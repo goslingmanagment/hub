@@ -21,6 +21,8 @@ import {
   ensureClientSendArchiveSweepQueue,
   ensureClientSendArchiveSweepSchedule,
 } from "./client-send-custody-archive.ts";
+import { ensureSaleHomesQueue, ensureSaleHomesSchedule } from "./sale-homes.ts";
+import { ensureShiftRowsQueue, ensureShiftRowsSchedule } from "./shift-rows.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } from "./capture-payload-parity.ts";
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
@@ -114,6 +116,8 @@ export async function ensureAllQueues(
   await ensureFanslyBlocklistQueue(boss, createdQueues);
   await ensureModelApplicationAbandonSweepQueue(boss, createdQueues);
   await ensureClientSendArchiveSweepQueue(boss, createdQueues);
+  await ensureShiftRowsQueue(boss, createdQueues);
+  await ensureSaleHomesQueue(boss, createdQueues);
 }
 
 export async function registerAllSchedules(
@@ -172,5 +176,7 @@ export async function registerAllSchedules(
     ensureFanslyBlocklistSchedule(boss),
     ensureModelApplicationAbandonSweepSchedule(boss),
     ensureClientSendArchiveSweepSchedule(boss),
+    ensureShiftRowsSchedule(boss),
+    ensureSaleHomesSchedule(boss),
   ]);
 }

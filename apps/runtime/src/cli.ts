@@ -76,6 +76,7 @@ import {
 import { buildFanslySendGuardReport } from "./services/fansly-send-guard/report.ts";
 import { registerSyncAlertsCommands } from "./sync/cli/alerts.ts";
 import { registerSyncChainCommands } from "./sync/cli/chain.ts";
+import { registerSaleRuleCommands } from "./services/sale-rule-cli.ts";
 import { registerSyncChatsCommands } from "./sync/cli/chats.ts";
 import { registerSyncCheckCommands } from "./sync/cli/checks.ts";
 import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
@@ -4043,6 +4044,9 @@ export function buildProgram() {
         await app.close();
       }
     });
+
+  // Whose a sale is by the one rule, its comparison with the ledger, and the shift rows (sale-rule-cli.ts).
+  registerSaleRuleCommands(program);
 
   return program;
 }
