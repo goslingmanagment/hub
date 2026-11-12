@@ -29,6 +29,7 @@ import { REPORT_DRAFT_NEXT, reportStatusWord } from "@agency_hub_core/ui/shiftRe
 import { shiftDurationHint, shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { ReportBody, useReportEdge } from "@/shared/ReportBody";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { MyMatters } from "../waiting/MyMatters";
 import { usePeriod } from "@/shared/usePeriod";
 import {
   MY_SHIFTS_MAX_DAYS,
@@ -380,6 +381,7 @@ export function MyShiftsScreen() {
         stale={read.isRefetchError}
       />
       <div className="wb-content mys">
+        <MyMatters />
         {window.clipped && (
           <Notice title={`Смены видны не больше чем за ${MY_SHIFTS_MAX_DAYS} день`}>
             Чтобы увидеть {formatDayRange(period.from, addDays(window.from, -1))}, выберите эти дни отдельно. Сейчас показаны {formatDayRange(window.from, window.to)}.

@@ -7,6 +7,7 @@ import { NO_SILENT_SIGNIN, peerOriginOf, siteOf } from "@agency_hub_core/ui/site
 import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
 import { decisionParts, decisionsElsewhereText, decisionsFailedText, useDecisionCounts } from "@/shared/decisions";
+import { useMattersActive, useWaitingTotal } from "@/shared/matters";
 import { CHATTER, OWNER, TEAM, useMe, type Role } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { useRestoredPeriod } from "@/shared/usePeriod";
@@ -128,6 +129,31 @@ function DecisionsCount() {
 }
 
 /**
+ * The badge of «Ждут вас» while the owner's switch reads matters: everything
+ * that waits for the person (never what only informs), on every page; a kind
+ * not checked is a quiet «?», never a silent zero.
+ */
+function WaitingCount() {
+  const { total, failed, settled } = useWaitingTotal();
+  if (!settled || (total === 0 && !failed)) return null;
+  const line = [total > 0 ? `Ждут вас: ${total}` : null, failed ? "Не всё удалось проверить: это не ноль" : null].filter(Boolean).join(". ");
+  return (
+    <Tooltip content={<span className="wb-nav__tip-line">{line}</span>} align="start">
+      <span className="wb-nav__count" aria-label={line}>
+        {total > 0 && <CountBadge value={total} />}
+        {failed && <span className="wb-nav__unknown" aria-hidden>?</span>}
+      </span>
+    </Tooltip>
+  );
+}
+
+/** «Решения», or «Ждут вас» with its own count once the switch reads matters. */
+function DecisionsRow({ item }: { item: NavItem }) {
+  const { active } = useMattersActive();
+  return active ? <NavRow item={{ ...item, label: "Ждут вас" }} end={<WaitingCount />} /> : <NavRow item={item} end={<DecisionsCount />} />;
+}
+
+/**
  * What makes a new instance of the screen: its route, and for a deep page the
  * object it shows (`handle.screenKey`, routes.tsx). Tabs of one card or one
  * screen keep the screen — and its state — mounted.
@@ -236,7 +262,7 @@ export function Shell() {
         <Brand />
         <nav aria-label="Разделы Workboard" className="wb-nav">
           {seenBy(WORK, role).map((item) => (
-            <NavRow key={item.to} item={item} end={item.to === "/decisions" ? <DecisionsCount /> : undefined} />
+            item.to === "/decisions" ? <DecisionsRow key={item.to} item={item} /> : <NavRow key={item.to} item={item} />
           ))}
           {/* The line parts work from the rest; with nothing after it (a chatter), there is no line. */}
           {seenBy(ADMIN, role).length + seenBy(EXITS, role).length > 0 && <div className="wb-nav__sep" role="separator" />}

@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { EmptyState, ErrorState, Section, Skeleton, Table, type Column } from "@agency_hub_core/ui";
 import { decisionParts, decisionsElsewhereText, decisionsFailedText, type DecisionQueue } from "@/shared/decisions";
+import { useMattersActive } from "@/shared/matters";
 import { usersQuery } from "@/shared/reads";
 import { useMe } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
@@ -14,7 +15,33 @@ import { HeldSection, ResolveSendModal, ResolvedJournal } from "./HeldSends";
 import { ChattersQuestions, QuestionsSection, QuestionsUnavailable } from "./Questions";
 import { ReportsSection } from "./Reports";
 import { useDecisions, useFanNames, type FanRefOnPage, type HeldSend } from "./data";
+import { WaitingScreen } from "../waiting/index";
 import "./decisions.css";
+
+/**
+ * The address `/decisions`: while the owner's switch `mattersReadEnabled` is
+ * off, Решения exactly as before; on, the list «Ждут вас» read from matters
+ * (screens/waiting). Until the switch is known, the same skeleton Решения
+ * shows while its queues load.
+ */
+export function DecisionsScreen() {
+  const { role } = useMe();
+  const { active } = useMattersActive();
+  if (role === "chatter") return null;
+  if (active === null) {
+    return (
+      <>
+        <ScreenHeader title="Решения" pageFilter meta={<Skeleton width={260} />} />
+        <div className="wb-content">
+          <Section title={<Skeleton width={220} height={24} />}>
+            <Table label="Решения загружаются" columns={SKELETON_COLUMNS} rows={[]} rowKey={() => ""} loading skeletonRows={3} skeletonLines={2} className="decisions-skeleton" />
+          </Section>
+        </div>
+      </>
+    );
+  }
+  return active ? <WaitingScreen /> : <DecisionsByQueue />;
+}
 
 /**
  * Решения (spec §4.6): what waits for the owner's decision — the questions «whose
@@ -25,7 +52,7 @@ import "./decisions.css";
  * so in its place: no answer is not a zero. A send's resolve, when open, is in
  * the address: `?send=`.
  */
-export function DecisionsScreen() {
+function DecisionsByQueue() {
   const { isOwner, role } = useMe();
   const { page, setPage } = usePageFilter();
   const [search, setSearch] = useSearchParams();

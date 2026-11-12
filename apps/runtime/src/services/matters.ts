@@ -1,8 +1,15 @@
 import { createHash } from "node:crypto";
 
 import {
+  isMatterCheckKind,
+  isMatterInfoKind,
   isMatterMirrorKind,
   isMatterServerKind,
+  LEDGER_CHECK_KINDS,
+  MATTER_CHECK_KIND_PERIODS,
+  MATTER_CHECK_KINDS,
+  MATTER_INFO_KINDS,
+  PEOPLE_CHECK_KINDS,
   type AgentMatterCloseBody,
   type AgentMatterCommentBody,
   type AgentMatterCommentResponse,
@@ -62,14 +69,24 @@ export function matterMirrorPeriodMs(kind: MatterMirrorKind): number {
   return LEDGER_KINDS.has(kind) ? 5 * MINUTE : MINUTE;
 }
 
+/** How often Hub's server asks the source of a kind it keeps (the mirrors' and the checks' of package K); null — another writer's kind. */
+export function matterKindPeriodMs(kind: string): number | null {
+  if (isMatterMirrorKind(kind)) return matterMirrorPeriodMs(kind);
+  if (isMatterCheckKind(kind)) return MATTER_CHECK_KIND_PERIODS[kind] * MINUTE;
+  return null;
+}
+
 /**
- * Whether a mirrored kind is known now: its source answered on the last try,
- * within three of its periods and a minute. Otherwise it is «не проверено».
+ * Whether a kind the server keeps is known now: its source answered on the
+ * last try, within three of its periods and a minute. Otherwise it is «не
+ * проверено». Another writer's kind with a check row is known while its last
+ * try answered.
  */
-export function matterKindChecked(check: MatterCheckRow | undefined, kind: MatterMirrorKind, now: Date): boolean {
+export function matterKindChecked(check: MatterCheckRow | undefined, kind: string, now: Date): boolean {
   if (check === undefined || check.answeredAt === null) return false;
   if (check.attemptedAt.getTime() > check.answeredAt.getTime()) return false;
-  return now.getTime() - check.answeredAt.getTime() <= 3 * matterMirrorPeriodMs(kind) + MINUTE;
+  const period = matterKindPeriodMs(kind);
+  return period === null || now.getTime() - check.answeredAt.getTime() <= 3 * period + MINUTE;
 }
 
 // ── «Ждут вас» and «Решения», from matters ──────────────────────────────────
@@ -103,6 +120,26 @@ export function waitingKindsOf(role: MatterOwnerRole): MatterMirrorKind[] {
   return WAITING_ROW_SPECS.filter((spec) => role === "owner" || spec.teamLead).flatMap((spec) => [...spec.kinds]);
 }
 
+/**
+ * The rows after the old ones (package K): matters no old row counts. The
+ * people's and the ledger's checks are the owner's; every other kind (another
+ * package's, an agent's) is whoever's it is. A kind that only informs is in
+ * none: it waits for nobody.
+ */
+const FAMILY_ROW_SPECS: ReadonlyArray<{ id: Extract<WaitingRowId, "people" | "ledger" | "other">; label: string; to: string; checks: readonly string[] }> = [
+  { id: "people", label: "Люди и доступ", to: "/workboard/decisions#people", checks: PEOPLE_CHECK_KINDS.filter((kind) => !isMatterInfoKind(kind)) },
+  { id: "ledger", label: "Проверки ledger", to: "/workboard/decisions#ledger", checks: LEDGER_CHECK_KINDS },
+  { id: "other", label: "Другие дела", to: "/workboard/decisions", checks: [] },
+];
+
+/** The family row a kind no old row counts belongs to; null — an old row's kind, or one that only informs. */
+export function waitingFamilyOf(kind: string): "people" | "ledger" | "other" | null {
+  if (isMatterMirrorKind(kind) || isMatterInfoKind(kind)) return null;
+  if (kind.startsWith("people.") && isMatterCheckKind(kind)) return "people";
+  if ((LEDGER_CHECK_KINDS as readonly string[]).includes(kind)) return "ledger";
+  return "other";
+}
+
 /** What the builders need of each mirrored kind. */
 export interface MatterKindState {
   checked: boolean;
@@ -127,7 +164,7 @@ export function matterWeight(matter: Pick<MatterRow, "kind" | "evidence">): numb
 export function buildWaitingRows(input: {
   role: MatterOwnerRole;
   matters: readonly WaitingMatter[];
-  kindState: (kind: MatterMirrorKind) => MatterKindState;
+  kindState: (kind: string) => MatterKindState;
   labelOf: (pageId: number) => string | undefined;
 }): Pick<MattersWaitingResponse, "rows" | "total" | "failed"> {
   const rows: MattersWaitingRow[] = [];
@@ -160,6 +197,15 @@ export function buildWaitingRows(input: {
       matterIds: mine.map((matter) => matter.id),
     });
   }
+  // The checks' rows: the owner's checks count for the owner only; a team lead sees «другие» of their own.
+  for (const spec of FAMILY_ROW_SPECS) {
+    if (input.role === "chatter" || (input.role === "team_lead" && spec.id !== "other")) continue;
+    const mine = input.matters.filter((matter) => waitingFamilyOf(matter.kind) === spec.id);
+    const checked = spec.checks.every((kind) => input.kindState(kind).checked) && mine.every((matter) => input.kindState(matter.kind).checked);
+    const count = checked ? mine.length : null;
+    if (count === 0) continue;
+    rows.push({ id: spec.id, label: spec.label, count, capped: false, pageLabel: null, to: spec.to, matterIds: mine.map((matter) => matter.id) });
+  }
   return {
     rows,
     total: rows.reduce((sum, row) => sum + (row.count ?? 0), 0),
@@ -176,7 +222,7 @@ export function buildWaitingRows(input: {
 export function buildDecisions(input: {
   role: MatterOwnerRole;
   matters: readonly WaitingMatter[];
-  kindState: (kind: MatterMirrorKind) => MatterKindState;
+  kindState: (kind: string) => MatterKindState;
   pageId: number | null;
 }): MattersWaitingResponse["decisions"] {
   const owner = input.role === "owner";
@@ -220,14 +266,22 @@ export function buildDecisions(input: {
 
 type MattersApp = Pick<AppContext, "db" | "config">;
 
+/**
+ * Who reads: the session's person by their role — except a narrow web session
+ * (opened from the extension), which reads as a chatter whatever the role: the
+ * person's own matters, never one with money.
+ */
 export function matterViewerOf(principal: HumanAuthPrincipal): MatterViewer {
-  return { userId: principal.user.id, role: principal.user.role as MatterOwnerRole, pageIds: principal.assignedPageIds };
+  const role = principal.narrowDeviceTokenId === undefined ? principal.user.role as MatterOwnerRole : "chatter";
+  return { userId: principal.user.id, role, pageIds: principal.assignedPageIds };
 }
 
-function kindStates(checks: readonly MatterCheckRow[], now: Date): (kind: MatterMirrorKind) => MatterKindState {
+function kindStates(checks: readonly MatterCheckRow[], now: Date): (kind: string) => MatterKindState {
   const byKind = new Map(checks.map((check) => [check.kind, check]));
   return (kind) => {
     const check = byKind.get(kind);
+    // A kind nobody checks (an agent's) is known as it is: its matters are what its writer said.
+    if (check === undefined && matterKindPeriodMs(kind) === null) return { checked: true, applicable: true, capped: false };
     return { checked: matterKindChecked(check, kind, now), applicable: check?.applicable ?? true, capped: check?.capped ?? false };
   };
 }
@@ -242,9 +296,9 @@ async function pageIdOf(app: MattersApp, pageLabel: string | undefined, idOf: Ma
 /** `mattersWaiting`: «Ждут вас» and «Решения» from matters, for a dashboard session. */
 export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPrincipal, query: MattersWaitingQuery, now: Date = new Date()): Promise<MattersWaitingResponse> {
   const viewer = matterViewerOf(principal);
-  const kinds = waitingKindsOf(viewer.role);
   const [matters, checks, pages, active] = await Promise.all([
-    kinds.length === 0 ? Promise.resolve([]) : listVisibleMatters(app.db, { viewer, state: "open", kinds, limit: 5000 }),
+    // Every open matter of the viewer: the old rows' kinds and, after them, the rest (package K).
+    viewer.role === "chatter" ? Promise.resolve([]) : listVisibleMatters(app.db, { viewer, state: "open", limit: 5000 }),
     listMatterChecks(app.db),
     listMatterPageLabels(app.db),
     loadEffectiveConfigField(app.db, app.config, "mattersReadEnabled"),
@@ -297,9 +351,10 @@ export async function readMattersList(app: MattersApp, principal: HumanAuthPrinc
   ]);
   const usernameOf = await listMatterUsernames(app.db, rows.flatMap((row) => ("userId" in row.owner ? [row.owner.userId] : [])));
   const checkOf = new Map(checks.map((check) => [check.kind, check]));
-  const mirrored = new Set<string>(waitingKindsOf(viewer.role));
+  // The kinds the server keeps for this viewer: the mirrored ones of their rows, and the owner's checks (package K).
+  const mirrored = new Set<string>([...waitingKindsOf(viewer.role), ...(viewer.role === "owner" ? MATTER_CHECK_KINDS : [])]);
   const kinds = [...new Set([...mirrored, ...counts.keys()])].sort().map((kind) => {
-    const isMirrored = isMatterMirrorKind(kind) && mirrored.has(kind);
+    const isMirrored = mirrored.has(kind);
     const check = checkOf.get(kind);
     return {
       kind,
@@ -313,17 +368,23 @@ export async function readMattersList(app: MattersApp, principal: HumanAuthPrinc
 
 const CLIENT_MATTERS_LIMIT = 50;
 
+/** The extension's number: the person's open matters, never one with money, never one that only informs. */
+export async function countClientMatters(app: Pick<AppContext, "db">, principal: HumanAuthPrincipal): Promise<number> {
+  const counts = await countVisibleOpenMatters(app.db, { viewer: matterViewerOf(principal), withoutMoney: true });
+  return [...counts].reduce((sum, [kind, value]) => sum + (isMatterInfoKind(kind) ? 0 : value), 0);
+}
+
 /** `clientMatters`: the extension's count and the longest waiting of the person's matters; never evidence, never money. */
 export async function readClientMatters(app: MattersApp, principal: HumanAuthPrincipal, now: Date = new Date()): Promise<ClientMattersResponse> {
   const viewer = matterViewerOf(principal);
-  const [rows, counts, pages] = await Promise.all([
-    listVisibleMatters(app.db, { viewer, state: "open", withoutMoney: true, limit: CLIENT_MATTERS_LIMIT }),
-    countVisibleOpenMatters(app.db, { viewer, withoutMoney: true }),
+  const [rows, count, pages] = await Promise.all([
+    listVisibleMatters(app.db, { viewer, state: "open", withoutMoney: true, limit: CLIENT_MATTERS_LIMIT + MATTER_INFO_KINDS.length }),
+    countClientMatters(app, principal),
     listMatterPageLabels(app.db),
   ]);
   return {
-    count: [...counts.values()].reduce((sum, value) => sum + value, 0),
-    matters: rows.map((row) => ({
+    count,
+    matters: rows.filter((row) => !isMatterInfoKind(row.kind)).slice(0, CLIENT_MATTERS_LIMIT).map((row) => ({
       id: row.id,
       kind: row.kind,
       title: row.title,
@@ -362,7 +423,8 @@ export interface AgentMatterScope {
 
 /** Opens (or updates, or reopens) an agent's matter by its key. */
 export async function agentOpenMatter(app: MattersApp, scope: AgentMatterScope, body: AgentMatterOpenBody, now: Date = new Date()): Promise<AgentMatterResponse> {
-  if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind)) throw notAgents(body.key);
+  // The kinds Hub's server keeps — the mirrors', the system state's and the checks' of package K — are never an agent's.
+  if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind) || isMatterCheckKind(body.kind)) throw notAgents(body.key);
   const owner: MatterOwner = "user" in body.owner ? { userId: (await personOf(app, body.owner.user)).userId } : { role: body.owner.role };
   const watcherUserIds: number[] = [];
   for (const watcher of body.watchers ?? []) watcherUserIds.push((await personOf(app, watcher)).userId);

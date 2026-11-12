@@ -2473,6 +2473,11 @@ export const clientActivityBodySchema = z.object({
 export const clientActivityResponseSchema = z.object({
   /** Pages of the beat that were recorded; a page that is not the caller's is skipped. */
   recorded: z.number().int().nonnegative(),
+  /**
+   * How many matters wait for the person now (`clientMatters`' count: their own, never one with money, never one that
+   * only informs): the number on the extension's icon. Absent when it could not be counted; an older extension ignores it.
+   */
+  matters: z.number().int().nonnegative().optional(),
   serverNow: isoTimestamp,
 });
 
@@ -4077,7 +4082,8 @@ export const clientRouteSchemas = {
       + "the person signs out. Each named page that is the caller's records its minute as open and the minute of "
       + "the last activity as active; a page that is not the caller's, or does not exist, is skipped. No content "
       + "of a page travels: only that a page was open and when the person was last active on it. The shift is "
-      + "computed from these minutes (`teamShifts`).",
+      + "computed from these minutes (`teamShifts`). The answer carries the count of the person's open matters "
+      + "(`matters`, as `clientMatters` counts them) for the extension's icon.",
     body: clientActivityBodySchema,
     response: {
       200: clientActivityResponseSchema,

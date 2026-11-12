@@ -341,7 +341,17 @@ export async function reconcileMatterKind(
   idOf: ReadonlyMap<string, number>,
   now: Date,
 ): Promise<{ opened: number; closed: number }> {
-  const meta = KIND_META[answer.kind];
+  return reconcileMatters(app, { kind: answer.kind, ...KIND_META[answer.kind], items: answer.items }, idOf, now);
+}
+
+/** The same for any kind the server keeps (the mirrors' and the checks' of package K): its writer and owner are the caller's. */
+export async function reconcileMatters(
+  app: Pick<AppContext, "db" | "logger">,
+  answer: { kind: string; source: MatterSource; owner: MatterOwner; items: readonly MirrorItem[] },
+  idOf: ReadonlyMap<string, number>,
+  now: Date,
+): Promise<{ opened: number; closed: number }> {
+  const meta = { source: answer.source, owner: answer.owner };
   const open = new Map((await listOpenMattersOfKinds(app.db, [answer.kind])).map((matter) => [matter.key, matter]));
   const seen = new Set<string>();
   const touched: string[] = [];
