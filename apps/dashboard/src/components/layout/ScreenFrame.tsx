@@ -20,7 +20,8 @@ import {
   type Section,
   type SectionTab,
 } from "@agency_hub_core/ui/screens";
-import { contentopsHref } from "@agency_hub_core/ui/sites";
+import { contentopsHref, contentopsModelsOf } from "@agency_hub_core/ui/sites";
+import { useAgentKeys } from "@/api/agentKeys";
 import { useDashboardShell } from "./DashboardShellContext.js";
 import { PageScopeGate } from "./PageScopeGate.js";
 import { PageFilterChip } from "./PageFilterChip.js";
@@ -66,13 +67,15 @@ function SubRow({ sectionTab, role, screen, search }: { sectionTab: SectionTab; 
 
 /**
  * The section's places in another product (Контент: ContentOps' План, Приехало,
- * Библиотека), on the model of the chosen page, or of the first page when every
- * page is chosen; the model is named, so the link says where it leads.
+ * Библиотека) on the chosen page's model, named beside them, when ContentOps
+ * holds that model (`contentopsModelsOf`: the pages of ContentOps' sign-in key);
+ * a page whose model ContentOps does not hold has none. With every page chosen
+ * there is no model to name: one link to ContentOps' own start.
  */
 function OutsideLinks({ outside, role }: { outside: NonNullable<Section["outside"]>; role: Role }) {
   const filter = usePageFilter();
   const { pages, findPageByLabel } = useDashboardShell();
-  const page = findPageByLabel(filter.page ?? undefined) ?? pages.find((item) => item.platform !== "telegram") ?? null;
+  const keys = useAgentKeys(outside.site === "contentops" && role === "owner");
   if (outside.site === "workboard") {
     // A Workboard screen on this host: a page load, the same tab.
     const links = outside.links.filter((link) => !link.ownerOnly || role === "owner");
@@ -83,11 +86,24 @@ function OutsideLinks({ outside, role }: { outside: NonNullable<Section["outside
       </span>
     );
   }
+  const page = findPageByLabel(filter.page ?? undefined);
+  const held = keys.data ? contentopsModelsOf(keys.data, pages) : null;
+  if (page && held && !held.has(page.modelSlug.toLowerCase())) return null;
+  if (!page || !held) {
+    return (
+      <span className="section-outside">
+        <a className="section-tab section-tab-outside" href={contentopsHref(null, "")} target="_blank" rel="noreferrer">
+          {outside.label}
+          <ArrowUpRight size={14} aria-hidden="true" />
+        </a>
+      </span>
+    );
+  }
   return (
     <span className="section-outside">
-      <span className="section-outside-label">{outside.label}{page ? ` · ${page.modelName}` : ""}</span>
+      <span className="section-outside-label">{outside.label} · {page.modelName}</span>
       {outside.links.map((link) => (
-        <a key={link.path} className="section-tab section-tab-outside" href={contentopsHref(page?.modelSlug ?? null, link.path)} target="_blank" rel="noreferrer">
+        <a key={link.path} className="section-tab section-tab-outside" href={contentopsHref(page.modelSlug, link.path)} target="_blank" rel="noreferrer">
           {link.label}
           <ArrowUpRight size={14} aria-hidden="true" />
         </a>
