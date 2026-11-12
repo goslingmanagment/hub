@@ -45,6 +45,15 @@ export interface PeopleCheckAgentKey {
   revokedAt: Date | null;
 }
 
+/** The open proposals of agents about one person (`personId`) or one proposed new person (`proposedCode`). */
+export interface PeopleCheckOpenProposals {
+  personId: number | null;
+  proposedCode: string | null;
+  count: number;
+  /** The oldest one's moment: since when the owner's word is awaited. */
+  since: Date;
+}
+
 export interface PeopleCheckPage {
   id: number;
   label: string;
@@ -66,6 +75,8 @@ export interface PeopleCheckSnapshot {
   lastInput: Map<string, Date>;
   /** The first minute the extension's activity is known at all; null — none. */
   activitySince: Date | null;
+  /** Agents' proposals the owner has not decided, by person (or proposed code). */
+  openProposals: PeopleCheckOpenProposals[];
 }
 
 function groupIds(rows: ReadonlyArray<{ owner: unknown; item: unknown }>): Map<number, number[]> {
@@ -82,7 +93,7 @@ function groupIds(rows: ReadonlyArray<{ owner: unknown; item: unknown }>): Map<n
 /** Everything the people checks need, in a handful of reads over small tables. */
 export async function readPeopleCheckSnapshot(db: Database, input: { today: string; idleSince: Date; now: Date }): Promise<PeopleCheckSnapshot> {
   const now = input.now.toISOString();
-  const [people, logins, keys, pages, working, access, terms, inputs, since] = await Promise.all([
+  const [people, logins, keys, pages, working, access, terms, inputs, since, proposals] = await Promise.all([
     db.execute<Row>(sql`select id, code, display_name, kind, role, state, left_on::text as left_on from people order by id`),
     db.execute<Row>(sql`
       select u.id, u.username, u.role, l.person_id, (u.disabled_at is null and u.deleted_at is null) as living,
@@ -103,6 +114,9 @@ export async function readPeopleCheckSnapshot(db: Database, input: { today: stri
        where input and minute >= ${input.idleSince.toISOString()}::timestamptz
        group by user_id, page_id`),
     db.execute<Row>(sql`select min(minute) as since from chatter_activity_minutes`),
+    db.execute<Row>(sql`
+      select person_id, proposed_code, count(*) as count, min(created_at) as since from person_proposals
+       where state = 'open' group by person_id, proposed_code order by min(created_at)`),
   ]);
   return {
     people: people.rows.map((row) => ({
@@ -135,6 +149,12 @@ export async function readPeopleCheckSnapshot(db: Database, input: { today: stri
     withPayTerms: new Set(terms.rows.map((row) => Number(row.person_id))),
     lastInput: new Map(inputs.rows.map((row) => [`${Number(row.user_id)}:${Number(row.page_id)}`, date(row.last_input)])),
     activitySince: nullableDate(since.rows[0]?.since ?? null),
+    openProposals: proposals.rows.map((row) => ({
+      personId: row.person_id === null || row.person_id === undefined ? null : Number(row.person_id),
+      proposedCode: row.proposed_code === null || row.proposed_code === undefined ? null : String(row.proposed_code),
+      count: Number(row.count),
+      since: date(row.since),
+    })),
   };
 }
 

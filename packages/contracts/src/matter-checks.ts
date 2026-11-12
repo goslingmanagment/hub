@@ -22,6 +22,8 @@ export const MATTER_CHECK_KIND_PERIODS = {
   "people.access_idle": 7 * 24 * 60,
   /** An agent key that expires within 7 days (or expired and nobody revoked it). */
   "people.agent_key_expiring": 10,
+  /** An agent's proposal about a person (or a new one) the owner has not decided: one matter per person, all of theirs. */
+  "people.proposal_open": 10,
   /** A check of the ledger red longer than its threshold (one per check key), in the ledger's own sentence. */
   "ledger.check": 15,
   /** The payout tabs someone works with no column for tomorrow: one matter listing them (the ledger's notice). */
