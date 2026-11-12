@@ -134,6 +134,15 @@ export const AGENT_CAPABILITIES = [
    * else and reads nothing back; the page grant does not widen it.
    */
   "write:system_state",
+  /**
+   * «Кто этот ключ» for another service's server (ledger, ContentOps,
+   * TaskIndex; ecosystem plan §3.3): an agent shows the service its hub key,
+   * the service sends Hub the key's sha256 with its OWN key holding this
+   * capability (`agentKeyIntrospect`), and learns the agent's code, whether the
+   * key is active and when it expires — never a key, a digest or a grant.
+   * Reads nothing of a page: the key's page grant does not widen it.
+   */
+  "introspect:agent_keys",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

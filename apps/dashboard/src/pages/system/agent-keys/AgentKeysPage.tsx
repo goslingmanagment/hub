@@ -1,11 +1,13 @@
 import { Fragment, useState } from "react";
 import { toast } from "sonner";
 
-import { AGENT_CAPABILITIES, type AgentCapability, type AgentKeyItem } from "@agency_hub_core/contracts";
+import { AGENT_CAPABILITIES, isServiceKeyCapabilities, type AgentCapability, type AgentKeyItem } from "@agency_hub_core/contracts";
 import {
   useAdminPages,
   useAgentKeys,
   useCreateAgentKey,
+  useKeyAgents,
+  useLinkAgentKey,
   useRevokeAgentKey,
   useUpdateAgentKeyCapabilities,
 } from "@/api/queries";
@@ -26,9 +28,11 @@ import { AGENT_KEY_STATUS } from "@/lib/statusWords";
 import { freshOf, platformName, RowChevron } from "../shared.js";
 
 /**
- * «Доступ ИИ-агентов»: agent read keys and their rights. The writes are the old
- * tab's (`TechnicalTab`) with their calls unchanged; the key's one showing can
- * only be closed by its button (design/screens/system.md §6).
+ * «Агенты и ключи»: agent read keys, whose agent each is, their rights and last
+ * call. The writes are the old tab's (`TechnicalTab`) with their calls unchanged;
+ * issuance names the agent, and a key issued before the people registry is
+ * linked to its agent on the agent's card. The key's one showing can only be
+ * closed by its button (design/screens/system.md §6).
  */
 
 const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
@@ -54,6 +58,7 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "signin:monitor": "«Войти через хаб» для сервера server-monitor: обменять одноразовый код входа на «кто это и владелец ли» и потом проверять, жив ли этот вход. Сессию Hub сервер не получает, страниц это право не касается",
   "write:reports": "Публиковать страницы-отчёты: сводку трафика и другие доски агента. Их читает владелец, а тимлиды только те, что агент им открыл. Данных Hub через это право агент не читает",
   "write:system_state": "Присылать состояние рутин и копий своего места (мака, ПК): когда что запускалось и чем кончилось, когда снята копия. Больше ничего не пишет и не читает",
+  "introspect:agent_keys": "Для сервера другой службы (ledger, ContentOps, TaskIndex): узнавать, чей ключ хаба показал ему агент, работает ли ключ и до какого числа. Сервер присылает только отпечаток ключа; сам ключ, права и страницы он не получает",
 };
 
 const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
@@ -79,9 +84,12 @@ const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
   "signin:monitor": "Вход через Hub для server-monitor",
   "write:reports": "Публиковать отчёты",
   "write:system_state": "Присылать состояние рутин и копий",
+  "introspect:agent_keys": "Узнавать, чей ключ агента",
 };
 
 const INPUT = "input";
+/** The issuance form's choice of no agent: a service's own key. */
+const SERVICE_KEY = "__service";
 
 function toggle<T>(list: T[], value: T): T[] {
   return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
@@ -119,6 +127,17 @@ function CapabilityCheckboxes({
   );
 }
 
+/** Whose a key is, in a line: the agent, a service's own key, or nobody yet. */
+function agentLine(key: AgentKeyItem): string {
+  if (key.agent) return key.agent.state === "left" ? `${key.agent.displayName} (ушёл)` : key.agent.displayName;
+  return isServiceKeyCapabilities(key.capabilities) ? "ключ сервиса, без агента" : "агент не указан";
+}
+
+function lastCallLine(key: AgentKeyItem): string {
+  if (key.lastCall) return `последний вызов ${formatAgo(key.lastCall.at)}`;
+  return key.lastUsedAt ? `использован ${formatAgo(key.lastUsedAt)}` : "ещё не использовался";
+}
+
 function keyStatus(key: AgentKeyItem) {
   return key.isActive ? AGENT_KEY_STATUS.active! : key.revokedAt ? AGENT_KEY_STATUS.revoked! : AGENT_KEY_STATUS.expired!;
 }
@@ -143,6 +162,7 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
   const [issuedToken, setIssuedToken] = useState<{ token: string; name: string } | null>(null);
   const [revoking, setRevoking] = useState<AgentKeyItem | null>(null);
   const [editing, setEditing] = useState<AgentKeyItem | null>(null);
+  const [linking, setLinking] = useState<AgentKeyItem | null>(null);
   const [open, setOpen] = useState<number | null>(null);
   const revoke = useRevokeAgentKey();
   // OWNED BY THE SCREEN, NOT THE MODAL. TanStack runs a per-call `mutate` callback
@@ -175,8 +195,9 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
         <div className="min-w-0">
           <h2 id="agent-keys-title" className="card-title">Ключи доступа</h2>
           <p className="card-description sys-measure">
-            Ключ даёт ИИ-агенту только отмеченные страницы и только отмеченные права; роли человека у ключа нет. Пока ключом
-            пользуются, срок продлевается, но не дальше 365 дней с выпуска.
+            Каждый ключ принадлежит агенту из «Людей» и даёт ему только отмеченные страницы и только отмеченные права. Без
+            агента бывает только ключ сервиса: вход через хаб и проверка чужих ключей. Пока ключом пользуются, срок
+            продлевается, но не дальше 365 дней с выпуска.
           </p>
         </div>
       </div>
@@ -211,6 +232,7 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
                 const isOpen = open === key.id;
                 const toggleRow = () => setOpen(isOpen ? null : key.id);
                 const menu = [
+                  ...(key.isActive && key.agent === null ? [{ label: "Указать агента", onSelect: () => setLinking(key) }] : []),
                   ...(key.isActive ? [{ label: "Изменить права", onSelect: () => setEditing(key) }] : []),
                   ...(key.revokedAt === null ? [{ label: "Отозвать", onSelect: () => setRevoking(key), danger: true }] : []),
                 ];
@@ -220,12 +242,13 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
                       <td className="sys-key-name">
                         <RowChevron open={isOpen} label={isOpen ? `Свернуть: ${key.name}` : `Раскрыть: ${key.name}`} onToggle={toggleRow} />
                         <span className="font-medium">{key.name}</span>
+                        <span className="cell-second">{agentLine(key)}</span>
                       </td>
                       <td>{firstTwo(key.capabilities.map((capability) => CAPABILITY_SHORT[capability] ?? capability))}</td>
                       <td>{firstTwo(key.pageLabels)}</td>
                       <td>
                         <span className="sys-key-until">до {formatDateTime(key.expiresAt, { yearUnlessCurrent: true })}</span>
-                        <span className="cell-second">{key.lastUsedAt ? `использован ${formatAgo(key.lastUsedAt)}` : "ещё не использовался"}</span>
+                        <span className="cell-second">{lastCallLine(key)}</span>
                       </td>
                       <td className="status-col"><StatusBadge status={keyStatus(key)} /></td>
                       <td className="sys-actions" onClick={(event) => event.stopPropagation()}>
@@ -247,6 +270,18 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
                             <div>
                               <p className="sys-label">Страницы</p>
                               <p>{key.pageLabels.join(", ")}</p>
+                            </div>
+                            <div>
+                              <p className="sys-label">Чей ключ</p>
+                              <p>{key.agent ? `${agentLine(key)}, код ${key.agent.code}` : agentLine(key)}</p>
+                            </div>
+                            <div>
+                              <p className="sys-label">Последний вызов</p>
+                              <p>
+                                {key.lastCall
+                                  ? <>{formatDateTime(key.lastCall.at, { yearUnlessCurrent: true })} · <span className="sys-code">{key.lastCall.operation}</span></>
+                                  : "в журнале вызовов ничего нет"}
+                              </p>
                             </div>
                             <Disclosure label="Подробнее">
                               <KeyValue
@@ -286,6 +321,8 @@ function AgentKeysSection({ creating, onCreating }: { creating: boolean; onCreat
 
       {editing && <EditAgentKeyCapabilitiesModal agentKey={editing} onClose={() => setEditing(null)} />}
 
+      {linking && <LinkAgentKeyModal agentKey={linking} onClose={() => setLinking(null)} />}
+
       {revoking && (
         <ConfirmModal
           title={`Отозвать ключ «${revoking.name}»?`}
@@ -316,7 +353,9 @@ function CreateAgentKeyModal({
   onIssued: (token: string, name: string) => void;
 }) {
   const { data: pages, isLoading: pagesLoading, isError: pagesError, refetch: refetchPages, isFetching: pagesFetching } = useAdminPages();
+  const agents = useKeyAgents();
   const [name, setName] = useState("");
+  const [agentCode, setAgentCode] = useState("");
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
   const [pageLabels, setPageLabels] = useState<string[]>([]);
   const [expiresInDays, setExpiresInDays] = useState(90);
@@ -326,6 +365,7 @@ function CreateAgentKeyModal({
     if (!canSubmit) return;
     create.mutate({
       name: name.trim(),
+      ...(agentCode === "" || agentCode === SERVICE_KEY ? {} : { agentCode }),
       capabilities,
       pageLabels,
       expiresInDays,
@@ -337,7 +377,10 @@ function CreateAgentKeyModal({
     });
   }
 
+  // Without an agent only a service's own key: sign-in and «who is this key» alone.
+  const serviceKey = isServiceKeyCapabilities(capabilities);
   const canSubmit = name.trim().length > 0
+    && agentCode !== "" && (agentCode !== SERVICE_KEY || serviceKey)
     && capabilities.length > 0
     && pageLabels.length > 0
     && Boolean(pages) && !pagesError
@@ -365,6 +408,13 @@ function CreateAgentKeyModal({
             placeholder="Например, аудит кастомов"
             className={INPUT}
           />
+        </Field>
+
+        <Field label="Чей ключ">
+          <AgentSelect agents={agents} value={agentCode} onChange={setAgentCode} allowNone />
+          {agentCode === SERVICE_KEY && capabilities.length > 0 && !serviceKey && (
+            <p className="field-hint mt-1">Без агента выпускается только ключ сервиса: вход через хаб и проверка чужих ключей. Выберите агента.</p>
+          )}
         </Field>
 
         <fieldset>
@@ -492,6 +542,83 @@ function EditAgentKeyCapabilitiesModal({
           </button>
           <button type="submit" disabled={unchanged || update.isPending} className="btn btn-primary">
             {update.isPending ? "Сохраняем…" : "Сохранить"}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+/** The agents a key may belong to; `allowNone` — a service's own key, no agent. */
+function AgentSelect({
+  agents,
+  value,
+  onChange,
+  allowNone = false,
+}: {
+  agents: ReturnType<typeof useKeyAgents>;
+  value: string;
+  onChange: (code: string) => void;
+  allowNone?: boolean;
+}) {
+  if (agents.isError) {
+    return (
+      <div role="alert" className="notice notice-danger">
+        <span>
+          Список агентов не загрузился.
+          <button type="button" disabled={agents.isFetching} onClick={() => void agents.refetch()} className="link ml-2">Повторить</button>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <select className={INPUT} value={value} onChange={(event) => onChange(event.target.value)} disabled={!agents.data}>
+      <option value="" disabled>{agents.data ? "Выберите агента" : "Загружаем агентов…"}</option>
+      {(agents.data ?? []).map((agent) => (
+        <option key={agent.code} value={agent.code}>{agent.displayName} ({agent.code})</option>
+      ))}
+      {allowNone && <option value={SERVICE_KEY}>Ключ сервиса, без агента</option>}
+    </select>
+  );
+}
+
+/** «Указать агента»: a key issued before the people registry goes to its agent's card. The key itself does not change. */
+function LinkAgentKeyModal({ agentKey, onClose }: { agentKey: AgentKeyItem; onClose: () => void }) {
+  const agents = useKeyAgents();
+  const link = useLinkAgentKey();
+  const [agentCode, setAgentCode] = useState("");
+
+  function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (agentCode === "" || link.isPending) return;
+    link.mutate({ agentCode, keyId: agentKey.id }, {
+      onSuccess: () => {
+        toast.success(`Ключ «${agentKey.name}» теперь у агента`);
+        onClose();
+      },
+      onError: () => {
+        toast.error("Не удалось указать агента");
+      },
+    });
+  }
+
+  const closeUnlessPending = () => {
+    if (!link.isPending) onClose();
+  };
+
+  return (
+    <ModalShell title={`Чей ключ «${agentKey.name}»`} onClose={closeUnlessPending} closeLabel="Закрыть" size="short">
+      <form className="space-y-6" onSubmit={handleSubmit}>
+        <p className="text-sm text-text-secondary">
+          Ключ остаётся тем же: его не нужно выпускать заново, права и страницы не меняются. Он появится в карточке агента в «Людях».
+        </p>
+        <Field label="Агент">
+          <AgentSelect agents={agents} value={agentCode} onChange={setAgentCode} />
+        </Field>
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" onClick={closeUnlessPending} disabled={link.isPending} className="btn">Отмена</button>
+          <button type="submit" disabled={agentCode === "" || link.isPending} className="btn btn-primary">
+            {link.isPending ? "Сохраняем…" : "Сохранить"}
           </button>
         </div>
       </form>

@@ -22,9 +22,18 @@ import { demoSystemState } from "./system-state.ts";
 type Capability =
   | "read:messages" | "read:money" | "read:observations_envelope" | "read:datasets" | "request:hydration"
   | "write:publication_drafts" | "approve:publications" | "write:fan_queues" | "read:content" | "read:team"
-  | "withdraw:publications" | "delete:posts" | "look:media" | "write:reports";
+  | "withdraw:publications" | "delete:posts" | "look:media" | "write:reports" | "signin:taskindex" | "introspect:agent_keys";
 
-/** The agents' read keys: the research agent, ContentOps (its own content only), the queue builder, and two that ended. */
+/** The agents of the keys (fixtures/people.ts): whose each key is. */
+const AGENTS = {
+  helper: { code: "helper-bot", displayName: "Помощник в чате", state: "working" },
+  contentops: { code: "contentops", displayName: "Сервер ContentOps", state: "working" },
+} as const;
+
+/**
+ * The agents' read keys: the research agent, ContentOps (its own content only), the queue builder, a service's own
+ * key (no agent), and two that ended before the people registry (no agent either).
+ */
 function agentKeys(request: DemoRequest) {
   const now = request.now;
   const key = (
@@ -37,6 +46,8 @@ function agentKeys(request: DemoRequest) {
     expiresInDays: number,
     lastUsedHoursAgo: number | null,
     revokedDaysAgo: number | null = null,
+    agent: (typeof AGENTS)[keyof typeof AGENTS] | null = null,
+    lastOperation: string | null = null,
   ) => {
     const expiresAt = daysAgo(now, -expiresInDays);
     const revokedAt = revokedDaysAgo === null ? null : iso(daysAgo(now, revokedDaysAgo));
@@ -51,13 +62,16 @@ function agentKeys(request: DemoRequest) {
       revokedAt,
       lastUsedAt: lastUsedHoursAgo === null ? null : iso(hoursAgo(now, lastUsedHoursAgo)),
       isActive: revokedAt === null && expiresAt.getTime() > now.getTime(),
+      agent: agent === null ? null : { ...agent },
+      lastCall: lastOperation === null || lastUsedHoursAgo === null ? null : { at: iso(hoursAgo(now, lastUsedHoursAgo)), operation: lastOperation },
     };
   };
   const all = ["mia-1", "mia-2", "mia-3", "mia-of", "mia-vip-of", "nova-1", "ivy-1", "ivy-2"];
   return [
-    key(7, "Исследователь архива", "Xk4q9TzP2w", ["read:messages", "read:money", "read:datasets", "read:observations_envelope", "request:hydration"], all, 41, 79, 0.3),
-    key(9, "ContentOps", "m3RfV8bN1c", ["read:content", "write:publication_drafts", "approve:publications", "withdraw:publications", "look:media"], ["mia-1", "mia-2", "mia-3", "nova-1", "ivy-1", "ivy-2"], 8, 82, 2.6),
-    key(10, "Очереди фанов", "Q7pLs2dYe9", ["read:datasets", "read:money", "write:fan_queues"], ["mia-1", "mia-2", "nova-1"], 5, 85, 19),
+    key(7, "Исследователь архива", "Xk4q9TzP2w", ["read:messages", "read:money", "read:datasets", "read:observations_envelope", "request:hydration", "read:team"], all, 41, 79, 0.3, null, AGENTS.helper, "agentShiftReview"),
+    key(9, "ContentOps", "m3RfV8bN1c", ["read:content", "write:publication_drafts", "approve:publications", "withdraw:publications", "look:media"], ["mia-1", "mia-2", "mia-3", "nova-1", "ivy-1", "ivy-2"], 8, 82, 2.6, null, AGENTS.contentops, "agentDatasetQuery"),
+    key(10, "Очереди фанов", "Q7pLs2dYe9", ["read:datasets", "read:money", "write:fan_queues"], ["mia-1", "mia-2", "nova-1"], 5, 85, 19, null, AGENTS.helper, "agentFanQueueCreate"),
+    key(13, "TaskIndex: вход и «кто этот ключ»", "Hn2wQ5sLr8", ["signin:taskindex", "introspect:agent_keys"], ["mia-1"], 1, 89, 0.1, null, null, "agentKeyIntrospect"),
     // The agents that publish report pages (system-reports.ts): the traffic routine and the boards.
     key(11, "Трафик", "Tf3kW8mZr2", ["write:reports"], ["mia-1"], 4, 86, 2.6),
     key(12, "Доски агентства", "Bd9xQ1nVs6", ["write:reports"], ["mia-1"], 3, 87, 0.7),

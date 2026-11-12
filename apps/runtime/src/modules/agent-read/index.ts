@@ -1,7 +1,8 @@
-import { routeSchemas } from "@agency_hub_core/contracts";
+import { AGENT_KEY_INTROSPECT_CACHE_SECONDS, AGENT_KEY_INTROSPECT_STALE_SECONDS, routeSchemas } from "@agency_hub_core/contracts";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import {
+  introspectAgentKey,
   issueAgentKey,
   listAgentKeysDetailed,
   revokeAgentKeyById,
@@ -40,6 +41,10 @@ import {
 import { handleAgentSyncStatus, handleAgentSyncWhy } from "./handlers-sync.ts";
 import { handleAgentThreadAvailability } from "./handlers-thread-availability.ts";
 import { handleAgentCrossSpenders } from "./handlers-cross-spenders.ts";
+import { beginAgentRequest, writeAgentAudit } from "./runtime.ts";
+
+/** «Кто этот ключ»: the one answer of this plane another service may keep (`agentKeyIntrospect`). */
+const INTROSPECT_URL = "/api/v1/agent/keys/introspect";
 
 /**
  * The Agent Read Plane registrar: operations #1..#13 under `/api/v1/agent/*`.
@@ -70,7 +75,11 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
   // oracle must be as uncacheable as a transcript.
   server.addHook("onSend", async (request, reply) => {
     if (request.url.startsWith("/api/v1/agent/")) {
-      reply.header("cache-control", "no-store");
+      // But a 200 of «кто этот ключ», which the service that asked keeps for itself (and nobody between).
+      const kept = reply.statusCode === 200 && request.routeOptions.url === INTROSPECT_URL;
+      reply.header("cache-control", kept
+        ? `private, max-age=${AGENT_KEY_INTROSPECT_CACHE_SECONDS}, stale-if-error=${AGENT_KEY_INTROSPECT_STALE_SECONDS}`
+        : "no-store");
     }
   });
 
@@ -209,6 +218,32 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
       { id: request.params.id, capabilities: request.body.capabilities },
       auditCtx(principal),
     );
+  });
+
+  // «Кто этот ключ» for another service (ledger, ContentOps, TaskIndex): its OWN key with
+  // introspect:agent_keys, and the sha256 of the key an agent showed it — never that key. The answer
+  // names the agent and whether the key works; no key material, capability or page. Reads only.
+  server.post(INTROSPECT_URL, {
+    schema: routeSchemas.agentKeyIntrospect,
+    config: { rateLimit: { max: 600, timeWindow: 60_000 } },
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    const scope = await beginAgentRequest(appContext, principal, {
+      operation: "agentKeyIntrospect", requiredCapabilities: ["introspect:agent_keys"],
+    });
+    try {
+      const { subjectKeyId, ...answer } = await introspectAgentKey(appContext, request.body.keyDigest);
+      await writeAgentAudit(appContext.db, {
+        agentKeyId: principal.agentKeyId,
+        operation: "agentKeyIntrospect",
+        pageIds: [],
+        verbatimText: false,
+        requestSummary: { subjectKeyId, outcome: answer.active ? "active" : "inactive" },
+      });
+      return answer;
+    } finally {
+      await scope.finish(1);
+    }
   });
 
   server.post("/api/v1/agent/keys/:id/revoke", {

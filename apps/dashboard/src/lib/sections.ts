@@ -375,7 +375,7 @@ export const SCREENS: readonly Screen[] = [
     keywords: "дозагрузка истории",
   },
   {
-    id: "system-agent-keys", path: "/system/agent-keys", label: "Доступ ИИ-агентов", title: "Доступ ИИ-агентов", section: "system", ownerOnly: true,
+    id: "system-agent-keys", path: "/system/agent-keys", label: "Агенты и ключи", title: "Агенты и ключи", section: "system", ownerOnly: true,
     why: "Ключи агентов и их права.",
     pageFilter: "none",
     keywords: "ключи агентов",
@@ -654,7 +654,7 @@ export const SECTIONS: readonly Section[] = [
       tab("collection", "Сбор данных", "system-collection", "system-collection-page"),
       tab("failures", "Сбои", "system-failures"),
       tab("history", "Заявки на историю", "system-history-requests"),
-      tab("agent-keys", "Доступ ИИ-агентов", "system-agent-keys"),
+      tab("agent-keys", "Агенты и ключи", "system-agent-keys"),
       tab("reports", "Отчёты агентов", "system-reports", "system-report"),
       tab("state", "Состояние", "system-state"),
       {

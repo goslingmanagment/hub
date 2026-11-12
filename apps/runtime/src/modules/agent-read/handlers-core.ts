@@ -20,6 +20,7 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   agentSubscriptionState,
+  findAgentKeyPerson,
   findAgentPersonIdentity,
   getAgentKeyById,
   getAgentKeyUsage,
@@ -226,9 +227,10 @@ export async function handleAgentCapabilities(
     operation: "agentCapabilities",
   });
   try {
-    const [key, usage] = await Promise.all([
+    const [key, usage, agent] = await Promise.all([
       getAgentKeyById(scope.db, principal.agentKeyId),
       getAgentKeyUsage(scope.db, { agentKeyId: principal.agentKeyId }),
+      findAgentKeyPerson(scope.db, principal.agentKeyId),
     ]);
 
     // What #7 WILL RUN, not what the flag says. `fts_trgm` names a query this
@@ -323,6 +325,7 @@ export async function handleAgentCapabilities(
           granted: granted.has(capability),
         })),
         expiresAt: iso(key?.expiresAt ?? new Date()),
+        agent: agent === null ? null : { code: agent.code, displayName: agent.displayName },
       },
       budgets: {
         timezone: "UTC",

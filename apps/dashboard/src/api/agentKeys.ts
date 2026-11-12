@@ -44,3 +44,29 @@ export function useUpdateAgentKeyCapabilities() {
     onSuccess: () => qc.invalidateQueries({ queryKey: AGENT_KEYS_QUERY_KEY }),
   });
 }
+
+/**
+ * The agents a key may belong to: the people registry's persons of kind agent
+ * who are not gone (the team's people list, which the owner reads).
+ */
+export function useKeyAgents(enabled = true) {
+  return useQuery({
+    queryKey: ["admin", "agentKeys", "agents"] as const,
+    queryFn: () => kernel.teamPeople(),
+    select: (data) => data.people
+      .filter((person) => person.kind === "agent" && person.state !== "left")
+      .map((person) => ({ code: person.code, displayName: person.displayName })),
+    enabled,
+  });
+}
+
+/** Links a key issued before the registry to its agent: the person's card takes the key (adminPersonUpdate). */
+export function useLinkAgentKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: ({ agentCode, keyId }: { agentCode: string; keyId: number }) =>
+      kernel.adminPersonUpdate({ params: { code: agentCode }, body: { agentKeys: { add: [keyId] } } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: AGENT_KEYS_QUERY_KEY }),
+  });
+}

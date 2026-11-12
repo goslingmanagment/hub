@@ -817,6 +817,11 @@ export const agentCapabilitiesResponseSchema = z.object({
       granted: z.boolean(),
     }).strict()),
     expiresAt: agentIsoTimestamp,
+    /**
+     * Who this key is: the agent person it belongs to (the people registry), the same answer another service gets
+     * from `agentKeyIntrospect`; null — no agent holds it (a service's own key). Absent — an older Hub.
+     */
+    agent: z.object({ code: z.string(), displayName: z.string() }).strict().nullable().optional(),
   }).strict(),
   /** The key's usage today. Reported only: a key has no daily or concurrency
    *  ceiling. */

@@ -5,6 +5,7 @@ import {
   createFanslyPage,
   createModel,
   findAgentKeyByDigest,
+  insertPersonRow,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -60,6 +61,7 @@ async function loginCookie(username: string, password: string) {
 function createBody(overrides: Record<string, unknown> = {}) {
   return {
     name: "customs-audit",
+    agentCode: "audit-bot",
     capabilities: ["read:messages", "read:money"],
     pageLabels: ["lora-2"],
     ...overrides,
@@ -94,6 +96,14 @@ describe("agent read plane: key issuance", () => {
       { username: "lead", role: "team_lead", password: "lead-secret" },
       { source: "cli" },
     );
+
+    // The agents a key may belong to (the people registry): one working, one gone, and a human who is not one.
+    for (const [code, kind, state] of [["audit-bot", "agent", "working"], ["old-bot", "agent", "left"], ["alex", "human", "working"]] as const) {
+      await insertPersonRow(testDb.db, {
+        code, displayName: code, kind, role: kind === "agent" ? "agent" : "chatter", state, leftOn: null, telegramUserId: null,
+        telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
+      });
+    }
 
     server = await buildApiServer(appContext);
     await server.ready();
@@ -148,6 +158,42 @@ describe("agent read plane: key issuance", () => {
     expect(JSON.stringify(list)).not.toContain(body.token);
     expect(JSON.stringify(list)).not.toContain(stored?.keyDigest ?? "IMPOSSIBLE");
     expect(list[0]?.keyPrefix).toBe(body.key.keyPrefix);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("gives every key its agent: named at issuance, linked with the key, listed with it", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const created = await server.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie }, payload: createBody() });
+    expect(created.statusCode, created.body).toBe(200);
+    expect(created.json().key.agent).toEqual({ code: "audit-bot", displayName: "audit-bot", state: "working" });
+    const listed = (await server.inject({ method: "GET", url: "/api/v1/agent/keys", headers: { cookie } })).json() as Array<Record<string, unknown>>;
+    expect(listed[0]?.agent).toEqual({ code: "audit-bot", displayName: "audit-bot", state: "working" });
+    expect(listed[0]?.lastCall).toBeNull();
+    const linked = await testDb.pool.query(
+      "select p.code from person_agent_keys k join people p on p.id = k.person_id where k.agent_key_id = $1", [created.json().key.id]);
+    expect(linked.rows.map((row) => row.code)).toEqual(["audit-bot"]);
+
+    // Only a service's own key goes without an agent.
+    const service = await server.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie },
+      payload: createBody({ name: "taskindex-server", agentCode: undefined, capabilities: ["signin:taskindex", "introspect:agent_keys"] }) });
+    expect(service.statusCode, service.body).toBe(200);
+    expect(service.json().key.agent).toBeNull();
+    for (const payload of [
+      createBody({ name: "no-agent", agentCode: undefined }),
+      createBody({ name: "gone-agent", agentCode: "old-bot" }),
+      createBody({ name: "a-human", agentCode: "alex" }),
+    ]) {
+      const refused = await server.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie }, payload });
+      expect(refused.statusCode, refused.body).toBe(400);
+    }
+    expect((await server.inject({ method: "POST", url: "/api/v1/agent/keys", headers: { cookie },
+      payload: createBody({ name: "nobody", agentCode: "nobody" }) })).statusCode).toBe(404);
+    // A refused issuance minted nothing.
+    const names = (await testDb.pool.query("select name from agent_keys order by id")).rows.map((row) => row.name);
+    expect(names).toEqual(["customs-audit", "taskindex-server"]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("sets Cache-Control: no-store on the response that carries the token", async (context) => {
