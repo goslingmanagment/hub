@@ -208453,6 +208453,15 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "stepLabel": {
+                            "type": "string"
+                          },
+                          "stepAt": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -210505,6 +210514,15 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "stepLabel": {
+                                "type": "string"
+                              },
+                              "stepAt": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -211427,6 +211445,15 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "stepLabel": {
+                                "type": "string"
+                              },
+                              "stepAt": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -212709,6 +212736,15 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "stepLabel": {
+                                "type": "string"
+                              },
+                              "stepAt": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -213562,6 +213598,15 @@
                                   ],
                                   "additionalProperties": false
                                 }
+                              },
+                              "code": {
+                                "type": "string"
+                              },
+                              "stepLabel": {
+                                "type": "string"
+                              },
+                              "stepAt": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -215352,6 +215397,15 @@
                             ]
                           },
                           "createdAt": {
+                            "type": "string"
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "stepLabel": {
+                            "type": "string"
+                          },
+                          "stepAt": {
                             "type": "string"
                           }
                         },
@@ -246507,6 +246561,15 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "code": {
+                            "type": "string"
+                          },
+                          "stepLabel": {
+                            "type": "string"
+                          },
+                          "stepAt": {
+                            "type": "string"
                           }
                         },
                         "required": [

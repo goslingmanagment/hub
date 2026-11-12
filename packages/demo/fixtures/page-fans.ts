@@ -2,7 +2,7 @@
  * A page's fans: the subscriber and follower lists, the deleted accounts, the
  * spender lists, the top fans, one fan's card, dossier, history and chat.
  */
-import type { KernelOperationResponse } from "@agency_hub_core/contracts";
+import { CUSTOM_STATE_WORDS, customOrderCode, type KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import {
   between,
@@ -204,11 +204,12 @@ const FACTS = [
   ["agreement", "Договорились о скидке на следующий набор", "ok next set is cheaper for you then"],
 ] as const;
 
+/** The extension's state, the order's real step, what, the price. */
 const CUSTOMS = [
-  ["ordered", "Видео в красном платье, 5 минут", 60_000],
-  ["paid", "Набор из 12 фото у окна", 45_000],
-  ["delivered", "Поздравление с днём рождения", 30_000],
-  ["cancelled", "Видео на улице: передумал", 80_000],
+  ["ordered", "recorded", "Видео в красном платье, 5 минут", 60_000],
+  ["paid", "at_model", "Набор из 12 фото у окна", 45_000],
+  ["delivered", "given", "Поздравление с днём рождения", 30_000],
+  ["cancelled", "cancelled", "Видео на улице: передумал", 80_000],
 ] as const;
 
 /** The fan's card as the console reads it: full for the world's spenders, known but empty for the quiet crowd. */
@@ -239,17 +240,19 @@ function fanCard(page: DemoPage, fanRef: string, now: Date): KernelOperationResp
       quote: { text: quote, from: kind === "about" ? "fan" : "model", at, media: false },
     };
   });
-  const customs = CUSTOMS.map(([state, description, priceMills], index) => {
+  const customs = CUSTOMS.map(([state, step, description, priceMills], index) => {
     const created = hoursAgo(now, 40 + index * 90);
     const paid = state === "paid" || state === "delivered";
+    const id = hashString(`${fanRef}:custom:${index}`) % 1_000_000 + 1;
     return {
-      id: hashString(`${fanRef}:custom:${index}`) % 1_000_000 + 1,
+      id,
       pageLabel: page.label, granted: true, description, priceMills, state,
       paymentMills: paid ? priceMills : null,
       paidAt: paid ? iso(created) : null,
       deliveredMessageRef: state === "delivered" ? numeric("delivered") : null,
       deliveredAt: state === "delivered" ? iso(hoursAgo(now, 30)) : null,
       createdBy: chatter, createdAt: iso(created), deliveryCandidates: [],
+      code: customOrderCode(id), stepLabel: CUSTOM_STATE_WORDS[step], stepAt: iso(hoursAgo(now, 30 + index * 60)),
     };
   });
   const other = (salt: string, username: string) => ({

@@ -83,19 +83,6 @@ export function columnOf(order: Pick<CustomOrder, "state">): ColumnId | null {
   return COLUMNS.find((column) => column.states.includes(order.state))?.id ?? null;
 }
 
-export const STATE_WORDS: Record<CustomOrderState, string> = {
-  recorded: "Записан",
-  paid: "Оплачен",
-  at_model: "У модели",
-  partly: "Сдан частично",
-  shot: "Снят",
-  revision: "Правка",
-  refused: "Отказ модели",
-  given: "Отдан фану",
-  closed: "Закрыт",
-  cancelled: "Отменён",
-};
-
 export const STATE_TONE: Partial<Record<CustomOrderState, "success" | "warning" | "danger" | "info" | "off">> = {
   partly: "info",
   revision: "warning",

@@ -2831,6 +2831,17 @@ export const clientFanFactSchema = z.object({
 /** Chat Memory week 4: the states of a custom; open on the wire. */
 export const CLIENT_FAN_CUSTOM_STATES = ["ordered", "paid", "delivered", "cancelled"] as const;
 
+/**
+ * A custom order's real step beside its four states, all absent from an older Hub: the order's code, its step in
+ * the board's words (CUSTOM_STATE_WORDS: «У модели», «Снят») to show as it is, and since when it is on that step.
+ */
+const clientCustomStepShape = {
+  /** `K-123`, the code every door names the order by. */
+  code: z.string().optional(),
+  stepLabel: z.string().optional(),
+  stepAt: isoTimestamp.optional(),
+};
+
 export const clientFanCustomSchema = z.object({
   id: intId,
   pageLabel: z.string(),
@@ -2854,6 +2865,7 @@ export const clientFanCustomSchema = z.object({
     mediaCount: count,
     priceMills: mills.nullable(),
   })),
+  ...clientCustomStepShape,
 });
 
 export const clientFanCardResponseSchema = z.object({
@@ -3365,6 +3377,7 @@ export const clientHandoffResponseSchema = z.object({
     state: clientOpenToken,
     paidAt: isoTimestamp.nullable(),
     createdAt: isoTimestamp,
+    ...clientCustomStepShape,
   })),
   /** Open promises from the facts of the page's chats, the newest first; empty — «не знаю». */
   promises: z.array(z.object({
