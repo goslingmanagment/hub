@@ -12,12 +12,12 @@ export type PublicationKind = (typeof PUBLICATION_KINDS)[number];
 export const PUBLICATION_REPLY_LOCKS = ["followers", "subscribers"] as const;
 export type PublicationReplyLock = (typeof PUBLICATION_REPLY_LOCKS)[number];
 
-/** What each platform can publish: OnlyFans has no FYP (spec §6); a vault
- *  album is Fansly's (0323): its text is the album's title, its files the
- *  album as it should be, in order. */
+/** What each platform can publish: OnlyFans has no FYP (spec §6). A vault
+ *  album (Fansly 0323, OnlyFans 8-docs 2026-11-12-of-vault-album): its text is
+ *  the album's title, its files the album as it should be, in order. */
 export const PUBLICATION_PLATFORM_KINDS = {
   fansly: ["fyp_post", "subscriber_post", "paid_post", "story", "vault_album"],
-  onlyfans: ["subscriber_post", "paid_post", "story"],
+  onlyfans: ["subscriber_post", "paid_post", "story", "vault_album"],
 } as const satisfies Record<string, readonly PublicationKind[]>;
 
 /** spec §4, in the order a publication lives through them. */
@@ -152,7 +152,9 @@ export const PUBLICATION_FINDING_CODES = [
   "tier_not_on_page",
   /** No longer produced (plan PR 4c uploads new files); kept so findings saved before still read. */
   "onlyfans_file_upload_unsupported",
-  /** A new file over 100 MB on an OnlyFans page: OnlyFansAPI's direct upload stops there. Blocking. */
+  /** A new file over 100 MB on an OnlyFans post: OnlyFansAPI's direct upload stops there. Blocking. On a
+   *  vault album (which sends larger files by a link) only a file over the link's limit, `detail.maxBytes`:
+   *  a warning with `detail.byHand` = 1 — the album goes without it, added by hand. */
   "onlyfans_file_too_large",
   /** No longer produced (plan PR 8 uploads new files on Fansly); kept so findings saved before still read. */
   "fansly_file_upload_unsupported",

@@ -80,6 +80,8 @@ describe("route auth declarations", () => {
       // Whether Fansly stopped serving one chat to its page.
       "agentThreadAvailability",
       "agentThreadMessages",
+      // The price of a vault album before «да» (write:publication_drafts).
+      "agentVaultAlbumQuote",
       // The chat extension's page routes (`/api/v1/client/pages/:pageLabel/…`):
       // `apiKey` + page scope, the page always in the path.
       "clientAiUsageDaily",

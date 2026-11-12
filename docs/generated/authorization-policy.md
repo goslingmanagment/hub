@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 64 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (449)
+## Routes (450)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -249,6 +249,7 @@ A full device token is not affected.
 | GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/availability` | `agentThreadAvailability` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests` | `agentHydrationRequestCreate` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages` | `agentThreadMessages` | `agentKey` | — | page | no |
+| POST | `/api/v1/agent/pages/:pageLabel/vault-album-quote` | `agentVaultAlbumQuote` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/people` | `agentPeople` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/people/:platform/:platformUserId` | `agentPerson` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — | no |

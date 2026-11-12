@@ -232,6 +232,18 @@ export function millsRoundedTo(value: MillsLike, unit: "cent" | "dollar"): Mills
   return roundDiv(millsFromInteger(value), step) * step;
 }
 
+/**
+ * What `credits` of a vendor cost at `centsPer1000` US cents a thousand (OnlyFansAPI's credits, shown
+ * beside an album's price), rounded half away from zero to whole cents. Display only.
+ */
+export function millsFromCreditsAt(credits: number, centsPer1000: number): Mills {
+  if (!Number.isInteger(credits) || credits < 0 || !Number.isInteger(centsPer1000) || centsPer1000 < 0) {
+    throw new Error(`Invalid credits "${credits}" at "${centsPer1000}"`);
+  }
+  // credits x cents/1000 cents = credits x cents / 100 mills.
+  return millsRoundedTo(millsPercentOf(BigInt(credits) * BigInt(centsPer1000), 1), "cent");
+}
+
 export function sumMills(values: Iterable<MillsLike>): Mills {
   let total = 0n;
   for (const value of values) {

@@ -13,6 +13,7 @@ import { formatAgo, formatDate, formatDay, formatMills, formatMomentAgo, formatW
 import { pageFromSearch } from "@/lib/pageParam";
 import { ruPlural } from "@/lib/plural";
 import { PUBLICATION_STATUS, OFAPI_OFF_WORD, type StatusTone, type StatusWord } from "@/lib/statusWords";
+import { albumProgressLine, albumReasonLabel, albumReasonParts, bytesLabel, creditsLabel } from "./publicationsAlbum.js";
 
 /**
  * The «Публикации» screen as words and rows ready to print (wall posts through
@@ -66,9 +67,13 @@ export const STATUS_FILTER_LABELS: Readonly<Record<PublicationStatus, string>> =
 const FALLBACK_STATUS: StatusWord = { word: "Нет данных", tone: "off" };
 
 /** One publication's status word: `withdrawn` tells the wall from the schedule by its reason. */
-export function statusWord(publication: Pick<PublicationWire, "status" | "statusReason">): StatusWord {
+export function statusWord(publication: Pick<PublicationWire, "status" | "statusReason"> & { kind?: PublicationKind }): StatusWord {
   if (publication.status === "withdrawn" && publication.statusReason === "deleted_after_publish") {
     return PUBLICATION_STATUS.deletedFromWall ?? FALLBACK_STATUS;
+  }
+  // An album out, some files not in it: «Вышел не весь» (8-docs 2026-11-12-of-vault-album, §1).
+  if (publication.status === "published" && publication.kind === "vault_album" && albumReasonParts(publication.statusReason) !== null) {
+    return PUBLICATION_STATUS.publishedInPart ?? FALLBACK_STATUS;
   }
   return PUBLICATION_STATUS[publication.status] ?? FALLBACK_STATUS;
 }
@@ -157,6 +162,9 @@ export function eventReasonLabel(reason: string | null): string | null {
   if (reason === null || reason === "") return null;
   const exact = EVENT_REASONS[reason];
   if (exact !== undefined) return exact;
+  // A vault album's reason (either platform): its parts in words, never «Другая причина».
+  const album = albumReasonLabel(reason);
+  if (album !== null) return lowerFirst(album);
   if (reason.includes(":answer_without_id") || reason.includes(":answer_without_album")) {
     return "Fansly ответил без номера: Hub не знает, что создано";
   }
@@ -624,8 +632,17 @@ export function mediaSummary(media: readonly Pick<MediaItem, "role">[]): string 
   return previews === 0 ? head : `${head}, ${previews} превью`;
 }
 
-/** «Пост для подписчиков, 2 файла, 1 превью, перезалив»: the row's second line. */
-export function postSubLine(publication: Pick<PublicationWire, "kind" | "media" | "repost">): string {
+/** «Пост для подписчиков, 2 файла, 1 превью, перезалив»: the row's second line. An OnlyFans album: its
+ *  progress while it goes up, its price before. */
+export function postSubLine(publication: Pick<PublicationWire, "kind" | "media" | "repost" | "albumRun" | "status">): string {
+  const run = publication.albumRun ?? null;
+  if (run !== null) {
+    const progress = albumProgressLine(run);
+    if (progress !== null) return progress;
+    if (run.step === null && (publication.status === "draft" || publication.status === "approved")) {
+      return `${KIND_LABELS[publication.kind]}, ${mediaSummary(publication.media)} · ${creditsLabel(run.estimateCredits)}`;
+    }
+  }
   return `${KIND_LABELS[publication.kind]}, ${mediaSummary(publication.media)}${publication.repost ? ", перезалив" : ""}`;
 }
 
@@ -762,6 +779,11 @@ export function findingText(finding: PublicationFinding, todayKey: string, media
       return "Выбранного уровня подписки нет на странице";
     case "onlyfans_file_too_large": {
       const bytes = detailNumber(finding, "byteSize");
+      if (detailNumber(finding, "byHand") === 1) {
+        const named = media.find((item) => item.source === "file" && `file:${item.fileId}` === finding.mediaKey)?.name ?? file;
+        const limit = detailNumber(finding, "maxBytes");
+        return `${named}${bytes === null ? "" : ` (${bytesLabel(bytes)})`}: больше ${limit === null ? "предела" : bytesLabel(limit)} — добавить руками`;
+      }
       return `${file}${bytes === null ? "" : ` (${Math.ceil(bytes / 1_000_000)} МБ)`}: на OnlyFans Hub загружает файлы до 100 МБ — возьмите файл из медиатеки или поменьше`;
     }
     case "onlyfans_file_upload_unsupported":
@@ -1176,6 +1198,8 @@ export function rowNote(
   if (commandNote !== null) return { text: upperFirst(commandNote), tone: "warning" };
   const reason = eventReasonLabel(publication.statusReason);
   if (MOVED_ON.has(publication.status) && reason !== null) return { text: upperFirst(reason), tone: "muted" };
+  // An album out but not whole: the files left out are what a person acts on.
+  if (publication.status === "published" && publication.kind === "vault_album" && reason !== null) return { text: upperFirst(reason), tone: "warning" };
   if (draft && reason !== null) return { text: `Вернулся в черновики: ${reason}`, tone: "warning" };
   if (publication.status === "approved" && publication.statusReason?.startsWith("held: ") && reason !== null) {
     return { text: upperFirst(reason), tone: "muted" };
@@ -1321,12 +1345,14 @@ export const EMPTY_RESOLVE_DRAFT: ResolveDraft = { outcome: null, state: null, p
 
 export type ResolveBody =
   | { outcome: "went_out"; state: "scheduled" | "published"; platformPostRef: string }
+  | { outcome: "went_out" }
   | { outcome: "did_not_go_out" };
 
-/** The resolve body, or the one thing still missing. */
-export function resolveForm(draft: ResolveDraft): { body: ResolveBody | null; missing: string | null; postRefError: string | null } {
-  if (draft.outcome === null) return { body: null, missing: "Выберите, ушёл ли пост", postRefError: null };
+/** The resolve body, or the one thing still missing. A vault album has no post: «вышел» asks nothing more. */
+export function resolveForm(draft: ResolveDraft, album = false): { body: ResolveBody | null; missing: string | null; postRefError: string | null } {
+  if (draft.outcome === null) return { body: null, missing: album ? "Выберите, собран ли альбом" : "Выберите, ушёл ли пост", postRefError: null };
   if (draft.outcome === "did_not_go_out") return { body: { outcome: "did_not_go_out" }, missing: null, postRefError: null };
+  if (album) return { body: { outcome: "went_out" }, missing: null, postRefError: null };
   const postRef = draft.postRef.trim();
   const postRefError = postRef !== "" && !/^[0-9A-Za-z_-]{1,64}$/.test(postRef) ? "Номер поста — цифры и латинские буквы, без пробелов" : null;
   if (postRef === "" || postRefError !== null) return { body: null, missing: "Укажите номер поста на площадке", postRefError };

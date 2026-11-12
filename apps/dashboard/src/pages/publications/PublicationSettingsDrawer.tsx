@@ -15,7 +15,7 @@ import { Switch } from "@/components/ui/Switch";
 import { formatCount, formatDayRange } from "@/lib/format";
 import { buildPageSectionRoute } from "@/lib/navigation";
 import { OFAPI_OFF_REASON, OFAPI_OFF_WORD } from "@/lib/statusWords";
-import { captureConfigSnapshot, seedValue, useBooleanConfigToggle } from "@/pages/settings/ConfigurationEditors";
+import { captureConfigSnapshot, ConfigEditor, seedValue, useBooleanConfigToggle } from "@/pages/settings/ConfigurationEditors";
 import { isUnknownOutcome, UNKNOWN_OUTCOME } from "@/pages/settings/settingsFeedback";
 import {
   actionFailure,
@@ -383,6 +383,8 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
   const items = config ?? [];
   const globalItem = items.find((item) => item.key === "publishingEnabled");
   const onlyfansItem = items.find((item) => item.key === "publishingOnlyfansEnabled");
+  const albumsItem = items.find((item) => item.key === "publishingOnlyfansVaultEnabled");
+  const albumCeilingItem = items.find((item) => item.key === "onlyfansVaultDailyCredits");
   const allPages = rows.map((row) => row.settings.pageLabel);
   const enabledPages = rows.filter((row) => row.settings.enabled).map((row) => row.settings.pageLabel);
   const onlyfansPages = rows.filter((row) => row.settings.platform === "onlyfans").map((row) => row.settings.pageLabel);
@@ -398,6 +400,7 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
   );
 
   const credits = configValue(items, "publishingOnlyfansDailyCredits");
+  const albumCeiling = configValue(items, "onlyfansVaultDailyCredits");
   const fileMax = configValue(items, "publicationFileMaxMb");
   const filesTotal = configValue(items, "publicationFilesMaxTotalGb");
   const number = (value: string | null) => (value === null || value === "" || Number.isNaN(Number(value)) ? "—" : formatCount(Number(value)));
@@ -456,6 +459,36 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
               })}
             />
           ) : placeholder("Публикация на OnlyFans", null)}
+          {albumsItem ? (
+            <ConfigSwitchRow
+              item={albumsItem}
+              title="Альбомы медиатеки OnlyFans"
+              hint="Заливка утверждённых альбомов. Около 3 кредитов за МБ, свой потолок в сутки."
+              words={["Включены", "Выключены"]}
+              off={ofapiOff ? { word: OFAPI_OFF_WORD, reason: OFAPI_OFF_REASON } : undefined}
+              question={(target) => ({
+                title: target ? "Включить альбомы OnlyFans?" : "Выключить альбомы OnlyFans?",
+                message: target
+                  ? "Hub начнёт заливать утверждённые альбомы в медиатеки страниц OnlyFans, где публикация включена."
+                  : "Hub сразу остановит альбомы: поставленная загрузка тоже не уйдёт.",
+                facts: [
+                  { label: "Куда", value: onlyfansPages.length > 0 ? onlyfansPages.join(", ") : "Страниц OnlyFans нет" },
+                  { label: "Потолок в сутки", value: albumCeiling === null ? "—" : `${number(albumCeiling)} кредитов` },
+                  { label: "Отменить", value: "Можно" },
+                ],
+                confirmLabel: target ? "Включить альбомы" : "Выключить альбомы",
+              })}
+            />
+          ) : placeholder("Альбомы медиатеки OnlyFans", null)}
+          {albumCeilingItem && (
+            <div className="pub-switch pub-album-ceiling">
+              <div className="switch-text">
+                <span className="pub-switch-title">Потолок альбомов в сутки</span>
+                <small>Кредиты OnlyFans API на заливку альбомов. 0 — пауза: альбомы ждут.</small>
+              </div>
+              <ConfigEditor item={albumCeilingItem} friendly />
+            </div>
+          )}
           {configState === "failed" && (
             <p className="pub-muted" role="alert">
               Параметры не загрузились.{" "}

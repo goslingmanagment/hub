@@ -61,6 +61,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { AppError, BadRequestError, NotFoundError } from "./errors.ts";
+import { OFAPI_LINK_UPLOAD_MAX_BYTES_DEFAULT } from "./ofapi-media-sources.ts";
 import { canonicalJson } from "./signed-cursor.ts";
 
 // Publications: wall posts and vault albums through Hub
@@ -361,6 +362,8 @@ export interface PublicationCheckFacts {
   volume: PublicationDayVolume;
   /** Why the page's latest schedule read may miss entries (empty: none known). */
   scheduleGaps: readonly string[];
+  /** An OnlyFans album's largest file by a link (onlyfansVaultLinkMaxMb); absent: the default 1000 MB. */
+  vaultLinkMaxBytes?: number | undefined;
 }
 
 function finding(code: PublicationFinding["code"], severity: PublicationFinding["severity"], extra: Partial<PublicationFinding> = {}): PublicationFinding {
@@ -386,11 +389,12 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
         out.push(finding("fansly_file_upload_unsupported", "blocking", { mediaKey: mediaKey(item) }));
       }
       // OnlyFans: Hub uploads the file through OnlyFansAPI before the post (plan PR 4c), up to 100 MB.
-      // A vault album's larger file goes by a link to Hub, and one over the
-      // link's limit stays for a person (publications-onlyfans-vault.ts): no finding.
-      if (page.platform === "onlyfans" && !album && file?.byteSize != null && file.byteSize > ONLYFANS_UPLOAD_MAX_BYTES) {
-        out.push(finding("onlyfans_file_too_large", "blocking", {
-          mediaKey: mediaKey(item), detail: { byteSize: file.byteSize, maxBytes: ONLYFANS_UPLOAD_MAX_BYTES },
+      // A vault album's larger file goes by a link to Hub (publications-onlyfans-vault.ts); one over the
+      // link's limit (the live onlyfansVaultLinkMaxMb) goes without it and is added by hand: a warning.
+      const limit = album ? facts.vaultLinkMaxBytes ?? OFAPI_LINK_UPLOAD_MAX_BYTES_DEFAULT : ONLYFANS_UPLOAD_MAX_BYTES;
+      if (page.platform === "onlyfans" && file?.byteSize != null && file.byteSize > limit) {
+        out.push(finding("onlyfans_file_too_large", album ? "warning" : "blocking", {
+          mediaKey: mediaKey(item), detail: { byteSize: file.byteSize, maxBytes: limit, ...(album ? { byHand: 1 } : {}) },
         }));
       }
       if (file && file.modelId !== page.modelId) {
@@ -508,7 +512,9 @@ async function readDraftContext(db: Database, pageId: number, body: PublicationC
   if (!page || page.status !== "active") throw new NotFoundError("Page not found");
   const fileIds = [...body.media, ...body.previews, ...body.extraAttachments.flatMap((extra) => [...extra.media, ...extra.previews])]
     .flatMap((item) => item.source === "file" ? [item.fileId] : []);
-  const album = body.kind === "vault_album" && page.platform === "fansly";
+  // A vault album on either platform: an OnlyFans page's albums are its custom
+  // vault lists as Hub last walked them (findPageVaultAlbumRefs, isPageVaultAlbum).
+  const album = body.kind === "vault_album";
   // An album named by id is looked up by it; its title finds one only without.
   const named = album ? body.vaultAlbumRef ?? null : null;
   const [walls, files, vaultAlbumRefs, vaultAlbumKnown] = await Promise.all([
@@ -526,6 +532,8 @@ export async function checkPublication(db: Database, input: {
   publicationId: number | null;
   content: PublicationContent;
   now: Date;
+  /** The live link limit of an OnlyFans album (vaultLinkMaxBytes); absent: the default. */
+  vaultLinkMaxBytes?: number | undefined;
 }): Promise<PublicationFinding[]> {
   const { page, content } = input;
   const mediaOnly = content.media.filter((item) => item.role === "media");
@@ -562,6 +570,7 @@ export async function checkPublication(db: Database, input: {
     // Gaps a read saw (Fansly's "the list is whole" is the stand's to
     // confirm, not one); a page not read yet has no schedule to compare.
     scheduleGaps: snapshot?.readAt == null ? [] : snapshot.incompleteReasons.filter((reason) => reason !== "list_whole_unverified"),
+    vaultLinkMaxBytes: input.vaultLinkMaxBytes,
   });
 }
 
@@ -706,6 +715,8 @@ export function toPublicationWire(record: PublicationRecord): PublicationWire {
     deletion: record.deletion === null ? null : {
       state: record.deletion.state, errorCode: record.deletion.errorCode, at: record.deletion.at.toISOString(),
     },
+    // An OnlyFans album's run and price: filled by the routes that read lists and details (withOnlyfansAlbumRuns).
+    albumRun: null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
     statusChangedAt: record.statusChangedAt.toISOString(),
@@ -731,11 +742,13 @@ export async function createPublicationDraft(db: Database, input: {
   author: PublicationAuthor;
   idempotencyKey: string | null;
   now?: Date;
+  /** An OnlyFans album's link limit (the route's vaultLinkMaxBytes); absent: the default. */
+  vaultLinkMaxBytes?: number;
 }): Promise<PublicationWire> {
   const now = input.now ?? new Date();
   const context = await readDraftContext(db, input.pageId, input.body);
   const content = normalizePublicationDraft(input.body, context);
-  const findings = await checkPublication(db, { page: context.page, publicationId: null, content, now });
+  const findings = await checkPublication(db, { page: context.page, publicationId: null, content, now, vaultLinkMaxBytes: input.vaultLinkMaxBytes });
   const { created, id } = await insertPublication(db, {
     ...content,
     pageId: input.pageId,
@@ -770,6 +783,7 @@ export async function updatePublicationDraft(db: Database, input: {
   onlyAuthorAgentKeyId?: number;
   allowedPageIds?: readonly number[];
   now?: Date;
+  vaultLinkMaxBytes?: number;
 }): Promise<PublicationWire> {
   const now = input.now ?? new Date();
   const current = await mustGet(db, input.id);
@@ -785,7 +799,7 @@ export async function updatePublicationDraft(db: Database, input: {
   }
   const context = await readDraftContext(db, current.pageId, input.body);
   const content = normalizePublicationDraft(input.body, context);
-  const findings = await checkPublication(db, { page: context.page, publicationId: current.id, content, now });
+  const findings = await checkPublication(db, { page: context.page, publicationId: current.id, content, now, vaultLinkMaxBytes: input.vaultLinkMaxBytes });
   const updated = await updatePublicationContent(db, {
     id: current.id, expectedVersion: input.version, content, findings, actor: input.actor,
   });
@@ -824,6 +838,7 @@ export type PublicationApprover =
 export async function approvePublications(db: Database, input: {
   items: ReadonlyArray<{ id: number; version: number }>;
   now?: Date;
+  vaultLinkMaxBytes?: number;
 } & ({ userId: number } | { approver: PublicationApprover })): Promise<PublicationApproveResult[]> {
   const approver: PublicationApprover = "approver" in input ? input.approver : { kind: "human", userId: input.userId };
   const actor: PublicationActor = approver.kind === "human"
@@ -859,7 +874,7 @@ export async function approvePublications(db: Database, input: {
         continue;
       }
       const content = contentOf(record);
-      const findings = await checkPublication(tx, { page, publicationId: record.id, content, now });
+      const findings = await checkPublication(tx, { page, publicationId: record.id, content, now, vaultLinkMaxBytes: input.vaultLinkMaxBytes });
       if (isBlocked(findings)) {
         await setPublicationFindings(tx, record.id, findings);
         results.push({ id: item.id, outcome: "refused", reason: "blocking_findings", publication: toPublicationWire({ ...record, findings }) });
@@ -989,7 +1004,7 @@ export async function listPublicationChangesWire(db: Database, input: {
 export async function resolveUnknownPublication(db: Database, input: {
   id: number;
   userId: number;
-  answer: { outcome: "went_out"; state: "scheduled" | "published"; platformPostRef: string } | { outcome: "did_not_go_out" };
+  answer: { outcome: "went_out"; state?: "scheduled" | "published" | undefined; platformPostRef?: string | undefined } | { outcome: "did_not_go_out" };
 }): Promise<{ publication: PublicationWire; replacement: PublicationWire | null }> {
   return db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as Database;
@@ -1000,6 +1015,17 @@ export async function resolveUnknownPublication(db: Database, input: {
     }
     const actor = { kind: "human" as const, userId: input.userId };
     if (input.answer.outcome === "went_out") {
+      // A vault album has no post: «it went out» is the album as approved, published (either platform).
+      if (record.kind === "vault_album") {
+        if (input.answer.platformPostRef !== undefined || (input.answer.state ?? "published") !== "published") {
+          throw new BadRequestError("a vault album has no post: answer went_out without a post id or a schedule");
+        }
+        await transitionPublication(tx, { id: record.id, from: "unknown", to: "published", actor, reason: "answered_went_out" });
+        return { publication: toPublicationWire(await mustGet(tx, record.id)), replacement: null };
+      }
+      if (input.answer.platformPostRef === undefined || input.answer.state === undefined) {
+        throw new BadRequestError("a post that went out needs its id on the platform and where it is: scheduled or published");
+      }
       await transitionPublication(tx, {
         id: record.id, from: "unknown", to: input.answer.state, actor,
         reason: "answered_went_out", platformPostRef: input.answer.platformPostRef,
@@ -1055,13 +1081,13 @@ export async function replaceWithdrawnPublication(db: Database, input: { id: num
 }
 
 /** One publication with its findings re-checked (drafts only), its journal and its approval. */
-export async function getPublicationDetail(db: Database, id: number, options: { allowedPageIds?: readonly number[]; now?: Date } = {}): Promise<PublicationDetail> {
+export async function getPublicationDetail(db: Database, id: number, options: { allowedPageIds?: readonly number[]; now?: Date; vaultLinkMaxBytes?: number } = {}): Promise<PublicationDetail> {
   let record = await mustGet(db, id);
   if (options.allowedPageIds && !options.allowedPageIds.includes(record.pageId)) throw new NotFoundError("Publication not found");
   if (record.status === "draft") {
     const page = await getPublicationPageFacts(db, record.pageId);
     if (page) {
-      const findings = await checkPublication(db, { page, publicationId: record.id, content: contentOf(record), now: options.now ?? new Date() });
+      const findings = await checkPublication(db, { page, publicationId: record.id, content: contentOf(record), now: options.now ?? new Date(), vaultLinkMaxBytes: options.vaultLinkMaxBytes });
       await setPublicationFindings(db, record.id, findings);
       record = { ...record, findings };
     }

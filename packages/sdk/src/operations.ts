@@ -192,6 +192,7 @@ export const kernelOperations = {
   agentThreadAvailability: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/threads/:conversationRef/availability" },
   agentThreadMessages: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages" },
   agentThreads: { method: "GET", path: "/api/v1/agent/threads" },
+  agentVaultAlbumQuote: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/vault-album-quote" },
   aiFeatureStream: { method: "POST", path: "/api/v1/ai/features/:feature" },
   aiGatewayStream: { method: "POST", path: "/api/v1/ai/gateway/stream" },
   aiPersonaArchive: { method: "DELETE", path: "/api/v1/ai/personas/:key" },

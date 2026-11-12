@@ -10,6 +10,8 @@ import {
   agentPublicationMediaQuerySchema,
   agentPublicationMediaResponseSchema,
   agentPublicationTargetsResponseSchema,
+  agentVaultAlbumQuoteBodySchema,
+  agentVaultAlbumQuoteResponseSchema,
   publicationApproveBodySchema,
   publicationApproveResponseSchema,
   publicationCreateBodySchema,
@@ -235,6 +237,16 @@ export const publicationRouteSchemas = {
       + " write:publication_drafts or withdraw:publications). On OnlyFans it spends OnlyFansAPI credits",
     params: publicationPageParamsSchema,
     response: { 200: publicationQueueRefreshResponseSchema, ...agentErrors },
+  },
+  agentVaultAlbumQuote: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "The price of a vault album before «да» (needs write:publication_drafts): the album new, found or"
+      + " similar titles; per file its credits, already on the page, too big; the order when it is not the folder's;"
+      + " the sum in credits and dollars; the albums' day ceiling, spent, left, the balance; whether sending is on."
+      + " Sends nothing to the platform; an old list of the page's albums asks the minutely job for a walk",
+    params: publicationPageParamsSchema,
+    body: agentVaultAlbumQuoteBodySchema,
+    response: { 200: agentVaultAlbumQuoteResponseSchema, ...agentErrors },
   },
   agentPublicationTargets: {
     auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
