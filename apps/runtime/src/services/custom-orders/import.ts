@@ -4,6 +4,7 @@ import { cardOf, customOrderCode, parseTelegramRef, type CustomOrderCard } from 
 import {
   addCustomOrderMessage,
   findCustomOrderIdByContentops,
+  findImportedCustomOrderWithoutCard,
   findPageFanByInput,
   findPageSummaryByLabel,
   listCustomOrderCardOwners,
@@ -14,7 +15,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { recordCustomOrder } from "./index.ts";
-import { fanInputOf, parseCardText } from "./rules.ts";
+import { buyerHandleOf, fanInputOf, parseCardText } from "./rules.ts";
 
 /**
  * Заказ кастома, the one-off import of the open orders (ecosystem plan
@@ -140,24 +141,28 @@ class Groups {
   }
 }
 
-/** «Tom (u100000001)», «Sam (sam_handle)», «handle123», a link: the handle to look the fan up by. */
-export function buyerHandleOf(buyer: string | null | undefined): string | null {
-  if (!buyer) return null;
-  const inParens = /\(([^)]+)\)\s*$/u.exec(buyer.trim());
-  const handle = (inParens ? inParens[1]! : buyer).trim();
-  return handle === "" || /\s\+\s/u.test(handle) ? null : handle;
-}
+export { buyerHandleOf } from "./rules.ts";
 
 function moscowDayOf(iso: string): string {
   return new Date(Date.parse(iso) + 3 * 3_600_000).toISOString().slice(0, 10);
 }
 
-/** An earlier import's order of these cards. A database without the orders' tables yet (a dry run before the deploy) has none. */
-async function existingOrderOf(db: Database, refs: readonly string[], contentopsRef: string | null): Promise<number | null> {
+/**
+ * An earlier import's order of these cards, of this ContentOps order, or — a source with neither (the board's «нет
+ * карточки») — of the same page and fan with neither: a repeat of the import finds every order it stored. A database
+ * without the orders' tables yet (a dry run before the deploy) has none.
+ */
+async function existingOrderOf(
+  db: Database,
+  refs: readonly string[],
+  contentopsRef: string | null,
+  cardless: { pageId: number | null; fanId: number | null; buyer: string | null } | null = null,
+): Promise<number | null> {
   try {
     const owners = await listCustomOrderCardOwners(db, refs);
     if (owners.size > 0) return [...owners.values()][0]!;
-    return contentopsRef === null ? null : await findCustomOrderIdByContentops(db, contentopsRef);
+    if (contentopsRef !== null) return await findCustomOrderIdByContentops(db, contentopsRef);
+    return cardless === null || refs.length > 0 ? null : await findImportedCustomOrderWithoutCard(db, cardless);
   } catch (error) {
     const code = (error as { code?: unknown; cause?: { code?: unknown } }).code ?? (error as { cause?: { code?: unknown } }).cause?.code;
     if (code === "42P01") return null;
@@ -236,6 +241,10 @@ export async function planCustomOrdersImport(app: ImportApp, args: CustomOrdersI
       unmatched.push("покупатель не назван");
     } else {
       unmatched.push(`фан «${handle}» не сопоставлен: страница неизвестна`);
+    }
+    if (refs.length === 0 && contentopsRef === null) {
+      const earlier = await existingOrderOf(app.db, refs, null, { pageId: page?.id ?? null, fanId, buyer: fanId === null ? buyerOf : null });
+      if (earlier !== null) { plan.existing.push({ refs, code: customOrderCode(earlier) }); continue; }
     }
 
     const text = co?.order.card.text ?? refs.map((ref) => args.cardTexts[ref]).find((one) => one !== undefined) ?? null;

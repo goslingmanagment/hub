@@ -14,6 +14,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { recordAudit } from "../auth.ts";
+import { buyerNamesFan, CUSTOM_CARD_FAN_TEXTS } from "../custom-orders/rules.ts";
 import type { TieringManifest } from "./lake-format.ts";
 import {
   type CapturePayloadCatalogWork,
@@ -1719,9 +1720,46 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   });
 
   // Custom orders (0399, package I): the order is the agency's work and stays; what names the fan goes — the
-  // link to him, the buyer's string, his chat, the name said in the video and the card's posted text. The order
-  // shows «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK would only null the link).
-  const customOrderPred = sql`fan_id = ${fanId}`;
+  // link to him, the buyer's string, his chat, the card's posted text and its fields in his words (what he asked
+  // for, the name said in the video, notes, references: CUSTOM_CARD_FAN_TEXTS). The price, the length, the face and
+  // the parts stay. The order shows «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK
+  // would only null the link). An order no fan was matched for is his when its buyer's string names him (his link,
+  // handle, username or number; `buyerNamesFan`) on one of the platform's pages or on no known page; a bare name
+  // («Том») names nobody and stays.
+  const fanUsername = scope.fanId === null ? null
+    : (await app.db.execute<{ username: string | null }>(sql`select username from fans where id = ${scope.fanId}`)).rows[0]?.username ?? null;
+  const buyerRows = await app.db.execute<{ id: string; buyer: string }>(sql`
+    select id::text as id, buyer from custom_orders
+    where fan_id is null and buyer is not null and (page_id is null or page_id in ${scope.pageIds})`);
+  const platform = scope.input.scopeType === "fan" ? scope.input.platform : "";
+  const byBuyer = buyerRows.rows
+    .filter((row) => buyerNamesFan(row.buyer, { platform, platformUserId: ref, username: fanUsername }))
+    .map((row) => Number(row.id));
+  const customOrderPred = byBuyer.length === 0 ? sql`fan_id = ${fanId}` : sql`(fan_id = ${fanId} or id in ${byBuyer})`;
+  // Its messages and its history keep the facts — which message did what and when, the states, the times — and
+  // lose the words: an excerpt quotes the chat, an author is a Telegram name, a revision's request, a refusal's
+  // reason and a note are free text about the fan, and the history keeps copies of them. Before the order loses
+  // the fan: the predicates follow him.
+  const customMessagePred = sql`order_id in (select id from custom_orders where ${customOrderPred})
+    and (excerpt is not null or author is not null)`;
+  targets.push({
+    plane: "hot",
+    target: "custom_order_messages",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from custom_order_messages where ${customMessagePred}`),
+    run: (tx) => execCount(tx, sql`update custom_order_messages set excerpt = null, author = null where ${customMessagePred}`),
+  });
+  const customEventPred = sql`object_type = 'custom_order'
+    and object_id in (select id::text from custom_orders where ${customOrderPred})
+    and (changes ? 'note' or changes ? 'reason' or changes ? 'excerpt')`;
+  targets.push({
+    plane: "hot",
+    target: "object_events",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from object_events where ${customEventPred}`),
+    run: (tx) => execCount(tx, sql`
+      update object_events set changes = changes - 'note' - 'reason' - 'excerpt' where ${customEventPred}`),
+  });
   targets.push({
     plane: "hot",
     target: "custom_orders",
@@ -1729,7 +1767,8 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     rows: await countOf(app, sql`select count(*)::text as n from custom_orders where ${customOrderPred}`),
     run: (tx) => execCount(tx, sql`
       update custom_orders
-      set fan_id = null, buyer = null, conversation_ref = null, source_text = null, card = card - 'name',
+      set fan_id = null, buyer = null, conversation_ref = null, source_text = null, state_note = null,
+          card = card - ${sql.param([...CUSTOM_CARD_FAN_TEXTS])}::text[],
           fan_erased_at = coalesce(fan_erased_at, now()), updated_at = now(), version = version + 1
       where ${customOrderPred}`),
   });

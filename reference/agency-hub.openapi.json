@@ -108229,7 +108229,16 @@
                               "type": "object",
                               "properties": {
                                 "telegramRef": {
-                                  "type": "string"
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "eventRef": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
                                 },
                                 "ordinal": {
                                   "type": "integer",
@@ -108260,6 +108269,12 @@
                                     }
                                   ]
                                 },
+                                "complete": {
+                                  "type": [
+                                    "boolean",
+                                    "null"
+                                  ]
+                                },
                                 "at": {
                                   "type": [
                                     "string",
@@ -108283,17 +108298,26 @@
                                     "string",
                                     "null"
                                   ]
+                                },
+                                "retractedAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
                                 }
                               },
                               "required": [
                                 "telegramRef",
+                                "eventRef",
                                 "ordinal",
                                 "kind",
                                 "part",
+                                "complete",
                                 "at",
                                 "author",
                                 "excerpt",
-                                "doneAt"
+                                "doneAt",
+                                "retractedAt"
                               ],
                               "additionalProperties": false
                             }
@@ -108734,6 +108758,9 @@
                     "minLength": 1,
                     "maxLength": 8000
                   },
+                  "another": {
+                    "type": "boolean"
+                  },
                   "onBehalfOf": {
                     "type": "string",
                     "minLength": 1,
@@ -109069,7 +109096,16 @@
                             "type": "object",
                             "properties": {
                               "telegramRef": {
-                                "type": "string"
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "eventRef": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               },
                               "ordinal": {
                                 "type": "integer",
@@ -109100,6 +109136,12 @@
                                   }
                                 ]
                               },
+                              "complete": {
+                                "type": [
+                                  "boolean",
+                                  "null"
+                                ]
+                              },
                               "at": {
                                 "type": [
                                   "string",
@@ -109123,17 +109165,26 @@
                                   "string",
                                   "null"
                                 ]
+                              },
+                              "retractedAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "telegramRef",
+                              "eventRef",
                               "ordinal",
                               "kind",
                               "part",
+                              "complete",
                               "at",
                               "author",
                               "excerpt",
-                              "doneAt"
+                              "doneAt",
+                              "retractedAt"
                             ],
                             "additionalProperties": false
                           }
@@ -109182,11 +109233,39 @@
                         "changed",
                         "unchanged"
                       ]
+                    },
+                    "event": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "ref": {
+                              "type": "string"
+                            },
+                            "result": {
+                              "type": "string",
+                              "enum": [
+                                "stored",
+                                "already"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "ref",
+                            "result"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
                     "order",
-                    "outcome"
+                    "outcome",
+                    "event"
                   ],
                   "additionalProperties": false
                 }
@@ -110069,6 +110148,12 @@
                           "delivery"
                         ]
                       },
+                      "eventRef": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 200,
+                        "pattern": "^[a-z][a-z0-9_]*:[A-Za-z0-9._:-]{1,200}$"
+                      },
                       "message": {
                         "type": "object",
                         "properties": {
@@ -110093,9 +110178,6 @@
                             "maxLength": 500
                           }
                         },
-                        "required": [
-                          "telegramRef"
-                        ],
                         "additionalProperties": false
                       },
                       "part": {
@@ -110187,6 +110269,12 @@
                           "revision"
                         ]
                       },
+                      "eventRef": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 200,
+                        "pattern": "^[a-z][a-z0-9_]*:[A-Za-z0-9._:-]{1,200}$"
+                      },
                       "message": {
                         "type": "object",
                         "properties": {
@@ -110211,9 +110299,6 @@
                             "maxLength": 500
                           }
                         },
-                        "required": [
-                          "telegramRef"
-                        ],
                         "additionalProperties": false
                       },
                       "ordinal": {
@@ -110254,6 +110339,12 @@
                         "minLength": 3,
                         "maxLength": 300
                       },
+                      "eventRef": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 200,
+                        "pattern": "^[a-z][a-z0-9_]*:[A-Za-z0-9._:-]{1,200}$"
+                      },
                       "ordinal": {
                         "default": 0,
                         "type": "integer",
@@ -110267,8 +110358,72 @@
                       }
                     },
                     "required": [
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "retract"
+                        ]
+                      },
+                      "eventRef": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 200,
+                        "pattern": "^[a-z][a-z0-9_]*:[A-Za-z0-9._:-]{1,200}$"
+                      },
+                      "retracts": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 300
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "message": {
+                        "type": "object",
+                        "properties": {
+                          "telegramRef": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 300
+                          },
+                          "at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                          },
+                          "author": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          },
+                          "excerpt": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
                       "action",
-                      "telegramRef"
+                      "eventRef",
+                      "retracts",
+                      "reason"
                     ],
                     "additionalProperties": false
                   },
@@ -110347,6 +110502,12 @@
                           "note"
                         ]
                       },
+                      "eventRef": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 200,
+                        "pattern": "^[a-z][a-z0-9_]*:[A-Za-z0-9._:-]{1,200}$"
+                      },
                       "message": {
                         "type": "object",
                         "properties": {
@@ -110371,9 +110532,6 @@
                             "maxLength": 500
                           }
                         },
-                        "required": [
-                          "telegramRef"
-                        ],
                         "additionalProperties": false
                       },
                       "onBehalfOf": {
@@ -110753,7 +110911,16 @@
                             "type": "object",
                             "properties": {
                               "telegramRef": {
-                                "type": "string"
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "eventRef": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               },
                               "ordinal": {
                                 "type": "integer",
@@ -110784,6 +110951,12 @@
                                   }
                                 ]
                               },
+                              "complete": {
+                                "type": [
+                                  "boolean",
+                                  "null"
+                                ]
+                              },
                               "at": {
                                 "type": [
                                   "string",
@@ -110807,17 +110980,26 @@
                                   "string",
                                   "null"
                                 ]
+                              },
+                              "retractedAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "telegramRef",
+                              "eventRef",
                               "ordinal",
                               "kind",
                               "part",
+                              "complete",
                               "at",
                               "author",
                               "excerpt",
-                              "doneAt"
+                              "doneAt",
+                              "retractedAt"
                             ],
                             "additionalProperties": false
                           }
@@ -110866,11 +111048,39 @@
                         "changed",
                         "unchanged"
                       ]
+                    },
+                    "event": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "ref": {
+                              "type": "string"
+                            },
+                            "result": {
+                              "type": "string",
+                              "enum": [
+                                "stored",
+                                "already"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "ref",
+                            "result"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
                     "order",
-                    "outcome"
+                    "outcome",
+                    "event"
                   ],
                   "additionalProperties": false
                 }
@@ -224900,7 +225110,16 @@
                         "type": "object",
                         "properties": {
                           "telegramRef": {
-                            "type": "string"
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "eventRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           },
                           "ordinal": {
                             "type": "integer",
@@ -224931,6 +225150,12 @@
                               }
                             ]
                           },
+                          "complete": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
                           "at": {
                             "type": [
                               "string",
@@ -224954,17 +225179,26 @@
                               "string",
                               "null"
                             ]
+                          },
+                          "retractedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
                           "telegramRef",
+                          "eventRef",
                           "ordinal",
                           "kind",
                           "part",
+                          "complete",
                           "at",
                           "author",
                           "excerpt",
-                          "doneAt"
+                          "doneAt",
+                          "retractedAt"
                         ],
                         "additionalProperties": false
                       }
@@ -225964,7 +226198,16 @@
                         "type": "object",
                         "properties": {
                           "telegramRef": {
-                            "type": "string"
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "eventRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           },
                           "ordinal": {
                             "type": "integer",
@@ -225995,6 +226238,12 @@
                               }
                             ]
                           },
+                          "complete": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
                           "at": {
                             "type": [
                               "string",
@@ -226018,17 +226267,26 @@
                               "string",
                               "null"
                             ]
+                          },
+                          "retractedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
                           "telegramRef",
+                          "eventRef",
                           "ordinal",
                           "kind",
                           "part",
+                          "complete",
                           "at",
                           "author",
                           "excerpt",
-                          "doneAt"
+                          "doneAt",
+                          "retractedAt"
                         ],
                         "additionalProperties": false
                       }
@@ -227190,7 +227448,16 @@
                         "type": "object",
                         "properties": {
                           "telegramRef": {
-                            "type": "string"
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "eventRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           },
                           "ordinal": {
                             "type": "integer",
@@ -227221,6 +227488,12 @@
                               }
                             ]
                           },
+                          "complete": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
+                          },
                           "at": {
                             "type": [
                               "string",
@@ -227244,17 +227517,26 @@
                               "string",
                               "null"
                             ]
+                          },
+                          "retractedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
                           "telegramRef",
+                          "eventRef",
                           "ordinal",
                           "kind",
                           "part",
+                          "complete",
                           "at",
                           "author",
                           "excerpt",
-                          "doneAt"
+                          "doneAt",
+                          "retractedAt"
                         ],
                         "additionalProperties": false
                       }

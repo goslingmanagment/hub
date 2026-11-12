@@ -60,9 +60,12 @@ import "./customs.css";
 
 const BOARD_BACK = { to: "/customs", label: "Кастомы" };
 
-/** Who took the order, by the registry's name; an imported order nobody took, one Gengar wrote alone. */
-function acceptorOf(order: Pick<CustomOrder, "acceptedByName" | "origin">): string {
-  return order.acceptedByName ?? (order.origin === "import" ? "перенесён" : "Генгар");
+/**
+ * Who took the order, by the registry's name, or Gengar who wrote it alone. An imported order nobody took says
+ * nothing on its face: that it came over is in its history.
+ */
+function acceptorOf(order: Pick<CustomOrder, "acceptedByName" | "origin">): string | null {
+  return order.acceptedByName ?? (order.origin === "import" ? null : "Генгар");
 }
 
 function StateBadge({ order }: { order: Pick<CustomOrder, "state"> }) {
@@ -105,7 +108,7 @@ function OrderCard({ order, serverNow }: { order: CustomOrder; serverNow: string
       <PaidLine order={order} />
       <span className="cus-card__foot">
         <Deadline order={order} serverNow={serverNow} />
-        <span className="cus-muted">{acceptorOf(order)}</span>
+        {acceptorOf(order) !== null && <span className="cus-muted">{acceptorOf(order)}</span>}
       </span>
     </Link>
   );
@@ -534,7 +537,7 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
             ...CARD_FIELDS.filter((field) => order.card[field.key] !== undefined).map((field) => ({
               label: field.label, value: <span className="cus-pre">{String(order.card[field.key])}</span>,
             })),
-            { label: "Принял", value: order.acceptedByName ?? (order.origin === "import" ? "перенесён из старых карточек" : "Генгар") },
+            ...(acceptorOf(order) === null ? [] : [{ label: "Принял", value: acceptorOf(order) }]),
           ]} />
           <Disclosure size="md" summary="Текст карточки для модели">
             <pre className="cus-card-text">{detail.cardText}</pre>
@@ -588,9 +591,14 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
             <Section title="В группе модели">
               <ul className="cus-list">
                 {detail.messages.map((message) => (
-                  <li key={`${message.telegramRef}:${message.ordinal}`} className="cus-list__row cus-list__row--text">
-                    <a href={telegramHref(message.telegramRef)} target="_blank" rel="noreferrer">{message.at ? <TimeMsk at={message.at} /> : "сообщение"}</a>
-                    <span>{message.author ? `${message.author}: ` : ""}{message.excerpt ?? ({ repost: "копия карточки", delivery: "сдача", revision: "правка", confirmation: "подтверждение", note: "заметка" })[message.kind]}</span>
+                  <li key={`${message.eventRef ?? message.telegramRef}:${message.ordinal}`} className="cus-list__row cus-list__row--text">
+                    {message.telegramRef === null
+                      ? <span>{message.at ? <TimeMsk at={message.at} /> : "сообщение"}</span>
+                      : <a href={telegramHref(message.telegramRef)} target="_blank" rel="noreferrer">{message.at ? <TimeMsk at={message.at} /> : "сообщение"}</a>}
+                    <span>
+                      {message.author ? `${message.author}: ` : ""}{message.excerpt ?? ({ repost: "копия карточки", delivery: "сдача", revision: "правка", confirmation: "подтверждение", note: "заметка" })[message.kind]}
+                      {message.retractedAt !== null && <span className="cus-muted"> · отозвана</span>}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -601,7 +609,7 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
               {detail.history.map((item, index) => (
                 <li key={index}>
                   <TimeMsk at={item.at} />
-                  <span>{EVENT_WORDS[item.event] ?? item.event}</span>
+                  <span>{item.event === "custom_order.recorded" && item.changes.origin === "import" ? "Перенесён из старых карточек" : EVENT_WORDS[item.event] ?? item.event}</span>
                   <span className="cus-muted">{[item.actor ?? (item.door === "system" ? null : "кто-то"), item.onBehalfOf ? `за ${item.onBehalfOf}` : null, DOOR_WORDS[item.door] ?? item.door].filter(Boolean).join(", ")}</span>
                 </li>
               ))}

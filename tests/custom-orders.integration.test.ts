@@ -7,6 +7,7 @@ import { sha256Hex } from "@agency_hub_core/shared";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { applyCustomOrdersImport, customOrdersImportArgsSchema, planCustomOrdersImport } from "../apps/runtime/src/services/custom-orders/import.ts";
 import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -161,8 +162,9 @@ describe("custom orders: who sees and moves what", () => {
     expect((await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-2", fan: "fan_three", card })).statusCode).toBe(404);
     expect((await agent(`/api/v1/agent/custom-orders/${orders.elsewhere}`, { action: "edit", card: { notes: "x" } })).statusCode).toBe(404);
 
+    // fan_one has alice's open order on lora-1: one more is said in so many words.
     const created = await agent("/api/v1/agent/custom-orders", {
-      pageLabel: "lora-1", fan: "https://fansly.com/fan_one/posts", acceptedBy: "alice", card, telegramRef: "https://t.me/c/2600000002/6/200",
+      pageLabel: "lora-1", fan: "https://fansly.com/fan_one/posts", acceptedBy: "alice", card, telegramRef: "https://t.me/c/2600000002/6/200", another: true,
     });
     expect(created.statusCode, created.body).toBe(200);
     const order = agentCustomOrderResponseSchema.parse(created.json()).order;
@@ -191,6 +193,11 @@ describe("custom orders: who sees and moves what", () => {
     expect(agentCustomOrderResponseSchema.parse((await agent(`/api/v1/agent/custom-orders/${order.code}`, revision)).json()).outcome).toBe("changed");
     const repeat = agentCustomOrderResponseSchema.parse((await agent(`/api/v1/agent/custom-orders/${order.code}`, revision)).json());
     expect(repeat).toMatchObject({ outcome: "unchanged", order: { state: "revision", openRevisions: 1 } });
+    // The daily routine repeats every message it sees: the first delivery again changes nothing — the order stays «правка».
+    const redelivered = agentCustomOrderResponseSchema.parse((await agent(`/api/v1/agent/custom-orders/${order.code}`, {
+      action: "delivery", message: { telegramRef: "tg:2600000001/3/300", excerpt: "6-08 стриптиз.mov" }, part: "video",
+    })).json());
+    expect(redelivered).toMatchObject({ outcome: "unchanged", order: { state: "revision", openRevisions: 1 } });
 
     // The reader's reads and reports (both answered 500 once: their audit lines broke the audit's own shapes).
     const listed = await server!.inject({ method: "GET", url: `/api/v1/agent/custom-orders?code=${order.code}`, headers: { authorization: `Bearer ${WRITER}` } });
@@ -199,6 +206,182 @@ describe("custom orders: who sees and moves what", () => {
     const cards = await agent("/api/v1/agent/custom-orders/cards", { cards: [{ telegramRef: "tg:2600000001/3/400" }, { telegramRef: "tg:2600000002/6/200" }], complete: true });
     expect(cards.statusCode, cards.body).toBe(200);
     expect(cards.json()).toMatchObject({ matched: [{ telegramRef: "tg:2600000002/6/200", code: order.code }], opened: 1 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  /** A fresh order of lora-1 at the model, no Telegram card yet. */
+  async function atModel(task: string): Promise<string> {
+    const id = await recordCustomOrder(app, {
+      pageId: pages["lora-1"]!, fanId: null, buyer: null, conversationRef: null, card: { task }, deadlineOn: null,
+      acceptedByUserId: users.alice!, origin: "extension", actor: { door: "extension", userId: users.alice! },
+    });
+    expect((await act("carol", `K-${id}`, { action: "at_model" })).statusCode).toBe(200);
+    return `K-${id}`;
+  }
+  const step = async (code: string, payload: Record<string, unknown>) => {
+    const response = await agent(`/api/v1/agent/custom-orders/${code}`, payload);
+    expect(response.statusCode, response.body).toBe(200);
+    return response.json() as { order: { state: string; partsDone: string[]; openRevisions: number; messages: Array<Record<string, unknown>> }; outcome: string; event?: unknown };
+  };
+
+  it("keeps a revision open until its own round is delivered whole: a part of the new version is not «снят»", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const code = await atModel("Ролик с правкой");
+    expect((await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/500" }, part: "video" })).order.state).toBe("shot");
+    // The model's group asks for a fix; the model sends a first piece of the new version, not the whole of it.
+    expect((await step(code, { action: "revision", message: { telegramRef: "tg:2600000001/3/501" }, ordinal: 1, text: "без музыки" })).order.state).toBe("revision");
+    const piece = await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/502" }, part: "video", complete: false });
+    expect(piece.order).toMatchObject({ state: "revision", openRevisions: 1 });
+    // The whole new version answers the request: the order is shot again, nothing open.
+    const whole = await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/503" }, part: "video", complete: true });
+    expect(whole.order).toMatchObject({ state: "shot", openRevisions: 0 });
+
+    // «Правка» on the board (no message of the model's group) is a requirement as well.
+    expect((await act("carol", code, { action: "revision", note: "фан просит другое начало" })).statusCode).toBe(200);
+    const boardPiece = await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/504" }, part: "video", complete: false });
+    expect(boardPiece.order.state).toBe("revision");
+    // The reader's «исправлено» closes the last open request: the parts are whole, so shot.
+    await step(code, { action: "revision", message: { telegramRef: "tg:2600000001/3/505" }, ordinal: 0, text: "короче" });
+    const done = await step(code, { action: "revision_done", telegramRef: "tg:2600000001/3/505", ordinal: 0 });
+    expect(done.order).toMatchObject({ state: "revision", openRevisions: 0 });
+    expect((await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/506" }, part: "video", complete: true })).order.state).toBe("shot");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps an event by the sender's own id: a delivery with no card, its repeat, a retraction, and says which event it stored", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const code = await atModel("Ролик без карточки");
+    const delivery = { action: "delivery", eventRef: "contentops:delivery:7d0c6a52-0000-4000-8000-000000000001", message: { excerpt: "CUS-1 · видео", author: "ContentOps" }, part: "video", complete: true };
+    const stored = await step(code, delivery);
+    expect(stored).toMatchObject({ outcome: "changed", event: { ref: delivery.eventRef, result: "stored" }, order: { state: "shot", partsDone: ["video"] } });
+    expect(stored.order.messages).toEqual([expect.objectContaining({ kind: "delivery", eventRef: delivery.eventRef, telegramRef: null, complete: true, retractedAt: null })]);
+    expect(await step(code, delivery)).toMatchObject({ outcome: "unchanged", event: { ref: delivery.eventRef, result: "already" } });
+
+    // The old way, a note under a link the order has a delivery of: the hub keeps one message per link and says it kept none.
+    await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/600" }, part: "video" });
+    const lost = await step(code, { action: "message", kind: "note", message: { telegramRef: "tg:2600000001/3/600", excerpt: "отвязана" } });
+    expect(lost).toMatchObject({ outcome: "unchanged", event: null });
+
+    // A retraction is its own event: it takes the delivery back and the state follows the parts that stay.
+    const retract = { action: "retract", eventRef: "contentops:retraction:7d0c6a52-0000-4000-8000-000000000002", retracts: delivery.eventRef, reason: "это другой заказ" };
+    const back = await step(code, retract);
+    expect(back).toMatchObject({ outcome: "changed", event: { ref: retract.eventRef, result: "stored" } });
+    // The routine's own delivery of the video stays: the order is still whole.
+    expect(back.order).toMatchObject({ state: "shot", partsDone: ["video"] });
+    expect(back.order.messages.find((message) => message.eventRef === delivery.eventRef)?.retractedAt).toEqual(expect.any(String));
+    expect(await step(code, retract)).toMatchObject({ outcome: "unchanged", event: { ref: retract.eventRef, result: "already" } });
+    // The routine's delivery taken back by its link: nothing delivers the video now.
+    const second = await step(code, { action: "retract", eventRef: "contentops:retraction:7d0c6a52-0000-4000-8000-000000000003", retracts: "https://t.me/c/2600000001/3/600", reason: "не тот ролик" });
+    expect(second.order).toMatchObject({ state: "at_model", partsDone: [] });
+    const unknown = await agent(`/api/v1/agent/custom-orders/${code}`, { action: "retract", eventRef: "contentops:retraction:x-4", retracts: "contentops:delivery:never", reason: "нет такой" });
+    expect(unknown.statusCode).toBe(409);
+    expect(unknown.json()).toMatchObject({ reason: "unknown_event" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("answers a card that carries an order's code with that order: one custom, one order", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // Gengar's `/tz`: the order first, no card yet; its code goes into the card's title.
+    const card = { task: "1. В белом", price: "120$" };
+    const first = agentCustomOrderResponseSchema.parse((await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", card })).json()).order;
+    // The daily routine finds the posted card by its link: no order has the link, but the card names the code.
+    const sourceText = `📦 Описание заказа ${first.code}\nДата: 12.11.2026\n🎥 Описание задания: 1. В белом\nОплата: 120$`;
+    const found = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", card, telegramRef: "tg:2600000002/6/700", sourceText });
+    expect(found.statusCode, found.body).toBe(200);
+    expect(agentCustomOrderResponseSchema.parse(found.json())).toMatchObject({ outcome: "changed", order: { id: first.id, telegramRefs: ["tg:2600000002/6/700"] } });
+    const again = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", card, telegramRef: "tg:2600000002/6/700", sourceText });
+    expect(agentCustomOrderResponseSchema.parse(again.json())).toMatchObject({ outcome: "unchanged", order: { id: first.id } });
+    const count = await testDb.pool.query("select count(*)::int as n from custom_orders where card ->> 'task' = '1. В белом'");
+    expect(count.rows[0].n).toBe(1);
+    // A code of an order this key does not see, or of no order: refused, never a second order and never a guess.
+    for (const other of [orders.elsewhere!, "K-999999"]) {
+      const refused = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", card, telegramRef: "tg:2600000002/6/701", sourceText: `📦 Описание заказа ${other}\n🎥 Описание задания: x` });
+      expect(refused.statusCode, other).toBe(409);
+      expect(refused.json()).toMatchObject({ reason: "code_unknown" });
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("records no second open order of a fan on a page through an agent unless it says another", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const fanId = Number((await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username) values ('fansly', '7400000011', 'fan_eleven') returning id",
+    )).rows[0]!.id);
+    await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [fanId, pages["lora-1"]]);
+    const first = agentCustomOrderResponseSchema.parse((await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", fan: "fan_eleven", card: { task: "Первый" } })).json());
+    // Gengar's `/tz` and the daily routine: the same fan's custom again, no card that would tell it — the open order is the answer.
+    const second = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", fan: "@fan_eleven", card: { task: "Второй" } });
+    expect(second.statusCode, second.body).toBe(409);
+    expect(second.json()).toMatchObject({ reason: "open_orders", message: expect.stringContaining(first.order.code) });
+    const another = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", fan: "fan_eleven", card: { task: "Второй" }, another: true });
+    expect(another.statusCode, another.body).toBe(200);
+    expect(agentCustomOrderResponseSchema.parse(another.json()).outcome).toBe("created");
+    const count = await testDb.pool.query("select count(*)::int as n from custom_orders where fan_id = $1", [fanId]);
+    expect(count.rows[0].n).toBe(2);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("makes a repeat of the import a no-op: every order it stored is found again, a cardless one too", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const fanId = Number((await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username) values ('fansly', '7400000012', 'fan_twelve') returning id",
+    )).rows[0]!.id);
+    await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [fanId, pages["lora-1"]]);
+    const args = customOrdersImportArgsSchema.parse({
+      version: 1, cardsSince: "2026-01-01", modelGroupChats: ["2600000001"],
+      contentops: [{ model: "lora", orders: [{
+        id: "tg-2600000003-3-900", buyer: "fan_twelve", account: "lora-1", state: "waiting",
+        card: { ref: "tg:2600000003/3/900", posted_at: "2026-11-10T10:00:00Z", text: "📦 Описание заказа\n🎥 Описание задания: Импорт с карточкой" },
+      }] }],
+      // Gengar's board: an order with no card yet.
+      board: { open: [{ fan: "fan_twelve", page: "lora-1", card: null, status: "no_card", usd: 50, duration: "3 минуты" }], done: [] },
+    });
+    const plan = await planCustomOrdersImport(app, args);
+    expect(plan.orders).toHaveLength(2);
+    const created = await applyCustomOrdersImport(app, plan);
+    expect(created).toHaveLength(2);
+    // `--apply` once more with the same file: nothing new.
+    const again = await planCustomOrdersImport(app, args);
+    expect(again.orders).toEqual([]);
+    expect(again.existing.map((one) => one.code).sort()).toEqual([...created].sort());
+    expect(await applyCustomOrdersImport(app, again)).toEqual([]);
+    const count = await testDb.pool.query("select count(*)::int as n from custom_orders where fan_id = $1", [fanId]);
+    expect(count.rows[0].n).toBe(2);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("erases the fan's words with the fan: the messages' excerpts and authors and their copies in the history", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const fanId = Number((await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username) values ('fansly', '7400000009', 'fan_nine') returning id",
+    )).rows[0]!.id);
+    await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [fanId, pages["lora-1"]]);
+    const id = await recordCustomOrder(app, {
+      pageId: pages["lora-1"]!, fanId, buyer: null, conversationRef: null, deadlineOn: null,
+      card: { task: "Ролик для Тома, скажи «Том, привет»", notes: "Том просил чёрное", price: "100$", duration: "5 минут" },
+      acceptedByUserId: users.alice!, origin: "extension", actor: { door: "extension", userId: users.alice! },
+    });
+    // An order the fan matched no fan of the page for: the card's buyer string names him.
+    const byName = await recordCustomOrder(app, {
+      pageId: pages["lora-1"]!, fanId: null, buyer: "Том (fan_nine)", conversationRef: null, deadlineOn: null,
+      card: { task: "Ещё ролик для Тома", price: "50$" }, acceptedByUserId: null, origin: "import", actor: { door: "system" },
+    });
+    const code = `K-${id}`;
+    expect((await act("carol", code, { action: "at_model" })).statusCode).toBe(200);
+    await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/800", author: "Модель", excerpt: "для Тома.mov" }, part: "video" });
+    await step(code, { action: "revision", message: { telegramRef: "tg:2600000001/3/801", author: "Чаттер" }, text: "Том просит сказать его имя" });
+    const erasureApp = { db: app.db, pool: testDb.pool, config: app.config, logger: app.logger } as never;
+    const scope = { scopeType: "fan", platform: "fansly", fanRef: "7400000009" } as const;
+    await executeErasure(erasureApp, scope, { initiatedBy: users.boss! });
+    const detail = customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/${code}`)).json());
+    // The facts stay (the state, the times, which message did what); the words go, and their copies in the history.
+    expect(detail.messages.map((message) => [message.kind, message.telegramRef, message.author, message.excerpt])).toEqual([
+      ["delivery", "tg:2600000001/3/800", null, null],
+      ["revision", "tg:2600000001/3/801", null, null],
+    ]);
+    const texts = JSON.stringify(detail.history.map((item) => item.changes));
+    expect(texts).not.toContain("Том");
+    expect(detail.history.map((item) => item.event)).toEqual(expect.arrayContaining(["custom_order.delivery", "custom_order.revision"]));
+    expect(detail.order).toMatchObject({ state: "revision", fanErased: true, stateNote: null, partsDone: ["video"] });
+    // The card keeps what the order is (its price, its length), not the fan's words.
+    expect(detail.order.card).toEqual({ price: "100$", duration: "5 минут" });
+    const named = customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/K-${byName}`)).json());
+    expect(named.order).toMatchObject({ buyer: null, fanErased: true, card: { price: "50$" } });
+    expect(JSON.stringify(named)).not.toContain("Том");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("keeps the order through the fan's erasure: its preview says anonymize, and the order stays without the fan", async (context) => {

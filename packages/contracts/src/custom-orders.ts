@@ -190,18 +190,36 @@ export const customOrderSchema = z.object({
 export type CustomOrder = z.infer<typeof customOrderSchema>;
 
 export const CUSTOM_ORDER_MESSAGE_KINDS = ["repost", "delivery", "revision", "confirmation", "note"] as const;
-/** A significant message of the order in Telegram (the reader of the models' groups records them). */
+/**
+ * A significant message of the order: a Telegram message the reader of the models' groups records (known by its
+ * link and ordinal), or an event of a sender with its own id of it (ContentOps' delivery, known by `eventRef`).
+ */
 export const customOrderMessageSchema = z.object({
-  telegramRef: z.string(),
+  /** The Telegram message: what the row is known by, or the evidence of an event; null — an event with no message. */
+  telegramRef: z.string().nullable(),
+  /** The sender's own id of the event (`contentops:delivery:<id>`); null — a Telegram message of the groups. */
+  eventRef: z.string().nullable(),
   ordinal: z.number().int().nonnegative(),
   kind: z.enum(CUSTOM_ORDER_MESSAGE_KINDS),
   part: z.enum(["video", "photos"]).nullable(),
+  /** A delivery: that part is whole now; null — not said (an older delivery). */
+  complete: z.boolean().nullable(),
   at: isoTimestamp.nullable(),
   author: z.string().nullable(),
   excerpt: z.string().nullable(),
   /** A revision request: when it was fixed. */
   doneAt: isoTimestamp.nullable(),
+  /** A delivery taken back (a retraction): its part no longer counts. */
+  retractedAt: isoTimestamp.nullable(),
 });
+
+/**
+ * An event's own id, as its sender keeps it: `<sender>:<kind>:<id>` (`contentops:delivery:7d0c…`), unique per
+ * order. Never a Telegram link: a link is the event's evidence (`message.telegramRef`).
+ */
+export const CUSTOM_ORDER_EVENT_REF_PATTERN = /^[a-z][a-z0-9_]*:[A-Za-z0-9._:-]{1,200}$/;
+export const customOrderEventRefSchema = z.string().trim().min(3).max(200).regex(CUSTOM_ORDER_EVENT_REF_PATTERN)
+  .refine((value) => !value.startsWith("tg:"), { message: "an event ref is the sender's own id; a Telegram link goes into message.telegramRef" });
 
 /** A sale that looks like a custom with no order: a tier that includes one, or a tip whose note says so. */
 export const customLookalikeSaleSchema = z.object({
@@ -366,13 +384,21 @@ export const agentCustomOrderCreateBodySchema = z.object({
   author: z.string().trim().min(1).max(120).optional(),
   /** The card's whole text as posted, without Markdown. */
   sourceText: z.string().trim().min(1).max(8000).optional(),
+  /**
+   * One more order for a fan who has an open one on the page: without it such a create is refused (409
+   * `open_orders`, the open orders named) — the custom is most likely one of them.
+   */
+  another: z.boolean().optional(),
   /** The person on whose word the agent writes (their login). */
   onBehalfOf: login.optional(),
 }).strict();
 
-/** A message of the order in Telegram: its link, when, who, a short verbatim excerpt (not a copy of the chat). */
+/**
+ * A message of the order in Telegram: its link, when, who, a short verbatim excerpt (not a copy of the chat). The
+ * link is the step's identity; a step with `eventRef` is known by that, and the link (optional then) is its evidence.
+ */
 const agentMessageSchema = z.object({
-  telegramRef: telegramRefInputSchema,
+  telegramRef: telegramRefInputSchema.optional(),
   at: isoDateTime({ offset: true }).optional(),
   author: z.string().trim().min(1).max(120).optional(),
   excerpt: z.string().trim().min(1).max(500).optional(),
@@ -398,39 +424,79 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("at_model"), telegramRef: telegramRefInputSchema.optional(), onBehalfOf: login.optional() }).strict(),
   /**
    * The model delivered (a file, an album, the line «6-08 го хард.mov»): the message is kept with its excerpt;
-   * `complete` — that part is whole now. Every wanted part whole — shot; else partly.
+   * `complete` — that part is whole now. Every wanted part whole — shot; else partly. While a revision is open
+   * the order stays «правка» until a delivery with `complete` answers it (it closes the open requests).
+   * `eventRef` — the sender's own id of the delivery (ContentOps'): known by it, the link then optional evidence.
    */
   z.object({
-    action: z.literal("delivery"), message: agentMessageSchema, part: z.enum(["video", "photos"]).optional(),
-    complete: z.boolean().default(true), onBehalfOf: login.optional(),
+    action: z.literal("delivery"), eventRef: customOrderEventRefSchema.optional(), message: agentMessageSchema,
+    part: z.enum(["video", "photos"]).optional(), complete: z.boolean().default(true), onBehalfOf: login.optional(),
   }).strict(),
   z.object({ action: z.literal("partly"), ref: telegramRefInputSchema, note: note.optional(), onBehalfOf: login.optional() }).strict(),
+  /** Every part is whole: «снят». Open revision requests are fixed by it. */
   z.object({ action: z.literal("shot"), ref: telegramRefInputSchema, onBehalfOf: login.optional() }).strict(),
   /** A revision request (several in one message: `ordinal` 1, 2…); a repeat changes nothing. */
   z.object({
-    action: z.literal("revision"), message: agentMessageSchema, ordinal: z.number().int().min(0).max(50).default(0), text: note,
-    onBehalfOf: login.optional(),
+    action: z.literal("revision"), eventRef: customOrderEventRefSchema.optional(), message: agentMessageSchema,
+    ordinal: z.number().int().min(0).max(50).default(0), text: note, onBehalfOf: login.optional(),
   }).strict(),
-  /** A revision request is fixed (a new version came and the reader or a person saw it). */
+  /** A revision request is fixed (a new version came and the reader or a person saw it): by its link and ordinal, or its eventRef. */
   z.object({
-    action: z.literal("revision_done"), telegramRef: telegramRefInputSchema, ordinal: z.number().int().min(0).max(50).default(0),
-    onBehalfOf: login.optional(),
+    action: z.literal("revision_done"), telegramRef: telegramRefInputSchema.optional(), eventRef: customOrderEventRefSchema.optional(),
+    ordinal: z.number().int().min(0).max(50).default(0), onBehalfOf: login.optional(),
+  }).strict(),
+  /**
+   * A delivery taken back (ContentOps «это другой заказ»): `retracts` names it — its eventRef, or the Telegram link
+   * of the message it came with (every delivery of that message). Its part stops counting and the state follows the
+   * parts that stay. The retraction is an event of its own (`eventRef`); `message` — its evidence and author.
+   */
+  z.object({
+    action: z.literal("retract"), eventRef: customOrderEventRefSchema,
+    retracts: z.string().trim().min(3).max(300).refine((value) => parseTelegramRef(value) !== null || CUSTOM_ORDER_EVENT_REF_PATTERN.test(value), {
+      message: "the delivery's eventRef, or the Telegram link of its message",
+    }),
+    reason: note,
+    message: agentMessageSchema.optional(), onBehalfOf: login.optional(),
   }).strict(),
   z.object({ action: z.literal("refused"), ref: telegramRefInputSchema, reason: note, onBehalfOf: login.optional() }).strict(),
   /** A return, the fan's refusal, a duplicate card. */
   z.object({ action: z.literal("cancel"), reason: note, onBehalfOf: login.optional() }).strict(),
   /** Another message of the order: a repost of the card (it becomes the order's card too), a confirmation, a note. */
   z.object({
-    action: z.literal("message"), kind: z.enum(["repost", "confirmation", "note"]), message: agentMessageSchema, onBehalfOf: login.optional(),
+    action: z.literal("message"), kind: z.enum(["repost", "confirmation", "note"]), eventRef: customOrderEventRefSchema.optional(),
+    message: agentMessageSchema, onBehalfOf: login.optional(),
   }).strict(),
   /** Attach a Telegram card (a copy in another chat) to the order. */
   z.object({ action: z.literal("card"), telegramRef: telegramRefInputSchema, onBehalfOf: login.optional() }).strict(),
-]);
+]).superRefine((body, context) => {
+  // A message step is known by its Telegram link, or by the sender's own eventRef; a repost is a card, so a link.
+  if ((body.action === "delivery" || body.action === "revision" || body.action === "message") && body.message.telegramRef === undefined
+    && (body.eventRef === undefined || (body.action === "message" && body.kind === "repost"))) {
+    context.addIssue({ code: "custom", path: ["message", "telegramRef"], message: "the message's Telegram link, or the step's eventRef (a repost: the link)" });
+  }
+  if (body.action === "revision_done" && (body.telegramRef === undefined) === (body.eventRef === undefined)) {
+    context.addIssue({ code: "custom", path: ["telegramRef"], message: "the revision's Telegram link, or its eventRef: one of them" });
+  }
+});
+
+/** The event a message step names, and what the hub did with it. */
+export const agentCustomOrderEventSchema = z.object({
+  /** The step's eventRef, else its Telegram link (as the hub writes it, `tg:…`). */
+  ref: z.string(),
+  /** stored — kept now; already — the hub had this very event (the same ref and kind) before. */
+  result: z.enum(["stored", "already"]),
+});
 
 export const agentCustomOrderResponseSchema = z.object({
   order: agentCustomOrderSchema,
   /** What the call did: created, changed, or nothing (the same again). */
   outcome: z.enum(["created", "changed", "unchanged"]),
+  /**
+   * A message step (delivery, revision, message, retract): the event the hub keeps for it. Null — the hub kept no
+   * such event (its link holds another kind of message, or the order's state takes no such step), and every other
+   * step. A sender that must know its event is in the hub checks this, not the status.
+   */
+  event: agentCustomOrderEventSchema.nullable(),
 });
 
 /** The reader of the models' groups: the cards it found that no order has, for the lead. */
