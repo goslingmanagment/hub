@@ -12,10 +12,12 @@ import {
   findTransactionIdsByPlatformRef,
   listLoginIdsOfPerson,
   listPageMessageTexts,
+  listSaleArchive,
   listSaleContext,
   listSaleFacts,
   readFanWatch,
   type Database,
+  type SaleArchiveRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -90,7 +92,8 @@ export async function readAgentFanWatch(db: Database, scope: AgentPages, body: A
       pageId: page.id,
       username: watch.username,
       since,
-      archivedAfter: watch.archivedAfter === undefined ? new Date(0) : new Date(watch.archivedAfter),
+      // The mark as the agent sent it: the database compares it to the microsecond (a Date would cut it).
+      archivedAfter: watch.archivedAfter ?? null,
       limit: AGENT_FAN_WATCH_MESSAGES_MAX + 1,
     });
     const messages = read.messages.slice(0, AGENT_FAN_WATCH_MESSAGES_MAX);
@@ -101,7 +104,7 @@ export async function readAgentFanWatch(db: Database, scope: AgentPages, body: A
       fanMessages: messages.map((message) => ({
         ref: message.ref,
         at: message.at.toISOString(),
-        archivedAt: message.archivedAt.toISOString(),
+        archivedAt: message.archivedAt,
         text: scope.texts ? message.text : "",
         media: message.media,
         tipMills: scope.money ? message.tipMills : null,
@@ -113,9 +116,31 @@ export async function readAgentFanWatch(db: Database, scope: AgentPages, body: A
   return { watches, serverNow: now.toISOString() };
 }
 
+/** A sale's `archive` on the wire; the priced message's text only with read:messages. */
+function archiveOut(archive: SaleArchiveRow | undefined, texts: boolean) {
+  return {
+    conversationRef: archive?.conversationRef ?? null,
+    partnerUsername: archive?.partnerUsername ?? null,
+    fanRecordUsername: archive?.fanRecordUsername ?? null,
+    partnerUsernames: archive?.partnerUsernames ?? [],
+    pricedMessage: archive?.pricedMessage == null ? null : {
+      sentAt: archive.pricedMessage.sentAt.toISOString(),
+      sender: archive.pricedMessage.sender,
+      text: texts ? archive.pricedMessage.text : null,
+    },
+    pageMessages7d: archive?.pageMessages7d ?? [],
+    lastAuthored60d: archive?.lastAuthored60d == null ? null : {
+      name: archive.lastAuthored60d.name,
+      at: archive.lastAuthored60d.at.toISOString(),
+      within48h: archive.lastAuthored60d.within48h,
+    },
+  };
+}
+
 /**
  * `agentSaleContext`: for each sale on the key's pages, its fan, the PPV it
- * bought (Hub's match, `listSaleFacts`), and who wrote to the fan before it.
+ * bought (Hub's match, `listSaleFacts`), and who wrote to the fan before it;
+ * and the fan's chat as the shift report check reads the archive (`listSaleArchive`).
  * A sale not found there — unknown, or on a page the key does not reach — is
  * listed back in `notFound`, the same for both.
  */
@@ -144,6 +169,7 @@ export async function readAgentSaleContext(db: Database, scope: AgentPages, body
   const rows = (await listSaleContext(db, { transactionIds: ids })).filter((row) => labelOf.has(row.pageId));
   const facts = await listSaleFacts(db, { transactionIds: rows.map((row) => row.transactionId) });
   const factOf = new Map(facts.map((fact) => [fact.transactionId, fact]));
+  const archiveOf = await listSaleArchive(db, { transactionIds: rows.map((row) => row.transactionId) });
   // The bought PPV's text, only with read:messages.
   const pageOf = new Map(rows.map((row) => [row.transactionId, row.pageId]));
   const ppvMessages = facts.flatMap((fact) => (fact.ppvMessageRef === null ? [] : [{ pageId: pageOf.get(fact.transactionId)!, ref: fact.ppvMessageRef }]));
@@ -180,6 +206,7 @@ export async function readAgentSaleContext(db: Database, scope: AgentPages, body
         at: row.lastWriter60d.at.toISOString(),
         within48h: row.occurredAt.getTime() - row.lastWriter60d.at.getTime() <= 48 * 3_600_000,
       },
+      archive: archiveOut(archiveOf.get(row.transactionId), scope.texts),
     });
   }
   for (const [id, sale] of wanted) {

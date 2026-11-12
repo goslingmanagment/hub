@@ -2,8 +2,12 @@
 
 /** sha256 over the normalized OpenAPI document — the cross-repo drift key. */
 <<<<<<< HEAD
+<<<<<<< HEAD
 export const KERNEL_CONTRACT_HASH = "da36bfa4fc45b1fa362a6a4dcfbd3b02019854bd5e64a1bcbf46b0349e69850b";
 =======
 export const KERNEL_CONTRACT_HASH = "96a1afd61fa0e15453a1a8c4e74e71425654485d24affe638f2d6dac5a72c323";
 >>>>>>> origin/eco/review-fan-panel-step
+=======
+export const KERNEL_CONTRACT_HASH = "c397431e96ed34a7766c9c7853e89541cf9e0ee9c16ff79003bcafd8feb471da";
+>>>>>>> origin/eco/review-agent-doors
 export const KERNEL_SDK_VERSION = "0.4.0";

@@ -189737,6 +189737,129 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "archive": {
+                            "type": "object",
+                            "properties": {
+                              "conversationRef": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "partnerUsername": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanRecordUsername": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "partnerUsernames": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "pricedMessage": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "sentAt": {
+                                        "type": "string"
+                                      },
+                                      "sender": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      },
+                                      "text": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "sentAt",
+                                      "sender",
+                                      "text"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "pageMessages7d": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "messages": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "messages"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "lastAuthored60d": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "at": {
+                                        "type": "string"
+                                      },
+                                      "within48h": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "at",
+                                      "within48h"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "conversationRef",
+                              "partnerUsername",
+                              "fanRecordUsername",
+                              "partnerUsernames",
+                              "pricedMessage",
+                              "pageMessages7d",
+                              "lastAuthored60d"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -189754,7 +189877,8 @@
                           "campaign",
                           "writers48h",
                           "writers7d",
-                          "lastWriter"
+                          "lastWriter",
+                          "archive"
                         ],
                         "additionalProperties": false
                       }

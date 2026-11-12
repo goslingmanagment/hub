@@ -102,7 +102,10 @@ export const agentFanWatchBodySchema = z.object({
     username: usernameSchema,
     /** The watch's start: the fan's messages after it. */
     since: isoDateTime({ offset: true }),
-    /** The newest `archivedAt` already seen: only messages the archive took after it (the watch's progress). */
+    /**
+     * The newest `archivedAt` already seen: only messages the archive took after it (the watch's progress). Compared at
+     * the archive's own precision (microseconds): the message that set the mark never comes back.
+     */
     archivedAfter: isoDateTime({ offset: true }).optional(),
   }).strict()).min(1).max(50),
 }).strict();
@@ -117,6 +120,7 @@ export const agentFanWatchResponseSchema = z.object({
     fanMessages: z.array(z.object({
       ref: z.string(),
       at: isoTimestamp,
+      /** When the archive took it, to the microsecond (`2026-11-12T01:25:24.972892Z`): the next `archivedAfter`. */
       archivedAt: isoTimestamp,
       /** Empty without read:messages. At most 2,000 characters. */
       text: z.string(),
@@ -144,6 +148,40 @@ export const agentSaleContextBodySchema = z.object({
 }).strict();
 
 const writerSchema = z.object({ name: z.string(), messages: count });
+
+/**
+ * The fan's chat as the shift report check has read the archive since before Hub's own facts (`ppv`, `writers7d`,
+ * `lastWriter`), so the check keeps every number when it leaves `ssh … psql`: the fan's latest chat on the page by the
+ * fan's platform id, and in it the page's messages that are not deleted. Facts, no rule: the check decides with them.
+ */
+const saleArchiveSchema = z.object({
+  /** The fan's latest chat on the page (by its last message); null — the fan has none there, and the rest is empty. */
+  conversationRef: z.string().nullable(),
+  /** That chat's partner name; null — none recorded. */
+  partnerUsername: z.string().nullable(),
+  /** The name of Hub's fan record with the fan's platform id; null — none. */
+  fanRecordUsername: z.string().nullable(),
+  /** Every name the fan has in the page's chats, in the database's own order (its collation): the greatest is last. */
+  partnerUsernames: z.array(z.string()),
+  /**
+   * A PPV purchase: the page's latest message in that chat priced at the sale's gross and sent at or before it; null —
+   * not a purchase of a message, or no such message.
+   */
+  pricedMessage: z.object({
+    sentAt: isoTimestamp,
+    /** Its author's login; null — sent without an author. */
+    sender: z.string().nullable(),
+    /** Its text, at most 2,000 characters; null — without read:messages. */
+    text: z.string().nullable(),
+  }).nullable(),
+  /**
+   * The page's messages in that chat in the 7 days before the sale, by author (`name` null — no author), most first,
+   * then by name in the database's order with no author last.
+   */
+  pageMessages7d: z.array(z.object({ name: z.string().nullable(), messages: count })),
+  /** The page's latest message with an author in that chat in the 60 days before the sale: who, when, within 48 hours. */
+  lastAuthored60d: z.object({ name: z.string(), at: isoTimestamp, within48h: z.boolean() }).nullable(),
+});
 
 export const agentSaleContextResponseSchema = z.object({
   /** The sales found on the key's pages, oldest first. */
@@ -174,6 +212,8 @@ export const agentSaleContextResponseSchema = z.object({
     writers7d: z.array(writerSchema),
     /** Who last wrote to the fan in the 60 days before it, when, and whether within 48 hours; null — nobody with an author. */
     lastWriter: z.object({ name: z.string(), at: isoTimestamp, within48h: z.boolean() }).nullable(),
+    /** The fan's chat in the archive, as the shift report check reads it. */
+    archive: saleArchiveSchema,
   })),
   /** Requested sales not found on the key's pages (unknown, or on a page the key does not reach), as asked. */
   notFound: z.array(saleRequestSchema),
