@@ -21,6 +21,7 @@ import {
   countAuthoredSendsByMinute,
   findPageSummaryByLabel,
   listChatterActivityMinutes,
+  listOwnerLoginIds,
   listSaleLastWriters,
   listShiftSales,
   recordChatterActivityBeat,
@@ -453,7 +454,8 @@ export function workOnPages(work: ComputedWork, labels: ReadonlySet<string>): Co
 /**
  * Everyone's work in [from, to) (or one person's): computed from all their
  * minutes and messages whatever the pages asked, then cut to `pages`: a lead's
- * view of a page does not make a shift of the page's share of one.
+ * view of a page does not make a shift of the page's share of one. The owner's
+ * logins' work holds no sale (`listOwnerLoginIds`).
  */
 export async function readPeopleWork(
   db: Database,
@@ -464,9 +466,9 @@ export async function readPeopleWork(
   const readMinutes = () => listChatterActivityMinutes(db, { from: input.from, to: input.to, pages: "all", ...person });
   const readSends = () => countAuthoredSendsByMinute(db, { from: input.from, to: input.to, pages: "all", ...person });
   // `inTurn`: `db` is the caller's transaction, one connection — no Promise.all on it.
-  const [minutes, sends] = options?.inTurn === true
-    ? [await readMinutes(), await readSends()]
-    : await Promise.all([readMinutes(), readSends()]);
+  const [minutes, sends, owners] = options?.inTurn === true
+    ? [await readMinutes(), await readSends(), await listOwnerLoginIds(db)]
+    : await Promise.all([readMinutes(), readSends(), listOwnerLoginIds(db)]);
   const scope = input.pages === "all" ? null : new Set(input.pages);
   const labels = new Set<string>();
   const people = new Map<number, { username: string; pageIds: Map<string, number>; minutes: ActivityMinute[]; sent: SentMinute[] }>();
@@ -482,7 +484,9 @@ export async function readPeopleWork(
   const out = new Map<number, PersonWork>();
   for (const [userId, known] of people) {
     const all = workOfMinutes(known.minutes, known.sent, input.now.getTime());
-    const work = scope === null ? all : all.flatMap((one) => workOnPages(one, labels) ?? []);
+    const cut = scope === null ? all : all.flatMap((one) => workOnPages(one, labels) ?? []);
+    // The owner is not a chatter: their work stays work, but holds no sale (owner, 2026-11-12).
+    const work = owners.has(userId) ? cut.map((one) => ({ ...one, salesSince: new Map<string, number>() })) : cut;
     if (work.length > 0) out.set(userId, { username: known.username, pageIds: known.pageIds, work });
   }
   return out;

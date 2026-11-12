@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createModel, createOnlyFansPage, listSaleFacts, upsertTransaction } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, createOnlyFansPage, listOwnerLoginIds, listSaleFacts, listSaleLastWriters, listUserRoles, upsertTransaction } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
@@ -27,7 +27,7 @@ describe("the facts of a sale", () => {
     testDb = await startIntegrationTestDatabase();
     if (!testDb) return;
     app = createTestAppContext(testDb);
-    for (const username of ["nikita", "vanya"]) {
+    for (const username of ["nikita", "vanya", "dima"]) {
       await createUserAccount(app, { username, role: "chatter" }, { source: "cli" });
       users[username] = await fixtureUserId(app, username);
     }
@@ -69,5 +69,25 @@ describe("the facts of a sale", () => {
     }
     const facts = await listSaleFacts(app.db, { transactionIds: ids });
     expect(ids.map((id) => facts.find((fact) => fact.transactionId === id)?.ppvSender?.username)).toEqual(["vanya", "nikita"]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("passes over the owner's chatter login: the chatter who wrote before the owner stepped in wrote last", async (context) => {
+    if (!testDb) return context.skip();
+    // A custom of 2026-11-12: a chatter talked the fan into it, the owner's chatter login wrote four messages,
+    // the fan tipped a minute later — and the sale went to the owner.
+    const person = Number((await q("insert into people (code, display_name, role, state) values ('dima', 'Дима', 'owner', 'working') returning id")).rows[0].id);
+    await q("insert into person_logins (user_id, person_id) values ($1, $2)", [users.dima, person]);
+    const model = await createModel(app.db, { slug: "owner-steps-in", name: "Owner steps in" });
+    const page = (await createFanslyPage(app.db, { modelId: model!.id, label: "owner-steps-in" }))!.id;
+    const tipAt = Date.now() - HOUR;
+    for (const [ref, author, before] of [["7200000001", "vanya", 20], ["7200000002", "dima", 3]] as const) {
+      await q(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at)
+               values ('fansly', $1, $2, '7300000001', $3, 'fansly-extension', false, false, $4)`, [page, ref, users[author], new Date(tipAt - before * 60_000)]);
+    }
+    const writers = await listSaleLastWriters(app.db, { hours: 48, sales: [{ transactionId: 1, pageId: page, fanRef: "7300000001", at: new Date(tipAt) }] });
+    expect(writers.get(1)).toBe(users.vanya);
+    const owners = await listOwnerLoginIds(app.db);
+    expect([owners.has(users.dima!), owners.has(users.vanya!)]).toEqual([true, false]);
+    expect((await listUserRoles(app.db, [users.dima!, users.vanya!])).get(users.dima!)).toBe("owner");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

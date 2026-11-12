@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { isOwnerLogin } from "./chatter-activity.ts";
 import { listOnlyfansUnlockMatches } from "./onlyfans-unlocks.ts";
 
 // The sales of a shift and their facts (Chat Memory week 4, 0311), and what the
@@ -263,10 +264,11 @@ export async function listConfirmedMarkKeys(db: Database, input: { transactionId
   return new Set(result.rows.map((row) => `${Number(row.user_id)}:${Number(row.transaction_id)}`));
 }
 
-/** The role of each of these people. */
+/** The role of each of these people: the owner's chatter login too is the owner's (`isOwnerLogin`). */
 export async function listUserRoles(db: Database, userIds: readonly number[]): Promise<Map<number, string>> {
   if (userIds.length === 0) return new Map();
   const result = await db.execute<{ id: string | number; role: string }>(sql`
-    select id, role from users where id = any(${sql.param(userIds.map(String))}::bigint[])`);
+    select u.id, case when ${isOwnerLogin(sql`u.id`)} then 'owner' else u.role::text end as role
+    from users u where u.id = any(${sql.param(userIds.map(String))}::bigint[])`);
   return new Map(result.rows.map((row) => [Number(row.id), row.role]));
 }
