@@ -645,7 +645,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
         operation: "agentVaultAlbumQuote",
         pageIds: [page.id],
         verbatimText: false,
-        requestSummary: { files: request.body.files.length, credits: quote.credits, album: quote.album.kind, walkRequested: quote.album.walkRequested },
+        requestSummary: { mediaCount: request.body.files.length, credits: quote.credits, albumKind: quote.album.kind, walkRequested: quote.album.walkRequested },
       });
       return quote;
     }, () => 1);

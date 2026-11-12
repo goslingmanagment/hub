@@ -183,6 +183,20 @@ async function ownerDraft(overrides: Record<string, unknown> = {}) {
 }
 
 describe("publications: an agent drafts, a person approves", () => {
+  it("the vault album quote answers through its route and leaves its audit row", async () => {
+    const quote = await agent("POST", "/api/v1/agent/pages/lilly-1/vault-album-quote", {
+      title: "Quote through the route",
+      files: [{ sha256: "a".repeat(64), byteSize: 1_000, name: "one.jpg" }],
+    });
+    expect(quote.statusCode, quote.body).toBe(200);
+    // A Fansly page: the album by the existing lookup, a price of zero.
+    expect(quote.json()).toMatchObject({ platform: "fansly", credits: 0, album: { kind: "new" } });
+    const audit = await testDb!.pool.query(
+      "select request_summary from agent_read_audit where operation = 'agentVaultAlbumQuote' order by id desc limit 1",
+    );
+    expect(audit.rows[0]?.request_summary).toMatchObject({ mediaCount: 1, credits: 0, albumKind: "new", walkRequested: false });
+  });
+
   it("the agent drafts through its key; the owner approves a batch; an edit returns it to draft", async () => {
     const created = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", { ...draft(), idempotencyKey: "post-1" });
     expect(created.statusCode, created.body).toBe(200);
