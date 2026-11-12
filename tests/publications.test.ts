@@ -177,6 +177,9 @@ describe("publications: the checks (spec §8.1)", () => {
     expect(codes(content, { page: ONLYFANS })).toEqual([]);
     const big = new Map([[10, { id: 10, modelId: 7, contentSha256: "a".repeat(64), byteSize: 100_000_001, bytesDeletedAt: null }]]);
     expect(codes(content, { page: ONLYFANS, files: big })).toEqual(["onlyfans_file_too_large:blocking"]);
+    // A vault album's large file goes by a link (vault album plan PR 7): not blocking.
+    const album = normalizePublicationDraft(body({ kind: "vault_album", text: "Long set", media: [{ source: "file", fileId: 10 }] }), CONTEXT);
+    expect(codes(album, { page: ONLYFANS, files: big })).toEqual([]);
   });
 
   it("a repeat closer than the threshold blocks unless marked as a repost; older is information", () => {

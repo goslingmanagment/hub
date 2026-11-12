@@ -56,7 +56,7 @@ describe("an album's price", () => {
     const facts = new Map([
       [100, { byteSize: 2 * MB + 1, mimeType: "image/jpeg", originalName: "a.jpg" }],
       [101, { byteSize: 5 * MB, mimeType: "video/mp4", originalName: "b.mp4" }],
-      [102, { byteSize: 150 * MB, mimeType: "video/mp4", originalName: "big.mp4" }],
+      [102, { byteSize: 1500 * MB, mimeType: "video/mp4", originalName: "big.mp4" }],
     ]);
     const files = buildVaultAlbumFiles(form(3), facts, new Map([["sha-1", { mediaRef: "555", uploadedAt: NOW }]]));
     expect(files.map((entry) => [entry.state, entry.credits, entry.mediaRef])).toEqual([
@@ -65,6 +65,22 @@ describe("an album's price", () => {
       ["too_big", 0, null],
     ]);
     expect(onlyfansVaultAlbumPrice(files)).toBe(7 + 1 + ONLYFANS_VAULT_ALBUM_OVERHEAD_CREDITS);
+  });
+
+  it("prices a file over 100 MB, sent by a link, at the same tariff; only one over the link's limit stays for a person", () => {
+    const facts = new Map([
+      [100, { byteSize: 300 * MB, mimeType: "video/mp4", originalName: "long.mp4" }],
+      [101, { byteSize: 1000 * MB, mimeType: "video/mp4", originalName: "limit.mp4" }],
+      [102, { byteSize: 1000 * MB + 1, mimeType: "video/mp4", originalName: "over.mp4" }],
+    ]);
+    expect(buildVaultAlbumFiles(form(3), facts, new Map()).map((entry) => [entry.state, entry.credits, entry.reason])).toEqual([
+      ["pending", 900, null],
+      ["pending", 3000, null],
+      ["too_big", 0, `over_${1000 * MB}_bytes`],
+    ]);
+    // The live setting onlyfansVaultLinkMaxMb lowers the limit.
+    expect(buildVaultAlbumFiles(form(1), facts, new Map(), { linkMaxBytes: 200 * MB }).map((entry) => [entry.state, entry.credits]))
+      .toEqual([["too_big", 0]]);
   });
 
   it("is spent by each upload's actual credits, its ceiling once sent without them, nothing before it leaves", () => {

@@ -1267,6 +1267,21 @@ export const DEMO_CONFIG_DESCRIPTORS: readonly DemoConfigDescriptor[] = [
     "destructive": false
   },
   {
+    "key": "onlyfansVaultLinkMaxMb",
+    "envName": "ONLYFANS_VAULT_LINK_MAX_MB",
+    "configField": "onlyfansVaultLinkMaxMb",
+    "kind": "number",
+    "subsystem": "OFAPI",
+    "label": "Vault albums: largest file by link (MB)",
+    "default": "1000",
+    "editability": "editable",
+    "runtimeApply": "live",
+    "comparable": true,
+    "note": "A vault album file over 100 MB goes to OnlyFansAPI as a temporary link to Hub, which it downloads itself; a file larger than this stays for a person to add by hand. 1000 is OnlyFansAPI's documented limit; the plan's own is not known. Read live per album.",
+    "costWarning": "Raising lets larger vault album files go up, each about 3 credits per MB.",
+    "destructive": false
+  },
+  {
     "key": "publishingOnlyfansVaultEnabled",
     "envName": "PUBLISHING_ONLYFANS_VAULT_ENABLED",
     "configField": "publishingOnlyfansVaultEnabled",

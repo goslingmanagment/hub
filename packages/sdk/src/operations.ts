@@ -406,6 +406,7 @@ export const kernelOperations = {
   pageSyncBlocks: { method: "GET", path: "/api/v1/pages/:pageLabel/sync/blocks" },
   pageTransactions: { method: "GET", path: "/api/v1/pages/:pageLabel/transactions" },
   pages: { method: "GET", path: "/api/v1/pages" },
+  publicVaultUploadFile: { method: "GET", path: "/api/v1/public/vault-upload-files/:token" },
   reportGet: { method: "GET", path: "/api/v1/reports/:slug" },
   reportsList: { method: "GET", path: "/api/v1/reports" },
   setFanFlags: { method: "PATCH", path: "/api/v1/fans/:platform/:platformUserId/flags" },

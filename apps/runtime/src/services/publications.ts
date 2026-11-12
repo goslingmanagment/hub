@@ -386,7 +386,9 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
         out.push(finding("fansly_file_upload_unsupported", "blocking", { mediaKey: mediaKey(item) }));
       }
       // OnlyFans: Hub uploads the file through OnlyFansAPI before the post (plan PR 4c), up to 100 MB.
-      if (page.platform === "onlyfans" && file?.byteSize != null && file.byteSize > ONLYFANS_UPLOAD_MAX_BYTES) {
+      // A vault album's larger file goes by a link to Hub, and one over the
+      // link's limit stays for a person (publications-onlyfans-vault.ts): no finding.
+      if (page.platform === "onlyfans" && !album && file?.byteSize != null && file.byteSize > ONLYFANS_UPLOAD_MAX_BYTES) {
         out.push(finding("onlyfans_file_too_large", "blocking", {
           mediaKey: mediaKey(item), detail: { byteSize: file.byteSize, maxBytes: ONLYFANS_UPLOAD_MAX_BYTES },
         }));

@@ -244694,6 +244694,130 @@
         }
       }
     },
+    "/api/v1/public/vault-upload-files/{token}": {
+      "get": {
+        "summary": "Binary — one file of an OnlyFans vault album upload in flight, by its link's token (OnlyFansAPI downloads it; not for API clients). Range is honoured. An unknown, expired or revoked token, or one whose upload has its outcome, answers 404. A link lives until its upload's outcome and at most 6 hours",
+        "tags": [
+          "ofapi"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "in": "path",
+            "name": "token",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Binary: the file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "description": "Binary: the file"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Binary: the requested range of the file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "description": "Binary: the requested range of the file"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The range is outside the file",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "description": "The range is outside the file"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/reports": {
       "get": {
         "summary": "The report pages agents published, without bodies: the owner's every one, a team lead's those opened to team leads",
