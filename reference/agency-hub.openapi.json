@@ -177853,7 +177853,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. A sale Hub knows: it behaves as the owner's decision of a dispute — the reports holding it get a new version, the open claims and questions of the sale are decided, the home is computed again. A sale with an active decision needs `supersedes` (409 `decision_exists`). A sale not named yet waits for the owner to tie it.",
+        "description": "Database only. A sale Hub knows: it behaves as the owner's decision of a dispute — the reports holding it get a new version, the open claims and questions of the sale are decided, the home is computed again. A sale with an active decision needs `supersedes` (409 `decision_exists`). A sale not named yet waits for the owner to tie it. What it replaces and answers is checked in the transaction that writes: of the key's pages, about the same sale (409 `other_sale`), not the owner's own decision (409 `owner_decision`).",
         "requestBody": {
           "required": true,
           "content": {
@@ -178437,7 +178437,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. Every source: the owner's disputes, the ones carried over from the ledger, the ones recorded «со слов».",
+        "description": "Database only. Every source: the owner's disputes, the ones carried over from the ledger, the ones recorded «со слов». The fan is named as Hub's own rows name him; a note is the team's free text, as written.",
         "parameters": [
           {
             "schema": {
@@ -179419,11 +179419,11 @@
     },
     "/api/v1/agent/sale-decisions/cancel": {
       "post": {
-        "summary": "Cancel a decision «со слов», with why (needs write:shift_reports)",
+        "summary": "Cancel a decision recorded «со слов» or carried over, with why (needs write:shift_reports)",
         "tags": [
           "agent"
         ],
-        "description": "Database only. The sale's home is computed again without it; a report handed in keeps its version until the person hands it in again.",
+        "description": "Database only. The sale's home is computed again without it, and every report handed in that the decision settled gets a new version with what rules now (`versions`): an agreement of the two sides, else the rule with the person's own word. The claims and questions it decided wait again. The owner's own decision is not a key's to cancel (409 `owner_decision`).",
         "requestBody": {
           "required": true,
           "content": {
@@ -179927,7 +179927,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. A change is placed when the feed first finds it committed, after every place given before: a change committed late comes after the cursor, never passed. No fan's name.",
+        "description": "Database only. A change is placed when the feed first finds it committed, after every place given before: a change committed late comes after the cursor, never passed. A change held back for the key's pages gets a new place at the end once the key may read it. `limit` counts places: a page may carry fewer changes than asked while `more` is true. The structured fields carry no fan's name; `note` is the team's free text, as written.",
         "parameters": [
           {
             "schema": {
@@ -180215,6 +180215,9 @@
                     "next": {
                       "type": "string"
                     },
+                    "more": {
+                      "type": "boolean"
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -180223,6 +180226,7 @@
                     "changes",
                     "held",
                     "next",
+                    "more",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -184499,7 +184503,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a version committed after a later one is placed after it, so `next` never passes a version not served yet. A version with a line on a page outside the key's grant is held back and listed in `held` on every read until the key may read it; then it is served in `reports` at its own place.",
+        "description": "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a version committed after a later one is placed after it, so `next` never passes a version not served yet. A version with a line on a page outside the key's grant is held back and listed in `held` on every read until the key may read it; then it gets a new place at the end of the feed and comes in `reports` through the cursor (a lost answer is asked again and brings it again). `limit` counts places: a page may carry fewer reports than asked while `more` is true.",
         "parameters": [
           {
             "schema": {
@@ -184984,6 +184988,9 @@
                     "next": {
                       "type": "string"
                     },
+                    "more": {
+                      "type": "boolean"
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -184992,6 +184999,7 @@
                     "reports",
                     "held",
                     "next",
+                    "more",
                     "serverNow"
                   ],
                   "additionalProperties": false

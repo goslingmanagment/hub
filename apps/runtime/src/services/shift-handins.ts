@@ -42,9 +42,10 @@ import {
   listHandinsOfShifts,
   listHandinVersions,
   holdHandinFeedVersions,
+  listHandinFeedHeld,
   listHandinVersionsAfter,
-  takeHandinFeedHeld,
   placeHandinVersionsInFeed,
+  releaseHandinFeedHeld,
   listMatterPageLabels,
   listOffPlatform,
   listPersonWorkingPageRows,
@@ -53,6 +54,7 @@ import {
   listSaleFacts,
   listSaleHomes,
   listVisiblePages,
+  lockSaleSettlements,
   openMatter,
   setHandinComment,
   setHandinMark,
@@ -69,13 +71,15 @@ import {
   type HandinVersionOffPlatform,
   type HandinVersionRow,
   type OffPlatformRow,
+  type SaleClaimRow,
+  type SaleDecisionRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { readLedgerPayouts } from "./ledger-payouts.ts";
-import { reportSums, settledShareOf } from "./sale-claim-rules.ts";
+import { pagesWithLines, reportSums, settledShareOf } from "./sale-claim-rules.ts";
 import { claimsOfReport, runSaleClaims } from "./sale-claims.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { computeSaleHomes, registrySlots, ruleWorksOf } from "./sale-homes.ts";
@@ -236,6 +240,19 @@ interface DraftFacts {
   senders: Map<number, number>;
   /** What a sale the owner decided or the sides agreed on gives the person, by transaction (review R2-a). */
   settled: Map<number, { amountMills: number; settled: "owner" | "agreed" }>;
+  /** What settled the draft's sales when it was read (`settlementsOf`): a hand-in checks it again before it writes. */
+  settledBy: string;
+}
+
+/**
+ * What settles the sales named now: the owner's active decision and the agreed claims of each, and `stamp` — one word
+ * that changes when any of them does (a decision made, replaced or cancelled; an agreement made or overridden).
+ */
+async function settlementsOf(db: Database, saleIds: readonly number[]): Promise<{ decisions: Map<number, SaleDecisionRow>; agreed: SaleClaimRow[]; stamp: string }> {
+  const decisions = await listActiveSaleDecisions(db, saleIds);
+  const agreed = await listSaleClaims(db, { transactionIds: saleIds, states: ["agreed"] });
+  const stamp = [...[...decisions.values()].map((one) => `d${one.id}`), ...agreed.map((claim) => `c${claim.id}`)].sort().join(" ");
+  return { decisions, agreed, stamp };
 }
 
 /** The shift's own work among the rule's works: the person's shift that ran with it the longest. */
@@ -406,8 +423,7 @@ async function draftFacts(
   // A sale the owner decided or the two sides agreed on: the person's line counts what that gives them, settled, in
   // every later draft — their old «моё» no longer takes the money back, nor opens the dispute again (review R2-a).
   const saleIds = classified.map((one) => one.sale.transactionId);
-  const decisions = await listActiveSaleDecisions(db, saleIds);
-  const agreed = await listSaleClaims(db, { transactionIds: saleIds, states: ["agreed"] });
+  const { decisions, agreed, stamp } = await settlementsOf(db, saleIds);
   const settled = new Map<number, { amountMills: number; settled: "owner" | "agreed" }>();
   for (const one of classified) {
     const id = one.sale.transactionId;
@@ -425,6 +441,7 @@ async function draftFacts(
     works: new Map(works.map((work) => [work.ref, { userId: work.userId, kind: work.kind }])),
     senders,
     settled,
+    settledBy: stamp,
   };
 }
 
@@ -708,7 +725,7 @@ function bodyOf(input: {
 export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: string | null): string | null {
   if (madeFor === null) return null;
   if (madeFor.kind === "off_platform") return madeFor.decision === "confirmed" ? "владелец подтвердил «мимо площадки»" : "владелец отклонил «мимо площадки»";
-  if (madeFor.kind === "decision") return "решение о продаже, записанное со слов";
+  if (madeFor.kind === "decision") return madeFor.outcome === "cancelled" ? "решение о продаже отменено" : "решение о продаже, записанное со слов";
   switch (madeFor.outcome) {
     case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;
     case "first":
@@ -743,17 +760,30 @@ function versionSummary(version: HandinVersionRow, names: Map<number, string>, k
 }
 
 /** The newest version as today's posts in «Отчётность». */
-function postsOf(version: HandinVersionRow, subject: Subject, context: ViewContext): ShiftReportResponse["posts"] {
-  return modelPostsOf(version, subject, context).map((post) => ({ modelName: post.modelName, text: post.text }));
+function postsOf(version: HandinVersionRow, subject: Subject, handin: HandinRow, context: ViewContext): ShiftReportResponse["posts"] {
+  return modelPostsOf(version, subject, handin, context).map((post) => ({ modelName: post.modelName, text: post.text }));
+}
+
+/**
+ * A handed-in version's report date: its own (0408), the report's for a version older than the column. The one date of
+ * a version for every reader — the ledger's feed, the post, the copy to «Отчётность» — whatever the shift's date became
+ * after the hand-in (a shift that went on past the hand-in may have moved into the next day).
+ */
+export function versionReportDate(version: Pick<HandinVersionRow, "reportDate">, handin: Pick<HandinRow, "reportDate">): string {
+  return version.reportDate ?? handin.reportDate;
 }
 
 /** The version's posts, one per model, with the model's slug (the copy to «Отчётность» goes by it). */
-function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "shift" | "person">, context: Pick<ViewContext, "catalog" | "names" | "fans">) {
+function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "shift" | "person">, handin: Pick<HandinRow, "reportDate">, context: Pick<ViewContext, "catalog" | "names" | "fans">) {
   const tag = subject.person?.reportTag ?? `#${subject.person?.code ?? context.names.get(subject.shift.userId) ?? "чаттер"}`;
+  // The post lists the accounts it always did: the shift's own pages and those where something is counted. A page the
+  // version names only for a line of «Рядом» that counts nothing (`reportSums`) is not an account of the person's post.
+  const held = new Set(subject.shift.pages.filter((page) => page.salesFrom !== null).map((page) => page.pageLabel));
+  const counted = new Set(version.lines.flatMap((line) => (line.pageLabel !== null && line.group === "mine" ? [line.pageLabel] : [])));
   return postTexts({
-    reportDate: subject.shift.reportDate,
+    reportDate: versionReportDate(version, handin),
     tag,
-    pages: version.pages.map((page) => {
+    pages: version.pages.filter((page) => page.amountMills !== 0 || held.has(page.pageLabel) || counted.has(page.pageLabel)).map((page) => {
       const info = context.catalog.info.get(page.pageLabel);
       return { pageLabel: page.pageLabel, platform: info?.platform ?? "fansly", modelSlug: info?.modelSlug ?? page.pageLabel, modelName: info?.modelName ?? page.pageLabel, amountMills: page.amountMills };
     }),
@@ -784,12 +814,15 @@ export async function readHandinVersionPosts(
   if (shift === null || shift.state === "dropped") return null;
   const handin = await findHandinByShift(db, shift.id);
   const version = handin === null ? undefined : (await listHandinVersions(db, handin.id)).find((one) => one.version === input.version);
-  if (version === undefined) return null;
+  if (handin === null || version === undefined) return null;
   const person = await findHandinPersonOfUser(db, shift.userId);
   const catalog = await pageCatalog(db);
   const names = await listHandinNames(db, [shift.userId]);
   const fans = await listHandinSaleFans(db, version.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])));
-  return { reportDate: shift.reportDate, startedAt: shift.startedAt, endedAt: shift.endedAt, posts: modelPostsOf(version, { shift, person }, { catalog, names, fans }) };
+  return {
+    reportDate: versionReportDate(version, handin), startedAt: shift.startedAt, endedAt: shift.endedAt,
+    posts: modelPostsOf(version, { shift, person }, handin, { catalog, names, fans }),
+  };
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────────
@@ -870,7 +903,7 @@ async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject,
       startedAt: subject.shift.startedAt.toISOString(),
       endedAt: subject.shift.endedAt.toISOString(),
       workedMinutes: subject.shift.workedMinutes,
-      reportDate: subject.shift.reportDate,
+      reportDate: reportDateOf(subject.shift, handin),
       pages: shiftPageLabels(subject.shift),
     },
     access: access.access,
@@ -881,7 +914,7 @@ async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject,
     versions: [...versions].reverse().map((version) => versionSummary(version, names, keyNames, access.cutTo)),
     view,
     afterSubmission,
-    posts: own && latest !== null ? postsOf(latest, subject, context) : [],
+    posts: own && latest !== null && handin !== null ? postsOf(latest, subject, handin, context) : [],
     colleagues,
     claims,
     serverNow: now.toISOString(),
@@ -1204,6 +1237,12 @@ export const SHIFT_REPORT_AFTER_PAID_KIND = "shift.report.after_paid";
  * `shiftReportSubmit`: «Сдать смену». The draft is computed now, the person's words read under the report's lock,
  * and the next version written; the matter «Сдайте смену» closes. A version after the ledger paid the day is kept
  * and raises a matter for the owner.
+ *
+ * The draft's facts are read before the wait for the ledger (up to 20 s) and the version is written after it, in the
+ * turn of the sales' settlements (`lockSaleSettlements`) and under the report's lock. What a decision, an agreement or a
+ * cancel changed in between is never written from the old read: when the decisions or agreements of the draft's sales,
+ * or the report itself, are not what they were, the facts are read again there — the lock is never held across the
+ * ledger's call, and nothing settles a sale between that read and the commit.
  */
 export async function submitShiftReport(
   app: HandinApp,
@@ -1215,14 +1254,21 @@ export async function submitShiftReport(
   const { subject, catalog } = await writableSubject(app, actor, input.shiftId);
   if (actor.kind === "agent" && actor.sourceRef === null) throw new BadRequestError("A report is handed in «со слов» only with the message", { reason: "source_ref_required" });
   const existing = await findHandinByShift(app.db, subject.shift.id);
-  const facts = await draftFacts(app.db, subject, existing, catalog, now, existing === null ? [] : await listHandinMarks(app.db, existing.id));
-  const dayPaid = await (options.dayPaid ?? ((one) => ledgerDayPaid(app, one)))({ personCode: subject.person?.code ?? null, reportDate: subject.shift.reportDate });
+  const read = await draftFacts(app.db, subject, existing, catalog, now, existing === null ? [] : await listHandinMarks(app.db, existing.id));
+  // Whether the report's day is paid: the day every reader takes the report on (`reportDateOf`) — the day it was handed in
+  // on before, the shift's day for a first hand-in.
+  const paidDay = reportDateOf(subject.shift, existing);
+  const dayPaid = await (options.dayPaid ?? ((one) => ledgerDayPaid(app, one)))({ personCode: subject.person?.code ?? null, reportDate: paidDay });
   const who = writer(actor);
 
   const version = await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
+    await lockSaleSettlements(db);
     const handin = await handinFor(db, subject);
     const marks = await listHandinMarks(db, handin.id);
+    const settledNow = await settlementsOf(db, read.classified.map((one) => one.sale.transactionId));
+    const stale = settledNow.stamp !== read.settledBy || handin.currentVersion !== (existing?.currentVersion ?? null);
+    const facts = stale ? await draftFacts(db, subject, handin, catalog, now, marks) : read;
     const lines = draftLines(facts, marks);
     const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
     const sums = linesPageSums(lines, facts.pages, offPlatform);
@@ -1261,17 +1307,17 @@ export async function submitShiftReport(
     app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the matter «Сдайте смену» did not close");
   });
   if (dayPaid === true) {
-    const pageIds = facts.pages.map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined);
+    const pageIds = read.pages.map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined);
     await openMatter(app.db, {
       key: `${SHIFT_REPORT_AFTER_PAID_KIND}:${version.id}`,
       kind: SHIFT_REPORT_AFTER_PAID_KIND,
       source: "server",
-      title: `Отчёт смены после выплаты: ${subject.person?.displayName ?? "чаттер"}, ${subject.shift.reportDate}, версия ${version.version}`,
+      title: `Отчёт смены после выплаты: ${subject.person?.displayName ?? "чаттер"}, ${paidDay}, версия ${version.version}`,
       object: { type: "shift", id: String(subject.shift.id) },
       pageIds,
       owner: { role: "owner" },
       money: true,
-      evidence: { shiftId: subject.shift.id, reportDate: subject.shift.reportDate, version: version.version, totalMills: version.totalMills },
+      evidence: { shiftId: subject.shift.id, reportDate: paidDay, version: version.version, totalMills: version.totalMills },
       link: `/workboard/shifts/report/${subject.shift.id}`,
     }, system, now).catch((error: unknown) => {
       app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the owner's matter «после выплаты» did not open");
@@ -1301,13 +1347,32 @@ export async function saleLineFacts(app: HandinApp, shiftId: number, transaction
   return details.get(transactionId) ?? null;
 }
 
+/**
+ * One sale's line as a shift's draft has it now: the facts and the person's own words — what a hand-in now would write
+ * of it (an agreement of the two sides, else the rule with the person's word). A report whose line a cancelled decision
+ * had settled goes back to it (sale-claims.ts). Null — the sale is no line of that draft, or the shift is no longer a
+ * shift of its own (dropped, or joined to another). `db` — the caller's transaction or the pool; read in turn.
+ */
+export async function draftLineOfSale(db: Database, shiftId: number, transactionId: number, now: Date): Promise<HandinVersionLine | null> {
+  const shift = await findHandinShift(db, shiftId);
+  if (shift === null || shift.id !== shiftId || shift.state === "dropped") return null;
+  const subject = await subjectOf(db, shiftId);
+  const catalog = await pageCatalog(db);
+  const handin = await findHandinByShift(db, shiftId);
+  const marks = handin === null ? [] : await listHandinMarks(db, handin.id);
+  const facts = await draftFacts(db, subject, handin, catalog, now, marks);
+  return draftLines(facts, marks).find((line) => line.transactionId === transactionId) ?? null;
+}
+
 // ── The ledger's feed ────────────────────────────────────────────────────────
 
 /**
  * `agentShiftReportsFeed`: every version after the cursor, in the feed's order. The versions committed since the last
  * read are placed first (0405, `placeHandinVersionsInFeed`): a version is placed only once committed, after every place
  * given before, so a version whose transaction commits after a later one's is served after it — the cursor (`next`, a
- * place) never passes a version not served yet, however the hand-ins interleave (review R2-b).
+ * place) never passes a version not served yet, however the hand-ins interleave (review R2-b). A place moves only to
+ * the end (a held version released for its key): a reader keeps versions by id, and a report's newest is its highest
+ * `version`.
  */
 export async function readShiftReportsFeed(
   app: HandinApp,
@@ -1315,21 +1380,19 @@ export async function readShiftReportsFeed(
   now: Date = new Date(),
 ): Promise<AgentShiftReportsFeedResponse> {
   const afterSeq = input.since === undefined ? 0 : Number(input.since);
+  // Held back for the key's pages (review R2b-4): kept per key and listed on its every read until it may read them.
+  // Then the version gets a new place at the end of the feed and leaves the list, before this read: the cursor serves
+  // it like any other, so an answer that is lost is asked again and brings it again.
+  if (input.agentKeyId !== undefined) await releaseHandinFeedHeld(app.db, { agentKeyId: input.agentKeyId, pageIds: input.pageIds });
   await placeHandinVersionsInFeed(app.db);
   const read = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds });
-  // Held back for the key's pages (review R2b-4): kept per key, listed on its every read until it may read them, then
-  // served once, ahead of the new ones, at their own place — the cursor passing them never loses them.
-  let late: typeof read.served = [];
   let held = read.held;
   if (input.agentKeyId !== undefined) {
-    const before = await takeHandinFeedHeld(app.db, { agentKeyId: input.agentKeyId, pageIds: input.pageIds });
     await holdHandinFeedVersions(app.db, { agentKeyId: input.agentKeyId, versionIds: read.held.map((one) => one.id) });
-    late = before.served;
-    held = [...before.held.filter((one) => !read.held.some((other) => other.id === one.id)), ...read.held];
+    held = await listHandinFeedHeld(app.db, { agentKeyId: input.agentKeyId, pageIds: input.pageIds });
   }
-  const rows = [...late, ...read.served];
   return {
-    reports: rows.map((row) => ({
+    reports: read.served.map((row) => ({
       id: row.id,
       seq: row.seq,
       person: row.personCode,
@@ -1341,7 +1404,9 @@ export async function readShiftReportsFeed(
       door: row.door as ShiftReportDoor,
       telegramMessageRef: row.telegramMessageRef,
       totalMills: row.totalMills,
-      pages: row.pages,
+      // Every line's page is a page of the version: one stored before `reportSums` named them all gets them here, at 0.
+      pages: pagesWithLines(row.pages.map((page) => page.pageLabel), row.lines)
+        .map((pageLabel) => row.pages.find((page) => page.pageLabel === pageLabel) ?? { pageLabel, amountMills: 0 }),
       lines: row.lines.flatMap((line) => (line.transactionId === null || line.pageLabel === null ? [] : [{
         transactionId: line.transactionId,
         pageLabel: line.pageLabel,
@@ -1375,6 +1440,8 @@ export async function readShiftReportsFeed(
     })),
     held: held.map((one) => ({ ...one, reason: "page_outside_key" as const })),
     next: String(read.last ?? afterSeq),
+    // `limit` counts places, held ones too: a page may carry fewer reports than asked, none even, while places follow.
+    more: read.more,
     serverNow: now.toISOString(),
   };
 }

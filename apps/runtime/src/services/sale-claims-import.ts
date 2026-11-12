@@ -5,6 +5,8 @@ import {
   listSaleCandidates,
   listSaleDecisions,
   listVisiblePages,
+  lockSaleSettlements,
+  markSaleDecisionApplied,
   type Database,
   type SaleCandidate,
 } from "@agency_hub_core/db";
@@ -28,6 +30,13 @@ import { millsOf } from "./ledger-payouts.ts";
  * sale_decisions"` (and of sale_questions) as files: the agent's read, no
  * second door into the ledger. A dry run reads Hub only and writes nothing;
  * the import is idempotent by the ledger's ids.
+ *
+ * Run again, it also completes what an earlier run left out of the records
+ * already carried over, each once: a decision the ledger had marked taken into a
+ * person's post (status applied: the person, the date) is marked so in Hub, so
+ * it is not offered for a report a second time; a question's note — the context
+ * the agent wrote, which 0408 took out of `ledger_ref` — joins the question's
+ * text, where a question asked through the door keeps its own.
  */
 
 const DAY_MS = 86_400_000;
@@ -144,6 +153,8 @@ export interface DecisionPlan {
   /** Why it is not carried over; null — it is. */
   skip: string | null;
   known: boolean;
+  /** The ledger marked it taken into a person's post of a date (status applied); null — it did not. */
+  applied: { person: string | null; userId: number | null; reportDate: string; at: string | null } | null;
 }
 
 export interface QuestionPlan {
@@ -176,6 +187,8 @@ export async function planImport(db: Database, input: { decisions: unknown; ques
     } catch {
       // a broken shares cell is said below
     }
+    const taker = str(row.applied_person);
+    if (taker !== null) codes.add(taker);
   }
   const logins = await listLoginsByPersonCode(db, [...codes]);
   const known = new Set((await listSaleDecisions(db, { limit: 5000 })).flatMap((one) => (one.ledgerDecisionId === null ? [] : [one.ledgerDecisionId])));
@@ -212,10 +225,15 @@ export async function planImport(db: Database, input: { decisions: unknown; ques
     if (kind === null && skip === null) skip = kindWord === "off_platform" ? "мимо площадки: это не решение о продаже" : `вид «${kindWord}» неизвестен`;
     if (kind === "split" && skip === null && mapped.reduce((sum, share) => sum + share.percent, 0) !== 100) skip = "доли не дают 100%";
     const match = await matchSale(db, ref);
+    const appliedDate = str(row.applied_report_date);
+    const taker = str(row.applied_person);
     decisions.push({
       ledgerId, ref, status, kind, shares: mapped.filter((share) => share.userId !== null).map((share) => ({ userId: share.userId!, percent: share.percent, person: share.person })),
       pot: str(row.pot), saidBy: str(row.said_by), match, homeNow: match.kind === "found" ? await homeOf(match.sale.transactionId) : null, skip,
       known: known.has(ledgerId),
+      applied: status === "applied" && appliedDate !== null && /^\d{4}-\d{2}-\d{2}$/.test(appliedDate)
+        ? { person: taker, userId: taker === null ? null : logins.get(taker)?.[0] ?? null, reportDate: appliedDate, at: str(row.applied_at) }
+        : null,
     });
   }
 
@@ -259,7 +277,8 @@ export function formatImportPlan(plan: ImportPlan): string {
   for (const one of plan.decisions) {
     const what = one.kind === "nobody" ? "никому" : one.kind === "pot" ? `в общак ${one.pot ?? ""}` : one.shares.map((share) => `${share.person} ${share.percent}%`).join(" + ");
     const home = one.homeNow === null ? "" : ` · сейчас: ${one.homeNow.home}/${one.homeNow.reason}`;
-    out.push(`  №${one.ledgerId} [${one.status}] ${refWords(one.ref)} → ${what || "?"} · сказал ${one.saidBy ?? "?"}`);
+    const taken = one.applied === null ? "" : ` · учтено: ${one.applied.person ?? "?"} за ${one.applied.reportDate}`;
+    out.push(`  №${one.ledgerId} [${one.status}] ${refWords(one.ref)} → ${what || "?"} · сказал ${one.saidBy ?? "?"}${taken}`);
     out.push(`      ${one.skip !== null ? `НЕ ПЕРЕНОСИТСЯ: ${one.skip}` : matchWords(one.match)}${home}${one.known ? " · уже перенесено" : ""}`);
   }
   const open = plan.questions.filter((one) => one.status === "open");
@@ -277,22 +296,40 @@ export function formatImportPlan(plan: ImportPlan): string {
 
 /**
  * What Hub keeps of a ledger record's words about its sale: enough to find it (page, fan reference, the ledger's own
- * reference, net, moment, when said), never the fan's name; the ledger's note goes to the decision's own note, the
- * ledger's ids to their columns (review R2b-3c).
+ * reference, net, moment, when said), never the fan's name; the ledger's ids go to their columns (review R2b-3c). The
+ * ledger's note is the team's free text, kept as written where Hub keeps such words — a decision's in its own note, a
+ * question's with the question (`questionTextOf`): it may name the fan, and a fan's erasure clears it.
  */
 function keptRef(ref: LedgerSaleRef): Record<string, unknown> {
   return { pageLabel: ref.pageLabel, fanRef: ref.fanRef, transactionRef: ref.transactionRef, netMills: ref.netMills, occurredAt: ref.occurredAt, saidAt: ref.saidAt };
 }
 
-/** Writes the plan: decisions first (the questions answered by one point to it), then the questions. Idempotent. */
-export async function applyImport(db: Database, plan: ImportPlan, now: Date): Promise<{ decisions: number; questions: number; days: string[] }> {
+/**
+ * A question's text as Hub keeps it: the question and, on its own line, its note — the one text the agent's door writes
+ * for a question asked through it (`askSaleQuestion`), free words of the team that a fan's erasure clears.
+ */
+export function questionTextOf(question: string, note: string | null): string {
+  const asked = question.slice(0, 2000);
+  return note === null ? asked : `${asked}\n${note.slice(0, 4000)}`;
+}
+
+/**
+ * Writes the plan: decisions first (the questions answered by one point to it), then the questions. Idempotent by the
+ * ledger's ids; a record already carried over is completed, once: `applied` — the decisions marked taken into a post as
+ * the ledger has them, `notes` — the questions whose note joined their text.
+ */
+export async function applyImport(db: Database, plan: ImportPlan, now: Date): Promise<{ decisions: number; questions: number; applied: number; notes: number; days: string[] }> {
   const pages = new Map((await listVisiblePages(db)).map((page) => [page.label, page.id]));
   const hubDecisionOf = new Map<number, number>();
   const days = new Set<string>();
   let decisions = 0;
   let questions = 0;
+  let applied = 0;
+  let notes = 0;
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
+    // Decisions of sales are written in the settlements' turn, as every other writer of them.
+    await lockSaleSettlements(txDb);
     for (const one of plan.decisions) {
       if (one.skip !== null || one.kind === null) continue;
       const sale = one.match.kind === "found" ? one.match.sale : null;
@@ -320,6 +357,14 @@ export async function applyImport(db: Database, plan: ImportPlan, now: Date): Pr
     }
     const existing = await listSaleDecisions(txDb, { limit: 5000 });
     for (const decision of existing) if (decision.ledgerDecisionId !== null && !hubDecisionOf.has(decision.ledgerDecisionId)) hubDecisionOf.set(decision.ledgerDecisionId, decision.id);
+    // Taken into a person's post in the ledger: taken in Hub too — for one carried over now and one carried over
+    // before (an active decision not marked yet; the mark is never moved).
+    for (const one of plan.decisions) {
+      const id = hubDecisionOf.get(one.ledgerId);
+      if (one.applied === null || one.skip !== null || id === undefined) continue;
+      const at = instantOf(one.applied.at) ?? now;
+      if (await markSaleDecisionApplied(txDb, { id, userId: one.applied.userId, reportDate: one.applied.reportDate, at })) applied += 1;
+    }
     for (const one of plan.questions) {
       const sale = one.match.kind === "found" ? one.match.sale : null;
       const open = one.status === "open";
@@ -341,14 +386,22 @@ export async function applyImport(db: Database, plan: ImportPlan, now: Date): Pr
         escalatedAt: open ? now : null,
         escalatedWhy: open ? "imported" : null,
         ledgerQuestionId: one.ledgerId,
-        question: one.question.slice(0, 2000),
+        question: questionTextOf(one.question, one.ref.note),
         whoText: one.who,
         ledgerRef: { ...keptRef(one.ref), askedOf: one.askedOf, ...(one.answer === null ? {} : { answer: one.answer }), ...(sale === null && one.match.kind === "link" ? { why: one.match.why } : {}) },
         decisionId: one.decisionLedgerId === null ? null : hubDecisionOf.get(one.decisionLedgerId) ?? null,
         closedAt: open ? null : now,
       }, now);
       if (inserted !== null) questions += 1;
+      else if (one.ref.note !== null) {
+        // Carried over before its note was kept: the note joins the question as it was written then. A text a fan's
+        // erasure cleared, or any other than the ledger's question alone, is left as it is.
+        const filled = await txDb.execute(sql`
+          update sale_claims set question = ${questionTextOf(one.question, one.ref.note)}, updated_at = ${now.toISOString()}::timestamptz
+          where ledger_question_id = ${one.ledgerId} and kind = 'imported' and question = ${one.question.slice(0, 2000)}`);
+        notes += filled.rowCount ?? 0;
+      }
     }
   });
-  return { decisions, questions, days: [...days].sort() };
+  return { decisions, questions, applied, notes, days: [...days].sort() };
 }

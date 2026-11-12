@@ -348,8 +348,11 @@ export interface HandinVersionOffPlatform {
 export type HandinVersionMadeFor =
   | { kind: "claim"; claimId: number; transactionId: number; outcome: "agreed" | "first" | "second" | "half" | "nobody" }
   | { kind: "off_platform"; offPlatformId: number; decision: "confirmed" | "rejected" }
-  /** A decision about the sale recorded «со слов» through the agent's door (review R2b-3). */
-  | { kind: "decision"; decisionId: number; transactionId: number; outcome: "said" };
+  /**
+   * A decision about the sale recorded «со слов» through the agent's door (review R2b-3): `said` — made, the version
+   * carries what it gives; `cancelled` — cancelled, the version carries what rules without it.
+   */
+  | { kind: "decision"; decisionId: number; transactionId: number; outcome: "said" | "cancelled" };
 
 export interface HandinVersionRow {
   id: number;
@@ -532,7 +535,10 @@ export interface HandinFeedHeld {
   pageLabels: string[];
 }
 
-/** Feed rows by a condition, in the feed's order, each with the version's pages outside `pageIds`. */
+/**
+ * Feed rows by a condition, in the feed's order, at most `limit` places, each with the version's pages outside
+ * `pageIds`. `more` — places follow the last one read (one place beyond the limit is asked for, to know).
+ */
 async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: readonly number[], limit: number) {
   const result = await db.execute<Row>(sql`
     select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code,
@@ -549,10 +555,11 @@ async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: re
     left join people p on p.id = h.person_id
     where ${where}
     order by f.seq
-    limit ${limit}`);
+    limit ${limit + 1}`);
+  const rows = result.rows.slice(0, limit);
   const served: HandinFeedRow[] = [];
   const held: HandinFeedHeld[] = [];
-  for (const row of result.rows) {
+  for (const row of rows) {
     const outside = (Array.isArray(row.outside) ? row.outside : []).map(String);
     const base = { seq: num(row.seq), shiftId: num(row.shift_id), userId: num(row.user_id), personCode: text(row.person_code), reportDate: String(row.report_date) };
     if (outside.length > 0) {
@@ -561,36 +568,66 @@ async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: re
     }
     served.push({ ...versionOf(row), ...base });
   }
-  const lastRow = result.rows.at(-1);
-  return { served, held, last: lastRow === undefined ? null : num(lastRow.seq) };
+  const lastRow = rows.at(-1);
+  return { served, held, last: lastRow === undefined ? null : num(lastRow.seq), more: result.rows.length > limit };
 }
 
 /**
  * The versions placed after a place of the feed, in the feed's order, up to `limit` places: those of the pages served;
  * a version with a line of a page outside them is held back (review R2b-4). `last` — the last place read, held or not:
- * the next cursor.
+ * the next cursor. `limit` counts places, so `served` may be fewer (none even) while `more` says places follow.
  */
 export async function listHandinVersionsAfter(
   db: Database,
   input: { afterSeq: number; limit: number; pageIds: readonly number[] },
-): Promise<{ served: HandinFeedRow[]; held: HandinFeedHeld[]; last: number | null }> {
+): Promise<{ served: HandinFeedRow[]; held: HandinFeedHeld[]; last: number | null; more: boolean }> {
   return feedRows(db, sql`f.seq > ${input.afterSeq}`, input.pageIds, input.limit);
 }
 
 /**
- * The versions the feed held back for an agent key (0408 `shift_handin_feed_held`), read again for its pages now:
- * `served` — the key may read them now (released from the list), `held` — still held.
+ * The versions held back for an agent key (0408 `shift_handin_feed_held`) that it may read now — every page of their
+ * lines among `pageIds` — get a NEW place at the end of the feed, in the order of their old ones, and leave the key's
+ * held list: one transaction, under the lock places are given under. From then on the ordinary cursor serves them, so
+ * an answer that never arrived is asked again and brings them again; served once at the old place, behind the cursor,
+ * a version was lost with that one answer. A place only ever moves to the end: a cursor that had not reached the old
+ * place meets the version at the new one, a cursor that had passed it meets it once more (a reader keeps versions by
+ * id, and a report's newest version is its highest `version`, not the last one read). Returns how many were released.
  */
-export async function takeHandinFeedHeld(db: Database, input: { agentKeyId: number; pageIds: readonly number[] }): Promise<{ served: HandinFeedRow[]; held: HandinFeedHeld[] }> {
+export async function releaseHandinFeedHeld(db: Database, input: { agentKeyId: number; pageIds: readonly number[] }): Promise<number> {
+  return db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('shift_handin_feed', 0))`);
+    const moved = await tx.execute<Row>(sql`
+      update shift_handin_feed f set seq = ready.seq, placed_at = clock_timestamp()
+      from (
+        select old.version_id, (select coalesce(max(seq), 0) from shift_handin_feed) + row_number() over (order by old.seq) as seq
+        from shift_handin_feed_held k
+        join shift_handin_feed old on old.version_id = k.version_id
+        join shift_handin_versions v on v.id = k.version_id
+        where k.agent_key_id = ${input.agentKeyId}
+          and not exists (
+            select 1 from jsonb_array_elements(v.lines) as line
+            join pages pg on pg.label = line ->> 'pageLabel'
+            where not (pg.id = any(${ids(input.pageIds)}))
+          )
+      ) ready
+      where f.version_id = ready.version_id
+      returning f.version_id`);
+    const versionIds = moved.rows.map((row) => num(row.version_id));
+    if (versionIds.length > 0) {
+      await tx.execute(sql`
+        delete from shift_handin_feed_held where agent_key_id = ${input.agentKeyId} and version_id = any(${ids(versionIds)})`);
+    }
+    return versionIds.length;
+  });
+}
+
+/** The versions held back for an agent key now: who and when, and the pages outside `pageIds`; in the feed's order. */
+export async function listHandinFeedHeld(db: Database, input: { agentKeyId: number; pageIds: readonly number[] }): Promise<HandinFeedHeld[]> {
   const kept = await db.execute<Row>(sql`select version_id from shift_handin_feed_held where agent_key_id = ${input.agentKeyId}`);
   const versionIds = kept.rows.map((row) => num(row.version_id));
-  if (versionIds.length === 0) return { served: [], held: [] };
-  const read = await feedRows(db, sql`f.version_id = any(${ids(versionIds)})`, input.pageIds, versionIds.length);
-  if (read.served.length > 0) {
-    await db.execute(sql`
-      delete from shift_handin_feed_held where agent_key_id = ${input.agentKeyId} and version_id = any(${ids(read.served.map((row) => row.id))})`);
-  }
-  return { served: read.served, held: read.held };
+  if (versionIds.length === 0) return [];
+  return (await feedRows(db, sql`f.version_id = any(${ids(versionIds)})`, input.pageIds, versionIds.length)).held;
 }
 
 /** Keeps the versions held back for an agent key: listed on its every read until it may read them. */

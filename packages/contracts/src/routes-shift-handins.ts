@@ -52,7 +52,10 @@ export const shiftReportShiftSchema = z.object({
   /** A shift still going: the last time Hub looked. */
   endedAt: isoTimestamp,
   workedMinutes: z.number().int().nonnegative(),
-  /** The Moscow day the shift is reported on (the ledger's rule). */
+  /**
+   * The Moscow day the shift is reported on: once handed in, the report's own day (its newest version's) — the day the
+   * ledger's feed and the post name; before that, the shift's day by the ledger's rule.
+   */
   reportDate: businessDate,
   pages: z.array(z.string()),
 });
@@ -333,8 +336,9 @@ export const agentShiftReportsFeedItemSchema = z.object({
   id: intId,
   /**
    * Its place in the feed (review R2-b): given when the feed first finds the version committed, after every place given
-   * before. The feed's order and its cursor: `next` is the last place served. Every version written before 0405 has its
-   * id as its place.
+   * before. The feed's order and its cursor: `next` is the last place read. Every version written before 0405 has its
+   * id as its place. A place moves only to the end: a version held back for a key gets a new one when the key may read
+   * it, so the same version may come again at a later place — keep versions by `id`.
    */
   seq: intId,
   /** The person's code (the ledger's slug); null — a login no person holds. */
@@ -399,9 +403,10 @@ export const agentShiftReportsFeedResponseSchema = z.object({
   /**
    * The versions held back for the key (review R2b-4): each has a line of a page outside the key's pages. Who and when
    * and which pages, no sums, no lines — the reader records a problem instead of never knowing. A held version is
-   * listed on every read until the key may read its pages; then the next read serves it in `reports`, ahead of the new
-   * ones, at its own `seq` (below the cursor): take every item of `reports` whatever its seq. The cursor passing a held
-   * version never loses it.
+   * listed on every read until the key may read its pages. Then it gets a NEW place at the end of the feed and leaves
+   * this list: it comes in `reports` through the cursor like any other version, so an answer that never arrived is
+   * asked again with the same `since` and brings it again. It may come after newer versions of its report: a report's
+   * newest version is the one with the highest `version`, not the last one read.
    */
   held: z.array(z.object({
     id: intId,
@@ -414,6 +419,11 @@ export const agentShiftReportsFeedResponseSchema = z.object({
   })).default([]),
   /** Ask again with `since` = this (the last place read, served or held); the same as asked when nothing is new. */
   next: z.string(),
+  /**
+   * Whether places follow `next`. `limit` counts places, held ones too, so a page may carry fewer `reports` than
+   * `limit` — none even — while more follow: read on while this is true (or until `next` is the `since` asked).
+   */
+  more: z.boolean(),
   serverNow: isoTimestamp,
 });
 
@@ -550,7 +560,9 @@ export const shiftHandinRouteSchemas = {
     description: "Database only. A version is served as soon as it is committed, in the order the feed placed it (`seq`): a "
       + "version committed after a later one is placed after it, so `next` never passes a version not served yet. A "
       + "version with a line on a page outside the key's grant is held back and listed in `held` on every read until the key "
-      + "may read it; then it is served in `reports` at its own place.",
+      + "may read it; then it gets a new place at the end of the feed and comes in `reports` through the cursor (a lost "
+      + "answer is asked again and brings it again). `limit` counts places: a page may carry fewer reports than asked "
+      + "while `more` is true.",
     querystring: agentShiftReportsFeedQuerySchema,
     response: { 200: agentShiftReportsFeedResponseSchema, ...agentErrors },
   },

@@ -49,9 +49,16 @@ export const agentSaleDecisionBodySchema = z.object({
   /** When it was said: a day or a moment. */
   saidAt: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}(T.+)?$/),
   note: z.string().trim().min(1).max(4000).optional(),
-  /** The decision it replaces (the sale's active one must be named). */
+  /**
+   * The decision it replaces: the active one of the very sale (it must be named); for a decision that names no sale,
+   * an active one of the same page and fan. Never the owner's own (409 `owner_decision`), never another sale's (409
+   * `other_sale`); one of a page outside the key's answers as one that does not exist (409 `not_active`).
+   */
   supersedes: intId.optional(),
-  /** The open question it answers: closed with it. */
+  /**
+   * The open question it answers, closed with it: one about the same sale (or, neither naming a sale, the same page
+   * and fan). Another's is 409 `other_sale`; one of a page outside the key's answers as none (409 `question_closed`).
+   */
   answers: intId.optional(),
   ...saidWords,
 });
@@ -66,7 +73,10 @@ export const agentSaleDecisionAppliedBodySchema = z.object({
 });
 
 export const agentSaleDecisionsQuerySchema = z.object({
-  /** Only the decisions still to be taken into a report: active, not taken into a post, not held by a report in Hub. */
+  /**
+   * Only the decisions someone still waits for: active, not taken into a post, and not held — the reports handed in Hub
+   * hold the sale for everyone it gives a share to.
+   */
   open: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   /** Said (or decided) on this Moscow day or later. */
   since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -93,8 +103,8 @@ export const agentSaleDecisionSchema = z.object({
   /** dispute — the owner's decision of a dispute; ledger — carried over from the ledger; agent — recorded «со слов». */
   source: z.enum(["dispute", "ledger", "agent"]),
   /**
-   * open — still to be taken into a report; held — a report handed in Hub holds the sale (its version follows the
-   * decision); applied — taken into a post; cancelled; superseded.
+   * open — still to be taken into a report; held — the reports handed in Hub hold the sale for everyone it gives a
+   * share to (their versions follow the decision); applied — taken into a post; cancelled; superseded.
    */
   status: z.enum(["open", "held", "applied", "cancelled", "superseded"]),
   /** Where it went, in words: «учтено в отчёте anna за 2026-11-11». */
@@ -171,7 +181,10 @@ export const agentSaleDecisionsFeedQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(200),
 });
 
-/** A decision as the feed carries it: as it is now, no fan's name. */
+/**
+ * A decision as the feed carries it: as it is now. Its structured fields carry no fan's name (the sale is Hub's id and
+ * its page); `note` is the team's free text, served as written — it may name the fan, and a fan's erasure clears it.
+ */
 export const agentSaleDecisionFeedDecisionSchema = z.object({
   id: intId,
   /** The sale by Hub's id; null — not tied to a sale yet (or off_platform, which names none). */
@@ -201,9 +214,10 @@ export const agentSaleDecisionFeedDecisionSchema = z.object({
 export const agentSaleDecisionsFeedResponseSchema = z.object({
   /**
    * Every change after the cursor, in the order the feed placed them (`seq`): made, superseded, cancelled, linked (tied
-   * to its sale), applied, changed. Each carries the decision as it is now: apply in order, keep by decision id. A
-   * change held back for the key's pages earlier comes here, once the key may read it, at its own older `seq`: take
-   * every item whatever its seq.
+   * to its sale), applied, changed. Each carries the decision as it is now: keep decisions by id and go by
+   * `decision.state`. A change held back for the key's pages earlier gets a NEW place at the end of the feed once the
+   * key may read it and comes here through the cursor — possibly after later changes of the same decision, possibly a
+   * second time for a reader whose cursor had passed its old place.
    */
   changes: z.array(z.object({
     seq: intId,
@@ -213,8 +227,13 @@ export const agentSaleDecisionsFeedResponseSchema = z.object({
   })),
   /** Changes of a decision on a page outside the key's pages: listed on every read until the key may read them. */
   held: z.array(z.object({ seq: intId, decisionId: intId, pageLabel: z.string().nullable(), reason: z.enum(["page_outside_key"]) })).default([]),
-  /** Ask again with `since` = this (the last place read). */
+  /** Ask again with `since` = this (the last place read, served or held); the same as asked when nothing is new. */
   next: z.string(),
+  /**
+   * Whether places follow `next`. `limit` counts places, held ones too, so a page may carry fewer `changes` than
+   * `limit` while more follow: read on while this is true (or until `next` is the `since` asked).
+   */
+  more: z.boolean(),
   serverNow: isoTimestamp,
 });
 
@@ -233,15 +252,19 @@ export const saleDecisionRouteSchemas = {
     summary: "Record a decision about a sale «со слов»: the owner's ruling or the chatters' agreement (needs write:shift_reports)",
     description: "Database only. A sale Hub knows: it behaves as the owner's decision of a dispute — the reports holding it get a "
       + "new version, the open claims and questions of the sale are decided, the home is computed again. A sale with an active "
-      + "decision needs `supersedes` (409 `decision_exists`). A sale not named yet waits for the owner to tie it.",
+      + "decision needs `supersedes` (409 `decision_exists`). A sale not named yet waits for the owner to tie it. What it "
+      + "replaces and answers is checked in the transaction that writes: of the key's pages, about the same sale (409 "
+      + "`other_sale`), not the owner's own decision (409 `owner_decision`).",
     body: agentSaleDecisionBodySchema,
     response: { 200: agentSaleDecisionWriteResponseSchema, ...agentErrors },
   },
   agentSaleDecisionCancel: {
     auth: { kind: "agentKey" }, tags: ["agent"],
-    summary: "Cancel a decision «со слов», with why (needs write:shift_reports)",
-    description: "Database only. The sale's home is computed again without it; a report handed in keeps its version until the "
-      + "person hands it in again.",
+    summary: "Cancel a decision recorded «со слов» or carried over, with why (needs write:shift_reports)",
+    description: "Database only. The sale's home is computed again without it, and every report handed in that the decision "
+      + "settled gets a new version with what rules now (`versions`): an agreement of the two sides, else the rule with the "
+      + "person's own word. The claims and questions it decided wait again. The owner's own decision is not a key's to "
+      + "cancel (409 `owner_decision`).",
     body: agentSaleDecisionCancelBodySchema,
     response: { 200: agentSaleDecisionWriteResponseSchema, ...agentErrors },
   },
@@ -255,7 +278,8 @@ export const saleDecisionRouteSchemas = {
   agentSaleDecisions: {
     auth: { kind: "agentKey" }, tags: ["agent"],
     summary: "The decisions about sales on the key's pages, as a list or as the memory file has them (needs write:shift_reports or read:team)",
-    description: "Database only. Every source: the owner's disputes, the ones carried over from the ledger, the ones recorded «со слов».",
+    description: "Database only. Every source: the owner's disputes, the ones carried over from the ledger, the ones recorded «со слов». "
+      + "The fan is named as Hub's own rows name him; a note is the team's free text, as written.",
     querystring: agentSaleDecisionsQuerySchema,
     response: { 200: agentSaleDecisionsResponseSchema, ...agentErrors },
   },
@@ -263,7 +287,9 @@ export const saleDecisionRouteSchemas = {
     auth: { kind: "agentKey" }, tags: ["agent"],
     summary: "Every change of a decision about whose a sale is, after a cursor: what the ledger follows (needs read:money)",
     description: "Database only. A change is placed when the feed first finds it committed, after every place given before: "
-      + "a change committed late comes after the cursor, never passed. No fan's name.",
+      + "a change committed late comes after the cursor, never passed. A change held back for the key's pages gets a new "
+      + "place at the end once the key may read it. `limit` counts places: a page may carry fewer changes than asked while "
+      + "`more` is true. The structured fields carry no fan's name; `note` is the team's free text, as written.",
     querystring: agentSaleDecisionsFeedQuerySchema,
     response: { 200: agentSaleDecisionsFeedResponseSchema, ...agentErrors },
   },

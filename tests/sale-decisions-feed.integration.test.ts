@@ -6,13 +6,15 @@ import { sha256Hex } from "@agency_hub_core/shared";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { readSaleDecisionsFeed } from "../apps/runtime/src/services/sale-decisions-feed.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
 // The decisions feed (review R2b-B): every change of a decision about whose a sale is, after a cursor, in the order
 // the changes were made — what the ledger follows instead of keeping a second writer (pots, a nobody's sale given to a
-// person, a report line's agreement). No fan's name. A change committed late is served after the cursor, never passed.
+// person, a report line's agreement). No fan's name in its structured fields (a note is free text). A change committed
+// late is served after the cursor, never passed; one held back for the key's pages gets a new place when it may be read.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -111,6 +113,74 @@ describe("the decisions feed", () => {
     expect(JSON.stringify(read)).not.toMatch(/fanName|fan_name/u);
     expect(read.changes.map((one) => one.seq)).toEqual([...read.changes.map((one) => one.seq)].sort((a, b) => a - b));
     expect((await feed(read.next)).changes).toEqual([]);
+  });
+
+  it("gives a change held back for the key's pages a new place once the key may read it: a lost answer does not lose it", async (context) => {
+    if (!testDb) return context.skip();
+    const key = Number((await testDb.pool.query("select id from agent_keys where name = 'decisions-feed'")).rows[0].id);
+    const model = await createModel(app.db, { slug: "nova", name: "Nova" });
+    const pageTwo = (await createFanslyPage(app.db, { modelId: model!.id, label: "nova-1" }))!.id;
+    const read = (pageIds: number[], since?: string) => readSaleDecisionsFeed(app, { pageIds, limit: 500, agentKeyId: key, ...(since === undefined ? {} : { since }) });
+    const start = (await read([pageOne])).next;
+    // A decision of nova-1, a page the key does not hold: money outside the platform, it names no sale.
+    const decision = Number((await testDb.pool.query(
+      `insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, decided_at, said_by, source, needs_link)
+       values (null, $1, 'off_platform', $2::jsonb, 'said', now(), 'владелец', 'agent', false) returning id`,
+      [pageTwo, JSON.stringify([{ userId: anna, percent: 100 }])],
+    )).rows[0].id);
+    const first = await read([pageOne], start);
+    expect(first.changes).toEqual([]);
+    expect(first.held).toEqual([{ seq: expect.any(Number), decisionId: decision, pageLabel: "nova-1", reason: "page_outside_key" }]);
+    const place = first.held[0]!.seq;
+    // The cursor passed it: it is still listed.
+    const second = await read([pageOne], first.next);
+    expect(second.held.map((one) => one.decisionId)).toEqual([decision]);
+    // The key may read nova-1 now: the change leaves the held list and comes through the cursor.
+    const third = await read([pageOne, pageTwo], second.next);
+    expect(third.changes.map((one) => [one.change, one.decision.id])).toEqual([["made", decision]]);
+    expect(third.held).toEqual([]);
+    // That answer never arrived: asked again from the same place, the change comes again.
+    const again = await read([pageOne, pageTwo], second.next);
+    expect(again.changes.map((one) => [one.change, one.decision.id])).toEqual([["made", decision]]);
+    // It has a new place at the end of the feed; `next` is that place.
+    const moved = third.changes[0]!.seq;
+    expect(moved).toBeGreaterThan(Number(second.next));
+    expect(moved).toBeGreaterThan(place);
+    expect(again.changes[0]!.seq).toBe(moved);
+    expect([third.next, again.next]).toEqual([String(moved), String(moved)]);
+    const last = await read([pageOne, pageTwo], third.next);
+    expect([last.changes, last.held]).toEqual([[], []]);
+  });
+
+  it("counts held places in the limit and says when more follow: a page with no changes is not the end", async (context) => {
+    if (!testDb) return context.skip();
+    const key = Number((await testDb.pool.query("select id from agent_keys where name = 'decisions-feed'")).rows[0].id);
+    const model = await createModel(app.db, { slug: "luna", name: "Luna" });
+    const other = (await createFanslyPage(app.db, { modelId: model!.id, label: "luna-1" }))!.id;
+    const everyPage = (await testDb.pool.query("select id from pages")).rows.map((row) => Number(row.id));
+    const start = (await readSaleDecisionsFeed(app, { pageIds: everyPage, limit: 500, agentKeyId: key })).next;
+    // Three decisions in a row: of mia-1, of luna-1 (outside the key's pages), of mia-1; read one place at a time.
+    const made: number[] = [];
+    for (const page of [pageOne, other, pageOne]) {
+      made.push(Number((await testDb.pool.query(
+        `insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, decided_at, said_by, source, needs_link)
+         values (null, $1, 'off_platform', $2::jsonb, 'said', now(), 'владелец', 'agent', false) returning id`,
+        [page, JSON.stringify([{ userId: anna, percent: 100 }])],
+      )).rows[0].id));
+    }
+    const pages: Array<{ changes: unknown[]; held: number[]; more: boolean; moved: boolean }> = [];
+    let since = start;
+    for (let at = 0; at < 4; at += 1) {
+      const page = await readSaleDecisionsFeed(app, { pageIds: [pageOne], since, limit: 1, agentKeyId: key });
+      pages.push({ changes: page.changes.map((one) => one.decision.id), held: page.held.map((one) => one.decisionId), more: page.more, moved: page.next !== since });
+      since = page.next;
+    }
+    expect(pages).toEqual([
+      { changes: [made[0]], held: [], more: true, moved: true },
+      { changes: [], held: [made[1]], more: true, moved: true },
+      { changes: [made[2]], held: [made[1]], more: false, moved: true },
+      { changes: [], held: [made[1]], more: false, moved: false },
+    ]);
   });
 
   it("serves a change committed after a later one was served, after the cursor", async (context) => {

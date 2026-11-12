@@ -1,6 +1,5 @@
 import type { AgentSaleDecision, AgentSaleQuestion } from "@agency_hub_core/contracts";
 import {
-  cancelSaleDecision,
   findSaleClaim,
   findSaleIdByPlatformRef,
   insertSaleClaim,
@@ -15,6 +14,7 @@ import {
   listMatterPageLabels,
   listSaleClaims,
   listSaleDecisions,
+  lockSaleSettlements,
   markSaleDecisionApplied,
   supersedeSaleDecision,
   updateSaleClaim,
@@ -28,17 +28,22 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
-import { settledShareOf } from "./sale-claim-rules.ts";
-import { applySaleDecision, runSaleClaims } from "./sale-claims.ts";
-import { refreshSaleHomes } from "./sale-homes.ts";
+import { applySaleDecision, cancelSaleDecisionApplied, runSaleClaims } from "./sale-claims.ts";
 
 /**
  * «Чья продажа» «со слов» (review R2b-3): the agent's door for what the team's chat agent records — a decision about a
  * sale and a question about one. Hub is their only home: the same `sale_owner_decisions` and `sale_claims` the owner's
  * disputes and the records carried over from the ledger use, so a decision made anywhere is seen everywhere. A decision
- * on a sale Hub knows goes through `applySaleDecision`, the owner's own path. The lists render as the agent's memory file
- * has them (`decisionsMarkdown`, `questionsMarkdown`): the information `ledger decision list --md` gave, nothing of a
- * fan's name but what Hub's own fan rows hold.
+ * on a sale Hub knows goes through `applySaleDecision`, the owner's own path, and its cancel through
+ * `cancelSaleDecisionApplied`. The lists render as the agent's memory file has them (`decisionsMarkdown`,
+ * `questionsMarkdown`): the information `ledger decision list --md` gave; the fan is named as Hub's own fan rows name
+ * him, and a note or a question is the team's free text, served as written.
+ *
+ * A key changes only what is its own to change (final review, round 2). A number it names — the decision a new one
+ * replaces, the question it answers, the decision it cancels or marks — is read in the transaction that writes, and must
+ * be of the key's pages (one of another page, or of no page, answers exactly as a number that does not exist), about
+ * the very sale of the new decision (with no sale: the same page and fan), and not the owner's own: a decision the owner
+ * made in Workboard is changed only by the owner there.
  */
 
 type DoorApp = Pick<AppContext, "db" | "config" | "logger">;
@@ -52,9 +57,38 @@ export interface DoorActor {
 
 type LedgerKind = AgentSaleDecision["kind"];
 
-const DAY_MS = 86_400_000;
 const money = (mills: number) => formatUsdFromMills(mills);
 const notFound = () => new NotFoundError("Not found");
+
+/** Whether an object is the key's to change: it names a page, and the page is of the key's grant. */
+const ofKeysPages = (actor: Pick<DoorActor, "pageIds">, pageId: number | null) => pageId !== null && actor.pageIds.includes(pageId);
+
+/** A decision the owner made himself, in the interface: the door answers where it is changed, and changes nothing. */
+function refuseOwners(decision: Pick<SaleDecisionRow, "id" | "source">): void {
+  if (decision.source !== "dispute") return;
+  throw new ConflictError(
+    `Decision ${decision.id} is the owner's own, made in Workboard: only the owner changes it, there («Ждут вас», /workboard/decisions)`,
+    { reason: "owner_decision" },
+  );
+}
+
+/**
+ * Whether a decision or a question recorded before (`was`) is about what a new decision is about. One that names its
+ * sale: only that very sale's. One that names none: the same page and the same fan — by the words when the new one
+ * names no sale either, else by its sale's fan as Hub knows him (his id, his login, «u» and his id). Pure.
+ */
+export function sameSaleOf(
+  now: { sale: Pick<HandinSaleRow, "transactionId" | "fan"> | null; pageId: number | null; fanRef: string | null },
+  was: Pick<SaleDecisionRow, "transactionId" | "pageId" | "ledgerRef">,
+): boolean {
+  if (was.transactionId !== null) return now.sale !== null && now.sale.transactionId === was.transactionId;
+  if (was.pageId === null || was.pageId !== now.pageId) return false;
+  const lower = (value: unknown) => (typeof value === "string" && value.trim() !== "" ? value.trim().toLowerCase() : null);
+  const named = lower(was.ledgerRef?.fanRef);
+  if (now.sale === null) return named === lower(now.fanRef);
+  const fan = now.sale.fan;
+  return named !== null && [fan.fanRef, fan.username, fan.fanRef === null ? null : `u${fan.fanRef}`].some((ref) => lower(ref) === named);
+}
 
 /** A day or a moment («2026-11-01» or an ISO time) as an instant; a day is its Moscow noon. */
 function instantOf(value: string): Date {
@@ -157,23 +191,48 @@ export async function recordSaleDecision(
     : await saleOf(db, actor.pageIds, input);
   const sale = found.sale;
 
-  // A sale with an active decision: the new one names it.
-  const active = sale === null ? null : (await listActiveSaleDecisions(db, [sale.transactionId])).get(sale.transactionId) ?? null;
-  if (active !== null && input.supersedes !== active.id) {
-    throw new ConflictError(`The sale has an active decision ${active.id}: name it in supersedes (--supersedes ${active.id})`, { reason: "decision_exists" });
-  }
-  let replaced: SaleDecisionRow | null = null;
-  if (input.supersedes !== undefined && active?.id !== input.supersedes) {
-    replaced = (await listSaleDecisions(db, { ids: [input.supersedes] }))[0] ?? null;
-    if (replaced === null || replaced.state !== "active") throw new ConflictError("The decision it replaces is not active", { reason: "not_active" });
-  }
-  let question: SaleClaimRow | null = null;
-  if (input.answers !== undefined) {
-    question = await findSaleClaim(db, input.answers);
-    if (question === null || (question.kind !== "question" && question.kind !== "imported") || (question.state !== "owner" && question.state !== "asked")) {
-      throw new ConflictError("No open question with this number", { reason: "question_closed" });
+  const knownSale = sale !== null && input.kind !== "off_platform" ? sale : null;
+  const about = { sale: knownSale, pageId: found.pageId, fanRef: typeof found.ref?.fanRef === "string" ? found.ref.fanRef : null };
+
+  /**
+   * What the decision replaces and what it answers, read in the transaction that writes it (in the settlements' turn,
+   * so nothing changes between this read and the write) and refused before any write.
+   */
+  const named = async (txDb: Database): Promise<{ supersedes: number | null; answers: number | null }> => {
+    let supersedes: number | null = null;
+    const active = knownSale === null ? null : (await listActiveSaleDecisions(txDb, [knownSale.transactionId])).get(knownSale.transactionId) ?? null;
+    if (active !== null) {
+      // A sale with an active decision: the owner's own stays; another's is replaced only when named.
+      refuseOwners(active);
+      if (input.supersedes !== active.id) {
+        throw new ConflictError(`The sale has an active decision ${active.id}: name it in supersedes (--supersedes ${active.id})`, { reason: "decision_exists" });
+      }
+    } else if (input.supersedes !== undefined) {
+      const replaced = (await listSaleDecisions(txDb, { ids: [input.supersedes] }))[0] ?? null;
+      if (replaced === null || replaced.state !== "active" || !ofKeysPages(actor, replaced.pageId)) {
+        throw new ConflictError("The decision it replaces is not active", { reason: "not_active" });
+      }
+      refuseOwners(replaced);
+      // The sale's own active decision is the one a decision of a sale replaces; with no sale, one of the same page and fan.
+      if (knownSale !== null || !sameSaleOf(about, replaced)) {
+        throw new ConflictError(`Decision ${replaced.id} is about another sale: a decision replaces the active one of its own sale`, { reason: "other_sale" });
+      }
+      supersedes = replaced.id;
     }
-  }
+    let answers: number | null = null;
+    if (input.answers !== undefined) {
+      const question = await findSaleClaim(txDb, input.answers, { lock: true });
+      if (question === null || (question.kind !== "question" && question.kind !== "imported") || (question.state !== "owner" && question.state !== "asked")
+        || !ofKeysPages(actor, question.pageId)) {
+        throw new ConflictError("No open question with this number", { reason: "question_closed" });
+      }
+      if (!sameSaleOf(about, question)) {
+        throw new ConflictError(`Question ${question.id} is about another sale: a decision answers a question about its own sale`, { reason: "other_sale" });
+      }
+      answers = question.id;
+    }
+    return { supersedes, answers };
+  };
 
   const insert = {
     kind: hubKindOf(input.kind), shares: input.kind === "pot" || input.kind === "exclude" ? [] : shares, pot: input.pot ?? null,
@@ -182,32 +241,28 @@ export async function recordSaleDecision(
   };
   let decisionId: number | null = null;
   let versions: Array<{ shiftId: number; version: number }> = [];
-  if (sale !== null && input.kind !== "off_platform") {
+  if (knownSale !== null) {
     // A known sale: exactly the owner's decision of a dispute — reports, claims, home, matters.
-    const open = (await listSaleClaims(db, { transactionIds: [sale.transactionId], states: ["owner", "asked", "agreed"] }))
-      .filter((claim) => question === null || claim.id !== question.id);
-    const people = await listHandinPeopleOfUsers(db, (await listCurrentReportsOfSales(db, [sale.transactionId])).map((report) => report.userId));
     const applied = await applySaleDecision(app, {
-      transactionId: sale.transactionId,
+      transactionId: knownSale.transactionId,
       insert,
-      open: question === null ? open : [...open, question],
-      madeFor: (id) => ({ kind: "decision", decisionId: id ?? 0, transactionId: sale.transactionId, outcome: "said" }),
-      amountFor: (report, net) => settledShareOf({
-        netMills: net, userIds: new Set(people.get(report.userId)?.userIds ?? [report.userId]),
-        decision: { kind: insert.kind, shares: insert.shares }, agreed: [],
-      })?.amountMills ?? 0,
+      first: named,
+      madeFor: (id) => ({ kind: "decision", decisionId: id ?? 0, transactionId: knownSale.transactionId, outcome: "said" }),
       by: { door: "telegram", actorUserId: null, agentKeyId: actor.agentKeyId, telegramMessageRef: actor.sourceRef, telegramSenderId: actor.telegramUserId },
-    }, sale, now);
+    }, knownSale, now);
     decisionId = applied.decisionId;
     versions = applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version }));
-    if (replaced !== null) await supersedeSaleDecision(db, { id: replaced.id, at: now });
   } else {
     await db.transaction(async (tx) => {
       const txDb = tx as unknown as Database;
+      await lockSaleSettlements(txDb);
+      const also = await named(txDb);
       const saved = await insertSaleDecision(txDb, { ...insert, transactionId: null, pageId: found.pageId, ruleHome: null }, now);
       decisionId = saved?.id ?? null;
-      if (replaced !== null) await supersedeSaleDecision(txDb, { id: replaced.id, at: now });
-      if (question !== null) await updateSaleClaim(txDb, question.id, { state: "decided", decisionId, closedAt: now }, now);
+      if (also.supersedes !== null && !(await supersedeSaleDecision(txDb, { id: also.supersedes, at: now }))) {
+        throw new ConflictError("The decision it replaces is not active", { reason: "not_active" });
+      }
+      if (also.answers !== null) await updateSaleClaim(txDb, also.answers, { state: "decided", decisionId, closedAt: now }, now);
     });
     await runSaleClaims(app, now).catch(() => undefined);
   }
@@ -215,33 +270,30 @@ export async function recordSaleDecision(
   return { decision: wire!, versions, savedAt: now.toISOString() };
 }
 
-/** `agentSaleDecisionCancel`: cancelled with why; the sale's home computed again without it. */
+/**
+ * `agentSaleDecisionCancel`: cancelled with why. The reports it settled get a new version with what rules now, the
+ * claims and questions it decided wait again, the sale's home is computed without it (`cancelSaleDecisionApplied`).
+ */
 export async function cancelSaleDecisionSaid(app: DoorApp, actor: DoorActor, input: { decisionId: number; note: string }, now: Date = new Date()) {
-  const { db } = app;
-  const decision = (await listSaleDecisions(db, { ids: [input.decisionId] }))[0];
-  if (decision === undefined || (decision.pageId !== null && !actor.pageIds.includes(decision.pageId))) throw notFound();
-  if (!(await cancelSaleDecision(db, { id: decision.id, note: input.note, at: now }))) {
-    throw new ConflictError("Only an active decision is cancelled", { reason: "not_active" });
-  }
-  if (decision.transactionId !== null) {
-    const sale = (await listHandinSalesByIds(db, [decision.transactionId]))[0];
-    if (sale !== undefined) {
-      const day = moscowDay(sale.occurredAt);
-      const from = new Date(`${day}T00:00:00+03:00`);
-      await refreshSaleHomes(db, { from, to: new Date(Math.min(now.getTime(), from.getTime() + DAY_MS)), now }).catch((error: unknown) => {
-        app.logger.warn({ day, err: error instanceof Error ? error.message : String(error) }, "sale decisions: the home was not computed again; the hourly job will");
-      });
-    }
-  }
-  const [wire] = await decisionWires(app, [decision.id]);
-  return { decision: wire!, versions: [], savedAt: now.toISOString() };
+  const cancelled = await cancelSaleDecisionApplied(app, {
+    decisionId: input.decisionId,
+    note: input.note,
+    check: (decision) => {
+      if (decision === null || !ofKeysPages(actor, decision.pageId)) throw notFound();
+      refuseOwners(decision);
+      return decision;
+    },
+    by: { door: "telegram", actorUserId: null, agentKeyId: actor.agentKeyId, telegramMessageRef: actor.sourceRef, telegramSenderId: actor.telegramUserId },
+  }, now);
+  const [wire] = await decisionWires(app, [input.decisionId]);
+  return { decision: wire!, versions: cancelled.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
 }
 
 /** `agentSaleDecisionApplied`: taken into a person's post of a date. */
 export async function markSaleDecisionTaken(app: DoorApp, actor: DoorActor | Pick<DoorActor, "pageIds">, input: { decisionId: number; person: string; reportDate: string }, now: Date = new Date()) {
   const { db } = app;
   const decision = (await listSaleDecisions(db, { ids: [input.decisionId] }))[0];
-  if (decision === undefined || (decision.pageId !== null && !actor.pageIds.includes(decision.pageId))) throw notFound();
+  if (decision === undefined || !ofKeysPages(actor, decision.pageId)) throw notFound();
   const userId = (await listLoginsByPersonCode(db, [input.person])).get(input.person)?.[0];
   if (userId === undefined) throw new BadRequestError(`No person with the code: ${input.person}`, { reason: "person_unknown" });
   if (!(await markSaleDecisionApplied(db, { id: decision.id, userId, reportDate: input.reportDate, at: now }))) {
@@ -290,10 +342,17 @@ async function decisionWiresOf(app: DoorApp, decisions: readonly SaleDecisionRow
     else if (decision.appliedAt !== null) {
       status = "applied";
       statusWords = `учтено в отчёте ${decision.appliedUserId === null ? "?" : codeOf(decision.appliedUserId) ?? `#${decision.appliedUserId}`} за ${decision.appliedReportDate ?? "?"}`;
-    } else if (holders.length > 0) {
-      status = "held";
-      statusWords = `в отчёте, сданном в системе: ${holders.map((one) => `${codeOf(one.userId) ?? `#${one.userId}`} за ${one.reportDate}`).join(", ")}`;
-    } else [status, statusWords] = ["open", "открыто, ждёт отчёта"];
+    } else {
+      // Held: the reports handed in Hub that hold the sale follow the decision by themselves — when they are the reports
+      // of everyone it gives a share to. A person it gives a share to whose report does not hold the sale still waits
+      // for it (a post-based report takes it from this list), whoever else's report holds the line.
+      const inHub = `в отчёте, сданном в системе: ${holders.map((one) => `${codeOf(one.userId) ?? `#${one.userId}`} за ${one.reportDate}`).join(", ")}`;
+      const loginsOf = (userId: number) => codes.get(userId)?.userIds ?? [userId];
+      const waiting = decision.shares.filter((share) => !holders.some((one) => loginsOf(share.userId).includes(one.userId)));
+      if (holders.length > 0 && waiting.length === 0) [status, statusWords] = ["held", inHub];
+      else if (holders.length > 0) [status, statusWords] = ["open", `открыто, ждёт отчёта: ${waiting.map((share) => codeOf(share.userId) ?? `#${share.userId}`).join(", ")}; ${inHub}`];
+      else [status, statusWords] = ["open", "открыто, ждёт отчёта"];
+    }
     const pageLabel = decision.pageId === null ? (typeof ref.pageLabel === "string" ? ref.pageLabel : null) : pages.labelOf.get(decision.pageId) ?? null;
     return {
       id: decision.id,
@@ -414,7 +473,7 @@ export async function askSaleQuestion(
 
 async function openQuestion(app: DoorApp, actor: Pick<DoorActor, "pageIds">, questionId: number): Promise<SaleClaimRow> {
   const question = await findSaleClaim(app.db, questionId);
-  if (question === null || (question.kind !== "question" && question.kind !== "imported") || (question.pageId !== null && !actor.pageIds.includes(question.pageId))) throw notFound();
+  if (question === null || (question.kind !== "question" && question.kind !== "imported") || !ofKeysPages(actor, question.pageId)) throw notFound();
   if (question.state !== "owner" && question.state !== "asked") throw new ConflictError("This question is already closed", { reason: "question_closed" });
   return question;
 }
@@ -492,7 +551,8 @@ export function questionsMarkdown(questions: readonly AgentSaleQuestion[]): stri
       const fan = [one.fan.name, one.fan.username ?? one.fan.fanRef].filter((part, at, all) => part !== null && all.indexOf(part) === at).join(" / ") || "фан?";
       const parts = [`- **${fan}** (${one.pageLabel ?? "?"}).`];
       if (one.netMills !== null) parts.push(`Нетто ${money(one.netMills)}.`);
-      parts.push(sentence(one.question));
+      // The question, and its note on its own line (`questionTextOf`): each its own sentence, as the ledger's list had them.
+      parts.push(...one.question.split(/\n+/u).map(sentence).filter((part) => part !== ""));
       if (one.who !== null) parts.push(sentence(`Договориться: ${one.who}`));
       parts.push(`Спросили: ${[moscowDay(new Date(one.askedAt)), ...(one.sourceLink === null ? [] : [one.sourceLink])].join(", ")}. (№${one.id})`);
       return parts.join(" ");

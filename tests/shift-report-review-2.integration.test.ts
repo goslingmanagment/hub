@@ -252,7 +252,85 @@ describe("the shift report, review round 2b", () => {
     expect(title).not.toContain("Имя Фана");
   });
 
-  it("lists a version held back for the key's pages on every read, and serves it once the key may read it (4)", async (context) => {
+  it("keeps an imported question's note with its text, also for one carried over before, and never for an erased one (round 3, 6)", async (context) => {
+    if (!testDb) return context.skip();
+    const rows = (columns: string[], values: unknown[][]) => ({ columns, rows: values });
+    const noDecisions = rows(["id", "page_label", "fan_ref", "fan_name", "transaction_ref", "net_micros", "kind", "shares", "said_by", "said_at", "note", "status"], []);
+    const columns = ["id", "page_label", "fan_ref", "fan_name", "transaction_ref", "net_micros", "question", "asked_of", "who", "asked_at", "note", "status"];
+    // Two questions carried over before a note was kept (the question alone, as that run wrote it); one of them was
+    // erased since with its fan.
+    const before = (ledgerId: number, question: string) => insertSaleClaim(app.db, {
+      transactionId: null, pageId: pageOne, kind: "imported", claimantUserId: null, claimantHandinId: null, claimantVersion: null, statement: null,
+      shareWithUserId: null, claimantNote: null, claimedAt: new Date("2026-11-06T12:00:00+03:00"), sideUserId: null, sideShiftId: null,
+      state: "owner", escalatedAt: new Date(), escalatedWhy: "imported", ledgerQuestionId: ledgerId, question, whoText: "anna и bella",
+      ledgerRef: { pageLabel: "mia-1", fanRef: "fan-ref-9", askedOf: "owner" },
+    }, new Date());
+    await before(71, "Чья продажа?");
+    await before(73, "Кому тип?");
+    await testDb.pool.query("update sale_claims set question = null where ledger_question_id = 73");
+    const files = {
+      decisions: noDecisions,
+      questions: rows(columns, [
+        [71, "mia-1", "fan-ref-9", null, null, null, "Чья продажа?", "owner", "anna и bella", "2026-11-06", "Писали оба, купил после смены anna", "open"],
+        [72, "mia-1", "fan-ref-9", null, null, null, "Чей кастом?", "owner", "anna и bella", "2026-11-06", "Заказал ночью, оплатил утром", "open"],
+        [73, "mia-1", "fan-ref-9", null, null, null, "Кому тип?", "owner", "anna и bella", "2026-11-06", "Заметка о стёртом фане", "open"],
+      ]),
+    };
+    expect(await applyImport(app.db, await planImport(app.db, files), new Date())).toMatchObject({ questions: 1, notes: 1 });
+    const stored = async (ledgerId: number) => (await testDb!.pool.query("select question from sale_claims where ledger_question_id = $1", [ledgerId])).rows[0].question as string | null;
+    expect(await stored(71)).toBe("Чья продажа?\nПисали оба, купил после смены anna");
+    expect(await stored(72)).toBe("Чей кастом?\nЗаказал ночью, оплатил утром");
+    expect(await stored(73)).toBeNull();
+    // Run again: nothing more.
+    expect(await applyImport(app.db, await planImport(app.db, files), new Date())).toMatchObject({ questions: 0, notes: 0 });
+    expect(await stored(71)).toBe("Чья продажа?\nПисали оба, купил после смены anna");
+    // The memory file's list shows the note after the question.
+    const md = await asAgent("GET", "/api/v1/agent/sale-questions?open=true&format=md");
+    expect(md.statusCode, md.body).toBe(200);
+    expect(md.json().markdown).toContain("Чья продажа? Писали оба, купил после смены anna.");
+    expect(md.json().markdown).toContain("Чей кастом? Заказал ночью, оплатил утром.");
+  });
+
+  it("carries over that the ledger had a decision taken into a post, also for one carried over before (round 3, 10)", async (context) => {
+    if (!testDb) return context.skip();
+    const rows = (columns: string[], values: unknown[][]) => ({ columns, rows: values });
+    const columns = ["id", "page_label", "fan_ref", "fan_name", "transaction_ref", "net_micros", "kind", "shares", "said_by", "said_at", "note", "status",
+      "applied_person", "applied_report_date", "applied_at"];
+    const whole = JSON.stringify([{ person: "anna", percent: 100 }]);
+    const [early, taken, open] = [await sale(6_100, 130, "nobody"), await sale(6_200, 135, "nobody"), await sale(6_300, 140, "nobody")];
+    const noQuestions = rows(["id", "page_label", "fan_ref", "fan_name", "transaction_ref", "net_micros", "question", "asked_of", "who", "asked_at", "note", "status"], []);
+    const decision = (id: number, transactionId: number, status: string, applied: [string | null, string | null, string | null]) =>
+      [id, "mia-1", "fan-ref-3", null, String(transactionId), null, "owner", whole, "владелец", "2026-11-06", null, status, ...applied];
+    // 911 was carried over when the import knew nothing of «applied»: open in Hub, taken into anna's post in the ledger.
+    await applyImport(app.db, await planImport(app.db, { decisions: rows(columns.slice(0, 12), [decision(911, early, "applied", [null, null, null]).slice(0, 12)]), questions: noQuestions }), new Date());
+    const marks = async () => (await testDb!.pool.query(
+      `select ledger_decision_id as ledger, applied_user_id::int as taker, to_char(applied_report_date, 'YYYY-MM-DD') as day, applied_at is not null as taken
+       from sale_owner_decisions where ledger_decision_id in (911, 912, 913) order by ledger_decision_id`,
+    )).rows;
+    expect(await marks()).toEqual([{ ledger: 911, taker: null, day: null, taken: false }]);
+    const files = {
+      decisions: rows(columns, [
+        decision(911, early, "applied", ["anna", "2026-11-07", "2026-11-08T10:00:00+03:00"]),
+        decision(912, taken, "applied", ["anna", "2026-11-07", "2026-11-08T10:05:00+03:00"]),
+        decision(913, open, "open", [null, null, null]),
+      ]),
+      questions: noQuestions,
+    };
+    expect(await applyImport(app.db, await planImport(app.db, files), new Date())).toMatchObject({ decisions: 2, applied: 2 });
+    expect(await marks()).toEqual([
+      { ledger: 911, taker: anna, day: "2026-11-07", taken: true },
+      { ledger: 912, taker: anna, day: "2026-11-07", taken: true },
+      { ledger: 913, taker: null, day: null, taken: false },
+    ]);
+    // Only the one not taken yet is offered for a report.
+    const offered = (await asAgent("GET", "/api/v1/agent/sale-decisions?open=true")).json().decisions as Array<{ transactionId: number | null }>;
+    const ids = offered.map((one) => one.transactionId);
+    expect([ids.includes(early), ids.includes(taken), ids.includes(open)]).toEqual([false, false, true]);
+    // Run again: nothing more.
+    expect(await applyImport(app.db, await planImport(app.db, files), new Date())).toMatchObject({ decisions: 0, applied: 0 });
+  });
+
+  it("lists a version held back for the key's pages on every read; readable, it gets a new place and a lost answer does not lose it (4)", async (context) => {
     if (!testDb) return context.skip();
     const key = Number((await testDb.pool.query("select id from agent_keys where name = 'review2-gengar'")).rows[0].id);
     const shift = await insertShift(anna, new Date(Date.now() - 80 * 3_600_000), new Date(Date.now() - 75 * 3_600_000), new Date(Date.now() - 77 * 3_600_000).toISOString().slice(0, 10));
@@ -280,11 +358,69 @@ describe("the shift report, review round 2b", () => {
     // The cursor passed it: it is still listed on the next read.
     const second = await readShiftReportsFeed(app, { pageIds: [pageOne], since: first.next, limit: 500, agentKeyId: key });
     expect(second.held.map((one) => one.id)).toEqual([version]);
-    // The key may read mia-2 now: served once, at its own place, the cursor not moved back.
+    // The key may read mia-2 now: the version leaves the held list and comes through the cursor.
     const third = await readShiftReportsFeed(app, { pageIds: [pageOne, pageTwo], since: second.next, limit: 500, agentKeyId: key });
-    expect(third.reports.map((one) => [one.id, one.seq])).toEqual([[version, place]]);
+    expect(third.reports.map((one) => one.id)).toEqual([version]);
     expect(third.held).toEqual([]);
-    expect(third.next).toBe(second.next);
-    expect((await readShiftReportsFeed(app, { pageIds: [pageOne, pageTwo], since: third.next, limit: 500, agentKeyId: key })).reports).toEqual([]);
+    // That answer never arrived: asked again from the same place, the version comes again.
+    const again = await readShiftReportsFeed(app, { pageIds: [pageOne, pageTwo], since: second.next, limit: 500, agentKeyId: key });
+    expect(again.reports.map((one) => one.id)).toEqual([version]);
+    expect(again.held).toEqual([]);
+    // It has a new place at the end of the feed, past the cursor that had passed its old one; `next` is that place.
+    const moved = third.reports[0]!.seq;
+    expect(moved).toBeGreaterThan(Number(second.next));
+    expect(moved).toBeGreaterThan(place);
+    expect(again.reports[0]!.seq).toBe(moved);
+    expect([third.next, again.next]).toEqual([String(moved), String(moved)]);
+    // From the new cursor nothing is left; a reader that never held it back gets it at that one place.
+    const last = await readShiftReportsFeed(app, { pageIds: [pageOne, pageTwo], since: third.next, limit: 500, agentKeyId: key });
+    expect([last.reports, last.held]).toEqual([[], []]);
+    const whole = await readShiftReportsFeed(app, { pageIds: [pageOne, pageTwo], limit: 500 });
+    expect(whole.reports.filter((one) => one.id === version).map((one) => one.seq)).toEqual([moved]);
+  });
+
+  it("counts held places in the limit and says when more follow: a page with no reports is not the end (5)", async (context) => {
+    if (!testDb) return context.skip();
+    const key = Number((await testDb.pool.query("select id from agent_keys where name = 'review2-gengar'")).rows[0].id);
+    /** A handed-in report of a fresh shift whose one version has one line of a page: the version's id. */
+    const versionOf = async (pageLabel: string, hoursAgo: number): Promise<number> => {
+      const shift = await insertShift(anna, new Date(Date.now() - hoursAgo * 3_600_000), new Date(Date.now() - (hoursAgo - 5) * 3_600_000), new Date(Date.now() - hoursAgo * 3_600_000).toISOString().slice(0, 10));
+      const handin = await testDb!.pool.query(
+        `insert into shift_handins (shift_id, user_id, person_id, report_date, state, current_version, submitted_at)
+         values ($1, $2, (select person_id from person_logins where user_id = $2), current_date, 'submitted', 1, now()) returning id`,
+        [shift, anna],
+      );
+      return Number((await testDb!.pool.query(
+        `insert into shift_handin_versions (handin_id, version, door, actor_user_id, total_mills, lines, rule_version)
+         values ($1, 1, 'workboard', $2, 1000, $3::jsonb, 'test') returning id`,
+        [handin.rows[0].id, anna, JSON.stringify([{
+          transactionId: 1, offPlatformId: null, group: "mine", pageLabel, kind: "tip", occurredAt: null, netMills: 1000,
+          rule: { home: "shift", reason: "holder", shareMills: 1000, toUserId: null, senderUserId: null }, alreadyIn: null,
+          statement: null, shareWithUserId: null, note: null, amountMills: 1000, added: false, disputed: false,
+        }])],
+      )).rows[0].id);
+    };
+    const start = (await readShiftReportsFeed(app, { pageIds: [pageOne, pageTwo], limit: 500, agentKeyId: key })).next;
+    // Three versions in a row: of mia-1, of mia-2 (outside the key's pages), of mia-1; the ledger reads them one place at a time.
+    const made = [await versionOf("mia-1", 200), await versionOf("mia-2", 230), await versionOf("mia-1", 260)];
+    const pages: Array<{ reports: number[]; held: number[]; more: boolean; moved: boolean }> = [];
+    let since = start;
+    for (let at = 0; at < 4; at += 1) {
+      const page = await readShiftReportsFeed(app, { pageIds: [pageOne], since, limit: 1, agentKeyId: key });
+      pages.push({ reports: page.reports.map((one) => one.id), held: page.held.map((one) => one.id), more: page.more, moved: page.next !== since });
+      since = page.next;
+    }
+    expect(pages).toEqual([
+      { reports: [made[0]], held: [], more: true, moved: true },
+      // The held place alone: no report in the answer, the cursor moved, more follow.
+      { reports: [], held: [made[1]], more: true, moved: true },
+      { reports: [made[2]], held: [made[1]], more: false, moved: true },
+      // The end: nothing read, `next` is the cursor asked.
+      { reports: [], held: [made[1]], more: false, moved: false },
+    ]);
+    // A version stored with a line of a page it does not name among its pages is served with that page, at nothing
+    // (round 3, 8): the ledger checks every line against the version's pages.
+    const served = (await readShiftReportsFeed(app, { pageIds: [pageOne, pageTwo], limit: 500 })).reports.find((one) => one.id === made[0])!;
+    expect(served.pages).toEqual([{ pageLabel: "mia-1", amountMills: 0 }]);
   });
 });
