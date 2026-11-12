@@ -117,7 +117,7 @@ function standing(request: DemoRequest): Seed[] {
       evidence: { check: "card_cover", name: "карты покрывают списания", severity: "warn", summary: "карта •0042: на счёте 5.40, к списанию 120.00 до 14.11, не хватает 114.60", failingSince: isoAt(now - 1.6 * DAY) },
       agoMs: 0.6 * DAY,
     },
-    { kind: "page.login_needed", key: "page.login_needed:nova-1", title: "Нужен вход в Fansly: nova-1", pages: ["nova-1"], link: "/pages/nova-1/browser-login", agoMs: 3 * HOUR },
+    { kind: "page.login_needed", key: "page.login_needed:nova-1", title: "Нужен вход в Fansly: nova-1", pages: ["nova-1"], link: "/settings/pages/nova-1/login", agoMs: 3 * HOUR },
     { kind: "incident.open", key: "incident.open:901", title: "Сбой: Сбор сообщений mia-2 стоит 2 часа", pages: ["mia-2"], evidence: { openedAt: isoAt(now - 2 * HOUR) }, link: "/system/failures?page=all", agoMs: 2 * HOUR },
     { kind: "agent.reminder", key: "agent.reminder:owner-1", title: "Генгар: цены на mia-2 не меняли 30 дней, пересмотрите перед выходными", pages: ["mia-2"], agoMs: 9 * HOUR },
     {
@@ -255,7 +255,7 @@ function mattersWaiting(request: DemoRequest): WaitingAnswer {
     const one = row.id === "login" && mine.length === 1 ? mine[0]!.pageLabels[0] ?? null : null;
     return [{
       id: row.id, label: one ? `${row.label}: ${one}` : row.label, count: mine.length, capped: false, pageLabel: one,
-      to: one ? `/pages/${one}/browser-login` : row.to, matterIds: mine.map((matter) => matter.id),
+      to: one ? `/settings/pages/${one}/login` : row.to, matterIds: mine.map((matter) => matter.id),
     }];
   });
   const page = typeof request.query.pageLabel === "string" ? request.query.pageLabel : null;

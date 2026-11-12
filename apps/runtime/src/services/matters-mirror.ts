@@ -189,7 +189,7 @@ export function loginItems(labels: readonly string[]): MirrorItem[] {
     pageLabels: [label],
     money: false,
     evidence: { pageLabel: label },
-    link: `/pages/${encodeURIComponent(label)}/browser-login`,
+    link: `/settings/pages/${encodeURIComponent(label)}/login`,
   }));
 }
 

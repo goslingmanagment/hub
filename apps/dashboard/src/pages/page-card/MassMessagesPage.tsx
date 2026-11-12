@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams } from "react-router";
+import { useRoutePageLabel } from "@/components/layout/usePageFilter";
 import type { PagePromoResponse } from "@agency_hub_core/contracts";
 import { usePageMassMessages, usePagePromo, type MassMessageList } from "@/api/page-promo";
 import { Pagination } from "@/components/shared/Pagination";
@@ -109,7 +109,7 @@ function Automations({ query }: { query: ReturnType<typeof usePagePromo> }) {
 
 /** «Рассылки»: what mass messages brought, and what the page writes by itself. Reads only (§9.7). */
 export function MassMessagesPage() {
-  const { pageLabel = "" } = useParams<{ pageLabel: string }>();
+  const pageLabel = useRoutePageLabel() ?? "";
   const label = decodeRouteSegment(pageLabel);
   const { search, update } = useListParams();
   const raw = search.get("list");

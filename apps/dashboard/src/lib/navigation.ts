@@ -28,8 +28,12 @@ export interface FanProfileNavigationState {
   fanLabel?: string;
 }
 
-export function buildPageRoute(pageLabel: string) {
-  return `/pages/${pathSegment(pageLabel)}`;
+/**
+ * A page itself: Главная on that page. The page is a filter (its card left on
+ * 12.11); `params` go along (`period`).
+ */
+export function buildPageRoute(pageLabel: string, params: Readonly<Record<string, string | null | undefined>> = {}) {
+  return withQuery("/", { page: pageLabel, ...params });
 }
 
 export function decodeRouteSegment(value: string) {
@@ -40,9 +44,15 @@ export function decodeRouteSegment(value: string) {
   }
 }
 
-/** A tab or a screen of a page's card (the page is in the path). */
+/**
+ * A page's own screen (they were the tabs of its card): its Fansly account and
+ * login under Настройки → Модели и страницы, its promo under Трафик, its mass
+ * messages under Публикации.
+ */
 export function buildPageSectionRoute(pageLabel: string, section: "account" | "promo" | "mass-messages" | "browser-login") {
-  return `${buildPageRoute(pageLabel)}/${section}`;
+  if (section === "account") return `/settings/pages/${pathSegment(pageLabel)}/account`;
+  if (section === "browser-login") return `/settings/pages/${pathSegment(pageLabel)}/login`;
+  return withQuery(section === "promo" ? "/traffic/promo" : "/content/mass-messages", { page: pageLabel });
 }
 
 function withQuery(path: string, params: Readonly<Record<string, string | null | undefined>>): string {

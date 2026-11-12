@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router";
+import { useRoutePageLabel } from "@/components/layout/usePageFilter";
+import { Link } from "react-router";
 import { toast } from "sonner";
 import { sumMills } from "@agency_hub_core/shared";
 import { useAuthMe } from "@/api/queries";
@@ -29,7 +30,7 @@ const FILTERS: ReadonlyArray<{ value: LinkFilter; label: string }> = [
  * A local read of the link series: no request reaches OnlyFans (§9.6).
  */
 export function PromoOnlyFans() {
-  const { pageLabel = "" } = useParams<{ pageLabel: string }>();
+  const pageLabel = useRoutePageLabel() ?? "";
   const label = decodeRouteSegment(pageLabel);
   const { findPageByLabel } = useDashboardShell();
   const page = findPageByLabel(label);

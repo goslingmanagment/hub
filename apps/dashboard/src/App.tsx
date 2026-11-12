@@ -7,8 +7,8 @@ import { ScreenFrame } from "./components/layout/ScreenFrame.js";
 import { ErrorBoundary } from "./components/shared/ErrorBoundary.js";
 import { LEGACY_ROUTES, SETTINGS_INDEX_RULE } from "./lib/redirects.js";
 import { Legacy } from "./routes/legacy.js";
-import { LiveLegacy } from "./routes/LiveLegacy.js";
-import { fansRoutes, pageCardRoutes } from "./routes/screens/fans-page.js";
+import { LiveLegacy, PageCardLegacy } from "./routes/LiveLegacy.js";
+import { fansRoutes } from "./routes/screens/fans-page.js";
 import { homeMoneyRoutes, MoneyIndex } from "./routes/screens/home-money.js";
 import { publicationsRoutes } from "./routes/screens/publications.js";
 import { settingsRoutes } from "./routes/screens/settings.js";
@@ -55,12 +55,17 @@ export function App() {
                 {settingsRoutes()}
                 {systemRoutes()}
               </Route>
-              {pageCardRoutes()}
             </Route>
 
             {/* Every old address lands on its new place, with its parameters. */}
             {/* `/money` follows its row too, but a team lead lands on «Операции» (R0б). */}
-            {LEGACY_ROUTES.map((rule) => <Route key={rule.path} path={rule.path} element={rule.path === "money" ? <MoneyIndex rule={rule} /> : <Legacy rule={rule} />} />)}
+            {LEGACY_ROUTES.map((rule) => (
+              <Route
+                key={rule.path}
+                path={rule.path}
+                element={rule.path === "money" ? <MoneyIndex rule={rule} /> : rule.path === "pages/:pageLabel" ? <PageCardLegacy rule={rule} /> : <Legacy rule={rule} />}
+              />
+            ))}
             <Route path="settings" element={<Legacy rule={SETTINGS_INDEX_RULE} />} />
 
             <Route path="*" element={<NotFoundScreen />} />

@@ -204,8 +204,8 @@ export function PageSources({ page, period, windowAt, windows, backTo, isOwner, 
           {(active || checkSync) && (
             <div className="flex flex-wrap items-center gap-2">
               {active && (
-                <Link id={`source-page-${page.pageId}`} className="btn btn-sm" to={`${buildPageRoute(page.pageLabel)}?${new URLSearchParams({ period })}`} state={{ backTo }}>
-                  Открыть страницу
+                <Link id={`source-page-${page.pageId}`} className="btn btn-sm" to={buildPageRoute(page.pageLabel, { period })} state={{ backTo }}>
+                  Только эта страница
                 </Link>
               )}
               {all && <Link className="btn btn-sm" to={all}>Все операции за период</Link>}

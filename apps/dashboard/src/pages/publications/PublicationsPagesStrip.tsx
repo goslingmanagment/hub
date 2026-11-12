@@ -92,7 +92,7 @@ export function PublicationsPagesStrip({ pages, picked, loading, failed, onRetry
             onSelect: () => onRefresh(page),
           });
         }
-        items.push({ label: "Открыть карточку страницы", onSelect: () => navigate(buildPageRoute(page.pageLabel)) });
+        items.push({ label: "Открыть на Главной", onSelect: () => navigate(buildPageRoute(page.pageLabel)) });
         if (profile !== null) {
           items.push({ label: `Открыть страницу на ${platformName(page.platform)}`, onSelect: () => window.open(profile, "_blank", "noopener,noreferrer") });
         }

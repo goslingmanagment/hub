@@ -86,12 +86,19 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
     },
   },
   { path: "pages", to: "/settings/pages" }, // 3
+  // A page's card left on 12.11: the page is a filter. Its «Сводка» is Главная on the page (the block of
+  // operations of an old address goes to Операции: pageCardLegacyRule), its tabs found their sections.
+  { path: "pages/:pageLabel", to: "/", pageFromPath: true },
+  { path: "pages/:pageLabel/account", to: "/settings/pages/:pageLabel/account" },
+  { path: "pages/:pageLabel/browser-login", to: "/settings/pages/:pageLabel/login" },
+  { path: "pages/:pageLabel/promo", to: "/traffic/promo", pageFromPath: true },
+  { path: "pages/:pageLabel/mass-messages", to: "/content/mass-messages", pageFromPath: true },
   { path: "pages/:pageLabel/subscribers", to: "/fans/subscribers", pageFromPath: true }, // 5
   { path: "pages/:pageLabel/followers", to: "/fans/followers", pageFromPath: true }, // 6
   { path: "pages/:pageLabel/top-supporters", to: "/fans", pageFromPath: true }, // 7
   { path: "pages/:pageLabel/deleted-fans", to: "/fans/gone", pageFromPath: true }, // 8
-  { path: "pages/:pageLabel/profile", to: "/pages/:pageLabel/account" }, // 9
-  { path: "pages/:pageLabel/settings", to: "/pages/:pageLabel/account", hash: "#fansly-settings" }, // 10
+  { path: "pages/:pageLabel/profile", to: "/settings/pages/:pageLabel/account" }, // 9
+  { path: "pages/:pageLabel/settings", to: "/settings/pages/:pageLabel/account", hash: "#fansly-settings" }, // 10
   { path: "pages/:pageLabel/spender-autolists/:bucketKey", to: "/fans/by-spend/:bucketKey", pageFromPath: true }, // 11
   { path: "pages/:pageLabel/fans/:platform/:platformUserId", to: "/fans/:pageLabel/:platform/:platformUserId" }, // 12
   { path: "browser-profiles/new", to: "/settings/pages/connect", rename: { page: "forPage" } }, // 13
@@ -101,7 +108,8 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
     to: (_, query) => {
       const page = query.get("page");
       query.delete("page");
-      return page ? `/pages/${pathSegment(page)}/promo` : "/system/onlyfans-api";
+      if (page) query.set("page", page);
+      return page ? "/traffic/promo" : "/system/onlyfans-api";
     },
   },
   { path: "ofapi-media", to: "/system/onlyfans-api", anchor: "#media" }, // 17
@@ -150,10 +158,10 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   { path: "system", to: "/system/collection" },
 ];
 
-// Four addresses are alive: the same path is a new screen, some of its old
-// parameters are not. Each answers with a rule or stays where it is.
+// Addresses that are alive, or old with a parameter of their own: the same path
+// is a new screen, some of its old parameters are not.
 
-/** `/pages/:pageLabel`: the old block of operations (4). */
+/** `/pages/:pageLabel`: the old block of operations (4); without it the rule above (Главная on the page). */
 export function pageCardLegacyRule(query: URLSearchParams): LegacyRule | null {
   return query.has("type") || query.has("txOffset")
     ? { to: "/money/transactions", pageFromPath: true, rename: { txOffset: "offset" }, set: { period: "all", reportableOnly: "false" } }

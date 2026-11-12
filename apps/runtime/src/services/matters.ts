@@ -218,7 +218,7 @@ export function buildWaitingRows(input: {
       if (pages.length === 1) {
         pageLabel = pages[0]!;
         label = `Нужен вход в Fansly: ${pageLabel}`;
-        to = `/pages/${encodeURIComponent(pageLabel)}/browser-login`;
+        to = `/settings/pages/${encodeURIComponent(pageLabel)}/login`;
       }
     }
     rows.push({

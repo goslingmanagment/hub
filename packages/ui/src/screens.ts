@@ -71,7 +71,7 @@ export interface ScreenPeriod {
   default?: PeriodKey;
 }
 
-export type SectionId = "home" | "waiting" | "money" | "fans" | "stats" | "publications" | "traffic" | "team" | "applications" | "settings" | "system" | "page";
+export type SectionId = "home" | "waiting" | "money" | "fans" | "stats" | "publications" | "traffic" | "team" | "applications" | "settings" | "system";
 
 export interface Crumb {
   label: string;
@@ -145,6 +145,13 @@ const STATS_PERIODS: readonly PeriodKey[] = ["7d", "30d", "90d", "180d", "365d"]
 
 const REPORTED: readonly Platform[] = ["fansly", "onlyfans"];
 const FANSLY: readonly Platform[] = ["fansly"];
+
+/** Настройки › Модели и страницы › the page: where a page's own Fansly screens sit. */
+const pageCrumbs = (page?: string): Crumb[] => [
+  { label: "Настройки", to: "/settings/pages" },
+  { label: "Модели и страницы", to: "/settings/pages" },
+  ...(page ? [{ label: page, to: `/settings/pages#page-${pathSegment(page)}` }] : []),
+];
 
 const fansCrumbs = (page?: string): Crumb[] => [
   { label: "Фаны", to: "/fans" },
@@ -315,6 +322,14 @@ export const SCREENS: readonly Screen[] = [
     telegramNote: { title: "Hub не публикует в Telegram", text: "У страниц Telegram публикаций нет." },
     keywords: "посты стена расписание утвердить настройки публикации",
   },
+  {
+    // A page's mass messages (a tab of the page's card until 12.11).
+    id: "content-mass-messages", path: "/content/mass-messages", label: "Рассылки", title: "Рассылки", section: "publications", ownerOnly: true,
+    why: "Массовые рассылки страницы: что ушло, кому и сколько принесло.",
+    pageFilter: "one", onePageWay: "picker", platforms: FANSLY,
+    platformsNote: "Рассылки Hub собирает только у страниц Fansly.", platformsShort: "только Fansly",
+    keywords: "рассылки массовые сообщения mass messages",
+  },
 
   // ── Трафик ─────────────────────────────────────────────────────────────
   // The traffic routine stays on the owner's Mac; its daily summary comes here as an agent's report (package O).
@@ -323,6 +338,14 @@ export const SCREENS: readonly Screen[] = [
     why: "Каналы трафика: что работает и что ждёт решения. Сводку пишет агент трафика.",
     pageFilter: "none",
     keywords: "трафик каналы подрядчики циклы доска сводка агент",
+  },
+  {
+    // A page's promo (a tab of the page's card until 12.11): Fansly's own, or the OnlyFans links as of 1 November.
+    id: "traffic-promo", path: "/traffic/promo", label: "Продвижение", title: "Трафик: продвижение", section: "traffic", ownerOnly: true,
+    why: "Ссылки и промо страницы: откуда пришли подписчики и деньги.",
+    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
+    platformsNote: "Hub не собирает данные Telegram.",
+    keywords: "продвижение промо ссылки трекинг кампании маркетинг ofapi marketing",
   },
 
   // ── Команда: Workboard ─────────────────────────────────────────────────
@@ -412,6 +435,23 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "none",
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Настройки", to: "/settings/pages" }, { label: "Модели и страницы", to: "/settings/pages" }],
+  },
+  {
+    // A page's own Fansly screens (they were tabs of the page's card, which left on 12.11): under its row here.
+    id: "settings-page-account", path: "/settings/pages/:pageLabel/account", label: "Аккаунт на Fansly", title: "Аккаунт на Fansly", section: "settings", ownerOnly: true,
+    why: "Как страница выглядит и как настроена на самом Fansly.",
+    pageFilter: "none", platforms: FANSLY,
+    platformsNote: "Этот экран есть только у страниц Fansly.",
+    deep: true, notSearched: true,
+    crumbs: (params) => pageCrumbs(params.pageLabel),
+  },
+  {
+    id: "settings-page-login", path: "/settings/pages/:pageLabel/login", label: "Вход в Fansly", title: "Вход в Fansly", section: "settings", ownerOnly: true,
+    why: "Браузер страницы входит в Fansly со своего устройства и IP.",
+    pageFilter: "none", platforms: FANSLY,
+    platformsNote: "Этот экран есть только у страниц Fansly.",
+    deep: true, notSearched: true,
+    crumbs: (params) => pageCrumbs(params.pageLabel),
   },
   {
     id: "settings-personas", path: "/settings/ai/personas", label: "Персоны", title: "Персоны ИИ", section: "settings", ownerOnly: true,
@@ -557,42 +597,6 @@ export const SCREENS: readonly Screen[] = [
     crumbs: () => [{ label: "Система", to: "/system/collection" }, { label: "Разработчик", to: "/system/dev" }, { label: "Журнал сбора", to: "/system/dev#log" }],
   },
 
-  // ── Карточка страницы: объект, а не ветка меню ─────────────────────────
-  {
-    id: "page", path: "/pages/:pageLabel", label: "Сводка", title: "Страница", section: "page",
-    why: "Сводка страницы.",
-    pageFilter: "none",
-    period: { class: "shared", options: COMMON_PERIODS },
-    notSearched: true,
-  },
-  {
-    id: "page-account", path: "/pages/:pageLabel/account", label: "Аккаунт на Fansly", title: "Аккаунт на Fansly", section: "page", ownerOnly: true,
-    why: "Как страница выглядит и как настроена на самом Fansly.",
-    pageFilter: "none", platforms: FANSLY,
-    platformsNote: "Этот экран есть только у страниц Fansly.",
-    notSearched: true,
-  },
-  {
-    id: "page-promo", path: "/pages/:pageLabel/promo", label: "Продвижение", title: "Продвижение", section: "page", ownerOnly: true,
-    why: "Ссылки и промо страницы.",
-    pageFilter: "none", platforms: REPORTED,
-    platformsNote: "Hub не собирает данные Telegram.",
-    notSearched: true,
-  },
-  {
-    id: "page-mass-messages", path: "/pages/:pageLabel/mass-messages", label: "Рассылки", title: "Рассылки", section: "page", ownerOnly: true,
-    why: "Массовые рассылки страницы.",
-    pageFilter: "none", platforms: FANSLY,
-    platformsNote: "Этот экран есть только у страниц Fansly.",
-    notSearched: true,
-  },
-  {
-    id: "page-browser-login", path: "/pages/:pageLabel/browser-login", label: "Вход в Fansly", title: "Вход в Fansly", section: "page", ownerOnly: true,
-    why: "Браузер страницы входит в Fansly со своего устройства и IP.",
-    pageFilter: "none", platforms: FANSLY,
-    platformsNote: "Этот экран есть только у страниц Fansly.",
-    notSearched: true,
-  },
 ];
 
 const SCREEN_BY_ID: ReadonlyMap<string, Screen> = new Map(SCREENS.map((screen) => [screen.id, screen]));
@@ -741,12 +745,12 @@ export const SECTIONS: readonly Section[] = [
     ],
   },
   {
-    id: "publications", label: "Публикации", title: "Публикации", icon: "Newspaper", ownerOnly: true, nav: "none",
-    tabs: [tab("publications", "Публикации", "publications")],
+    id: "publications", label: "Публикации", title: "Публикации", icon: "Newspaper", ownerOnly: true, nav: "tabs",
+    tabs: [tab("publications", "Публикации", "publications"), tab("mass-messages", "Рассылки", "content-mass-messages")],
   },
   {
     id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", ownerOnly: true, nav: "tabs",
-    tabs: [tab("summary", "Сводка", "traffic")],
+    tabs: [tab("summary", "Сводка", "traffic"), tab("promo", "Продвижение", "traffic-promo")],
   },
   {
     id: "applications", label: "Анкеты", title: "Анкеты моделей", icon: "ClipboardList", ownerOnly: true, nav: "none",
@@ -761,7 +765,7 @@ export const SECTIONS: readonly Section[] = [
   {
     id: "settings", label: "Настройки", title: "Настройки", icon: "Settings", ownerOnly: true, lower: true, nav: "side",
     tabs: [
-      tab("pages", "Модели и страницы", "settings-pages", "settings-connect", "settings-connect-profile"),
+      tab("pages", "Модели и страницы", "settings-pages", "settings-connect", "settings-connect-profile", "settings-page-account", "settings-page-login"),
       tab("ai", "ИИ", "settings-personas", "settings-persona", "settings-new-persona", "settings-features", "settings-feature", "settings-limits"),
       tab("notifications", "Оповещения", "settings-notifications"),
     ],
@@ -904,17 +908,27 @@ export function menuItemAt(pathname: string): string | null {
   return section.group ? screen.id : section.id;
 }
 
-// ── A page's card ────────────────────────────────────────────────────────
+// ── A page's own screens ─────────────────────────────────────────────────
 
-/** The tabs of a page's card, as its platform and the viewer's role have them. */
-export function pageCardTabs(page: { label: string; platform: string }, role: Role): { to: string; label: string; screenId: string }[] {
-  const base = `/pages/${pathSegment(page.label)}`;
-  const rows: { to: string; label: string; screenId: string }[] = [{ to: base, label: "Сводка", screenId: "page" }];
-  for (const [id, segment] of [["page-account", "account"], ["page-promo", "promo"], ["page-mass-messages", "mass-messages"]] as const) {
+/**
+ * What a page has of its own beside the filter (its card left on 12.11: the
+ * page is a filter now), as its platform and the viewer's role have them: its
+ * Fansly account and login under Настройки, its promo under Трафик, its mass
+ * messages under Публикации.
+ */
+export function pagePlaces(page: { label: string; platform: string }, role: Role): { to: string; label: string; screenId: string }[] {
+  const label = pathSegment(page.label);
+  const query = new URLSearchParams({ page: page.label }).toString();
+  const rows: { to: string; label: string; screenId: string }[] = [];
+  for (const [id, to] of [
+    ["settings-page-account", `/settings/pages/${label}/account`],
+    ["traffic-promo", `/traffic/promo?${query}`],
+    ["content-mass-messages", `/content/mass-messages?${query}`],
+  ] as const) {
     const screen = screenById(id);
     if (!screenVisible(screen, role)) continue;
     if (screen.platforms && !(screen.platforms as readonly string[]).includes(page.platform)) continue;
-    rows.push({ to: `${base}/${segment}`, label: screen.label, screenId: id });
+    rows.push({ to, label: screen.label, screenId: id });
   }
   return rows;
 }

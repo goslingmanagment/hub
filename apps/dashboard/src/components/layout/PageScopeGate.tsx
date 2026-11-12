@@ -111,14 +111,11 @@ function OutOfScopePanel() {
   const title = telegram
     ? screen.telegramNote?.title ?? "Hub не собирает данные Telegram"
     : screen.platformsNote ?? `У страницы ${item.label} нет таких данных`;
-  const onPageCard = screen.section === "page";
   return (
     <StatusPanel
       title={title}
       {...(telegram && screen.telegramNote ? { description: screen.telegramNote.text } : {})}
-      action={onPageCard
-        ? undefined
-        : <button type="button" className="btn btn-sm" onClick={() => filter.select(null)}>Все страницы</button>}
+      action={<button type="button" className="btn btn-sm" onClick={() => filter.select(null)}>Все страницы</button>}
     />
   );
 }

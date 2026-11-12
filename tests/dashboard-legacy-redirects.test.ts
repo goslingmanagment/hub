@@ -18,13 +18,13 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   [6, "/pages/mia-1/followers?filter=new24h", "/fans/followers?filter=new24h&page=mia-1"],
   [7, "/pages/mia-1/top-supporters?filter=cooling&q=ann&sortBy=username&dir=asc&period=90d&offset=50", "/fans?filter=cooling&q=ann&sortBy=username&dir=asc&period=90d&offset=50&page=mia-1"],
   [8, "/pages/mia-1/deleted-fans?offset=50", "/fans/gone?offset=50&page=mia-1"],
-  [9, "/pages/mia-1/profile", "/pages/mia-1/account"],
-  [10, "/pages/mia-1/settings", "/pages/mia-1/account#fansly-settings"],
+  [9, "/pages/mia-1/profile", "/settings/pages/mia-1/account"],
+  [10, "/pages/mia-1/settings", "/settings/pages/mia-1/account#fansly-settings"],
   [11, "/pages/mia-1/spender-autolists/600-plus?period=all&followersOnly=true&query=a&offset=50", "/fans/by-spend/600-plus?period=all&followersOnly=true&query=a&offset=50&page=mia-1"],
   [12, "/pages/mia-1/fans/fansly/7409?period=30d", "/fans/mia-1/fansly/7409?period=30d"],
   [13, "/browser-profiles/new?page=mia-1&name=draft", "/settings/pages/connect?name=draft&forPage=mia-1"],
   [14, "/browser-profiles/abc", "/settings/pages/connect/abc"],
-  [15, "/ofapi-marketing?page=mia-of", "/pages/mia-of/promo"],
+  [15, "/ofapi-marketing?page=mia-of", "/traffic/promo?page=mia-of"],
   [16, "/ofapi-marketing", "/system/onlyfans-api"],
   [17, "/ofapi-media", "/system/onlyfans-api#media"],
   [18, "/ofapi-exports", "/system/onlyfans-api#exports"],
@@ -110,6 +110,13 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   ["Разработчик: Расширение, its period", "/system/dev/extension?period=30d", "/system/dev?period=30d#extension"],
   ["Разработчик: Все параметры", "/system/dev/config", "/system/dev#config"],
   ["Разработчик: one parameter", "/system/dev/config#config-publishingEnabled", "/system/dev#config-publishingEnabled"],
+  // L2 (12.11): a page's card left; the page is a filter and its tabs found their sections.
+  ["the card: Главная on the page", "/pages/mia-1", "/?page=mia-1"],
+  ["the card with its period", "/pages/mia-1?period=7d", "/?period=7d&page=mia-1"],
+  ["the card: Аккаунт на Fansly", "/pages/mia-1/account#fansly-settings", "/settings/pages/mia-1/account#fansly-settings"],
+  ["the card: Вход в Fansly", "/pages/mia-1/browser-login", "/settings/pages/mia-1/login"],
+  ["the card: Продвижение", "/pages/mia-of/promo", "/traffic/promo?page=mia-of"],
+  ["the card: Рассылки", "/pages/mia-1/mass-messages?offset=20", "/content/mass-messages?offset=20&page=mia-1"],
 ];
 
 describe("old addresses (design/ia.md §8.2)", () => {
@@ -122,11 +129,11 @@ describe("old addresses (design/ia.md §8.2)", () => {
   });
 
   it("encodes a page's label in the new path", () => {
-    expect(resolveLegacyUrl("/pages/a%20b/profile")).toBe("/pages/a%20b/account");
+    expect(resolveLegacyUrl("/pages/a%20b/profile")).toBe("/settings/pages/a%20b/account");
     expect(resolveLegacyUrl("/settings?tab=engine&page=a%2Fb")).toBe("/system/collection/a%2Fb");
   });
 
-  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/pages/mia-1", "/pages/mia-1?period=7d", "/pages/mia-1/promo", "/publications?page=mia-1&status=draft&window=all", "/team/applications", "/team/applications/abc", "/system/dev", "/system/dev/log/42", "/account", "/join", "/login"])(
+  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/traffic/promo?page=mia-of", "/content/mass-messages?page=mia-1", "/settings/pages/mia-1/account", "/settings/pages/mia-1/login", "/publications?page=mia-1&status=draft&window=all", "/team/applications", "/team/applications/abc", "/system/dev", "/system/dev/log/42", "/account", "/join", "/login"])(
     "leaves %s where it is",
     (url) => {
       expect(resolveLegacyUrl(url)).toBeNull();
@@ -154,7 +161,7 @@ describe("the table of screens", () => {
         }
       }
     }
-    const orphans = SCREENS.filter((screen) => screen.section !== "page" && !seen.has(screen.id)).map((screen) => screen.id);
+    const orphans = SCREENS.filter((screen) => !seen.has(screen.id)).map((screen) => screen.id);
     expect(orphans).toEqual([]);
   });
 

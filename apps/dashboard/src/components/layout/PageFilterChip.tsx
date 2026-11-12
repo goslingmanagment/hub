@@ -1,8 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { Check, ChevronDown, X } from "lucide-react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import { PLATFORM_WORD } from "@/components/shared/PlatformBadge";
-import { buildPageRoute } from "@/lib/navigation";
 import type { Screen } from "@agency_hub_core/ui/screens";
 import { useDashboardShell } from "./DashboardShellContext.js";
 import { usePageFilter } from "./usePageFilter.js";
@@ -222,15 +221,6 @@ export function PageFilterChip() {
             button.current?.focus();
             filter.select(page);
           }}
-          footer={filter.page ? (
-            <>
-              <div className="menu-rule" />
-              <Link className="menu-item" to={buildPageRoute(filter.page)} onClick={() => setOpen(false)}>
-                <span className="menu-check" />
-                Открыть карточку {filter.page}
-              </Link>
-            </>
-          ) : undefined}
         />
       )}
     </div>
