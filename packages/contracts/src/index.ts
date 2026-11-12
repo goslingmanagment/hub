@@ -106,6 +106,8 @@ export * from "./sale-claims.ts";
 export * from "./routes-sale-claims.ts";
 // Цепочка продажи (package T): from one sale, whose it is down to its payout.
 export * from "./routes-sale-chain.ts";
+// Стирание фана: the ledger's feed of the erasures Hub completed.
+export * from "./routes-erasures.ts";
 
 export * from "./routes-ofapi-banned-words.ts";
 export * from "./routes-model-applications.ts";

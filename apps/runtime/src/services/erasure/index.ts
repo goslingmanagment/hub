@@ -1144,6 +1144,129 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
   },
 ];
 
+/** How a fan's erasure treats a column of Hub's work objects that can hold words. */
+export type FanTextErasureStance =
+  /** A fan-scope target clears it, or rewrites it to a neutral form, on the rows about the fan (`target`). */
+  | "cleared"
+  /** It holds no words about a fan: an enum or a state, an id or a key, a message reference, a team member, sums. */
+  | "no_words"
+  /** Words that can name a fan on a row tied to no fan: outside the fan scope, and the reason says what reaches it. */
+  | "unlinked";
+
+export interface FanTextErasureColumn {
+  /** `table.column`, exactly as `information_schema.columns` reports it. */
+  column: string;
+  stance: FanTextErasureStance;
+  /** The `ErasureTarget.target` of the FAN-scope plan that clears it (stance `cleared` only). */
+  target?: string;
+  why: string;
+}
+
+/**
+ * The work objects about a sale (0382 matters and history, 0400 shift reports, 0404 claims and decisions), whose every
+ * column of text or JSON is accounted for in `FAN_TEXT_ERASURE_COLUMNS`. Words have no column shape a pattern could
+ * find (the fan-ref ratchet above hunts ids), so the census is by table: a new text column on one of these tables fails
+ * `tests/erasure-fan-ref-columns.integration.test.ts` until it is listed here with its stance.
+ */
+export const FAN_TEXT_ERASURE_TABLES = [
+  "matters",
+  "object_events",
+  "sale_claims",
+  "sale_owner_decisions",
+  "off_platform_sales",
+  "shift_handins",
+  "shift_handin_marks",
+  "shift_handin_versions",
+] as const;
+
+const ENUM = "an enum the table's CHECK holds to its list";
+const OFF_PLATFORM_UNLINKED = "«мимо площадки» is money a person says came past the platform, from someone named in "
+  + "their own words (a Telegram name, a card holder): no row ties it to a fan, and a name there lives in another "
+  + "namespace than a platform login, so equality with one would be a guess. Not in the fan scope; a page's erasure "
+  + "deletes the confirmed ones counted on the page (`off_platform_sales` by `page_id`).";
+
+export const FAN_TEXT_ERASURE_COLUMNS: readonly FanTextErasureColumn[] = [
+  // Matters (0382). The fan's: the object is his sale, a claim or a decision on it, his custom order, or he himself.
+  { column: "matters.reason_key", stance: "no_words", why: "the writer's key to find its finding again (`<kind>:<id>`); rewriting it would break the writer's latch and open a second matter" },
+  { column: "matters.kind", stance: "no_words", why: "the kind's dotted words" },
+  { column: "matters.source", stance: "no_words", why: ENUM },
+  { column: "matters.state", stance: "no_words", why: ENUM },
+  { column: "matters.closed_how", stance: "no_words", why: ENUM },
+  { column: "matters.title", stance: "cleared", target: "matters", why: "the server's own title keeps its words before the colon (who, what kind), the rest becomes «фан стёрт»; another writer's title is replaced whole" },
+  { column: "matters.object_type", stance: "no_words", why: "the object's type" },
+  { column: "matters.object_id", stance: "no_words", why: "the object's id" },
+  { column: "matters.owner_role", stance: "no_words", why: ENUM },
+  { column: "matters.evidence", stance: "cleared", target: "matters", why: "the server's evidence loses its words (`WORK_TEXT_KEYS`) and keeps ids, sums and times; another writer's evidence is emptied" },
+  { column: "matters.link", stance: "cleared", target: "matters", why: "the server's link is a path of ids and stays; another writer's link goes" },
+  // Object events (0382): the history of the fan's matters and objects. An order's own history is the custom orders block's.
+  { column: "object_events.object_type", stance: "no_words", why: "the object's type" },
+  { column: "object_events.object_id", stance: "no_words", why: "the object's id" },
+  { column: "object_events.event", stance: "no_words", why: "the event's dotted words" },
+  { column: "object_events.door", stance: "no_words", why: ENUM },
+  { column: "object_events.changes", stance: "cleared", target: "object_events", why: "a comment's text and a closing's note go (`WORK_TEXT_KEYS`); the event row, who, when and through which door stay" },
+  // Claims (0404) on the fan's sales, and the ledger's questions about him not tied to a sale.
+  { column: "sale_claims.kind", stance: "no_words", why: ENUM },
+  { column: "sale_claims.statement", stance: "no_words", why: ENUM },
+  { column: "sale_claims.claimant_note", stance: "cleared", target: "sale_claims", why: "the claimant's line of why" },
+  { column: "sale_claims.state", stance: "no_words", why: ENUM },
+  { column: "sale_claims.answer", stance: "no_words", why: ENUM },
+  { column: "sale_claims.answer_note", stance: "cleared", target: "sale_claims", why: "the other side's line of why" },
+  { column: "sale_claims.answer_door", stance: "no_words", why: ENUM },
+  { column: "sale_claims.answer_ref", stance: "no_words", why: "the reference of the Telegram message an answer «со слов» came in" },
+  { column: "sale_claims.escalated_why", stance: "no_words", why: ENUM },
+  { column: "sale_claims.question", stance: "cleared", target: "sale_claims", why: "the ledger question's words" },
+  { column: "sale_claims.who_text", stance: "cleared", target: "sale_claims", why: "the ledger's free words of who; the people it named are claimant_user_id and side_user_id" },
+  { column: "sale_claims.ledger_ref", stance: "cleared", target: "sale_claims", why: "the ledger's fan, name, note and answer go (`LEDGER_FAN_KEYS`); page, sale reference, sum and times stay" },
+  // The owner's decisions (0404) on the fan's sales, and the ledger's decisions about him not tied to a sale.
+  { column: "sale_owner_decisions.kind", stance: "no_words", why: ENUM },
+  { column: "sale_owner_decisions.shares", stance: "no_words", why: "the team's shares: user ids and percents" },
+  { column: "sale_owner_decisions.pot", stance: "no_words", why: "a pot's slug" },
+  { column: "sale_owner_decisions.outcome", stance: "no_words", why: ENUM },
+  { column: "sale_owner_decisions.rule_home", stance: "no_words", why: "the rule's home of the sale when it was decided" },
+  { column: "sale_owner_decisions.note", stance: "cleared", target: "sale_owner_decisions", why: "the owner's why" },
+  { column: "sale_owner_decisions.said_by", stance: "no_words", why: "who of the team said it, as the ledger wrote" },
+  { column: "sale_owner_decisions.source", stance: "no_words", why: ENUM },
+  { column: "sale_owner_decisions.ledger_ref", stance: "cleared", target: "sale_owner_decisions", why: "as sale_claims.ledger_ref" },
+  { column: "sale_owner_decisions.state", stance: "no_words", why: ENUM },
+  // «Мимо площадки» (0400, 0404).
+  { column: "off_platform_sales.from_whom", stance: "unlinked", why: OFF_PLATFORM_UNLINKED },
+  { column: "off_platform_sales.what_for", stance: "unlinked", why: OFF_PLATFORM_UNLINKED },
+  { column: "off_platform_sales.state", stance: "no_words", why: ENUM },
+  { column: "off_platform_sales.decided_note", stance: "unlinked", why: OFF_PLATFORM_UNLINKED },
+  // Shift reports (0400).
+  { column: "shift_handins.state", stance: "no_words", why: ENUM },
+  { column: "shift_handins.comment", stance: "unlinked", why: "the shift's comment for the next shift and the owner: about the whole shift, tied to no sale and no fan" },
+  { column: "shift_handin_marks.statement", stance: "no_words", why: ENUM },
+  { column: "shift_handin_marks.note", stance: "cleared", target: "shift_handin_marks", why: "the person's note on the fan's sale" },
+  { column: "shift_handin_versions.door", stance: "no_words", why: ENUM },
+  { column: "shift_handin_versions.telegram_message_ref", stance: "no_words", why: "the reference of the agent's message «со слов»" },
+  { column: "shift_handin_versions.pages", stance: "no_words", why: "the pages' labels and sums" },
+  { column: "shift_handin_versions.lines", stance: "cleared", target: "shift_handin_versions", why: "the note of a line on the fan's sale, the one change the version's trigger lets the erasure make (`SHIFT_HANDIN_LINES_ERASURE`)" },
+  { column: "shift_handin_versions.off_platform", stance: "unlinked", why: OFF_PLATFORM_UNLINKED },
+  { column: "shift_handin_versions.comment", stance: "unlinked", why: "as shift_handins.comment, frozen in the version" },
+  { column: "shift_handin_versions.rule_version", stance: "no_words", why: "the rule's version" },
+  { column: "shift_handin_versions.made_for", stance: "no_words", why: "why the system made it: a kind, ids and an outcome" },
+];
+
+/** The words Hub's writers put in a matter's evidence and in an object event's changes: a person's note (a claim's
+ *  evidence, a matter's closing), a comment's text, a ledger question. The rest there is ids, sums, states and times. */
+const WORK_TEXT_KEYS = ["note", "text", "question"] as const;
+/** What a ledger record carried over (sale-claims-import.ts) says of its fan: his ref and name, its note, its answer. */
+const LEDGER_FAN_KEYS = ["fanRef", "fanName", "note", "answer"] as const;
+/** The words a matter about an erased fan says instead of him. */
+const MATTER_FAN_ERASED = "фан стёрт";
+/** The title of a matter about an erased fan that Hub's server did not write (its words are not Hub's to keep). */
+const MATTER_ERASED_TITLE = "Дело о стёртом фане";
+
+/**
+ * The one change a handed-in version takes (0408_shift_handin_erasure.sql): its trigger lets an UPDATE through only
+ * while this transaction-local setting is on, and then only one that clears notes inside `lines` — every other column,
+ * every line's other fields and the lines' count unchanged. The fan scope sets it around its own statement.
+ */
+export const SHIFT_HANDIN_LINES_ERASURE = { setting: "agency_hub.erasure", value: "shift_handin_lines" } as const;
+
+const textArray = (keys: readonly string[]) => sql`array[${sql.join(keys.map((key) => sql`${key}`), sql`, `)}]::text[]`;
+
 async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLineage): Promise<WorkTarget[]> {
   const ref = scope.fanRef!;
   const fanId = scope.fanId ?? -1;
@@ -1701,6 +1824,124 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // Transactions are the fan's by his id or by his ref on the scope's pages (the money's anonymization below).
   const txnPred = sql`fan_id = ${fanId} or (platform_account_id in ${scope.pageIds}
     and (correlation_account_id = ${ref} or sender_id = ${ref}))`;
+
+  // Hub's work objects about the fan's sales (0382, 0400, 0404): the rule of the chatters' notes below, applied to each.
+  // The row keeps its kind, state, ids, sums, when and who of the team; the words about the fan go
+  // (`FAN_TEXT_ERASURE_COLUMNS`, column by column). Before the orders and the transactions lose the fan: every
+  // predicate here follows him through them; the history before the matters, the matters before the claims.
+  const fanSales = sql`select id from transactions where ${txnPred}`;
+  // A ledger record carried over and tied to no sale names its fan in `ledger_ref.fanRef`: it is his when that ref is
+  // his by the import's own match (`listSaleCandidates`: his login, his id, «u» and his id) on one of the pages.
+  const ledgerFanPred = sql`(transaction_id is null
+    and ledger_ref ->> 'pageLabel' in (select label from pages where id in ${scope.pageIds})
+    and (btrim(ledger_ref ->> 'fanRef') in (${ref}, ${`u${ref}`})
+      or lower(btrim(ledger_ref ->> 'fanRef')) in (select lower(username) from fans where id = ${fanId} and username is not null)))`;
+  const ofFanSalePred = sql`(transaction_id in (${fanSales}) or ${ledgerFanPred})`;
+  // What a matter or an event is about: the fan's sale, a claim or a decision on it, his custom order, or he himself.
+  const fanObjectPred = sql`(
+    (object_type = 'transaction' and object_id in (select id::text from transactions where ${txnPred}))
+    or (object_type = 'sale_claim' and object_id in (select id::text from sale_claims where ${ofFanSalePred}))
+    or (object_type = 'sale_owner_decision' and object_id in (select id::text from sale_owner_decisions where ${ofFanSalePred}))
+    or (object_type = 'custom_order' and object_id in (select id::text from custom_orders where fan_id = ${fanId}))
+    or (object_type = 'fan' and object_id in (${String(fanId)}, ${ref})))`;
+  const workTextKeys = textArray(WORK_TEXT_KEYS);
+
+  // The history: a comment's text and a closing's note of the fan's matters, and of his objects (an order's own
+  // history is the custom orders block's). The event stays: who, when, through which door, what happened.
+  const fanEventPred = sql`changes ?| ${workTextKeys} and (
+    (object_type = 'matter' and object_id in (select id::text from matters where ${fanObjectPred}))
+    or (object_type <> 'custom_order' and ${fanObjectPred}))`;
+  targets.push({
+    plane: "hot",
+    target: "object_events",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from object_events where ${fanEventPred}`),
+    run: (tx) => execCount(tx, sql`update object_events set changes = changes - ${workTextKeys} where ${fanEventPred}`),
+  });
+
+  // What waits about him: the kind, the owner, the state and the times stay. The server's title keeps its words before
+  // the colon — who, what kind («Анна считает своей», «Спор о продаже», «Кастом K-123 просрочен»), never the fan — and
+  // says «фан стёрт» after it; its evidence keeps ids, sums and times, its link (a path of ids) stays. Another writer's
+  // words are not Hub's: its title is replaced, its evidence emptied, its link dropped. An open matter's mirror writes
+  // its own fan-less title again on its next pass.
+  const neutralTitle = sql`case when source = 'server' and strpos(title, ':') > 1
+    then left(left(title, strpos(title, ':') - 1), 280) || ${`: ${MATTER_FAN_ERASED}`}
+    else ${MATTER_ERASED_TITLE} end`;
+  const fanMatterPred = sql`${fanObjectPred} and (title is distinct from (${neutralTitle})
+    or evidence ?| ${workTextKeys} or (source <> 'server' and (evidence <> '{}'::jsonb or link is not null)))`;
+  targets.push({
+    plane: "hot",
+    target: "matters",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from matters where ${fanMatterPred}`),
+    run: (tx) => execCount(tx, sql`
+      update matters
+      set title = ${neutralTitle},
+          evidence = case when source = 'server' then evidence - ${workTextKeys} else '{}'::jsonb end,
+          link = case when source = 'server' then link else null end,
+          updated_at = now()
+      where ${fanMatterPred}`),
+  });
+
+  // Claims and the owner's decisions: who, whose, the answer, the outcome and the shares stay — the money's chain; the
+  // lines of why, the ledger's question and its words about the fan go.
+  const ledgerFanKeys = textArray(LEDGER_FAN_KEYS);
+  const fanClaimPred = sql`${ofFanSalePred} and (claimant_note is not null or answer_note is not null
+    or question is not null or who_text is not null or coalesce(ledger_ref ?| ${ledgerFanKeys}, false))`;
+  targets.push({
+    plane: "hot",
+    target: "sale_claims",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from sale_claims where ${fanClaimPred}`),
+    run: (tx) => execCount(tx, sql`
+      update sale_claims
+      set claimant_note = null, answer_note = null, question = null, who_text = null,
+          ledger_ref = ledger_ref - ${ledgerFanKeys}, updated_at = now()
+      where ${fanClaimPred}`),
+  });
+  const fanDecisionPred = sql`${ofFanSalePred} and (note is not null or coalesce(ledger_ref ?| ${ledgerFanKeys}, false))`;
+  targets.push({
+    plane: "hot",
+    target: "sale_owner_decisions",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from sale_owner_decisions where ${fanDecisionPred}`),
+    run: (tx) => execCount(tx, sql`
+      update sale_owner_decisions set note = null, ledger_ref = ledger_ref - ${ledgerFanKeys} where ${fanDecisionPred}`),
+  });
+
+  // A shift report: the draft's notes on the fan's sales, and the notes of the handed-in versions' lines on them — the
+  // one change a version takes (`SHIFT_HANDIN_LINES_ERASURE`: the trigger checks that nothing else moved). The sums,
+  // amounts, statements and lines stay; «мимо площадки» and the comment are tied to no fan (`FAN_TEXT_ERASURE_COLUMNS`).
+  const handinMarkPred = sql`note is not null and transaction_id in (${fanSales})`;
+  targets.push({
+    plane: "hot",
+    target: "shift_handin_marks",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from shift_handin_marks where ${handinMarkPred}`),
+    run: (tx) => execCount(tx, sql`update shift_handin_marks set note = null where ${handinMarkPred}`),
+  });
+  const fanLinePred = sql`(line ->> 'transactionId') ~ '^[0-9]+$'
+    and (line ->> 'transactionId')::bigint in (${fanSales})
+    and coalesce(line -> 'note', 'null'::jsonb) <> 'null'::jsonb`;
+  const handinVersionPred = sql`exists (select 1 from jsonb_array_elements(lines) as line where ${fanLinePred})`;
+  targets.push({
+    plane: "hot",
+    target: "shift_handin_versions",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from shift_handin_versions where ${handinVersionPred}`),
+    run: async (tx) => {
+      const { setting, value } = SHIFT_HANDIN_LINES_ERASURE;
+      await tx.execute(sql`select set_config(${setting}, ${value}, true)`);
+      const cleared = await execCount(tx, sql`
+        update shift_handin_versions v
+        set lines = (
+          select jsonb_agg(case when ${fanLinePred} then line || '{"note": null}'::jsonb else line end order by i)
+          from jsonb_array_elements(v.lines) with ordinality as e(line, i))
+        where ${handinVersionPred}`);
+      await tx.execute(sql`select set_config(${setting}, '', true)`);
+      return cleared;
+    },
+  });
 
   // Сообщения людям (0403, package S): a message the server made of the fan's order (its card) or of a handed-in
   // report that holds his sale (the post) keeps its row — kind, to whom, when, state — and loses its text. Before the

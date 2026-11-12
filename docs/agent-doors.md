@@ -35,6 +35,7 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | Custom orders | `GET/POST /api/v1/agent/custom-orders`, `POST …/custom-orders/:code`, `POST …/custom-orders/cards` (`hub custom list\|create\|step\|cards`) | `write:customs` | Record an order from the card (Gengar's `/tz`), write what the models' group says (at the model, deliveries in parts, revisions, refusals, cancels, messages), report cards with no order. Never a payment or «отдали»: those are people's |
 | Shift reports «со слов» | `GET /api/v1/agent/shift-reports/draft`, `GET …/claimable`, `POST …/line`, `…/comment`, `…/off-platform`, `…/submit` (`hub shift-report show\|claimable\|line\|comment\|off-platform\|submit`) | `write:shift_reports` | Gengar's `/smena` fills and hands in the report of a person whose switch «сдаёт смену в системе» is on, from the person's own words: below |
 | Shift reports (the ledger's feed) | `GET /api/v1/agent/shift-reports` | `read:team` + `read:money` | Every version handed in, after a cursor: what the ledger accrues and pays from |
+| Erasures (the ledger's feed) | `GET /api/v1/agent/erasures` | `read:team` + `read:money` | Every fan erasure Hub completed, after a cursor: the platform and the fan's ref, for the ledger to blank its own copies: below |
 | Claims | — | — | No agent door on Hub yet: it comes with its own package. Until then the ledger holds them |
 | Keys (for services) | `POST /api/v1/agent/keys/introspect` | `introspect:agent_keys` | Another service asks who an agent's hub key is: below |
 
@@ -82,6 +83,31 @@ registry, and preferably `--message`, the message itself. The refusals, as `hub`
 What stays the ledger's: accrued and paid. The ledger reads every handed-in version itself from its feed
 (`GET /api/v1/agent/shift-reports`); nothing about a shift handed in here is saved to the ledger another way. A
 person whose switch is off reports exactly as before.
+
+## Erasures: the ledger's own copies
+
+A fan's erasure in Hub (`erasure:run --scope fan`, the owner's act) clears Hub's rows; the ledger keeps its own
+copies of what Hub served it — the report lines' notes, «мимо площадки», the comments, the old decisions' and
+questions' words, its sales' payloads — which Hub cannot reach. The ledger reads the erasures and blanks them itself.
+
+`GET /api/v1/agent/erasures?since=<next>&limit=<1..500, 200>` (`read:team` + `read:money`, the capabilities of the
+ledger's key for its shift reports' feed):
+
+```json
+{ "erasures": [{ "id": 41, "platform": "fansly", "fanRef": "123456789", "erasedAt": "2026-11-12T18:00:00.000Z" }],
+  "next": "41", "serverNow": "2026-11-12T18:05:00.000Z" }
+```
+
+- `id` is the erasure's tombstone in Hub (`erasure_log`) and the cursor; `fanRef` is the fan's platform id as the
+  fan scope named him (`fan:<platform>:<ref>`). That is everything the tombstone keeps of him, and everything served:
+  no name, and no list of his sales — Hub's anonymized sales are not tied back to him anywhere, and a list here would
+  tie them again. The ledger finds his sales by the fan id its own sales carry.
+- Served once the erasure completed. Dry runs, unfinished executions and page and model scopes are never served.
+  Erasures run one at a time under one lock, so they complete in the order of their ids: `next` never passes one
+  not served yet. Keep `next` and ask again with it; nothing new answers the same `next`.
+- An erasure none of whose pages is in the key's grant is left out, and `next` moves past it.
+- After Hub's database is restored from a copy, the erasures since the copy are re-run there and get new ids, and
+  Hub's ids start again from the copy's: `docs/runbooks/business-backup.md`, «Restoring for real».
 
 ## «Кто этот ключ»: another service accepts a hub key
 

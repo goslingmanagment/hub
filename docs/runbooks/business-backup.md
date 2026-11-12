@@ -87,6 +87,24 @@ restored copy does not have:
 - the pg-boss backlog and schedules: the app re-creates queues and schedules on start, and no
   queued send is replayed. Turn off the outgoing workers before an app ever runs on a copy.
 
+Then re-apply the erasures the copy predates, before an app or a person reads it: a copy holds every fan,
+page or model erased after its snapshot (`snapshotAt` in `manifest.json`) as if nothing were erased. List
+them on production, read-only:
+`select id, scope_type, scope_ref, plan -> 'resolvedPageIds' as page_ids, completed_at from erasure_log where not dry_run and (completed_at is null or completed_at >= '<snapshotAt>') order by id`
+(an execution still open at the snapshot had not committed its deletes into the copy). Run each again on
+the copy, in that order, with the owner's user id, through the app's CLI pointed at the copy:
+`erasure:run --scope fan --platform <p> --ref <r> --initiated-by-user-id <owner> --execute --confirm 'fan:<p>:<r>'`
+(page: `--scope page --page <label>`, the label the copy has for the plan's `page_ids`, since a label can
+change; model: `--scope model --model <slug>`). An erasure is re-runnable by design: it reaches whatever
+of the scope is still there and completes its own tombstone in the copy; the dry run without `--execute`
+shows what it would take first. If production's `erasure_log` is lost with production, the erasures since
+the copy are known only to the owner: Hub keeps no other record of them.
+
+The ledger reads Hub by cursors, and a restored Hub's ids start again from the copy's: handed-in report
+versions (and their places in the shift reports' feed) and erasures get ids the ledger has already seen, so it
+would take new versions for ones it stored and step over new erasures behind its cursor. Before the ledger reads
+Hub's feeds again, follow the ledger's own note on a Hub restore (in the ledger repository).
+
 ## ContentOps database
 
 ContentOps (a VM on the owner's PC) had no copy of its database: the catalog, the custom orders,
