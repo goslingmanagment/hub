@@ -251655,6 +251655,18 @@
                               "null"
                             ]
                           },
+                          "uncheckedSince": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "uncheckedReason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "fresh": {
                             "type": "boolean"
                           },
@@ -251695,6 +251707,8 @@
                           "lastReportAt",
                           "onlineSince",
                           "version",
+                          "uncheckedSince",
+                          "uncheckedReason",
                           "fresh",
                           "hours",
                           "silentProblem"

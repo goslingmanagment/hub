@@ -53,6 +53,10 @@ export const COPY_STALE_MS = 36 * 60 * MINUTE_MS;
 export const SILENT_GRACE_MS = 10 * MINUTE_MS;
 /** Hub's own reporter: its schedules and the ledger's health. */
 export const HUB_REPORTER = "hub";
+/** The ledger's scheduler as Hub reads it (GET /v1/health/jobs). */
+export const LEDGER_REPORTER = "ledger";
+/** Reporters Hub writes itself: their silence is Hub's own (a dead tick, an unanswering ledger), never a matter of its own. */
+export const HUB_WRITTEN_REPORTERS: ReadonlySet<string> = new Set([HUB_REPORTER, LEDGER_REPORTER]);
 
 // ── A batch's routine, written over the row it had ─────────────────────────
 
@@ -80,6 +84,8 @@ export interface RoutineReportInput {
   emptySince: Date | null;
   emptyThresholdSeconds: number | null;
   runCount: number | null;
+  /** Its runner restarted then and it has not run since (the ledger's jobs): runs before do not count. */
+  awaitingSince?: Date | null;
 }
 
 /**
@@ -114,6 +120,7 @@ export function mergeRoutineReport(old: SystemRoutineRow | null, report: Routine
       ?? at;
   }
 
+  const awaiting = clamp(report.awaitingSince ?? null);
   return {
     key: report.key,
     reporter: context.reporter,
@@ -132,6 +139,7 @@ export function mergeRoutineReport(old: SystemRoutineRow | null, report: Routine
     reportedAt: at,
     reportedByKeyId: context.agentKeyId,
     retiredAt: null,
+    awaitingSince: awaiting !== null && (lastRunAt === null || lastRunAt.getTime() < awaiting.getTime()) ? awaiting : null,
   };
 }
 
@@ -158,14 +166,15 @@ export function mergeCopyReport(old: SystemCopyRow | null, report: CopyReport, c
 
 /** What the judges need of a routine's reporter. */
 export interface ReporterView {
-  /** It reported within REPORTER_SILENT_MS. */
+  /** It reported within REPORTER_SILENT_MS, with its facts. */
   fresh: boolean;
   /** The first report since its last silence: a routine is not silent for a grace after it. */
   onlineSince: Date | null;
 }
 
-export function reporterFresh(reporter: Pick<SystemReporterRow, "lastReportAt"> | undefined, now: Date): boolean {
-  return reporter !== undefined && now.getTime() - reporter.lastReportAt.getTime() <= REPORTER_SILENT_MS;
+/** It reported within REPORTER_SILENT_MS, and its source did not answer without its facts since. */
+export function reporterFresh(reporter: Pick<SystemReporterRow, "lastReportAt" | "uncheckedSince"> | undefined, now: Date): boolean {
+  return reporter !== undefined && reporter.uncheckedSince === null && now.getTime() - reporter.lastReportAt.getTime() <= REPORTER_SILENT_MS;
 }
 
 const LEVEL_OF: Readonly<Record<RoutineState, SystemLevel>> = {
@@ -197,11 +206,14 @@ export interface RoutineVerdict {
  * skipped, ok.
  */
 export function routineVerdict(row: SystemRoutineRow, reporter: ReporterView, now: Date): RoutineVerdict {
-  const base = later(row.lastRunAt ?? row.firstSeenAt, reporter.onlineSince) ?? row.firstSeenAt;
+  // Its runner restarted and it has not run since: counted from the restart, «ещё не запускалась» until then silent.
+  const awaiting = row.awaitingSince !== null && (row.lastRunAt === null || row.lastRunAt.getTime() < row.awaitingSince.getTime());
+  const base = (awaiting ? later(row.awaitingSince, reporter.onlineSince) : later(row.lastRunAt ?? row.firstSeenAt, reporter.onlineSince)) ?? row.firstSeenAt;
   const silentAfter = new Date(base.getTime() + 2 * row.periodSeconds * 1000 + SILENT_GRACE_MS);
   const verdict = (state: RoutineState): RoutineVerdict => ({ state, level: LEVEL_OF[state], silentAfter });
   if (!reporter.fresh) return verdict("unchecked");
   if (now.getTime() > silentAfter.getTime()) return verdict("silent");
+  if (awaiting) return verdict("pending");
   if (row.lastResult === "failed") return verdict(row.failedStreak >= 2 ? "failing" : "failed_once");
   if (row.lastResult === "empty_input") {
     const since = row.emptySince ?? row.lastRunAt ?? row.firstSeenAt;
@@ -388,12 +400,13 @@ const PLACE_ORDER = { server: 0, mac: 1, pc: 2 } as const;
 export function reporterViews(reporters: readonly SystemReporterRow[], config: { systemMacHoursFrom?: number; systemMacHoursTo?: number }, now: Date) {
   return reporters.map((reporter) => {
     const fresh = reporterFresh(reporter, now);
-    const hours = reporter.reporter === HUB_REPORTER ? null : reporterHours(reporter.reporter, config);
+    const own = HUB_WRITTEN_REPORTERS.has(reporter.reporter);
+    const hours = own ? null : reporterHours(reporter.reporter, config);
     return {
       row: reporter,
       fresh,
       hours,
-      silentProblem: reporter.reporter !== HUB_REPORTER && !fresh && insideHours(now, hours),
+      silentProblem: !own && !fresh && insideHours(now, hours),
     };
   });
 }
@@ -480,6 +493,8 @@ export async function readSystemState(app: StateApp, now: Date = new Date()): Pr
       lastReportAt: view.row.lastReportAt.toISOString(),
       onlineSince: view.row.onlineSince.toISOString(),
       version: view.row.version,
+      uncheckedSince: view.row.uncheckedSince?.toISOString() ?? null,
+      uncheckedReason: view.row.uncheckedReason,
       fresh: view.fresh,
       hours: view.hours,
       silentProblem: view.silentProblem,

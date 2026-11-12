@@ -21,6 +21,9 @@ export interface SystemReporterRow {
   onlineSince: Date;
   readAt: Date | null;
   version: string | null;
+  /** Its source answered without its facts since then (no answer, a scheduler off): its routines are «не проверено». */
+  uncheckedSince: Date | null;
+  uncheckedReason: string | null;
 }
 
 export interface SystemRoutineRow {
@@ -41,6 +44,8 @@ export interface SystemRoutineRow {
   reportedAt: Date;
   reportedByKeyId: number | null;
   retiredAt: Date | null;
+  /** Its runner restarted then and it has not run since: «ещё не запускалась», then silent. */
+  awaitingSince: Date | null;
 }
 
 export interface SystemCopyRow {
@@ -78,9 +83,9 @@ const iso = (value: Date | null) => (value === null ? null : value.toISOString()
 
 type ReporterDbRow = {
   reporter: string; place: SystemPlaceName; agent_key_id: Num | null; last_report_at: Stamp; online_since: Stamp;
-  reporter_read_at: Stamp | null; version: string | null;
+  reporter_read_at: Stamp | null; version: string | null; unchecked_since: Stamp | null; unchecked_reason: string | null;
 };
-const REPORTER_COLUMNS = sql.raw("reporter, place, agent_key_id, last_report_at, online_since, reporter_read_at, version");
+const REPORTER_COLUMNS = sql.raw("reporter, place, agent_key_id, last_report_at, online_since, reporter_read_at, version, unchecked_since, unchecked_reason");
 
 function reporterOf(row: ReporterDbRow): SystemReporterRow {
   return {
@@ -91,6 +96,8 @@ function reporterOf(row: ReporterDbRow): SystemReporterRow {
     onlineSince: date(row.online_since),
     readAt: dateOrNull(row.reporter_read_at),
     version: row.version,
+    uncheckedSince: dateOrNull(row.unchecked_since),
+    uncheckedReason: row.unchecked_reason,
   };
 }
 
@@ -98,11 +105,11 @@ type RoutineDbRow = {
   routine_key: string; reporter: string; place: SystemPlaceName; title: string; period_seconds: Num; last_run_at: Stamp | null;
   last_success_at: Stamp | null; last_result: SystemRoutineResult | null; detail: string | null; failed_streak: Num;
   empty_since: Stamp | null; empty_threshold_seconds: Num | null; run_count: Num | null; first_seen_at: Stamp; reported_at: Stamp;
-  reported_by_key_id: Num | null; retired_at: Stamp | null;
+  reported_by_key_id: Num | null; retired_at: Stamp | null; awaiting_since: Stamp | null;
 };
 const ROUTINE_COLUMNS = sql.raw(
   "routine_key, reporter, place, title, period_seconds, last_run_at, last_success_at, last_result, detail, failed_streak, "
-    + "empty_since, empty_threshold_seconds, run_count, first_seen_at, reported_at, reported_by_key_id, retired_at",
+    + "empty_since, empty_threshold_seconds, run_count, first_seen_at, reported_at, reported_by_key_id, retired_at, awaiting_since",
 );
 
 function routineOf(row: RoutineDbRow): SystemRoutineRow {
@@ -124,6 +131,7 @@ function routineOf(row: RoutineDbRow): SystemRoutineRow {
     reportedAt: date(row.reported_at),
     reportedByKeyId: numOrNull(row.reported_by_key_id),
     retiredAt: dateOrNull(row.retired_at),
+    awaitingSince: dateOrNull(row.awaiting_since),
   };
 }
 
@@ -184,6 +192,8 @@ async function touchReporter(db: Database, input: SystemReportInput): Promise<Sy
       last_report_at = greatest(system_reporters.last_report_at, excluded.last_report_at),
       reporter_read_at = excluded.reporter_read_at,
       version = excluded.version,
+      unchecked_since = null,
+      unchecked_reason = null,
       updated_at = clock_timestamp()
     returning ${REPORTER_COLUMNS}`);
   return reporterOf(result.rows[0]!);
@@ -229,18 +239,19 @@ export async function replaceReporterRoutines(
 async function upsertRoutine(db: Database, row: SystemRoutineRow): Promise<void> {
   await db.execute(sql`
     insert into system_routines (routine_key, reporter, place, title, period_seconds, last_run_at, last_success_at, last_result, detail,
-      failed_streak, empty_since, empty_threshold_seconds, run_count, first_seen_at, reported_at, reported_by_key_id, retired_at, updated_at)
+      failed_streak, empty_since, empty_threshold_seconds, run_count, first_seen_at, reported_at, reported_by_key_id, retired_at, awaiting_since,
+      updated_at)
     values (${row.key}, ${row.reporter}, ${row.place}, ${row.title}, ${row.periodSeconds}, ${iso(row.lastRunAt)}::timestamptz,
       ${iso(row.lastSuccessAt)}::timestamptz, ${row.lastResult}, ${row.detail}, ${row.failedStreak}, ${iso(row.emptySince)}::timestamptz,
       ${row.emptyThresholdSeconds}, ${row.runCount}, ${row.firstSeenAt.toISOString()}::timestamptz, ${row.reportedAt.toISOString()}::timestamptz,
-      ${row.reportedByKeyId}, ${iso(row.retiredAt)}::timestamptz, clock_timestamp())
+      ${row.reportedByKeyId}, ${iso(row.retiredAt)}::timestamptz, ${iso(row.awaitingSince)}::timestamptz, clock_timestamp())
     on conflict (routine_key) do update set
       reporter = excluded.reporter, place = excluded.place, title = excluded.title, period_seconds = excluded.period_seconds,
       last_run_at = excluded.last_run_at, last_success_at = excluded.last_success_at, last_result = excluded.last_result,
       detail = excluded.detail, failed_streak = excluded.failed_streak, empty_since = excluded.empty_since,
       empty_threshold_seconds = excluded.empty_threshold_seconds, run_count = excluded.run_count,
       reported_at = excluded.reported_at, reported_by_key_id = excluded.reported_by_key_id, retired_at = excluded.retired_at,
-      updated_at = clock_timestamp()`);
+      awaiting_since = excluded.awaiting_since, updated_at = clock_timestamp()`);
 }
 
 /** A reporter's whole list of copies, as `replaceReporterRoutines` for routines. */
@@ -280,6 +291,19 @@ export async function replaceReporterCopies(
       returning copy_key`);
     return { reporter, accepted: rows.length, retired: retired.rows.length };
   });
+}
+
+/**
+ * The reporter's source answered without its facts (no answer, a scheduler
+ * off): its routines are «не проверено» from the first such moment until the
+ * next full answer. Its routines and their matters stay as they were. A
+ * reporter never heard of is left alone.
+ */
+export async function markReporterUnchecked(db: Database, input: { reporter: string; at: Date; reason: string }): Promise<void> {
+  await db.execute(sql`
+    update system_reporters set unchecked_since = coalesce(unchecked_since, ${input.at.toISOString()}::timestamptz),
+      unchecked_reason = ${input.reason.slice(0, 300)}, updated_at = clock_timestamp()
+    where reporter = ${input.reporter}`);
 }
 
 export async function listSystemReporters(db: Database): Promise<SystemReporterRow[]> {

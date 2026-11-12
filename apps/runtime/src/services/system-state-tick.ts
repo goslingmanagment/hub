@@ -1,12 +1,13 @@
 import { z } from "zod";
 
-import { MATTER_SERVER_KINDS } from "@agency_hub_core/contracts";
+import { MATTER_SERVER_KINDS, ROUTINE_PERIOD_MAX_SECONDS } from "@agency_hub_core/contracts";
 import {
   closeMatter,
   listOpenMattersOfKinds,
   listSystemCopies,
   listSystemReporters,
   listSystemRoutines,
+  markReporterUnchecked,
   matterChanges,
   openMatter,
   readScheduleRuns,
@@ -17,7 +18,7 @@ import {
   type SystemCopyRow,
   type SystemRoutineRow,
 } from "@agency_hub_core/db";
-import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
+import { MOSCOW_TIME_ZONE } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
@@ -29,6 +30,8 @@ import {
   copyVerdict,
   cronMaxGapSeconds,
   HUB_REPORTER,
+  HUB_WRITTEN_REPORTERS,
+  LEDGER_REPORTER,
   reporterViews,
   routineVerdict,
   writeRoutineReports,
@@ -123,38 +126,106 @@ export function hubScheduleRoutines(runs: readonly ScheduleRunRow[]): RoutineRep
 }
 
 const LEDGER_PERIOD_SECONDS = 300;
-const LEDGER_REBUILD_PERIOD_SECONDS = 3600;
 const ledgerHealthSchema = z.object({ ok: z.boolean().optional(), build: z.string().optional(), uptimeSeconds: z.number().optional() }).passthrough();
-const ledgerChecksSchema = z.object({
-  checks: z.object({ stale: z.boolean(), lastSheetsCollectAt: z.string().nullable(), lastRebuildAt: z.string().nullable() }),
+const instantText = z.string().nullable();
+/** GET /v1/health/jobs (ledger, the payouts key): every job of its scheduler with its last outcome since the process started. */
+export const ledgerJobsSchema = z.object({
+  at: z.string(),
+  startedAt: z.string(),
+  scheduler: z.boolean(),
+  jobs: z.array(z.object({
+    job: z.string(),
+    intervalSeconds: z.number().int().positive(),
+    lastStartedAt: instantText,
+    lastDoneAt: instantText,
+    lastFailedAt: instantText,
+    lastError: z.string().nullable(),
+    failedInRow: z.number().int().nonnegative(),
+  }).passthrough()),
 }).passthrough();
+export type LedgerJobsAnswer = z.infer<typeof ledgerJobsSchema>;
+
+/** What a person reads for each of the ledger's jobs (its own words: internal/*, `server.Every`). */
+const LEDGER_JOB_TITLES: Readonly<Record<string, string>> = {
+  "bybit": "Ledger: движения Bybit",
+  "bybit-balance": "Ledger: остатки на Bybit",
+  "hub": "Ledger: продажи из Hub",
+  "hub-team": "Ledger: смены команды из Hub",
+  "brief-sweep": "Ledger: уборка брифа и предложений",
+  "cards": "Ledger: события карт",
+  "free": "Ledger: сколько можно вывести",
+  "month-cards": "Ledger: карточка месяца",
+  "transit": "Ledger: деньги в пути",
+  "payroll": "Ledger: долги и «К выплате»",
+  "report-posts": "Ledger: разбор постов «Отчётности»",
+  "checks": "Ledger: проверки",
+};
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 300);
+const JOB_NAME = /^[a-z0-9][a-z0-9._-]{0,80}$/;
+
+function instantOf(text: string | null): Date | null {
+  if (text === null) return null;
+  const value = new Date(text);
+  return Number.isNaN(value.getTime()) ? null : value;
+}
+
+/**
+ * The ledger's jobs as routines `server.ledger.<job>`: period = its interval,
+ * last success = its last done, failed after two failures in a row; a job that
+ * has not finished a run since the ledger started awaits from that start
+ * («ещё не запускалась», then silent).
+ */
+export function ledgerJobRoutines(answer: LedgerJobsAnswer): RoutineReportInput[] {
+  const started = instantOf(answer.startedAt);
+  return answer.jobs.filter((job) => JOB_NAME.test(job.job)).map((job) => {
+    const done = instantOf(job.lastDoneAt);
+    const failed = instantOf(job.lastFailedAt);
+    const result = failed !== null && (done === null || failed.getTime() > done.getTime()) ? "failed" as const : done !== null ? "ok" as const : null;
+    const awaiting = done === null && failed === null ? started : null;
+    const lastRunAt = done === null ? failed : failed === null ? done : (failed.getTime() > done.getTime() ? failed : done);
+    let detail: string | null = null;
+    if (result === "failed") detail = job.lastError ? `Ошибка: ${job.lastError}`.slice(0, 500) : "Ошибка без текста";
+    else if (awaiting !== null) detail = `Ещё не запускалась после запуска ledger ${moscowMoment(awaiting)}`;
+    return {
+      key: `server.ledger.${job.job}`.slice(0, 120),
+      place: "server" as const,
+      title: LEDGER_JOB_TITLES[job.job] ?? `Ledger: ${job.job}`,
+      periodSeconds: Math.min(Math.max(60, job.intervalSeconds), ROUTINE_PERIOD_MAX_SECONDS),
+      lastRunAt,
+      lastSuccessAt: done,
+      lastResult: result,
+      detail,
+      failedRuns: job.failedInRow,
+      emptySince: null,
+      emptyThresholdSeconds: null,
+      runCount: null,
+      awaitingSince: awaiting,
+    };
+  });
+}
+
+export interface LedgerRead {
+  /** «Ledger отвечает», in Hub's own batch. */
+  service: RoutineReportInput[];
+  /** The ledger's jobs (its reporter's batch), or null with why they are not checked now. */
+  jobs: { routines: RoutineReportInput[]; readAt: Date | null } | null;
+  uncheckedReason: string | null;
+}
 
 /**
  * The ledger as Hub sees it with its payouts key (GET only): whether it
- * answers, and its last rebuild of debts and accruals (its hourly job). Not
- * connected — no rows. When it does not answer, the rebuild's row is sent as
- * it was (its silence will speak for itself), never as a fresh run.
+ * answers (`/health`), and its scheduler's jobs (`/v1/health/jobs`). Not
+ * connected — nothing. No answer about the jobs, or its scheduler off — the
+ * jobs are «не проверено», never green.
  */
-export async function ledgerRoutines(
-  app: Pick<AppContext, "config" | "logger">,
-  previous: ReadonlyMap<string, SystemRoutineRow>,
-  now: Date,
-  fetchImpl?: typeof fetch,
-): Promise<RoutineReportInput[]> {
-  if (!app.config.ledgerPayoutsKey) return [];
+export async function readLedger(app: Pick<AppContext, "config" | "logger">, now: Date, fetchImpl?: typeof fetch): Promise<LedgerRead | null> {
+  if (!app.config.ledgerPayoutsKey) return null;
   const read = { client: "system-state", ...(fetchImpl === undefined ? {} : { fetchImpl }) };
   const service: RoutineReportInput = {
     key: "server.ledger.service", place: "server", title: "Ledger отвечает", periodSeconds: LEDGER_PERIOD_SECONDS,
     lastRunAt: now, lastSuccessAt: null, lastResult: "failed", detail: null, failedRuns: null, emptySince: null,
     emptyThresholdSeconds: null, runCount: null,
-  };
-  const kept = previous.get("server.ledger.rebuild");
-  let rebuild: RoutineReportInput = {
-    key: "server.ledger.rebuild", place: "server", title: "Ledger: пересчёт долгов и начислений", periodSeconds: LEDGER_REBUILD_PERIOD_SECONDS,
-    lastRunAt: kept?.lastRunAt ?? null, lastSuccessAt: kept?.lastSuccessAt ?? null, lastResult: kept?.lastResult ?? null,
-    detail: kept?.detail ?? null, failedRuns: kept?.failedStreak ?? null, emptySince: null, emptyThresholdSeconds: null, runCount: null,
   };
   try {
     const health = ledgerHealthSchema.parse(await ledgerGet(app, "/health", {}, read));
@@ -165,29 +236,17 @@ export async function ledgerRoutines(
   } catch (error) {
     service.detail = `Не отвечает: ${errorText(error)}`;
   }
-  if (service.lastResult === "ok") {
-    try {
-      const today = toBusinessDate(now, MOSCOW_TIME_ZONE);
-      const answer = ledgerChecksSchema.parse(await ledgerGet(app, "/v1/payouts", { from: today, to: today }, read));
-      const rebuilt = answer.checks.lastRebuildAt === null ? null : new Date(answer.checks.lastRebuildAt);
-      const sheets = answer.checks.lastSheetsCollectAt === null ? null : new Date(answer.checks.lastSheetsCollectAt);
-      const valid = (value: Date | null) => (value !== null && !Number.isNaN(value.getTime()) ? value : null);
-      rebuild = {
-        ...rebuild,
-        lastRunAt: valid(rebuilt),
-        lastSuccessAt: valid(rebuilt),
-        lastResult: valid(rebuilt) === null ? null : "ok",
-        failedRuns: null,
-        detail: [
-          valid(sheets) ? `Таблицы выплат пришли с мака ${moscowMoment(valid(sheets)!)}` : "Таблицы выплат с мака не приходили",
-          answer.checks.stale ? "ledger считает данные устаревшими" : null,
-        ].filter(Boolean).join("; "),
-      };
-    } catch (error) {
-      app.logger.warn({ err: error }, "system state: the ledger's payouts did not answer; its rebuild stays as it was");
-    }
+  if (service.lastResult !== "ok") return { service: [service], jobs: null, uncheckedReason: "Ledger не ответил" };
+  try {
+    const raw = await ledgerGet(app, "/v1/health/jobs", {}, { ...read, absentOn: [404] });
+    if (raw === undefined) return { service: [service], jobs: null, uncheckedReason: "Ledger пока не отдаёт свои задачи" };
+    const answer = ledgerJobsSchema.parse(raw);
+    if (!answer.scheduler) return { service: [service], jobs: null, uncheckedReason: "Планировщик ledger выключен: его задачи не идут" };
+    return { service: [service], jobs: { routines: ledgerJobRoutines(answer), readAt: instantOf(answer.at) }, uncheckedReason: null };
+  } catch (error) {
+    app.logger.warn({ err: error }, "system state: the ledger's jobs did not answer; they read «не проверено»");
+    return { service: [service], jobs: null, uncheckedReason: "Ledger не ответил о своих задачах" };
   }
-  return [service, rebuild];
 }
 
 // ── Matters ────────────────────────────────────────────────────────────────
@@ -265,7 +324,7 @@ export function systemFindings(input: {
   }
 
   for (const view of input.reporters) {
-    if (view.row.reporter === HUB_REPORTER) continue;
+    if (HUB_WRITTEN_REPORTERS.has(view.row.reporter)) continue;
     const key = `reporter.silent:${view.row.reporter}`;
     if (view.silentProblem) {
       want.push({ key, kind: "reporter.silent", title: `${PLACE_WORD[view.row.place]} не присылает состояние`,
@@ -321,19 +380,25 @@ export async function reconcileSystemMatters(app: Pick<AppContext, "db" | "logge
   return tally;
 }
 
-/** One pass: Hub's own facts reported, then the matters made what they are now. */
+/** One pass: Hub's own facts reported, the ledger's jobs as its reporter, then the matters made what they are now. */
 export async function runSystemStateTick(
   app: AppContext,
   options: { now?: Date; fetchImpl?: typeof fetch } = {},
 ): Promise<SystemMattersTally & { routines: number }> {
   const now = options.now ?? new Date();
-  const previous = new Map((await listSystemRoutines(app.db)).filter((row) => row.reporter === HUB_REPORTER).map((row) => [row.key, row]));
   const own = hubScheduleRoutines(await readScheduleRuns(app.db));
-  const ledger = await ledgerRoutines(app, previous, now, options.fetchImpl);
+  const ledger = await readLedger(app, now, options.fetchImpl);
   const written = await writeRoutineReports(app, {
     reporter: HUB_REPORTER, place: "server", agentKeyId: null, readAt: now, version: opsLiveRevision()?.slice(0, 12) ?? null,
-    routines: [...own, ...ledger],
+    routines: [...own, ...(ledger?.service ?? [])],
   }, now);
+  if (ledger?.jobs) {
+    await writeRoutineReports(app, {
+      reporter: LEDGER_REPORTER, place: "server", agentKeyId: null, readAt: ledger.jobs.readAt, version: null, routines: ledger.jobs.routines,
+    }, now);
+  } else if (ledger?.uncheckedReason) {
+    await markReporterUnchecked(app.db, { reporter: LEDGER_REPORTER, at: now, reason: ledger.uncheckedReason });
+  }
 
   const [config, reporters, routines, copies] = await Promise.all([
     loadEffectiveConfig(app.db, app.config),
