@@ -24,6 +24,19 @@ function jsonOf<T>(value: unknown, fallback: T): T {
   return value as T;
 }
 
+// ── One at a time ────────────────────────────────────────────────────────────
+
+/**
+ * The writers of whose a sale is and of what a report counts of it take their turn: a decision made, replaced, cancelled
+ * or tied to its sale, an agreement of two sides, and a hand-in — which writes what those give. Taken first in the
+ * writer's transaction, before any row (so: this lock, then decisions and claims, then reports) and held to its commit.
+ * Under it a hand-in reads the decisions and agreements of its sales as they stay until it commits, and a decision
+ * finds every version handed in: neither writes over what the other has just written. Never across a call to the ledger.
+ */
+export async function lockSaleSettlements(db: Database): Promise<void> {
+  await db.execute(sql`select pg_advisory_xact_lock(hashtextextended('sale_settlements', 0))`);
+}
+
 // ── The reports a claim is read from ─────────────────────────────────────────
 
 /** The newest version of a handed-in report, with whose report it is. */
@@ -196,11 +209,14 @@ export async function listSaleClaims(
     involvingUserIds?: readonly number[];
     states?: readonly SaleClaimState[];
     kinds?: readonly SaleClaimKind[];
+    /** Closed by one of these decisions. */
+    decisionIds?: readonly number[];
     limit?: number;
   },
 ): Promise<SaleClaimRow[]> {
   const where = [sql`true`];
   if (input.ids !== undefined) where.push(sql`c.id = any(${ids(input.ids)})`);
+  if (input.decisionIds !== undefined) where.push(sql`c.decision_id = any(${ids(input.decisionIds)})`);
   if (input.transactionIds !== undefined) where.push(sql`c.transaction_id = any(${ids(input.transactionIds)})`);
   if (input.sideUserIds !== undefined) where.push(sql`c.side_user_id = any(${ids(input.sideUserIds)})`);
   if (input.involvingUserIds !== undefined) {
@@ -279,7 +295,7 @@ export async function updateSaleClaim(
   patch: Partial<Pick<SaleClaimRow,
     "state" | "answer" | "answerNote" | "answeredAt" | "answeredByUserId" | "answeredByAgentKeyId" | "answerDoor" | "answerRef"
     | "escalatedAt" | "escalatedWhy" | "decisionId" | "closedAt" | "claimantVersion" | "claimantNote" | "sideShiftId" | "transactionId" | "pageId"
-    | "answerText" | "closeNote">>,
+    | "answerText" | "closeNote" | "question">>,
   at: Date,
 ): Promise<void> {
   const sets = [sql`updated_at = ${at.toISOString()}::timestamptz`];
@@ -307,6 +323,7 @@ export async function updateSaleClaim(
   if (patch.pageId !== undefined) put("page_id", patch.pageId);
   if (patch.answerText !== undefined) put("answer_text", patch.answerText);
   if (patch.closeNote !== undefined) put("close_note", patch.closeNote);
+  if (patch.question !== undefined) put("question", patch.question);
   await db.execute(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}`);
 }
 
@@ -484,8 +501,11 @@ export async function cancelSaleDecision(db: Database, input: { id: number; note
   return (result.rowCount ?? 0) > 0;
 }
 
-/** Marks an active decision taken into a post-based report (whose, which date); false — not active or taken already. */
-export async function markSaleDecisionApplied(db: Database, input: { id: number; userId: number; reportDate: string; at: Date }): Promise<boolean> {
+/**
+ * Marks an active decision taken into a post-based report (whose, which date); false — not active or taken already.
+ * `userId` null — a person Hub has no login of (carried over from the ledger): taken, by nobody Hub can name.
+ */
+export async function markSaleDecisionApplied(db: Database, input: { id: number; userId: number | null; reportDate: string; at: Date }): Promise<boolean> {
   const result = await db.execute(sql`
     update sale_owner_decisions set applied_user_id = ${input.userId}, applied_report_date = ${input.reportDate}::date,
       applied_at = ${input.at.toISOString()}::timestamptz

@@ -314,7 +314,10 @@ export function settledVersion(input: {
 
 /**
  * A report's page sums (shift-handin-rules.ts `pageSums`, the one place a report's numbers are made): the counted lines
- * and, on its page, each «мимо площадки» the owner confirmed. Pure.
+ * and, on its page, each «мимо площадки» the owner confirmed. The page of every line the report carries is a page of
+ * the report, with 0 where nothing is counted — a sale of «Рядом» on a page the shift did not hold, a disputed «моё»:
+ * the ledger checks each line of a version against the version's pages and keeps one with a line of no page as a
+ * problem. Pure.
  */
 export function reportSums(
   lines: ReadonlyArray<{ pageLabel: string | null; amountMills: number; group?: string }>,
@@ -325,7 +328,14 @@ export function reportSums(
   const confirmed = offPlatform
     .filter((line) => line.state === "confirmed" && typeof line.pageLabel === "string" && line.pageLabel !== "")
     .map((line) => ({ pageLabel: line.pageLabel!, amountMills: line.amountMills }));
-  return pageSums([...counted, ...confirmed], pages);
+  return pageSums([...counted, ...confirmed], pagesWithLines(pages, lines));
+}
+
+/** The pages given and, after them, the page of every line that is not among them yet, in the lines' order. Pure. */
+export function pagesWithLines(pages: readonly string[], lines: ReadonlyArray<{ pageLabel: string | null }>): string[] {
+  const out = [...pages];
+  for (const line of lines) if (line.pageLabel !== null && !out.includes(line.pageLabel)) out.push(line.pageLabel);
+  return out;
 }
 
 // ── Words ────────────────────────────────────────────────────────────────────

@@ -16,6 +16,8 @@ import { readOnlyConnectionString } from "./sale-rule-cli.ts";
  *    `sale_decisions` and `sale_questions` (the files are `ledger sql -json "SELECT * FROM …"` answers). A dry run reads
  *    Hub with a read-only session and prints every record with the sale found or «привязать»; the import writes the
  *    owner's decisions and the disputes, computes the homes of the sales' days again and opens the owner's matters.
+ *    Run again with fresh files, it writes nothing twice and completes the records carried over before: a decision the
+ *    ledger marked taken into a post is marked so, a question's note joins its text.
  *  - `sale-claims:run` — the claims' pass now, as the worker runs it after each shift-rows pass.
  */
 export function registerSaleClaimCommands(program: Command): void {
@@ -53,7 +55,8 @@ export function registerSaleClaimCommands(program: Command): void {
           await refreshSaleHomes(app.db, { from, to: new Date(Math.min(now.getTime(), from.getTime() + 86_400_000)), now });
         }
         await runSaleClaims(app, now);
-        console.log(`carried over: ${written.decisions} decisions, ${written.questions} questions; homes computed again for ${written.days.length} days`);
+        console.log(`carried over: ${written.decisions} decisions, ${written.questions} questions; of the ones carried over before: `
+          + `${written.applied} decisions marked taken into a post, ${written.notes} questions given their note; homes computed again for ${written.days.length} days`);
       } finally {
         await app.close();
       }

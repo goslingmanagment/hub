@@ -131,6 +131,18 @@ export async function findPersonRowById(db: Database, id: number): Promise<Perso
   return row === undefined ? null : personOf(row);
 }
 
+/**
+ * Whether a Telegram account is the owner's own: a person of the registry whose role is owner, who has not left, holds
+ * this Telegram id. No id asked, or an owner the registry gives no Telegram id — false: nothing is the owner's word
+ * until the registry says whose account it is.
+ */
+export async function isOwnerTelegramUser(db: Database, telegramUserId: number): Promise<boolean> {
+  if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) return false;
+  const result = await db.execute<Row>(sql`
+    select 1 from people where role = 'owner' and kind = 'human' and state <> 'left' and telegram_user_id = ${telegramUserId} limit 1`);
+  return result.rows.length > 0;
+}
+
 /** The people any of whose parts changed at or after `since`: the record, a login's row, a key's revocation. */
 export async function listPersonRowsChangedSince(db: Database, since: Date): Promise<PersonRow[]> {
   const result = await db.execute<Row>(sql`
