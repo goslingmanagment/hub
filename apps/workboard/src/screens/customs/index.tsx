@@ -1,7 +1,7 @@
 import { Copy, MoreHorizontal } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import type { CustomLookalikeSale, CustomOrder, CustomOrderAction, CustomOrderActionBody, CustomOrderCard, CustomOrderDetailResponse } from "@agency_hub_core/contracts";
+import { CUSTOM_STATE_WORDS, type CustomLookalikeSale, type CustomOrder, type CustomOrderAction, type CustomOrderActionBody, type CustomOrderCard, type CustomOrderDetailResponse } from "@agency_hub_core/contracts";
 import {
   Badge,
   Button,
@@ -35,7 +35,6 @@ import {
   EVENT_WORDS,
   PAYMENT_KIND_WORDS,
   STATE_TONE,
-  STATE_WORDS,
   columnOf,
   deadlineWords,
   fanWords,
@@ -70,7 +69,7 @@ function acceptorOf(order: Pick<CustomOrder, "acceptedByName" | "origin">): stri
 
 function StateBadge({ order }: { order: Pick<CustomOrder, "state"> }) {
   const tone = STATE_TONE[order.state];
-  return <Badge tone={tone ?? "neutral"}>{STATE_WORDS[order.state]}</Badge>;
+  return <Badge tone={tone ?? "neutral"}>{CUSTOM_STATE_WORDS[order.state]}</Badge>;
 }
 
 function Deadline({ order, serverNow }: { order: CustomOrder; serverNow: string }) {

@@ -142,7 +142,7 @@ describe("the fan's card across pages", () => {
     const created = await post("/api/v1/client/pages/ari-1/fans/7000000001/customs", { description: "5 мин в душе", priceMills: 120_000, paymentRef });
     expect(created.statusCode, created.body).toBe(200);
     const custom = created.json().card.customs[0];
-    expect(custom).toMatchObject({ description: "5 мин в душе", state: "paid", paymentMills: 120_000, granted: true, createdBy: "vanya" });
+    expect(custom).toMatchObject({ description: "5 мин в душе", state: "paid", paymentMills: 120_000, granted: true, createdBy: "vanya", code: `K-${custom.id}`, stepLabel: "Оплачен" });
     expect(custom.deliveryCandidates.map((message: { messageRef: string }) => message.messageRef)).toEqual(["9800000001"]);
     // The tip is taken: it is no longer offered.
     expect(created.json().card.customPayments).toEqual([]);
@@ -151,7 +151,7 @@ describe("the fan's card across pages", () => {
     expect((await post(url, { action: "delivered", messageRef: "9800000002" })).statusCode).toBe(409);
     const delivered = await post(url, { action: "delivered", messageRef: "9800000001" });
     expect(delivered.json()).toMatchObject({ changed: true });
-    expect(delivered.json().card.customs[0]).toMatchObject({ state: "delivered", deliveredMessageRef: "9800000001" });
+    expect(delivered.json().card.customs[0]).toMatchObject({ state: "delivered", deliveredMessageRef: "9800000001", stepLabel: "Отдан фану" });
     // Delivered is final.
     expect((await post(url, { action: "cancel" })).json()).toMatchObject({ changed: false });
   }, INTEGRATION_TEST_TIMEOUT_MS);
