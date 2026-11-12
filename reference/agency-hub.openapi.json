@@ -229763,6 +229763,20 @@
                           "checked": {
                             "type": "boolean"
                           },
+                          "tone": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "bad",
+                                  "warn"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "to": {
                             "type": "string"
                           }
@@ -229772,6 +229786,7 @@
                           "title",
                           "count",
                           "checked",
+                          "tone",
                           "to"
                         ],
                         "additionalProperties": false

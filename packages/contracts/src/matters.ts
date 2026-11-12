@@ -9,7 +9,7 @@
 import { z } from "zod";
 
 import { intId, isoTimestamp } from "./primitives.ts";
-import { WAITING_GROUP_IDS } from "./waiting-groups.ts";
+import { WAITING_GROUP_IDS, WAITING_TONES } from "./waiting-groups.ts";
 
 /** Dotted words: `send.held`, `shift.report.missing`. */
 export const MATTER_KIND_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
@@ -231,6 +231,8 @@ export const mattersWaitingResponseSchema = z.object({
     title: z.string(),
     count: z.number().int().nonnegative(),
     checked: z.boolean(),
+    /** The worst tone of its matters (`bad` broken, `warn` outcome unknown or not checked; waiting-groups.ts); null — none. */
+    tone: z.enum(WAITING_TONES).nullable(),
     to: z.string(),
   })),
   /** The sum of what did answer: the menu's number (the owner's: of `groups`, the list's numbers). */

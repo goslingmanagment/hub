@@ -2,8 +2,8 @@ import { CircleCheck, ExternalLink } from "lucide-react";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import type { Matter, TeamLedgerQuestion } from "@agency_hub_core/contracts";
-import { Button, Disclosure, ErrorState, Notice, Skeleton, fanText } from "@agency_hub_core/ui";
+import { waitingGroupOf, waitingToneOf, worstWaitingTone, type Matter, type TeamLedgerQuestion, type WaitingTone } from "@agency_hub_core/contracts";
+import { Button, Disclosure, ErrorState, Notice, Skeleton, StatusDot, fanText } from "@agency_hub_core/ui";
 import { formatDay, formatDateTime, formatMills, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { partLabel, purposeLabel } from "@agency_hub_core/ui/heldSends";
 import { ruPlural } from "@agency_hub_core/ui/plural";
@@ -296,12 +296,19 @@ function LineRow({ line, now }: { line: Line; now: number }) {
 /** A long group shows its longest waiting lines and the rest on a press. */
 const GROUP_SHOWN = 10;
 
-function Group({ id, title, lines, now }: { id: WaitingGroupId; title: string; lines: readonly Line[]; now: number }) {
+/** A group's dot, as the console Home's chip draws it: red broken, orange outcome unknown (contracts waiting-groups.ts). */
+const TONE_WORDS: Readonly<Record<WaitingTone, { tone: "danger" | "warning"; label: string }>> = {
+  bad: { tone: "danger", label: "Что-то сломано" },
+  warn: { tone: "warning", label: "Исход неизвестен или не проверено" },
+};
+
+function Group({ id, title, lines, now, tone = null }: { id: WaitingGroupId; title: string; lines: readonly Line[]; now: number; tone?: WaitingTone | null }) {
   const [all, setAll] = useState(false);
   const shown = all ? lines : lines.slice(0, GROUP_SHOWN);
   return (
     <section className="wt-group" id={id} aria-labelledby={`wt-${id}`}>
       <h2 className="wt-group__title" id={`wt-${id}`}>
+        {tone !== null && <StatusDot tone={TONE_WORDS[tone].tone} label={TONE_WORDS[tone].label} />}
         {title}
         <span className="wt-group__count">{lines.reduce((sum, line) => sum + (line.weight ?? 1), 0)}</span>
       </h2>
@@ -421,7 +428,13 @@ export function WaitingScreen() {
   const waiting = groups.filter((group) => group.id !== "info");
   const info = groups.find((group) => group.id === "info");
   const waitingCount = waiting.reduce((sum, group) => sum + group.lines.length, 0);
-  const unchecked = uncheckedWords((list.data?.kinds ?? []).filter((kind) => kind.checked === "no").map((kind) => kind.kind));
+  const uncheckedKinds = (list.data?.kinds ?? []).filter((kind) => kind.checked === "no").map((kind) => kind.kind);
+  const unchecked = uncheckedWords(uncheckedKinds);
+  // A group's tone, as the Home's chip has it: its worst matter's; a group with a kind not checked at least orange.
+  const toneOf = (group: { id: WaitingGroupId; lines: readonly Line[] }): WaitingTone | null => worstWaitingTone([
+    ...group.lines.map((line) => (line.matter === null ? null : waitingToneOf(line.matter.kind))),
+    uncheckedKinds.some((kind) => waitingGroupOf(kind) === group.id) ? "warn" : null,
+  ]);
   const onlyTitle = only === null ? null : WAITING_GROUPS.find((group) => group.id === only)?.title ?? null;
 
   // A link with an anchor lands at its group once the list has answered (the old screen's sections did the same).
@@ -483,7 +496,7 @@ export function WaitingScreen() {
               </p>
             ) : (
               <div className="wt-sheet">
-                {waiting.map((group) => <Group key={group.id} id={group.id} title={group.title} lines={group.lines} now={now} />)}
+                {waiting.map((group) => <Group key={group.id} id={group.id} title={group.title} lines={group.lines} now={now} tone={toneOf(group)} />)}
               </div>
             )}
             {info && (

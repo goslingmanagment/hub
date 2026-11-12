@@ -6,6 +6,8 @@ import {
   WAITING_GROUPS,
   waitingGroupLink,
   waitingGroupOf,
+  waitingToneOf,
+  worstWaitingTone,
   isCustomOrderCheckKind,
   isMatterMirrorKind,
   isMatterPersonStartKind,
@@ -288,7 +290,12 @@ export function buildWaitingGroups(input: {
       else count += input.customOrders;
     }
     if (count === 0 && checked) continue;
-    groups.push({ id: group.id, title: group.title, count, checked, to: waitingGroupLink(group.id) });
+    // The worst of its matters' tones; a group not checked is at least «outcome unknown».
+    const tone = worstWaitingTone([
+      ...input.matters.filter((matter) => waitingGroupOf(matter.kind) === group.id).map((matter) => waitingToneOf(matter.kind)),
+      checked ? null : "warn",
+    ]);
+    groups.push({ id: group.id, title: group.title, count, checked, tone, to: waitingGroupLink(group.id) });
   }
   return groups;
 }

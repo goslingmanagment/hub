@@ -34,6 +34,8 @@ import { reportQuestionsQueryOptions, saleQuestionsQueryOptions, teamCustomsQuer
 export interface WaitingRow {
   /** The chip's own words (a group of the list): shown instead of the row's short label. */
   title?: string;
+  /** A group's tone (contracts waiting-groups.ts): `bad` something is broken, `warn` its outcome is not known. */
+  tone?: "bad" | "warn" | null;
   /** The old rows; while the owner's switch reads matters, also «Люди и доступ», «Проверки ledger», «Другие дела» (package K). */
   id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history" | "content" | "people" | "ledger" | "other" | "publications" | "system";
   label: string;
@@ -237,7 +239,7 @@ export function useWaitingCounts(role: string): WaitingCounts {
     // when it has some. A team lead keeps the rows (services/matters.ts buildWaitingRows).
     const matterRows: WaitingRow[] = role === "owner"
       ? fromMatters.data.groups.map((group) => ({
-        id: group.id as WaitingRow["id"], label: group.title, title: group.title,
+        id: group.id as WaitingRow["id"], label: group.title, title: group.title, tone: group.tone,
         count: !group.checked && group.count === 0 ? null : group.count, capped: !group.checked, to: group.to,
       }))
       : fromMatters.data.rows.map((row) => ({

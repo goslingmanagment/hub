@@ -61,6 +61,22 @@ describe("«Ждут вас»: one table of groups", () => {
     const failed = buildWaitingGroups({
       matters: [], kindState: (kind) => (kind === "incident.open" ? { ...known, checked: false } : known), trackedKinds: ["incident.open", "people.no_pay_terms"],
     });
-    expect(failed).toEqual([{ id: "system", title: "Сбор, сбои и рутины", count: 0, checked: false, to: "/workboard/decisions#system" }]);
+    expect(failed).toEqual([{ id: "system", title: "Сбор, сбои и рутины", count: 0, checked: false, tone: "warn", to: "/workboard/decisions#system" }]);
+  });
+
+  it("gives a group the worst tone of its matters: broken over unknown over none; not checked is at least unknown", () => {
+    const known: MatterKindState = { checked: true, applicable: true, capped: false };
+    const tones = (matters: Array<{ id: number; kind: string }>, kindState: (kind: string) => MatterKindState = () => known) =>
+      Object.fromEntries(buildWaitingGroups({ matters: matters.map((one) => ({ ...one, pageIds: [], evidence: {} })), kindState, trackedKinds: [] })
+        .map((group) => [group.id, group.tone]));
+    // Collection and failures: a stale routine's line alone is no alarm; a failure in it makes the group red.
+    expect(tones([{ id: 1, kind: "routine.empty" }])).toEqual({ system: null });
+    expect(tones([{ id: 1, kind: "routine.empty" }, { id: 2, kind: "incident.open" }])).toEqual({ system: "bad" });
+    // Publications: an unknown outcome beside a draft makes it orange; a held send is orange; a red ledger check red.
+    expect(tones([{ id: 1, kind: "publication.draft" }, { id: 2, kind: "publication.unknown" }, { id: 3, kind: "send.held" }, { id: 4, kind: "ledger.check" }]))
+      .toEqual({ publications: "warn", held: "warn", ledger: "bad" });
+    // A group whose source did not answer is at least orange, a red one stays red.
+    const notChecked = (kind: string): MatterKindState => (kind === "ledger.sale_question" || kind === "incident.open" ? { ...known, checked: false } : known);
+    expect(tones([{ id: 1, kind: "ledger.sale_question" }, { id: 2, kind: "incident.open" }], notChecked)).toEqual({ questions: "warn", system: "bad" });
   });
 });

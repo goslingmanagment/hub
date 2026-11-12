@@ -35,6 +35,8 @@ const DOT: Partial<Readonly<Record<WaitingRow["id"], string>>> = {
   extension: "status-dot-error",
 };
 
+const TONE_DOT: Readonly<Record<"bad" | "warn", string>> = { bad: "status-dot-error", warn: "status-dot-warn" };
+
 /** A shift's window, its end on the minute: one query key per minute, not per render. */
 function lastDay(now = Date.now()): { from: string; to: string } {
   const to = Math.floor(now / 60_000) * 60_000;
@@ -52,7 +54,10 @@ function WaitingLine({ role }: { role: string }) {
         {loading && rows.length === 0 && <span className="text-text-muted">Проверяем…</span>}
         {rows.map((row) => (
           <AppLink key={`${row.title === undefined ? "row" : "group"}:${row.id}`} to={row.to} className="home-strip-item">
-            {row.title === undefined && DOT[row.id] && <span className={`status-dot ${DOT[row.id]}`} aria-hidden="true" />}
+            {/* A group's tone (the one table): red broken, orange outcome unknown; an old row its own dot. */}
+            {row.title !== undefined
+              ? row.tone && <span className={`status-dot ${TONE_DOT[row.tone]}`} aria-hidden="true" />
+              : DOT[row.id] && <span className={`status-dot ${DOT[row.id]}`} aria-hidden="true" />}
             {row.count === null ? (
               <span>{row.title ?? SHORT_LABEL[row.id] ?? row.label}: <span className="text-text-muted">не удалось проверить</span></span>
             ) : row.page !== undefined ? (

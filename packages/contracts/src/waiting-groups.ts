@@ -57,6 +57,37 @@ export function waitingGroupOf(kind: string): WaitingGroupId {
   return "other";
 }
 
+/**
+ * The tone of what waits, beside its group (the one place): `bad` — something is broken (an open failure, a critical
+ * failure of the extension, a page that needs sign-in, a routine that failed or went silent, a stale copy or a silent
+ * reporter, a red check of the ledger); `warn` — the outcome is not known (a publication's, a held send's; and a group
+ * whose source did not answer: «не проверено»); `null` — it only waits.
+ */
+export const WAITING_TONES = ["bad", "warn"] as const;
+export type WaitingTone = (typeof WAITING_TONES)[number];
+
+const BAD_KINDS: ReadonlySet<string> = new Set([
+  "incident.open", "extension.critical", "page.login_needed", "routine.failed", "routine.silent", "copy.stale", "reporter.silent", "ledger.check",
+]);
+const WARN_KINDS: ReadonlySet<string> = new Set(["publication.unknown", "send.held"]);
+
+/** The tone of a matter's kind. */
+export function waitingToneOf(kind: string): WaitingTone | null {
+  if (BAD_KINDS.has(kind)) return "bad";
+  if (WARN_KINDS.has(kind)) return "warn";
+  return null;
+}
+
+/** The worst of tones: `bad` over `warn` over none. */
+export function worstWaitingTone(tones: Iterable<WaitingTone | null>): WaitingTone | null {
+  let worst: WaitingTone | null = null;
+  for (const tone of tones) {
+    if (tone === "bad") return "bad";
+    if (tone === "warn") worst = "warn";
+  }
+  return worst;
+}
+
 /** The list filtered to one group: `/workboard/decisions#<group>`. */
 export function waitingGroupLink(id: WaitingGroupId): string {
   return `/workboard/decisions#${id}`;
