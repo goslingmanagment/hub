@@ -22,6 +22,7 @@ import { registerClientFanCardRoutes } from "./fan-card.ts";
 import { registerClientFanMarksRoutes } from "./fan-marks.ts";
 import { registerChatterStatsRoutes } from "./chatter-stats.ts";
 import { registerAccountReportsRoutes } from "./account-reports.ts";
+import { registerAccountPayRoutes } from "./account-pay.ts";
 import { registerTeamSalesRoutes } from "./team-sales.ts";
 import { registerClientWinBackRoutes } from "./win-back.ts";
 import { registerClientFanBadgesRoutes } from "./fan-badges.ts";
@@ -78,6 +79,7 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerClientFanBadgesRoutes(server, ctx);
   registerChatterStatsRoutes(server, ctx);
   registerAccountReportsRoutes(server, ctx);
+  registerAccountPayRoutes(server, ctx);
   registerTeamSalesRoutes(server, ctx);
   registerClientHandoffRoutes(server, ctx);
   registerClientHealthViewRoutes(server, ctx);

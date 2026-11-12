@@ -87,11 +87,74 @@ export const teamLedgerPayoutsResponseSchema = z.object({
   generatedAt: isoTimestamp,
   people: z.array(teamLedgerPayoutPersonSchema),
   checks: z.object({
-    /** The sheets were last collected, or the debts last rebuilt, too long ago. */
+    /** The sheets were last collected, or the debts last rebuilt, too long ago (the ledger's own word). */
     stale: z.boolean(),
     lastSheetsCollectAt: isoTimestamp.nullable(),
     lastRebuildAt: isoTimestamp.nullable(),
+    /** The debts were last rebuilt more than 2 hours ago, or never (the ledger's limit): every sum may lag. */
+    debtsStale: z.boolean(),
+    /** The payout sheets were last read more than 3 hours ago, or never (the ledger's limit): only «в таблице» may lag. */
+    sheetsStale: z.boolean(),
   }),
+  serverNow: isoTimestamp,
+});
+
+/** A day's state by the FIFO of payouts (the ledger's two): paid, still owed (in part or whole); none — accrued nothing. */
+export const LEDGER_DAY_STATES = ["paid", "to_pay", "none"] as const;
+export const ledgerDayStateEnum = z.enum(LEDGER_DAY_STATES);
+
+export const teamLedgerPayoutPersonQuerySchema = z.object({
+  /** The ledger's code of the person. */
+  person: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
+  /** Moscow dates, both included, at most 62 days. */
+  from: businessDate,
+  to: businessDate,
+});
+
+/**
+ * One person's pay in a window as the ledger keeps it (GET /v1/payouts/person): each day accrued with its state by the
+ * payouts, the manual postings on the debt with their memo (a bonus adds, a fine or an advance takes off), the
+ * payouts, the last payout and the debt now. Owner session only; no rate, no fix, no revenue a day was priced from.
+ */
+export const teamLedgerPayoutPersonResponseSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  from: businessDate,
+  to: businessDate,
+  /** Days before it are in the opening debt, not one by one. */
+  accrualFrom: businessDate,
+  factsFrom: businessDate.nullable(),
+  reportsFrom: businessDate.nullable(),
+  generatedAt: isoTimestamp,
+  /** The window's days added up. */
+  accruedMills: mills,
+  /** The payouts dated in the window. */
+  paidMills: mills,
+  /** The debt now, as `ledger payables` counts it: plus — owed, minus — paid ahead. */
+  balanceMills: mills,
+  oldestUnpaidDate: businessDate.nullable(),
+  /** The latest payout ever; null — none yet. */
+  lastPayout: z.object({ date: businessDate, document: z.number().int().nonnegative(), amountMills: mills }).nullable(),
+  /** One per date and model. */
+  days: z.array(z.object({
+    date: businessDate,
+    model: z.string(),
+    amountMills: mills,
+    worked: z.boolean(),
+    /** sheet · facts · reports; another value as the ledger wrote it. */
+    source: z.string(),
+    state: ledgerDayStateEnum,
+    paidMills: mills,
+    unpaidMills: mills,
+    /** The journal rows (documents.num) of the payouts that paid the day, in order. */
+    paidBy: z.array(z.number().int()),
+  })),
+  /** The manual postings on the debt dated in the window: plus — a bonus, minus — a fine or an advance. */
+  adjustments: z.array(z.object({ date: businessDate, amountMills: mills, memo: z.string(), document: z.number().int().nullable() })),
+  /** The payouts dated in the window. */
+  payouts: z.array(z.object({ date: businessDate, document: z.number().int().nonnegative(), amountMills: mills })),
+  /** The debts are rebuilt every hour; stale — not for 2 hours. */
+  checks: z.object({ stale: z.boolean(), lastRebuildAt: isoTimestamp.nullable() }),
   serverNow: isoTimestamp,
 });
 
@@ -110,8 +173,18 @@ export const teamLedgerPayoutPrepareResponseSchema = z.object({
   nothing: z.string().nullable(),
   toPayMills: mills.nullable(),
   period: z.object({ from: businessDate, to: businessDate }).nullable(),
-  /** The message's lines: a week of a tab «дд–дд.мм: a+b = база × ставка% = зп», an opening debt, a remainder. */
-  lines: z.array(z.object({ kind: z.string(), model: z.string().nullable(), text: z.string(), shownMills: mills })),
+  /**
+   * The message's lines: a week of a tab «дд–дд.мм: a+b = база × ставка% = зп», a remainder of a day, an opening debt,
+   * a manual posting («поправка дд.мм: +X — {за что}»), what the days do not explain. `from`/`to` — its days; null — not said.
+   */
+  lines: z.array(z.object({
+    kind: z.string(),
+    model: z.string().nullable(),
+    text: z.string(),
+    shownMills: mills,
+    from: businessDate.nullable(),
+    to: businessDate.nullable(),
+  })),
   /** What the owner should know before paying; a blocker stops the payout until it is understood. */
   flags: z.array(z.object({ kind: z.string(), blocker: z.boolean(), text: z.string() })),
   blockers: z.number().int().nonnegative(),
@@ -264,6 +337,8 @@ export const teamLedgerQuestionsResponseSchema = z.object({
 export type TeamLedgerPayoutsResponse = z.infer<typeof teamLedgerPayoutsResponseSchema>;
 export type TeamLedgerPayoutPrepareResponse = z.infer<typeof teamLedgerPayoutPrepareResponseSchema>;
 export type TeamLedgerPayoutPerson = z.infer<typeof teamLedgerPayoutPersonSchema>;
+export type TeamLedgerPayoutPersonResponse = z.infer<typeof teamLedgerPayoutPersonResponseSchema>;
+export type LedgerDayState = z.infer<typeof ledgerDayStateEnum>;
 export type TeamLedgerReportsQuery = z.infer<typeof teamLedgerReportsQuerySchema>;
 export type TeamLedgerReportsResponse = z.infer<typeof teamLedgerReportsResponseSchema>;
 export type TeamLedgerReportDay = z.infer<typeof teamLedgerReportDaySchema>;
@@ -298,6 +373,22 @@ export const teamLedgerRouteSchemas = {
     querystring: teamLedgerPayoutPrepareQuerySchema,
     response: {
       200: teamLedgerPayoutPrepareResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  teamLedgerPayoutPerson: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "One person's pay in a window from the agency ledger: days with their state, adjustments with their memo, payouts",
+    description: "Read from the ledger's GET /v1/payouts/person with Hub's payouts key. The days are Moscow days, at most "
+      + "62. 404 — the ledger has no payout tab of the person; 503 — the ledger is not connected or did not answer.",
+    querystring: teamLedgerPayoutPersonQuerySchema,
+    response: {
+      200: teamLedgerPayoutPersonResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,

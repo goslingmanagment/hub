@@ -187,7 +187,7 @@ export function proposalLines(proposal: Pick<Proposal, "change">): string[] {
   }
   if (Array.isArray(fields.rights)) {
     const rights = fields.rights as string[];
-    const words = [rights.includes("customs_lead") ? "ведёт кастомы" : null, rights.includes("records_customs") ? "записывает кастомы в системе" : null].filter(Boolean);
+    const words = [rights.includes("customs_lead") ? "ведёт кастомы" : null, rights.includes("records_customs") ? "записывает кастомы в системе" : null, rights.includes("sees_own_pay") ? "видит свои деньги" : null].filter(Boolean);
     lines.push(words.length > 0 ? words.join(", ") : "без узких прав");
   }
   if (typeof fields.note === "string") lines.push(`заметка: ${fields.note}`);
@@ -342,6 +342,10 @@ const RIGHT_SWITCHES: ReadonlyArray<{ right: RegistryPerson["rights"][number]["r
   {
     right: "records_customs", label: "Записывает кастомы в системе", hint: "Получает дела по кастомам: «отдайте фану», продажа похожа на кастом без заказа.",
     on: "записывает кастомы в системе", off: "больше не получает дела по кастомам", held: "Записывает кастомы в системе.",
+  },
+  {
+    right: "sees_own_pay", label: "Видит свои деньги", hint: "На «Моих сменах»: начислено за период, к выплате, выплачено и начисление каждой смены. Только суммы, без ставок.",
+    on: "видит свои деньги", off: "больше не видит свои деньги", held: "Видит свои деньги.",
   },
 ];
 

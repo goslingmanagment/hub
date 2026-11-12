@@ -84,6 +84,8 @@ export * from "./routes-shift-review.ts";
 export * from "./routes-team-ledger.ts";
 // The chatter's own shift reports from the agency ledger (`GET /api/v1/account/reports`), spread by routes.ts.
 export * from "./routes-account-reports.ts";
+// «Мои деньги»: the chatter's own pay behind the person's switch (`GET /api/v1/account/pay`), spread by routes.ts.
+export * from "./routes-account-pay.ts";
 // Its quality numbers, one definition for the review's screen and «Смены» (`teamChatterNumbers`).
 export * from "./shift-review-rules.ts";
 export * from "./shift-review-audit.ts";

@@ -25,6 +25,7 @@ import { shiftReviewRouteSchemas } from "./routes-shift-review.ts";
 import { teamLedgerRouteSchemas } from "./routes-team-ledger.ts";
 import { matterRouteSchemas } from "./routes-matters.ts";
 import { agentReportRouteSchemas } from "./routes-agent-reports.ts";
+import { accountPayRouteSchemas } from "./routes-account-pay.ts";
 import { customOrderRouteSchemas } from "./routes-custom-orders.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
@@ -7184,6 +7185,7 @@ const baseRouteSchemas = {
   ...matterRouteSchemas,
   ...agentReportRouteSchemas,
   ...accountReportsRouteSchemas,
+  ...accountPayRouteSchemas,
   ...peopleRouteSchemas,
   ...signinRouteSchemas,
   ...systemStateRouteSchemas,

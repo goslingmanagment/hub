@@ -4,6 +4,7 @@ import type { KernelOperationDef, KernelOperationKey } from "@agency_hub_core/co
 
 export const kernelOperations = {
   accountChatterStats: { method: "GET", path: "/api/v1/account/stats" },
+  accountPay: { method: "GET", path: "/api/v1/account/pay" },
   accountReports: { method: "GET", path: "/api/v1/account/reports" },
   adminAiAccountUpdate: { method: "PATCH", path: "/api/v1/admin/ai/accounts/:accountId" },
   adminAiAccountsList: { method: "GET", path: "/api/v1/admin/ai/accounts" },
@@ -460,6 +461,7 @@ export const kernelOperations = {
   teamCustoms: { method: "GET", path: "/api/v1/team/customs" },
   teamEmptyHours: { method: "GET", path: "/api/v1/team/empty-hours" },
   teamGreetings: { method: "GET", path: "/api/v1/team/greetings" },
+  teamLedgerPayoutPerson: { method: "GET", path: "/api/v1/team/ledger-payouts/person" },
   teamLedgerPayoutPrepare: { method: "GET", path: "/api/v1/team/ledger-payouts/prepare" },
   teamLedgerPayouts: { method: "GET", path: "/api/v1/team/ledger-payouts" },
   teamLedgerQuestions: { method: "GET", path: "/api/v1/team/ledger-questions" },

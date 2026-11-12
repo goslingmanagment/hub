@@ -170,6 +170,22 @@ export function usePayoutPrepare(slug: string | null) {
 }
 
 /**
+ * One person's pay in the period (`teamLedgerPayoutPerson`, ledger #80), for the open panel only: each day with its
+ * state by the payouts, the adjustments with their memo, the payouts, the last payout. Read-only.
+ */
+export function usePayoutPerson(slug: string, period: ResolvedPeriod) {
+  const { isOwner } = useMe();
+  const problem = ledgerWindowProblem(period);
+  const window = { person: slug, from: period.from, to: period.to };
+  return useQuery({
+    queryKey: ["payouts", "ledger-person", window] as const,
+    queryFn: () => kernel.teamLedgerPayoutPerson({ query: window }),
+    enabled: isOwner && problem === null,
+    staleTime: 60_000,
+  });
+}
+
+/**
  * Every chatter's reports of the period (`teamLedgerReports`): the journal of «Отчёты», and the report a payouts
  * day opens to. Asked only while something shows it (`enabled`).
  */
