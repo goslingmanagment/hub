@@ -1,0 +1,13 @@
+/* Сообщения людям: the owner's press beside a «Скопировать». Tokens only. */
+@layer components {
+  .people-message-send__why {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .people-message-send__result {
+    flex-basis: 100%;
+  }
+}

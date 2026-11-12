@@ -23,6 +23,8 @@ const RUNTIME_LOG_REDACT_PATHS = [
   "*.botToken",
   "telegramBotToken",
   "*.telegramBotToken",
+  "peopleTelegramBotToken",
+  "*.peopleTelegramBotToken",
   "body.botToken",
   "req.body.botToken",
   "request.body.botToken",

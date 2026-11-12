@@ -112,6 +112,10 @@ const envSchema = z.object({
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
   // Hub's Telegram messages in Russian (alerts, the daily report, the digest): the owner's live switch, off = English.
   TELEGRAM_RUSSIAN: booleanSchema.default(false),
+  // Сообщения людям (package S): the sender's own bot (unset: nothing leaves) and the owner's two live settings.
+  PEOPLE_TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
+  PEOPLE_MESSAGE_KINDS: z.string().default("{}"),
+  PEOPLE_MESSAGE_CHATS: z.string().default("{}"),
   SERVICE_EGRESS_PROXY_URL: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_USERNAME: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_PASSWORD: optionalTrimmedStringSchema,
@@ -481,6 +485,12 @@ export interface AppConfig {
   telegramReportHourUtc: number;
   /** Hub's Telegram messages in Russian (`TELEGRAM_RUSSIAN`, live): the same facts, recipients and schedule. */
   telegramRussian?: boolean;
+  /** PEOPLE_TELEGRAM_BOT_TOKEN: the bot of «Сообщения людям» (package S); absent — nothing can leave, every message is held. */
+  peopleTelegramBotToken?: string | null;
+  /** PEOPLE_MESSAGE_KINDS (live): the kinds turned on and since when, JSON (people-messages.ts). */
+  peopleMessageKinds?: string;
+  /** PEOPLE_MESSAGE_CHATS (live): the work chats per model, JSON (people-messages.ts). */
+  peopleMessageChats?: string;
   serviceEgressProxyUrl: string | null;
   serviceEgressProxyUsername: string | null;
   serviceEgressProxyPassword: string | null;
@@ -905,6 +915,9 @@ export function loadConfig(
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
     telegramRussian: parsed.TELEGRAM_RUSSIAN,
+    peopleTelegramBotToken: parsed.PEOPLE_TELEGRAM_BOT_TOKEN ?? null,
+    peopleMessageKinds: parsed.PEOPLE_MESSAGE_KINDS,
+    peopleMessageChats: parsed.PEOPLE_MESSAGE_CHATS,
     serviceEgressProxyUrl: serviceEgressProxy.url,
     serviceEgressProxyUsername: serviceEgressProxy.username,
     serviceEgressProxyPassword: serviceEgressProxy.password,

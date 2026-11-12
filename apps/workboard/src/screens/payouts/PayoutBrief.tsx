@@ -5,6 +5,7 @@ import { millsToDollarsNumber } from "@agency_hub_core/shared";
 import { Button, Money, Notice, Skeleton, Table, Tooltip, type Column } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { useOwnerCard } from "@/screens/people/registry";
+import { PeopleMessageSend } from "@/shared/peopleMessages";
 import { copyText } from "./copy";
 import { usePayoutPrepare } from "./ledger";
 
@@ -120,6 +121,8 @@ export function PayoutBrief({ slug, name, adjustments, fallback }: {
                 Скопировать
               </Button>
             </Tooltip>
+            {/* Сообщения людям: only while the owner turned the payout text on and the bot is set. */}
+            <PeopleMessageSend kind="payout.text" who={{ person: slug }} text={message} />
           </div>
         </>
       )}

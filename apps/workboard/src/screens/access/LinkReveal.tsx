@@ -2,6 +2,7 @@ import { Copy } from "lucide-react";
 import { useState } from "react";
 import { Button, Field, Modal, Notice, Textarea, TimeMsk, toast } from "@agency_hub_core/ui";
 import { buildJoinLink, currentOrigin, telegramMessage, type LinkKind } from "@agency_hub_core/ui/teamAccess";
+import { PeopleMessageSend } from "@/shared/peopleMessages";
 
 /**
  * The one and only place a fresh link is ever visible (the console's
@@ -61,6 +62,8 @@ export function LinkReveal({ link, onClose }: { link: RevealedLink; onClose: () 
               {copied === "message" ? "Скопировано" : "Скопировать сообщение"}
             </Button>
             <span className="access-hint">Ссылка уже внутри сообщения.</span>
+            {/* Сообщения людям: only for an invitation, while the owner turned it on and the bot is set. */}
+            {link.kind === "invite" && <PeopleMessageSend kind="newcomer.invite" who={{ userId: link.userId }} text={message} />}
           </div>
         </div>
 

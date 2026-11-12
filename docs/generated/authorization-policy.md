@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 72 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (478)
+## Routes (482)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -481,6 +481,10 @@ A full device token is not affected.
 | GET | `/api/v1/sync/pages/:pageLabel/work` | `syncPageWork` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/pages/:pageLabel/work/:workId` | `syncPageWorkGet` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — | no |
+| GET | `/api/v1/system/people-messages` | `peopleMessages` | `owner-session` | — | — | no |
+| POST | `/api/v1/system/people-messages/kinds/:kind` | `peopleMessageSwitch` | `owner-session` | — | — | no |
+| POST | `/api/v1/system/people-messages/press` | `peopleMessagePress` | `owner-session` | — | — | no |
+| GET | `/api/v1/system/people-messages/recipient` | `peopleMessageRecipient` | `owner-session` | — | — | no |
 | GET | `/api/v1/system/state` | `systemState` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-numbers` | `teamChatterNumbers` | `session` | — | — | no |

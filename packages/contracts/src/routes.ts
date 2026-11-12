@@ -34,6 +34,7 @@ import { shiftHandinRouteSchemas } from "./routes-shift-handins.ts";
 import { signinRouteSchemas } from "./routes-signin.ts";
 // Система → «Состояние»: every routine and copy, from the owner's place (ecosystem plan, package P).
 import { systemStateRouteSchemas } from "./routes-system-state.ts";
+import { peopleMessageRouteSchemas } from "./routes-people-messages.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -8335,7 +8336,8 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof signinRouteSchemas
   & typeof systemStateRouteSchemas
   & typeof customOrderRouteSchemas
-  & typeof shiftHandinRouteSchemas;
+  & typeof shiftHandinRouteSchemas
+  & typeof peopleMessageRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
@@ -8353,6 +8355,7 @@ export const routeSchemas: RouteSchemas = {
   ...systemStateRouteSchemas,
   ...customOrderRouteSchemas,
   ...shiftHandinRouteSchemas,
+  ...peopleMessageRouteSchemas,
 };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;

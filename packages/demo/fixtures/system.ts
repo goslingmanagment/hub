@@ -18,6 +18,7 @@ import {
 import { demoPageSyncBlocks, demoSyncHistoryRequests, demoSyncOverview, demoSyncPages } from "./system-sync.ts";
 import { reportHandlers } from "./system-reports.ts";
 import { demoSystemState } from "./system-state.ts";
+import { peopleMessagesHandlers } from "./system-people-messages.ts";
 
 type Capability =
   | "read:messages" | "read:money" | "read:observations_envelope" | "read:datasets" | "request:hydration"
@@ -111,4 +112,6 @@ export const systemHandlers: DemoHandlers = {
 
   // System → «Состояние»: the routines and copies (the `hub-demo-scenario` cookie: healthy, mac-silent).
   systemState: (request) => demoSystemState(request),
+  // Система → «Сообщения людям»: the server's sender as merged (no token, every kind off) and what it held.
+  ...peopleMessagesHandlers,
 };
