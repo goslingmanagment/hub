@@ -69,8 +69,8 @@ describe("the ledger's month card on Hub", () => {
     expect(monthWindow("2026-12")).toEqual({ from: "2026-12-01", to: "2027-01-01" });
     // The last day of the month is inside the window the read resolves, the next month's first instant is not.
     const bounds = resolvePeriodBounds("custom", new Date("2026-11-12T12:00:00Z"), monthWindow("2026-10"), MOSCOW_TIME_ZONE);
-    expect(bounds.from.toISOString()).toBe("2026-09-30T21:00:00.000Z");
-    expect(bounds.to.toISOString()).toBe("2026-10-31T21:00:00.000Z");
+    expect(bounds.from?.toISOString()).toBe("2026-09-30T21:00:00.000Z");
+    expect(bounds.to?.toISOString()).toBe("2026-10-31T21:00:00.000Z");
   });
 
   it("a month is its Moscow days", () => {
