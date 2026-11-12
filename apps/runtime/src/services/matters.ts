@@ -145,7 +145,9 @@ export function waitingKindsOf(role: MatterOwnerRole): MatterMirrorKind[] {
  * package's, an agent's) is whoever's it is. A kind that only informs is in
  * none: it waits for nobody.
  */
-const FAMILY_ROW_SPECS: ReadonlyArray<{ id: Extract<WaitingRowId, "people" | "ledger" | "other">; label: string; to: string; checks: readonly string[] }> = [
+const FAMILY_ROW_SPECS: ReadonlyArray<{ id: Extract<WaitingRowId, "content" | "people" | "ledger" | "other">; label: string; to: string; checks: readonly string[] }> = [
+  // ContentOps' findings (its key writes `contentops.*`, the owner's): a group of the list, «Контент».
+  { id: "content", label: "Контент", to: "/workboard/decisions#content", checks: [] },
   { id: "people", label: "Люди и доступ", to: "/workboard/decisions#people", checks: PEOPLE_CHECK_KINDS.filter((kind) => !isMatterInfoKind(kind)) },
   { id: "ledger", label: "Проверки ledger", to: "/workboard/decisions#ledger", checks: LEDGER_CHECK_KINDS },
   // Another package's or an agent's kinds land in several groups of the list: the whole list, nothing hidden.
@@ -153,8 +155,9 @@ const FAMILY_ROW_SPECS: ReadonlyArray<{ id: Extract<WaitingRowId, "people" | "le
 ];
 
 /** The family row a kind no old row counts belongs to; null — an old row's kind, or one that only informs. */
-export function waitingFamilyOf(kind: string): "people" | "ledger" | "other" | null {
+export function waitingFamilyOf(kind: string): "content" | "people" | "ledger" | "other" | null {
   if (isMatterMirrorKind(kind) || isMatterInfoKind(kind)) return null;
+  if (kind.startsWith("contentops.")) return "content";
   // A newcomer's way (package J): the people's family, as the checks' of people and access.
   if ((kind.startsWith("people.") && isMatterCheckKind(kind)) || isMatterPersonStartKind(kind)) return "people";
   if ((LEDGER_CHECK_KINDS as readonly string[]).includes(kind)) return "ledger";

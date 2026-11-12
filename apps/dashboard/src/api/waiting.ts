@@ -33,7 +33,7 @@ import { reportQuestionsQueryOptions, saleQuestionsQueryOptions, teamCustomsQuer
  */
 export interface WaitingRow {
   /** The old rows; while the owner's switch reads matters, also «Люди и доступ», «Проверки ledger», «Другие дела» (package K). */
-  id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history" | "people" | "ledger" | "other";
+  id: "drafts" | "unknown" | "questions" | "reports" | "customs" | "held" | "login" | "failures" | "extension" | "history" | "content" | "people" | "ledger" | "other";
   label: string;
   /** null: the read failed, or the state it depends on could not be checked. */
   count: number | null;

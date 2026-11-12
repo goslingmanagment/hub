@@ -18,7 +18,7 @@ import { usePages } from "@/shared/usePages";
 import { ResolveSendModal } from "../decisions/HeldSends";
 import { DisputeModal, NobodyModal, OffPlatformModal, UnlinkedModal } from "./Disputes";
 import { useFanNames, type Custom, type FanRefOnPage, type HeldSend, type KnownFan } from "../decisions/data";
-import { WAITING_GROUPS, groupOf, groupOfAnchor, uncheckedWords, waitedFor, waitingSince, type WaitingGroupId } from "./kinds";
+import { WAITING_GROUPS, contentopsLink, groupOf, groupOfAnchor, uncheckedWords, waitedFor, waitingSince, type WaitingGroupId } from "./kinds";
 import "./waiting.css";
 
 /**
@@ -247,9 +247,24 @@ function lineOf(matter: Matter, context: Context): Line {
         action: telegram ? <TelegramLink href={telegram}>Сообщение</TelegramLink> : <span className="wt-quiet">в ledger</span>,
       };
     }
+    // ContentOps' findings say it all in their title (the custom, where it lies or where the plan puts it).
+    case "contentops.custom_copy":
+    case "contentops.custom_in_plan":
+      return { ...base, action: <ContentopsLink href={contentopsLink(matter)} /> };
     default:
-      return base;
+      // Another ContentOps kind: its model's inbox, nearer than nothing.
+      return matter.kind.startsWith("contentops.") && !matter.link ? { ...base, action: <ContentopsLink href={contentopsLink(matter)} /> } : base;
   }
+}
+
+/** «Открыть в ContentOps»: another product, a new tab (its sign-in is Hub's). */
+function ContentopsLink({ href }: { href: string }) {
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className="wt-go">
+      Открыть в ContentOps
+      <ExternalLink size={14} strokeWidth={1.75} aria-hidden />
+    </a>
+  );
 }
 
 function LineRow({ line, now }: { line: Line; now: number }) {

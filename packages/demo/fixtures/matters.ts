@@ -35,6 +35,7 @@ interface Seed {
   money?: boolean;
   evidence?: Record<string, unknown>;
   link?: string | null;
+  object?: Matter["object"];
   /** How long ago it was opened. */
   agoMs: number;
 }
@@ -45,11 +46,11 @@ function matterOf(seed: Seed, id: number, now: number): Matter {
     id,
     key: seed.key,
     kind: seed.kind,
-    source: seed.kind.startsWith("ledger.") ? "ledger" : seed.kind === "agent.reminder" ? "agent" : "server",
+    source: seed.kind.startsWith("ledger.") ? "ledger" : seed.kind.startsWith("contentops.") ? "contentops" : seed.kind === "agent.reminder" ? "agent" : "server",
     state: "open",
     closedHow: null,
     title: seed.title,
-    object: null,
+    object: seed.object ?? null,
     pageLabels: seed.pages ?? [],
     owner: seed.owner ?? OWNER_ROLE,
     watcherUserIds: [],
@@ -119,6 +120,19 @@ function standing(request: DemoRequest): Seed[] {
     },
     { kind: "page.login_needed", key: "page.login_needed:nova-1", title: "Нужен вход в Fansly: nova-1", pages: ["nova-1"], link: "/settings/pages/nova-1/login", agoMs: 3 * HOUR },
     { kind: "incident.open", key: "incident.open:901", title: "Сбой: Сбор сообщений mia-2 стоит 2 часа", pages: ["mia-2"], evidence: { openedAt: isoAt(now - 2 * HOUR) }, link: "/system/failures?page=all", agoMs: 2 * HOUR },
+    // ContentOps' findings (its hub-orders/matters.ts): a custom's copy outside the customs folder, a custom in the plan.
+    {
+      kind: "contentops.custom_copy", key: "contentops.custom_copy:demo-case-1", title: "Копия кастома CUS-217 лежит вне папки кастомов: Фото/2026-11/IMG_0412.jpg",
+      object: { type: "contentops_case", id: "demo-case-1" },
+      evidence: { model: "mia-hart", custom: "CUS-217", path: "Фото/2026-11/IMG_0412.jpg", source: "yadisk", seenAt: isoAt(now - 26 * HOUR), rule: "кастом и всё, что из него сделано, не ставится в фуп, сториз и на стену без цены" },
+      agoMs: 26 * HOUR,
+    },
+    {
+      kind: "contentops.custom_in_plan", key: "contentops.custom_in_plan:demo-row-1", title: "В плане ContentOps VID-88 из CUS-203 стоит на стене без цены: mia-1 · стена · завтра 18:00",
+      pages: ["mia-1"], object: { type: "contentops_plan_row", id: "demo-row-1" },
+      evidence: { model: "mia-hart", item: "VID-88", custom: "CUS-203", account: "mia-1", surface: "wall", slot: `${isoAt(now + DAY).slice(0, 10)} 18:00` },
+      agoMs: 4 * HOUR,
+    },
     { kind: "agent.reminder", key: "agent.reminder:owner-1", title: "Генгар: цены на mia-2 не меняли 30 дней, пересмотрите перед выходными", pages: ["mia-2"], agoMs: 9 * HOUR },
     {
       kind: "people.access_idle", key: "people.access_idle:all", title: "Доступ без работы 30 дней: 3 страницы у 2 человек",
@@ -241,9 +255,10 @@ const ROWS: ReadonlyArray<{ id: WaitingAnswer["rows"][number]["id"]; label: stri
   { id: "failures", label: "Сбои", to: "/workboard/decisions#system", of: (kind) => kind === "incident.open" },
   { id: "extension", label: "Критичные сбои расширения", to: "/workboard/decisions#system", of: (kind) => kind === "extension.critical" },
   { id: "history", label: "Заявки на историю", to: "/workboard/decisions#system", of: (kind) => kind === "history.request" },
+  { id: "content", label: "Контент", to: "/workboard/decisions#content", of: (kind) => kind.startsWith("contentops.") },
   { id: "people", label: "Люди и доступ", to: "/workboard/decisions#people", of: (kind) => kind.startsWith("people.") && kind !== "people.access_idle" },
   { id: "ledger", label: "Проверки ledger", to: "/workboard/decisions#ledger", of: (kind) => kind === "ledger.check" || kind === "ledger.sheet_column" || kind === "ledger.off_platform" },
-  { id: "other", label: "Другие дела", to: "/workboard/decisions", of: (kind) => !MIRRORED.includes(kind) && !CHECKS.includes(kind) },
+  { id: "other", label: "Другие дела", to: "/workboard/decisions", of: (kind) => !MIRRORED.includes(kind) && !CHECKS.includes(kind) && !kind.startsWith("contentops.") },
 ];
 
 function mattersWaiting(request: DemoRequest): WaitingAnswer {

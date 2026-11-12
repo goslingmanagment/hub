@@ -21,6 +21,7 @@ const SHORT_LABEL: Readonly<Record<WaitingRow["id"], string>> = {
   failures: "Сбои",
   extension: "Сбои расширения",
   history: "Заявки на историю",
+  content: "Контент",
   people: "Люди и доступ",
   ledger: "Проверки ledger",
   other: "Другие дела",
