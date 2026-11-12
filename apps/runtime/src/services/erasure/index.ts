@@ -1722,6 +1722,30 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // link to him, the buyer's string, his chat, the name said in the video and the card's posted text. The order
   // shows «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK would only null the link).
   const customOrderPred = sql`fan_id = ${fanId}`;
+  // Its messages and its history keep the facts — which message did what and when, the states, the times — and
+  // lose the words: an excerpt quotes the chat, an author is a Telegram name, a revision's request, a refusal's
+  // reason and a note are free text about the fan, and the history keeps copies of them. Before the order loses
+  // the fan: the predicates follow him.
+  const customMessagePred = sql`order_id in (select id from custom_orders where ${customOrderPred})
+    and (excerpt is not null or author is not null)`;
+  targets.push({
+    plane: "hot",
+    target: "custom_order_messages",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from custom_order_messages where ${customMessagePred}`),
+    run: (tx) => execCount(tx, sql`update custom_order_messages set excerpt = null, author = null where ${customMessagePred}`),
+  });
+  const customEventPred = sql`object_type = 'custom_order'
+    and object_id in (select id::text from custom_orders where ${customOrderPred})
+    and (changes ? 'note' or changes ? 'reason' or changes ? 'excerpt')`;
+  targets.push({
+    plane: "hot",
+    target: "object_events",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from object_events where ${customEventPred}`),
+    run: (tx) => execCount(tx, sql`
+      update object_events set changes = changes - 'note' - 'reason' - 'excerpt' where ${customEventPred}`),
+  });
   targets.push({
     plane: "hot",
     target: "custom_orders",
@@ -1729,7 +1753,7 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     rows: await countOf(app, sql`select count(*)::text as n from custom_orders where ${customOrderPred}`),
     run: (tx) => execCount(tx, sql`
       update custom_orders
-      set fan_id = null, buyer = null, conversation_ref = null, source_text = null, card = card - 'name',
+      set fan_id = null, buyer = null, conversation_ref = null, source_text = null, card = card - 'name', state_note = null,
           fan_erased_at = coalesce(fan_erased_at, now()), updated_at = now(), version = version + 1
       where ${customOrderPred}`),
   });

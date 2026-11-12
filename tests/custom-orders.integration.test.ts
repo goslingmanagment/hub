@@ -201,6 +201,125 @@ describe("custom orders: who sees and moves what", () => {
     expect(cards.json()).toMatchObject({ matched: [{ telegramRef: "tg:2600000002/6/200", code: order.code }], opened: 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  /** A fresh order of lora-1 at the model, no Telegram card yet. */
+  async function atModel(task: string): Promise<string> {
+    const id = await recordCustomOrder(app, {
+      pageId: pages["lora-1"]!, fanId: null, buyer: null, conversationRef: null, card: { task }, deadlineOn: null,
+      acceptedByUserId: users.alice!, origin: "extension", actor: { door: "extension", userId: users.alice! },
+    });
+    expect((await act("carol", `K-${id}`, { action: "at_model" })).statusCode).toBe(200);
+    return `K-${id}`;
+  }
+  const step = async (code: string, payload: Record<string, unknown>) => {
+    const response = await agent(`/api/v1/agent/custom-orders/${code}`, payload);
+    expect(response.statusCode, response.body).toBe(200);
+    return response.json() as { order: { state: string; partsDone: string[]; openRevisions: number; messages: Array<Record<string, unknown>> }; outcome: string; event?: unknown };
+  };
+
+  it("keeps a revision open until its own round is delivered whole: a part of the new version is not «снят»", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const code = await atModel("Ролик с правкой");
+    expect((await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/500" }, part: "video" })).order.state).toBe("shot");
+    // The model's group asks for a fix; the model sends a first piece of the new version, not the whole of it.
+    expect((await step(code, { action: "revision", message: { telegramRef: "tg:2600000001/3/501" }, ordinal: 1, text: "без музыки" })).order.state).toBe("revision");
+    const piece = await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/502" }, part: "video", complete: false });
+    expect(piece.order).toMatchObject({ state: "revision", openRevisions: 1 });
+    // The whole new version answers the request: the order is shot again, nothing open.
+    const whole = await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/503" }, part: "video", complete: true });
+    expect(whole.order).toMatchObject({ state: "shot", openRevisions: 0 });
+
+    // «Правка» on the board (no message of the model's group) is a requirement as well.
+    expect((await act("carol", code, { action: "revision", note: "фан просит другое начало" })).statusCode).toBe(200);
+    const boardPiece = await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/504" }, part: "video", complete: false });
+    expect(boardPiece.order.state).toBe("revision");
+    // The reader's «исправлено» closes the last open request: the parts are whole, so shot.
+    await step(code, { action: "revision", message: { telegramRef: "tg:2600000001/3/505" }, ordinal: 0, text: "короче" });
+    const done = await step(code, { action: "revision_done", telegramRef: "tg:2600000001/3/505", ordinal: 0 });
+    expect(done.order).toMatchObject({ state: "revision", openRevisions: 0 });
+    expect((await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/506" }, part: "video", complete: true })).order.state).toBe("shot");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps an event by the sender's own id: a delivery with no card, its repeat, a retraction, and says which event it stored", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const code = await atModel("Ролик без карточки");
+    const delivery = { action: "delivery", eventRef: "contentops:delivery:7d0c6a52-0000-4000-8000-000000000001", message: { excerpt: "CUS-1 · видео", author: "ContentOps" }, part: "video", complete: true };
+    const stored = await step(code, delivery);
+    expect(stored).toMatchObject({ outcome: "changed", event: { ref: delivery.eventRef, result: "stored" }, order: { state: "shot", partsDone: ["video"] } });
+    expect(stored.order.messages).toEqual([expect.objectContaining({ kind: "delivery", eventRef: delivery.eventRef, telegramRef: null, complete: true, retractedAt: null })]);
+    expect(await step(code, delivery)).toMatchObject({ outcome: "unchanged", event: { ref: delivery.eventRef, result: "already" } });
+
+    // The old way, a note under a link the order has a delivery of: the hub keeps one message per link and says it kept none.
+    await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/600" }, part: "video" });
+    const lost = await step(code, { action: "message", kind: "note", message: { telegramRef: "tg:2600000001/3/600", excerpt: "отвязана" } });
+    expect(lost).toMatchObject({ outcome: "unchanged", event: null });
+
+    // A retraction is its own event: it takes the delivery back and the state follows the parts that stay.
+    const retract = { action: "retract", eventRef: "contentops:retraction:7d0c6a52-0000-4000-8000-000000000002", retracts: delivery.eventRef, reason: "это другой заказ" };
+    const back = await step(code, retract);
+    expect(back).toMatchObject({ outcome: "changed", event: { ref: retract.eventRef, result: "stored" } });
+    // The routine's own delivery of the video stays: the order is still whole.
+    expect(back.order).toMatchObject({ state: "shot", partsDone: ["video"] });
+    expect(back.order.messages.find((message) => message.eventRef === delivery.eventRef)?.retractedAt).toEqual(expect.any(String));
+    expect(await step(code, retract)).toMatchObject({ outcome: "unchanged", event: { ref: retract.eventRef, result: "already" } });
+    // The routine's delivery taken back by its link: nothing delivers the video now.
+    const second = await step(code, { action: "retract", eventRef: "contentops:retraction:7d0c6a52-0000-4000-8000-000000000003", retracts: "https://t.me/c/2600000001/3/600", reason: "не тот ролик" });
+    expect(second.order).toMatchObject({ state: "at_model", partsDone: [] });
+    const unknown = await agent(`/api/v1/agent/custom-orders/${code}`, { action: "retract", eventRef: "contentops:retraction:x-4", retracts: "contentops:delivery:never", reason: "нет такой" });
+    expect(unknown.statusCode).toBe(409);
+    expect(unknown.json()).toMatchObject({ reason: "unknown_event" });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("answers a card that carries an order's code with that order: one custom, one order", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // Gengar's `/tz`: the order first, no card yet; its code goes into the card's title.
+    const card = { task: "1. В белом", price: "120$" };
+    const first = agentCustomOrderResponseSchema.parse((await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", card })).json()).order;
+    // The daily routine finds the posted card by its link: no order has the link, but the card names the code.
+    const sourceText = `📦 Описание заказа ${first.code}\nДата: 12.11.2026\n🎥 Описание задания: 1. В белом\nОплата: 120$`;
+    const found = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", card, telegramRef: "tg:2600000002/6/700", sourceText });
+    expect(found.statusCode, found.body).toBe(200);
+    expect(agentCustomOrderResponseSchema.parse(found.json())).toMatchObject({ outcome: "changed", order: { id: first.id, telegramRefs: ["tg:2600000002/6/700"] } });
+    const again = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", card, telegramRef: "tg:2600000002/6/700", sourceText });
+    expect(agentCustomOrderResponseSchema.parse(again.json())).toMatchObject({ outcome: "unchanged", order: { id: first.id } });
+    const count = await testDb.pool.query("select count(*)::int as n from custom_orders where card ->> 'task' = '1. В белом'");
+    expect(count.rows[0].n).toBe(1);
+    // A code of an order this key does not see, or of no order: refused, never a second order and never a guess.
+    for (const other of [orders.elsewhere!, "K-999999"]) {
+      const refused = await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", card, telegramRef: "tg:2600000002/6/701", sourceText: `📦 Описание заказа ${other}\n🎥 Описание задания: x` });
+      expect(refused.statusCode, other).toBe(409);
+      expect(refused.json()).toMatchObject({ reason: "code_unknown" });
+    }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("erases the fan's words with the fan: the messages' excerpts and authors and their copies in the history", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const fanId = Number((await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username) values ('fansly', '7400000009', 'fan_nine') returning id",
+    )).rows[0]!.id);
+    await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [fanId, pages["lora-1"]]);
+    const id = await recordCustomOrder(app, {
+      pageId: pages["lora-1"]!, fanId, buyer: null, conversationRef: null, card: { task: "Ролик для фана" }, deadlineOn: null,
+      acceptedByUserId: users.alice!, origin: "extension", actor: { door: "extension", userId: users.alice! },
+    });
+    const code = `K-${id}`;
+    expect((await act("carol", code, { action: "at_model" })).statusCode).toBe(200);
+    await step(code, { action: "delivery", message: { telegramRef: "tg:2600000001/3/800", author: "Модель", excerpt: "для Тома.mov" }, part: "video" });
+    await step(code, { action: "revision", message: { telegramRef: "tg:2600000001/3/801", author: "Чаттер" }, text: "Том просит сказать его имя" });
+    const erasureApp = { db: app.db, pool: testDb.pool, config: app.config, logger: app.logger } as never;
+    const scope = { scopeType: "fan", platform: "fansly", fanRef: "7400000009" } as const;
+    await executeErasure(erasureApp, scope, { initiatedBy: users.boss! });
+    const detail = customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/${code}`)).json());
+    // The facts stay (the state, the times, which message did what); the words go, and their copies in the history.
+    expect(detail.messages.map((message) => [message.kind, message.telegramRef, message.author, message.excerpt])).toEqual([
+      ["delivery", "tg:2600000001/3/800", null, null],
+      ["revision", "tg:2600000001/3/801", null, null],
+    ]);
+    const texts = JSON.stringify(detail.history.map((item) => item.changes));
+    expect(texts).not.toContain("Том");
+    expect(detail.history.map((item) => item.event)).toEqual(expect.arrayContaining(["custom_order.delivery", "custom_order.revision"]));
+    expect(detail.order).toMatchObject({ state: "revision", fanErased: true, stateNote: null, partsDone: ["video"] });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("keeps the order through the fan's erasure: its preview says anonymize, and the order stays without the fan", async (context) => {
     if (!testDb || !server) return context.skip();
     const erasureApp = { db: app.db, pool: testDb.pool, config: app.config, logger: app.logger } as never;

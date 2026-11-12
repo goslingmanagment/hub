@@ -148,6 +148,7 @@ export const EVENT_WORDS: Record<string, string> = {
   "custom_order.fan_confirmed": "Фан подтверждён",
   "custom_order.card": "Привязана карточка из Telegram",
   "custom_order.message": "Сообщение в группе модели",
+  "custom_order.retracted": "Сдача отозвана",
 };
 
 export const DOOR_WORDS: Record<string, string> = {

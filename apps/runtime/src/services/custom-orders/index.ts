@@ -18,6 +18,7 @@ import {
   addCustomOrderMessage,
   addCustomOrderPayment,
   bumpCustomOrder,
+  closeCustomOrderRevisions,
   dismissCustomSale,
   findCustomOrder,
   findCustomSale,
@@ -34,13 +35,16 @@ import {
   listObjectEvents,
   listPersonFans,
   listUsersWithPersonRight,
+  listCustomOrderLiveDeliveries,
   listCustomOrderMessages,
   lockCustomOrder,
   markCustomOrderRevisionDone,
   moveCustomOrder,
   removeCustomOrderPayment,
+  retractCustomOrderDeliveries,
   updateCustomOrderFields,
   type CustomLookalikeRow,
+  type CustomOrderMessageResult,
   type CustomOrderMessageRow,
   type CustomOrderRow,
   type CustomOrderSaleRow,
@@ -53,6 +57,7 @@ import { requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from 
 import { ConflictError, NotFoundError } from "../errors.ts";
 import {
   cardOf,
+  DELIVERY_MOVES_FROM,
   fanInputOf,
   isBoardAction,
   leadsSteps,
@@ -162,13 +167,16 @@ export function orderWire(row: CustomOrderRow, now: Date = new Date()): CustomOr
 export function messageWire(message: CustomOrderMessageRow): CustomOrderMessage {
   return {
     telegramRef: message.telegramRef,
+    eventRef: message.eventRef,
     ordinal: message.ordinal,
     kind: message.kind,
     part: message.part,
+    complete: message.complete,
     at: message.postedAt?.toISOString() ?? null,
     author: message.author,
     excerpt: message.excerpt,
     doneAt: message.doneAt?.toISOString() ?? null,
+    retractedAt: message.retractedAt?.toISOString() ?? null,
   };
 }
 
@@ -324,12 +332,22 @@ export async function readCustomOrder(app: CustomApp, principal: AuthPrincipal, 
 
 // ── One step ────────────────────────────────────────────────────────────────
 
-/** A message of the order in Telegram, as a door gives it. */
+/**
+ * A message of the order, as a door gives it: a Telegram message known by its link, or an event known by the
+ * sender's own `eventRef` (ContentOps' delivery), the link then only its evidence (null — none).
+ */
 export interface CustomMessageInput {
-  telegramRef: string;
+  telegramRef: string | null;
+  eventRef?: string | null;
   at: Date | null;
   author: string | null;
   excerpt: string | null;
+}
+
+/** The event a message step names and what became of it: kept now, or the order had this very one. */
+export interface CustomEventResult {
+  ref: string;
+  result: "stored" | "already";
 }
 
 /** A step as every door gives it: the board's body, the extension's and the agent's translated to it. */
@@ -359,8 +377,10 @@ export type CustomStep =
   | { action: "close" }
   | { action: "cancel"; reason?: string | undefined }
   | { action: "delivery"; message: CustomMessageInput; part: "video" | "photos" | undefined; complete: boolean }
-  | { action: "revision_done"; telegramRef: string; ordinal: number }
-  | { action: "message"; kind: "repost" | "confirmation" | "note"; message: CustomMessageInput };
+  | { action: "revision_done"; telegramRef: string | null; eventRef?: string | null; ordinal: number }
+  | { action: "message"; kind: "repost" | "confirmation" | "note"; message: CustomMessageInput }
+  /** A delivery taken back, by its eventRef or its message's link; the retraction is its own event (a note). */
+  | { action: "retract"; retracts: { eventRef: string } | { telegramRef: string }; reason: string; message: CustomMessageInput & { eventRef: string } };
 
 function patched(card: CustomOrderCard, patch: CustomOrderCardPatch): CustomOrderCard {
   const next: Record<string, unknown> = { ...card };
@@ -381,10 +401,15 @@ const sameValue = (left: unknown, right: unknown) => JSON.stringify(left ?? null
  */
 export async function applyCustomStep(
   app: CustomApp,
-  input: { orderId: number; step: CustomStep; actor: CustomActor; viewer: CustomViewer | null; now?: Date },
+  input: {
+    orderId: number; step: CustomStep; actor: CustomActor; viewer: CustomViewer | null; now?: Date;
+    /** Filled for a message step: the event it names and whether it is kept now or was before; null — not kept. */
+    report?: { event: CustomEventResult | null };
+  },
 ): Promise<boolean> {
   const now = input.now ?? new Date();
   const step = input.step;
+  if (input.report !== undefined) input.report.event = null;
   return app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     if (!(await lockCustomOrder(db, input.orderId))) throw notFound();
@@ -400,11 +425,23 @@ export async function applyCustomStep(
     });
     const move = (to: CustomOrderStateRow, extra: { note?: string | null; ref?: string | null } = {}) =>
       moveCustomOrder(db, { orderId: order.id, from: [order.state], to, ...extra, at: now });
-    const addMessage = (message: CustomMessageInput, kind: "repost" | "delivery" | "revision" | "confirmation" | "note", extra: { part?: "video" | "photos" | null; ordinal?: number } = {}) =>
-      addCustomOrderMessage(db, {
-        orderId: order.id, telegramRef: message.telegramRef, ordinal: extra.ordinal ?? 0, kind, part: extra.part ?? null,
-        postedAt: message.at, author: message.author, excerpt: message.excerpt, at: now,
+    const addMessage = async (
+      message: CustomMessageInput,
+      kind: "repost" | "delivery" | "revision" | "confirmation" | "note",
+      extra: { part?: "video" | "photos" | null; ordinal?: number; complete?: boolean } = {},
+    ): Promise<CustomOrderMessageResult> => {
+      const result = await addCustomOrderMessage(db, {
+        orderId: order.id, telegramRef: message.telegramRef, eventRef: message.eventRef ?? null, ordinal: extra.ordinal ?? 0, kind,
+        part: extra.part ?? null, complete: extra.complete ?? null, postedAt: message.at, author: message.author, excerpt: message.excerpt, at: now,
       });
+      // `taken`: the identity holds another kind of message — this event is not kept, and the answer says so.
+      if (input.report !== undefined && result !== "taken") input.report.event = { ref: message.eventRef ?? message.telegramRef!, result };
+      return result;
+    };
+    const refsOf = (message: CustomMessageInput) => ({
+      ...(message.telegramRef === null ? {} : { telegramRef: message.telegramRef }),
+      ...(message.eventRef ? { eventRef: message.eventRef } : {}),
+    });
 
     const changed = await (async (): Promise<boolean> => {
       switch (step.action) {
@@ -487,17 +524,23 @@ export async function applyCustomStep(
         case "delivery": {
           const wanted = wantedParts(cardOf(order.card));
           const part = step.part ?? wanted[0]!;
-          const added = await addMessage(step.message, "delivery", { part });
+          // The same delivery again (or its link holding another message) is nothing new: an old message never moves the order.
+          if ((await addMessage(step.message, "delivery", { part, complete: step.complete })) !== "stored") return false;
+          // Kept in every state; it moves the order only from the states before «снят» and from a revision.
+          const moves = DELIVERY_MOVES_FROM.includes(order.state);
           const partsDone = step.complete ? [...new Set([...order.partsDone, part])] : order.partsDone;
+          // A revision is a requirement of its own round: only a delivery marked whole answers it (and fixes the open
+          // requests); a piece of the new version leaves the order «правка», never «снят» from the old round's parts.
+          const revisionOpen = order.openRevisions > 0 || order.state === "revision";
+          const answered = moves && step.complete && revisionOpen ? await closeCustomOrderRevisions(db, { orderId: order.id, at: now }) : 0;
           const whole = wanted.every((one) => partsDone.includes(one));
-          const to: CustomOrderStateRow = whole ? "shot" : "partly";
-          const moves = order.state !== to;
-          if (!added && !moves && partsDone.length === order.partsDone.length) return false;
+          const to: CustomOrderStateRow = !moves ? order.state : revisionOpen && !step.complete ? "revision" : whole ? "shot" : "partly";
           if (partsDone.length !== order.partsDone.length) await updateCustomOrderFields(db, order.id, { partsDone }, now);
-          if (moves) await move(to, { ref: step.message.telegramRef });
+          if (to !== order.state) await move(to, { ref: step.message.telegramRef });
           await event("delivery", {
-            from: order.state, to, part, complete: step.complete, telegramRef: step.message.telegramRef,
+            from: order.state, to, part, complete: step.complete, ...refsOf(step.message),
             ...(step.message.excerpt ? { excerpt: step.message.excerpt } : {}),
+            ...(answered > 0 ? { revisionsDone: answered } : {}),
           });
           return true;
         }
@@ -507,34 +550,71 @@ export async function applyCustomStep(
           const note = step.action === "refused" ? step.reason : step.action === "shot" ? null : step.note ?? null;
           const ref = step.ref ?? null;
           if (order.state === step.action && order.stateRef === ref && order.stateNote === note && ref !== null) return false;
-          if (step.action === "shot") await updateCustomOrderFields(db, order.id, { partsDone: wantedParts(cardOf(order.card)) }, now);
+          // «Снят»: every part whole, and the open revision requests fixed by it (an order with one open is never shot).
+          let answered = 0;
+          if (step.action === "shot") {
+            await updateCustomOrderFields(db, order.id, { partsDone: wantedParts(cardOf(order.card)) }, now);
+            answered = await closeCustomOrderRevisions(db, { orderId: order.id, at: now });
+          }
           await move(STEP_TO[step.action]!, { note, ref });
-          await event(step.action, { from: order.state, ...(note === null ? {} : { note }), ...(ref === null ? {} : { ref }) });
+          await event(step.action, {
+            from: order.state, ...(note === null ? {} : { note }), ...(ref === null ? {} : { ref }), ...(answered > 0 ? { revisionsDone: answered } : {}),
+          });
           return true;
         }
         case "revision": {
           const note = step.note ?? step.message?.excerpt ?? null;
-          const added = step.message === undefined ? true : await addMessage({ ...step.message, excerpt: note }, "revision", { ordinal: step.ordinal ?? 0 });
-          if (!added) return false;
+          if (step.message !== undefined && (await addMessage({ ...step.message, excerpt: note }, "revision", { ordinal: step.ordinal ?? 0 })) !== "stored") return false;
           const ref = step.ref ?? step.message?.telegramRef ?? null;
           if (order.state !== "revision" || order.stateNote !== note || order.stateRef !== ref) await move("revision", { note, ref });
-          await event("revision", { from: order.state, ...(note === null ? {} : { note }), ...(ref === null ? {} : { ref }), ...(step.ordinal ? { ordinal: step.ordinal } : {}) });
+          await event("revision", {
+            from: order.state, ...(note === null ? {} : { note }), ...(ref === null ? {} : { ref }), ...(step.ordinal ? { ordinal: step.ordinal } : {}),
+            ...(step.message?.eventRef ? { eventRef: step.message.eventRef } : {}),
+          });
           return true;
         }
         case "revision_done": {
-          if (!(await markCustomOrderRevisionDone(db, { orderId: order.id, telegramRef: step.telegramRef, ordinal: step.ordinal, at: now }))) return false;
-          await event("revision_done", { telegramRef: step.telegramRef, ordinal: step.ordinal });
+          // The request is fixed; the order stays «правка» until a whole delivery or «снят» (the round's readiness).
+          const done = await markCustomOrderRevisionDone(db, { orderId: order.id, telegramRef: step.telegramRef, eventRef: step.eventRef ?? null, ordinal: step.ordinal, at: now });
+          if (!done) return false;
+          await event("revision_done", {
+            ...(step.telegramRef === null ? {} : { telegramRef: step.telegramRef }), ...(step.eventRef ? { eventRef: step.eventRef } : {}), ordinal: step.ordinal,
+          });
           return true;
         }
         case "message": {
-          const added = await addMessage(step.message, step.kind);
+          const kept = await addMessage(step.message, step.kind);
           let card = false;
-          if (step.kind === "repost") {
-            card = await addCustomOrderCard(db, { orderId: order.id, telegramRef: step.message.telegramRef, at: now, postedAt: step.message.at, author: step.message.author });
-            if (!card && !order.telegramRefs.includes(step.message.telegramRef)) throw new ConflictError("The Telegram card belongs to another order", { reason: "taken" });
+          const cardRef = step.message.telegramRef;
+          if (step.kind === "repost" && cardRef !== null) {
+            card = await addCustomOrderCard(db, { orderId: order.id, telegramRef: cardRef, at: now, postedAt: step.message.at, author: step.message.author });
+            if (!card && !order.telegramRefs.includes(cardRef)) throw new ConflictError("The Telegram card belongs to another order", { reason: "taken" });
           }
-          if (!added && !card) return false;
-          await event("message", { kind: step.kind, telegramRef: step.message.telegramRef });
+          if (kept !== "stored" && !card) return false;
+          await event("message", { kind: step.kind, ...refsOf(step.message) });
+          return true;
+        }
+        case "retract": {
+          // The retraction is an event of its own (a note with its reason), so a repeat of it changes nothing.
+          const kept = await addMessage({ ...step.message, excerpt: step.reason }, "note");
+          if (kept === "taken") throw new ConflictError("This eventRef names another message of the order", { reason: "event_taken" });
+          if (kept === "already") return false;
+          const { matched, retracted } = await retractCustomOrderDeliveries(db, { orderId: order.id, ...step.retracts }, now);
+          if (matched === 0) throw new ConflictError("The order has no delivery of that ref", { reason: "unknown_event" });
+          // A part stops counting unless another delivery not taken back made it whole; the state follows the parts that stay.
+          const live = await listCustomOrderLiveDeliveries(db, order.id);
+          const lost = [...new Set(retracted.filter((one) => one.complete !== false && one.part !== null).map((one) => one.part!))]
+            .filter((part) => !live.wholeParts.includes(part));
+          const partsDone = order.partsDone.filter((part) => !lost.includes(part));
+          const wanted = wantedParts(cardOf(order.card));
+          const to: CustomOrderStateRow = retracted.length === 0 || (order.state !== "shot" && order.state !== "partly") ? order.state
+            : wanted.every((one) => partsDone.includes(one)) ? "shot" : partsDone.length > 0 || live.count > 0 ? "partly" : "at_model";
+          if (partsDone.length !== order.partsDone.length) await updateCustomOrderFields(db, order.id, { partsDone }, now);
+          if (to !== order.state) await move(to);
+          await event("retracted", {
+            from: order.state, to, retracts: "eventRef" in step.retracts ? step.retracts.eventRef : step.retracts.telegramRef,
+            eventRef: step.message.eventRef, parts: lost, reason: step.reason,
+          });
           return true;
         }
         case "given": {

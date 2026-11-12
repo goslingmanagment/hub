@@ -356,36 +356,110 @@ export async function addCustomOrderCard(
 export type CustomOrderMessageKindRow = "repost" | "delivery" | "revision" | "confirmation" | "note";
 
 export interface CustomOrderMessageRow {
-  telegramRef: string;
+  /** The Telegram message: the row's identity, or the evidence of an event named by `eventRef`; null — none. */
+  telegramRef: string | null;
+  /** The sender's own id of the event (0999: ContentOps' delivery or retraction); null — a Telegram message. */
+  eventRef: string | null;
   ordinal: number;
   kind: CustomOrderMessageKindRow;
   part: "video" | "photos" | null;
+  /** A delivery: that part whole; null — not said (recorded before 0999). */
+  complete: boolean | null;
   postedAt: Date | null;
   author: string | null;
   excerpt: string | null;
   doneAt: Date | null;
+  /** A delivery taken back: its part no longer counts. */
+  retractedAt: Date | null;
 }
 
-/** A message of the order; false — this message (and ordinal) is the order's already. */
+/**
+ * What became of a message given to the order: `stored`; `already` — the same message (its link and ordinal, or its
+ * event ref) of the same kind is the order's; `taken` — that identity holds another kind of message: nothing kept.
+ */
+export type CustomOrderMessageResult = "stored" | "already" | "taken";
+
+/**
+ * A message of the order. With `eventRef` the event is known by it (the link, if any, only its evidence): unique
+ * per order. Without it the Telegram link and ordinal are the identity, as the readers of the groups give them.
+ */
 export async function addCustomOrderMessage(
   db: Database,
-  input: { orderId: number; telegramRef: string; ordinal: number; kind: CustomOrderMessageKindRow; part: "video" | "photos" | null;
-    postedAt: Date | null; author: string | null; excerpt: string | null; at: Date },
+  input: { orderId: number; telegramRef: string | null; eventRef?: string | null; ordinal: number; kind: CustomOrderMessageKindRow;
+    part: "video" | "photos" | null; complete?: boolean | null; postedAt: Date | null; author: string | null; excerpt: string | null; at: Date },
+): Promise<CustomOrderMessageResult> {
+  const eventRef = input.eventRef ?? null;
+  if (eventRef === null && input.telegramRef === null) throw new Error("A message of an order is known by its Telegram link or its event ref");
+  const values = sql`(${input.orderId}, ${eventRef === null ? input.telegramRef : null}, ${eventRef}, ${eventRef === null ? null : input.telegramRef},
+    ${input.ordinal}, ${input.kind}, ${input.part}, ${input.complete ?? null}::boolean, ${input.postedAt?.toISOString() ?? null}::timestamptz,
+    ${input.author}, ${input.excerpt}, ${input.at.toISOString()}::timestamptz)`;
+  const result = await db.execute(eventRef === null
+    ? sql`
+      insert into custom_order_messages (order_id, telegram_ref, event_ref, evidence_ref, ordinal, kind, part, complete, posted_at, author, excerpt, added_at)
+      values ${values} on conflict (order_id, telegram_ref, ordinal) do nothing`
+    : sql`
+      insert into custom_order_messages (order_id, telegram_ref, event_ref, evidence_ref, ordinal, kind, part, complete, posted_at, author, excerpt, added_at)
+      values ${values} on conflict (order_id, event_ref) where event_ref is not null do nothing`);
+  if ((result.rowCount ?? 0) > 0) return "stored";
+  const existing = await db.execute<Row>(eventRef === null
+    ? sql`select kind from custom_order_messages where order_id = ${input.orderId} and telegram_ref = ${input.telegramRef} and ordinal = ${input.ordinal}`
+    : sql`select kind from custom_order_messages where order_id = ${input.orderId} and event_ref = ${eventRef}`);
+  return existing.rows[0]?.kind === input.kind ? "already" : "taken";
+}
+
+/** A revision request fixed; false — none open by that message (or event ref) and ordinal. */
+export async function markCustomOrderRevisionDone(
+  db: Database,
+  input: { orderId: number; telegramRef: string | null; eventRef?: string | null; ordinal: number; at: Date },
 ): Promise<boolean> {
+  const by = input.eventRef ? sql`event_ref = ${input.eventRef}` : sql`telegram_ref = ${input.telegramRef} and ordinal = ${input.ordinal}`;
   const result = await db.execute(sql`
-    insert into custom_order_messages (order_id, telegram_ref, ordinal, kind, part, posted_at, author, excerpt, added_at)
-    values (${input.orderId}, ${input.telegramRef}, ${input.ordinal}, ${input.kind}, ${input.part},
-      ${input.postedAt?.toISOString() ?? null}::timestamptz, ${input.author}, ${input.excerpt}, ${input.at.toISOString()}::timestamptz)
-    on conflict (order_id, telegram_ref, ordinal) do nothing`);
+    update custom_order_messages set done_at = ${input.at.toISOString()}::timestamptz
+    where order_id = ${input.orderId} and ${by} and kind = 'revision' and done_at is null`);
   return (result.rowCount ?? 0) > 0;
 }
 
-/** A revision request fixed; false — none open by that message and ordinal. */
-export async function markCustomOrderRevisionDone(db: Database, input: { orderId: number; telegramRef: string; ordinal: number; at: Date }): Promise<boolean> {
+/** Every open revision request of the order fixed (a whole new version came, or «снят»): how many. */
+export async function closeCustomOrderRevisions(db: Database, input: { orderId: number; at: Date }): Promise<number> {
   const result = await db.execute(sql`
     update custom_order_messages set done_at = ${input.at.toISOString()}::timestamptz
-    where order_id = ${input.orderId} and telegram_ref = ${input.telegramRef} and ordinal = ${input.ordinal} and kind = 'revision' and done_at is null`);
-  return (result.rowCount ?? 0) > 0;
+    where order_id = ${input.orderId} and kind = 'revision' and done_at is null`);
+  return result.rowCount ?? 0;
+}
+
+/**
+ * The deliveries of the order named by an event ref, or by a Telegram link (every delivery of that message, its
+ * own or as evidence), taken back: `matched` — how many the ref names at all, `retracted` — the ones taken back now.
+ */
+export async function retractCustomOrderDeliveries(
+  db: Database,
+  input: { orderId: number; eventRef: string } | { orderId: number; telegramRef: string },
+  at: Date,
+): Promise<{ matched: number; retracted: Array<{ part: "video" | "photos" | null; complete: boolean | null }> }> {
+  const by = "eventRef" in input ? sql`event_ref = ${input.eventRef}` : sql`(telegram_ref = ${input.telegramRef} or evidence_ref = ${input.telegramRef})`;
+  const matched = await db.execute<Row>(sql`
+    select count(*)::int as n from custom_order_messages where order_id = ${input.orderId} and kind = 'delivery' and ${by}`);
+  const result = await db.execute<Row>(sql`
+    update custom_order_messages set retracted_at = ${at.toISOString()}::timestamptz
+    where order_id = ${input.orderId} and kind = 'delivery' and retracted_at is null and ${by}
+    returning part, complete`);
+  return {
+    matched: Number(matched.rows[0]?.n ?? 0),
+    retracted: result.rows.map((row) => ({ part: (row.part as "video" | "photos" | null) ?? null, complete: (row.complete as boolean | null) ?? null })),
+  };
+}
+
+/** The order's deliveries not taken back: how many, and the parts one of them made whole (`complete` not false). */
+export async function listCustomOrderLiveDeliveries(db: Database, orderId: number): Promise<{ count: number; wholeParts: Array<"video" | "photos"> }> {
+  const result = await db.execute<Row>(sql`
+    select count(*)::int as n,
+      coalesce(array_agg(distinct part) filter (where part is not null and complete is not false), '{}'::text[]) as parts
+    from custom_order_messages where order_id = ${orderId} and kind = 'delivery' and retracted_at is null`);
+  const row = result.rows[0];
+  return {
+    count: Number(row?.n ?? 0),
+    wholeParts: ((row?.parts as string[] | null) ?? []).filter((part): part is "video" | "photos" => part === "video" || part === "photos"),
+  };
 }
 
 /** The messages of these orders, each order's in their order. */
@@ -393,19 +467,24 @@ export async function listCustomOrderMessagesOf(db: Database, orderIds: readonly
   const byOrder = new Map<number, CustomOrderMessageRow[]>();
   if (orderIds.length === 0) return byOrder;
   const result = await db.execute<Row>(sql`
-    select order_id, telegram_ref, ordinal, kind, part, posted_at, author, excerpt, done_at from custom_order_messages
+    select order_id, coalesce(telegram_ref, evidence_ref) as telegram_ref, event_ref, ordinal, kind, part, complete, posted_at, author, excerpt,
+      done_at, retracted_at
+    from custom_order_messages
     where order_id = any(${ids(orderIds)}) order by order_id, coalesce(posted_at, added_at), id`);
   for (const row of result.rows) {
     const list = byOrder.get(Number(row.order_id)) ?? [];
     list.push({
-      telegramRef: String(row.telegram_ref),
+      telegramRef: (row.telegram_ref as string | null) ?? null,
+      eventRef: (row.event_ref as string | null) ?? null,
       ordinal: Number(row.ordinal),
       kind: row.kind as CustomOrderMessageKindRow,
       part: (row.part as "video" | "photos" | null) ?? null,
+      complete: (row.complete as boolean | null) ?? null,
       postedAt: date(row.posted_at),
       author: (row.author as string | null) ?? null,
       excerpt: (row.excerpt as string | null) ?? null,
       doneAt: date(row.done_at),
+      retractedAt: date(row.retracted_at),
     });
     byOrder.set(Number(row.order_id), list);
   }

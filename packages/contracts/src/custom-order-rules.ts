@@ -20,8 +20,8 @@ const ALL: readonly CustomOrderState[] = [...NOT_ENDED, "closed", "cancelled"];
 
 // ── Steps and states ────────────────────────────────────────────────────────
 
-/** The board's steps, and the reader's own: a delivery message, a revision fixed, another message of the order. */
-export type CustomStepName = CustomOrderAction | "delivery" | "revision_done" | "message";
+/** The board's steps, and the readers' own: a delivery message, a revision fixed, another message, a delivery taken back. */
+export type CustomStepName = CustomOrderAction | "delivery" | "revision_done" | "message" | "retract";
 
 const BOARD_ACTIONS: ReadonlySet<string> = new Set(CUSTOM_ORDER_ACTIONS);
 export function isBoardAction(step: CustomStepName): step is CustomOrderAction {
@@ -46,11 +46,16 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
   given: ["recorded", "paid", "at_model", "partly", "shot", "revision"],
   close: ["given"],
   cancel: OPEN,
-  // A delivery proves the card reached the model, whatever the board said.
-  delivery: ["recorded", "paid", "at_model", "partly", "revision"],
+  // A delivery is kept in every state (its sender must know it is in the hub); it moves the order only from the
+  // states before «снят» and from a revision (DELIVERY_MOVES_FROM): it proves the card reached the model.
+  delivery: ALL,
   revision_done: NOT_ENDED,
   message: ALL,
+  retract: ALL,
 };
+
+/** The states a delivery moves the order from (to «сдан частично», «снят» or back to «правка»). */
+export const DELIVERY_MOVES_FROM: readonly CustomOrderState[] = ["recorded", "paid", "at_model", "partly", "revision"];
 
 export const STEP_TO: Partial<Readonly<Record<CustomOrderAction, CustomOrderState>>> = {
   at_model: "at_model",

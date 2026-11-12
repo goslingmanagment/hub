@@ -210,7 +210,10 @@ function detail(request: DemoRequest, order: DemoOrder): CustomOrderDetailRespon
     }),
     sourceText: order.origin === "import" ? renderCardText({ id: order.id, card: order.card, deadlineOn: order.deadlineOn, createdAt: new Date(order.createdAt), buyer: order.buyer, fan: null }).replace(/ K-\d+/u, "") : null,
     messages: ["shot", "given", "closed", "revision", "partly"].includes(order.state)
-      ? [{ telegramRef: `tg:${DEMO_CHAT}/3/${20_000 + order.id}`, ordinal: 0, kind: "delivery", part: "video", at: isoAt(order.stateAt), author: "Модель", excerpt: "6-12 кастом в красном.mov", doneAt: null }]
+      ? [{
+        telegramRef: `tg:${DEMO_CHAT}/3/${20_000 + order.id}`, eventRef: null, ordinal: 0, kind: "delivery", part: "video", complete: true,
+        at: isoAt(order.stateAt), author: "Модель", excerpt: "6-12 кастом в красном.mov", doneAt: null, retractedAt: null,
+      }]
       : [],
     payments: order.payments.map((payment) => ({ transactionRef: payment.ref, kind: payment.kind, grossMills: payment.gross, netMills: Math.round(payment.gross * 0.8), at: isoAt(payment.at), note: payment.note })),
     paymentSuggestions: fanRef !== null && order.state !== "cancelled" && order.payments.length < 2

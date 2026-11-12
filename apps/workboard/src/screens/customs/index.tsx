@@ -588,9 +588,14 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
             <Section title="В группе модели">
               <ul className="cus-list">
                 {detail.messages.map((message) => (
-                  <li key={`${message.telegramRef}:${message.ordinal}`} className="cus-list__row cus-list__row--text">
-                    <a href={telegramHref(message.telegramRef)} target="_blank" rel="noreferrer">{message.at ? <TimeMsk at={message.at} /> : "сообщение"}</a>
-                    <span>{message.author ? `${message.author}: ` : ""}{message.excerpt ?? ({ repost: "копия карточки", delivery: "сдача", revision: "правка", confirmation: "подтверждение", note: "заметка" })[message.kind]}</span>
+                  <li key={`${message.eventRef ?? message.telegramRef}:${message.ordinal}`} className="cus-list__row cus-list__row--text">
+                    {message.telegramRef === null
+                      ? <span>{message.at ? <TimeMsk at={message.at} /> : "сообщение"}</span>
+                      : <a href={telegramHref(message.telegramRef)} target="_blank" rel="noreferrer">{message.at ? <TimeMsk at={message.at} /> : "сообщение"}</a>}
+                    <span>
+                      {message.author ? `${message.author}: ` : ""}{message.excerpt ?? ({ repost: "копия карточки", delivery: "сдача", revision: "правка", confirmation: "подтверждение", note: "заметка" })[message.kind]}
+                      {message.retractedAt !== null && <span className="cus-muted"> · отозвана</span>}
+                    </span>
                   </li>
                 ))}
               </ul>

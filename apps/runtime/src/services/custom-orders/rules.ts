@@ -9,6 +9,7 @@ export {
   buyerLinkOf,
   cardOf,
   deadlinePassed,
+  DELIVERY_MOVES_FROM,
   dottedDay,
   isBoardAction,
   leadsSteps,
