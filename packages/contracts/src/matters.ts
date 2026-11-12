@@ -130,7 +130,11 @@ const username = z.string().trim().min(1).max(64);
 const pageLabel = z.string().trim().min(1).max(64);
 
 export const matterOwnerSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("user"), userId: intId, username: z.string() }),
+  z.object({
+    kind: z.literal("user"), userId: intId, username: z.string(),
+    /** The person's name where the login is a person's (the people registry); null — a login of no person. */
+    displayName: z.string().nullable(),
+  }),
   z.object({ kind: z.literal("role"), role: z.enum(MATTER_OWNER_ROLE_NAMES) }),
 ]);
 

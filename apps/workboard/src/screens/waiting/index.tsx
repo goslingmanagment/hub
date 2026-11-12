@@ -264,7 +264,8 @@ function Group({ id, title, lines, now }: { id: WaitingGroupId; title: string; l
 /** Whom a matter waits for, as the line of «Ждут других» says it. */
 const ROLE_WORD: Readonly<Record<string, string>> = { owner: "владелец", team_lead: "тимлид", chatter: "чаттеры" };
 function whoseWord(matter: Matter): string {
-  return matter.owner.kind === "user" ? matter.owner.username || `вход №${matter.owner.userId}` : ROLE_WORD[matter.owner.role] ?? matter.owner.role;
+  // The person's name (as «Люди» and «Кастомы» say it), the login of a login that is nobody's.
+  return matter.owner.kind === "user" ? matter.owner.displayName ?? (matter.owner.username || `вход №${matter.owner.userId}`) : ROLE_WORD[matter.owner.role] ?? matter.owner.role;
 }
 
 /** The group a «Ждут вас» row of a count (no matter behind it: the custom orders' number) stands in. */

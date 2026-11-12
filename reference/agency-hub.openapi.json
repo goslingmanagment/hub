@@ -227300,12 +227300,19 @@
                                   },
                                   "username": {
                                     "type": "string"
+                                  },
+                                  "displayName": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   }
                                 },
                                 "required": [
                                   "kind",
                                   "userId",
-                                  "username"
+                                  "username",
+                                  "displayName"
                                 ],
                                 "additionalProperties": false
                               },

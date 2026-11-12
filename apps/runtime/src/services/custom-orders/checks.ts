@@ -19,6 +19,7 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 import { applyCustomStep } from "./index.ts";
+import { customsLeadOwner } from "./readers.ts";
 import { deadlinePassed, dottedDay } from "./rules.ts";
 
 /**
@@ -175,11 +176,6 @@ async function reconcile(app: Pick<AppContext, "db" | "logger">, kind: CustomOrd
   return { opened, closed };
 }
 
-async function leadOwner(app: Pick<AppContext, "db">): Promise<MatterOwner> {
-  const leads = await listUsersWithPersonRight(app.db, "customs_lead");
-  return leads[0] === undefined ? { role: "team_lead" } : { userId: leads[0].userId };
-}
-
 const CARD_KIND = "custom.card_without_order";
 const cardKey = (ref: string) => `${CARD_KIND}:${ref}`;
 
@@ -192,7 +188,7 @@ export async function reportUnmatchedCards(
   input: { cards: ReadonlyArray<{ telegramRef: string; postedAt?: string | undefined; where?: string | undefined }>; complete: boolean; agentKeyId: number },
   now: Date,
 ): Promise<{ opened: number; closed: number }> {
-  const lead = await leadOwner(app);
+  const lead = await customsLeadOwner(app);
   const findings: Finding[] = input.cards.map((card) => ({
     key: cardKey(card.telegramRef),
     title: `Карточка кастома без заказа${card.where ? `: ${card.where}` : ""}`,
@@ -221,7 +217,7 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
     tally.closed += done.closed;
   };
   const [lead, recorderRows, onShift] = await Promise.all([
-    leadOwner(app),
+    customsLeadOwner(app),
     listUsersWithPersonRight(app.db, "records_customs"),
     listOnShiftUsersByPage(app.db, now),
   ]);

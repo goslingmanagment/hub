@@ -160,10 +160,20 @@ function visible(request: DemoRequest): Matter[] {
   else seeds = all;
   const chatter = DEMO_USERS.find((user) => user.role === "chatter" && user.active)!;
   if (scenario !== "matters-0") {
-    seeds.push({
-      kind: "agent.reminder", key: `agent.reminder:${chatter.username}`, title: "Генгар: ответьте в «Обучалке» про смену 10 нояб.",
-      owner: { kind: "user", userId: chatter.id, username: chatter.username }, agoMs: 5 * HOUR,
-    });
+    // The chatter's own: one in the calm scenario, five otherwise (the strip shows three and unfolds the rest).
+    const own = [
+      ["Генгар: ответьте в «Обучалке» про смену 10 нояб.", 5 * HOUR],
+      ["Отдайте фану Dennis кастом CUS-0014: файл у вас в «Кастомах»", 9 * HOUR],
+      ["Генгар: уточните у фана Ivan K. цену за видео до вечера", 26 * HOUR],
+      ["Генгар: фан Lars P. ждёт ответа про оплату после выходных", 2 * DAY],
+      ["Проверьте, ушло ли приветствие фану Theo C.", 40 * MIN],
+    ] as const;
+    for (const [index, [title, agoMs]] of own.slice(0, scenario === "matters-6" ? 1 : own.length).entries()) {
+      seeds.push({
+        kind: "agent.reminder", key: `agent.reminder:${chatter.username}-${index}`, title, pages: ["mia-1"],
+        owner: { kind: "user", userId: chatter.id, username: chatter.username, displayName: chatter.name }, agoMs,
+      });
+    }
   }
   // What waits for the person who leads customs (the invented agency's: kate.v): the owner reads it as oversight.
   const lead = DEMO_USERS.find((user) => user.username === "kate.v")!;
@@ -171,11 +181,11 @@ function visible(request: DemoRequest): Matter[] {
     seeds.push(
       {
         kind: "custom.not_at_model", key: "custom.not_at_model:CUS-0012", title: "Кастом CUS-0012 оплачен и сутки не у модели: mia-1", pages: ["mia-1"],
-        owner: { kind: "user", userId: lead.id, username: lead.username }, link: "/workboard/customs/CUS-0012", agoMs: 26 * HOUR,
+        owner: { kind: "user", userId: lead.id, username: lead.username, displayName: lead.name }, link: "/workboard/customs/CUS-0012", agoMs: 26 * HOUR,
       },
       {
         kind: "custom.overdue", key: "custom.overdue:CUS-0009", title: "Кастом CUS-0009 просрочен: mia-3", pages: ["mia-3"],
-        owner: { kind: "user", userId: lead.id, username: lead.username }, link: "/workboard/customs/CUS-0009", agoMs: 2 * DAY,
+        owner: { kind: "user", userId: lead.id, username: lead.username, displayName: lead.name }, link: "/workboard/customs/CUS-0009", agoMs: 2 * DAY,
       },
     );
   }

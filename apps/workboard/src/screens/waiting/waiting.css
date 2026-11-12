@@ -204,6 +204,13 @@
     margin-bottom: var(--ui-space-4);
   }
 
+  .wt-strip__more {
+    margin-top: var(--ui-space-2);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
   .wt-strip__title {
     margin: 0 0 var(--ui-space-2);
     font-size: var(--ui-fs-15);

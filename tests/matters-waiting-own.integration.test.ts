@@ -109,6 +109,39 @@ describe("«Ждут вас»: what waits for the viewer themself", () => {
     ]);
   });
 
+  it("the customs count is the lead's line: the acting team lead's while nobody has «ведёт кастомы», nobody's once a person has it", async (context) => {
+    if (!testDb) return context.skip();
+    await testDb.pool.query("insert into custom_orders (page_id, state, origin) values ($1, 'paid', 'workboard')", [pages["lora-1"]]);
+    const waiting = async () => mattersWaitingResponseSchema.parse((await asSession("boss", "/api/v1/matters/waiting")).json());
+    Object.assign(app.config, { customOrdersReadEnabled: true });
+    try {
+      // Nobody leads customs and nobody holds the team lead's role: the owner's row, counted.
+      const acting = await waiting();
+      expect(acting.rows.find((row) => row.id === "customs")).toMatchObject({ count: 1, to: "/workboard/customs", matterIds: [] });
+      expect(acting.decisions.customs).toBe(1);
+      const withRow = acting.total;
+
+      // A person leads customs: the count is nobody's — in no row and no number of the owner's.
+      const person = await testDb.pool.query(
+        "insert into people (code, display_name, kind, role, state, origin) values ('carol', 'Кэрол', 'human', 'chatter', 'working', 'owner') returning id",
+      );
+      await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [users.carol, person.rows[0].id]);
+      await testDb.pool.query("insert into person_rights (person_id, \"right\") values ($1, 'customs_lead')", [person.rows[0].id]);
+      const led = await waiting();
+      expect(led.rows.find((row) => row.id === "customs")).toBeUndefined();
+      expect(led.decisions.customs).toBe(0);
+      expect(led.total).toBe(withRow - 1);
+      // The lead's matters are oversight for the owner, under the person's name.
+      const lines = mattersListResponseSchema.parse((await asSession("boss", "/api/v1/matters?kind=own.test")).json()).matters;
+      expect(lines.find((one) => one.key === "own.test:carol")?.owner).toMatchObject({ kind: "user", username: "carol", displayName: "Кэрол" });
+
+      await testDb.pool.query("delete from person_rights where person_id = $1", [person.rows[0].id]);
+      expect((await waiting()).rows.find((row) => row.id === "customs")).toMatchObject({ count: 1 });
+    } finally {
+      Object.assign(app.config, { customOrdersReadEnabled: false });
+    }
+  });
+
   it("once someone holds the team lead's role, its matters leave the owner's count; a team lead's and a chatter's counts are what they read", async (context) => {
     if (!testDb) return context.skip();
     const aliceBefore = await clientCount("alice");

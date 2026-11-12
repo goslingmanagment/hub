@@ -1,5 +1,5 @@
 import type { TeamCustomsResponse } from "@agency_hub_core/contracts";
-import { listCustomOrdersAwaitingGiving, type CustomOrderRow } from "@agency_hub_core/db";
+import { listCustomOrdersAwaitingGiving, listUsersWithPersonRight, type CustomOrderRow, type MatterOwner } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfigField } from "../effective-config.ts";
@@ -20,6 +20,16 @@ type ReaderApp = Pick<AppContext, "db"> & Partial<Pick<AppContext, "config">>;
 export async function customOrdersReadOn(app: ReaderApp): Promise<boolean> {
   if (app.config === undefined) return false;
   return (await loadEffectiveConfigField(app.db, app.config, "customOrdersReadEnabled")) === true;
+}
+
+/**
+ * Who leads customs, the one rule: the person with the right «ведёт кастомы» (`customs_lead`, their living login),
+ * else the team lead's role. The custom checks give the lead's matters to it, and «Ждут вас»'s customs count is the
+ * role's only while nobody has the right (a person who has it reads their own matters instead).
+ */
+export async function customsLeadOwner(app: Pick<AppContext, "db">): Promise<MatterOwner> {
+  const leads = await listUsersWithPersonRight(app.db, "customs_lead");
+  return leads[0] === undefined ? { role: "team_lead" } : { userId: leads[0].userId };
 }
 
 export function awaitingGivingOf(app: ReaderApp, input: { pageIds: "all" | readonly number[]; limit: number }): Promise<CustomOrderRow[]> {

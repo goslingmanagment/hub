@@ -534,12 +534,17 @@ export async function listMatterPageLabels(db: Database): Promise<{ labelOf: Map
   return { labelOf, idOf };
 }
 
-/** id → login of the users named. */
-export async function listMatterUsernames(db: Database, userIds: readonly number[]): Promise<Map<number, string>> {
+/** id → login of the users named, and their person's name. */
+export async function listMatterUsernames(db: Database, userIds: readonly number[]): Promise<Map<number, { username: string; displayName: string | null }>> {
   if (userIds.length === 0) return new Map();
-  const result = await db.execute<{ id: string | number | bigint; username: string }>(sql`
-    select id, username from users where id = any(${ids([...new Set(userIds)])})`);
-  return new Map(result.rows.map((row) => [Number(row.id), row.username]));
+  // With the person's name where the login is a person's (the people registry), in one read.
+  const result = await db.execute<{ id: string | number | bigint; username: string; display_name: string | null }>(sql`
+    select u.id, u.username, p.display_name
+      from users u
+      left join person_logins l on l.user_id = u.id
+      left join people p on p.id = l.person_id
+     where u.id = any(${ids([...new Set(userIds)])})`);
+  return new Map(result.rows.map((row) => [Number(row.id), { username: row.username, displayName: row.display_name ?? null }]));
 }
 
 /** A living, enabled user by login (case aside); null — none. */
