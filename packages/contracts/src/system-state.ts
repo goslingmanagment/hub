@@ -175,7 +175,11 @@ export const systemStateReporterSchema = z.object({
   /** The first report since its last silence. */
   onlineSince: isoTimestamp,
   version: z.string().nullable(),
-  /** It reported within the limit. */
+  /** Its source answered without its facts since then (the ledger did not answer, its scheduler is off); null — it did. */
+  uncheckedSince: isoTimestamp.nullable(),
+  /** Why, in words: «Планировщик ledger выключен». */
+  uncheckedReason: z.string().nullable(),
+  /** It reported within the limit, with its facts: otherwise its lines are «не проверено». */
   fresh: z.boolean(),
   /** Moscow hours it is watched in ("10:00–03:00"); null — all day. */
   hours: z.object({ from: z.number().int().min(0).max(23), to: z.number().int().min(0).max(23) }).nullable(),

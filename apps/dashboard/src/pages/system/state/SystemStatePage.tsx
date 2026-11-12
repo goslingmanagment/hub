@@ -175,9 +175,31 @@ function RoutineRows({ routines, open, toggle }: { routines: readonly SystemStat
 }
 
 /** A place's reporter in one line: who tells Hub about it, and when it last did. */
-function ReporterLine({ place, reporter }: { place: SystemPlace; reporter: SystemStateReporter | undefined }) {
+/** The ledger's own scheduler, under «Сервер»: Hub reads its jobs; no answer or its scheduler off is «не проверено». */
+function LedgerLine({ reporter }: { reporter: SystemStateReporter }) {
+  if (reporter.fresh) {
+    return <p className="state-reporter">Задачи ledger: ledger сообщил о них {formatAgo(reporter.lastReportAt)}.</p>;
+  }
+  const since = reporter.uncheckedSince ?? reporter.lastReportAt;
+  return (
+    <Notice
+      tone="off"
+      className="state-reporter-notice"
+      detail="Строки задач ledger ниже не проверены: Hub не знает, идут ли они. Зелёными они не станут, пока ledger не ответит."
+    >
+      {reporter.uncheckedReason ?? "Ledger не сообщает о своих задачах"} с {moscowAt(since)}
+    </Notice>
+  );
+}
+
+function ReporterLine({ place, reporter, ledger }: { place: SystemPlace; reporter: SystemStateReporter | undefined; ledger?: SystemStateReporter | undefined }) {
   if (place === "server") {
-    return <p className="state-reporter">Hub проверяет сам{reporter ? `, последний раз ${formatAgo(reporter.lastReportAt)}` : ""}.</p>;
+    return (
+      <>
+        <p className="state-reporter">Hub проверяет сам{reporter ? `, последний раз ${formatAgo(reporter.lastReportAt)}` : ""}.</p>
+        {ledger && <LedgerLine reporter={ledger} />}
+      </>
+    );
   }
   if (!reporter) return <p className="state-reporter">{PLACE_TITLE[place]} пока не присылает состояние.</p>;
   if (reporter.fresh) {
@@ -197,26 +219,36 @@ function ReporterLine({ place, reporter }: { place: SystemPlace; reporter: Syste
   );
 }
 
-function PlaceGroup({ place, routines, reporter }: { place: SystemPlace; routines: readonly SystemStateRoutine[]; reporter: SystemStateReporter | undefined }) {
+function PlaceGroup({ place, routines, reporter, ledger }: {
+  place: SystemPlace;
+  routines: readonly SystemStateRoutine[];
+  reporter: SystemStateReporter | undefined;
+  ledger?: SystemStateReporter | undefined;
+}) {
   const [open, setOpen] = useState<string | null>(null);
   const toggle = (key: string) => setOpen((current) => (current === key ? null : key));
   const shown = routines.filter((routine) => routine.level === "problem" || routine.level === "attention");
-  const folded = routines.filter((routine) => routine.level === "healthy" || routine.level === "unchecked");
-  const unchecked = folded.length > 0 && folded.every((routine) => routine.level === "unchecked");
+  // Not checked and fine are two folds: a line nobody could check is never counted as «в порядке».
+  const unchecked = routines.filter((routine) => routine.level === "unchecked");
+  const healthy = routines.filter((routine) => routine.level === "healthy");
   return (
     <div className="state-place" data-place={place}>
       <div className="state-place-head">
         <h3 className="state-place-title">{PLACE_TITLE[place]}</h3>
         {routines.length > 0 && <span className="state-place-count">{routines.length} {ruPlural(routines.length, "рутина", "рутины", "рутин")}</span>}
       </div>
-      <ReporterLine place={place} reporter={reporter} />
+      <ReporterLine place={place} reporter={reporter} ledger={ledger} />
       {shown.length > 0 && <RoutineRows routines={shown} open={open} toggle={toggle} />}
-      {folded.length > 0 && (
-        <details className="state-fold" data-fold={unchecked ? "unchecked" : "healthy"}>
-          <summary className="state-fold-summary">
-            {unchecked ? "Не проверено" : "В порядке"}: {folded.length}
-          </summary>
-          <RoutineRows routines={folded} open={open} toggle={toggle} />
+      {unchecked.length > 0 && (
+        <details className="state-fold" data-fold="unchecked">
+          <summary className="state-fold-summary">Не проверено: {unchecked.length}</summary>
+          <RoutineRows routines={unchecked} open={open} toggle={toggle} />
+        </details>
+      )}
+      {healthy.length > 0 && (
+        <details className="state-fold" data-fold="healthy">
+          <summary className="state-fold-summary">В порядке: {healthy.length}</summary>
+          <RoutineRows routines={healthy} open={open} toggle={toggle} />
         </details>
       )}
     </div>
@@ -334,6 +366,7 @@ export function SystemStatePage() {
                 place={place}
                 routines={data.routines.filter((routine) => routine.place === place)}
                 reporter={reporterOf(place)}
+                ledger={place === "server" ? data.reporters.find((reporter) => reporter.reporter === "ledger") : undefined}
               />
             ))}
           </section>

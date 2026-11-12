@@ -84,11 +84,11 @@ export function routineLine(routine: SystemStateRoutine, now: number = Date.now(
       return `${since ? `Работает, но на входе пусто уже ${spanWords(now - Date.parse(since))}` : "На входе пусто"}${limit}. ${capital(success)}.`;
     }
     case "unchecked":
-      return `Не проверено: место не присылает состояние. ${capital(success)}.`;
+      return `Не проверено: состояние не пришло. ${capital(success)}.`;
     case "outcome_unknown":
       return `Запуск ${ran ?? ""}, итог отсюда не виден · ${period}`;
     case "pending":
-      return `Ещё не запускалась · ${period}`;
+      return `${routine.detail ?? "Ещё не запускалась"} · ${period}`;
     case "skipped":
       return `Делать было нечего${ran ? `, проверка ${ran}` : ""} · ${period}`;
     case "ok":
