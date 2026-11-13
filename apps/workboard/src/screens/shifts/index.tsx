@@ -5,7 +5,6 @@ import { Button, EmptyState, ErrorState, LinkButton, Notice } from "@agency_hub_
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { addDays, daysInRange } from "@agency_hub_core/ui/moscow";
 import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
-import { useMattersActive } from "@/shared/matters";
 import { usePeopleIndex } from "@/shared/people";
 import { SHIFT_SALES_KEY, usersQuery } from "@/shared/reads";
 import { liveLogins, personOfLogin, useTeamPeople } from "@/screens/people/registry";
@@ -19,7 +18,6 @@ import { HowItCounts } from "./HowItCounts.js";
 import { Journal } from "./Journal.js";
 import { NowOnShift } from "./NowOnShift.js";
 import { reportNotes } from "./reports.js";
-import { WaitingLine } from "./WaitingLine.js";
 import { WeekGrid, sentence } from "./WeekGrid.js";
 import "./shifts.css";
 
@@ -62,7 +60,6 @@ export function ShiftsScreen() {
   const window = useMemo(() => shiftsWindow(period), [period]);
   const { sales, numbers } = useShiftsPeriod({ window, page, current: period.current });
   const mine = search.get("mine") === "1";
-  const { active: waitingFromMatters } = useMattersActive();
   const own = useOwnLogins(mine);
   const people = usePeopleIndex();
   const full = useMemo(() => (sales.data ? buildModel(sales.data, numbers.data, window, people) : undefined), [sales.data, numbers.data, window, people]);
@@ -196,9 +193,7 @@ export function ShiftsScreen() {
           </p>
         )}
         <div className="shifts-top">
-          {/* What waits has one place, «Ждут вас» with its number in the menu; this older line stays only while the
-              owner's switch `mattersReadEnabled` is off (the list is then the old queues). */}
-          {waitingFromMatters === false && <WaitingLine />}
+          {/* What waits has one place, «Ждут вас» with its number in the menu: no line of it here. */}
           <NowOnShift page={page} only={own} />
         </div>
         {/* Cut off only days before Hub counted: the header's «Hub считает смены с …» says it all, no advice to pick them. */}

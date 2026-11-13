@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import type { SyncBlocksPage, SyncPagesResponse, TeamLedgerPayoutsResponse, TeamLedgerReportsResponse } from "@agency_hub_core/contracts";
-import { pendingChangesOf, reportQuestionsWindow as screenWindow, unparsedPostsToDecide } from "@agency_hub_core/ui/shiftReports";
 
 import { isOfapiOffFailure } from "../apps/dashboard/src/lib/failures.ts";
 import { engineStatusState } from "../apps/dashboard/src/pages/settings/engine/engineDisplay.ts";
@@ -14,9 +13,12 @@ import {
   reportQuestionsWindow,
 } from "../apps/runtime/src/services/matters-mirror.ts";
 
-// The mirror of «Ждут вас» and «Решения» (package D) ports the screens' rules
-// to the server. A port that drifts from its screen is a count that differs
-// in silence: each rule runs here beside its original on the same answers.
+// The mirror of «Ждут вас» (package D) holds the rules of what waits. Two of
+// them still have a twin in the console — «Публикации» says which Fansly pages
+// need a login, «Сбои» greys the failures of the switched-off OnlyFans API —
+// and a twin that drifts is two screens that disagree in silence: each runs
+// here beside the mirror's on the same answers. The reports' rules are the
+// mirror's alone, pinned on fixed answers.
 
 const stop = (by: string[], reason = "page_hold") => ({ reason, by, resources: [], until: null });
 const block = (stops: ReturnType<typeof stop>[] = []) => ({ state: "engine", engine: { stopped: stops.length > 0 ? "some" : "none", stops, paused: false } });
@@ -75,9 +77,9 @@ describe("the matters mirror keeps the screens' rules", () => {
     }
   });
 
-  it("asks the ledger about the same posts and changed days as Решения, over the same window", () => {
-    expect(reportQuestionsWindow("2026-11-12")).toEqual(screenWindow("2026-11-12"));
-    expect(reportQuestionsWindow("2026-03-01")).toEqual(screenWindow("2026-03-01"));
+  it("asks the ledger about the posts and changed days of the last 31 Moscow days, today included", () => {
+    expect(reportQuestionsWindow("2026-11-12")).toEqual({ from: "2026-10-13", to: "2026-11-12" });
+    expect(reportQuestionsWindow("2026-03-01")).toEqual({ from: "2026-01-30", to: "2026-03-01" });
     const post = (id: number, blocking: boolean, reportDate: string | null, postedAt: string, labels: Array<string | null>) => ({
       id, blocking, reportDate, postedAt, flags: blocking ? ["unknown_author"] : ["duplicate"], totalMills: 1000, link: null,
       pages: labels.map((pageLabel) => ({ name: "x", pageLabel, inShift: true, amountMills: 500 })),
@@ -99,8 +101,12 @@ describe("the matters mirror keeps the screens' rules", () => {
         { slug: "b", name: "B", hubUser: null, pendingChanges: [] },
       ],
     } as unknown as TeamLedgerPayoutsResponse;
-    expect(reportPostItems(reports, payouts).map((item) => Number(item.object!.id))).toEqual(unparsedPostsToDecide(reports, payouts).map((one) => one.id));
+    // The blocking posts of the days the reports accrue from (the 9th on): the 10th's, and the one with no date
+    // posted on the Moscow 9th. A post's pages are its account lines Hub knows.
+    const posts = reportPostItems(reports, payouts);
+    expect(posts.map((item) => Number(item.object!.id))).toEqual([1, 4]);
+    expect(posts.map((item) => item.pageLabels)).toEqual([["page-a"], []]);
     expect(reportPostItems(reports, { reportsFrom: null } as never)).toEqual([]);
-    expect(paidDayChangeItems(payouts).map((item) => Number(item.object!.id))).toEqual(pendingChangesOf(payouts).map((one) => one.id));
+    expect(paidDayChangeItems(payouts).map((item) => Number(item.object!.id))).toEqual([7]);
   });
 });

@@ -200,8 +200,6 @@ export const mattersListResponseSchema = z.object({
 export const mattersWaitingQuerySchema = z.object({}).strict();
 
 export const mattersWaitingResponseSchema = z.object({
-  /** The owner's switch (`mattersReadEnabled`): the screens read this answer instead of their own sources. */
-  active: z.boolean(),
   /**
    * «Ждут вас» by the list's groups (waiting-groups.ts, the one table) — for every role, in both apps: a group per
    * kind the viewer's own open matters fall in, in the list's order, never «Для сведения»; the console Home's chips. A

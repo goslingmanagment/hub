@@ -46,7 +46,7 @@ export function usePublicationSettings() {
   });
 }
 
-/** The reads behind «Ждут вас»: the same keys as the home's rows (api/waiting.ts), so the counts agree. */
+/** The reads behind the screen's own counts of what waits: every draft and every «Исход неизвестен». */
 const WAITING_LIMIT = 1000;
 
 /** A count is never the previous filter's rows: the same read without the dimmed placeholder. */

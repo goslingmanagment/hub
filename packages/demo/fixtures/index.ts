@@ -37,7 +37,7 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   "wb-admin": wbAdminHandlers,
   // The people registry: the team's list, the owner's card with pay terms, and its writes (people.ts).
   people: peopleHandlers,
-  // «Ждут вас» from matters (packages D and K); `hub-demo-scenario=matters-0|matters-6|matters-40|matters-off` (matters.ts).
+  // «Ждут вас» from matters (packages D and K); `hub-demo-scenario=matters-0|matters-6|matters-40` (matters.ts).
   matters: mattersHandlers,
   // Workboard «Кастомы»: the board, an order and its steps, kept in memory (wb-customs.ts).
   customs: wbCustomsHandlers,

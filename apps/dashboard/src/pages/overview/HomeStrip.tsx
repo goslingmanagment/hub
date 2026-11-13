@@ -1,7 +1,7 @@
 import { useAuthMe } from "@/api/queries";
 import { useTeamShifts } from "@/api/team";
 import { usePeopleIndex } from "@/api/people";
-import { useWaitingCounts, type WaitingRow } from "@/api/waiting";
+import { useWaitingCounts } from "@/api/waiting";
 import { AppLink } from "@/components/shared/AppLink";
 import { formatDuration, formatTimeOfDay } from "@/lib/format";
 import { workboardHref, workboardPersonHref } from "@/lib/workboard";
@@ -11,30 +11,6 @@ import { workboardHref, workboardPersonHref } from "@/lib/workboard";
  * working now. They only count and lead to where the thing is done; the trends
  * below stay the screen's main content.
  */
-const SHORT_LABEL: Partial<Readonly<Record<WaitingRow["id"], string>>> = {
-  drafts: "Посты на утверждение",
-  unknown: "Исход неизвестен",
-  questions: "Чья продажа",
-  reports: "Отчёты смен",
-  customs: "Кастомы не отданы",
-  held: "Проверить отправки",
-  login: "Нужен вход",
-  failures: "Сбои",
-  extension: "Сбои расширения",
-  history: "Заявки на историю",
-  content: "Контент",
-  people: "Люди и доступ",
-  ledger: "Проверки ledger",
-  other: "Другие дела",
-};
-
-const DOT: Partial<Readonly<Record<WaitingRow["id"], string>>> = {
-  unknown: "status-dot-warn",
-  login: "status-dot-error",
-  failures: "status-dot-error",
-  extension: "status-dot-error",
-};
-
 const TONE_DOT: Readonly<Record<"bad" | "warn", string>> = { bad: "status-dot-error", warn: "status-dot-warn" };
 
 /** A shift's window, its end on the minute: one query key per minute, not per render. */
@@ -44,33 +20,30 @@ function lastDay(now = Date.now()): { from: string; to: string } {
 }
 
 function WaitingLine({ role }: { role: string }) {
-  const { rows, loading, failed, refetchAll } = useWaitingCounts(role);
-  // Nothing waits: no line at all rather than a line saying so (owner, 2026-11-04).
-  if (!loading && rows.length === 0) return null;
+  const { rows, loading, failed, unanswered, refetchAll } = useWaitingCounts(role);
+  // Nothing waits: no line at all rather than a line saying so (owner, 2026-11-04). No answer is not «nothing waits».
+  if (!loading && !unanswered && rows.length === 0) return null;
   return (
     <div className="home-strip-row">
       <span className="home-strip-label">Ждут вас</span>
       <div className="home-strip-items">
         {loading && rows.length === 0 && <span className="text-text-muted">Проверяем…</span>}
+        {unanswered && <span className="text-text-muted">Не удалось проверить</span>}
         {rows.map((row) => (
-          <AppLink key={`${row.title === undefined ? "row" : "group"}:${row.id}`} to={row.to} className="home-strip-item">
-            {/* A group's tone (the one table): red broken, orange outcome unknown; an old row its own dot. */}
-            {row.title !== undefined
-              ? row.tone && <span className={`status-dot ${TONE_DOT[row.tone]}`} aria-hidden="true" />
-              : DOT[row.id] && <span className={`status-dot ${DOT[row.id]}`} aria-hidden="true" />}
+          <AppLink key={row.id} to={row.to} className="home-strip-item">
+            {/* A group's tone (the one table): red broken, orange outcome unknown. */}
+            {row.tone && <span className={`status-dot ${TONE_DOT[row.tone]}`} aria-hidden="true" />}
             {row.count === null ? (
-              <span>{row.title ?? SHORT_LABEL[row.id] ?? row.label}: <span className="text-text-muted">не удалось проверить</span></span>
-            ) : row.page !== undefined ? (
-              <span>{row.title ?? SHORT_LABEL[row.id] ?? row.label}: {row.page}</span>
+              <span>{row.label}: <span className="text-text-muted">не удалось проверить</span></span>
             ) : (
               <>
-                <span>{row.title ?? SHORT_LABEL[row.id] ?? row.label}</span>
+                <span>{row.label}</span>
                 <span className="home-count">{row.capped ? `${row.count}+` : row.count}</span>
               </>
             )}
           </AppLink>
         ))}
-        {failed.length > 0 && <button type="button" className="link" onClick={refetchAll}>Повторить</button>}
+        {(unanswered || failed.length > 0) && <button type="button" className="link" onClick={refetchAll}>Повторить</button>}
       </div>
     </div>
   );

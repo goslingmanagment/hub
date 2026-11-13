@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { Button, Disclosure, ErrorState, Fan, Field, Hint, Modal, Notice, Person, Section, Table, Textarea, TextInput, TimeMsk, Tooltip, toast, type Column } from "@agency_hub_core/ui";
+import { Button, Disclosure, Fan, Field, Modal, Notice, Textarea, TextInput, TimeMsk, Tooltip, platformWord as pagePlatformWord, toast } from "@agency_hub_core/ui";
 import { formatTimeOfDay } from "@agency_hub_core/ui/format";
 import {
   EMPTY_RESOLVE_DRAFT,
@@ -10,7 +10,6 @@ import {
   heldSince,
   messageIdLabel,
   notSentWarning,
-  outcomeLabel,
   partLabel,
   platformWord,
   purposeLabel,
@@ -21,9 +20,9 @@ import {
   type ResolveDraft,
   type ResolveFailure,
 } from "@agency_hub_core/ui/heldSends";
-import { consoleFanHref, PersonLink } from "@/shared/links";
-import { FanCell, collidingIn, goColumn, pageWords } from "./FanCell";
-import { RESOLVED_PAGE_SIZE, useFanNames, useResolveHeldSend, useResolvedSends, type FanRefOnPage, type HeldSend, type KnownFan } from "./data";
+import { consoleFanHref } from "@/shared/links";
+import { useResolveHeldSend, type HeldSend, type KnownFan } from "./data";
+import "./decisions.css";
 
 /**
  * Зависшие отправки: a send from the extension's preview whose outcome Hub
@@ -33,8 +32,10 @@ import { RESOLVED_PAGE_SIZE, useFanNames, useResolveHeldSend, useResolvedSends, 
  * with words for the page's own platform (most held sends are Fansly's).
  */
 
-function What({ item }: { item: HeldSend }) {
-  return <span>{purposeLabel(item.purpose)}<span className="decisions-sub decisions-nowrap">{partLabel(item)}</span></span>;
+/** «nova-1 · Fansly»: the send's page, in the window's summary. */
+function pageWords(pageLabel: string, platform: string | null | undefined): string {
+  const word = pagePlatformWord(platform);
+  return word ? `${pageLabel} · ${word}` : pageLabel;
 }
 
 /**
@@ -51,120 +52,6 @@ function greeted(item: HeldSend): { text: string; hint: string | null } | null {
 }
 
 const GREETED_HEADER = "Уже поприветствован?";
-const GREETED_HINT = "Записано ли в Hub, что нового подписчика уже поприветствовали. «Да, вручную» — эту часть приветствия отправили руками.";
-
-/** The value with its note on hover — no dotted line: the line belongs to the column's term (D14). */
-function Greeted({ item }: { item: HeldSend }) {
-  const words = greeted(item);
-  if (words === null) return <Tooltip content="Это не приветствие: про приветствие фана отправка ничего не говорит"><span className="text-ink-3">—</span></Tooltip>;
-  return words.hint === null ? <span>{words.text}</span> : <Tooltip content={words.hint}><span>{words.text}</span></Tooltip>;
-}
-
-export function HeldSection({ items, total, serverNow, platformOf, fanOf, onOpen, selected }: {
-  selected: string | null;
-  items: readonly HeldSend[];
-  total: number;
-  serverNow: string;
-  platformOf: (pageLabel: string) => string | undefined;
-  fanOf: (fan: FanRefOnPage) => KnownFan | undefined;
-  onOpen: (attemptId: string) => void;
-}) {
-  const now = Date.parse(serverNow);
-  const collides = collidingIn(items, fanOf);
-  const columns: Column<HeldSend>[] = [
-    { key: "fan", header: "Фан", width: 210, cell: (row) => <FanCell fan={fanOf(row)} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={platformOf(row.pageLabel)} showLogin={collides(row)} /> },
-    { key: "what", header: "Что отправляли", headerWrap: false, cell: (row) => <What item={row} /> },
-    { key: "who", header: "Кто отправлял", headerWrap: false, width: 180, cell: (row) => <PersonLink userId={row.userId} name={row.username} backLabel="Ждут вас" /> },
-    {
-      key: "when",
-      header: "Когда",
-      width: 200,
-      nowrap: true,
-      sortValue: (row) => row.createdAt,
-      cell: (row) => <span><TimeMsk at={row.createdAt} /><span className="decisions-sub">без отчёта {formatSpan(now - heldSince(row))}</span></span>,
-    },
-    { key: "greeting", header: GREETED_HEADER, hint: GREETED_HINT, headerWrap: false, width: 200, cell: (row) => <Greeted item={row} /> },
-    goColumn<HeldSend>(),
-  ];
-  return (
-    <Section
-      id="held"
-      className="decisions-section"
-      title={<>Зависшие отправки <span className="decisions-count">{total}</span></>}
-      description={<>Расширение не сообщило, ушло ли сообщение. До разбора Hub <Hint content="Из превью этому фану не отправят, нового подписчика не поприветствуют, пока кто-то не посмотрит чат и не запишет, что увидел.">держит фана</Hint>.</>}
-    >
-      <Table label="Зависшие отправки" columns={columns} rows={items} rowKey={(row) => row.attemptId} onRowClick={(row) => onOpen(row.attemptId)} selectedKey={selected} />
-      {total > items.length && <p className="decisions-note">Показаны {items.length} из {total}: сверху те, что ждут дольше всех.</p>}
-    </Section>
-  );
-}
-
-/** The journal of resolves, folded: who, when, what they saw, why. Every resolve is also in Hub's audit. */
-export function ResolvedJournal({ page, platformOf }: {
-  page: string | null;
-  platformOf: (pageLabel: string) => string | undefined;
-}) {
-  const [offset, setOffset] = useState(0);
-  const [open, setOpen] = useState(false);
-  const resolved = useResolvedSends({ offset, ...(page ? { pageLabel: page } : {}) });
-  const data = resolved.data;
-  const rows = (data?.items ?? []).filter((item) => item.resolution !== null);
-  // The journal's own fans, read once it is opened: folded, it costs no reads (and never shows «фан ·2754» where a name is known).
-  const fanOf = useFanNames(open ? rows : []);
-  const collides = collidingIn(rows, fanOf);
-  if (!data) {
-    return resolved.isError
-      ? <ErrorState compact onRetry={() => void resolved.refetch()} retrying={resolved.isFetching} title="Журнал разборов не пришёл" />
-      : null;
-  }
-  if (data.total === 0) return null;
-  const columns: Column<HeldSend>[] = [
-    { key: "fan", header: "Фан", width: 240, cell: (row) => <FanCell fan={fanOf(row)} fanRef={row.fanRef} pageLabel={row.pageLabel} platform={platformOf(row.pageLabel)} showLogin={collides(row)} /> },
-    { key: "what", header: "Что отправляли", headerWrap: false, width: 220, cell: (row) => <span>{purposeLabel(row.purpose)}<span className="decisions-sub">{row.username}, <TimeMsk at={row.createdAt} /></span></span> },
-    {
-      key: "outcome",
-      header: "Итог",
-      width: 200,
-      cell: (row) => {
-        if (row.resolution === null) return "—";
-        const label = outcomeLabel(row.resolution.outcome);
-        // The message's number is for the audit, not for reading (Р8): on hover.
-        return row.resolution.platformMessageId === null ? label : <Tooltip content={`ID сообщения ${row.resolution.platformMessageId}`}><span>{label}</span></Tooltip>;
-      },
-    },
-    {
-      key: "by",
-      header: "Кто разобрал",
-      headerWrap: false,
-      width: 190,
-      nowrap: true,
-      cell: (row) => row.resolution === null ? "—" : <Person name={row.resolution.username} hint={<TimeMsk at={row.resolution.at} />} />,
-    },
-    { key: "why", header: "Почему так решили", cell: (row) => <span className="decisions-text">{row.resolution?.note ?? "—"}</span> },
-  ];
-  const pages = Math.ceil(data.total / RESOLVED_PAGE_SIZE);
-  const at = Math.floor(offset / RESOLVED_PAGE_SIZE) + 1;
-  return (
-    <Disclosure size="md" className="decisions-fold" summary="Разобранные отправки" hint={String(data.total)} open={open} onOpenChange={setOpen}>
-      <p className="decisions-note">Сверху последние. Каждый разбор записан и в журнале аудита Hub.</p>
-      <Table
-        label="Разобранные отправки"
-        columns={columns}
-        rows={rows}
-        rowKey={(row) => row.attemptId}
-        refreshing={resolved.isPlaceholderData}
-        empty={<p className="decisions-note">На этой странице списка записей нет.</p>}
-      />
-      {pages > 1 && (
-        <div className="decisions-pager">
-          <Button size="sm" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - RESOLVED_PAGE_SIZE))}>Назад</Button>
-          <span>{at} из {pages}</span>
-          <Button size="sm" disabled={at >= pages} onClick={() => setOffset(offset + RESOLVED_PAGE_SIZE)}>Дальше</Button>
-        </div>
-      )}
-    </Disclosure>
-  );
-}
 
 /**
  * The resolve of one held send. Two answers and neither is preselected:

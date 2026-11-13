@@ -55,7 +55,6 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { awaitingGivingOf, customsLeadOwner } from "./custom-orders/readers.ts";
-import { loadEffectiveConfigField } from "./effective-config.ts";
 import { AppError, ConflictError, NotFoundError } from "./errors.ts";
 
 /**
@@ -168,7 +167,7 @@ export function buildWaitingGroups(input: {
 
 // ── The doors ───────────────────────────────────────────────────────────────
 
-type MattersApp = Pick<AppContext, "db" | "config">;
+type MattersApp = Pick<AppContext, "db">;
 
 /**
  * Who reads: the session's person by their role — except a narrow web session
@@ -236,11 +235,10 @@ async function pageIdOf(app: MattersApp, pageLabel: string | undefined, idOf: Ma
 export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPrincipal, now: Date = new Date()): Promise<MattersWaitingResponse> {
   const viewer = matterViewerOf(principal);
   const heldRoles = await heldRolesOf(app, viewer);
-  const [matters, checks, active] = await Promise.all([
+  const [matters, checks] = await Promise.all([
     // What waits for the viewer themself.
     viewer.role === "chatter" ? Promise.resolve([]) : listVisibleMatters(app.db, { viewer, state: "open", heldRoles, limit: 5000 }),
     listMatterChecks(app.db),
-    loadEffectiveConfigField(app.db, app.config, "mattersReadEnabled"),
   ]);
   const kindState = kindStates(checks, now);
   const orders = heldRoles.includes("team_lead") ? await customOrdersCount(app, viewer) : undefined;
@@ -255,7 +253,6 @@ export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPr
     ...(orders === undefined ? {} : { customOrders: orders }),
   });
   return {
-    active: active === true,
     groups,
     total: groups.reduce((sum, group) => sum + group.count, 0),
     failed: groups.filter((group) => !group.checked).map((group) => group.id),

@@ -3390,22 +3390,6 @@ export const clientHandoffResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
-export const teamCustomsResponseSchema = z.object({
-  /** Open customs (ordered or paid) of the pages the viewer reaches, the oldest payment first. */
-  customs: z.array(z.object({
-    id: intId,
-    pageLabel: z.string(),
-    fanRef: clientFanRefSchema,
-    description: z.string(),
-    priceMills: mills.nullable(),
-    state: clientOpenToken,
-    paidAt: isoTimestamp.nullable(),
-    createdBy: z.string(),
-    createdAt: isoTimestamp,
-  })),
-  serverNow: isoTimestamp,
-});
-
 /** Chat Memory week 5: the longest window of the chatter numbers. */
 export const CHATTER_NUMBERS_MAX_DAYS = 31;
 
@@ -4573,18 +4557,6 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
-  teamCustoms: {
-    auth: { kind: "session" },
-    tags: ["client"],
-    summary: "Open customs of the pages the viewer reaches",
-    description: "A cabinet route for the owner and team leads; read-only. Customs ordered or paid and not delivered, "
-      + "the oldest payment first, up to 200.",
-    response: {
-      200: teamCustomsResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
   teamChatterNumbers: {
     auth: { kind: "session" },
     tags: ["client"],
@@ -4805,7 +4777,6 @@ export type TeamSalesRepliesResponse = z.infer<typeof teamSalesRepliesResponseSc
 export type ClientFanCustom = z.infer<typeof clientFanCustomSchema>;
 export type ClientFanCustomCreateBody = z.infer<typeof clientFanCustomCreateBodySchema>;
 export type ClientFanCustomChangeBody = z.infer<typeof clientFanCustomChangeBodySchema>;
-export type TeamCustomsResponse = z.infer<typeof teamCustomsResponseSchema>;
 export type ClientHandoffResponse = z.infer<typeof clientHandoffResponseSchema>;
 export type ClientWinBackResponse = z.infer<typeof clientWinBackResponseSchema>;
 export type ClientWinBackAttemptBody = z.infer<typeof clientWinBackAttemptBodySchema>;

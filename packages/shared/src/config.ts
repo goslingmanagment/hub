@@ -244,8 +244,6 @@ const envSchema = z.object({
   CHATSPACE_SERVER_USERNAME: z.string().trim().min(1).default("chatspace-server"),
   FANSLY_BLOCKLIST_INVITE: z.string().trim().min(1).default("UBpb0x7HoY8xN2Fi"),
   OF_HISTORY_AUTO_APPROVE_ENABLED: booleanSchema.default(true),
-  // Дела (package D): the screens read «Ждут вас» and «Решения» from matters instead of their own sources.
-  MATTERS_READ_ENABLED: booleanSchema.default(false),
   // «Состояние» (package P): the Moscow hours the Mac's reporter is watched in; its silence outside them is no matter.
   SYSTEM_MAC_HOURS_FROM: z.coerce.number().int().min(0).max(23).default(10),
   SYSTEM_MAC_HOURS_TO: z.coerce.number().int().min(0).max(23).default(3),
@@ -606,8 +604,6 @@ export interface AppConfig {
   fanslyBlocklistInvite?: string;
   /** OnlyFans history requests approve themselves when the chat has nothing unread. */
   ofHistoryAutoApproveEnabled?: boolean;
-  /** Дела: «Ждут вас» and «Решения» read matters (`mattersWaiting`) instead of their own sources; off — the old reads. */
-  mattersReadEnabled?: boolean;
   /** «Состояние»: the Mac's reporter is watched from this Moscow hour… */
   systemMacHoursFrom?: number;
   /** …to this one (before it; less than `from` — past midnight). */
@@ -979,7 +975,6 @@ export function loadConfig(
     chatspaceServerUsername: parsed.CHATSPACE_SERVER_USERNAME,
     fanslyBlocklistInvite: parsed.FANSLY_BLOCKLIST_INVITE,
     ofHistoryAutoApproveEnabled: parsed.OF_HISTORY_AUTO_APPROVE_ENABLED,
-    mattersReadEnabled: parsed.MATTERS_READ_ENABLED,
     systemMacHoursFrom: parsed.SYSTEM_MAC_HOURS_FROM,
     systemMacHoursTo: parsed.SYSTEM_MAC_HOURS_TO,
     fanFactsEnabled: parsed.FAN_FACTS_ENABLED,

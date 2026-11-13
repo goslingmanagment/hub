@@ -91,10 +91,9 @@ export function carriedHref(item: Pick<MenuItem, "to" | "app">, filters: Carried
 /**
  * «Ждут вас»: one read in both apps, the same answer, so the number does not
  * change when the owner crosses from one app to the other. It is the sum of
- * what waits (`total` of `mattersWaiting`: Hub mirrors the old sources into
- * matters every minute, the ledger's every five); the screens keep their own
- * reads until the owner's switch (`active`) says otherwise. The query key is
- * the one the screens of matters read, so they share the answer.
+ * what waits (`total` of `mattersWaiting`: Hub mirrors its sources into
+ * matters every minute, the ledger's every five). The query key is the one
+ * the screens of matters read, so they share the answer.
  */
 export function waitingQuery(kernel: KernelClient) {
   return {

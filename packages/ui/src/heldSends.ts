@@ -9,7 +9,7 @@ import { ruPlural } from "./plural.js";
 
 /**
  * A held send of the chat extension and its manual resolve, as words and a
- * body ready to send (chat-extension H-7e), for Workboard's Решения (the
+ * body ready to send (chat-extension H-7e), for Workboard's «Ждут вас» (the
  * console's page it replaced said the same): nothing preselected, «why» required, a message id only
  * with «sent», the contract's schema has the last word, every refusal in words.
  * The words name the platform of the send's page — 92 % of held sends are
@@ -258,13 +258,4 @@ export function resolveFailure(error: unknown, draft: Pick<ResolveDraft, "outcom
     message: "Hub не подтвердил запись: неизвестно, записан ли разбор. Нажмите ещё раз: одинаковый разбор записывается один раз.",
     gone: false,
   };
-}
-
-const OUTCOME_LABELS: Readonly<Record<string, string>> = {
-  sent: "Сообщение ушло",
-  not_sent: "Сообщение не ушло",
-};
-
-export function outcomeLabel(outcome: string): string {
-  return OUTCOME_LABELS[outcome] ?? outcome;
 }

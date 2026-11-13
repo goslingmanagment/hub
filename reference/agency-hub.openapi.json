@@ -236410,7 +236410,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Database only. What waits for the viewer themself, every role grouped by the one table; the number is the groups' sum. A group whose source did not answer lately has `checked: false` («не удалось проверить») and is in `failed`. `active` is the owner's switch: until it is on, the screens keep their own reads and Hub compares the two counts in the background (matter_checks).",
+        "description": "Database only. What waits for the viewer themself, every role grouped by the one table; the number is the groups' sum. A group whose source did not answer lately has `checked: false` («не удалось проверить») and is in `failed`.",
         "security": [
           {
             "cookieAuth": []
@@ -236424,9 +236424,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "active": {
-                      "type": "boolean"
-                    },
                     "groups": {
                       "type": "array",
                       "items": {
@@ -236522,7 +236519,6 @@
                     }
                   },
                   "required": [
-                    "active",
                     "groups",
                     "total",
                     "failed",
@@ -295867,176 +295863,6 @@
                     "error",
                     "message",
                     "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/team/customs": {
-      "get": {
-        "summary": "Open customs of the pages the viewer reaches",
-        "tags": [
-          "client"
-        ],
-        "description": "A cabinet route for the owner and team leads; read-only. Customs ordered or paid and not delivered, the oldest payment first, up to 200.",
-        "security": [
-          {
-            "cookieAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "customs": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "integer",
-                            "exclusiveMinimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          "pageLabel": {
-                            "type": "string"
-                          },
-                          "fanRef": {
-                            "type": "string",
-                            "pattern": "^[1-9]\\d{0,29}$"
-                          },
-                          "description": {
-                            "type": "string"
-                          },
-                          "priceMills": {
-                            "anyOf": [
-                              {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "state": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 64
-                          },
-                          "paidAt": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "createdBy": {
-                            "type": "string"
-                          },
-                          "createdAt": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "id",
-                          "pageLabel",
-                          "fanRef",
-                          "description",
-                          "priceMills",
-                          "state",
-                          "paidAt",
-                          "createdBy",
-                          "createdAt"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "serverNow": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "customs",
-                    "serverNow"
                   ],
                   "additionalProperties": false
                 }
