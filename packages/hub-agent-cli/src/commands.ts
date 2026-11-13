@@ -27,6 +27,13 @@ import {
   agentCustomOrderCreateBodySchema,
   agentCustomOrderUpdateBodySchema,
   CUSTOM_ORDER_STATES,
+  adminPersonUpdateBodySchema,
+  agentPeopleQuerySchema,
+  agentPersonProposalBodySchema,
+  agentPersonProposalsQuerySchema,
+  PERSON_PROPOSAL_STATES,
+  PERSON_STATES,
+  PERSON_WEEKDAYS,
   agentShiftReportCommentBodySchema,
   agentShiftReportLineBodySchema,
   agentShiftReportOffPlatformBodySchema,
@@ -2661,6 +2668,261 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
   },
 ];
 
+// --- the people registry (read:team, propose:people) ------------------------
+
+const PEOPLE_READ_CAPABILITY_HINT =
+  "This key lacks read:team: the owner grants it to the key (dashboard, Система, Агенты и ключи)";
+const PEOPLE_PROPOSE_CAPABILITY_HINT =
+  "This key lacks propose:people: the owner grants it to the key (dashboard, Система, Агенты и ключи)";
+
+function peopleHint(error: { status: number | null; code: string | null }): string | null {
+  return error.status === 403 && error.code !== "forbidden" ? PEOPLE_READ_CAPABILITY_HINT : null;
+}
+
+/** What a refusal of the proposals' door means, and what to do. */
+function peopleProposalHint(error: { status: number | null; code: string | null }): string | null {
+  const reason = refusalReason(error);
+  if (error.status === 403 && error.code !== "forbidden") return PEOPLE_PROPOSE_CAPABILITY_HINT;
+  if (error.status === 409 && reason === "code_taken") {
+    return "code_taken: the registry has a person with this code. Propose a change to them (--person <code>), or give the new"
+      + " person another code";
+  }
+  if (error.status === 409 && (reason === "login_taken" || reason === "key_taken")) {
+    return `${reason}: the login or agent key this change adds belongs to another person (the message names it)`;
+  }
+  if (error.status === 404) {
+    return "Not found, and the message names what: the person's code, a page's label (an active page of the agency), a login"
+      + " or an agent key. The codes and the working pages are in hub people";
+  }
+  if (error.status === 400) {
+    return "A rule of the registry refuses this change, and the message says which: a person who has a schedule needs"
+      + " --slot-from, a day after their slot's own; a shift lasts 1 to 16 hours; --left-on is for a person who left"
+      + " (--state left); the list of working pages names a page only once";
+  }
+  return null;
+}
+
+/** `--since` as the registry's doors take it: an instant with an explicit offset, checked by the door's own schema. */
+function peopleSince(values: HubOptionValues, schema: { safeParse(value: unknown): { success: boolean } }) {
+  const since = readString(values, "since");
+  if (since !== undefined && !schema.safeParse({ since }).success) {
+    throw new HubUsageError(`--since is an instant with an explicit offset, e.g. 2026-11-12T00:00:00+03:00, got "${since}"`);
+  }
+  return defined({ since });
+}
+
+/** A list flag, repeated or comma-separated, in the order given. */
+function readOrderedList(values: HubOptionValues, name: string): string[] | undefined {
+  return readList(values, name)?.flatMap((value) => value.split(",")).map((value) => value.trim()).filter((value) => value !== "");
+}
+
+/** `--working-page`: the person's WHOLE list in order (the first is the main one); `--no-working-pages`: none. */
+function peopleWorkingPages(values: HubOptionValues): string[] | undefined {
+  const pages = readOrderedList(values, "working-page");
+  const none = readFlag(values, "no-working-pages");
+  if (pages !== undefined && none) throw new HubUsageError("--working-page gives the whole list, --no-working-pages an empty one: not both");
+  if (none) return [];
+  if (pages !== undefined && pages.length === 0) throw new HubUsageError("--working-page takes page labels; for no working page at all: --no-working-pages");
+  return pages;
+}
+
+/**
+ * `--slot 15:00-23:00` (Moscow; an end before the start crosses midnight) or `--slot none` (the line has no slot from
+ * that day), with `--slot-from`, `--slot-page` (a page's own line; absent — the person's line for every page) and
+ * `--slot-days`: one line of the schedule, as the owner's edit takes it. The times' own format is the contract's.
+ */
+function peopleSchedule(values: HubOptionValues) {
+  const slot = readString(values, "slot");
+  const from = readString(values, "slot-from");
+  const pageLabel = readString(values, "slot-page");
+  const days = readOrderedList(values, "slot-days");
+  if (slot === undefined) {
+    if (from !== undefined || pageLabel !== undefined || days !== undefined) {
+      throw new HubUsageError("--slot-from, --slot-page and --slot-days go with --slot <start>-<end> (or --slot none)");
+    }
+    return undefined;
+  }
+  // No day given: null, which the registry takes only while the line has no slot yet.
+  const line = defined({ pageLabel, from: from ?? null });
+  if (slot.trim() === "none") {
+    if (days !== undefined) throw new HubUsageError("--slot none ends the line's slot: it takes no --slot-days");
+    return { ...line, slot: null };
+  }
+  const edges = /^([^\s-]+)-([^\s-]+)$/.exec(slot.trim());
+  if (edges === null) throw new HubUsageError(`--slot is <start>-<end> by Moscow time, e.g. 15:00-23:00 (an end may be 24:00), or none; got "${slot}"`);
+  const weekdays = days?.map((day) => {
+    if (!(PERSON_WEEKDAYS as readonly string[]).includes(day)) throw new HubUsageError(`--slot-days must be of ${PERSON_WEEKDAYS.join(", ")}, got "${day}"`);
+    return day;
+  });
+  return { ...line, slot: defined({ start: edges[1]!, end: edges[2]!, weekdays }) };
+}
+
+/** The change the flags make: the fields of the owner's edit they name, and no other. */
+function peopleChangeFlags(values: HubOptionValues, file: Record<string, unknown> | undefined): Record<string, unknown> {
+  const handle = readString(values, "telegram-handle");
+  const telegram = file?.telegram;
+  return defined({
+    workingPageLabels: peopleWorkingPages(values),
+    schedule: peopleSchedule(values),
+    state: readEnum(values, "state", PERSON_STATES),
+    leftOn: readString(values, "left-on"),
+    // The handle goes beside what the file says of Telegram (the id, the report tag), not instead of it.
+    telegram: handle === undefined ? undefined : { ...(typeof telegram === "object" && telegram !== null && !Array.isArray(telegram) ? telegram : {}), handle },
+  });
+}
+
+/** The paths of `sent` the contract's own parse left out: fields it does not have (it drops them without a word). */
+function droppedFields(sent: unknown, kept: unknown, path = ""): string[] {
+  if (Array.isArray(sent)) {
+    return Array.isArray(kept) ? sent.flatMap((item, index) => droppedFields(item, kept[index], `${path}[${index}]`)) : [];
+  }
+  if (typeof sent !== "object" || sent === null || typeof kept !== "object" || kept === null) return [];
+  return Object.entries(sent).flatMap(([key, value]) => {
+    const at = path === "" ? key : `${path}.${key}`;
+    return key in kept ? droppedFields(value, (kept as Record<string, unknown>)[key], at) : [at];
+  });
+}
+
+/** A proposal that names a field the contract does not have. */
+function noSuchProposalField(fields: readonly string[]): HubUsageError {
+  return new HubUsageError(
+    `a proposal has no field ${fields.join(", ")}: --file is the change itself (with --person) or the new person, in the`
+    + " fields of the owner's edit; never pay terms, never an invitation",
+    { fields },
+  );
+}
+
+/**
+ * `people propose`'s body. With --person: an update, the change being --file's fields (the owner's edit) with the
+ * flags laid over them, never empty. Without: a new person, whole from --file. A field the contract does not have
+ * (pay terms, an invitation, a misspelt name) is refused here: the hub would drop it and record the rest.
+ */
+function peopleProposalBody(values: HubOptionValues, deps: HubRunDeps) {
+  const personCode = readString(values, "person");
+  const file = readJsonObject(values, deps, "file");
+  const flags = peopleChangeFlags(values, file);
+  let proposed: Record<string, unknown>;
+  if (personCode === undefined) {
+    if (Object.keys(flags).length > 0) {
+      throw new HubUsageError("the flags change a person the registry has: name them with --person <code>. A new person comes whole from --file <json>");
+    }
+    if (file === undefined) {
+      throw new HubUsageError("name the person the change is about (--person <code>), or propose a new person (--file <json>: code, displayName, role…)");
+    }
+    proposed = { kind: "create", person: file };
+  } else {
+    const change = { ...file, ...flags };
+    if (Object.keys(change).length === 0) {
+      throw new HubUsageError(
+        "nothing to change: say what changes (--working-page, --slot, --state, --left-on, --telegram-handle), or give the"
+        + " other fields of the edit in --file <json>",
+      );
+    }
+    // Before the contract's own check: a change of unknown fields alone would read there as «nothing to change».
+    const unknown = Object.keys(change).filter((field) => !(field in adminPersonUpdateBodySchema.shape));
+    if (unknown.length > 0) throw noSuchProposalField(unknown.map((field) => `change.${field}`));
+    proposed = { kind: "update", personCode, change };
+  }
+  const sent = {
+    ...proposed,
+    ...defined({ reason: requireString(values, "reason"), requestedBy: readString(values, "requested-by"), sourceRef: readString(values, "message") }),
+  };
+  const body = checkedDraft(agentPersonProposalBodySchema, sent);
+  const dropped = droppedFields(sent, body);
+  if (dropped.length > 0) throw noSuchProposalField(dropped);
+  return body;
+}
+
+function peopleSinceOption(what: string): HubOption {
+  return { kind: "string", describe: `Only ${what} at or after this instant, RFC 3339 with an explicit offset; left out — all of them` };
+}
+
+const PEOPLE_COMMANDS: HubCommand[] = [
+  {
+    name: "people",
+    operation: "agentPeople",
+    summary:
+      "The people registry's feed, who is who: each person's code, kind (human | agent | service), role, state (invited |"
+      + " set_up | working | left, with `leftOn`), Telegram (id, handle, the report's tag), Hub logins and agent keys, working"
+      + " pages in order (the first is the main one; a page outside this key's grant is left out, `keyGrantExcludedPages`"
+      + " counts those pages), the schedule (`schedule`: the slot for every page that holds today, else the next one;"
+      + " `scheduleSlots`: every line, a page's own too) and rights. Pay terms (`payTerms`) only for a key with read:pay_terms"
+      + " (`payTermsIncluded`). --since — only the people changed at or after it: keep the greatest `updatedAt` and ask"
+      + " again from it minus an overlap. It only reads: a change is hub people propose, and waits for the owner. Exit 0"
+      + " — answered; 4 — refused or no answer. Needs read:team.",
+    example: "hub people --since 2026-11-12T00:00:00+03:00",
+    options: { since: peopleSinceOption("the people changed") },
+    hint: peopleHint,
+    run: (client, values) => client.agentPeople({ query: peopleSince(values, agentPeopleQuerySchema) }),
+  },
+  {
+    name: "people propose",
+    operation: "agentPersonProposalCreate",
+    summary:
+      "Propose a change about a person, or a new person. The proposal waits for the owner (Workboard, «Люди») and nothing"
+      + " about the person changes until the owner accepts it: this key never changes a person itself. The registry is the"
+      + " one home of who a person is, the pages they work and their schedule: a change goes here, never into the person's"
+      + " card in the knowledge base. A change: --person <code> and what changes —"
+      + " --working-page (the WHOLE list in order, the first is the main one: read the current one in hub people;"
+      + " --no-working-pages for none), --slot <start>-<end> by Moscow time with --slot-from <day> (--slot-page for one"
+      + " page's own line, --slot-days; --slot none ends the line's slot), --state, --left-on <day> (a person who left),"
+      + " --telegram-handle; any other field of the owner's edit from --file <json> (displayName, role, telegram.userId,"
+      + " telegram.reportTag, rights, onboarding, note, logins, agentKeys), the flags laid over it. A new person: no"
+      + " --person, the person whole in --file <json> (code, displayName, role and what is known). Always --reason: why, in"
+      + " your words, a person's own words as a quote; --requested-by and --message when someone asked. Never pay terms,"
+      + " never an invitation: a file that carries them is refused. Hub checks the change against the registry now (an"
+      + " unknown person, page, login or key is refused here). Exit 0 — recorded, `proposal.state` open; 4 — refused or no"
+      + " answer. Needs propose:people.",
+    example:
+      'hub people propose --person anna --working-page mia-1,mia-2 --slot 15:00-23:00 --slot-from 2026-11-17 --reason "С 17.11'
+      + ' берёт mia-2, смена 15–23" --requested-by owner --message https://t.me/c/2600000001/3001',
+    options: {
+      person: { kind: "string", describe: "The person's code, as hub people prints it: a change about them. Left out — a new person from --file" },
+      "working-page": {
+        kind: "list",
+        describe: "A page the person works, by its label (repeatable or comma-separated): the WHOLE new list in order, the first is the main one. Not access: who may open a page is the logins' own",
+      },
+      "no-working-pages": { kind: "boolean", describe: "The person works no page (an empty list)" },
+      slot: { kind: "string", describe: "The new shift slot by Moscow time, <start>-<end>: 15:00-23:00, 23:00-07:00 (past midnight), 16:00-24:00; or none — no slot on this line from --slot-from" },
+      "slot-from": { kind: "string", describe: "The first day of the new arrangement, ГГГГ-ММ-ДД (Moscow): the slot holding then ends the day before. Needed once the person has a slot" },
+      "slot-page": { kind: "string", describe: "One page's own line, by its label; left out — the person's line for every page" },
+      "slot-days": { kind: "list", describe: `The days the slot holds (repeatable or comma-separated): ${PERSON_WEEKDAYS.join(", ")}; a night slot is dated by its evening` },
+      state: { kind: "string", describe: `The person's state: ${PERSON_STATES.join(" | ")}` },
+      "left-on": { kind: "string", describe: "The day the person left, ГГГГ-ММ-ДД: with --state left, or to correct the day of one who left" },
+      "telegram-handle": { kind: "string", describe: "The person's Telegram handle, with or without @" },
+      file: { kind: "string", describe: "A JSON object, from a file or - for stdin. With --person: the change, in the fields of the owner's edit; without: the new person" },
+      reason: { kind: "string", describe: "Why (required), in your words, up to 2000 characters; the person's own words go in as a quote" },
+      "requested-by": { kind: "string", describe: "Who asked: a Hub login or a person's code" },
+      message: { kind: "string", describe: "Where it was said: the message's link (https://t.me/c/<chat>/<msg>) or id" },
+    },
+    hint: peopleProposalHint,
+    run: async (client, values, deps) => {
+      const answer = await client.agentPersonProposalCreate({ body: peopleProposalBody(values, deps) });
+      const { proposal } = answer;
+      return new HubNotedResult(
+        answer,
+        `Proposal ${proposal.id} about ${proposal.personCode} is recorded and waits for the owner (Workboard, «Люди»): `
+        + (proposal.kind === "create" ? "the person is not in the registry until the owner accepts it" : "nothing about the person has changed")
+        + ". What became of it: hub people proposals.",
+      );
+    },
+  },
+  {
+    name: "people proposals",
+    operation: "agentPersonProposals",
+    summary:
+      `This key's own proposals about people and what became of them, the newest first: \`state\` (${PERSON_PROPOSAL_STATES.join(" | ")};`
+      + " open waits for the owner, accepted — the change is in the registry), `decidedAt` and the owner's `decisionNote`,"
+      + " the `change` as it was proposed, `reason`, `requestedBy`, `sourceRef`. Another key's proposals are not in it."
+      + " --since — only the ones created or decided at or after it. Exit 0 — answered; 4 — refused or no answer. Needs"
+      + " propose:people.",
+    example: "hub people proposals --since 2026-11-10T00:00:00+03:00",
+    options: { since: peopleSinceOption("the proposals created or decided") },
+    hint: (error) => (error.status === 403 && error.code !== "forbidden" ? PEOPLE_PROPOSE_CAPABILITY_HINT : null),
+    run: (client, values) => client.agentPersonProposals({ query: peopleSince(values, agentPersonProposalsQuerySchema) }),
+  },
+];
+
 // --- agent reports (write:reports) -----------------------------------------
 
 const REPORT_CAPABILITY_HINT =
@@ -4047,6 +4309,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
   ...MATTER_COMMANDS,
   ...CUSTOM_COMMANDS,
   ...SHIFT_REPORT_COMMANDS,
+  ...PEOPLE_COMMANDS,
 ];
 
 /** A command by its words: one (`threads`) or two (`report put`). */
