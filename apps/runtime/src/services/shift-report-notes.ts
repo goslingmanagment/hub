@@ -7,7 +7,7 @@ import {
   type TeamLedgerReportDay,
 } from "@agency_hub_core/contracts";
 import { listMatterPageLabels, listSalePlatformRefs, type Database, type ShiftSale } from "@agency_hub_core/db";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { formatUsdFromMills, millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireSessionUser, type AuthPrincipal } from "./auth.ts";
@@ -192,7 +192,7 @@ export function personDayNotes(input: {
         const base = sumKnown(withLines.map((day) => day.payBaseMills));
         // A post is written in whole cents: the breakdown's sum is read as the post prints it, so a post $44.00 above a
         // breakdown of $421.582 says «+$44.00», not «+$43.99».
-        const breakdown = Math.round(counted.reduce((sum, line) => sum + line.netMills, 0) / 10) * 10;
+        const breakdown = millsToNumber(millsRoundedTo(counted.reduce((sum, line) => sum + line.netMills, 0), "cent"));
         const apart = base === null ? 0 : base - breakdown;
         note.postApartMills = Math.abs(apart) < ROUNDING_APART_MILLS ? 0 : apart;
       } else {
