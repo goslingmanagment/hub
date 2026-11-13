@@ -183,6 +183,13 @@
     color: var(--ui-text-2);
   }
 
+  /* The day's note under the report's sum (shared/ReportNote.tsx): the number first, the note under it, across the cell. */
+  .mys-noted {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
   /* -------------------------------------------------------------- A phone */
 
   @media (max-width: 640px) {
@@ -273,6 +280,30 @@
       padding-left: 24px;
       font-size: var(--ui-fs-14);
       line-height: var(--ui-lh-14);
+    }
+
+    /* The day's note goes under everything else of the row, across it: the sum keeps its place on the first line
+       (with «Мои деньги» on, my-money.css places the sum and the accrual inside it). */
+    .mys-journal .ui-table tbody td.mys-col-total:has(.mys-noted),
+    .mys-journal .mys-noted,
+    .mys-journal .mys-noted__sum:has(.mym-total) {
+      display: contents;
+    }
+
+    .mys-journal .mys-noted__sum:not(:has(.mym-total)) {
+      grid-column: 2;
+      grid-row: 1;
+      justify-self: end;
+    }
+
+    .mys-journal .mys-noted > .wb-report-note {
+      grid-column: 1 / -1;
+      grid-row: 5;
+      justify-content: flex-start;
+      width: auto;
+      min-width: 0;
+      margin-top: 4px;
+      padding-left: 24px;
     }
 
     .mys-journal .ui-table tbody td.mys-col-pages,

@@ -463,6 +463,7 @@ export const kernelOperations = {
   shiftReportClaimable: { method: "GET", path: "/api/v1/shift-reports/:shiftId/claimable" },
   shiftReportCommentSet: { method: "PUT", path: "/api/v1/shift-reports/:shiftId/comment" },
   shiftReportLineSet: { method: "PUT", path: "/api/v1/shift-reports/:shiftId/lines/:transactionId" },
+  shiftReportNotes: { method: "GET", path: "/api/v1/shift-report-notes" },
   shiftReportOffPlatformAdd: { method: "POST", path: "/api/v1/shift-reports/:shiftId/off-platform" },
   shiftReportOffPlatformWithdraw: { method: "DELETE", path: "/api/v1/shift-reports/:shiftId/off-platform/:offPlatformId" },
   shiftReportSubmit: { method: "POST", path: "/api/v1/shift-reports/:shiftId/submit" },

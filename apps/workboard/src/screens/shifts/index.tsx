@@ -7,17 +7,17 @@ import { addDays, daysInRange } from "@agency_hub_core/ui/moscow";
 import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { usePeopleIndex } from "@/shared/people";
 import { SHIFT_SALES_KEY } from "@/shared/reads";
+import { placeNotes } from "@/shared/reportNotes";
 import { liveLogins, personOfLogin, useTeamPeople } from "@/screens/people/registry";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
 import { AuthorlessLine } from "./Authorless.js";
-import { AUTHORSHIP_MAX_DAYS, SHIFTS_MAX_DAYS, buildModel, shiftsWindow, useShiftsPeriod, useShiftsReports, windowColumns } from "./data.js";
+import { AUTHORSHIP_MAX_DAYS, SHIFTS_MAX_DAYS, buildModel, shiftsWindow, useShiftNotes, useShiftsPeriod, windowColumns } from "./data.js";
 import { HowItCounts } from "./HowItCounts.js";
 import { Journal } from "./Journal.js";
 import { NowOnShift } from "./NowOnShift.js";
-import { reportNotes } from "./reports.js";
 import { WeekGrid, sentence } from "./WeekGrid.js";
 import "./shifts.css";
 
@@ -68,13 +68,11 @@ export function ShiftsScreen() {
     chatters: full.chatters.filter((row) => row.userId !== null && own.has(row.userId)),
     journal: full.journal.filter((shift) => own.has(shift.userId)),
   } : full), [full, own]);
-  // The owner's: where the day's report pays by another sum than the rule's shifts of it (reports.ts).
+  // What stands between a day's shifts and the report it is paid by, under the day's last shift (shared/reportNotes.ts):
+  // Hub answers the owner of everyone's days and anyone else of their own, so a team lead asks only on their own shifts.
   const ruleFrom = sales.data?.ruleFrom ?? null;
-  const reports = useShiftsReports(window, isOwner && ruleFrom !== null);
-  const notes = useMemo(
-    () => reportNotes({ shifts: model?.journal ?? [], reports, page, ruleFrom, people }),
-    [model, reports, page, ruleFrom, people],
-  );
+  const dayNotes = useShiftNotes(window, page, ruleFrom !== null && (isOwner || mine));
+  const notes = useMemo(() => placeNotes(model?.journal ?? [], dayNotes), [model, dayNotes]);
   const everyone = new URLSearchParams(location.search);
   everyone.delete("mine");
 
@@ -100,8 +98,6 @@ export function ShiftsScreen() {
     void queryClient.invalidateQueries({ queryKey: ["shifts"] });
     // Every period's shifts with sales, as ["shifts"] covered before they became the entries Люди and Выплаты share.
     void queryClient.invalidateQueries({ queryKey: SHIFT_SALES_KEY });
-    // The reports behind «в отчёте $…», the entry «Выплаты → Отчёты» shares.
-    void queryClient.invalidateQueries({ queryKey: ["payouts", "reports"] });
   };
 
   let body;
@@ -165,6 +161,7 @@ export function ShiftsScreen() {
           page={page}
           reportNotes={notes}
           ruled={ruleFrom !== null}
+          mine={mine}
         />
       </>
     );

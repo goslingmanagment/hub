@@ -295,18 +295,11 @@
     text-underline-offset: 4px;
   }
 
-  /* «в отчёте $…» under a shift's sales: the day's report pays by another sum (as «в таблице» under a debt). */
+  /* The day's note under its last shift's sales (shared/ReportNote.tsx): the number first, the note under it, across the cell. */
   .shifts-journal__money {
-    display: inline-flex;
+    display: flex;
     flex-direction: column;
     align-items: flex-end;
-  }
-
-  .shifts-journal__report {
-    color: var(--ui-warn-text);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    white-space: nowrap;
   }
 
   .shifts-skeleton-cell {

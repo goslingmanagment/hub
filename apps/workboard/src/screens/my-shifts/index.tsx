@@ -28,6 +28,8 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
 import { REPORT_DRAFT_NEXT, reportStatusWord } from "@agency_hub_core/ui/shiftReports";
 import { shiftDurationHint, shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { ReportBody, useReportEdge } from "@/shared/ReportBody";
+import { ReportNoteLine } from "@/shared/ReportNote";
+import { noteParts, placeNotes, type NoteRow, type PlacedNote } from "@/shared/reportNotes";
 import { useRowBackState } from "@/shared/links";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { MyMatters } from "../waiting/MyMatters";
@@ -39,6 +41,7 @@ import {
   joinShifts,
   myShiftsWindow,
   previousReportedMills,
+  useMyShiftNotes,
   useMyShifts,
   usePreviousReports,
   useShiftNow,
@@ -196,6 +199,30 @@ const COLUMNS: Column<MyShiftRow>[] = [
   { key: "state", header: "Отчёт", className: "mys-col-state", grow: true, cell: (row) => <StateCell row={row} /> },
 ];
 
+// ───────────────────────────────────────────────────────────── The day's note
+
+/** A row's shift, for the day's note; a report Hub saw no shift for stands under no day. */
+function noteRows(rows: readonly MyShiftRow[]): NoteRow[] {
+  return rows.flatMap((row) => (row.shift === null ? [] : [{ key: row.key, userId: null, startedAt: row.shift.startedAt, endedAt: row.shift.endedAt, ongoing: row.shift.ongoing }]));
+}
+
+/**
+ * «По отчёту» with the day's note under the report's sum (and under the day's accrual, where «Мои деньги» shows it):
+ * what stands between the day's shifts and the person's reports (shared/reportNotes.ts). The report's own sum is the
+ * row's number already, so only the named things are said. No note — the columns as they came.
+ */
+function withNotes(columns: readonly Column<MyShiftRow>[], notes: ReadonlyMap<string, PlacedNote>): readonly Column<MyShiftRow>[] {
+  if (notes.size === 0) return columns;
+  return columns.map((column): Column<MyShiftRow> => (column.key !== "total" ? column : {
+    ...column,
+    cell: (row, index) => {
+      const placed = notes.get(row.key);
+      if (placed === undefined) return column.cell(row, index);
+      return <span className="mys-noted"><span className="mys-noted__sum">{column.cell(row, index)}</span><ReportNoteLine placed={placed} own sum={false} /></span>;
+    },
+  }));
+}
+
 // ───────────────────────────────────────────────────────────── The facts
 
 /** What of the reports did not come: all of them, or the posts alone (the drafts are shown). */
@@ -320,6 +347,13 @@ export function MyShiftsScreen() {
   const facts = useMemo(() => (rows ? factsOf(rows, reports !== null && postsRead) : undefined), [rows, reports, postsRead]);
   // «Мои деньги» (ecosystem package H1): nothing until the person's switch is on.
   const money = useMyMoneyParts(window, COLUMNS, rows);
+  // The day's note under its last shift: only a day that has something to say here (the report's sum is the row's own).
+  const dayNotes = useMyShiftNotes(window);
+  const notes = useMemo(
+    () => new Map([...placeNotes(noteRows(rows ?? []), dayNotes)].filter(([, placed]) => noteParts(placed, { sum: false }).length > 0)),
+    [rows, dayNotes],
+  );
+  const columns = useMemo(() => withNotes(money.columns, notes), [money.columns, notes]);
   const unavailable: Unavailable = data === undefined ? null : data.reports === null ? "reports" : postsRead ? null : "posts";
 
   // The shift going on is shown once: as the journal's first row when the period holds it, else above the journal
@@ -378,7 +412,7 @@ export function MyShiftsScreen() {
         <Table
           label="Мои смены"
           className="mys-journal"
-          columns={money.columns}
+          columns={columns}
           rows={rows ?? []}
           rowKey={(row) => row.key}
           rowHref={(row) => (row.hub === null ? undefined : `/my/shifts/${row.hub.shiftId}`)}

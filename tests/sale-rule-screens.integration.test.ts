@@ -3,8 +3,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFanslyPage, createModel, setSaleRuleSwitch } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { createUserAccount, type HumanAuthPrincipal } from "../apps/runtime/src/services/auth.ts";
 import { computeChatterStats } from "../apps/runtime/src/services/chatter-stats.ts";
+import { readShiftReportNotes } from "../apps/runtime/src/services/shift-report-notes.ts";
 import { teamShiftSalesOf, teamShiftSalesRead } from "../apps/runtime/src/services/team-shift-sales.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -14,6 +15,8 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // The screens' switch to the one rule on a fixture: off, «Смены» and «Мои смены» answer as before (a junction sale
 // nobody wrote to counts for both, no field of the rule appears); on from the day, the junction sale counts once — the
 // owner's to decide, «вне смен» — and the team's total is every sale once; on from a later day, the day stays as it was.
+// And what stands between a day's shifts by the rule and the report it is paid by (`shiftReportNotes`): a sale no line
+// of the person's reports pays is said, one paid in a later report is not, and only the owner reads everyone's days.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -110,6 +113,84 @@ describe("the screens' switch to the one rule", () => {
     const stats = await computeChatterStats(app.db, { userId: first, username: "screens-first", pages: [{ pageId, label: "screens-a", platform: "fansly" }], days: 7, until: nextDay, now });
     expect(stats.totals).toMatchObject({ salesNetMills: 10_000, overlapNetMills: 0 });
     expect(stats.ruleFrom).toBe(day);
+    await setSaleRuleSwitch(app.db, { screensFrom: null, setBy: "test", at: now });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("says what stands between a day's shifts and its report: a sale in no report, never one paid later; a chatter their own", async (context) => {
+    if (!testDb) return context.skip();
+    Object.assign(app.config, { ledgerUrl: "https://ledger.test", ledgerPayoutsKey: "test-payouts-key" });
+    const saleId = Number((await q("select id from transactions where transaction_id = 'screens-1'")).rows[0].id);
+    const session = (id: number, username: string, role: string, extra: object = {}) => ({
+      authMethod: "session", authSessionId: 1, user: { id, username, role }, assignedPageIds: [pageId], ...extra,
+    }) as unknown as HumanAuthPrincipal;
+    // The owner reads everyone's days: whose login it is does not matter.
+    const owner = session(first + second + 1_000, "screens-owner", "owner");
+    // A line of a saved breakdown, as the ledger's GET /v1/reports serves it.
+    const line = (ref: string | null, netMills: number, what = "") => ({
+      n: null, transaction_ref: ref, page: "screens-a", fan_ref: "", fan_name: "", kind: "tip", occurred_at: null, net_micros: netMills * 1000,
+      counted: true, added: what !== "", what, flags: null, notes: null, ppv_author: "", ppv_sent_at: "",
+    });
+    const report = (id: number, reportDate: string, lines: Array<ReturnType<typeof line>>, postedMills?: number) => {
+      const total = lines.reduce((sum, one) => sum + one.net_micros, 0);
+      return {
+        id, person: "first", hub_username: "screens-first", hub_user_id: first, chatter: "first", report_date: reportDate,
+        window_from: `${reportDate}T10:00:00+03:00`, window_to: `${reportDate}T14:00:00+03:00`, cut_at: `${reportDate}T13:50:00+03:00`,
+        version: 1, versions: 1, status: "posted", source: "agent", total_micros: total, created_at: `${reportDate}T14:05:00+03:00`, posted_at: null,
+        pages: [{ page: "screens-a", model: "", amount_micros: total, posted_micros: postedMills === undefined ? total : postedMills * 1000, post_state: "posted_equal" }],
+        lines,
+      };
+    };
+    const asked: string[] = [];
+    const ledger = (reports: unknown[]): typeof fetch => (async (input: URL) => {
+      const url = new URL(String(input));
+      asked.push(`${url.pathname} ${url.searchParams.get("from")}…${url.searchParams.get("to")}`);
+      const window = { from: url.searchParams.get("from"), to: url.searchParams.get("to") };
+      // The drafts alone: the pay base comes from their pages; the posts are not open to Hub's key here.
+      const body = url.pathname === "/v1/reports" ? { ...window, reports } : url.pathname === "/v1/report-days" ? { ...window, days: null } : null;
+      return new Response(JSON.stringify(body ?? { error: "no" }), { status: body === null ? 404 : 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const notes = (principal: HumanAuthPrincipal, reports: unknown[]) =>
+      readShiftReportNotes(app, principal, { query: { days: 7, until: nextDay }, pageScope: undefined }, { fetchImpl: ledger(reports), now });
+
+    // Off: no day has a note, and the ledger is not asked.
+    expect(await notes(owner, [])).toMatchObject({ ruleFrom: null, notes: [] });
+    expect(asked).toEqual([]);
+
+    await setSaleRuleSwitch(app.db, { screensFrom: day, setBy: "test", at: now });
+    // The day's report was cut before the sale: it is the first chatter's by the rule and in no report of theirs.
+    const cut = await notes(owner, [report(1, day, [])]);
+    expect(cut.ruleFrom).toBe(day);
+    expect(cut.notes).toEqual([{
+      userIds: [first], reportDate: day,
+      unreported: { count: 1, mills: 10_000, sales: [{ saleId, occurredAt: msk("11:00").toISOString(), pageLabel: "screens-a", kind: "tip", netMills: 10_000 }] },
+      byWordsMills: 0, postApartMills: 0, sumOnlyMills: null,
+    }]);
+    // The reports are read from 2 days before the shown days to 8 after them, in one window.
+    const shownFrom = new Date(Date.parse(`${nextDay}T00:00:00Z`) - 6 * DAY).toISOString().slice(0, 10);
+    const around = (from: string, days: number) => new Date(Date.parse(`${from}T00:00:00Z`) + days * DAY).toISOString().slice(0, 10);
+    expect(asked.filter((one) => one.startsWith("/v1/reports "))).toEqual([`/v1/reports ${around(shownFrom, -2)}…${around(nextDay, 8)}`]);
+
+    // Paid in the next day's report as «долёт» — by the platform's reference, by Hub's id, or in words: nothing to say.
+    expect((await notes(owner, [report(1, day, []), report(2, nextDay, [line("screens-1", 10_000, "долёт")])])).notes).toEqual([]);
+    expect((await notes(owner, [report(1, day, []), report(2, nextDay, [line(String(saleId), 10_000, "долёт")])])).notes).toEqual([]);
+    expect((await notes(owner, [report(1, day, []), report(2, nextDay, [line(null, 10_000, "долёт: тип 11:00")])])).notes).toEqual([]);
+    // In the report itself, with an amount by word beside it and a post changed by hand.
+    const full = await notes(owner, [report(1, day, [line("screens-1", 10_000), line(null, 12_000, "перевод мимо площадки")], 37_000)]);
+    expect(full.notes).toEqual([{
+      userIds: [first], reportDate: day, unreported: { count: 0, mills: 0, sales: [] }, byWordsMills: 12_000, postApartMills: 15_000, sumOnlyMills: null,
+    }]);
+
+    // A chatter reads their own days alone, whoever the reports are of; so does a team lead (people's reports from the
+    // ledger are the owner's); a narrow session reads as a chatter whatever the role.
+    expect((await notes(session(first, "screens-first", "chatter"), [report(1, day, [])])).notes).toEqual(cut.notes);
+    expect((await notes(session(second, "screens-second", "chatter"), [report(1, day, [])])).notes).toEqual([]);
+    expect((await notes(session(second, "screens-second", "team_lead"), [report(1, day, [])])).notes).toEqual([]);
+    expect((await notes(session(first, "screens-first", "team_lead"), [report(1, day, [])])).notes).toEqual(cut.notes);
+    expect((await notes(session(second, "screens-second", "owner", { narrowDeviceTokenId: 7 }), [report(1, day, [])])).notes).toEqual([]);
+    // The ledger away: nothing is known of the days, said as such.
+    await expect(readShiftReportNotes(app, owner, { query: { days: 7, until: nextDay }, pageScope: undefined }, {
+      fetchImpl: (async () => new Response("{}", { status: 502 })) as unknown as typeof fetch, now,
+    })).rejects.toThrow(/ledger/i);
     await setSaleRuleSwitch(app.db, { screensFrom: null, setBy: "test", at: now });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

@@ -64,6 +64,9 @@ export const ledgerReportSchema = z.object({
   })),
   lines: list(z.object({
     n: z.number().int().nullish().transform((value) => value ?? null),
+    // The sale the line names: the platform's reference of its transaction, or Hub's own id of it (an added amount may
+    // carry either, an older one none). The server's alone (report-line-pairs.ts): it is in no answer to a browser.
+    transaction_ref: z.string().nullish().transform((value) => value ?? null),
     page: text,
     fan_ref: text,
     fan_name: text,

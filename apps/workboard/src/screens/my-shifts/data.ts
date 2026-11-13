@@ -16,7 +16,9 @@ export * from "./model.js";
  *   - `accountChatterStats` { days, until? } — the shifts of the period's window;
  *   - `accountReports` { from, to } — the ledger's reports of those days;
  *   - `shiftReportsList` { from, to } — the shift rows with the state of their report in Hub (ecosystem package F):
- *     empty while the person's switch «сдаёт смену в системе» is off, and then nothing on the screen changes.
+ *     empty while the person's switch «сдаёт смену в системе» is off, and then nothing on the screen changes;
+ *   - `shiftReportNotes` { days, until? } — what stands between the person's own shifts of a day and their reports
+ *     (shared/reportNotes.ts), read apart: the journal never waits for it.
  * Query keys start with "my-shifts".
  */
 
@@ -57,6 +59,22 @@ export function useMyShifts(window: MyShiftsWindow, current: boolean) {
     refetchInterval: (state) => (current && state.state.data?.stats.shifts.some((shift) => shift.ongoing) ? 60_000 : false),
   });
   return query;
+}
+
+/**
+ * What stands between the period's own shifts and their reports (`shiftReportNotes`: the caller's own days, whatever
+ * the query), the same days as the shifts' read. For the note under a day's last shift alone: the ledger away (or any
+ * other failure) is no line, nothing else. null — not known.
+ */
+export function useMyShiftNotes(window: MyShiftsWindow) {
+  const params = { days: window.days, ...(window.until ? { until: window.until } : {}) };
+  const query = useQuery({
+    queryKey: ["my-shifts", "report-notes", params.days, params.until ?? null],
+    queryFn: () => kernel.shiftReportNotes({ query: params }),
+    staleTime: 60_000,
+    retry: false,
+  });
+  return query.data?.notes ?? null;
 }
 
 /** The reports of the window before, for the change; any failure is no change, never a zero. */

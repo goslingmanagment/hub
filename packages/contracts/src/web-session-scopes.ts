@@ -46,6 +46,8 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "saleChain",
   // «Мои деньги» on «Мои смены» (ecosystem package H1): the person's own sums, behind their switch.
   "accountPay",
+  // «Мои смены»: what stands between the person's own shifts and their reports; a narrow session reads as a chatter.
+  "shiftReportNotes",
   // «Кастомы» (package I): the board, an order and the steps a chatter takes on their pages' orders (the lead all of
   // them); «Ждут вас» of the extension leads to an order page.
   "customOrdersBoard",
