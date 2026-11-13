@@ -33,7 +33,7 @@ export function shiftSalesQuery(params: ShiftSalesParams) {
   });
 }
 
-/** `adminListUsers` (the owner's only): Люди, Решения, Доступ and a person's «Доступ». */
+/** `adminListUsers` (the owner's only): Люди, Доступ and a person's «Доступ». */
 export const usersQuery = queryOptions({
   queryKey: ["team", "users"] as const,
   queryFn: () => kernel.adminListUsers(),
