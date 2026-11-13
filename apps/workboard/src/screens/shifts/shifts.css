@@ -1,9 +1,5 @@
 /* Смены (spec §4.1): only what packages/ui does not have. Values are tokens. */
 @layer components {
-  /* ------------------------------------------------------ «Ждут решения» */
-
-  /* The two status lines on top: what waits for a decision, who is on a shift. */
-  /* Two status lines (36 px each) read as one block: no air between them beyond their own. */
   /* `?mine=1`: whose shifts these are, and the way back to everyone's. */
   .shifts-mine {
     font-size: 14px;
@@ -11,94 +7,11 @@
     color: var(--ui-text-2);
   }
 
+  /* The status line on top: who is on a shift. */
   .shifts-top {
     display: flex;
     flex-direction: column;
     gap: 0;
-  }
-
-  /* People on a shift: a block of its own, as far from the line above as the blocks below are. */
-  .shifts-top > .ui-section:not(:first-child) {
-    margin-top: 20px;
-  }
-
-  .shifts-waiting {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 16px;
-    min-height: 36px;
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-  }
-
-  .shifts-waiting__label {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    color: var(--ui-text);
-    font-weight: 500;
-  }
-
-  .shifts-waiting__dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--ui-accent);
-  }
-
-  .shifts-waiting__parts {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 4px 10px;
-    min-width: 0;
-  }
-
-  .shifts-waiting__sep {
-    color: var(--ui-text-3);
-  }
-
-  .shifts-waiting__link {
-    color: var(--ui-text);
-    text-decoration: underline;
-    text-decoration-color: var(--ui-line-strong);
-    text-underline-offset: 3px;
-  }
-
-  .shifts-waiting__link:hover {
-    text-decoration-color: currentColor;
-  }
-
-  /* What waits on the other pages, a queue that did not answer: said, quieter than what waits here. */
-  .shifts-waiting__link--quiet {
-    color: var(--ui-text-2);
-  }
-
-  .shifts-waiting__link--quiet:hover {
-    color: var(--ui-text);
-  }
-
-  .shifts-waiting__failed {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--ui-text-2);
-  }
-
-  /* Nothing waits here: no accent, the hollow dot of «никто не на смене»; the label reads on into its tail. */
-  .shifts-waiting--quiet {
-    column-gap: 10px;
-  }
-
-  .shifts-waiting--quiet .shifts-waiting__label {
-    color: var(--ui-text-2);
-    font-weight: 400;
-  }
-
-  .shifts-waiting--quiet .shifts-waiting__dot {
-    border: 1.5px solid var(--ui-text-3);
-    background: transparent;
   }
 
   /* ---------------------------------------------------- «Сейчас на смене» */

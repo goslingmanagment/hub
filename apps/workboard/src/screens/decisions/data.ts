@@ -1,145 +1,22 @@
-import { queryOptions, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ClientSendCustodyListItem, ClientSendCustodyResolveBody, KernelOperationResponse, TeamLedgerQuestion, TeamLedgerReportPost } from "@agency_hub_core/contracts";
-import { pendingChangesOf, postOnPage, unparsedPostsToDecide, type PendingChange } from "@agency_hub_core/ui/shiftReports";
-import { customsQuery, heldSendsQuery, questionOnPage, reportChangesQuery, reportPostsQuery, saleQuestionsQuery } from "@/shared/decisions";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import type { ClientSendCustodyListItem, ClientSendCustodyResolveBody, KernelOperationResponse } from "@agency_hub_core/contracts";
 import { kernel } from "@/shared/hub";
 
 /**
- * Решения — the data layer (spec §4.6). The screen reads only this file.
- *
- * Phase 1 adapter over today's operations; the reads and their keys are the
- * shared ones (src/shared/decisions.ts), so a decision made here moves the
- * sidebar's count at once:
- *   - the questions «whose is this sale» the chat agent asked (the owner's only,
- *     the agency ledger's, `teamLedgerQuestions`): the owner's to decide and the
- *     chatters' own — read only: the owner answers the agent in the chat, the
- *     agent records the decision in the ledger and the question leaves;
- *   - the shift reports' questions (the owner's only, the agency ledger's, the
- *     last month): the posts it could not use (`teamLedgerReports`) of the days
- *     it accrues from the posts — none while the payout sheets pay
- *     (`unparsedPostsToDecide`, by `reportsFrom` of `teamLedgerPayouts`) — and
- *     the paid days whose report changed (`teamLedgerPayouts`) — read only: the
- *     owner's word on them is given to the ledger, not here;
- *   - customs: `teamCustoms`;
- *   - held sends: `clientSendCustodyList` (held: the shared key; resolved: ours);
- *   - fan names: `pageFanCard` per fan — Hub sends the number only (phase 2: the
- *     name in each answer, see the report).
+ * A held send's resolve — its data (the window is HeldSends.tsx; «Ждут вас»,
+ * screens/waiting, opens it from the send's line):
+ *   - held sends: `clientSendCustodyList`, state `held` (the shared key of
+ *     src/shared/decisions.ts);
+ *   - fan names: `pageFanCard` per fan — Hub sends the number only.
  *
  * The one write keeps the console's request and body: a held send's resolve,
- * `clientSendCustodyResolve` { params: { pageLabel, attemptId }, body } —
- * apps/dashboard/src/api/clientHeldSends.ts:59-78, apps/dashboard/src/pages/ClientHeldSendsPage.tsx:421-432.
+ * `clientSendCustodyResolve` { params: { pageLabel, attemptId }, body }.
  * It says its refusals itself (no global toast) and never repeats by itself.
  */
 
-export type Custom = KernelOperationResponse<"teamCustoms">["customs"][number];
 export type HeldSend = ClientSendCustodyListItem;
 
 const MINUTE = 60_000;
-/** One page of the journal of resolved sends. */
-export const RESOLVED_PAGE_SIZE = 25;
-/** The held queue on this screen: Hub answers at most 100 a page; production has had 0–11. */
-const HELD_LIMIT = 100;
-/** The most rows `teamCustoms` answers. */
-export const CUSTOMS_LIMIT = 200;
-/** A custom paid longer ago than this is overdue. An assumption of the console's audit, not the owner's rule. */
-export const CUSTOM_OVERDUE_DAYS = 7;
-
-/** Future contract (phase 2, `teamDecisions`): one read of the screen, already cut to the page filter on the server. */
-export interface DecisionsView {
-  /** The questions «whose is this sale» on the page (a question of no known page is every page's): the owner's to decide, and
-   *  the chatters' own (information, not counted); `elsewhere` — the owner's on the other pages. */
-  questions: { owner: TeamLedgerQuestion[]; chatters: TeamLedgerQuestion[]; elsewhere: number; serverNow: string } | null;
-  /** The posts the ledger could not use, of the days it accrues from the posts (on the page: a post of no known page is
-   *  every page's), and the paid days whose report changed. */
-  reports: { posts: TeamLedgerReportPost[]; changes: PendingChange[]; elsewhere: number } | null;
-  customs: { paid: Custom[]; ordered: Custom[]; other: Custom[]; elsewhere: number; capped: boolean; serverNow: string } | null;
-  held: { items: HeldSend[]; total: number; elsewhere: number; serverNow: string } | null;
-}
-
-export function useDecisions(options: { owner: boolean; page: string | null }) {
-  const { owner, page } = options;
-  const [questions, posts, changes, customs, held, heldAll] = useQueries({
-    queries: [
-      { ...saleQuestionsQuery, enabled: owner, refetchInterval: 5 * MINUTE },
-      { ...reportPostsQuery(), enabled: owner, refetchInterval: 5 * MINUTE },
-      { ...reportChangesQuery(), enabled: owner, refetchInterval: 5 * MINUTE },
-      { ...customsQuery, refetchInterval: MINUTE },
-      { ...heldSendsQuery({ limit: HELD_LIMIT, offset: 0, ...(page ? { pageLabel: page } : {}) }), refetchInterval: MINUTE },
-      // The queue of every page (the sidebar's own read): how many a page filter hides.
-      { ...heldSendsQuery(), enabled: page !== null, refetchInterval: MINUTE },
-    ],
-  });
-
-  const onPage = (label: string) => page === null || label === page;
-  const toDecide = posts.data && changes.data ? unparsedPostsToDecide(posts.data, changes.data) : [];
-  const view: DecisionsView = {
-    questions: questions.data
-      ? {
-        owner: questions.data.owner.filter((question) => questionOnPage(question, page)),
-        chatters: questions.data.chatters.filter((question) => questionOnPage(question, page)),
-        elsewhere: questions.data.owner.filter((question) => !questionOnPage(question, page)).length,
-        serverNow: questions.data.serverNow,
-      }
-      : null,
-    reports: posts.data && changes.data
-      ? {
-        posts: toDecide.filter((post) => postOnPage(post, page)),
-        changes: pendingChangesOf(changes.data),
-        elsewhere: toDecide.filter((post) => !postOnPage(post, page)).length,
-      }
-      : null,
-    customs: customs.data
-      ? {
-        paid: customs.data.customs.filter((one) => one.state === "paid" && onPage(one.pageLabel)),
-        ordered: customs.data.customs.filter((one) => one.state === "ordered" && onPage(one.pageLabel)),
-        other: customs.data.customs.filter((one) => one.state !== "paid" && one.state !== "ordered" && onPage(one.pageLabel)),
-        elsewhere: customs.data.customs.filter((one) => one.state === "paid" && !onPage(one.pageLabel)).length,
-        capped: customs.data.customs.length >= CUSTOMS_LIMIT,
-        serverNow: customs.data.serverNow,
-      }
-      : null,
-    held: held.data
-      ? {
-        items: held.data.items,
-        total: held.data.total,
-        elsewhere: page !== null && heldAll.data ? Math.max(0, heldAll.data.total - held.data.total) : 0,
-        serverNow: held.data.serverNow,
-      }
-      : null,
-  };
-
-  const reads = owner ? [questions, posts, changes, customs, held] : [customs, held];
-  return {
-    view,
-    questions,
-    posts,
-    changes,
-    customs,
-    held,
-    /** The first load of anything: one skeleton for the screen. */
-    loading: reads.some((query) => query.isLoading),
-    fetching: reads.some((query) => query.isFetching),
-    updatedAt: Math.max(0, ...reads.map((query) => query.dataUpdatedAt)),
-    /** A read again failed: what the screen shows is the last good answer. */
-    stale: reads.some((query) => query.isRefetchError),
-    refetch: () => {
-      for (const query of [...reads, heldAll]) if (query.isEnabled ?? true) void query.refetch();
-    },
-  };
-}
-
-/** The journal of sends resolved by hand, the last first (`clientSendCustodyList`, state `resolved`). */
-export function resolvedSendsQuery(params: { offset: number; pageLabel?: string }) {
-  return queryOptions({
-    queryKey: ["decisions", "held-resolved", params] as const,
-    queryFn: () => kernel.clientSendCustodyList({ query: { state: "resolved", limit: RESOLVED_PAGE_SIZE, ...params } }),
-    placeholderData: (previous) => previous,
-  });
-}
-
-export function useResolvedSends(params: { offset: number; pageLabel?: string }) {
-  return useQuery(resolvedSendsQuery(params));
-}
 
 // ── fan names ────────────────────────────────────────────────────────────────
 
@@ -160,7 +37,7 @@ export const isPlatformFanRef = (fan: FanRefOnPage): boolean => /^[1-9]\d{0,29}$
 
 /**
  * The names of a few fans (`pageFanCard`, one read each, long cached): the
- * disputes, customs and held sends carry the number only. A fan Hub does not
+ * questions and held sends carry the number only. A fan Hub does not
  * know, or a read that failed, stays «фан ·4821» — never the 18 digits.
  */
 export function useFanNames(fans: readonly FanRefOnPage[]): (fan: FanRefOnPage) => KnownFan | undefined {
@@ -189,20 +66,19 @@ export function useFanNames(fans: readonly FanRefOnPage[]): (fan: FanRefOnPage) 
 // ── writes ───────────────────────────────────────────────────────────────────
 
 /**
- * What a decision changes: the queues and their counts — not the fans' names
- * (`["decisions","fan",…]`) or the ledger's reads (the questions, the reports),
- * which a write here never changes (Р10: no N `pageFanCard` reads after every
- * decision).
+ * What a resolve changes: the held sends — not the fans' names
+ * (`["decisions","fan",…]`) or the ledger's questions, which a write here
+ * never changes (Р10: no N `pageFanCard` reads after every decision).
  */
 function isQueueKey(query: { queryKey: readonly unknown[] }): boolean {
   const [area, kind] = query.queryKey;
-  return area === "decisions" && kind !== "fan" && kind !== "sale-questions" && kind !== "report-posts" && kind !== "report-changes";
+  return area === "decisions" && kind !== "fan" && kind !== "sale-questions";
 }
 
 /**
  * A held send's resolve: the console's request (`clientSendCustodyResolve`).
  * Settled, not only succeeded: after a refusal the row may be gone, after a
- * lost answer the resolve may be recorded — both lists are read again.
+ * lost answer the resolve may be recorded — the held sends are read again.
  */
 export function useResolveHeldSend() {
   const qc = useQueryClient();

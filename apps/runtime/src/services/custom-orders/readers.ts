@@ -1,15 +1,12 @@
-import type { TeamCustomsResponse } from "@agency_hub_core/contracts";
 import {
   listCustomOrdersAwaitingGiving, listOpenMattersOfKinds, listUsersWithPersonRight, type CustomOrderRow, type Database, type MatterOwner,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { cardOf, priceMillsOf, whatOf } from "./rules.ts";
 
 /**
- * «Кастомы оплачены, не отданы», read from the custom orders: «Ждут вас» and «Решения» (through `teamCustoms`, and
- * the customs row of «Ждут вас»), the morning report's line. The number counts the orders paid (a sale, or the state)
- * or shot and not given.
+ * «Кастомы оплачены, не отданы», read from the custom orders: the customs row of «Ждут вас» and the morning report's
+ * line. The number counts the orders paid (a sale, or the state) or shot and not given.
  */
 
 /**
@@ -47,30 +44,4 @@ export function awaitingGivingOf(app: Pick<AppContext, "db">, input: { pageIds: 
 /** When an order waits from: its first payment, or the moment it became paid or shot. */
 export function waitsSince(order: CustomOrderRow): Date {
   return order.firstPaidAt ?? order.stateAt;
-}
-
-/**
- * `teamCustoms` from the orders, in its old shape: every row `paid` (what the screens count). An order whose fan
- * is not confirmed has no `fanRef` the shape can carry and is left out here; the board shows it.
- */
-export function teamCustomsOfOrders(orders: readonly CustomOrderRow[], now: Date): TeamCustomsResponse {
-  return {
-    customs: orders
-      .filter((order) => order.pageLabel !== null && order.fanRef !== null && /^[1-9]\d{0,29}$/.test(order.fanRef))
-      .map((order) => {
-        const card = cardOf(order.card);
-        return {
-          id: order.id,
-          pageLabel: order.pageLabel!,
-          fanRef: order.fanRef!,
-          description: whatOf(card),
-          priceMills: priceMillsOf(card.price),
-          state: "paid",
-          paidAt: waitsSince(order).toISOString(),
-          createdBy: order.acceptedBy ?? (order.origin === "import" ? "перенесён" : "Генгар"),
-          createdAt: order.createdAt.toISOString(),
-        };
-      }),
-    serverNow: now.toISOString(),
-  };
 }

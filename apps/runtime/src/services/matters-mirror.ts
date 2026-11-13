@@ -48,19 +48,22 @@ import { getSyncBlocksOverview } from "./sync-blocks.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 /**
- * Дела, the shadow week (ecosystem plan, package D): every minute Hub reads
- * the sources «Ждут вас» and «Решения» read today (the ledger's every five
- * minutes, as the screens do), turns what waits into matters by the screens'
- * own rules, and closes the matters whose cause went away. After each kind it
- * counts the matters back through the read the API serves and compares that
- * with the old list's count of the same answer: a difference is logged and kept
- * in matter_checks (`mismatch_since`). A source that did not answer leaves its
- * matters as they were and its kind «не проверено». The screens keep their own
- * reads until the owner's switch (`mattersReadEnabled`).
+ * Дела, the mirror (ecosystem plan, package D): every minute Hub reads the
+ * sources of what waits (the ledger's every five minutes), turns it into
+ * matters by the rules below, and closes the matters whose cause went away.
+ * After each kind it counts the matters back through the read the API serves
+ * and compares that with its source's own count of the same answer
+ * (`legacy_count` against `matter_count`): a difference is logged and kept in
+ * matter_checks (`mismatch_since`). A source that did not answer leaves its
+ * matters as they were and its kind «не проверено».
  *
- * The rules below are ports of the screens' (each names its original); a unit
- * test runs both on the same answers. Database and Hub's own ledger only:
- * nothing here asks a platform or sends anything.
+ * «Ждут вас» in the console and in Workboard is read from these matters and
+ * from nothing else: the screens' own reads of it, which these rules were
+ * ported from, are gone, and the rules live here alone. Two still have a twin
+ * in the console, where a screen of its own shows the same thing (the pages
+ * that need a login, the failures of a switched-off OnlyFans API): a unit test
+ * runs both on the same answers. Database and Hub's own ledger only: nothing
+ * here asks a platform or sends anything.
  */
 
 export const MATTERS_MIRROR_QUEUE = "matters.mirror";
@@ -84,16 +87,16 @@ function kindMeta(kind: MatterMirrorKind): { source: MatterSource; owner: Matter
 }
 
 const SYSTEM: MatterActor = { door: "system" };
-/** What the screens read at most: «Ждут вас»'s publications list. */
+/** The most publications of one status the mirror reads. */
 const PUBLICATIONS_LIMIT = 1000;
 const HELD_LIMIT = 1000;
 const INCIDENTS_LIMIT = 200;
 const HISTORY_LIMIT = 200;
 const DAY_MS = 86_400_000;
 
-// ── The screens' rules, on the same answers ────────────────────────────────
+// ── The rules of what waits, each on its source's answer ────────────────────
 
-/** Publications of one status (Публикации; «Ждут вас» rows «Посты на утверждение» and «Исход неизвестен»). */
+/** Publications of one status: drafts to approve, and the ones whose outcome on the platform is not known. */
 export function publicationItems(
   kind: "publication.draft" | "publication.unknown",
   publications: ReadonlyArray<{ id: number; pageLabel: string; kind: string; publishAt: string; version: number }>,
@@ -110,7 +113,7 @@ export function publicationItems(
   }));
 }
 
-/** Held sends (Решения → «Зависшие отправки»): who sent and when, never the fan or the text. */
+/** Held sends («Зависшие отправки»): who sent and when, never the fan or the text. */
 export function heldSendItems(sends: ReadonlyArray<{
   attemptId: string; pageLabel: string; username: string; purpose: string; partIndex: number; partCount: number; createdAt: string;
 }>): MirrorItem[] {
@@ -171,9 +174,9 @@ export function isOfapiOffIncident(item: { kind: string; platform: string | null
 }
 
 /**
- * The open failures that wait for a person («Ждут вас» `failures`,
- * `countsAsFailure`): not the OnlyFans API's while its key is off, not a page's
- * blocked login the login row already shows.
+ * The open failures that wait for a person: not the OnlyFans API's while its
+ * key is off, not a page's blocked login, which is a matter of its own
+ * (`page.login_needed`).
  */
 export function failureItems(
   incidents: ReadonlyArray<{ id: number; incidentKey: string; kind: string; pageLabel: string | null; platform: string | null; openedAt: Date | string }>,
@@ -210,7 +213,7 @@ export function extensionItems(counters: ReadonlyArray<{ code: string; total: nu
   }));
 }
 
-/** History requests that wait for the owner's approval: not Fansly's, which take none (`hydrationRequestTakesApproval`). */
+/** History requests that wait for the owner's approval: not Fansly's, which take none (the console's `hydrationRequestTakesApproval`). */
 export function historyItems(requests: ReadonlyArray<{ requestRef: string; platform: string; pageLabel: string | null; createdAt: Date | string }>): MirrorItem[] {
   return requests.filter((request) => request.platform !== "fansly").map((request) => ({
     key: `history.request:${request.requestRef}`,
@@ -243,9 +246,13 @@ function moscowDay(iso: string): string | null {
 }
 
 /**
- * The posts the ledger could not use that wait for the owner: a blocking flag,
- * of the days it pays from the posts (`unparsedPostsToDecide` of
- * packages/ui/src/shiftReports.ts). The post's pages are its account lines.
+ * The posts the ledger could not use at all (a blocking flag) that wait for the
+ * owner. A post is a decision only while the ledger accrues pay from the posted
+ * reports (`reportsFrom` of its payouts) and only of the days it accrues: its
+ * report date on or after `reportsFrom`, or — the date not read — posted
+ * (Moscow) on or after it. Before that the payout sheets pay for the day, and
+ * the post is information for «Выплаты → Отчёты», not a question. The post's
+ * pages are its account lines.
  */
 export function reportPostItems(reports: Pick<TeamLedgerReportsResponse, "posts">, payouts: Pick<TeamLedgerPayoutsResponse, "reportsFrom">): MirrorItem[] {
   const from = payouts.reportsFrom;
@@ -310,7 +317,7 @@ export function reportPostFixItems(
   return items;
 }
 
-/** Paid days whose report changed since (`pendingChangesOf`): a person's pay, on every page. */
+/** Paid days whose report changed since: a person's pay, on every page. Each waits for the owner's word. */
 export function paidDayChangeItems(payouts: Pick<TeamLedgerPayoutsResponse, "people">): MirrorItem[] {
   return payouts.people.flatMap((person) => person.pendingChanges.map((change) => ({
     key: `ledger.paid_day_changed:${change.id}`,
@@ -323,7 +330,7 @@ export function paidDayChangeItems(payouts: Pick<TeamLedgerPayoutsResponse, "peo
   })));
 }
 
-/** The 31 Moscow days the reports' questions are read for (`reportQuestionsWindow`, REPORT_QUESTIONS_DAYS). */
+/** The report dates the reports' questions are read for: the last 31 Moscow days, today included. */
 export function reportQuestionsWindow(today: string): { from: string; to: string } {
   return { from: new Date(Date.parse(`${today}T00:00:00Z`) - 30 * DAY_MS).toISOString().slice(0, 10), to: today };
 }
@@ -342,7 +349,7 @@ export interface MattersMirrorTally {
   /** The mirrored kinds, and the authors' posts to fix that ride the reports' read. */
   answered: Array<MatterMirrorKind | ReportPostMatterKind>;
   failed: Array<MatterMirrorKind | ReportPostMatterKind>;
-  /** The kinds whose matters, read back, differ from the old list's count. */
+  /** The kinds whose matters, read back, differ from their source's own count. */
   mismatched: MatterMirrorKind[];
   opened: number;
   closed: number;
@@ -350,7 +357,7 @@ export interface MattersMirrorTally {
 
 type MirrorApp = AppContext;
 
-/** Every open matter of the kind as the owner reads it: the shadow's new count (`extension.critical` counts its events). */
+/** Every open matter of the kind as the owner reads it: the count read back (`extension.critical` counts its events). */
 async function readBackCount(app: MirrorApp, kind: MatterMirrorKind): Promise<number> {
   const matters = await listVisibleMatters(app.db, { viewer: { userId: 0, role: "owner", pageIds: [] }, state: "open", kinds: [kind], limit: 10_000 });
   return matters.reduce((sum, matter) => sum + matterWeight(matter), 0);
@@ -403,7 +410,7 @@ export async function reconcileMatters(
       const result = await openMatter(app.db, input, SYSTEM, now);
       if (result.transition === "opened" || result.transition === "reopened") opened += 1;
     } catch (error) {
-      // One item that cannot be kept does not stop the rest: the shadow count says it is missing.
+      // One item that cannot be kept does not stop the rest: the count read back says it is missing.
       app.logger.error({ err: error, kind: answer.kind, key: item.key, writer: error instanceof MatterWriterConflictError ? error.heldBy : undefined }, "matters mirror: a matter could not be opened");
     }
   }
@@ -476,7 +483,7 @@ export async function runMattersMirror(
         tally.mismatched.push(answer.kind);
         app.logger.warn(
           { kind: answer.kind, legacyCount, matterCount, mismatchSince: check.mismatchSince?.toISOString() ?? null },
-          "matters mirror: the matters' count differs from the old list's",
+          "matters mirror: the matters' count differs from its source's",
         );
       }
     } catch (error) {
@@ -510,8 +517,8 @@ export async function runMattersMirror(
     return [{ kind: "send.held", items: heldSendItems(list.items.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() }))) }];
   });
 
-  // The login pages first: a page's blocked login is its row, not a failure besides. Without them, no page is subtracted
-  // (as the screen does when its reads fail).
+  // The login pages first: a page's blocked login is its own matter, not a failure besides. Without them, no page is
+  // subtracted.
   let loginPages = new Set<string>();
   const loginDue = due("page.login_needed") || due("incident.open");
   if (loginDue) {

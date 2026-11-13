@@ -18,8 +18,7 @@ import { wbHeldHandlers } from "./wb-admin.ts";
  * held sends as their own fixtures, so a line shows their words), the
  * console's rows, and the new checks: people and access, the ledger's.
  * The cookie `hub-demo-scenario` picks how many: `matters-0`, `matters-6`,
- * `matters-40`; `matters-off` is the owner's switch off (the screens read
- * their own sources). Without it, every matter of the agency as it stands
+ * `matters-40`. Without it, every matter of the agency as it stands
  * (about a dozen). Invented names and sums only.
  */
 
@@ -268,7 +267,7 @@ function mattersWaiting(request: DemoRequest): WaitingAnswer {
     return inGroup.length === 0 ? [] : [{ id: group.id, title: group.title, count: inGroup.length, checked: true, tone, to: waitingGroupLink(group.id) }];
   });
   return {
-    active: request.scenario !== "matters-off",
+    active: true,
     groups,
     total: groups.reduce((sum, group) => sum + group.count, 0),
     failed: [],

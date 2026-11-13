@@ -16,7 +16,7 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // смены», their shifts with their reports. The app keeps them out of the team's
 // screens, but the wall is Hub's: every read and write the owner's and team
 // leads' screens send (apps/workboard/src/screens/*/data.ts, shared/reads.ts,
-// shared/decisions.ts) refuses a chatter's session, and only their own reads —
+// shared/decisions.ts, shared/matters.ts) refuses a chatter's session, and only their own reads —
 // `accountChatterStats` and `accountReports` — answer it.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
@@ -62,8 +62,8 @@ function teamReads(chatterId: number): Array<[string, string]> {
     ["teamGreetings", "/api/v1/team/greetings?days=7"],
     ["teamWinBackResults", "/api/v1/team/win-back/results?days=7"],
     ["teamWinBackApproaches", "/api/v1/team/win-back/approaches"],
-    // Решения
-    ["teamCustoms", "/api/v1/team/customs"],
+    // Ждут вас
+    ["mattersWaiting", "/api/v1/matters/waiting"],
     ["clientSendCustodyList", "/api/v1/client-send-custody?state=held"],
     // Разбор смены
     ["teamShiftReview", `/api/v1/team/shift-review?userId=${chatterId}&startedAt=2026-11-08T13:00:00.000Z`],
@@ -72,7 +72,7 @@ function teamReads(chatterId: number): Array<[string, string]> {
     ["teamLedgerReports", "/api/v1/team/ledger-reports?from=2026-11-02&to=2026-11-08"],
     ["teamLedgerPayoutPrepare", "/api/v1/team/ledger-payouts/prepare?person=nikita"],
     ["teamLedgerPayoutPerson", "/api/v1/team/ledger-payouts/person?person=nikita&from=2026-11-02&to=2026-11-08"],
-    // Решения: the questions «whose is this sale»
+    // Ждут вас: the questions «whose is this sale»
     ["teamLedgerQuestions", "/api/v1/team/ledger-questions"],
     // Доступ
     ["adminPages", "/api/v1/admin/pages"],

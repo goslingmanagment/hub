@@ -39,8 +39,8 @@ export const matterRouteSchemas = {
     summary: "«Ждут вас» read from matters, by the list's groups (waiting-groups.ts): the chips, the menu's number and the list's counts",
     description: "Database only. What waits for the viewer themself, every role grouped by the one table; the number is "
       + "the groups' sum. A group whose source did not answer lately has `checked: false` («не удалось проверить») and "
-      + "is in `failed`. `active` is the owner's switch: until it is on, the screens keep their own reads and Hub "
-      + "compares the two counts in the background (matter_checks).",
+      + "is in `failed`. `active` is always true: a constant kept for the bundles loaded in a browser tab before the "
+      + "owner's switch was removed.",
     querystring: mattersWaitingQuerySchema,
     response: { 200: mattersWaitingResponseSchema, ...readErrors },
   },

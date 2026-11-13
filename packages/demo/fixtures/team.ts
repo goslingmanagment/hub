@@ -3,7 +3,7 @@ import { averageQuality, type ShiftQuality } from "@agency_hub_core/ui/shiftRevi
 
 import { demoError, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_CHATTERS, DEMO_DATA_PAGES, demoFans, demoPage } from "../world.ts";
-import { teamCustoms, teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
+import { teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
 import { adminModelApplication, adminModelApplications } from "./team-applications.ts";
 import { teamChatterStats, teamShiftSales } from "./team-stats.ts";
 import { teamDisputes } from "./team-disputes.ts";
@@ -526,12 +526,6 @@ export const teamHandlers: DemoHandlers = {
 
   adminModelApplications,
   adminModelApplication,
-
-  teamCustoms: (request) => {
-    const scope = viewerPages(request);
-    if (!scope) return FORBIDDEN();
-    return teamCustoms(request, scope);
-  },
 
   teamWinBackApproaches: (request) => {
     if (request.role !== "owner") return demoError(403, "Forbidden", "Подходы меняет только владелец.");

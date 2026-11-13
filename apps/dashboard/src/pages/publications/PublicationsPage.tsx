@@ -20,7 +20,7 @@ import {
   useWithdrawPagePublications,
   useWithdrawPublication,
 } from "@/api/publications";
-import { useOfapiStatus, useWaitingCounts } from "@/api/waiting";
+import { useFanslyLoginPages, useOfapiStatus } from "@/api/waiting";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext";
 import { usePageFilter } from "@/components/layout/usePageFilter";
 import { QueryNotice } from "@/components/shared/QueryNotice";
@@ -125,7 +125,7 @@ export function PublicationsPage() {
   const { data: auth } = useAuthMe();
   const role = auth?.user.role ?? "owner";
   const ofapi = useOfapiStatus(role);
-  const { loginPages } = useWaitingCounts(role);
+  const loginPages = useFanslyLoginPages(role);
   const todayKey = useTodayKey();
   const range = useMemo(() => windowRange(view.window, todayKey), [view.window, todayKey]);
   const lastWeek = useMemo(() => windowRange("last7", todayKey), [todayKey]);
@@ -307,7 +307,7 @@ export function PublicationsPage() {
     });
   }
 
-  // ── «Ждут вас» of this screen: the home's reads, the page counted here ──
+  // ── What waits on this screen: every draft and «Исход неизвестен», the page counted here ──
   const onPage = (rows: readonly PublicationWire[]) => (pageLabel === null ? rows : rows.filter((row) => row.pageLabel === pageLabel));
   const counted = (query: CountedQuery): number | null => {
     if (query.data === undefined) return query.isError ? null : 0;

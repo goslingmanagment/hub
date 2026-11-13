@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 73 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (508)
+## Routes (507)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -514,7 +514,6 @@ A full device token is not affected.
 | GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-numbers` | `teamChatterNumbers` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-stats` | `teamChatterStats` | `session` | — | — | no |
-| GET | `/api/v1/team/customs` | `teamCustoms` | `session` | — | — | no |
 | GET | `/api/v1/team/empty-hours` | `teamEmptyHours` | `session` | — | — | no |
 | GET | `/api/v1/team/greetings` | `teamGreetings` | `session` | — | — | no |
 | GET | `/api/v1/team/ledger-month` | `teamLedgerMonth` | `owner-session` | — | — | no |

@@ -106,7 +106,8 @@ const teamScreens: RouteObject[] = [
   },
   { path: "sales", element: <SalesRedirect /> },
   { path: "sales/:tab", lazy: () => import("../screens/sales/index.js").then((m) => ({ Component: m.SalesScreen })) },
-  { path: "decisions", lazy: () => import("../screens/decisions/index.js").then((m) => ({ Component: m.DecisionsScreen })) },
+  // «Ждут вас» (it was Решения, the address stays): the list read from matters.
+  { path: "decisions", lazy: () => import("../screens/waiting/index.js").then((m) => ({ Component: m.WaitingScreen })) },
   { path: "payouts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
   { path: "access", element: <AccessRedirect /> },
 ];

@@ -1,54 +1,13 @@
 /**
- * The smaller «Команда» answers: the customs paid and not given, greetings and broadcasts,
- * win-back approaches and their results. They lean on the same people,
- * pages and fans as the shifts in team-world.ts.
+ * The smaller «Команда» answers: greetings and broadcasts, win-back approaches
+ * and their results. They lean on the same people and pages as the shifts in
+ * team-world.ts.
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
 import { type DemoRequest } from "../core.ts";
-import { DEMO_CHATTERS, DEMO_PAGES, demoFans, type DemoUser } from "../world.ts";
+import { DEMO_CHATTERS, DEMO_PAGES, type DemoUser } from "../world.ts";
 import { DAY, HOUR, MIN, between, intBetween, isoAt, mskDay, mskMidnight, pick, rng, windowDays, windowStart } from "./team-world.ts";
-
-// --- Customs ---
-
-interface CustomSeed {
-  page: string;
-  fan: number;
-  text: string;
-  price: number | null;
-  /** Days since payment. */
-  paidDaysAgo: number;
-  createdDaysAgo: number;
-  by: string;
-}
-
-// `teamCustoms` answers the custom orders paid or shot and not given, every row `paid`: one that still waits for the
-// fan's payment is not in it (the board «Кастомы» shows it, wb-customs.ts).
-const CUSTOMS: readonly CustomSeed[] = [
-  { page: "mia-1", fan: 2, text: "Видео 6–7 мин в красном белье, медленный стриптиз, в конце зовёт его по имени (Джейк)", price: 180, paidDaysAgo: 9.4, createdDaysAgo: 9.6, by: "alex.k" },
-  { page: "nova-1", fan: 3, text: "Распаковка его подарка (туфли на каблуке) и примерка, 3–5 мин", price: 220, paidDaysAgo: 1.6, createdDaysAgo: 2.4, by: "den.s" },
-];
-
-export function teamCustoms(request: DemoRequest, scope: readonly string[]): KernelOperationResponse<"teamCustoms"> {
-  const now = request.now.getTime();
-  const customs = CUSTOMS.filter((seed) => scope.includes(seed.page)).map((seed, index) => {
-    const fans = demoFans(seed.page).filter((fan) => fan.totalSpent > 0);
-    const fan = fans[seed.fan % Math.max(1, fans.length)] ?? demoFans(seed.page)[0]!;
-    return {
-      id: 4100 + index * 7,
-      pageLabel: seed.page,
-      fanRef: fan.platformUserId,
-      description: seed.text,
-      priceMills: seed.price === null ? null : seed.price * 1000,
-      state: "paid",
-      paidAt: isoAt(now - Math.round(seed.paidDaysAgo * DAY)),
-      createdBy: seed.by,
-      createdAt: isoAt(now - Math.round(seed.createdDaysAgo * DAY)),
-    };
-  });
-  customs.sort((left, right) => left.paidAt.localeCompare(right.paidAt));
-  return { customs, serverNow: request.now.toISOString() };
-}
 
 // --- Greetings and broadcasts ---
 

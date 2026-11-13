@@ -34,7 +34,7 @@ export type DeviceItem = KernelOperationResponse<"adminListDeviceTokens">[number
 export type LinkItem = KernelOperationResponse<"adminListAccountLinks">[number];
 type AiLimits = KernelOperationResponse<"adminAiChatterLimits">;
 
-/** The people list is the entry Люди and Решения read too (src/shared/reads.ts): a write here refreshes them all. */
+/** The people list is the entry Люди reads too (src/shared/reads.ts): a write here refreshes them all. */
 const USERS_KEY = usersQuery.queryKey;
 const PAGES_KEY = ["access", "pages"] as const;
 const devicesKey = (userId: number) => ["access", "user", userId, "devices"] as const;

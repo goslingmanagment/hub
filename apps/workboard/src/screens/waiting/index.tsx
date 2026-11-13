@@ -389,7 +389,8 @@ export function WaitingScreen() {
   const offPlatformParam = Number(search.get("offPlatform"));
   const nobodyParam = search.get("nobody");
   const unlinkedParam = search.get("unlinked") !== null;
-  // The open resolve keeps the record it was opened with while Hub answers (as on «Решения»).
+  // The open resolve keeps the record it was opened with while Hub answers: a refused write re-reads the held sends,
+  // and the send may leave them — the window's words about the refusal stay readable.
   const lastSend = useRef<HeldSend | null>(null);
   const foundSend = attemptId ? held.data?.items.find((one) => one.attemptId === attemptId) : undefined;
   if (foundSend) lastSend.current = foundSend;
@@ -427,7 +428,7 @@ export function WaitingScreen() {
   ]);
   const onlyTitle = only === null ? null : WAITING_GROUPS.find((group) => group.id === only)?.title ?? null;
 
-  // A link with an anchor lands at its group once the list has answered (the old screen's sections did the same).
+  // A link with an anchor lands at its group once the list has answered.
   const jumped = useRef<string | null>(null);
   useEffect(() => {
     if (list.isLoading || location.hash === "" || jumped.current === location.key) return;

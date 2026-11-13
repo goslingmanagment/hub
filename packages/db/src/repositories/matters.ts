@@ -469,7 +469,7 @@ export interface MatterCheckRow {
   applicable: boolean;
   /** The source's read hit its limit: there are at least this many. */
   capped: boolean;
-  /** The old list's count from the last answer, and the matters' own after it. */
+  /** The source's own count from the last answer (the column keeps its first name), and the matters' read back after it. */
   legacyCount: number | null;
   matterCount: number | null;
   /** Since when the two counts differ; null — they agree. */
