@@ -37,12 +37,14 @@ import { shiftSalesWindow, teamShiftSalesRead } from "./team-shift-sales.ts";
  * THE READ. The reports of 2 days before the shown days to 8 days after them (REPORTS_BEFORE_DAYS, REPORTS_AFTER_DAYS:
  * a late sale is paid in a later report, a night's report may be dated a day off the shift); and, the mirror of it,
  * the person's sales by the rule from 8 days before the shown days to 2 after — else a «долёт» of last week in
- * Monday's report would read as money «по словам». The shifts and their sales are `teamShiftSalesRead`'s, the very computation «Смены» shows, for everyone at
- * once: a chatter's own answer is cut from it, so the owner and the chatter read one note of one day.
+ * Monday's report would read as money «по словам». The shifts and their sales are `teamShiftSalesRead`'s, the very
+ * computation «Смены» shows, for everyone at once: a person's own answer is cut from it, so the owner and the chatter
+ * read one note of one day.
  *
- * A person is every login of theirs (the people registry). Computed here because the lines of other people's reports
- * and the references of the sales must not travel to a browser. Read-only: the ledger by GET with Hub's payouts key,
- * nothing is written anywhere. The ledger not answering is a 503: nothing is known of the days then.
+ * WHO READS. The owner everyone's days; anyone else their own person's (`readsEveryone`). A person is every login of
+ * theirs (the people registry). Computed here because the lines of other people's reports and the references of the
+ * sales must not travel to a browser. Read-only: the ledger by GET with Hub's payouts key, nothing is written
+ * anywhere. The ledger not answering is a 503: nothing is known of the days then.
  */
 
 /** A report and the rule this close say the same: no sale is this small (half a dollar), cents apart are rounding. */
@@ -317,11 +319,13 @@ async function labelsOf(db: Database, pageIds: readonly number[]): Promise<Set<s
 }
 
 /**
- * Whose days a session reads: everyone's for the owner and a team lead; their own alone for anyone else — and for a
- * narrow session (the one the extension opens, no password) whatever the role, as every read it may make.
+ * Whose days a session reads. People's shift reports from the agency ledger are the owner's alone (`teamLedgerReports`
+ * refuses a team lead) and one's own (`accountReports`): so everyone's days for the owner; their own person's days for
+ * anyone else, a team lead too — and for a narrow session (the one the extension opens, no password) whatever the
+ * role, as every read it may make.
  */
 export function readsEveryone(principal: { narrowDeviceTokenId?: number | undefined; user: { role: string } }): boolean {
-  return principal.narrowDeviceTokenId === undefined && (principal.user.role === "owner" || principal.user.role === "team_lead");
+  return principal.narrowDeviceTokenId === undefined && principal.user.role === "owner";
 }
 
 export async function readShiftReportNotes(
@@ -338,7 +342,7 @@ export async function readShiftReportNotes(
   const from = shown[0]!;
   const to = shown.at(-1)!;
   const everyone = readsEveryone(principal);
-  // The page asked: 404 and 403 as every team read. One's own days are of every page (the owner reads the same note).
+  // The page asked: 404 and 403 as every team read. Without one, every page: one's own days are read as the owner reads them.
   const pages = await teamReadPages(app, principal, { pageLabel: input.query.pageLabel, pageScope: everyone ? input.pageScope : undefined });
   const rule = await readScreensRule(app.db);
   if (rule === null) return { from, to, ruleFrom: null, notes: [], serverNow: now.toISOString() };

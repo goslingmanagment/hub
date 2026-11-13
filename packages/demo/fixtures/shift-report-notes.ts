@@ -27,7 +27,8 @@ import { addDays, mskDay, teamWorld, viewerPages, workedPages } from "./team-wor
  *
  * On a chatter's own «Мои смены» (the demo chatter is alex.k; their own working life, account-model.ts) the days are
  * those whose report is the post in «Отчётность», older than the days handed in in Hub (shift-reports.ts): a sale in
- * no report, an amount by word, and both on one line. A chatter reads their own days alone.
+ * no report, an amount by word, and both on one line. Anyone but the owner reads their own days alone (a team lead of
+ * the demo works no shifts: no line).
  * Invented people and amounts only.
  */
 
@@ -138,8 +139,8 @@ function shiftReportNotes(request: DemoRequest): Answer | DemoReply {
   if (!Number.isInteger(days) || days < 1 || days > 31) return demoError(400, "Bad Request", "days — целое от 1 до 31.");
   const until = queryString(request, "until");
   if (until !== undefined && !BUSINESS_DATE.test(until)) return demoError(400, "Bad Request", "until — день в формате YYYY-MM-DD.");
-  // As Hub: everyone's days for the owner and a team lead, one's own for a chatter and for a narrow session.
-  const scope = request.narrow ? null : viewerPages(request);
+  // As Hub: everyone's days for the owner; one's own for a team lead, a chatter and a narrow session.
+  const scope = request.narrow || request.role !== "owner" ? null : viewerPages(request);
   const pageLabel = queryString(request, "pageLabel");
   if (pageLabel !== undefined) {
     if (!demoPage(pageLabel)) return demoError(404, "Not Found", `Страницы «${pageLabel}» нет.`);

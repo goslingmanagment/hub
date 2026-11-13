@@ -457,8 +457,9 @@ export function useShiftsPeriod({ window, page, current }: ShiftsParams) {
 
 /**
  * What stands between the period's shifts and the reports they are paid by (`shiftReportNotes`): one request for the
- * window and the page, the very parameters of the shifts' own read. Only for the note under a day's last shift: the
- * ledger away (or any other failure) is no line, nothing else.
+ * window and the page, the very parameters of the shifts' own read; everyone's days for the owner, their own for a
+ * team lead (Hub decides). Only for the note under a day's last shift: the ledger away (or any other failure) is no
+ * line, nothing else.
  */
 export function useShiftNotes(window: ShiftsWindow, page: string | null, enabled: boolean) {
   const params = {

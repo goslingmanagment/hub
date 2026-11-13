@@ -16,7 +16,7 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // nobody wrote to counts for both, no field of the rule appears); on from the day, the junction sale counts once — the
 // owner's to decide, «вне смен» — and the team's total is every sale once; on from a later day, the day stays as it was.
 // And what stands between a day's shifts by the rule and the report it is paid by (`shiftReportNotes`): a sale no line
-// of the person's reports pays is said, one paid in a later report is not, and a chatter reads their own days alone.
+// of the person's reports pays is said, one paid in a later report is not, and only the owner reads everyone's days.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -180,9 +180,12 @@ describe("the screens' switch to the one rule", () => {
       userIds: [first], reportDate: day, unreported: { count: 0, mills: 0, sales: [] }, byWordsMills: 12_000, postApartMills: 15_000, sumOnlyMills: null,
     }]);
 
-    // A chatter reads their own days alone, whoever the reports are of; a narrow session reads as a chatter whatever the role.
+    // A chatter reads their own days alone, whoever the reports are of; so does a team lead (people's reports from the
+    // ledger are the owner's); a narrow session reads as a chatter whatever the role.
     expect((await notes(session(first, "screens-first", "chatter"), [report(1, day, [])])).notes).toEqual(cut.notes);
     expect((await notes(session(second, "screens-second", "chatter"), [report(1, day, [])])).notes).toEqual([]);
+    expect((await notes(session(second, "screens-second", "team_lead"), [report(1, day, [])])).notes).toEqual([]);
+    expect((await notes(session(first, "screens-first", "team_lead"), [report(1, day, [])])).notes).toEqual(cut.notes);
     expect((await notes(session(second, "screens-second", "owner", { narrowDeviceTokenId: 7 }), [report(1, day, [])])).notes).toEqual([]);
     // The ledger away: nothing is known of the days, said as such.
     await expect(readShiftReportNotes(app, owner, { query: { days: 7, until: nextDay }, pageScope: undefined }, {

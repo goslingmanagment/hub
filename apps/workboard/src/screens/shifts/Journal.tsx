@@ -162,7 +162,7 @@ function usual(text: string): string {
   return `Заметно хуже обычной смены команды за этот период. Обычно — ${text}`;
 }
 
-function columnsOf(state: QualityState, norms: TeamNorms, page: string | null, notes: ReadonlyMap<string, PlacedNote>, ruled: boolean, mine: boolean): Column<JournalShift>[] {
+function columnsOf(state: QualityState, norms: TeamNorms, page: string | null, notes: ReadonlyMap<string, PlacedNote>, ruled: boolean, mine: boolean, isOwner: boolean): Column<JournalShift>[] {
   // E1: with a page picked, the quality columns still count the whole shift — said at the columns themselves.
   const scope = (hint: string) => (page ? `${hint} По всей смене, не только ${page}.` : hint);
   return [
@@ -201,8 +201,11 @@ function columnsOf(state: QualityState, norms: TeamNorms, page: string | null, n
     {
       key: "sales",
       header: "Продажи",
-      // The rule's sum, not the pay's: people are paid by the day's report, and the day's last shift says what stands between.
-      ...(ruled ? { hint: "По правилу «чья продажа». Начисляют по отчёту дня: под числом — продажи, которых нет в отчётах, суммы по словам и правки поста." } : {}),
+      // The rule's sum, not the pay's: people are paid by the day's report, and the day's last shift says what stands
+      // between — to the owner of everyone's days (people's reports are the owner's), to anyone else of their own.
+      ...(ruled ? { hint: isOwner
+        ? "По правилу «чья продажа». Начисляют по отчёту дня: под числом — продажи, которых нет в отчётах, суммы по словам и правки поста."
+        : "По правилу «чья продажа». Начисляют по отчёту дня, его сумма может отличаться." } : {}),
       numeric: true,
       sortValue: (shift) => shift.salesNetMills,
       cell: (shift) => <SalesCell shift={shift} note={notes.get(shift.key)} own={mine} />,
@@ -304,7 +307,7 @@ export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuali
   const rowState = useRowBackState("Смены");
   const rows = sorted(model?.journal ?? [], sort);
   const shown = all ? rows : rows.slice(0, FIRST_ROWS);
-  const columns = columnsOf(quality, model?.norms ?? NO_NORMS, page, reportNotes, ruled, mine);
+  const columns = columnsOf(quality, model?.norms ?? NO_NORMS, page, reportNotes, ruled, mine, isOwner);
 
   const description = [
     isOwner ? "Строка открывает разбор смены." : "Строка открывает карточку чаттера.",

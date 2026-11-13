@@ -27,7 +27,7 @@ export const shiftReportNotesQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(CHATTER_STATS_MAX_DAYS).default(7),
   /** The window's last Moscow day; default today. */
   until: businessDate.optional(),
-  /** One page only, as the team's page filter: its shifts, its sales, its lines of the reports. */
+  /** One page only, as the page filter of «Смены»: its shifts, its sales, its lines of the reports. */
   pageLabel: z.string().min(1).max(120).optional(),
 });
 
@@ -94,9 +94,10 @@ export const shiftReportNoteRouteSchemas = {
     auth: { kind: "any-session" },
     tags: ["client"],
     summary: "Per person and report day, what stands between the shifts' sales by the rule and the report: sales in no report, sums by word, a post changed by hand",
-    description: "Workboard «Смены» and «Мои смены»; read-only. The owner and a team lead: every person's days, on the "
-      + "pages the viewer reaches (`pageLabel` narrows to one: 404 for a page that does not exist, 403 for one the viewer "
-      + "does not reach). Anyone else, and a narrow session whatever the role: their own person's days alone. Shifts and "
+    description: "Workboard «Смены» and «Мои смены»; read-only. The owner: every person's days. Anyone else — a team "
+      + "lead, a chatter — and a narrow session whatever the role: their own person's days alone (people's shift reports "
+      + "from the ledger are the owner's and one's own). `pageLabel` narrows to one page: 404 for a page that does not "
+      + "exist, 403 for one the viewer does not reach. Shifts and "
       + "their sales are `teamShiftSales`' by the rule; the reports are the ledger's GET /v1/reports, /v1/report-days and "
       + "/v1/report-posts, read with Hub's payouts key. No fan, no report line and no reference of a sale is in the "
       + "answer. 503 when the ledger is not connected or did not answer: nothing is known of the days then.",

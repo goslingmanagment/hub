@@ -68,9 +68,10 @@ export function ShiftsScreen() {
     chatters: full.chatters.filter((row) => row.userId !== null && own.has(row.userId)),
     journal: full.journal.filter((shift) => own.has(shift.userId)),
   } : full), [full, own]);
-  // What stands between a day's shifts and the report it is paid by, under the day's last shift (shared/reportNotes.ts).
+  // What stands between a day's shifts and the report it is paid by, under the day's last shift (shared/reportNotes.ts):
+  // Hub answers the owner of everyone's days and anyone else of their own, so a team lead asks only on their own shifts.
   const ruleFrom = sales.data?.ruleFrom ?? null;
-  const dayNotes = useShiftNotes(window, page, ruleFrom !== null);
+  const dayNotes = useShiftNotes(window, page, ruleFrom !== null && (isOwner || mine));
   const notes = useMemo(() => placeNotes(model?.journal ?? [], dayNotes), [model, dayNotes]);
   const everyone = new URLSearchParams(location.search);
   everyone.delete("mine");

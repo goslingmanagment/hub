@@ -326,11 +326,11 @@ describe("the ledger's windows", () => {
 });
 
 describe("whose days a session reads", () => {
-  it("everyone's for the owner and a team lead; one's own for a chatter, and for a narrow session whatever the role", () => {
+  it("everyone's for the owner; one's own for a team lead and a chatter, and for a narrow session whatever the role", () => {
     expect(readsEveryone({ user: { role: "owner" } })).toBe(true);
-    expect(readsEveryone({ user: { role: "team_lead" } })).toBe(true);
+    // People's shift reports from the ledger are the owner's alone, as `teamLedgerReports` is.
+    expect(readsEveryone({ user: { role: "team_lead" } })).toBe(false);
     expect(readsEveryone({ user: { role: "chatter" } })).toBe(false);
     expect(readsEveryone({ user: { role: "owner" }, narrowDeviceTokenId: 7 })).toBe(false);
-    expect(readsEveryone({ user: { role: "team_lead" }, narrowDeviceTokenId: 7 })).toBe(false);
   });
 });
