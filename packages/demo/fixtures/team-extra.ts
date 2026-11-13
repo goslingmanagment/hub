@@ -1,5 +1,5 @@
 /**
- * The smaller «Команда» answers: open customs, greetings and broadcasts,
+ * The smaller «Команда» answers: the customs paid and not given, greetings and broadcasts,
  * win-back approaches and their results. They lean on the same people,
  * pages and fans as the shifts in team-world.ts.
  */
@@ -16,23 +16,17 @@ interface CustomSeed {
   fan: number;
   text: string;
   price: number | null;
-  /** Days since payment; null — ordered, not paid. */
-  paidDaysAgo: number | null;
+  /** Days since payment. */
+  paidDaysAgo: number;
   createdDaysAgo: number;
   by: string;
 }
 
+// `teamCustoms` answers the custom orders paid or shot and not given, every row `paid`: one that still waits for the
+// fan's payment is not in it (the board «Кастомы» shows it, wb-customs.ts).
 const CUSTOMS: readonly CustomSeed[] = [
   { page: "mia-1", fan: 2, text: "Видео 6–7 мин в красном белье, медленный стриптиз, в конце зовёт его по имени (Джейк)", price: 180, paidDaysAgo: 9.4, createdDaysAgo: 9.6, by: "alex.k" },
-  { page: "mia-vip-of", fan: 0, text: "Разбор его фото голосом, 3–4 мин, честно и с юмором", price: 60, paidDaysAgo: null, createdDaysAgo: 8.1, by: "olya.m" },
-  { page: "nova-1", fan: 0, text: "Фотосет 15 фото в его футболке (размер прислал), лицо можно", price: 120, paidDaysAgo: null, createdDaysAgo: 6.3, by: "den.s" },
-  { page: "mia-3", fan: 4, text: "Голосовое 2 мин на английском: пожелание спокойной ночи, имя — Marcus", price: 45, paidDaysAgo: null, createdDaysAgo: 4.2, by: "kate.v" },
-  { page: "mia-2", fan: 1, text: "Видео в душе 4 мин, без музыки, в конце воздушный поцелуй в камеру", price: 150, paidDaysAgo: null, createdDaysAgo: 3.5, by: "alex.k" },
   { page: "nova-1", fan: 3, text: "Распаковка его подарка (туфли на каблуке) и примерка, 3–5 мин", price: 220, paidDaysAgo: 1.6, createdDaysAgo: 2.4, by: "den.s" },
-  { page: "mia-1", fan: 7, text: "Видео 1 мин: «С днём рождения, Tom» в чёрном платье", price: 40, paidDaysAgo: null, createdDaysAgo: 0.7, by: "kate.v" },
-  { page: "mia-3", fan: 11, text: "Тренировка в спортивном топе и джоггерах, 5 мин, вид сбоку", price: 90, paidDaysAgo: null, createdDaysAgo: 1.4, by: "kate.v" },
-  { page: "ivy-2", fan: 0, text: "5 фото в очках и с косичками, домашний свет", price: 35, paidDaysAgo: null, createdDaysAgo: 2.2, by: "ivan.p" },
-  { page: "nova-1", fan: 9, text: "Видео 10 мин по его сценарию «соседка зашла за солью» — ждём ответа модели, цену не назвали", price: null, paidDaysAgo: null, createdDaysAgo: 0.8, by: "den.s" },
 ];
 
 export function teamCustoms(request: DemoRequest, scope: readonly string[]): KernelOperationResponse<"teamCustoms"> {
@@ -46,18 +40,13 @@ export function teamCustoms(request: DemoRequest, scope: readonly string[]): Ker
       fanRef: fan.platformUserId,
       description: seed.text,
       priceMills: seed.price === null ? null : seed.price * 1000,
-      state: seed.paidDaysAgo === null ? "ordered" : "paid",
-      paidAt: seed.paidDaysAgo === null ? null : isoAt(now - Math.round(seed.paidDaysAgo * DAY)),
+      state: "paid",
+      paidAt: isoAt(now - Math.round(seed.paidDaysAgo * DAY)),
       createdBy: seed.by,
       createdAt: isoAt(now - Math.round(seed.createdDaysAgo * DAY)),
     };
   });
-  customs.sort((left, right) => {
-    if (left.paidAt !== null && right.paidAt !== null) return left.paidAt.localeCompare(right.paidAt);
-    if (left.paidAt !== null) return -1;
-    if (right.paidAt !== null) return 1;
-    return left.createdAt.localeCompare(right.createdAt);
-  });
+  customs.sort((left, right) => left.paidAt.localeCompare(right.paidAt));
   return { customs, serverNow: request.now.toISOString() };
 }
 

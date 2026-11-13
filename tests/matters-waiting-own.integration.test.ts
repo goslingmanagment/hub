@@ -6,7 +6,6 @@ import { createFanslyPage, createModel, openMatter, type MatterOpenInput } from 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
-import { runMattersMirror } from "../apps/runtime/src/services/matters-mirror.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -16,8 +15,8 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // owner reads every matter, but his list's number, the menu, the Home row and the
 // extension's icon count only his user's matters, the owner's role and — while
 // nobody holds it — the team lead's role. A team lead's and a chatter's counts
-// are what they read. Once the custom orders are customs' home, the matters
-// mirror opens nothing of the old per-order kind and closes what it had.
+// are what they read. «Кастомы» counts the custom orders paid and not given, the
+// lead's line.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -117,33 +116,28 @@ describe("«Ждут вас»: what waits for the viewer themself", () => {
     if (!testDb) return context.skip();
     await testDb.pool.query("insert into custom_orders (page_id, state, origin) values ($1, 'paid', 'workboard')", [pages["lora-1"]]);
     const waiting = async () => mattersWaitingResponseSchema.parse((await asSession("boss", "/api/v1/matters/waiting")).json());
-    Object.assign(app.config, { customOrdersReadEnabled: true });
-    try {
-      // Nobody leads customs and nobody holds the team lead's role: the owner's line of «Кастомы», counted.
-      const acting = await waiting();
-      expect(acting.customOrders).toBe(1);
-      expect(acting.groups.find((group) => group.id === "customs")).toMatchObject({ count: 1, to: "/workboard/decisions#customs" });
-      const withRow = acting.total;
+    // Nobody leads customs and nobody holds the team lead's role: the owner's line of «Кастомы», counted.
+    const acting = await waiting();
+    expect(acting.customOrders).toBe(1);
+    expect(acting.groups.find((group) => group.id === "customs")).toMatchObject({ count: 1, to: "/workboard/decisions#customs" });
+    const withRow = acting.total;
 
-      // A person leads customs: the count is nobody's — in no group and no number of the owner's.
-      const person = await testDb.pool.query(
-        "insert into people (code, display_name, kind, role, state, origin) values ('carol', 'Кэрол', 'human', 'chatter', 'working', 'owner') returning id",
-      );
-      await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [users.carol, person.rows[0].id]);
-      await testDb.pool.query("insert into person_rights (person_id, \"right\") values ($1, 'customs_lead')", [person.rows[0].id]);
-      const led = await waiting();
-      expect(led.customOrders).toBe(0);
-      expect(led.groups.find((group) => group.id === "customs")?.count ?? 0).toBe(0);
-      expect(led.total).toBe(withRow - 1);
-      // The lead's matters are oversight for the owner, under the person's name.
-      const lines = mattersListResponseSchema.parse((await asSession("boss", "/api/v1/matters?kind=own.test")).json()).matters;
-      expect(lines.find((one) => one.key === "own.test:carol")?.owner).toMatchObject({ kind: "user", username: "carol", displayName: "Кэрол" });
+    // A person leads customs: the count is nobody's — in no group and no number of the owner's.
+    const person = await testDb.pool.query(
+      "insert into people (code, display_name, kind, role, state, origin) values ('carol', 'Кэрол', 'human', 'chatter', 'working', 'owner') returning id",
+    );
+    await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [users.carol, person.rows[0].id]);
+    await testDb.pool.query("insert into person_rights (person_id, \"right\") values ($1, 'customs_lead')", [person.rows[0].id]);
+    const led = await waiting();
+    expect(led.customOrders).toBe(0);
+    expect(led.groups.find((group) => group.id === "customs")?.count ?? 0).toBe(0);
+    expect(led.total).toBe(withRow - 1);
+    // The lead's matters are oversight for the owner, under the person's name.
+    const lines = mattersListResponseSchema.parse((await asSession("boss", "/api/v1/matters?kind=own.test")).json()).matters;
+    expect(lines.find((one) => one.key === "own.test:carol")?.owner).toMatchObject({ kind: "user", username: "carol", displayName: "Кэрол" });
 
-      await testDb.pool.query("delete from person_rights where person_id = $1", [person.rows[0].id]);
-      expect((await waiting()).groups.find((group) => group.id === "customs")).toMatchObject({ count: 1 });
-    } finally {
-      Object.assign(app.config, { customOrdersReadEnabled: false });
-    }
+    await testDb.pool.query("delete from person_rights where person_id = $1", [person.rows[0].id]);
+    expect((await waiting()).groups.find((group) => group.id === "customs")).toMatchObject({ count: 1 });
   });
 
   it("once someone holds the team lead's role, its matters leave the owner's count; a team lead's and a chatter's counts are what they read", async (context) => {
@@ -162,34 +156,21 @@ describe("«Ждут вас»: what waits for the viewer themself", () => {
     // A team lead's own matter of a group the owner's rows were alone in: the list shows it, so the number counts it.
     await openMatter(app.db, matter("contentops.test:lead", { owner: { role: "team_lead" }, pageIds: [pages["lora-1"]!] }), SYSTEM);
     const lead = mattersWaitingResponseSchema.parse((await asSession("lead", "/api/v1/matters/waiting")).json());
-    // Customs and held sends: «не проверено» (the mirror of package D has not run yet), never a zero.
+    // «Кастомы» is the lead's line now — the order of lora-1 above, paid and not given, read from the orders themselves.
+    // Held sends: «не проверено» (the mirror of package D has not run yet), never a zero.
+    expect(lead.customOrders).toBe(1);
     expect(lead.groups.map((group) => [group.id, group.count, group.checked])).toEqual([
-      ["customs", 0, false], ["held", 0, false], ["content", 1, true], ["other", 1, true],
+      ["customs", 1, true], ["held", 0, false], ["content", 1, true], ["other", 1, true],
     ]);
-    expect(lead.failed).toEqual(["customs", "held"]);
-    // A team lead's number is what their list shows: every own matter that waits, by the list's groups.
+    expect(lead.failed).toEqual(["held"]);
+    // A team lead's number is what their list shows: every own matter that waits, by the list's groups, and the one
+    // line of the custom orders with its count.
     const leadList = mattersListResponseSchema.parse((await asSession("lead", "/api/v1/matters")).json()).matters;
-    expect(lead.total).toBe(leadList.filter((one) => one.mine && !isMatterInfoKind(one.kind)).length);
+    expect(lead.total).toBe(leadList.filter((one) => one.mine && !isMatterInfoKind(one.kind)).length + lead.customOrders);
     expect(lead.total).toBe(lead.groups.reduce((sum, group) => sum + group.count, 0));
     expect(await list("lead")).toEqual([["own.test:team-lead", true]]);
     expect(await list("alice")).toEqual([["own.test:alice", true]]);
     expect(await clientCount("alice")).toBe(1);
     expect(aliceBefore).toBe(1);
-  });
-
-  it("with the custom orders as customs' home, the mirror opens nothing of the old per-order kind and closes what it had", async (context) => {
-    if (!testDb) return context.skip();
-    await openMatter(app.db, {
-      key: "custom.paid_not_delivered:CUS-0001", kind: "custom.paid_not_delivered", source: "server", title: "Кастом оплачен, не отдан: lora-1",
-      object: null, pageIds: [pages["lora-1"]!], owner: { role: "team_lead" }, money: false, evidence: {}, link: null,
-    }, SYSTEM);
-    Object.assign(app.config, { customOrdersReadEnabled: true });
-    try {
-      await runMattersMirror(app, { now: new Date() });
-      const rows = await testDb.pool.query("select state, closed_how from matters where kind = 'custom.paid_not_delivered'");
-      expect(rows.rows).toEqual([{ state: "closed", closed_how: "cause_gone" }]);
-    } finally {
-      Object.assign(app.config, { customOrdersReadEnabled: false });
-    }
   });
 });

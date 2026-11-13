@@ -18,7 +18,6 @@ import {
   listNotificationIncidentsWithPages,
   listChatterLoginsOfPeople,
   listOpenMattersOfKinds,
-  listPageOpenCustoms,
   listSyncPages,
   listVisibleMatters,
   matterChanges,
@@ -38,7 +37,6 @@ import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { readSyncPageStatuses } from "../sync/inspect.ts";
-import { customOrdersReadOn } from "./custom-orders/readers.ts";
 import { toSyncPageStatusWire } from "../sync/requests/wire.ts";
 import { getClientHealthView } from "./client-health-view.ts";
 import { readLedgerPayouts } from "./ledger-payouts.ts";
@@ -80,15 +78,14 @@ export interface MirrorItem {
   owner?: MatterOwner;
 }
 
-/** Who writes a kind and whom it waits for: the owner, or (customs and held sends) the team leads (MATTER_MIRROR_KIND_ROLES). */
+/** Who writes a kind and whom it waits for: the owner, or (held sends) the team leads (MATTER_MIRROR_KIND_ROLES). */
 function kindMeta(kind: MatterMirrorKind): { source: MatterSource; owner: MatterOwner } {
   return { source: kind.startsWith("ledger.") ? "ledger" : "server", owner: { role: MATTER_MIRROR_KIND_ROLES[kind] } };
 }
 
 const SYSTEM: MatterActor = { door: "system" };
-/** What the screens read at most: «Ждут вас»'s publications list, the team's customs. */
+/** What the screens read at most: «Ждут вас»'s publications list. */
 const PUBLICATIONS_LIMIT = 1000;
-const CUSTOMS_LIMIT = 200;
 const HELD_LIMIT = 1000;
 const INCIDENTS_LIMIT = 200;
 const HISTORY_LIMIT = 200;
@@ -126,24 +123,6 @@ export function heldSendItems(sends: ReadonlyArray<{
     evidence: { attemptId: send.attemptId, purpose: send.purpose, partIndex: send.partIndex, partCount: send.partCount, sentBy: send.username, sentAt: send.createdAt },
     link: `/workboard/decisions?send=${encodeURIComponent(send.attemptId)}#held`,
   }));
-}
-
-/**
- * Customs paid and not delivered among the team's open customs (Решения →
- * «Кастомы: оплачены, не отданы»; «Ждут вас» `customs`): the paid of a read of
- * at most 200, so the cap is the screens' too. No price: a team lead reads them.
- */
-export function paidCustomItems(customs: ReadonlyArray<{ id: number; pageLabel: string; state: string; paidAt: string | null; createdBy: string }>): { items: MirrorItem[]; capped: boolean } {
-  const items = customs.filter((custom) => custom.state === "paid").map((custom) => ({
-    key: `custom.paid_not_delivered:${custom.id}`,
-    title: `Кастом оплачен, не отдан: ${custom.pageLabel}`,
-    object: { type: "fan_custom", id: String(custom.id) },
-    pageLabels: [custom.pageLabel],
-    money: false,
-    evidence: { customId: custom.id, paidAt: custom.paidAt, createdBy: custom.createdBy },
-    link: "/workboard/decisions#customs",
-  }));
-  return { items, capped: items.length === CUSTOMS_LIMIT };
 }
 
 /** The engine modes in which a page's status is read (apps/dashboard engineDisplay.ts ENGINE_READING_MODES). */
@@ -529,15 +508,6 @@ export async function runMattersMirror(
   await read(["send.held"], async () => {
     const list = await listClientSendCustody(app.db, { state: "held", pages: "all", limit: HELD_LIMIT, offset: 0 });
     return [{ kind: "send.held", items: heldSendItems(list.items.map((item) => ({ ...item, createdAt: item.createdAt.toISOString() }))) }];
-  });
-  await read(["custom.paid_not_delivered"], async () => {
-    // Package I: once the custom orders are customs' home (the owner's setting), the custom checks are the one writer of
-    // what waits about an order (`custom.not_at_model`, `custom.overdue`, …): this old kind opens nothing and its open
-    // matters close, cause gone. «Ждут вас»'s customs row then counts the orders themselves (services/matters.ts).
-    if (await customOrdersReadOn(app)) return [{ kind: "custom.paid_not_delivered", items: [] }];
-    const customs = await listPageOpenCustoms(app.db, { pageIds: "all", limit: CUSTOMS_LIMIT });
-    const paid = paidCustomItems(customs.map((custom) => ({ ...custom, paidAt: custom.paidAt?.toISOString() ?? null })));
-    return [{ kind: "custom.paid_not_delivered", items: paid.items, capped: paid.capped }];
   });
 
   // The login pages first: a page's blocked login is its row, not a failure besides. Without them, no page is subtracted

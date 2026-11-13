@@ -212,7 +212,7 @@ describe("matters", () => {
     const first = await runMattersMirror(app, { now: start });
     // Every source in Hub's own database answers (OnlyFans' history requests too, as not applicable while its API is off).
     expect([...first.answered].sort()).toEqual([
-      "custom.paid_not_delivered", "extension.critical", "history.request", "incident.open", "page.login_needed",
+      "extension.critical", "history.request", "incident.open", "page.login_needed",
       "publication.draft", "publication.unknown", "send.held",
     ]);
     // The ledger is not connected here: its kinds did not answer.
@@ -235,7 +235,7 @@ describe("matters", () => {
     expect(owner.failed).toEqual(["questions", "reports", "people", "ledger"]);
     expect(owner.total).toBe(owner.groups.reduce((sum, group) => sum + group.count, 0));
     // A team lead's «Ждут вас»: their own and their role's on their pages, by the list's groups — the role's matter on
-    // lora-1 of the rights test in «Другие дела»; customs and held sends answered and are empty; nothing failed.
+    // lora-1 of the rights test in «Другие дела»; held sends answered and are empty, no custom order waits; nothing failed.
     const lead = await waiting("lead");
     expect(lead.groups.map((group) => [group.id, group.count])).toEqual([["other", 1]]);
     expect(lead).toMatchObject({ total: 1, failed: [] });

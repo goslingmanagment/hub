@@ -4,12 +4,13 @@ import type { Database } from "../client.ts";
 import { isOwnerLogin } from "./chatter-activity.ts";
 import { listOnlyfansUnlockMatches } from "./onlyfans-unlocks.ts";
 
-// The sales of a shift and their facts (Chat Memory week 4, 0311), and what the
-// draft shift report's tables hold of them: the chatters' marks, the owner's
-// splits and which marks a confirmed report held. Nothing writes those tables
-// any more — what a shift pays is the chatter's posted report, which the agency
-// ledger reads — but `agentTeamSales` still passes them to the ledger as they
-// stand (the tables are kept, never dropped). Hub lists and counts.
+// The sales of a shift and their facts (Chat Memory week 4). The draft shift
+// report's own tables of 0311 and 0318 (`shift_reports`, `shift_report_lines`,
+// `shift_report_marks`, `shift_report_resolutions`, `shift_report_credits`) have
+// no reader or writer left: a shift's report is its hand-in (`shift-handins.ts`),
+// whose a sale is — the owner's decisions (`sale-claims.ts`). They stay in the
+// database, empty; only erasure still goes over them (services/erasure). Hub
+// lists and counts.
 
 export interface ShiftSale {
   transactionId: number;
@@ -204,67 +205,6 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
     writers: (row.writers ?? []).map((writer) => ({ userId: Number(writer.user_id), username: writer.username, messages: Number(writer.messages) })),
     withoutAuthor: Math.max(0, Number(row.outgoing) - Number(row.written)),
   }));
-}
-
-export type ShiftMark = "mine" | "share" | "not_mine";
-
-export interface ShiftMarkRow {
-  userId: number;
-  username: string;
-  transactionId: number;
-  mark: ShiftMark;
-  shareWithUserId: number | null;
-  shareWithUsername: string | null;
-  amountMills: number | null;
-  note: string | null;
-}
-
-/** Every chatter's marks on these sales. */
-export async function listShiftMarks(db: Database, input: { transactionIds: readonly number[] }): Promise<ShiftMarkRow[]> {
-  if (input.transactionIds.length === 0) return [];
-  const result = await db.execute<{
-    user_id: string | number; username: string; transaction_id: string | number; mark: ShiftMark; share_with_user_id: string | number | null;
-    share_username: string | null; amount_mills: string | number | null; note: string | null;
-  }>(sql`
-    select m.user_id, u.username, m.transaction_id, m.mark, m.share_with_user_id, s.username as share_username, m.amount_mills, m.note
-    from shift_report_marks m
-    join users u on u.id = m.user_id
-    left join users s on s.id = m.share_with_user_id
-    where m.transaction_id = any(${sql.param(input.transactionIds.map(String))}::bigint[])`);
-  return result.rows.map((row) => ({
-    userId: Number(row.user_id),
-    username: row.username,
-    transactionId: Number(row.transaction_id),
-    mark: row.mark,
-    shareWithUserId: row.share_with_user_id === null ? null : Number(row.share_with_user_id),
-    shareWithUsername: row.share_username,
-    amountMills: row.amount_mills === null ? null : Number(row.amount_mills),
-    note: row.note,
-  }));
-}
-
-/** The owner's split of each of these sales that has one (written while Hub still took splits): percent per person. */
-export async function listShiftResolutions(
-  db: Database,
-  input: { transactionIds: readonly number[] },
-): Promise<Map<number, Array<{ userId: number; percent: number }>>> {
-  if (input.transactionIds.length === 0) return new Map();
-  const result = await db.execute<{ transaction_id: string | number; shares: Array<{ userId: number; percent: number }> }>(sql`
-    select transaction_id, shares from shift_report_resolutions
-    where transaction_id = any(${sql.param(input.transactionIds.map(String))}::bigint[])`);
-  return new Map(result.rows.map((row) => [
-    Number(row.transaction_id),
-    row.shares.map((share) => ({ userId: Number(share.userId), percent: Number(share.percent) })),
-  ]));
-}
-
-/** Which chatters' marks of these sales their confirmed shift reports hold (`<userId>:<transactionId>`): only those are credited. */
-export async function listConfirmedMarkKeys(db: Database, input: { transactionIds: readonly number[] }): Promise<Set<string>> {
-  if (input.transactionIds.length === 0) return new Set();
-  const result = await db.execute<{ user_id: string | number; transaction_id: string | number }>(sql`
-    select r.user_id, l.transaction_id from shift_report_lines l join shift_reports r on r.id = l.report_id
-    where l.transaction_id = any(${sql.param(input.transactionIds.map(String))}::bigint[])`);
-  return new Set(result.rows.map((row) => `${Number(row.user_id)}:${Number(row.transaction_id)}`));
 }
 
 /** The role of each of these people: the owner's chatter login too is the owner's (`isOwnerLogin`). */

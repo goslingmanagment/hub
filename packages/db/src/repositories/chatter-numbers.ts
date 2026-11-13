@@ -53,37 +53,3 @@ export async function readShiftFans(
   const row = result.rows[0]!;
   return { writtenFans: row.written_fans ?? [], paidFans: row.paid_fans ?? [] };
 }
-
-export interface ConfirmedShiftCreditRow {
-  startedAt: Date;
-  endedAt: Date;
-  /** The report's credited net; for a page scope, only its lines on those pages. */
-  creditedMills: number;
-}
-
-/**
- * A chatter's confirmed shift reports that started since `since` (week 4),
- * with what they credit. A team lead's scope sees only the lines of its pages:
- * a report of a shift on several pages credits the others too.
- */
-export async function listConfirmedShiftCredits(
-  db: Database,
-  input: { userId: number; since: Date; pageIds: "all" | readonly number[] },
-): Promise<ConfirmedShiftCreditRow[]> {
-  const credited = input.pageIds === "all"
-    ? sql`r.credited_net_mills`
-    : sql`coalesce((
-        select sum(l.credited_mills) from shift_report_lines l
-        where l.report_id = r.id and l.page_id = any(${sql.param(input.pageIds.map(String))}::bigint[])
-      ), 0)`;
-  const result = await db.execute<{ started_at: Date | string; ended_at: Date | string; credited: string | number }>(sql`
-    select r.started_at, r.ended_at, ${credited} as credited
-    from shift_reports r
-    where r.user_id = ${input.userId} and r.started_at >= ${input.since.toISOString()}::timestamptz
-    order by r.started_at`);
-  return result.rows.map((row) => ({
-    startedAt: new Date(row.started_at),
-    endedAt: new Date(row.ended_at),
-    creditedMills: Number(row.credited),
-  }));
-}

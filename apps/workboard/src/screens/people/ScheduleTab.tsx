@@ -266,11 +266,11 @@ function SlotLine({ slot, today, quiet = false }: { slot: Slot; today: string; q
 }
 
 /**
- * Where the shift report takes a person's slot from, while it is not this card: the agency's knowledge base (the
- * person's card in /OS) — Hub's people mirror there still writes in shadow. Remove the line (null) when the mirror is
- * switched on and the report reads the slot from here.
+ * A caveat under the schedule while what is set here does not reach its readers; null — none. The shift report reads
+ * a person's slot from their card in the agency's knowledge base, and since 2026-11-13 Hub's people mirror writes the
+ * card's header from this registry every hour: a slot set here is the slot the report reads.
  */
-const SLOT_SOURCE_NOTE: string | null = "Пока отчёт смены берёт слот из карточки человека в базе знаний: график отсюда дойдёт туда, когда включат зеркало.";
+const SLOT_SOURCE_NOTE: string | null = null;
 
 /**
  * The slots, by line: the person's line for every page, then each page that has its own; under each line its earlier and

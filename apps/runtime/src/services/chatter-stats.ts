@@ -11,7 +11,6 @@ import {
   findFirstChatterActivity,
   listActivePeople,
   listAuthoredSends,
-  listConfirmedShiftCredits,
   listPpvFacts,
   listReplyDelayCounts,
   listSaleLastWriters,
@@ -25,7 +24,6 @@ import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, requireSessionUser, type AuthPrincipal } from "./auth.ts";
-import { revenueOfShifts } from "./chatter-numbers.ts";
 import {
   SALE_LAST_WRITER_HOURS,
   dayOfShift,
@@ -272,7 +270,7 @@ export async function computeChatterStats(
   const heldSales = held.flatMap((one) => one.sales);
   const creditedSales = ruledHeld === null ? [] : [...[...ruledHeld.credits.values()].flat(), ...ruledHeld.withoutShift.map((one) => one.sale)];
 
-  const [team, sendsRead, ppvRows, replyRows, reports] = await Promise.all([
+  const [team, sendsRead, ppvRows, replyRows] = await Promise.all([
     // Whose shifts hold these sales too.
     heldSales.length === 0 && creditedSales.length === 0
       ? Promise.resolve(new Map<number, PersonWork>())
@@ -282,7 +280,6 @@ export async function computeChatterStats(
     repliesTo <= from
       ? Promise.resolve([])
       : listReplyDelayCounts(db, { from, to: repliesTo, pages: pageIds, burstMinFans: MASS_SEND_MIN_CHATS, delayBounds: DELAY_BOUNDS }),
-    listConfirmedShiftCredits(db, { userId, since: new Date(from.getTime() - DAY_MS), pageIds }),
   ]);
   const othersOf = new Map<number, number[]>();
   const usernames = new Map<number, string>();
@@ -340,12 +337,11 @@ export async function computeChatterStats(
   const sends = sendsRead.filter((send) => send.at >= from && send.at < to);
   const salesByFan = new Map<string, ShiftSale[]>();
   for (const sale of sales) if (sale.fanRef !== null) push(salesByFan, `${sale.pageId}:${sale.fanRef}`, sale);
-  const confirmations = revenueOfShifts(work, current.map((one) => one.work), reports);
 
   const written = new Set<string>();
   const paid = new Set<string>();
   let sendAt = 0;
-  const shifts = current.map(({ work: shift, sales: own }, index) => {
+  const shifts = current.map(({ work: shift, sales: own }) => {
     while (sendAt < sendsRead.length && sendsRead[sendAt]!.at.getTime() < shift.startedAt) sendAt += 1;
     const ownSends: AuthoredSendRow[] = [];
     for (let at = sendAt; at < sendsRead.length && sendsRead[at]!.at.getTime() < shift.endedAt; at += 1) ownSends.push(sendsRead[at]!);
@@ -353,7 +349,6 @@ export async function computeChatterStats(
     for (const key of fans.written) written.add(key);
     for (const key of fans.paid) paid.add(key);
     const overlapping = own.filter((sale) => together.has(sale.transactionId));
-    const confirmation = confirmations[index]!;
     return {
       date: dayOf(shift),
       startedAt: iso(shift.startedAt),
@@ -369,7 +364,9 @@ export async function computeChatterStats(
       ppvSent: ownSends.filter((send) => send.priced).length,
       fansWritten: fans.written.length,
       fansPaid: fans.paid.length,
-      confirmedNetMills: confirmation.confirmed ? confirmation.revenueMills : null,
+      // The confirmed shift reports of week 4 are gone (nothing writes or reads `shift_reports`): no shift is
+      // confirmed, as it has been since; the field stays in the answer, empty. A shift's report is its hand-in.
+      confirmedNetMills: null,
       sales: own.map((sale) => ({
         at: sale.occurredAt.toISOString(),
         netMills: sale.netMills,
@@ -462,8 +459,9 @@ export async function computeChatterStats(
       perHourMills: perHour(salesNetMills, workedMinutes),
       overlapNetMills: sum((shift) => shift.overlapNetMills),
       byKind,
-      confirmedNetMills: sum((shift) => shift.confirmedNetMills ?? 0),
-      unconfirmedShifts: shifts.filter((shift) => !shift.ongoing && shift.confirmedNetMills === null).length,
+      // Nothing is confirmed (see `confirmedNetMills` of a shift): every ended shift counts as not confirmed.
+      confirmedNetMills: 0,
+      unconfirmedShifts: shifts.filter((shift) => !shift.ongoing).length,
       messages: sends.length,
       fansWritten: written.size,
       fansPaid: paid.size,

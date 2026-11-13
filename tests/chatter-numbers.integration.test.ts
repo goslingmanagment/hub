@@ -112,12 +112,14 @@ describe("the numbers of a chatter's shift", () => {
       textMessages: 2,
       aiUnedited: 0,
     });
-    const numbers = numbersOf([{ row, workedMinutes: 60, revenueMills: 20_000 }]);
+    const numbers = numbersOf([{ row, workedMinutes: 60 }]);
     expect(numbers).toMatchObject({
-      revenuePerHourMills: 20_000, ppvShare: 0.5, replies: 1, replyMedianSeconds: 600, repliesWithinHour: 1, ppvAveragePriceMills: 25_000,
+      ppvShare: 0.5, replies: 1, replyMedianSeconds: 600, repliesWithinHour: 1, ppvAveragePriceMills: 25_000,
+      // Revenue was the old confirmed shift report's: the fields stay in the answer, empty.
+      revenueMills: null, revenuePerHourMills: null,
     });
     // The same fan written to in two shifts of the week is one fan.
-    expect(numbersOf([{ row, workedMinutes: 60, revenueMills: null }, { row, workedMinutes: 60, revenueMills: null }]))
+    expect(numbersOf([{ row, workedMinutes: 60 }, { row, workedMinutes: 60 }]))
       .toMatchObject({ fansWritten: 1, fansPaid: 1, messages: 4 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -214,9 +216,9 @@ describe("the numbers of a chatter's shift", () => {
     expect(review.filter((message) => message.sent).map((message) => message.mass)).toEqual([false, false, false, false, false]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("shows a lead one shift and its revenue on the lead's page, though the shift went through another page", async (context) => {
+  it("shows a lead one shift on the lead's page, though the shift went through another page", async (context) => {
     if (!testDb) return context.skip();
-    // Коля works page A, then page B (not the lead's), then A again — one shift. His report credits $40 on A, $10 on B.
+    // Коля works page A, then page B (not the lead's), then A again — one shift.
     const model = await createModel(app.db, { slug: "split", name: "Split" });
     const [a, b] = [
       (await createFanslyPage(app.db, { modelId: model!.id, label: "split-a" }))!.id,
@@ -238,33 +240,22 @@ describe("the numbers of a chatter's shift", () => {
                select 'fansly', $1, ($2::bigint + n)::text, '7400000001', $3, 'fansly-extension', false, false, $4::timestamptz + interval '1 minute' * n, 'hand'
                from generate_series(0, 29) n`, [page, 9400000000 + offset, kolya, new Date(start.getTime() + offset * MIN)]);
     }
-    const report = Number((await q(
-      `insert into shift_reports (user_id, started_at, ended_at, credited_net_mills) values ($1, $2, $3, 50000) returning id`,
-      [kolya, start, new Date(start.getTime() + 180 * MIN)])).rows[0].id);
-    const fanId = Number((await q("insert into fans (platform, platform_user_id, username) values ('fansly', '7400000001', 'split') returning id")).rows[0].id);
-    for (const [name, page, net] of [["split-a", a, 40_000n], ["split-b", b, 10_000n]] as const) {
-      await upsertTransaction(app.db, {
-        platformAccountId: page, source: "fansly:rest", fanId, transactionId: name, rawType: "7001", canonicalType: "tip", transactionState: "posted",
-        rawStatus: "ok", grossAmountMills: net, sourceDestinationAmountMills: net, creatorNetAmountMills: net, occurredAt: new Date(start.getTime() + 30 * MIN),
-      });
-      const id = (await q("select id from transactions where transaction_id = $1", [name])).rows[0].id;
-      await q(`insert into shift_report_lines (report_id, transaction_id, page_id, mark, net_mills, credited_mills, occurred_at)
-               values ($1, $2, $3, 'mine', $4, $4, $5)`, [report, id, page, Number(net), new Date(start.getTime() + 30 * MIN)]);
-    }
     const lead = { authMethod: "session", user: { id: kolya, role: "owner" } } as never;
     const response = await readTeamChatterNumbers(app, lead, {
       from: new Date(start.getTime() - MIN).toISOString(), to: new Date().toISOString(), pageScope: [a],
     });
     const numbers = response.chatters.find((one) => one.username === "kolya")!;
     // One shift, however little of it the lead's page holds: a view of a page does not cut it in two.
-    expect(numbers.shifts.map((shift) => shift.numbers.revenueMills)).toEqual([40_000]);
-    expect(numbers.week.revenueMills).toBe(40_000);
+    expect(numbers.shifts).toHaveLength(1);
+    // The confirmed shift reports are gone: no shift is confirmed and none has revenue; the fields stay, empty.
+    expect(numbers.shifts[0]).toMatchObject({ confirmed: false, numbers: { revenueMills: null, revenuePerHourMills: null } });
+    expect(numbers.week).toMatchObject({ shifts: 1, unconfirmedShifts: 1, revenueMills: null, revenuePerHourMills: null });
 
     // One person asked: the same numbers, nobody else; the lead's pages still decide.
     const window = { from: new Date(start.getTime() - MIN).toISOString(), to: new Date().toISOString() };
     const one = await readTeamChatterNumbers(app, lead, { ...window, userId: kolya, pageScope: [a] });
     expect(one.chatters.map((chatter) => chatter.username)).toEqual(["kolya"]);
-    expect(one.chatters[0]!.week.revenueMills).toBe(40_000);
+    expect(one.chatters[0]!.week).toEqual(numbers.week);
     const offScope = await readTeamChatterNumbers(app, lead, { ...window, userId: kolya, pageScope: [pageId] });
     expect(offScope.chatters).toEqual([]);
     const someoneElse = await readTeamChatterNumbers(app, lead, { ...window, userId: vanya, pageScope: [a] });

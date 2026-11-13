@@ -154,14 +154,14 @@ describe("customs of a fan", () => {
       "insert into fans (platform, platform_user_id, username) values ('fansly', '7300000009', 'elsewhere') returning id",
     )).rows[0]!.id);
     await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [stranger, loraId]);
-    const custom = Number((await testDb.pool.query<{ id: string }>(
-      `insert into fan_customs (page_id, fan_id, description, state, created_by_user_id)
-       select $1, $2, 'видео', 'ordered', id from users where username = 'vanya' returning id`,
-      [loraId, stranger],
-    )).rows[0]!.id);
+    // His order on the other page, the chatter's own to cancel there: through this page it is not found and stays as it was.
+    const custom = await recordCustomOrder(app, {
+      pageId: loraId, fanId: stranger, buyer: null, conversationRef: null, card: { task: "видео" }, deadlineOn: null,
+      acceptedByUserId: await fixtureUserId(app, "vanya"), origin: "agent", state: "paid", actor: { door: "system" },
+    });
 
     expect((await post("", { description: "фото" }, "7300000009")).statusCode).toBe(404);
     expect((await post(`/${custom}`, { action: "cancel" }, "7300000009")).statusCode).toBe(404);
-    expect((await testDb.pool.query("select state from fan_customs where id = $1", [custom])).rows[0].state).toBe("ordered");
+    expect((await testDb.pool.query("select state from custom_orders where id = $1", [custom])).rows[0].state).toBe("paid");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

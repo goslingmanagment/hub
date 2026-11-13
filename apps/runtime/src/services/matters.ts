@@ -54,7 +54,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
-import { awaitingGivingOf, customOrdersReadOn, customsLeadOwner } from "./custom-orders/readers.ts";
+import { awaitingGivingOf, customsLeadOwner } from "./custom-orders/readers.ts";
 import { loadEffectiveConfigField } from "./effective-config.ts";
 import { AppError, ConflictError, NotFoundError } from "./errors.ts";
 
@@ -132,7 +132,7 @@ export function matterWeight(matter: Pick<MatterRow, "kind" | "evidence">): numb
 /**
  * «Ждут вас» by the list's groups (contracts waiting-groups.ts, the one table): a group per kind of the viewer's own
  * open matters, in the list's order, never «Для сведения»; counted as the list counts — one per matter, and the
- * custom orders' number in «Кастомы» where they are customs' home. A group is `checked: false` when a source of it
+ * custom orders' number in «Кастомы». A group is `checked: false` when a source of it
  * (a kind the viewer's checks keep, `trackedKinds`, or a kind of its open matters) did not answer lately; such a group
  * is shown with what it has, and a group with nothing and everything answered is left out.
  */
@@ -197,14 +197,13 @@ export function matterIsMine(matter: Pick<MatterRow, "owner">, viewer: MatterVie
 }
 
 /**
- * «Кастомы»'s orders while the custom orders are customs' home: the orders paid or shot and not given, of the viewer's
- * pages (the owner every page); null — the read failed; undefined — the old kind counts. It is the lead's line: the
- * viewer's only while customs are led by the team lead's role they hold (`customsLeadOwner`). When a person leads
- * customs it is nobody's (zero): that person reads their own matters, the owner sees them under «Ждут других» and has
- * the board.
+ * «Кастомы»'s orders: the orders paid or shot and not given, of the viewer's pages (the owner every page); null — the
+ * read failed; undefined — a chatter's, who has no such line. It is the lead's line: the viewer's only while customs
+ * are led by the team lead's role they hold (`customsLeadOwner`). When a person leads customs it is nobody's (zero):
+ * that person reads their own matters, the owner sees them under «Ждут других» and has the board.
  */
 async function customOrdersCount(app: MattersApp, viewer: MatterViewer): Promise<number | null | undefined> {
-  if (viewer.role === "chatter" || !(await customOrdersReadOn(app))) return undefined;
+  if (viewer.role === "chatter") return undefined;
   if ("userId" in (await customsLeadOwner(app))) return 0;
   try {
     return (await awaitingGivingOf(app, { pageIds: viewer.role === "owner" ? "all" : viewer.pageIds, limit: 5000 })).length;

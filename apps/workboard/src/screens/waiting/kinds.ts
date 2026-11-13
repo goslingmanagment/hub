@@ -21,7 +21,7 @@ export function groupOfAnchor(hash: string): WaitingGroupId | null {
   return WAITING_GROUPS.some((group) => group.id === id) ? (id as WaitingGroupId) : null;
 }
 
-/** What could not be checked, in a few words: «Не удалось проверить: кастомы, проверки ledger». */
+/** What could not be checked, in a few words: «Не удалось проверить: зависшие отправки, проверки ledger». */
 const UNCHECKED_WORD: Readonly<Record<string, string>> = {
   "publication.draft": "посты на утверждение",
   "publication.unknown": "исход публикаций",
@@ -29,7 +29,6 @@ const UNCHECKED_WORD: Readonly<Record<string, string>> = {
   "ledger.report_post": "отчёты смен",
   "ledger.paid_day_changed": "отчёты смен",
   "report.post_fix": "отчёты смен",
-  "custom.paid_not_delivered": "кастомы",
   "send.held": "зависшие отправки",
   "page.login_needed": "вход в Fansly",
   "incident.open": "сбои",

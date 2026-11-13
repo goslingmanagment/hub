@@ -15,7 +15,6 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   listAllAutomatedTexts,
-  listConfirmedShiftCredits,
   listPagesByLabels,
   listSentGenerationLinks,
   listShiftReviewGenerations,
@@ -56,10 +55,14 @@ import {
  * for, `shiftChatsOf`; its AI texts, `chatOriginsOf`) counted by the review's
  * rules (`shiftReviewWaits`, `shiftReviewCounts`, `shiftReviewAiCounts` in
  * packages/contracts). Only messages with the chatter as their author are the
- * chatter's — a message without an author is nobody's; revenue only from the
- * confirmed shift report (week 4), and for a team lead only its lines on the
- * lead's pages. The same for Fansly and OnlyFans. A guide, not a basis for pay.
- * Database only.
+ * chatter's — a message without an author is nobody's. The same for Fansly and
+ * OnlyFans. A guide, not a basis for pay. Database only.
+ *
+ * Revenue was the confirmed shift report's of week 4 (`shift_reports`): nothing
+ * writes or reads those tables any more, so `revenueMills`, `revenuePerHourMills`
+ * and `confirmed` stay in the answer as they have been since — empty, every
+ * shift not confirmed. A shift's money is «Смены»' (`teamShiftSales`), its
+ * report the hand-in (shift-handins.ts).
  */
 
 const DAY_MS = 86_400_000;
@@ -91,7 +94,6 @@ export interface ShiftNumbersRow {
 
 interface ShiftInput {
   workedMinutes: number;
-  revenueMills: number | null;
   row: ShiftNumbersRow;
 }
 
@@ -198,71 +200,21 @@ function averagePrice(prices: readonly number[]): number | null {
 }
 
 /**
- * Each confirmed report's shift, by the shift's index: the piece of work it overlaps most (a tie: the one that began
- * with it). A report is written with its shift's bounds of the day, and a later rule of a shift may move them (#1081
- * moved the start of 14 closed shifts): the report stays that shift's, not a look-in's beside it. A shift may hold two
- * when a rule joins two pieces of work. Pure.
- */
-export function reportsOfShifts<R extends { startedAt: Date; endedAt: Date }>(
-  shifts: ReadonlyArray<{ startedAt: number; endedAt: number }>,
-  reports: readonly R[],
-): Map<number, R[]> {
-  const out = new Map<number, R[]>();
-  for (const report of reports) {
-    const start = report.startedAt.getTime();
-    const end = report.endedAt.getTime();
-    let best = -1;
-    let bestOverlap = 0;
-    shifts.forEach((shift, index) => {
-      const overlap = Math.min(end, shift.endedAt) - Math.max(start, shift.startedAt);
-      if (overlap > bestOverlap || (overlap === bestOverlap && overlap > 0 && shift.startedAt === start)) {
-        best = index;
-        bestOverlap = overlap;
-      }
-    });
-    if (best >= 0) out.set(best, [...(out.get(best) ?? []), report]);
-  }
-  return out;
-}
-
-/**
- * Each of `shifts`' confirmed report and the revenue it shows. A report is the shift's the report screen gives it
- * (`reportsOfShifts`: the piece of `work`, all of the person's work read, it overlaps most), so it stays its shift's when
- * a later rule moved the shift's bounds; a shift holding two (a rule joined two pieces of work) shows both. `shifts` are
- * pieces of `work`. Pure.
- */
-export function revenueOfShifts<W extends { startedAt: number; endedAt: number }>(
-  work: readonly W[],
-  shifts: readonly W[],
-  reports: ReadonlyArray<{ startedAt: Date; endedAt: Date; creditedMills: number }>,
-): Array<{ confirmed: boolean; revenueMills: number | null }> {
-  const reportsOf = reportsOfShifts(work, reports);
-  return shifts.map((shift) => {
-    const own = reportsOf.get(work.indexOf(shift));
-    return own === undefined
-      ? { confirmed: false, revenueMills: null }
-      : { confirmed: true, revenueMills: own.reduce((sum, report) => sum + report.creditedMills, 0) };
-  });
-}
-
-/**
  * The numbers of one or more shifts together: a fan written to in several counts once; `waitingAtEnd` of several is
  * their average; the median reply is the review's, to the second. Pure.
  */
 export function numbersOf(shifts: readonly ShiftInput[]): ChatterNumbers {
   const rows = shifts.map((shift) => shift.row);
   const sum = (pick: (row: ShiftNumbersRow) => number) => rows.reduce((total, row) => total + pick(row), 0);
-  const confirmed = shifts.filter((shift) => shift.revenueMills !== null);
-  const revenue = confirmed.length === 0 ? null : confirmed.reduce((total, shift) => total + shift.revenueMills!, 0);
-  const confirmedMinutes = confirmed.reduce((total, shift) => total + shift.workedMinutes, 0);
   const allMessages = sum((row) => row.messages + row.massMessages);
   const ppvSent = sum((row) => row.ppvSent);
   const delays = rows.flatMap((row) => row.replyDelays);
   const middle = shiftReviewMedian(delays);
   return {
     workedMinutes: shifts.reduce((total, shift) => total + shift.workedMinutes, 0),
-    revenueMills: revenue,
-    revenuePerHourMills: revenue === null || confirmedMinutes === 0 ? null : Number((BigInt(revenue) * 60n) / BigInt(confirmedMinutes)),
+    // No confirmed report any more (the header): the fields stay, empty.
+    revenueMills: null,
+    revenuePerHourMills: null,
     fansWritten: new Set(rows.flatMap((row) => row.writtenFans)).size,
     fansPaid: new Set(rows.flatMap((row) => row.paidFans)).size,
     messages: sum((row) => row.messages),
@@ -331,10 +283,9 @@ export async function readTeamChatterNumbers(
 
   // As the review reads a shift: its pages, the automated texts, the colleagues' shifts.
   const chatterIds = [...new Set(jobs.map((job) => job.userId))];
-  const [known, autoTexts, reports] = await Promise.all([
+  const [known, autoTexts] = await Promise.all([
     listPagesByLabels(app.db, [...new Set(jobs.flatMap(({ shift }) => shiftPageLabels(shift)))]),
     listAllAutomatedTexts(app.db),
-    Promise.all(chatterIds.map((userId) => listConfirmedShiftCredits(app.db, { userId, since: new Date(from.getTime() - DAY_MS), pageIds: scope }))),
   ]);
   const shiftsOfAll = jobs.some(({ shift }) => shiftNeedsColleagues(shift)) ? piecesOf(others ?? people, "shift") : [];
   const openings = autoOpenings(autoTexts);
@@ -347,14 +298,14 @@ export async function readTeamChatterNumbers(
     });
   });
 
-  const chatters: TeamChatterNumbersResponse["chatters"] = chatterIds.map((userId, chatter) => {
+  const chatters: TeamChatterNumbersResponse["chatters"] = chatterIds.map((userId) => {
     const mine = jobs.flatMap((job, index) => (job.userId === userId ? [{ shift: job.shift, row: rows[index]! }] : []));
-    const revenue = revenueOfShifts(people.get(userId)!.work, mine.map((one) => one.shift), reports[chatter]!);
-    const computed = mine.map((one, index) => ({ ...one, workedMinutes: one.shift.workedMinutes, ...revenue[index]! }));
+    const computed = mine.map((one) => ({ ...one, workedMinutes: one.shift.workedMinutes }));
     return {
       userId,
       username: people.get(userId)!.username,
-      week: { ...numbersOf(computed), shifts: computed.length, unconfirmedShifts: computed.filter((one) => !one.confirmed).length },
+      // No shift has a confirmed report (the header): every one counts as not confirmed, as it has since.
+      week: { ...numbersOf(computed), shifts: computed.length, unconfirmedShifts: computed.length },
       shifts: computed
         .sort((a, b) => b.shift.startedAt - a.shift.startedAt)
         .map((one) => ({
@@ -362,7 +313,7 @@ export async function readTeamChatterNumbers(
           endedAt: new Date(one.shift.endedAt).toISOString(),
           ongoing: one.shift.ongoing,
           pages: [...one.shift.pages.keys()].sort(),
-          confirmed: one.confirmed,
+          confirmed: false,
           numbers: numbersOf([one]),
         })),
     };

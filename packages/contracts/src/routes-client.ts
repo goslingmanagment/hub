@@ -3415,9 +3415,11 @@ export const CHATTER_NUMBERS_MAX_DAYS = 31;
  */
 export const chatterNumbersSchema = z.object({
   workedMinutes: count,
-  /** Credited by confirmed shift reports; null — not confirmed (a week: the confirmed shifts only). */
+  /**
+   * Was: credited by the confirmed shift reports (Chat Memory week 4), and per worked hour of the confirmed shifts.
+   * Those reports are gone — a shift's report is its hand-in — so both are always null; they stay for the answer's shape.
+   */
   revenueMills: mills.nullable(),
-  /** `revenueMills` per worked hour of the confirmed shifts. */
   revenuePerHourMills: mills.nullable(),
   fansWritten: count,
   /** Of `fansWritten`: paid on the page after the chatter's first message to them in the shift, before its end. */
@@ -3461,6 +3463,7 @@ export const teamChatterNumbersResponseSchema = z.object({
   chatters: z.array(z.object({
     userId: intId,
     username: z.string(),
+    /** `unconfirmedShifts` is every shift, and a shift's `confirmed` always false: the confirmed reports are gone (`revenueMills`). */
     week: chatterNumbersSchema.extend({ shifts: count, unconfirmedShifts: count }),
     shifts: z.array(z.object({
       startedAt: isoTimestamp,
