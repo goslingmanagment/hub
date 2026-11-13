@@ -95,6 +95,11 @@ the owner's machine (outside this repository); a change that moves a home or add
 - **A sale's chain of money** (whose, shift, report, accrual, payout): one read, `services/sale-chain.ts`
   (`saleChain`, agents `agentSaleChain` / `hub sale-chain`), it computes nothing anew and says «неизвестно» when a
   source does not answer. Shown only by `SaleChainTrigger` (`packages/ui/src/components/SaleChain.tsx`): the sale's amount.
+- **What stands between a day's shifts and its report**: `services/shift-report-notes.ts` (`shiftReportNotes`),
+  on the one pairing of report lines with sales, `services/report-line-pairs.ts` (the CLI `sale-rule:compare` reads the
+  same). A report line names its sale by reference (an amount added by hand too: the ledger's
+  `adds[].transaction_ref`). «Смены» and «Мои смены» show its named differences («не в отчёте», «в отчёте по
+  словам», «в посте иначе»), never a second sum compared in a browser.
 - **A custom order**: `services/custom-orders/` (table `custom_orders`, code `K-123`): one order from the fan's chat
   to the fan's hands. Doors: the extension's fan panel, Workboard «Кастомы», agents (`hub custom …`); ContentOps
   reads orders and reports files, it never closes one. Its checks (`custom-orders/checks.ts`) are the one writer of
