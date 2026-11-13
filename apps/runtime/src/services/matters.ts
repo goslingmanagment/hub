@@ -253,6 +253,8 @@ export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPr
     ...(orders === undefined ? {} : { customOrders: orders }),
   });
   return {
+    // A constant for the tabs opened before the switch was removed (contracts matters.ts): nothing of ours reads it.
+    active: true,
     groups,
     total: groups.reduce((sum, group) => sum + group.count, 0),
     failed: groups.filter((group) => !group.checked).map((group) => group.id),

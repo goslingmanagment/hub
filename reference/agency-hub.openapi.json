@@ -236410,7 +236410,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Database only. What waits for the viewer themself, every role grouped by the one table; the number is the groups' sum. A group whose source did not answer lately has `checked: false` («не удалось проверить») and is in `failed`.",
+        "description": "Database only. What waits for the viewer themself, every role grouped by the one table; the number is the groups' sum. A group whose source did not answer lately has `checked: false` («не удалось проверить») and is in `failed`. `active` is always true: a constant kept for the bundles loaded in a browser tab before the owner's switch was removed.",
         "security": [
           {
             "cookieAuth": []
@@ -236424,6 +236424,12 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "active": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
                     "groups": {
                       "type": "array",
                       "items": {
@@ -236519,6 +236525,7 @@
                     }
                   },
                   "required": [
+                    "active",
                     "groups",
                     "total",
                     "failed",

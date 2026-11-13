@@ -205,7 +205,7 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
 
         <Field
           label="Почему вы так решили (обязательно)"
-          hint={form.noteLeft < 0 ? undefined : `Заметка сохранится в журнале разборов вместе с вашим именем. До ${RESOLVE_NOTE_MAX} знаков, осталось ${form.noteLeft}.`}
+          hint={form.noteLeft < 0 ? undefined : `Заметка сохранится вместе с разбором и вашим именем. До ${RESOLVE_NOTE_MAX} знаков, осталось ${form.noteLeft}.`}
           error={form.noteLeft < 0 ? `Заметка длиннее ${RESOLVE_NOTE_MAX} знаков: сократите на ${-form.noteLeft}.` : undefined}
         >
           {(control) => (
@@ -222,7 +222,7 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
 
         {failure !== null && <Notice tone="danger" role="alert">{failure.message}</Notice>}
 
-        <Disclosure summary="Для журнала: попытка и генерация">
+        <Disclosure summary="Технические данные: попытка и генерация">
           <p className="decisions-mono">Попытка {item.attemptId} · генерация {item.generationRef}</p>
         </Disclosure>
       </form>

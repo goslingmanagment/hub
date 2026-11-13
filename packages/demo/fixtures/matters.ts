@@ -267,6 +267,7 @@ function mattersWaiting(request: DemoRequest): WaitingAnswer {
     return inGroup.length === 0 ? [] : [{ id: group.id, title: group.title, count: inGroup.length, checked: true, tone, to: waitingGroupLink(group.id) }];
   });
   return {
+    active: true,
     groups,
     total: groups.reduce((sum, group) => sum + group.count, 0),
     failed: [],

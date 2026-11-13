@@ -201,6 +201,11 @@ export const mattersWaitingQuerySchema = z.object({}).strict();
 
 export const mattersWaitingResponseSchema = z.object({
   /**
+   * Always true, and no code of ours reads it any more: a bundle loaded in a browser tab before the owner's switch was
+   * removed reads it, and without it such a tab falls back to queues that no longer have their routes.
+   */
+  active: z.literal(true),
+  /**
    * «Ждут вас» by the list's groups (waiting-groups.ts, the one table) — for every role, in both apps: a group per
    * kind the viewer's own open matters fall in, in the list's order, never «Для сведения»; the console Home's chips. A
    * group's count is the list's (one per matter; in «Кастомы» the custom orders' count too); `checked: false` — a
