@@ -56,6 +56,8 @@ LAUNCHD_TITLES = {
     "ledger-sheets": "Ledger: таблицы выплат",
     "ledger-sheets-mirror": "Ledger: зеркало в таблицы выплат",
     "mac-backup-push": "Копии мака на сервер",
+    "mac-disk-watch": "Место на маке (порог 40 ГБ)",
+    "os-people-mirror": "Зеркало людей в карточки /OS",
     "os-tasks-render": "TASKS.md из TaskIndex",
     "taskindex-backup": "Копия TaskIndex на мак",
 }
