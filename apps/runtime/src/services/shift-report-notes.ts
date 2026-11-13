@@ -190,7 +190,10 @@ export function personDayNotes(input: {
         // The post against the breakdown saved for it. A report adds up lines rounded to the cent while a line keeps its
         // thousandths, so a day of many sales may lie a few cents apart: less than the smallest sale is not a change.
         const base = sumKnown(withLines.map((day) => day.payBaseMills));
-        const apart = base === null ? 0 : base - counted.reduce((sum, line) => sum + line.netMills, 0);
+        // A post is written in whole cents: the breakdown's sum is read as the post prints it, so a post $44.00 above a
+        // breakdown of $421.582 says «+$44.00», not «+$43.99».
+        const breakdown = Math.round(counted.reduce((sum, line) => sum + line.netMills, 0) / 10) * 10;
+        const apart = base === null ? 0 : base - breakdown;
         note.postApartMills = Math.abs(apart) < ROUNDING_APART_MILLS ? 0 : apart;
       } else {
         // No breakdown to read (a post written by hand, a report handed in in Hub): the report's sum where it is another.

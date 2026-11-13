@@ -224,6 +224,12 @@ describe("a post that lies apart from its breakdown", () => {
     expect(notesOf({ shifts: day, reportDays: [report(11, "2026-11-10", [paid(own)], 32_000)] })).toMatchObject([{ postApartMills: -8_000 }]);
   });
 
+  it("reads the breakdown's sum in whole cents, as the post prints it: thousandths of the lines are not a difference", () => {
+    const fine = sale("2026-11-10 13:00", 421_582);
+    expect(notesOf({ shifts: [shift(11, "2026-11-10", [fine])], reportDays: [report(11, "2026-11-10", [paid(fine)], 465_580)] }))
+      .toMatchObject([{ postApartMills: 44_000 }]);
+  });
+
   it("cents apart is rounding, half a dollar is a change; a breakdown not posted has nothing to lie apart from", () => {
     expect(notesOf({ shifts: day, reportDays: [report(11, "2026-11-10", [paid(own)], 40_490)] })).toEqual([]);
     expect(notesOf({ shifts: day, reportDays: [report(11, "2026-11-10", [paid(own)], 39_510)] })).toEqual([]);
