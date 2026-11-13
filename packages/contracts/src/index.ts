@@ -106,6 +106,8 @@ export * from "./sale-claims.ts";
 export * from "./routes-sale-claims.ts";
 // Цепочка продажи (package T): from one sale, whose it is down to its payout.
 export * from "./routes-sale-chain.ts";
+// «Смены» and «Мои смены»: what stands between a day's shifts and the report it is paid by (`GET /api/v1/shift-report-notes`).
+export * from "./routes-shift-report-notes.ts";
 // Стирание фана: the ledger's feed of the erasures Hub completed.
 export * from "./routes-erasures.ts";
 // «Чья продажа» «со слов» through Hub (review R2b-3).

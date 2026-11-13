@@ -11,6 +11,7 @@ import { settingsHandlers } from "./settings.ts";
 import { saleChainHandlers } from "./sale-chain.ts";
 import { saleClaimHandlers } from "./sale-claims.ts";
 import { shiftReportHandlers } from "./shift-reports.ts";
+import { shiftReportNoteHandlers } from "./shift-report-notes.ts";
 import { shellHandlers } from "./shell.ts";
 import { systemHandlers } from "./system.ts";
 import { teamHandlers } from "./team.ts";
@@ -43,6 +44,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   customs: wbCustomsHandlers,
   // Отчёт смены: the demo chatter's shift rows, drafts and versions, kept in memory with every write (shift-reports.ts).
   "shift-reports": shiftReportHandlers,
+  // «Смены» and «Мои смены»: what stands between a day's shifts and the report it is paid by (shift-report-notes.ts).
+  "shift-report-notes": shiftReportNoteHandlers,
   // «Начало»: a newcomer's way to the first shift, by the scenario's stage, and where they are paid (person-start.ts).
   "person-start": personStartHandlers,
   // Заявки: claims of a sale, their answers, the owner's disputes and «мимо площадки», kept in memory (sale-claims.ts).

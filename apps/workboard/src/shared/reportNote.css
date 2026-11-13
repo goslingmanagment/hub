@@ -1,0 +1,52 @@
+/*
+ * A report day's note under its row's money (shared/ReportNote.tsx): «Смены» and «Мои смены». Tokens only.
+ */
+@layer components {
+  /*
+   * One quiet line in the warning's ink at the right edge of its column: something to look at, never the row's number.
+   * It gives its column no width (a table fits itself to its content, and a journal's money column is narrow): where
+   * the column is narrower than the line, the line runs left under the cells before it — their second line is empty —
+   * and its parts stand one under another.
+   */
+  .wb-report-note {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0 6px;
+    width: 0;
+    min-width: 100%;
+    color: var(--ui-warn-text);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 400;
+  }
+
+  .wb-report-note__item {
+    display: inline-flex;
+    flex: none;
+    gap: 6px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wb-report-note__sep {
+    color: var(--ui-text-3);
+  }
+
+  /* On hover: the words, then the sales one under another. */
+  .wb-report-note__hint,
+  .wb-report-note__sales {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .wb-report-note__hint {
+    gap: 8px;
+  }
+
+  .wb-report-note__sales {
+    gap: 2px;
+    color: var(--ui-text-2);
+    font-variant-numeric: tabular-nums;
+  }
+}

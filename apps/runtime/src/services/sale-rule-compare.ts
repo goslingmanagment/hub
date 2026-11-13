@@ -7,6 +7,7 @@ import { formatUsdFromMills, millsToNumber, sumMills } from "@agency_hub_core/sh
 
 import { readAgentTeamSales } from "./agent-team-sales.ts";
 import { dayOfWork, moscowDayOf } from "./chatter-shifts.ts";
+import { REPORTS_AFTER_DAYS, REPORTS_BEFORE_DAYS, pairReportLines, type PairLine, type PairSale } from "./report-line-pairs.ts";
 import { ruleNowOf, ruleSalesOf, ruleWorksOf, saleRuleInputs, sendersOf, usersLeftAt, type SaleRuleInput, type SaleSlotProvider } from "./sale-homes.ts";
 import {
   LEDGER_GO_RULE,
@@ -33,6 +34,9 @@ import { teamShiftSalesOf } from "./team-shift-sales.ts";
  *      depends on a schedule slot is marked.
  *  (b) every person and day: today's Workboard («Смены», `teamShiftMoney`), the rule, the ledger's facts, Gengar's
  *      layout, the posted report.
+ *  (c) every person over the range: the sales by the rule no line of their layouts pays, and what their layouts count
+ *      that is none of their sales («по словам») — by the one pairing «Смены» reads (report-line-pairs.ts), so a sale
+ *      paid in a later layout as «долёт» is paid, not «not in the layout».
  *
  * A work is whole in the range its day is in, as Workboard counts it: the sales of the day on each side of the range
  * that a work of the range holds, or that a home dates into it (the night past the last midnight), are compared too.
@@ -89,9 +93,14 @@ export interface LedgerExport {
   pages: string[];
   homes: LedgerFactHome[];
   claims: Array<{ ref: string; person: string }>;
-  /** The latest saved layout of each person and report date (not superseded). */
+  /**
+   * The latest saved layout of each person and report date (not superseded): the range's, and those of
+   * REPORTS_BEFORE_DAYS before it to REPORTS_AFTER_DAYS after it — a sale of the range may be paid in a later layout
+   * (as «Смены» reads the reports, shift-report-notes.ts).
+   */
   layouts: LedgerLayout[];
-  layoutLines: Array<{ reportId: number; ref: string | null; page: string; netMicros: number }>;
+  /** Their counted lines, each layout's in its own order. `what` — the words of an amount added by hand. */
+  layoutLines: Array<{ reportId: number; ref: string | null; page: string; netMicros: number; what?: string }>;
   posted: Array<{ person: string; reportDate: string; page: string; postedMicros: number }>;
 }
 
@@ -115,6 +124,7 @@ const int = (value: unknown) => Number(value);
 const mskStart = (day: string) => `${day}T00:00:00+03:00`;
 const nextDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10);
 const previousDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
+const shiftDay = (day: string, days: number) => new Date(Date.parse(`${day}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 
 /** Reads what the ledger holds of [first, last] (Moscow days) and the day on each side (a work the range's edge cuts). */
 export async function readLedgerExport(run: LedgerSql, range: { first: string; last: string }): Promise<LedgerExport> {
@@ -151,15 +161,17 @@ export async function readLedgerExport(run: LedgerSql, range: { first: string; l
   const claims = (await run("SELECT transaction_ref, person FROM v_sale_claims")).map((row) => ({ ref: String(row.transaction_ref), person: String(row.person) }));
   const layouts = (await run(`SELECT id, person, hub_user_id, hub_username, report_date, total_micros, status FROM (
       SELECT r.*, ROW_NUMBER() OVER (PARTITION BY COALESCE(person, hub_username), report_date ORDER BY created_at DESC, id DESC) rn
-      FROM shift_reports r WHERE source = 'agent' AND status <> 'superseded' AND report_date BETWEEN '${range.first}' AND '${range.last}')
+      FROM shift_reports r WHERE source = 'agent' AND status <> 'superseded'
+        AND report_date BETWEEN '${shiftDay(range.first, -REPORTS_BEFORE_DAYS)}' AND '${shiftDay(range.last, REPORTS_AFTER_DAYS)}')
     WHERE rn = 1 ORDER BY report_date, id`)).map((row): LedgerLayout => ({
     id: int(row.id), person: text(row.person), userId: row.hub_user_id === null ? null : int(row.hub_user_id), username: String(row.hub_username),
     reportDate: String(row.report_date), totalMicros: int(row.total_micros), status: String(row.status),
   }));
   const ids = layouts.map((layout) => layout.id).join(", ") || "0";
-  const layoutLines = (await run(`SELECT report_id, transaction_ref, page_label, net_micros FROM shift_report_lines
-    WHERE report_id IN (${ids}) AND counted = 1`)).map((row) => ({
+  const layoutLines = (await run(`SELECT report_id, transaction_ref, page_label, net_micros, what FROM shift_report_lines
+    WHERE report_id IN (${ids}) AND counted = 1 ORDER BY report_id, seq`)).map((row) => ({
     reportId: int(row.report_id), ref: text(row.transaction_ref), page: String(row.page_label), netMicros: int(row.net_micros),
+    what: text(row.what) ?? "",
   }));
   const posted = (await run(`SELECT person, report_date, page, posted_micros FROM v_report_pages
     WHERE report_date BETWEEN '${range.first}' AND '${range.last}' AND posted_micros IS NOT NULL`)).map((row) => ({
@@ -191,9 +203,13 @@ export interface SaleComparison {
   ledger: HomeView | null;
   /** The port, ledger's Go rule, on the ledger's own stored facts: must be `ledger`. */
   portOnLedger: HomeView | null;
-  /** Who Gengar's latest saved layout counted it for, net mills each. */
+  /**
+   * Who Gengar's latest saved layouts counted it for, net mills each: a line that names it (by the platform's reference
+   * or Hub's id), in the range's layouts or a later one («долёт»), and an amount added in words that pays it for the
+   * person it is by the rule (report-line-pairs.ts).
+   */
   gengar: Array<{ person: string; mills: number }>;
-  /** The people the rule gives it to whose layout of that report date does not count it (none of the layouts does). */
+  /** The people the rule gives it to whose layout of that report date does not count it — and no line of the layouts read pays it. */
   missingFromLayout: string[];
   same: boolean;
   slot: boolean;
@@ -211,6 +227,16 @@ export interface PersonDay {
   postedMills: number | null;
 }
 
+/** A person over the range, by the one pairing of report lines with sales (report-line-pairs.ts). */
+export interface PersonReported {
+  person: string;
+  userId: number | null;
+  /** Their sales by the rule dated in the range, on a day they have a layout of, that no counted line of their layouts read pays. */
+  unreported: { count: number; mills: number };
+  /** Counted lines of their layouts of the range that pay none of their sales by the rule: «по словам». */
+  byWordsMills: number;
+}
+
 export interface SaleRuleComparison {
   first: string;
   last: string;
@@ -222,6 +248,8 @@ export interface SaleRuleComparison {
   ledgerWindows: LedgerWindow[];
   sales: SaleComparison[];
   days: PersonDay[];
+  /** Everyone with a layout of the range. */
+  people: PersonReported[];
   /** Shifts whose report date is not the day the screens and the ledger's facts date them by. */
   datedApart: Array<{ person: string; startedAt: string; endedAt: string; dayOfWork: string; reportDate: string }>;
   notes: string[];
@@ -363,6 +391,11 @@ export function compareSaleRule(input: {
   platformRefOf: ReadonlyMap<string, string>;
   /** What people said and the owner decided (package G), as `sale_homes` reads them; absent — the answer's own (old) marks. */
   inputs?: ReadonlyMap<string, SaleRuleInput>;
+  /**
+   * Hub's facts of the days before the range's own read, with their slots: only for whose those sales are by the rule,
+   * so a «долёт» of last week in a layout of the range pays its sale instead of reading as «по словам». Absent — none.
+   */
+  lead?: { windows: readonly HubWindow[]; slots: readonly RuleSlot[] };
 }): SaleRuleComparison {
   const { ledger } = input;
   const notes: string[] = [];
@@ -395,6 +428,18 @@ export function compareSaleRule(input: {
     });
   }
 
+  // The same rule on the days before the range's read: whose those sales are, for the pairing alone.
+  const leadSales: Array<{ sale: AgentTeamSale; hub: HomeView }> = [];
+  for (const { answer } of input.lead?.windows ?? []) {
+    for (const work of answer.works) if (!usernames.has(work.userId)) usernames.set(work.userId, work.username);
+    const dayOf = dayOfIn(new Map(answer.works.map((work) => [work.ref, work])));
+    const ruleSales = ruleSalesOf(answer.sales, { pageIds: input.pageIds, leftAt: input.leftAt, ...(input.inputs === undefined ? {} : { inputs: input.inputs }) });
+    const homes = homesOfSales(ruleSales, ruleWorksOf(answer.works), input.lead!.slots, ruleNowOf(answer), SALE_RULE);
+    answer.sales.forEach((sale, at) => {
+      if (!hubSales.has(sale.transactionRef)) leadSales.push({ sale, hub: viewOf(homes[at]!, dayOf, sale.occurredAt) });
+    });
+  }
+
   // The port, ledger's Go, on the ledger's own facts and claims.
   const whole = ledgerWholeWorks(ledger);
   const claimedBy = new Map<string, number>();
@@ -417,19 +462,75 @@ export function compareSaleRule(input: {
   const factRows = new Map<string, LedgerFactHome[]>();
   for (const row of ledger.homes) factRows.set(row.ref, [...(factRows.get(row.ref) ?? []), row]);
 
-  // Gengar's latest layouts: who counted each sale (they name a sale by the platform's reference).
+  const fromAt = Date.parse(mskStart(input.first));
+  const toAt = Date.parse(mskStart(nextDay(input.last)));
+  const inRange = (day: string) => day >= input.first && day <= input.last;
+
+  // Gengar's latest layouts: who counted each sale. A line names its sale by the platform's reference, or by Hub's id.
   const layoutOf = new Map(ledger.layouts.map((layout) => [layout.id, layout]));
+  const personOfLayout = (layout: LedgerLayout) => layout.person ?? layout.username;
   const gengarOf = new Map<string, Array<{ person: string; mills: number }>>();
   for (const line of ledger.layoutLines) {
     if (line.ref === null) continue;
     const layout = layoutOf.get(line.reportId)!;
-    gengarOf.set(line.ref, [...(gengarOf.get(line.ref) ?? []), { person: layout.person ?? layout.username, mills: line.netMicros / 1000 }]);
+    gengarOf.set(line.ref, [...(gengarOf.get(line.ref) ?? []), { person: personOfLayout(layout), mills: line.netMicros / 1000 }]);
   }
-  const layoutDays = new Set(ledger.layouts.map((layout) => `${layout.person ?? layout.username}|${layout.reportDate}`));
+  // The layouts of the range itself: a day row and «not in the layout» are theirs; the ones around it only pay sales.
+  const layoutDays = new Set(ledger.layouts.filter((layout) => inRange(layout.reportDate)).map((layout) => `${personOfLayout(layout)}|${layout.reportDate}`));
 
-  const fromAt = Date.parse(mskStart(input.first));
-  const toAt = Date.parse(mskStart(nextDay(input.last)));
-  const inRange = (day: string) => day >= input.first && day <= input.last;
+  // Which line of a person's layouts pays which of their sales by the rule (report-line-pairs.ts), person by person.
+  interface OwnSale extends PairSale { reportDate: string }
+  interface LayoutLine extends PairLine { reportDate: string }
+  const ownSales = new Map<string, Map<string, OwnSale>>();
+  for (const { sale, hub } of [...leadSales, ...[...hubSales.values()].map((one) => ({ sale: one.sale, hub: one.hub }))]) {
+    if (hub.kind !== "shift" && hub.kind !== "visit") continue;
+    for (const share of hub.shares) {
+      const person = name(share.userId);
+      const sales = ownSales.get(person) ?? new Map<string, OwnSale>();
+      const known = sales.get(sale.transactionRef);
+      sales.set(sale.transactionRef, known !== undefined ? { ...known, netMills: known.netMills + share.mills } : {
+        hubRef: sale.transactionRef, platformRef: input.platformRefOf.get(sale.transactionRef) ?? null, pageLabel: sale.pageLabel,
+        netMills: share.mills, occurredAt: Date.parse(sale.occurredAt), reportDate: share.reportDate,
+      });
+      ownSales.set(person, sales);
+    }
+  }
+  // A person's lines, the oldest layout first: a sale two layouts count is paid by the first.
+  const linesOfLayout = new Map<number, LedgerExport["layoutLines"]>();
+  for (const line of ledger.layoutLines) linesOfLayout.set(line.reportId, [...(linesOfLayout.get(line.reportId) ?? []), line]);
+  const ownLines = new Map<string, LayoutLine[]>();
+  for (const layout of [...ledger.layouts].sort((a, b) => a.reportDate.localeCompare(b.reportDate) || a.id - b.id)) {
+    const lines = ownLines.get(personOfLayout(layout)) ?? [];
+    for (const line of linesOfLayout.get(layout.id) ?? []) {
+      lines.push({ ref: line.ref, pageLabel: line.page, netMills: line.netMicros / 1000, counted: true, what: line.what ?? "", reportDate: layout.reportDate });
+    }
+    ownLines.set(personOfLayout(layout), lines);
+  }
+  /** Who an amount added in words pays a sale for: by Hub's reference of the sale. */
+  const paidInWords = new Map<string, Array<{ person: string; mills: number }>>();
+  const reported = new Map<string, PersonReported>();
+  for (const person of new Set([...ownSales.keys(), ...ownLines.keys()])) {
+    const pairs = pairReportLines([...(ownSales.get(person)?.values() ?? [])], ownLines.get(person) ?? []);
+    for (const [sale, line] of pairs.paidBy) {
+      if (line.ref === null) paidInWords.set(sale.hubRef, [...(paidInWords.get(sale.hubRef) ?? []), { person, mills: line.netMills }]);
+    }
+    // Someone with no layout of the range has nothing to be missing from, and nothing counted by word.
+    if (!ledger.layouts.some((layout) => inRange(layout.reportDate) && personOfLayout(layout) === person)) continue;
+    const unpaid = pairs.unpaid.filter((sale) => inRange(sale.reportDate) && layoutDays.has(`${person}|${sale.reportDate}`));
+    const byWords = pairs.loose.filter((line) => inRange(line.reportDate));
+    reported.set(person, {
+      person,
+      userId: userOfPerson.get(person) ?? null,
+      unreported: { count: unpaid.length, mills: unpaid.reduce((sum, sale) => sum + sale.netMills, 0) },
+      byWordsMills: byWords.reduce((sum, line) => sum + line.netMills, 0),
+    });
+  }
+  /** Who the layouts count a sale for: the lines that name it by either reference, and the amounts in words that pay it. */
+  const gengarFor = (ref: string) => {
+    const platform = input.platformRefOf.get(ref);
+    return [...(platform === undefined || platform === ref ? [] : gengarOf.get(platform) ?? []), ...(gengarOf.get(ref) ?? []), ...(paidInWords.get(ref) ?? [])];
+  };
+
   const lastRead = ledger.windows.reduce((latest, window) => (window.to > latest ? window.to : latest), "");
   // The range's sales, and those of the day on each side that a work of the range holds or a home dates into it.
   const refs = new Set<string>();
@@ -485,8 +586,8 @@ export function compareSaleRule(input: {
       hubGo,
       ledger: fact,
       portOnLedger: port,
-      gengar: gengarOf.get(input.platformRefOf.get(ref) ?? ref) ?? [],
-      missingFromLayout: (gengarOf.has(input.platformRefOf.get(ref) ?? ref) ? [] : hub?.kind === "shift" || hub?.kind === "visit" ? hub.shares : [])
+      gengar: gengarFor(ref),
+      missingFromLayout: (gengarFor(ref).length > 0 ? [] : hub?.kind === "shift" || hub?.kind === "visit" ? hub.shares : [])
         .map((share) => ({ person: name(share.userId), reportDate: share.reportDate }))
         .filter((one) => layoutDays.has(`${one.person}|${one.reportDate}`))
         .map((one) => `${one.person} ${one.reportDate}`),
@@ -525,6 +626,7 @@ export function compareSaleRule(input: {
     }
   }
   for (const layout of ledger.layouts) {
+    if (!inRange(layout.reportDate)) continue;
     const row = keyOf(layout.userId, layout.person, layout.reportDate);
     row.layoutMills = (row.layoutMills ?? 0) + layout.totalMicros / 1000;
   }
@@ -552,6 +654,7 @@ export function compareSaleRule(input: {
     ledgerWindows: ledger.windows,
     sales,
     days: [...days.values()].sort((a, b) => a.person.localeCompare(b.person) || a.day.localeCompare(b.day)),
+    people: [...reported.values()].sort((a, b) => a.person.localeCompare(b.person)),
     datedApart,
     notes,
   };
@@ -587,10 +690,16 @@ export async function runSaleRuleComparison(db: Database, input: {
     covered = Math.max(covered, Date.parse(window.to));
   }
   if (covered < toAt) hub.push({ window: null, answer: await read(covered, toAt) });
-  const leftAt = await usersLeftAt(db, [...new Set(hub.flatMap(({ answer }) => sendersOf(answer)))]);
+  // The days before: a layout of the range pays the sales of up to REPORTS_AFTER_DAYS days before its own (a «долёт»).
+  const leadFrom = Date.parse(mskStart(shiftDay(input.first, -REPORTS_AFTER_DAYS)));
+  const lead: HubWindow[] = leadFrom < fromAt ? [{ window: null, answer: await read(leadFrom, fromAt) }] : [];
+  const every = [...hub, ...lead];
+  const leftAt = await usersLeftAt(db, [...new Set(every.flatMap(({ answer }) => sendersOf(answer)))]);
   const slots = await input.slots.slotsFor({ from: new Date(fromAt), to: new Date(toAt) });
+  const leadSlots = lead.length === 0 ? [] : await input.slots.slotsFor({ from: new Date(leadFrom), to: new Date(fromAt) });
   const days = Math.round((Date.parse(mskStart(nextDay(input.last))) - Date.parse(mskStart(input.first))) / DAY_MS);
   const workboard = await teamShiftSalesOf(db, { days, until: input.last, now: input.now, pages: "all" });
+  const saleIds = [...new Set(every.flatMap(({ answer }) => answer.sales.map((sale) => Number(sale.transactionRef))))];
   return compareSaleRule({
     first: input.first,
     last: input.last,
@@ -602,9 +711,9 @@ export async function runSaleRuleComparison(db: Database, input: {
     slots,
     slotsSource: input.slotsSource,
     workboard: workboard.chatters,
-    platformRefOf: new Map([...await listSalePlatformRefs(db, [...new Set(hub.flatMap(({ answer }) => answer.sales.map((sale) => Number(sale.transactionRef))))])]
-      .map(([id, ref]) => [String(id), ref])),
-    inputs: await saleRuleInputs(db, [...new Set(hub.flatMap(({ answer }) => answer.sales.map((sale) => Number(sale.transactionRef))))]),
+    platformRefOf: new Map([...await listSalePlatformRefs(db, saleIds)].map(([id, ref]) => [String(id), ref])),
+    inputs: await saleRuleInputs(db, saleIds),
+    lead: { windows: lead, slots: leadSlots },
   });
 }
 

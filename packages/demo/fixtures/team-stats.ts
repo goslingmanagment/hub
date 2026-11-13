@@ -35,8 +35,8 @@ function fanNameOf(fan: DemoFan): string | null {
   return profile.displayName ?? profile.username;
 }
 
-/** The screens count by the rule from this many days back (`ruleFrom`). */
-const RULE_FROM_DAYS = 14;
+/** The screens count by the rule from this many days back (`ruleFrom`); the days' notes begin there too (shift-report-notes.ts). */
+export const DEMO_RULE_FROM_DAYS = 14;
 
 function dateOf(shift: Pick<DemoShift, "startedAt" | "endedAt">): string {
   return shiftPayDay(shift);
@@ -425,7 +425,7 @@ export function teamShiftSales(request: DemoRequest, scope: readonly string[], d
     }),
     outside: outsideOf(world, scope, dayList, to, decided === null ? [] : [decided.sale]),
     // The demo agency counts by the one rule «чья продажа» from a fortnight ago, as Hub does since its switch.
-    ruleFrom: addDays(today, -RULE_FROM_DAYS),
+    ruleFrom: addDays(today, -DEMO_RULE_FROM_DAYS),
     serverNow: now.toISOString(),
   };
 }

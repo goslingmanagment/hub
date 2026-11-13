@@ -15,7 +15,7 @@ import { listUsers } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import { ServiceUnavailableError } from "./errors.ts";
 import { checkWindow, hubUsersOf, ledgerGet, list, micros, millsOf } from "./ledger-payouts.ts";
-import { accountReportOf, draftPages, parseLedgerReportDays, parseLedgerReports, reportPageOf } from "./ledger-reports.ts";
+import { accountReportOf, draftPages, parseLedgerReportDays, parseLedgerReports, reportPageOf, type LedgerReport } from "./ledger-reports.ts";
 
 /**
  * Workboard «Выплаты → Отчёты» and the reports' part of «Решения» (the owner's): every chatter's shift reports of
@@ -107,6 +107,19 @@ export async function readTeamLedgerReports(
   query: TeamLedgerReportsQuery,
   options: { fetchImpl?: typeof fetch; now?: Date } = {},
 ): Promise<TeamLedgerReportsResponse> {
+  return (await readTeamLedgerReportsWithBreakdowns(app, query, options)).answer;
+}
+
+/**
+ * `readTeamLedgerReports` and, beside it, each report day's saved breakdown as the ledger serves it, by the day's
+ * `key`: its lines name their sales (`transaction_ref`), which no answer to a browser carries. For the server's own
+ * reads (shift-report-notes.ts); a day without a breakdown — a post written by hand — has none.
+ */
+export async function readTeamLedgerReportsWithBreakdowns(
+  app: Pick<AppContext, "db" | "config" | "logger">,
+  query: TeamLedgerReportsQuery,
+  options: { fetchImpl?: typeof fetch; now?: Date } = {},
+): Promise<{ answer: TeamLedgerReportsResponse; breakdowns: Map<string, LedgerReport> }> {
   checkWindow(query.from, query.to, TEAM_LEDGER_REPORTS_MAX_DAYS);
   const window = { from: query.from, to: query.to };
   const read = { client: "workboard-reports", ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}) };
@@ -172,8 +185,10 @@ export async function readTeamLedgerReports(
     groupOf(dayKey(post.person, post.report_date), post.person, post.report_date).postIds.push(post.id);
   }
 
+  const breakdowns = new Map<string, LedgerReport>();
   const reports: TeamLedgerReportDay[] = [...groups.values()].map((group) => {
     const draft = group.draftId === null ? null : draftById.get(group.draftId) ?? null;
+    if (draft !== null) breakdowns.set(group.key, draft);
     const postedAt = group.pages.map((page) => page.postedAt).filter((at): at is string => at !== null).sort().at(-1) ?? draft?.posted_at ?? null;
     return {
       key: group.key,
@@ -206,5 +221,8 @@ export async function readTeamLedgerReports(
     link: telegramPostLink(post.peer, post.topic, post.msg_id),
   })).sort((left, right) => right.postedAt.localeCompare(left.postedAt) || right.id - left.id);
 
-  return { from: window.from, to: window.to, reports, posts: flagged, postsRead, serverNow: (options.now ?? new Date()).toISOString() };
+  return {
+    answer: { from: window.from, to: window.to, reports, posts: flagged, postsRead, serverNow: (options.now ?? new Date()).toISOString() },
+    breakdowns,
+  };
 }

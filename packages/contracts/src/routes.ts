@@ -32,6 +32,7 @@ import { peopleRouteSchemas } from "./routes-people.ts";
 import { shiftHandinRouteSchemas } from "./routes-shift-handins.ts";
 import { saleClaimRouteSchemas } from "./routes-sale-claims.ts";
 import { saleChainRouteSchemas } from "./routes-sale-chain.ts";
+import { shiftReportNoteRouteSchemas } from "./routes-shift-report-notes.ts";
 import { erasureRouteSchemas } from "./routes-erasures.ts";
 import { saleDecisionRouteSchemas } from "./routes-sale-decisions.ts";
 // One sign-in across the names Hub serves: the one-time code between names (ecosystem plan §3.2).
@@ -8368,6 +8369,7 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof peopleMessageRouteSchemas
   & typeof saleClaimRouteSchemas
   & typeof saleChainRouteSchemas
+  & typeof shiftReportNoteRouteSchemas
   & typeof erasureRouteSchemas
   & typeof saleDecisionRouteSchemas;
 export const routeSchemas: RouteSchemas = {
@@ -8390,6 +8392,7 @@ export const routeSchemas: RouteSchemas = {
   ...peopleMessageRouteSchemas,
   ...saleClaimRouteSchemas,
   ...saleChainRouteSchemas,
+  ...shiftReportNoteRouteSchemas,
   ...erasureRouteSchemas,
   ...saleDecisionRouteSchemas,
 };
