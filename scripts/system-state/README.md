@@ -14,6 +14,11 @@ batch of routines and one of copies (`PUT /api/v1/agent/system/routines`, `…/c
   and Hub shows «итог не виден»;
 - copies: the newest dated folder under each configured `~/Backups/<name>/`, its `manifest.json` when there is one.
 
+The Mac's free space is watched the same way, with no code of its own in Hub: `install-disk-watch.sh` installs a
+launchd agent that runs `disk-watch.sh` every 30 minutes (exit 1 below 40 GB free on the home volume: the nightly copy
+of Hub's base refuses below 30). The reporter sends it like any launchd agent, so two low readings in a row are the
+owner's matter, and it closes itself when there is room again.
+
 What to report lives on the Mac only, `~/.config/agency/system-state.json` (titles of jobs name people: never in
 this repository). `system-state.example.json` shows its shape with invented names.
 
@@ -22,6 +27,7 @@ python3 scripts/system-state/generate-config.py --out ~/.config/agency/system-st
 python3 scripts/system-state/report.py --dry-run                                           # the two batches, nothing sent
 python3 scripts/system-state/report.py                                                     # send (prints one JSON line)
 bash scripts/system-state/install-launchd.sh                                               # every 5 minutes (--uninstall)
+bash scripts/system-state/install-disk-watch.sh                                            # free space, every 30 minutes (--uninstall, --min-gb N)
 ```
 
 The key: `hub.credentials` in the config names an env file with `HUB_AGENT_KEY` and `HUB_BASE_URL` (a dedicated
