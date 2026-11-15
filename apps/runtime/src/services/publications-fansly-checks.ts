@@ -40,6 +40,7 @@ import {
   findPublicationMatch,
   onlyfansCheckPlan,
   settlePublicationCheck,
+  type PublicationMatchAmbiguity,
   type PublicationMatchTarget,
 } from "./publications-onlyfans-checks.ts";
 import type { OnlyfansPlatformItem } from "./publications-onlyfans-reads.ts";
@@ -110,7 +111,26 @@ export interface FanslyConclusion {
 
 const failed = (reason: string, evidence: Record<string, unknown> = {}): FanslyConclusion => ({ outcome: "read_failed", status: null, reason, evidence });
 const notFound = (reason: string | null, evidence: Record<string, unknown> = {}): FanslyConclusion => ({ outcome: "not_found", status: null, reason, evidence });
-const conclude = (status: PublicationStatus & PublicationCheckOutcome, reason: string, evidence: Record<string, unknown> = {}, platformPostRef?: string | null): FanslyConclusion =>
+/**
+ * Every reason a Fansly check writes when it concludes a status (`conclude`): the plain codes here, and the prefixed
+ * ones of the type below. A new code is added here or the check does not compile; the words of each are in the one
+ * table (contracts publication-words.ts, tests/publication-words.test.ts walks them).
+ */
+export const FANSLY_CHECK_REASONS = [
+  "story_read_unverified", "story_listed", "story_not_listed", "still_in_schedule", "not_out_yet", "id_reads_another_post",
+  "read_by_id", "still_in_schedule_by_content", "list_shows_the_id", "matched_by_content", "absent_by_id_schedule_and_timeline",
+  "found_in_schedule_by_id", "found_in_schedule", "withdraw_confirmed_by_read", "found_in_timeline", "collected_post_by_id",
+  "found_in_collected_posts", "reads_failed",
+] as const;
+/** The prefixes a reason carries a detail after (a match's ambiguity, what is not proven yet). */
+export const FANSLY_CHECK_REASON_PREFIXES = ["timeline_", "schedule_", "absent_unproven:"] as const;
+export type FanslyCheckReason =
+  | (typeof FANSLY_CHECK_REASONS)[number]
+  | `timeline_${PublicationMatchAmbiguity}`
+  | `schedule_${PublicationMatchAmbiguity}`
+  | `absent_unproven:${string}`;
+
+const conclude = (status: PublicationStatus & PublicationCheckOutcome, reason: FanslyCheckReason, evidence: Record<string, unknown> = {}, platformPostRef?: string | null): FanslyConclusion =>
   ({ outcome: status, status, reason, evidence, ...(platformPostRef === undefined ? {} : { platformPostRef }) });
 
 function itemOfPost(post: FanslyReadPost): OnlyfansPlatformItem {

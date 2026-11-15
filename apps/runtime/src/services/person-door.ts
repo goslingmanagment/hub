@@ -126,3 +126,13 @@ export async function doorPerson(
   }
   return person;
 }
+
+/**
+ * A vault album's OnlyFans API account — the day's ceiling, what the albums spent of it, what is left, the balance —
+ * is agency money: the owner's alone through the door. Anyone else gets the album's own run and cost (its estimate,
+ * what it spent, why the uploads stopped), never the account (the reviewers' P3-6).
+ */
+export function albumAccountFor<P extends { albumRun?: { account: unknown } | null | undefined }>(role: string, publication: P): P {
+  if (role === "owner" || !publication.albumRun) return publication;
+  return { ...publication, albumRun: { ...publication.albumRun, account: null } } as P;
+}
