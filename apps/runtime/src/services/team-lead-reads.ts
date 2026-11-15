@@ -13,9 +13,8 @@ export const CONSOLE_ONLY_READS: ReadonlySet<string> = new Set([
   // Главная and Деньги: the agency's income.
   "overview", "overviewGrowth", "overviewRevenue", "overviewRevenueDaily", "modelRevenueDaily", "pageRevenue", "pageRevenueDaily",
   "crossPageTransactions", "pageTransactions", "models",
-  // Фаны (Hub's for now) and the archive's conversations.
-  "crossPageFanDetail", "crossPageFanTransactions", "pageFanTransactions", "pageConversationPreview", "pageConversationMessages",
-  "spenderSeries", "archiveSearch", "archiveConversationMessages",
+  // The archive's conversations («Фаны» is Workboard's since products package M: its reads left this table).
+  "pageConversationMessages", "archiveSearch", "archiveConversationMessages",
   // Система: collection, OnlyFans API, agents' reports, the server's state.
   "syncOverview", "syncRequests", "healthSync", "opsLive", "opsMetrics", "reportsList", "reportGet",
   "ofapiCollectionGet", "ofapiMediaGet", "ofapiVaultListsGet", "ofapiTypedExportList", "ofapiTypedExportRows", "ofapiProfileVisitorsGet",
