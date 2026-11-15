@@ -1,3 +1,4 @@
+import { findLoginPersonScope } from "@agency_hub_core/db";
 import type { UserRole } from "@agency_hub_core/shared";
 
 import type { AuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
@@ -34,32 +35,38 @@ const OWNER = ["owner"] as const satisfies readonly UserRole[];
  * services/custom-orders/person.ts: a chatter who leads no customs reads none.
  */
 const SHOOTING = ["owner", "content_manager", "chatter"] as const satisfies readonly UserRole[];
+/**
+ * A content manager's publications and statistics are HER WORKING PAGES' (plan §11 item 13: «КМ OF Лоры видит общую
+ * библиотеку Лоры, а план и публикации — своих страниц»): Lora's OnlyFans content manager neither reads nor approves
+ * the posts of Lora's Fansly pages. «Съёмка» keeps its own rule (custom-orders/person.ts); the owner, his realm.
+ */
+const OWN = "working" as const;
 
 export const PERSON_DOOR_OPERATIONS = {
   // «Публикации»: the feed, the card, the platforms' schedules and the settings, and their actions.
-  personPublicationList: { console: "adminPublicationList", roles: SCREEN },
-  personPublicationGet: { console: "adminPublicationGet", roles: SCREEN },
+  personPublicationList: { console: "adminPublicationList", roles: SCREEN, pages: OWN },
+  personPublicationGet: { console: "adminPublicationGet", roles: SCREEN, pages: OWN },
   // The card's «Стена» and «Тиры»: the page's walls and tiers by name, never prices (the agents' read).
-  personPublicationTargets: { console: "adminPublicationGet", roles: SCREEN },
-  personPublicationApprove: { console: "adminPublicationApprove", roles: SCREEN },
-  personPublicationCancel: { console: "adminPublicationCancel", roles: SCREEN },
-  personPublicationWithdraw: { console: "adminPublicationWithdraw", roles: SCREEN },
-  personPublicationReplace: { console: "adminPublicationReplace", roles: SCREEN },
-  personPublicationResolve: { console: "adminPublicationResolve", roles: SCREEN },
-  personPublicationQueueList: { console: "adminPublicationQueueList", roles: SCREEN },
-  personPublicationQueueRefresh: { console: "adminPublicationQueueRefresh", roles: SCREEN },
-  personPublicationSettingsList: { console: "adminPublicationSettingsList", roles: SCREEN },
+  personPublicationTargets: { console: "adminPublicationGet", roles: SCREEN, pages: OWN },
+  personPublicationApprove: { console: "adminPublicationApprove", roles: SCREEN, pages: OWN },
+  personPublicationCancel: { console: "adminPublicationCancel", roles: SCREEN, pages: OWN },
+  personPublicationWithdraw: { console: "adminPublicationWithdraw", roles: SCREEN, pages: OWN },
+  personPublicationReplace: { console: "adminPublicationReplace", roles: SCREEN, pages: OWN },
+  personPublicationResolve: { console: "adminPublicationResolve", roles: SCREEN, pages: OWN },
+  personPublicationQueueList: { console: "adminPublicationQueueList", roles: SCREEN, pages: OWN },
+  personPublicationQueueRefresh: { console: "adminPublicationQueueRefresh", roles: SCREEN, pages: OWN },
+  personPublicationSettingsList: { console: "adminPublicationSettingsList", roles: SCREEN, pages: OWN },
   // Read beside the settings: the publishing switches alone, never the rest of the config.
-  personPublicationSwitches: { console: "adminPublicationSettingsList", roles: SCREEN },
-  personPublicationSettingsUpdate: { console: "adminPublicationSettingsUpdate", roles: OWNER },
-  personPublicationDeletePost: { console: "adminPublicationDeletePost", roles: OWNER },
-  personPublicationWithdrawPage: { console: "adminPublicationWithdrawPage", roles: OWNER },
+  personPublicationSwitches: { console: "adminPublicationSettingsList", roles: SCREEN, pages: OWN },
+  personPublicationSettingsUpdate: { console: "adminPublicationSettingsUpdate", roles: OWNER, pages: OWN },
+  personPublicationDeletePost: { console: "adminPublicationDeletePost", roles: OWNER, pages: OWN },
+  personPublicationWithdrawPage: { console: "adminPublicationWithdrawPage", roles: OWNER, pages: OWN },
   personPublicationSwitchSet: { console: "adminConfigUpdate", roles: OWNER },
   personFanslyLoginPages: { console: "syncPages", roles: OWNER },
   // «Статистика»: what of a page's media is watched, bought and commented.
-  personCreatorStatsContent: { console: "creatorStatsContent", roles: SCREEN },
-  personCreatorStatsMedia: { console: "creatorStatsMedia", roles: SCREEN },
-  personContentComments: { console: "contentComments", roles: SCREEN },
+  personCreatorStatsContent: { console: "creatorStatsContent", roles: SCREEN, pages: OWN },
+  personCreatorStatsMedia: { console: "creatorStatsMedia", roles: SCREEN, pages: OWN },
+  personContentComments: { console: "contentComments", roles: SCREEN, pages: OWN },
   // «Съёмка» (package C3): the shooting side of custom orders, and its steps.
   personCustomOrderList: { console: "customOrdersBoard", roles: SHOOTING },
   personCustomOrderStep: { console: "customOrderAct", roles: SHOOTING },
@@ -73,6 +80,8 @@ export const PERSON_DOOR_OPERATIONS = {
 export interface PersonDoorRow {
   console: string;
   roles: readonly UserRole[];
+  /** `working`: a content manager acts on her own working pages alone, not every page of her models. */
+  pages?: typeof OWN;
 }
 
 export type PersonDoorOperation = keyof typeof PERSON_DOOR_OPERATIONS;
@@ -104,5 +113,10 @@ export async function doorPerson(
   if (!row.roles.includes(person.user.role)) throw new ForbiddenError("Это действие вашей роли не открыто");
   const sandbox = sandboxOwnerRefusal(row.console, person);
   if (sandbox) throw sandbox;
+  if (row.pages === OWN && person.user.role === "content_manager") {
+    const scope = await findLoginPersonScope(app.db, person.user.id);
+    const own = scope === null || scope.state === "left" ? [] : scope.workingPageIds;
+    return { ...person, assignedPageIds: own.filter((id) => person.assignedPageIds.includes(id)) };
+  }
   return person;
 }
