@@ -155,3 +155,13 @@ export async function deleteSpentHandoffCodes(db: Database, now: Date): Promise<
   `);
   return result.rowCount ?? 0;
 }
+
+/** Ends a session only if the given service's page opened it (0423 `opened_by`); null — nothing ended. */
+export async function revokeSessionOpenedBy(db: Database, input: { sessionId: number; openedBy: string }): Promise<{ userId: number } | null> {
+  const result = await db.execute<Row>(sql`
+    update auth_sessions set revoked_at = now(), revoked_reason = 'signed_out'
+     where id = ${input.sessionId} and opened_by = ${input.openedBy} and revoked_at is null
+    returning user_id`);
+  const row = result.rows[0];
+  return row === undefined ? null : { userId: Number(row.user_id) };
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
+import { buildJoinLink } from "@agency_hub_core/ui/teamAccess";
 import { CONTENT_MANAGER_OPERATIONS, contentManagerRefusal } from "../apps/runtime/src/services/content-manager-operations.ts";
 
 // A content manager's login opens ContentOps alone (products plan §4.1): no console, no Workboard. The table is the
@@ -44,5 +45,12 @@ describe("a content manager's operations", () => {
     for (const role of ["owner", "team_lead", "chatter"]) expect(contentManagerRefusal("teamShifts", user(role)), role).toBeNull();
     expect(contentManagerRefusal("teamShifts", { kind: "agent" } as unknown as Parameters<typeof contentManagerRefusal>[1])).toBeNull();
     expect(contentManagerRefusal("teamShifts", null)).toBeNull();
+  });
+});
+
+describe("a content manager's link", () => {
+  it("opens ContentOps' own page; every other login's opens the chatters' site", () => {
+    expect(buildJoinLink("https://hub.gosling-agency.ru", "s3cret", "content_manager")).toBe("https://contentops.gosling-agency.ru/join#s3cret");
+    expect(buildJoinLink("https://hub.gosling-agency.ru", "s3cret", "chatter")).toBe("https://chatgoose.gosling-agency.ru/join#s3cret");
   });
 });

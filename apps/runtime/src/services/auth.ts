@@ -877,7 +877,7 @@ interface LoginBackoffEntry {
   lockedUntil: number;
 }
 
-const LOGIN_BACKOFF_FREE_FAILURES = 5;
+export const LOGIN_BACKOFF_FREE_FAILURES = 5;
 const LOGIN_BACKOFF_BASE_LOCK_MS = 30_000;
 const LOGIN_BACKOFF_MAX_LOCK_MS = 15 * 60_000;
 const LOGIN_BACKOFF_FORGET_MS = 30 * 60_000;
@@ -1086,7 +1086,7 @@ export async function loginWithPassword(
 export async function createWebSessionTx(
   app: Pick<AppContext, "config">,
   dbTx: AppContext["db"],
-  input: { userId: number; narrowDeviceTokenId?: number },
+  input: { userId: number; narrowDeviceTokenId?: number; openedBy?: "contentops" },
 ) {
   const sessionToken = input.narrowDeviceTokenId === undefined
     ? randomToken(32)
@@ -1098,6 +1098,7 @@ export async function createWebSessionTx(
     tokenDigest: sessionTokenDigest(sessionToken),
     expiresAt,
     ...(input.narrowDeviceTokenId === undefined ? {} : { narrowDeviceTokenId: input.narrowDeviceTokenId }),
+    ...(input.openedBy === undefined ? {} : { openedBy: input.openedBy }),
   });
   return { sessionToken, expiresAt, sessionId: created.id };
 }

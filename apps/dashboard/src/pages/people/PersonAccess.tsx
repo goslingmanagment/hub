@@ -72,7 +72,7 @@ type Asking =
   | { kind: "newLink"; linkKind: "invite" | "password_reset" }
   | { kind: "delete" };
 
-const WORKS: ReadonlySet<string> = new Set(["chatter", "team_lead"]);
+const WORKS: ReadonlySet<string> = new Set(["chatter", "team_lead", "content_manager"]);
 
 function Block({ title, aside, children, variant }: { title: ReactNode; aside?: ReactNode; children: ReactNode; variant: "page" | "drawer" }) {
   if (variant === "page") return <Card title={title} actions={aside}><div className="access-block__body">{children}</div></Card>;
@@ -605,7 +605,7 @@ function Question({ asking, user, createLink, onClose, onLink, onChanged, onDele
           pending: createLink.isPending,
           run: async () => {
             const link = await createLink.mutateAsync({ userId: user.id, kind: asking.linkKind });
-            onLink({ userId: user.id, username: name, kind: link.kind, secret: link.token, expiresAt: link.expiresAt });
+            onLink({ userId: user.id, username: name, kind: link.kind, secret: link.token, expiresAt: link.expiresAt, role: user.role });
           },
         };
     }

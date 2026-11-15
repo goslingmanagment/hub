@@ -7,6 +7,7 @@ import { SESSION_COOKIE_NAME, isAgentPrincipal, requireDeviceTokenUser, readSess
 import { isTestPrincipal, userIsTest } from "../../services/sandbox/realm.ts";
 import { AppError, BadRequestError } from "../../services/errors.ts";
 import { PERSON_CLIENT, contentopsWaitingOf, personForContentops } from "../../services/signin-person.ts";
+import { contentopsLinkSignin, contentopsLogout, contentopsPasswordChange, contentopsPasswordSignin } from "../../services/contentops-signin.ts";
 import {
   SSO_STATE_TTL_SECONDS,
   acceptHandoffCode,
@@ -310,6 +311,56 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const checked = await checkServerGrant(appContext, { client: request.body.client, grant: request.body.grant });
     if (!checked.active) return { active: false as const };
     return contentopsWaitingOf(appContext, checked.user, await userIsTest(appContext, checked.user.id));
+  });
+
+  // ContentOps' own entrance (products plan C4): its server signs a person in by login and password, sets the
+  // password of an invitation, changes it, and signs out — through Hub's own services, never keeping a password.
+  const contentopsDoor = async (request: FastifyRequest & { body: { client: SigninClient } }) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    requireSigninCapability(principal.capabilities, request.body.client);
+    if (request.body.client !== PERSON_CLIENT) {
+      throw new BadRequestError("This sign-in is ContentOps' own");
+    }
+    return principal;
+  };
+
+  server.post("/api/v1/auth/sso/password", {
+    schema: routeSchemas.authSsoPassword,
+    config: { rateLimit: SERVER_RATE_LIMIT },
+  }, async (request) => {
+    const principal = await contentopsDoor(request);
+    const { username, password, ip, userAgent } = request.body;
+    return contentopsPasswordSignin(appContext, { username, password, ip, userAgent }, auditCtx(principal));
+  });
+
+  server.post("/api/v1/auth/sso/link", {
+    schema: routeSchemas.authSsoLink,
+    config: { rateLimit: SERVER_RATE_LIMIT },
+  }, async (request) => {
+    const principal = await contentopsDoor(request);
+    const { token, password, ip, userAgent } = request.body;
+    return contentopsLinkSignin(appContext, { token, password, ip, userAgent }, auditCtx(principal));
+  });
+
+  server.post("/api/v1/auth/sso/password-change", {
+    schema: routeSchemas.authSsoPasswordChange,
+    config: { rateLimit: SERVER_RATE_LIMIT },
+  }, async (request) => {
+    const principal = await contentopsDoor(request);
+    const checked = await checkServerGrant(appContext, { client: request.body.client, grant: request.body.grant });
+    if (!checked.active) return { result: "refused" as const, reason: "wrong" as const };
+    const { currentPassword, newPassword, ip, userAgent } = request.body;
+    return contentopsPasswordChange(appContext, {
+      userId: checked.user.id, username: checked.user.username, currentPassword, newPassword, ip, userAgent,
+    }, auditCtx(principal));
+  });
+
+  server.post("/api/v1/auth/sso/logout", {
+    schema: routeSchemas.authSsoLogout,
+    config: { rateLimit: SERVER_RATE_LIMIT },
+  }, async (request) => {
+    const principal = await contentopsDoor(request);
+    return contentopsLogout(appContext, { grant: request.body.grant }, auditCtx(principal));
   });
 
   server.post("/api/v1/auth/web-link", {

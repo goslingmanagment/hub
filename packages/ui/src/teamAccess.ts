@@ -1,4 +1,4 @@
-import { chatterSiteOriginFor } from "./sites.js";
+import { CONTENTOPS_ORIGIN, chatterSiteOriginFor } from "./sites.js";
 
 /**
  * The people's access, without React: who is in what state, the one-time join
@@ -44,9 +44,19 @@ export function daysToHours(days: number): number {
 /** The chatters' site (/join opens there) and the one that goes with a console's origin: ./sites.ts. */
 export { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "./sites.js";
 
-/** The secret travels in the fragment: it never reaches a server log as a path. */
-export function buildJoinLink(consoleOrigin: string, secret: string): string {
+/**
+ * The secret travels in the fragment: it never reaches a server log as a path. A content manager's login ends in
+ * ContentOps (products plan C4): its own page sets the password through Hub and opens «Сегодня»; everyone else's
+ * link opens the chatters' site.
+ */
+export function buildJoinLink(consoleOrigin: string, secret: string, role?: string | null): string {
+  if (opensContentopsOnly(role)) return `${CONTENTOPS_ORIGIN}/join#${secret}`;
   return `${chatterSiteOriginFor(consoleOrigin)}/join#${secret}`;
+}
+
+/** A login whose only product is ContentOps: its links and its sign-in are ContentOps' own. */
+export function opensContentopsOnly(role: string | null | undefined): boolean {
+  return role === "content_manager";
 }
 
 export function currentOrigin(): string {
@@ -59,8 +69,15 @@ export function currentOrigin(): string {
  * in Workboard, which shows what is left before the first shift (the extension
  * to install and sign in to among it), so the message carries no guide link.
  */
-export function telegramMessage(kind: LinkKind, username: string, link: string, name?: string | null): string {
+export function telegramMessage(kind: LinkKind, username: string, link: string, name?: string | null, role?: string | null): string {
   const hello = name?.trim() ? `Привет, ${name.trim()}!` : "Привет!";
+  if (opensContentopsOnly(role)) {
+    if (kind === "password_reset") {
+      return `${hello} Ссылка для нового пароля ContentOps:\n${link}\nЛогин: ${username}\nОткрой ссылку и придумай новый пароль.`;
+    }
+    return `${hello} Твой вход в ContentOps готов.\nСсылка: ${link}\nЛогин: ${username}\n`
+      + "Открой ссылку и придумай пароль: дальше ContentOps сам покажет, с чего начать.";
+  }
   // The login on a line of its own: no dot after it to copy by mistake.
   if (kind === "password_reset") {
     return `${hello} Ссылка для нового пароля ChatGoose:\n${link}\nЛогин: ${username}\nОткрой ссылку и придумай новый пароль.`;

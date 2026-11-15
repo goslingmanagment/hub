@@ -5,6 +5,7 @@ import {
   findDeviceTokenForUser,
   findHandoffGrant,
   findHandoffSession,
+  revokeSessionOpenedBy,
   findPersonIdOfLogin,
   findUserById,
   insertHandoffCode,
@@ -592,3 +593,18 @@ async function sessionStatus(db: AppContext["db"], sessionId: number, userId: nu
 
 /** The one service a test person may be handed to (sandbox/realm.ts): ContentOps, the content manager's product. */
 const SANDBOX_HANDOFF_CLIENT = "contentops";
+
+/**
+ * Another service's «Выйти» (products plan C4): the Hub session behind its grant ends — only when that service's own
+ * page opened it (`auth_sessions.opened_by`); a session the person opened in Hub stays, whatever the grant. null —
+ * nothing was ended.
+ */
+export async function revokeOpenedSession(app: Pick<AppContext, "db">, input: {
+  client: string;
+  grant: string;
+  openedBy: "contentops";
+}): Promise<{ userId: number } | null> {
+  const grant = await findHandoffGrant(app.db, sha256Hex(input.grant));
+  if (!grant || grant.target !== input.client) return null;
+  return revokeSessionOpenedBy(app.db, { sessionId: grant.sessionId, openedBy: input.openedBy });
+}
