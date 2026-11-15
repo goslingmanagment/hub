@@ -158,6 +158,7 @@ export const EVENT_WORDS: Record<string, string> = {
 export const DOOR_WORDS: Record<string, string> = {
   extension: "в расширении",
   workboard: "в Workboard",
+  contentops: "в ContentOps",
   api: "через агента",
   telegram: "в Telegram",
   system: "сам Hub",

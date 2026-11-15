@@ -10,6 +10,7 @@ import { createInvite, redeemAccountLink } from "../apps/runtime/src/services/ac
 import { AGENT_KEY_TOKEN_PREFIX, SESSION_COOKIE_NAME, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { PERSON_DOOR_OPERATIONS } from "../apps/runtime/src/services/person-door.ts";
 import { seedSandbox } from "../apps/runtime/src/services/sandbox/seed.ts";
+import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
@@ -47,6 +48,8 @@ const grants: Record<string, string> = {};
 const userIds: Record<string, number> = {};
 const drafts: Record<"A" | "B", Array<{ id: number; version: number }>> = { A: [], B: [] };
 let ownerSession = "";
+/** «Съёмка»: an order «Проверен» on each model's page (A, B, the test page T, and Ivy, whose customs lead shoots too). */
+const orders: Record<"A" | "B" | "T" | "I", string> = { A: "", B: "", T: "", I: "" };
 
 type Injected = Awaited<ReturnType<Awaited<ReturnType<typeof buildApiServer>>["inject"]>>;
 
@@ -137,6 +140,27 @@ beforeAll(async () => {
   const invited = await createInvite(app, { username: "chat", pageLabels: ["mia-1", "zoe-1"] }, { source: "cli" });
   await redeemAccountLink(app, { token: invited.link.token, password: "chat-password-for-tests" });
   await seedSandbox(app, { scenarios: ["publications"], env: SANDBOX_PASSWORDS });
+  // «Съёмка»: a third model with no content manager, and a chatter who leads customs of Mia and Ivy.
+  const ivy = await createModel(app.db, { slug: "ivy", name: "Ivy" });
+  pages["ivy-1"] = (await createFanslyPage(app.db, { modelId: ivy!.id, label: "ivy-1" }))!.id;
+  const nikInvite = await createInvite(app, { username: "nik", pageLabels: ["mia-1"] }, { source: "cli" });
+  await redeemAccountLink(app, { token: nikInvite.link.token, password: "nik-password-for-tests" });
+  userIds.nik = await fixtureUserId(app, "nik");
+  const nik = (await testDb.pool.query<{ id: string }>(
+    "insert into people (code, display_name, role, state) values ('nik', 'Nik', 'chatter', 'working') returning id",
+  )).rows[0]!.id;
+  await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [userIds.nik, nik]);
+  for (const model of [mia!.id, ivy!.id]) {
+    await testDb.pool.query("insert into team_roles (person_id, model_id, kind) values ($1, $2, 'customs')", [nik, model]);
+  }
+  const testPage = (await testDb.pool.query<{ id: string }>("select id from pages where label = 'test-1'")).rows[0]!.id;
+  for (const [key, pageId] of [["A", pages["mia-1"]], ["B", pages["zoe-1"]], ["T", Number(testPage)], ["I", pages["ivy-1"]]] as const) {
+    const id = await recordCustomOrder(app, {
+      pageId: pageId!, fanId: null, buyer: `buyer_${key}`, conversationRef: null, card: { task: `Съёмка ${key}` }, deadlineOn: null,
+      acceptedByUserId: null, origin: "workboard", state: "checked", actor: { door: "system" },
+    });
+    orders[key] = `K-${id}`;
+  }
   server = await buildApiServer(app);
   await server.ready();
   const owner = await signIn("boss", "boss-password-for-tests");
@@ -148,6 +172,7 @@ beforeAll(async () => {
     lead: await signIn("lead", "lead-password-for-tests"),
     chatter: await signIn("chat", "chat-password-for-tests"),
     testKm: await signIn("t-km", "sandbox-km-1"),
+    customsLead: await signIn("nik", "nik-password-for-tests"),
   };
   for (const [who, session] of Object.entries(sessions)) {
     const grant = await grantOf(session);
@@ -191,6 +216,8 @@ const CALLS: Record<keyof typeof PERSON_DOOR_OPERATIONS, (aim: Aim) => { path: s
   personCreatorStatsContent: (aim) => ({ path: "stats/content", body: { pageLabel: aim.page, days: 7 } }),
   personCreatorStatsMedia: (aim) => ({ path: "stats/media", body: { pageLabel: aim.page, mediaOfferId: "1", days: 7 } }),
   personContentComments: (aim) => ({ path: "stats/comments", body: { pageLabel: aim.page, ...COMMENTS } }),
+  personCustomOrderList: (aim) => ({ path: "custom-orders/list", body: { modelSlug: aim.model === "A" ? "mia" : aim.model === "B" ? "zoe" : "test" } }),
+  personCustomOrderStep: (aim) => ({ path: "custom-orders/step", body: { code: orders[aim.model], step: "at_model", deadlineOn: "2030-01-10" } }),
 };
 
 function aim(model: "A" | "B" | "T"): Aim {
@@ -214,6 +241,8 @@ function leaks(body: string, others: readonly string[]): string[] {
 }
 
 const OPERATIONS = Object.keys(PERSON_DOOR_OPERATIONS) as Array<keyof typeof PERSON_DOOR_OPERATIONS>;
+/** «Съёмка»'s rows: a chatter's login is served there only while the person leads customs of a model. */
+const SHOOTING_ROWS: ReadonlySet<string> = new Set(["personCustomOrderList", "personCustomOrderStep"]);
 
 describe("the person's door", () => {
   it("is the table: every route of the door is a row, every row a route, a call each", () => {
@@ -224,7 +253,7 @@ describe("the person's door", () => {
 
   it("hands a grant to everyone who may sign in to ContentOps", (context) => {
     if (!server) return context.skip();
-    for (const who of ["owner", "kmA", "kmB", "testKm"]) expect(grants[who], who).toBeDefined();
+    for (const who of ["owner", "kmA", "kmB", "testKm", "customsLead"]) expect(grants[who], who).toBeDefined();
   });
 
   // Every row as every persona, by the row's roles: a persona whose role is on the row gets its own pages and never
@@ -248,7 +277,8 @@ describe("the person's door", () => {
           expect(answer.statusCode, `${key} as ${persona.who} (no grant)`).toBe(401);
           continue;
         }
-        if (!roles.includes(persona.role)) {
+        // «Съёмка» serves a chatter only while they lead customs (services/custom-orders/person.ts): this one does not.
+        if (!roles.includes(persona.role) || (SHOOTING_ROWS.has(key) && persona.role === "chatter")) {
           expect(answer.statusCode, `${key} as ${persona.who}: ${answer.body}`).toBe(403);
           continue;
         }
@@ -322,5 +352,42 @@ describe("the person's door", () => {
       [target.id],
     );
     expect(events.rows[0]).toEqual({ actor_kind: "human", actor_user_id: String(userIds.kira), actor_agent_key_id: null });
+  });
+  it("«Съёмка»: each person reads the orders of their own shooting and moves the ones whose step they lead", async (context) => {
+    if (!server) return context.skip();
+    const list = async (who: string) => {
+      const answer = await inject("POST", "/api/v1/person/custom-orders/list", { bearer: KEY, payload: { client: "contentops", grant: grants[who] } });
+      expect(answer.statusCode, `${who}: ${answer.body}`).toBe(200);
+      return answer.json<{ orders: Array<{ code: string }> }>().orders.map((one) => one.code).sort();
+    };
+    const step = (who: string, code: string, extra: object = {}) =>
+      inject("POST", "/api/v1/person/custom-orders/step", { bearer: KEY, payload: { client: "contentops", grant: grants[who], code, step: "partly", note: "пришло видео", ...extra } });
+    // The owner: every live order, never a test one; a content manager: her model's; the customs lead: his models'.
+    expect(await list("owner")).toEqual([orders.A, orders.B, orders.I].sort());
+    expect(await list("kmA")).toEqual([orders.A]);
+    expect(await list("kmB")).toEqual([orders.B]);
+    expect(await list("customsLead")).toEqual([orders.A, orders.I].sort());
+    // The test content manager: the test order alone; a live one never sees it.
+    expect(await list("testKm")).toEqual([orders.T]);
+    expect((await step("testKm", orders.A)).statusCode).toBe(404);
+    expect((await step("kmA", orders.T)).statusCode).toBe(404);
+    // Ivy has no content manager: its customs lead takes the shooting's steps; Mia's are her content manager's.
+    const handed = await inject("POST", "/api/v1/person/custom-orders/step", {
+      bearer: KEY, payload: { client: "contentops", grant: grants.customsLead, code: orders.I, step: "at_model", deadlineOn: "2030-01-12" },
+    });
+    expect(handed.statusCode, handed.body).toBe(200);
+    expect(handed.json<{ order: { state: string; deadlineOn: string } }>().order).toMatchObject({ state: "at_model", deadlineOn: "2030-01-12" });
+    const notHis = await step("customsLead", orders.A);
+    expect(notHis.statusCode, notHis.body).toBe(409);
+    expect(notHis.json<{ reason: string }>().reason).toBe("not_allowed");
+    // The history names the person and the door, never ContentOps' key.
+    const events = await testDb!.pool.query<{ event: string; door: string; actor_user_id: string | null; actor_agent_key_id: string | null }>(
+      "select event, door, actor_user_id::text, actor_agent_key_id::text from object_events where object_type = 'custom_order' and object_id = $1 order by id",
+      [orders.I.slice(2)],
+    );
+    expect(events.rows.slice(-2)).toEqual([
+      { event: "custom_order.deadline", door: "contentops", actor_user_id: String(userIds.nik), actor_agent_key_id: null },
+      { event: "custom_order.at_model", door: "contentops", actor_user_id: String(userIds.nik), actor_agent_key_id: null },
+    ]);
   });
 });

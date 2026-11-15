@@ -109,7 +109,7 @@ const DAY_MS = 86_400_000;
 
 /** Who did a step and through which door (object_events). */
 export interface CustomActor {
-  door: "extension" | "workboard" | "telegram" | "api" | "system";
+  door: "extension" | "workboard" | "telegram" | "api" | "system" | "contentops";
   userId?: number | null;
   agentKeyId?: number | null;
   onBehalfOfUserId?: number | null;

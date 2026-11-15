@@ -465,6 +465,8 @@ export const kernelOperations = {
   personContentComments: { method: "POST", path: "/api/v1/person/stats/comments" },
   personCreatorStatsContent: { method: "POST", path: "/api/v1/person/stats/content" },
   personCreatorStatsMedia: { method: "POST", path: "/api/v1/person/stats/media" },
+  personCustomOrderList: { method: "POST", path: "/api/v1/person/custom-orders/list" },
+  personCustomOrderStep: { method: "POST", path: "/api/v1/person/custom-orders/step" },
   personFanslyLoginPages: { method: "POST", path: "/api/v1/person/fansly/login-pages" },
   personPublicationApprove: { method: "POST", path: "/api/v1/person/publications/approve" },
   personPublicationCancel: { method: "POST", path: "/api/v1/person/publications/cancel" },

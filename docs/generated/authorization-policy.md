@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 84 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (566)
+## Routes (568)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -492,6 +492,8 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/allowance` | `voiceNoteAllowance` | `apiKey` | — | page | yes |
+| POST | `/api/v1/person/custom-orders/list` | `personCustomOrderList` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/custom-orders/step` | `personCustomOrderStep` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/fansly/login-pages` | `personFanslyLoginPages` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/publications/approve` | `personPublicationApprove` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/publications/cancel` | `personPublicationCancel` | `agentKey` | — | — | no |

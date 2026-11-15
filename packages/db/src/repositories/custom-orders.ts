@@ -860,7 +860,7 @@ export async function insertCustomOrderEvent(
   input: {
     orderId: number;
     event: string;
-    door: "extension" | "workboard" | "telegram" | "api" | "system";
+    door: "extension" | "workboard" | "telegram" | "api" | "system" | "contentops";
     userId?: number | null;
     agentKeyId?: number | null;
     onBehalfOfUserId?: number | null;

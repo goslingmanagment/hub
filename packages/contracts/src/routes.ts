@@ -43,6 +43,7 @@ import { matterRouteSchemas } from "./routes-matters.ts";
 import { agentReportRouteSchemas } from "./routes-agent-reports.ts";
 import { accountPayRouteSchemas } from "./routes-account-pay.ts";
 import { customOrderRouteSchemas } from "./routes-custom-orders.ts";
+import { agentCustomOrderResponseSchema, agentCustomOrdersResponseSchema, customOrderCodeSchema } from "./custom-orders.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
 import { teamRouteSchemas } from "./routes-teams.ts";
@@ -6156,6 +6157,26 @@ export const personDoorRouteSchemas = {
     summary: "As the signed-in person: post comments of one of their pages",
     body: personPageBodySchema.extend(contentCommentsQuerySchema.shape),
     response: { 200: contentCommentsResponseSchema, ...personDoorErrors },
+  },
+  // «Съёмка» (package C3): the shooting side of custom orders as the person — the agent read's list cut by the person's
+  // scope and realm (services/custom-orders/person.ts), and a step by the step's leader (leaders.ts).
+  personCustomOrderList: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: the open custom orders of their shooting (all of the owner's realm, a content manager's models, the models whose customs they lead)",
+    body: personDoorBodySchema.extend({ modelSlug: z.string().trim().min(1).max(80).optional() }),
+    response: { 200: agentCustomOrdersResponseSchema, ...personDoorErrors },
+  },
+  personCustomOrderStep: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: a step of the shooting side of a custom order they lead (at the model with a deadline, partly, shot, revision, refused)",
+    body: personDoorBodySchema.extend({
+      code: customOrderCodeSchema,
+      step: z.enum(["at_model", "partly", "shot", "revision", "refused"]),
+      deadlineOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      note: z.string().trim().min(1).max(500).optional(),
+      part: z.enum(["video", "photos"]).optional(),
+    }),
+    response: { 200: agentCustomOrderResponseSchema, ...personDoorErrors },
   },
 } as const;
 

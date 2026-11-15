@@ -24,10 +24,10 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../auth.ts";
 import { AppError, ConflictError } from "../errors.ts";
 import {
-  applyCustomStep, cardTextOf, customLeaderContext, messageWire, notAllowed, orderMessagesOf, orderWire, recordCustomOrder,
+  applyCustomStep, cardTextOf, customLeaderContext, messageWire, orderMessagesOf, orderWire, recordCustomOrder,
   type CustomActor, type CustomEventResult, type CustomLeaderContext, type CustomMessageInput, type CustomStep,
 } from "./index.ts";
-import { phaseLeader } from "./leaders.ts";
+import { takeShootingStep } from "./person.ts";
 import { personOfLogin } from "../teams.ts";
 import { reportUnmatchedCards } from "./checks.ts";
 import { dottedDay, fanInputOf, moscowDay, parseCardText, STEP_FROM } from "./rules.ts";
@@ -162,9 +162,9 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
 }
 
 /**
- * A person's step carried by another product's key (ContentOps «Съёмка», package C3): the key only carries it; the
- * person must lead that step of the order by the one rule (leaders.ts) — the shooting's leader (a fan's complaint
- * after «отдан»: the check's too), or the owner — and be of the order's realm. Written as theirs.
+ * A person's step carried by another product's key, by a login (ContentOps «Съёмка» before the person's door): kept
+ * only while a released ContentOps still calls it; ContentOps now goes through the door (person.ts,
+ * services/person-door.ts) and this action goes away after it is released. Same rule, same realm wall.
  */
 async function personStep(
   app: AgentApp, scope: AgentCustomScope, order: CustomOrderRow,
@@ -178,27 +178,11 @@ async function personStep(
   const orderTest = order.pageId !== null && context.facts.pages.some((page) => page.pageId === order.pageId && page.test);
   // The test realm's wall (sandbox/realm.ts): a test order is moved by test people only, a live one by live people.
   if (personTest !== orderTest) throw notFound();
-  const mine = (phase: "check" | "shoot") => {
-    const leader = phaseLeader(context.facts, order.pageId, phase, context.fallback);
-    return leader.kind === "person" && leader.userId === person.userId;
-  };
-  const leads = person.role === "owner" || mine("shoot") || (body.step === "revision" && order.state === "given" && mine("check"));
-  if (!leads) throw notAllowed("This step of the order is not the person's: the shooting's leader takes it");
   const actor: CustomActor = { door: "api", agentKeyId: scope.principal.agentKeyId, onBehalfOfUserId: person.userId };
-  let changed = false;
-  if (body.step === "at_model" && body.deadlineOn !== undefined && body.deadlineOn !== order.deadlineOn) {
-    changed = await applyCustomStep(app, { orderId: order.id, step: { action: "deadline", deadlineOn: body.deadlineOn }, actor, viewer: null, now, byPerson: true });
-  }
-  const step: CustomStep = body.step === "at_model" ? { action: "at_model" }
-    : body.step === "partly" ? { action: "partly", note: body.note }
-    : body.step === "shot" ? { action: "shot" }
-    : body.step === "refused" ? { action: "refused", reason: body.note! }
-    : { action: "revision", note: body.note, part: body.part };
-  const current = (await findCustomOrder(app.db, order.id))!;
-  if (!STEP_FROM[step.action].includes(current.state)) {
-    throw notAllowed(`An order «${current.state}» takes no step «${step.action}»`);
-  }
-  changed = (await applyCustomStep(app, { orderId: order.id, step, actor, viewer: null, now, byPerson: true })) || changed;
+  const changed = await takeShootingStep(
+    app, order, { userId: person.userId, owner: person.role === "owner" },
+    { step: body.step, deadlineOn: body.deadlineOn, note: body.note, part: body.part }, actor, now,
+  );
   return {
     order: await agentOrderOf(app, (await findCustomOrder(app.db, order.id))!, now),
     outcome: changed ? "changed" as const : "unchanged" as const,
