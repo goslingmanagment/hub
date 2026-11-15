@@ -95,6 +95,7 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
   server.post("/api/v1/sale-disputes/decide", { schema: routeSchemas.saleDisputeDecide }, async (request) => {
     return decideSaleDispute(appContext, await decider(request), {
       transactionId: request.body.transactionId, claimId: request.body.claimId, outcome: request.body.outcome, note: request.body.note ?? null,
+      shares: request.body.shares, seenSides: request.body.seenSides,
     });
   });
 

@@ -423,3 +423,54 @@ export function nobodyWeekTitle(input: { count: number; mills: number; from: str
 export function offPlatformTitle(input: { person: string; reportDate: string; count: number; mills: number }): string {
   return `Мимо площадки: ${input.person}, ${dayWords(input.reportDate)}, ${input.count === 1 ? money(input.mills) : `${input.count} на ${money(input.mills)}`}`;
 }
+
+/**
+ * The sides of a disputed sale — ONE computation for the decider's window and the decision (review round 2, N1–N3):
+ * everyone who asked (by the question's number, the first first), whoever holds the sale by the rule now, the other side
+ * each question named, and whoever's counted report counts it. A button of the window names one of them; the decision
+ * gives to that person, never to a place in a list. Pure.
+ */
+export function disputeSidesOf(input: {
+  claims: ReadonlyArray<{ id: number; claimantUserId: number | null; sideUserId: number | null; state: string }>;
+  holders: readonly number[];
+  counting: readonly number[];
+}): number[] {
+  const out: number[] = [];
+  const add = (id: number | null) => {
+    if (id !== null && !out.includes(id)) out.push(id);
+  };
+  const open = [...input.claims].filter((claim) => claim.state !== "withdrawn").sort((a, b) => a.id - b.id);
+  for (const claim of open) add(claim.claimantUserId);
+  for (const id of input.holders) add(id);
+  for (const claim of open) add(claim.sideUserId);
+  for (const id of input.counting) add(id);
+  return out;
+}
+
+/** One answer of the window, by the people it gives the sale to (percent each); never by a place in a list. */
+export interface DisputeAnswer {
+  key: string;
+  outcome: "give" | "split" | "pot" | "rule" | "nobody";
+  shares: Array<{ userId: number; percent: number }>;
+}
+
+/**
+ * What the decider may answer: each side whole; two sides in halves (of two or three sides, each pair); a sale of the pot
+ * — it stays in the pot; a sale the rule gives someone — as the rule has it; «никому». Pure.
+ */
+export function disputeAnswersOf(input: { sides: readonly number[]; pot: boolean; ruleNamesSomeone: boolean }): DisputeAnswer[] {
+  const out: DisputeAnswer[] = input.sides.map((userId) => ({ key: `give:${userId}`, outcome: "give", shares: [{ userId, percent: 100 }] }));
+  if (input.sides.length >= 2 && input.sides.length <= 3) {
+    for (let a = 0; a < input.sides.length; a += 1) {
+      for (let b = a + 1; b < input.sides.length; b += 1) {
+        const [low, high] = [input.sides[a]!, input.sides[b]!].sort((x, y) => x - y) as [number, number];
+        out.push({ key: `split:${low}:${high}`, outcome: "split", shares: [{ userId: low, percent: 50 }, { userId: high, percent: 50 }] });
+      }
+    }
+  }
+  if (input.pot) out.push({ key: "pot", outcome: "pot", shares: [] });
+  else if (input.ruleNamesSomeone) out.push({ key: "rule", outcome: "rule", shares: [] });
+  out.push({ key: "nobody", outcome: "nobody", shares: [] });
+  return out;
+}
+

@@ -4,6 +4,7 @@ import type { OffPlatformPendingResponse, SaleDisputeResponse, ShiftReportLineFa
 import { Badge, Button, ErrorState, Fan, Modal, Money, Notice, PageLabel, Select, Skeleton, TextInput, toast } from "@agency_hub_core/ui";
 import { formatDateTime, formatDay, formatMills } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { KernelApiError } from "@agency_hub_core/ui/hubClient";
 import { kernel } from "@/shared/hub";
 import { ChainMoney } from "@/shared/saleChain";
 
@@ -82,9 +83,22 @@ export function DisputeModal({ transactionId, claimId, onClose }: { transactionI
   });
   const [why, setWhy] = useState("");
   const decide = useMutation({
-    mutationFn: (outcome: SaleDisputeResponse["outcomes"][number]["outcome"]) => kernel.saleDisputeDecide({
-      body: { ...(transactionId !== null ? { transactionId } : { claimId: claimId! }), outcome, note: why.trim() === "" ? null : why.trim() },
+    // A button names its people (`shares`) and the sides the window showed: the server gives the sale to them, or answers
+    // 409 `sides_changed` when the sides are no longer those — the window reads again.
+    mutationFn: (one: SaleDisputeResponse["outcomes"][number]) => kernel.saleDisputeDecide({
+      body: {
+        ...(transactionId !== null ? { transactionId } : { claimId: claimId! }), outcome: one.outcome, note: why.trim() === "" ? null : why.trim(),
+        ...(one.shares.length > 0 ? { shares: one.shares } : {}),
+        seenSides: (read.data?.parties ?? []).map((party) => party.userId),
+      },
     }),
+    onError: (error) => {
+      const body = error instanceof KernelApiError ? error.body as { reason?: unknown } | null : null;
+      if (body?.reason === "sides_changed") {
+        toast.error("Пока вы смотрели, стороны спора изменились: окно обновлено");
+        void read.refetch();
+      }
+    },
     onSuccess: (answer) => {
       toast.success(answer.versions.length > 0
         ? `Решение записано: ${plural(answer.versions.length, "отчёт получил", "отчёта получили", "отчётов получили")} новую версию`
@@ -142,12 +156,12 @@ export function DisputeModal({ transactionId, claimId, onClose }: { transactionI
               <div className="wt-outcomes">
                 {data.outcomes.map((one) => (
                   <Button
-                    key={one.outcome}
+                    key={one.key || one.outcome}
                     size="md"
                     variant={one.outcome === "nobody" || one.outcome === "dismiss" ? "ghost" : "secondary"}
-                    loading={decide.isPending && decide.variables === one.outcome}
+                    loading={decide.isPending && decide.variables === one}
                     disabled={decide.isPending}
-                    onClick={() => decide.mutate(one.outcome)}
+                    onClick={() => decide.mutate(one)}
                     className="wt-outcome"
                   >
                     <span className="wt-outcome__label">{one.label}</span>

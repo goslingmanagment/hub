@@ -17,6 +17,7 @@ import {
   cancelSaleDecision,
   closeMatter,
   decideOffPlatform,
+  findHandinById,
   findHandinByShift,
   findHandinPersonBy,
   findHandinPersonOfUser,
@@ -73,8 +74,9 @@ import { silenceSettles } from "./shift-report-phases.ts";
 import {
   claimStands,
   claimTitle,
-  decisionOfOutcome,
   deriveClaims,
+  disputeAnswersOf,
+  disputeSidesOf,
   disputeTitle,
   nobodyWeekTitle,
   offPlatformTitle,
@@ -86,7 +88,7 @@ import {
   type OwnerOutcome,
   type ReportView,
 } from "./sale-claim-rules.ts";
-import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, type SaleHomeReason } from "./sale-rule.ts";
+import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, halvesOf, type SaleHomeReason } from "./sale-rule.ts";
 import { realmOf, testUserIds } from "./sandbox/realm.ts";
 import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, teamFactsFor, type Decider } from "./teams.ts";
 import { dayWords } from "./shift-handin-rules.ts";
@@ -935,7 +937,10 @@ function partiesOf(claims: readonly SaleClaimRow[]): { first: number | null; sec
 export async function decideSaleDispute(
   app: ClaimsApp,
   principal: HumanAuthPrincipal,
-  input: { transactionId?: number | undefined; claimId?: number | undefined; outcome: OwnerOutcome | "dismiss" | "pot" | "return"; note: string | null },
+  input: {
+    transactionId?: number | undefined; claimId?: number | undefined; outcome: OwnerOutcome | "dismiss" | "pot" | "return" | "give" | "split" | "rule"; note: string | null;
+    shares?: ReadonlyArray<{ userId: number; percent: number }> | undefined; seenSides?: readonly number[] | undefined;
+  },
   now: Date = new Date(),
 ) {
   const { db } = app;
@@ -950,12 +955,11 @@ export async function decideSaleDispute(
     if (input.outcome !== "pot" && input.outcome !== "return" && input.outcome !== "nobody") throw new BadRequestError("A sale given to the pot takes «В общак», «Вернуть» or «Никому»", { reason: "pot_offer" });
     return decidePotOffer(app, principal, { offer, outcome: input.outcome, note: input.note }, now);
   }
-  if (input.outcome === "pot" || input.outcome === "return") throw new BadRequestError("Only a sale given to the pot takes this answer", { reason: "not_pot_offer" });
+  if (input.outcome === "return") throw new BadRequestError("Only a sale given to the pot takes this answer", { reason: "not_pot_offer" });
   if (principal.user.role !== "owner" && open.length === 0) throw new ForbiddenError("Only the owner decides");
   await requireDisputeDecider(app, principal, open);
   if (open.length === 0) throw new NotFoundError("No dispute of this sale waits for a decision");
   const transactionId = input.transactionId ?? open[0]!.transactionId;
-  const { first, second } = partiesOf(open);
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
   if (input.outcome === "dismiss") {
     if (open.some((claim) => claim.kind !== "imported" && claim.kind !== "question")) throw new BadRequestError("Only a question closes without a decision", { reason: "not_imported" });
@@ -963,19 +967,63 @@ export async function decideSaleDispute(
     await runSaleClaims(app, now).catch(() => undefined);
     return { decided: false, versions: [], savedAt: now.toISOString() };
   }
-  const outcome: OwnerOutcome = input.outcome;
   if (transactionId === null) throw new BadRequestError("Tie the question to its sale first", { reason: "needs_link" });
-  if (first === null && outcome !== "nobody") throw new BadRequestError("This dispute names nobody: only «никому»", { reason: "no_parties" });
-  if ((outcome === "second" || outcome === "half") && second === null) throw new BadRequestError("This dispute has no second side", { reason: "no_second" });
-  const decision = decisionOfOutcome(outcome, first ?? 0, second);
-  const sale = (await listHandinSalesByIds(db, [transactionId]))[0];
+  // The sides now, as the window computes them (`disputeSidesNow`): a button names a person among them, and a window
+  // read before the sides changed is refused — the decider reads it again.
+  const now_ = await disputeSidesNow(app, open, now);
+  const sides = now_.sides;
+  if (input.seenSides !== undefined && (input.seenSides.length !== sides.length || input.seenSides.some((id) => !sides.includes(id)))) {
+    throw new ConflictError("The dispute's sides changed: read it again", { reason: "sides_changed" });
+  }
+  if (input.outcome === "rule") {
+    // «По правилу»: the questions are closed, the sale stays as the rule has it.
+    if (now_.pot || (now_.sale?.home?.shares.length ?? 0) === 0) throw new BadRequestError("The rule gives this sale to nobody: decide it", { reason: "no_rule_owner" });
+    for (const claim of open) await updateSaleClaim(db, claim.id, { state: "decided", closedAt: now }, now);
+    await runSaleClaims(app, now).catch(() => undefined);
+    return { decided: false, versions: [], savedAt: now.toISOString() };
+  }
+  // The decision by the people it names: the shares sent (a button of the window), or a client before that read in the
+  // window's own order (`first` — its first side, `second` — its second, `half` — the two).
+  const among = (userId: number) => {
+    if (!sides.includes(userId)) throw new ConflictError("This person is not a side of the dispute now: read it again", { reason: "sides_changed" });
+    return userId;
+  };
+  let decision: { kind: "split" | "nobody" | "pot"; shares: Array<{ userId: number; percent: number }>; pot: string | null; outcome: "first" | "half" | "nobody" | "said"; made: "first" | "half" | "nobody" | "pot" };
+  const sent = input.shares ?? [];
+  switch (input.outcome) {
+    case "first":
+    case "second":
+    case "give": {
+      const userId = input.outcome === "give" ? sent.length === 1 && sent[0]!.percent === 100 ? sent[0]!.userId : null : sides[input.outcome === "first" ? 0 : 1] ?? null;
+      if (userId === null) throw new BadRequestError("«целиком» names one person", { reason: "no_parties" });
+      decision = { kind: "split", shares: [{ userId: among(userId), percent: 100 }], pot: null, outcome: "first", made: "first" };
+      break;
+    }
+    case "half":
+    case "split": {
+      const two = input.outcome === "split" ? sent.map((one) => one.userId) : [sides[0], sides[1]];
+      if (two.length !== 2 || two[0] === undefined || two[1] === undefined || two[0] === two[1] || (input.outcome === "split" && sent.some((one) => one.percent !== 50))) {
+        throw new BadRequestError("«пополам» names two people", { reason: "no_second" });
+      }
+      const [low, high] = [among(two[0]), among(two[1])].sort((a, b) => a - b) as [number, number];
+      decision = { kind: "split", shares: [{ userId: low, percent: 50 }, { userId: high, percent: 50 }], pot: null, outcome: "half", made: "half" };
+      break;
+    }
+    case "pot":
+      if (!now_.pot) throw new BadRequestError("Only a sale of the pot stays in the pot", { reason: "not_pot" });
+      decision = { kind: "pot", shares: [], pot: POT_OBSHAK, outcome: "said", made: "pot" };
+      break;
+    default:
+      decision = { kind: "nobody", shares: [], pot: null, outcome: "nobody", made: "nobody" };
+  }
+  const sale = now_.sale;
   const applied = await applySaleDecision(app, {
     transactionId,
     insert: {
-      kind: decision.kind, shares: decision.shares, pot: null, outcome, note, decidedByUserId: principal.user.id, decidedAt: now,
+      kind: decision.kind, shares: decision.shares, pot: decision.pot, outcome: decision.outcome, note, decidedByUserId: principal.user.id, decidedAt: now,
       saidBy: null, source: "dispute", ledgerDecisionId: null, ledgerRef: null,
     },
-    madeFor: () => ({ kind: "claim", claimId: open[0]!.id, transactionId, outcome }),
+    madeFor: () => ({ kind: "claim", claimId: open[0]!.id, transactionId, outcome: decision.made }),
     by: { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
   }, sale, now);
   return { decided: true, versions: applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
@@ -1457,13 +1505,45 @@ function saysOf(claim: SaleClaimRow, userId: number, now: Date): string[] {
   return out;
 }
 
+/**
+ * The sides of a disputed sale now — the one computation of the window and the decision (`disputeSidesOf`): everyone
+ * who asked, whoever holds the sale by the rule now (its stored home, and the works holding it as the claimant's facts
+ * read them — a «стык смен» names both shifts), the other side of each question, whoever's counted report counts it.
+ */
+async function disputeSidesNow(app: ClaimsApp, claims: readonly SaleClaimRow[], now: Date) {
+  const { db } = app;
+  const transactionId = claims.find((claim) => claim.transactionId !== null)?.transactionId ?? null;
+  const sale = transactionId === null ? undefined : (await listHandinSalesByIds(db, [transactionId]))[0];
+  const reports = transactionId === null ? [] : await listCurrentReportsOfSales(db, [transactionId]);
+  const open = claims.filter((claim) => claim.state !== "withdrawn");
+  let facts: ShiftReportLineFacts | null = null;
+  if (transactionId !== null) {
+    const shiftIds: number[] = [];
+    for (const claim of [...open].sort((a, b) => a.id - b.id)) {
+      if (claim.claimantHandinId !== null) {
+        const handin = await findHandinById(db, claim.claimantHandinId);
+        if (handin !== null) shiftIds.push(handin.shiftId);
+      }
+      if (claim.sideShiftId !== null) shiftIds.push(claim.sideShiftId);
+    }
+    for (const report of reports) shiftIds.push(report.shiftId);
+    for (const shiftId of [...new Set(shiftIds)]) {
+      facts = await saleLineFacts(app, shiftId, transactionId, now).catch(() => null);
+      if (facts !== null) break;
+    }
+  }
+  const holders = [...(sale?.home?.shares.map((share) => share.userId) ?? []), ...(facts?.holders?.map((holder) => holder.userId) ?? [])];
+  const counting = reports.filter((report) => report.lines.some((line) => line.transactionId === transactionId && line.amountMills > 0)).map((report) => report.userId);
+  const pot = sale?.home?.home === "pot" || reports.some((report) => report.lines.some((line) => line.transactionId === transactionId && line.rule.home === "pot"));
+  return { transactionId, sale, reports, facts, pot, sides: transactionId === null ? [] : disputeSidesOf({ claims: open, holders, counting }) };
+}
+
 async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: Date): Promise<SaleDisputeResponse> {
   const { db } = app;
-  const transactionId = claims[0]?.transactionId ?? null;
-  const sale = transactionId === null ? undefined : (await listHandinSalesByIds(db, [transactionId]))[0];
-  const { first, second } = partiesOf(claims.filter((claim) => claim.state !== "withdrawn"));
-  const reports = transactionId === null ? [] : await listCurrentReportsOfSales(db, [transactionId]);
-  const ids = [first, second, ...(sale?.home?.shares.map((share) => share.userId) ?? [])].filter((id): id is number => id !== null);
+  const { transactionId, sale, reports, facts: sideFacts, pot, sides } = await disputeSidesNow(app, claims, now);
+  const legacy = partiesOf(claims.filter((claim) => claim.state !== "withdrawn"));
+  const first = sides[0] ?? legacy.first;
+  const ids = [...sides, ...(legacy.first === null ? [] : [legacy.first]), ...(sale?.home?.shares.map((share) => share.userId) ?? [])];
   const names = await listHandinNames(db, ids);
   const decision = transactionId === null ? undefined : (await listActiveSaleDecisions(db, [transactionId])).get(transactionId);
   const decider = decision?.decidedByUserId == null ? null : (await listHandinNames(db, [decision.decidedByUserId])).get(decision.decidedByUserId) ?? null;
@@ -1479,30 +1559,30 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
     claimedMills: counted(userId).claimed,
     shiftId: counted(userId).shiftId ?? (role === "second" ? claims.find((claim) => claim.sideUserId === userId)?.sideShiftId ?? null : null),
   });
-  const parties = [first === null ? null : party(first, "first"), second === null ? null : party(second, "second")].filter((one): one is NonNullable<typeof one> => one !== null);
-  // The facts the claimant's draft read of the sale (F1's facts, not computed again): the claimant's shift first.
-  let facts: ShiftReportLineFacts | null = null;
-  if (transactionId !== null) {
-    const shifts = [counted(first ?? -1).shiftId, claims[0]?.sideShiftId ?? null, counted(second ?? -1).shiftId].filter((id): id is number => id !== null);
-    for (const shiftId of [...new Set(shifts)]) {
-      facts = await saleLineFacts(app, shiftId, transactionId, now).catch(() => null);
-      if (facts !== null) break;
-    }
-  }
+  // The sides, each a party of the window: the decider's buttons name them (a question with nobody, the one who asked).
+  const parties = (sides.length > 0 ? sides : first === null ? [] : [first]).map((userId, index) => party(userId, index === 0 ? "first" : "second"));
+  const facts = sideFacts;
   const net = sale?.netMills ?? 0;
   const outcomes: SaleDisputeResponse["outcomes"] = [];
   const nameOf = (id: number | null) => (id === null ? "" : names.get(id) ?? `#${id}`);
-  if (transactionId !== null && first !== null) {
-    const gives = (outcome: OwnerOutcome) => [first, second].filter((id): id is number => id !== null)
-      .map((userId) => ({ userId, mills: shareAfter({ netMills: net, userId, outcome, first, second, statement: null }) }));
-    outcomes.push({ outcome: "first", label: `${nameOf(first)}: целиком`, gives: gives("first") });
-    if (second !== null) {
-      outcomes.push({ outcome: "second", label: `${nameOf(second)}: целиком`, gives: gives("second") });
-      outcomes.push({ outcome: "half", label: "Пополам", gives: gives("half") });
+  if (transactionId !== null) {
+    const homeMills = (userId: number) => sale?.home?.shares.filter((share) => share.userId === userId).reduce((sum, share) => sum + share.mills, 0) ?? 0;
+    for (const answer of disputeAnswersOf({ sides: parties.map((one) => one.userId), pot, ruleNamesSomeone: !pot && (sale?.home?.shares.length ?? 0) > 0 })) {
+      const halves = answer.outcome === "split" ? halvesOf(net, answer.shares[0]!.userId, answer.shares[1]!.userId) : [];
+      const gives = parties.map((one) => ({
+        userId: one.userId,
+        mills: answer.outcome === "give" ? (answer.shares[0]!.userId === one.userId ? net : 0)
+          : answer.outcome === "split" ? halves.find((half) => half.userId === one.userId)?.mills ?? 0
+            : answer.outcome === "rule" ? homeMills(one.userId) : 0,
+      }));
+      const label = answer.outcome === "give" ? `${nameOf(answer.shares[0]!.userId)}: целиком`
+        : answer.outcome === "split" ? `Пополам: ${nameOf(answer.shares[0]!.userId)} и ${nameOf(answer.shares[1]!.userId)}`
+          : answer.outcome === "pot" ? "Остаётся в общаке"
+            : answer.outcome === "rule" ? "Оставить по правилу" : "Никому";
+      outcomes.push({ outcome: answer.outcome, key: answer.key, label, gives, shares: answer.shares });
     }
   }
-  if (transactionId !== null) outcomes.push({ outcome: "nobody", label: "Никому", gives: parties.map((one) => ({ userId: one.userId, mills: 0 })) });
-  if (claims.every((claim) => claim.kind === "imported" || claim.kind === "question")) outcomes.push({ outcome: "dismiss", label: "Закрыть без решения", gives: [] });
+  if (claims.every((claim) => claim.kind === "imported" || claim.kind === "question")) outcomes.push({ outcome: "dismiss", key: "dismiss", label: "Закрыть без решения", gives: [], shares: [] });
   // Which handed-in reports a decision gives a new version: the window says so instead of promising it of every report.
   const held = reports.filter((report) => report.lines.some((line) => line.transactionId === transactionId));
   const heldNames = await listHandinNames(db, held.map((report) => report.userId));
@@ -1673,9 +1753,9 @@ async function potOfferDisputeOf(app: ClaimsApp, offer: PotOffer, now: Date, dec
     claims: [],
     facts: null,
     outcomes: decided !== null ? [] : [
-      { outcome: "pot", label: "В общак", gives: [{ userId: offer.userId, mills: 0 }] },
-      { outcome: "return", label: `Вернуть ${personNameForms(name).dat}`, gives: [{ userId: offer.userId, mills: net }] },
-      { outcome: "nobody", label: "Никому", gives: [{ userId: offer.userId, mills: 0 }] },
+      { outcome: "pot", key: "pot", label: "В общак", gives: [{ userId: offer.userId, mills: 0 }], shares: [] },
+      { outcome: "return", key: "return", label: `Вернуть ${personNameForms(name).dat}`, gives: [{ userId: offer.userId, mills: net }], shares: [] },
+      { outcome: "nobody", key: "nobody", label: "Никому", gives: [{ userId: offer.userId, mills: 0 }], shares: [] },
     ],
     decision: decided === null ? null : {
       outcome: decided.kind === "pot" ? "в общак" : decided.kind === "nobody" ? "никому" : `вернуть ${personNameForms(name).dat}`,

@@ -79,8 +79,12 @@ export const saleDisputeResponseSchema = z.object({
   /** The answers the owner may give, each with what it gives every party. */
   outcomes: z.array(z.object({
     outcome: z.enum(SALE_DISPUTE_OUTCOMES_WITH_DISMISS),
+    /** Unique within the window (two «целиком» buttons share an outcome). */
+    key: z.string().default(""),
     label: z.string(),
     gives: z.array(z.object({ userId: intId, mills })),
+    /** Whom it gives the sale to (`give`, `split`): sent back as it is when pressed. */
+    shares: z.array(z.object({ userId: intId, percent: z.number().int().min(1).max(100) })).default([]),
   })),
   /** The owner's decision already standing; null — none. */
   decision: z.object({ outcome: z.string(), note: z.string().nullable(), decidedAt: isoTimestamp, by: z.string().nullable() }).nullable(),
@@ -103,6 +107,10 @@ export const saleDisputeDecideBodySchema = z.object({
   /** …or a question carried over from the ledger that names no sale. */
   claimId: intId.optional(),
   outcome: z.enum(SALE_DISPUTE_OUTCOMES_WITH_DISMISS),
+  /** With `give` / `split`: the people the button named, as the window gave them. */
+  shares: z.array(z.object({ userId: intId, percent: z.number().int().min(1).max(100) })).max(3).optional(),
+  /** The sides the window showed (its `parties`): when they are no longer the sides now, 409 `sides_changed`. */
+  seenSides: z.array(intId).max(20).optional(),
   /** Why: kept with the decision. */
   note: z.string().trim().max(1000).nullable().optional(),
 }).refine((body) => (body.transactionId === undefined) !== (body.claimId === undefined), "name the sale or the claim");
