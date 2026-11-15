@@ -9,7 +9,7 @@
 import { z } from "zod";
 
 import { intId, isoTimestamp } from "./primitives.ts";
-import { WAITING_GROUP_IDS, WAITING_TONES } from "./waiting-groups.ts";
+import { WAITING_GROUP_IDS, WAITING_PRODUCT_IDS, WAITING_TONES } from "./waiting-groups.ts";
 
 /** Dotted words: `send.held`, `shift.report.missing`. */
 export const MATTER_KIND_PATTERN = /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$/;
@@ -225,6 +225,21 @@ export const mattersWaitingResponseSchema = z.object({
     /** The worst tone of its matters (`bad` broken, `warn` outcome unknown or not checked; waiting-groups.ts); null — none. */
     tone: z.enum(WAITING_TONES).nullable(),
     to: z.string(),
+    /** The product its matters are decided in (waiting-groups.ts). */
+    product: z.enum(WAITING_PRODUCT_IDS),
+  })),
+  /**
+   * The same by product (Hub · Workboard · ContentOps; the Home's tiles, Workboard's number): a product the viewer has
+   * a group in, its count the sum of its groups' and the matter that waits longest (since its reason began,
+   * `waitingSinceOf`); `oldest` null when only the custom orders' count or an unchecked source stands for it.
+   */
+  products: z.array(z.object({
+    id: z.enum(WAITING_PRODUCT_IDS),
+    title: z.string(),
+    count: z.number().int().nonnegative(),
+    checked: z.boolean(),
+    tone: z.enum(WAITING_TONES).nullable(),
+    oldest: z.object({ title: z.string(), since: isoTimestamp, link: z.string().nullable() }).nullable(),
   })),
   /** The menu's number, the list's: the sum of `groups`. */
   total: z.number().int().nonnegative(),

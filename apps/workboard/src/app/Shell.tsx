@@ -23,9 +23,10 @@ function base(): string {
 }
 
 /** «Ждут вас»: the one read both products show (packages/ui/src/place.ts). */
-function useWaitingCount(enabled: boolean): MenuCountView | null {
+function useWaitingCount(enabled: boolean, owner: boolean): MenuCountView | null {
   const read = useQuery({ ...waitingQuery(kernel), enabled });
-  return enabled ? waitingCount(read) : null;
+  // The owner's Workboard list is Workboard's cut of everything (the rest is Hub's «Ждут вас»); anyone else's is whole.
+  return enabled ? waitingCount(read, owner ? "workboard" : undefined) : null;
 }
 
 /**
@@ -79,7 +80,7 @@ function WorkboardFrame({ children }: { children: ReactNode }) {
   // «Начало» is listed while a newcomer has a step open (the address still opens it).
   const start = useAccountStart();
   const menu: { upper: MenuItem[]; lower: MenuItem[] } = role === null ? { upper: [], lower: [] } : productMenu("workboard", role, { newcomer: startOpen(start.data) });
-  const waiting = useWaitingCount(menu.upper.some((item) => item.count === "waiting"));
+  const waiting = useWaitingCount(menu.upper.some((item) => item.count === "waiting"), role === "owner");
   const ownName = useOwnName();
   const own = carryParams(location.search).toString();
   const origin = window.location.origin;
