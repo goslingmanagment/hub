@@ -118,6 +118,11 @@ describe("a report whose shift is merged after the hand-in", () => {
     // anna's work of 22–20 hours ago: the shift row handed in; the row it is joined into comes with the merge.
     const gone = await shiftRow(22.5, 19.5);
     await handInAndConfirm(asSession, "anna", gone);
+    const home = (await q("select home, reason, shares from sale_homes where transaction_id = $1", [sale])).rows[0];
+    const counted = (await q(
+      `select v.lines from shift_handins h join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version where h.shift_id = $1`, [gone],
+    )).rows[0]?.lines as Array<{ transactionId: number; amountMills: number }> | undefined;
+    expect(counted?.find((line) => line.transactionId === sale)?.amountMills, JSON.stringify({ home, counted })).toBe(NET);
 
     // The ledger's side: every version kept by id under the shift the feed served it with; a shift's report is its
     // highest version.
