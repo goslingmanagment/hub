@@ -70,6 +70,13 @@ function swapLine(input: { date: string; start: string; end: string; pages: read
  * (a person of the same team); «График» (a lead's proposal of the standing schedule) goes to the owner.
  */
 /** What one asks about a fan (the extension's fan panel): no swap, no schedule. */
+/** Hub's own sentence when a swap clashes with one that stands or waits (its words are a person's). */
+function swapWords(error: unknown): string | null {
+  const body = (error as { body?: { reason?: unknown; message?: unknown } } | null)?.body;
+  const clash = body?.reason === "swap_taken" || body?.reason === "swap_asked" || body?.reason === "swap_cover_off";
+  return clash && typeof body?.message === "string" ? body.message : null;
+}
+
 const FAN_KINDS: readonly TeamQuestionKind[] = ["discount_over_50", "free_paid", "custom_price", "whale_terms"];
 
 export function AskModal({ onClose, start, onAsked }: { onClose: () => void; start?: AskStart; onAsked?: () => void }) {
@@ -121,7 +128,7 @@ export function AskModal({ onClose, start, onAsked }: { onClose: () => void; sta
       if (onAsked !== undefined) onAsked();
       else onClose();
     },
-    onError: () => toast.error(swap ? "Подмена не ушла: проверьте день, часы и кто выйдет" : "Вопрос не ушёл. Попробуйте ещё раз"),
+    onError: (error) => toast.error(swapWords(error) ?? (swap ? "Подмена не ушла: проверьте день, часы и кто выйдет" : "Вопрос не ушёл. Попробуйте ещё раз")),
   });
   const ready = page !== "" && words !== "" && (!swap || swapReady) && !ask.isPending;
   return (
@@ -278,7 +285,7 @@ export function QuestionModal({ id, onClose }: { id: number; onClose: () => void
     onSuccess: (_data, value) => done(value === "yes" ? "Ответ «Можно» ушёл" : "Ответ «Нельзя» ушёл"),
     onError: (error) => {
       const reason = (error as { body?: { reason?: unknown } } | null)?.body?.reason;
-      toast.error(reason === "swap_started" ? "Подмена уже началась: ответьте «Нельзя» или оставьте" : "Ответ не записан: вопрос могли уже закрыть");
+      toast.error(reason === "swap_started" ? "Подмена уже началась: ответьте «Нельзя» или оставьте" : swapWords(error) ?? "Ответ не записан: вопрос могли уже закрыть");
     },
   });
   const revoke = useMutation({

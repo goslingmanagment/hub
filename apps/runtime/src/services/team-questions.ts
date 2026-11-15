@@ -18,6 +18,8 @@ import {
   findPersonRowByCode,
   insertPersonDayLine,
   listApprovedSwaps,
+  listPersonDaySwaps,
+  lockPersonSwaps,
   listStandingSwapQuestionIds,
   listMatterPageLabels,
   listOpenMattersOfKinds,
@@ -254,6 +256,7 @@ export async function askTeamQuestion(app: QuestionsApp, principal: AuthPrincipa
   const facts = await teamFactsFor(app, principal);
   const modelId = modelOfPageId(facts, page.id);
   const swap = body.kind === "swap" && body.swap !== undefined ? await swapOfBody(app, facts, principal, body.swap, { modelId, scope, now }) : null;
+  if (swap !== null) await refuseSwapClash(app.db, facts, swap, { asked: true });
   if (body.kind !== "swap" && body.swap !== undefined) throw new BadRequestError("A swap's details belong to the kind «Подмена»");
   // The absent person is a side too: a lead asking for a person of their team, or that person, never decides it.
   const sides = personsOfLogins(facts, [principal.user.id]);
@@ -289,6 +292,11 @@ export async function answerQuestion(
   }
   // «Можно» of a swap writes the day's lines of the schedule in the answer's own transaction: both or neither.
   await app.db.transaction(async (tx) => {
+    // No swap stands twice over the same hours: checked here, under the persons' lock, against what stands.
+    if (swap !== null) {
+      await lockPersonSwaps(tx, [swap.absentPersonId, swap.coverPersonId]);
+      await refuseSwapClash(tx, facts, swap, { asked: false });
+    }
     if (!(await answerTeamQuestion(tx, { id, answer: body.answer, text, byUserId: principal.user.id, at: now }))) {
       throw new ConflictError("The question is not open any more");
     }
@@ -393,6 +401,31 @@ async function swapOfBody(
   const teamPages = new Set(input.modelId === null ? [] : pagesOfModels(facts, [input.modelId]));
   if (![...works(cover.id)].some((id) => teamPages.has(id))) throw new BadRequestError("The covering person is not of this team");
   return { date: body.date, pageIds, startMinute, endMinute, absentPersonId, coverPersonId: cover.id };
+}
+
+/** Two hours of one day overlap; an end at or before the start is past midnight. Pure. */
+export function swapHoursOverlap(a: { startMinute: number; endMinute: number }, b: { startMinute: number; endMinute: number }): boolean {
+  const span = (one: { startMinute: number; endMinute: number }) => [one.startMinute, one.endMinute > one.startMinute ? one.endMinute : one.endMinute + 1440] as const;
+  const [aFrom, aTo] = span(a);
+  const [bFrom, bTo] = span(b);
+  return aFrom < bTo && bFrom < aTo;
+}
+
+/**
+ * No swap stands twice over the same hours (on any of its pages, that day): the absent person off already (an approved
+ * swap not taken back), or asked for already (an open swap question — at asking only; «Можно» checks what stands), or the
+ * covering person off themselves in those hours. Refused with words a person reads.
+ */
+async function refuseSwapClash(db: QuestionsApp["db"], facts: TeamFacts, swap: TeamQuestionSwapRow, input: { asked: boolean }): Promise<void> {
+  const of = (personId: number) => listPersonDaySwaps(db, { personId, day: swap.date, pageIds: swap.pageIds });
+  const clashes = (hours: ReadonlyArray<{ startMinute: number; endMinute: number }>) => hours.some((one) => swapHoursOverlap(one, swap));
+  const absent = await of(swap.absentPersonId);
+  if (clashes(absent.off)) throw new ConflictError("На эти часы подмена уже стоит", { reason: "swap_taken" });
+  if (input.asked && clashes(absent.asked)) throw new ConflictError("Подмену на эти часы уже спросили, ждёт ответа", { reason: "swap_asked" });
+  if (clashes((await of(swap.coverPersonId)).off)) {
+    const name = facts.people.find((one) => one.personId === swap.coverPersonId)?.name ?? "Тот, кто выйдет,";
+    throw new ConflictError(`${name} сам не выходит в эти часы`, { reason: "swap_cover_off" });
+  }
 }
 
 /**

@@ -193,3 +193,39 @@ export async function listStandingSwapQuestionIds(db: Database, questionIds: rea
     where question_id = any(${ids(questionIds)}) and revoked_at is null`);
   return new Set(result.rows.map((row) => num(row.question_id)));
 }
+
+/** Hours of a swap's day (Moscow minutes), as the clash check compares them. */
+export interface SwapHours {
+  startMinute: number;
+  endMinute: number;
+}
+
+/**
+ * A person's swaps of one day on any of the pages, for «no swap stands twice over the same hours»: the hours of their
+ * standing `off` lines (approved, not taken back) and of the open swap questions where they are the absent person. The
+ * hours are the caller's to compare.
+ */
+export async function listPersonDaySwaps(db: Database, input: { personId: number; day: string; pageIds: readonly number[] }): Promise<{ off: SwapHours[]; asked: SwapHours[] }> {
+  if (input.pageIds.length === 0) return { off: [], asked: [] };
+  const off = await db.execute<Row>(sql`select start_minute, end_minute from person_schedule_slots
+    where person_id = ${input.personId} and kind = 'off' and revoked_at is null and valid_from = ${input.day}::date
+      and page_id = any(${ids(input.pageIds)})`);
+  const asked = await db.execute<Row>(sql`select swap from team_questions
+    where kind = 'swap' and state = 'open' and swap is not null and swap->>'date' = ${input.day}
+      and (swap->>'absentPersonId')::bigint = ${input.personId}`);
+  const pages = new Set(input.pageIds);
+  return {
+    off: off.rows.map((row) => ({ startMinute: num(row.start_minute), endMinute: num(row.end_minute) })),
+    asked: asked.rows.flatMap((row) => {
+      const swap = swapOf(row.swap);
+      return swap !== null && swap.pageIds.some((id) => pages.has(id)) ? [{ startMinute: swap.startMinute, endMinute: swap.endMinute }] : [];
+    }),
+  };
+}
+
+/** Holds the persons' swap days until the caller's transaction ends: two «Можно» at once are checked one after the other. */
+export async function lockPersonSwaps(db: Database, personIds: readonly number[]): Promise<void> {
+  for (const id of [...new Set(personIds)].sort((a, b) => a - b)) {
+    await db.execute(sql`select pg_advisory_xact_lock(422, ${id}::int)`);
+  }
+}
