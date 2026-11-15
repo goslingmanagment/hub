@@ -1,8 +1,8 @@
-import type { KernelOperationResponse } from "@agency_hub_core/contracts";
+import { averageShiftQuality, shiftQualityOf, type KernelOperationResponse } from "@agency_hub_core/contracts";
 import { averageQuality, type ShiftQuality } from "@agency_hub_core/ui/shiftReview";
 
 import { demoError, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
-import { DEMO_CHATTERS, DEMO_DATA_PAGES, demoFans, demoPage } from "../world.ts";
+import { DEMO_CHATTERS, DEMO_DATA_PAGES, demoFans, demoPage, demoUserByRole } from "../world.ts";
 import { teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
 import { adminModelApplication, adminModelApplications } from "./team-applications.ts";
 import { teamChatterStats, teamShiftSales } from "./team-stats.ts";
@@ -494,6 +494,7 @@ export const teamHandlers: DemoHandlers = {
         const { numbers, quality } = numbersOf(shift, disputed, request.now);
         return {
           row: {
+            userId: user.id,
             startedAt: isoAt(shift.startedAt),
             endedAt: isoAt(shift.endedAt),
             ongoing: shift.ongoing,
@@ -507,12 +508,58 @@ export const teamHandlers: DemoHandlers = {
       return {
         userId: user.id,
         username: user.username,
+        // In the demo every chatter is one person with one login, the same number.
+        personId: user.id,
+        userIds: [user.id],
         week: weekOf(rows.map(({ row, quality }) => ({ numbers: row.numbers, confirmed: row.confirmed, quality }))),
         shifts: rows.map(({ row }) => row),
       };
     }).filter((chatter) => chatter.shifts.length > 0)
       .sort((left, right) => right.week.messages - left.week.messages);
     return { from: isoAt(from), to: isoAt(to), chatters, serverNow: request.now.toISOString() };
+  },
+
+  // «Мои смены»: the chatter's own numbers and the team's average beside them, as Hub answers (account-shift-numbers.ts).
+  accountShiftNumbers: (request) => {
+    const me = demoUserByRole(request.role);
+    const toParsed = parseInstant(queryString(request, "to"));
+    const fromParsed = parseInstant(queryString(request, "from"));
+    if (toParsed === null || fromParsed === null) return demoError(400, "Bad Request", "from и to — время в формате RFC 3339.");
+    const to = toParsed ?? request.now.getTime();
+    const from = fromParsed ?? to - 7 * DAY;
+    if (from >= to || to - from > 31 * DAY) return demoError(400, "Bad Request", "Окно — не больше 31 дня.");
+    const disputed = new Set(teamDisputes(request.now).filter((dispute) => dispute.resolution === null).map((dispute) => dispute.sale.ref));
+    const middleOfWork = (shift: DemoShift) => Math.floor((shift.startedAt + shift.endedAt - 1) / 2);
+    const inWindow = teamWorld(request.now).shifts.filter((shift) => middleOfWork(shift) >= from && middleOfWork(shift) < to);
+    const mine = inWindow.filter((shift) => shift.user.id === me.id).map((shift) => ({ shift, ...numbersOf(shift, disputed, request.now) }));
+    const week = weekOf(mine.map(({ numbers, quality }) => ({ numbers, confirmed: false, quality })));
+    const { shifts: _shifts, unconfirmedShifts: _unconfirmed, ...periodNumbers } = week;
+    // The team: the chatters of the pages of my pages' models; its closed shifts only (Hub reads them from the table).
+    const team = inWindow.filter((shift) => !shift.ongoing && shift.user.pages.some((page) => me.pages.some((own) => own.split("-")[0] === page.split("-")[0])));
+    const teamQuality = team.map((shift) => shiftQualityOf(numbersOf(shift, disputed, request.now).numbers));
+    return {
+      from: isoAt(from),
+      to: isoAt(to),
+      personId: me.id,
+      period: {
+        shifts: mine.length,
+        workedMinutes: week.workedMinutes,
+        quality: averageShiftQuality(mine.map((one) => shiftQualityOf(one.numbers))),
+        numbers: periodNumbers,
+      },
+      team: team.length === 0 ? null : { ...averageShiftQuality(teamQuality), people: new Set(team.map((shift) => shift.user.id)).size },
+      shifts: [...mine].sort((a, b) => b.shift.startedAt - a.shift.startedAt).map(({ shift, numbers }) => ({
+        userId: me.id,
+        startedAt: isoAt(shift.startedAt),
+        endedAt: isoAt(shift.endedAt),
+        ongoing: shift.ongoing,
+        pages: workedPages(shift),
+        workedMinutes: shift.workedMinutes,
+        quality: shiftQualityOf(numbers),
+        numbers,
+      })),
+      serverNow: request.now.toISOString(),
+    };
   },
 
   teamChatterStats: (request) => {

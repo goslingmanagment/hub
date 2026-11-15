@@ -30,7 +30,10 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { type AuthPrincipal } from "./auth.ts";
 import { requireTeamReader } from "./teams.ts";
-import { middleOfWork, readPeopleWork } from "./chatter-shifts.ts";
+import { middleOfWork, readPeopleWork, type ComputedWork, type PersonWork } from "./chatter-shifts.ts";
+import { loadEffectiveConfigField } from "./effective-config.ts";
+import { groupLoginsByPerson, loginsOfPersonOf } from "./person-logins.ts";
+import { storedRowsFor, type ShiftNumbersStore } from "./shift-numbers.ts";
 import { BadRequestError } from "./errors.ts";
 import {
   SENDABLE_FEATURES,
@@ -166,7 +169,7 @@ export function shiftNumbersOf(input: {
  * `allFansPageIds` (`pagesWithAllFans`), from the wait horizon before `start` to `end`.
  */
 export async function readShiftNumbers(
-  app: AppContext,
+  app: Pick<AppContext, "db">,
   input: {
     userId: number; username: string; pages: ReadonlyArray<{ id: number; label: string }>; allFansPageIds: readonly number[];
     start: number; end: number; openings: readonly string[];
@@ -253,64 +256,122 @@ async function eachAtMost<T, R>(items: readonly T[], limit: number, run: (item: 
   return out;
 }
 
-export async function readTeamChatterNumbers(
-  app: AppContext,
-  principal: AuthPrincipal,
-  input: { from?: string | undefined; to?: string | undefined; userId?: number | undefined; pageScope: readonly number[] | undefined },
-): Promise<TeamChatterNumbersResponse> {
-  // A cookie session of any role, cut to the viewer's teams by the caller (`teamPagesFor`, services/teams.ts).
-  requireTeamReader(principal);
-  const now = new Date();
-  const to = input.to === undefined ? now : new Date(input.to);
-  const from = input.from === undefined ? new Date(to.getTime() - 7 * DAY_MS) : new Date(input.from);
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) throw new BadRequestError("`from` must be before `to`");
-  if (to.getTime() - from.getTime() > CHATTER_NUMBERS_MAX_DAYS * DAY_MS) {
-    throw new BadRequestError(`The window is at most ${CHATTER_NUMBERS_MAX_DAYS} days`);
-  }
+/** One shift to count: the login's shift as chatter-shifts.ts computes it, read as «Разбор смены» reads it. */
+export interface ShiftJob {
+  userId: number;
+  username: string;
+  shift: ComputedWork;
+  /** The shift's end; now for one going on. */
+  end: number;
+  pages: Array<{ id: number; label: string }>;
+  /** The pages whose every fan the shift answers for (`pagesWithAllFans`). */
+  allFansPageIds: number[];
+}
 
+export interface TeamShiftJobs {
+  jobs: ShiftJob[];
+  /** The automated openings the review leaves out (`autoOpenings`), the same for every shift. */
+  openings: string[];
+}
+
+/**
+ * The shifts whose middle falls in [from, to), of these pages (`"all"`: the live agency's), of these logins or
+ * everyone's, each with what its numbers are read from. The one place the team read, the chatter's own read, the job
+ * that stores the numbers and its shadow check take their shifts from.
+ */
+export async function teamShiftJobs(
+  app: Pick<AppContext, "db">,
+  input: { from: Date; to: Date; now: Date; scope: "all" | readonly number[]; userIds?: readonly number[] | undefined },
+): Promise<TeamShiftJobs> {
+  const { from, to, now, scope } = input;
   // A day more on each side, so the shifts of the window are whole.
   const around = { from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), now };
-  const scope = input.pageScope ?? "all";
   // Whether a page with fewer of the person's messages shows all its fans is a question of the colleagues' shifts on every
   // page (`pagesWithAllFans`), so everyone's work, read beside the people asked when it is not theirs already.
-  const whole = scope === "all" && input.userId === undefined;
-  const [people, others] = await Promise.all([
-    readPeopleWork(app.db, { ...around, pages: scope, ...(input.userId === undefined ? {} : { userId: input.userId }) }),
-    whole ? null : readPeopleWork(app.db, { ...around, pages: "all" }),
-  ]);
-  const jobs = [...people].flatMap(([userId, person]) => person.work
+  const whole = scope === "all" && input.userIds === undefined;
+  const readPeople = async (): Promise<Map<number, PersonWork>> => {
+    if (input.userIds === undefined) return readPeopleWork(app.db, { ...around, pages: scope });
+    const each = await Promise.all(input.userIds.map((userId) => readPeopleWork(app.db, { ...around, pages: scope, userId })));
+    return new Map(each.flatMap((one) => [...one]));
+  };
+  const [people, others] = await Promise.all([readPeople(), whole ? null : readPeopleWork(app.db, { ...around, pages: "all" })]);
+  const found = [...people].flatMap(([userId, person]) => person.work
     .filter((shift) => shift.kind === "shift" && middleOfWork(shift) >= from.getTime() && middleOfWork(shift) < to.getTime())
     .map((shift) => ({ userId, username: person.username, shift })));
-  if (jobs.length === 0) return { from: from.toISOString(), to: to.toISOString(), chatters: [], serverNow: now.toISOString() };
+  if (found.length === 0) return { jobs: [], openings: [] };
 
   // As the review reads a shift: its pages, the automated texts, the colleagues' shifts.
-  const chatterIds = [...new Set(jobs.map((job) => job.userId))];
   const [known, autoTexts] = await Promise.all([
-    listPagesByLabels(app.db, [...new Set(jobs.flatMap(({ shift }) => shiftPageLabels(shift)))]),
+    listPagesByLabels(app.db, [...new Set(found.flatMap(({ shift }) => shiftPageLabels(shift)))]),
     listAllAutomatedTexts(app.db),
   ]);
-  const shiftsOfAll = jobs.some(({ shift }) => shiftNeedsColleagues(shift)) ? piecesOf(others ?? people, "shift") : [];
-  const openings = autoOpenings(autoTexts);
-  const rows = await eachAtMost(jobs, SHIFT_READS_AT_ONCE, ({ userId, username, shift }) => {
+  const shiftsOfAll = found.some(({ shift }) => shiftNeedsColleagues(shift)) ? piecesOf(others ?? people, "shift") : [];
+  const jobs = found.map(({ userId, username, shift }): ShiftJob => {
     const end = shift.ongoing ? now.getTime() : shift.endedAt;
     const pages = shiftPageLabels(shift).flatMap((label) => known.filter((page) => page.label === label));
     const allFans = pagesWithAllFans(shift, shiftsOfAll.filter((one) => one.userId !== userId), shift.startedAt, end);
-    return readShiftNumbers(app, {
-      userId, username, pages, allFansPageIds: pages.filter((page) => allFans.has(page.label)).map((page) => page.id), start: shift.startedAt, end, openings,
-    });
+    return { userId, username, shift, end, pages, allFansPageIds: pages.filter((page) => allFans.has(page.label)).map((page) => page.id) };
   });
+  return { jobs, openings: autoOpenings(autoTexts) };
+}
 
-  const chatters: TeamChatterNumbersResponse["chatters"] = chatterIds.map((userId) => {
-    const mine = jobs.flatMap((job, index) => (job.userId === userId ? [{ shift: job.shift, row: rows[index]! }] : []));
-    const computed = mine.map((one) => ({ ...one, workedMinutes: one.shift.workedMinutes }));
+/** A shift's numbers counted now, from the database. */
+export function readJobNumbers(app: Pick<AppContext, "db">, job: ShiftJob, openings: readonly string[]): Promise<ShiftNumbersRow> {
+  return readShiftNumbers(app, {
+    userId: job.userId, username: job.username, pages: job.pages, allFansPageIds: job.allFansPageIds, start: job.shift.startedAt, end: job.end, openings,
+  });
+}
+
+/**
+ * Each shift's numbers: with `fromTable`, a closed shift's stored row when it is of this shift as it is now
+ * (`storedRowsFor`), else — a going shift, a shift with no fresh row, the switch off — counted live as before.
+ * `liveFallback: false` leaves a shift without a stored row out (null): the team's average reads only the table.
+ */
+export async function shiftRowsOf(
+  app: Pick<AppContext, "db">,
+  found: TeamShiftJobs,
+  options: { fromTable: boolean; liveFallback?: boolean; store?: ShiftNumbersStore },
+): Promise<Array<ShiftNumbersRow | null>> {
+  const stored = options.fromTable ? await storedRowsFor(app, found, options.store) : new Map<ShiftJob, ShiftNumbersRow>();
+  const live = options.liveFallback ?? true;
+  return eachAtMost(found.jobs, SHIFT_READS_AT_ONCE, async (job) => stored.get(job) ?? (live ? readJobNumbers(app, job, found.openings) : null));
+}
+
+/** Whether the owner's switch reads the team's closed shifts from the stored table (`teamNumbersFromTable`, live). */
+export async function numbersFromTable(app: Pick<AppContext, "db" | "config">): Promise<boolean> {
+  return (await loadEffectiveConfigField(app.db, app.config, "teamNumbersFromTable")) === true;
+}
+
+type NumbersEntry = TeamChatterNumbersResponse["chatters"][number];
+
+/**
+ * The answer's lines, one a PERSON (person-logins.ts): a person with two logins is one line of both logins' shifts,
+ * each shift saying its login. A line's `userId` is the login that worked the most shifts (the first on a tie), its
+ * `userIds` every login of the person in the answer; a person with one login reads as before. Pure but for the join.
+ */
+export async function chattersByPerson(
+  app: Pick<AppContext, "db">,
+  jobs: readonly ShiftJob[],
+  rows: readonly ShiftNumbersRow[],
+): Promise<NumbersEntry[]> {
+  const chatterIds = [...new Set(jobs.map((job) => job.userId))];
+  const groups = await groupLoginsByPerson(app.db, chatterIds);
+  const chatters = groups.map((group): NumbersEntry => {
+    const mine = jobs.flatMap((job, index) => (group.userIds.includes(job.userId) ? [{ job, row: rows[index]! }] : []));
+    const shiftsOf = (userId: number) => mine.filter((one) => one.job.userId === userId).length;
+    const lead = [...group.userIds].sort((a, b) => shiftsOf(b) - shiftsOf(a) || a - b)[0]!;
+    const computed = mine.map((one) => ({ ...one, shift: one.job.shift, workedMinutes: one.job.shift.workedMinutes }));
     return {
-      userId,
-      username: people.get(userId)!.username,
+      userId: lead,
+      username: mine.find((one) => one.job.userId === lead)!.job.username,
+      personId: group.personId,
+      userIds: [lead, ...group.userIds.filter((id) => id !== lead)],
       // No shift has a confirmed report (the header): every one counts as not confirmed, as it has since.
       week: { ...numbersOf(computed), shifts: computed.length, unconfirmedShifts: computed.length },
       shifts: computed
-        .sort((a, b) => b.shift.startedAt - a.shift.startedAt)
+        .sort((a, b) => b.shift.startedAt - a.shift.startedAt || a.job.userId - b.job.userId)
         .map((one) => ({
+          userId: one.job.userId,
           startedAt: new Date(one.shift.startedAt).toISOString(),
           endedAt: new Date(one.shift.endedAt).toISOString(),
           ongoing: one.shift.ongoing,
@@ -321,5 +382,34 @@ export async function readTeamChatterNumbers(
     };
   });
   chatters.sort((a, b) => a.username.localeCompare(b.username));
+  return chatters;
+}
+
+/** The window of a numbers read: [from, to), by default the last 7 days, at most CHATTER_NUMBERS_MAX_DAYS. */
+export function numbersWindowOf(input: { from?: string | undefined; to?: string | undefined }, now: Date): { from: Date; to: Date } {
+  const to = input.to === undefined ? now : new Date(input.to);
+  const from = input.from === undefined ? new Date(to.getTime() - 7 * DAY_MS) : new Date(input.from);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) throw new BadRequestError("`from` must be before `to`");
+  if (to.getTime() - from.getTime() > CHATTER_NUMBERS_MAX_DAYS * DAY_MS) {
+    throw new BadRequestError(`The window is at most ${CHATTER_NUMBERS_MAX_DAYS} days`);
+  }
+  return { from, to };
+}
+
+export async function readTeamChatterNumbers(
+  app: AppContext,
+  principal: AuthPrincipal,
+  input: { from?: string | undefined; to?: string | undefined; userId?: number | undefined; pageScope: readonly number[] | undefined },
+): Promise<TeamChatterNumbersResponse> {
+  // A cookie session of any role, cut to the viewer's teams by the caller (`teamPagesFor`, services/teams.ts).
+  requireTeamReader(principal);
+  const now = new Date();
+  const { from, to } = numbersWindowOf(input, now);
+  // One person: every login of theirs (person-logins.ts), on the viewer's pages.
+  const userIds = input.userId === undefined ? undefined : (await loginsOfPersonOf(app.db, input.userId)).userIds;
+  const found = await teamShiftJobs(app, { from, to, now, scope: input.pageScope ?? "all", userIds });
+  if (found.jobs.length === 0) return { from: from.toISOString(), to: to.toISOString(), chatters: [], serverNow: now.toISOString() };
+  const rows = await shiftRowsOf(app, found, { fromTable: await numbersFromTable(app) });
+  const chatters = await chattersByPerson(app, found.jobs, rows.map((row) => row!));
   return { from: from.toISOString(), to: to.toISOString(), chatters, serverNow: now.toISOString() };
 }

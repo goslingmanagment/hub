@@ -112,6 +112,9 @@ const envSchema = z.object({
   TELEGRAM_REPORT_HOUR: optionalTelegramHourSchema,
   // Hub's Telegram messages in Russian (alerts, the daily report, the digest): the owner's live switch, off = English.
   TELEGRAM_RUSSIAN: booleanSchema.default(false),
+  // The team's shift numbers from the stored table (`shift_numbers`, products package N): the owner's live switch,
+  // off = computed live as before.
+  TEAM_NUMBERS_FROM_TABLE: booleanSchema.default(false),
   // Сообщения людям (package S): the sender's own bot (unset: nothing leaves) and the owner's two live settings.
   PEOPLE_TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   PEOPLE_MESSAGE_KINDS: z.string().default("{}"),
@@ -481,6 +484,8 @@ export interface AppConfig {
   telegramReportHourUtc: number;
   /** Hub's Telegram messages in Russian (`TELEGRAM_RUSSIAN`, live): the same facts, recipients and schedule. */
   telegramRussian?: boolean;
+  /** The team's shift numbers from the stored table (`TEAM_NUMBERS_FROM_TABLE`, live); off — computed live. */
+  teamNumbersFromTable?: boolean;
   /** PEOPLE_TELEGRAM_BOT_TOKEN: the bot of «Сообщения людям» (package S); absent — nothing can leave, every message is held. */
   peopleTelegramBotToken?: string | null;
   /** PEOPLE_MESSAGE_KINDS (live): the kinds turned on and since when, JSON (people-messages.ts). */
@@ -907,6 +912,7 @@ export function loadConfig(
     telegramEnabled,
     telegramReportHourUtc: parsed.TELEGRAM_REPORT_HOUR ?? 9,
     telegramRussian: parsed.TELEGRAM_RUSSIAN,
+    teamNumbersFromTable: parsed.TEAM_NUMBERS_FROM_TABLE,
     peopleTelegramBotToken: parsed.PEOPLE_TELEGRAM_BOT_TOKEN ?? null,
     peopleMessageKinds: parsed.PEOPLE_MESSAGE_KINDS,
     peopleMessageChats: parsed.PEOPLE_MESSAGE_CHATS,
