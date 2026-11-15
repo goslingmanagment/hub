@@ -413,7 +413,9 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
     countedAt: state.counted ? state.countedAt : null,
     preview: state.preview ? true : undefined,
     previous: own ? { user: person(OLEG), comment: PREVIOUS.comment, at: at(12, PREVIOUS.at) } : null,
-    post: own && state.counted ? { ...state.post } : null,
+    post: own && state.counted
+      ? { ...state.post, models: [{ modelSlug: "mia", modelName: "Mia", copiedAt: state.post.copiedAt, changedSinceCopy: state.post.changedSinceCopy }] }
+      : null,
   };
 }
 
@@ -613,7 +615,7 @@ function reportOf(request: DemoRequest, scenario: Scenario): Report {
       totalMills: board.totals.nowMills, cut: !own, computedAt: request.now.toISOString(),
     },
     afterSubmission: own && late.length ? { count: late.length, mills: late.reduce((sum, row) => sum + row.netMills, 0) } : null,
-    posts: own && state.counted ? [{ modelName: "Mia", text: postOf(state, board) }] : [],
+    posts: own && state.counted ? [{ modelSlug: "mia", modelName: "Mia", text: postOf(state, board) }] : [],
     colleagues: [OLEG, SEVA],
     claims: [],
     board,

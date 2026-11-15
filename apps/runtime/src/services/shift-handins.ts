@@ -31,6 +31,7 @@ import {
   listHandinOtherReports,
   listHandinRenewals,
   listHandinMarks,
+  listHandinPostCopies,
   listHandinNames,
   listHandinPeopleOfUsers,
   listHandinSaleFans,
@@ -797,7 +798,7 @@ function versionSummary(version: HandinVersionRow, names: Map<number, string>, k
 
 /** The newest version as today's posts in «Отчётность». */
 function postsOf(version: HandinVersionRow, subject: Subject, handin: HandinRow, context: ViewContext): ShiftReportResponse["posts"] {
-  return modelPostsOf(version, subject, handin, context).map((post) => ({ modelName: post.modelName, text: post.text }));
+  return modelPostsOf(version, subject, handin, context).map((post) => ({ modelSlug: post.modelSlug, modelName: post.modelName, text: post.text }));
 }
 
 /**
@@ -912,6 +913,7 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
   const details = facts === null ? new Map<number, ShiftReportLineFacts>() : await lineDetails(db, subject, facts, catalog);
   const context: ViewContext = { details, catalog, names, fans };
   const keyNames = await listHandinAgentKeyNames(db, versions.flatMap((version) => (version.agentKeyId === null ? [] : [version.agentKeyId])));
+  const posts = own && latest !== null && handin !== null ? postsOf(latest, subject, handin, context) : [];
 
   let view: ShiftReportBody | null = null;
   if (own || (latest === null && access.draftPreview)) {
@@ -971,12 +973,14 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
     versions: [...versions].reverse().map((version) => versionSummary(version, names, keyNames, access.cutTo)),
     view,
     afterSubmission,
-    posts: own && latest !== null && handin !== null ? postsOf(latest, subject, handin, context) : [],
+    posts,
     colleagues,
     claims,
     boardShift: boardOn(subject),
     board: await readBoard({
       db, subject, catalog, cutTo: access.cutTo, draftPreview: access.draftPreview, handin, versions, draft, now,
+      posts: posts.map((post) => ({ modelSlug: post.modelSlug, modelName: post.modelName })),
+      postCopies: handin === null ? [] : await listHandinPostCopies(db, handin.id),
       // Asked only once the post was copied: before that there is nothing for the ledger to have seen.
       postSeen: options.withPost === true && own && latest !== null && handin?.postCopiedAt != null ? await postSeenOf(app, subject, versionReportDate(latest, handin)) : null,
       actor: { access: access.access, kind: actor.kind, enabled: subject.enabled },

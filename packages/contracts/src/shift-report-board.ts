@@ -430,6 +430,16 @@ export const shiftReportBoardSchema = z.object({
     seen: z.boolean().nullable(),
     changedSinceCopy: z.boolean(),
     late: z.boolean(),
+    /**
+     * Each model's post (a shift on pages of two models has two): whether it was copied and changed since. The board
+     * copies each by its own button («Скопировать пост: Лора») and marks each «скопирован».
+     */
+    models: z.array(z.object({
+      modelSlug: z.string(),
+      modelName: z.string(),
+      copiedAt: isoTimestamp.nullable(),
+      changedSinceCopy: z.boolean(),
+    })).default([]),
   }).nullable().optional(),
 });
 export type ShiftReportBoard = z.infer<typeof shiftReportBoardSchema>;

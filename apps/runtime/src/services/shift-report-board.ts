@@ -373,11 +373,14 @@ export async function cancelShiftReportFix(app: BoardApp, actor: HandinPersonAct
 }
 
 /** «Скопировать пост»: remember it, so a later version that changes a page sum says «Пост изменился» and opens a matter. */
-export async function markShiftReportPostCopied(app: BoardApp, actor: HandinPersonActor, input: { shiftId: number }, now: Date = new Date()): Promise<ShiftReportResponse> {
+export async function markShiftReportPostCopied(app: BoardApp, actor: HandinPersonActor, input: { shiftId: number; model?: string | null }, now: Date = new Date()): Promise<ShiftReportResponse> {
   const { subject } = await writableSubject(app, actor, input.shiftId);
   const handin = await findHandinByShift(app.db, subject.shift.id);
   if (handin === null || handin.currentVersion === null) throw new NotFoundError("Nothing counted yet");
-  await setHandinPostCopied(app.db, { handinId: handin.id, version: handin.currentVersion, at: now });
+  // Each model's post is copied by its own button: the copy of the one named. A client before that copies them all.
+  const models = (await readSubject(app, actor, subject, now)).posts.map((post) => post.modelSlug);
+  if (input.model != null && !models.includes(input.model)) throw new BadRequestError("No post of this model in the report", { reason: "model_not_in_post" });
+  await setHandinPostCopied(app.db, { handinId: handin.id, version: handin.currentVersion, at: now, modelSlugs: input.model == null ? models : [input.model] });
   await syncCheckMatters(app, now).catch((error: unknown) => warn(app, error, "the post's matter after a copy"));
   return readSubject(app, actor, subject, now);
 }

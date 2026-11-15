@@ -171,7 +171,10 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
     if (post?.late && post.copiedAt === null) {
       postLines.push(<span className="k is-amb" key="late"><Ico name="clock" size={14} />Пост за {day(`${report.shift.reportDate}T12:00:00+03:00`)} опоздал больше чем на сутки: ledger его сам не примет</span>);
     }
-    if (post && post.copiedAt !== null && post.changedSinceCopy) {
+    const changed = (post?.models ?? []).filter((model) => model.copiedAt !== null && model.changedSinceCopy);
+    if (changed.length > 0 && report.posts.length > 1) {
+      postLines.push(<span className="k is-amb" key="changed"><Ico name="pen" size={14} />Пост {changed.map((model) => model.modelName).join(", ")} изменился. Исправьте прежний пост в «Отчётности», новый не пишите</span>);
+    } else if (post && post.copiedAt !== null && (post.changedSinceCopy || changed.length > 0)) {
       postLines.push(<span className="k is-amb" key="changed"><Ico name="pen" size={14} />Пост изменился. Исправьте прежний пост в «Отчётности», новый не пишите</span>);
     } else if (post && post.copiedAt !== null && post.seen === false) {
       postLines.push(<span className="k" key="unseen"><Ico name="clock" size={14} />Пост в «Отчётность» ещё не пришёл</span>);
@@ -183,7 +186,16 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
         {what}
         {!own && what !== null && <span className="grow" />}
         {own && <button type="button" className="btn btn--quiet btn--lg" disabled={pending} onClick={() => void run({ op: "reopen" })}>Исправить</button>}
-        {own && <button type="button" className="btn btn--main btn--lg" onClick={actions.copyPost}><Ico name="copy" size={14} />Скопировать пост</button>}
+        {own && report.posts.map((one) => {
+          // One button per model of the shift: «Отчётность» takes one post per model, never two joined.
+          const copied = post?.models.find((model) => model.modelSlug === one.modelSlug)?.copiedAt != null;
+          const label = report.posts.length > 1 ? `Скопировать пост: ${one.modelName}` : "Скопировать пост";
+          return (
+            <button key={one.modelSlug} type="button" className={`btn ${copied ? "btn--quiet" : "btn--main"} btn--lg`} onClick={() => actions.copyPost(one.modelSlug)}>
+              <Ico name={copied ? "check" : "copy"} size={14} />{label}{copied ? " · скопирован" : ""}
+            </button>
+          );
+        })}
       </>
     );
   }
