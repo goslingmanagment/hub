@@ -28,7 +28,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { auditCtx, pageScopeFor } from "../../api/request-auth.ts";
-import { doorPerson, type PersonDoorOperation } from "../../services/person-door.ts";
+import { albumAccountFor, doorPerson, type PersonDoorOperation } from "../../services/person-door.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { recordAudit } from "../../services/auth.ts";
 import { resolvePublishingStoppedIncident } from "../../services/notification-incidents.ts";
@@ -385,6 +385,9 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     findings: publication.findings.map((finding) => findingWords(finding, publication.media)),
     command: commandNoteWords(publication),
   });
+  // A vault album's OnlyFans API account is the owner's alone (person-door.ts albumAccountFor).
+  const accountFor = <P extends { albumRun?: PublicationWire["albumRun"] | undefined }>(person: { user: { role: string } }, publication: P): P =>
+    albumAccountFor(person.user.role, publication);
   const withdrawWords = <R extends { outcome: string; reason: string | null }>(answer: { results: R[] }, words: (result: R) => string) => ({
     results: answer.results.map((result) => ({ ...result, words: words(result) })),
   });
@@ -395,11 +398,13 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   server.post("/api/v1/person/publications/list", { schema: routeSchemas.personPublicationList }, async (request) => {
     const { client: _client, grant: _grant, ...query } = request.body;
-    const listed = await screen.list(await as(request, "personPublicationList"), query);
-    return { publications: listed.publications.map((publication) => ({ ...publication, words: wordsOfPublication(publication) })) };
+    const person = await as(request, "personPublicationList");
+    const listed = await screen.list(person, query);
+    return { publications: listed.publications.map((publication) => ({ ...accountFor(person, publication), words: wordsOfPublication(publication) })) };
   });
   server.post("/api/v1/person/publications/get", { schema: routeSchemas.personPublicationGet }, async (request) => {
-    const detail = await screen.get(await as(request, "personPublicationGet"), request.body.id);
+    const person = await as(request, "personPublicationGet");
+    const detail = await screen.get(person, request.body.id);
     // Who drafted, approved and moved it, by name: the card says «Автор: Генгар», «Утвердил: Диана».
     const userIds = [detail.author.userId, detail.revision?.approvedByUserId ?? null, ...detail.events.map((event) => event.actorUserId)];
     const agentKeyIds = [detail.author.agentKeyId, ...detail.events.map((event) => event.actorAgentKeyId)];
@@ -408,12 +413,13 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       agentKeyIds: agentKeyIds.filter((id): id is number => id !== null),
     });
     return {
-      ...detail,
+      ...accountFor(person, detail),
       names,
       words: {
         ...wordsOfPublication(detail),
         events: detail.events.map((event) => statusReasonWords(event.reason)),
-        album: detail.albumRun ? albumRunWords(detail.albumRun) : null,
+        // The account's ceiling and balance are the owner's (agency money); the album's own run and cost are anyone's here.
+        album: detail.albumRun ? albumRunWords(detail.albumRun, { account: person.user.role === "owner" }) : null,
       },
     };
   });
