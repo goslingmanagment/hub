@@ -543,6 +543,11 @@ export const agentShiftReportsFeedItemSchema = z.object({
   /** The person's code (the ledger's slug); null — a login no person holds. */
   person: z.string().nullable(),
   hubUserId: intId,
+  /**
+   * The shift the version was made under — the version's own, never changed (0426): a report moved to the shift that
+   * remains after a merge keeps its earlier versions under the shift that is gone (the last of them a version with no
+   * lines) and makes its next ones under the new shift. A shift's report is its highest version.
+   */
   shiftId: intId,
   reportDate: businessDate,
   version: z.number().int().positive(),

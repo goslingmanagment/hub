@@ -368,6 +368,41 @@ export async function syncLateMarks(app: CheckApp, now: Date): Promise<number> {
 }
 
 /**
+ * A merge: the report moves to the shift that remains, when that shift has none of its own (false — it has one). The
+ * ledger keeps each shift's highest version as its report, by the shift the feed names for the version (0426), so a
+ * report that counts lines leaves a version with none under the shift that is gone, then counts the same lines again
+ * under the shift that remains: the sales stay counted once. In one transaction, in the settlements' turn.
+ */
+async function moveToMerged(db: Database, input: { handinId: number; from: number; to: number }, now: Date): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockSaleSettlements(txDb);
+    const handin = await findHandinByShift(txDb, input.from, { lock: true });
+    if (handin === null || handin.id !== input.handinId || (await findHandinByShift(txDb, input.to)) !== null) return false;
+    const latest = (await listHandinVersions(txDb, handin.id)).at(-1);
+    const counts = latest !== undefined && latest.lines.length > 0;
+    const system = (outcome: "merged" | "moved") => ({
+      door: latest!.door === "telegram" ? "workboard" as const : latest!.door, actorUserId: latest!.actorUserId ?? handin.userId, agentKeyId: null,
+      telegramMessageRef: null, telegramSenderId: null, comment: latest!.comment, dayPaid: null, ruleVersion: latest!.ruleVersion,
+      madeFor: { kind: "decision" as const, decisionId: null, transactionId: null, outcome }, reportDate: latest!.reportDate ?? handin.reportDate, at: now,
+    });
+    if (counts) {
+      await insertHandinVersion(txDb, {
+        ...system("merged"), handin, totalMills: 0, pages: latest!.pages.map((page) => ({ pageLabel: page.pageLabel, amountMills: 0 })), lines: [], offPlatform: [],
+      });
+    }
+    if (!(await moveHandinToShift(txDb, { handinId: handin.id, shiftId: input.to }))) throw new Error(`shift report ${handin.id}: the move to shift ${input.to} found a report there`);
+    if (counts) {
+      const moved = (await findHandinById(txDb, handin.id))!;
+      await insertHandinVersion(txDb, {
+        ...system("moved"), handin: moved, totalMills: latest!.totalMills, pages: latest!.pages, lines: latest!.lines, offPlatform: latest!.offPlatform,
+      });
+    }
+    return true;
+  });
+}
+
+/**
  * A shift row cancelled or merged after a hand-in. Cancelled: its open candidate is superseded and, when a version
  * counts lines, the system makes a version with none (the ledger and the rule stop counting it); the person gets a
  * matter. Merged: the report moves to the shift that remains when that shift has none (else as cancelled).
@@ -376,7 +411,7 @@ export async function settleGoneShifts(app: CheckApp, now: Date): Promise<number
   const { db } = app;
   let touched = 0;
   for (const one of await listHandinsOfGoneShifts(db)) {
-    if (one.state === "merged" && one.mergedInto !== null && (await moveHandinToShift(db, { handinId: one.handinId, shiftId: one.mergedInto }))) {
+    if (one.state === "merged" && one.mergedInto !== null && (await moveToMerged(db, { handinId: one.handinId, from: one.shiftId, to: one.mergedInto }, now))) {
       touched += 1;
       continue;
     }
