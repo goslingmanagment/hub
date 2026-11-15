@@ -18,11 +18,11 @@ import type { Platform } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import {
   canAccessPage,
-  requireDashboardUser,
   type AuthPrincipal,
 } from "./auth.ts";
 import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { getPageSummary } from "./reporting.ts";
+import { requireTeamReader } from "./teams.ts";
 
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
@@ -168,7 +168,8 @@ export async function listPageFanProfileVersions(
   pageLabel: string,
   platformUserId: string,
 ): Promise<FanProfileVersionListResponse> {
-  requireDashboardUser(principal);
+  // Any role of the team (the fans screens, products package M), on a page of their teams (fan-reads.ts).
+  requireTeamReader(principal);
 
   const { page, fan } = await resolvePageFan(app, principal, pageLabel, platformUserId);
   const rows = await listFanProfileVersionSummaries(app.db, {
@@ -193,7 +194,7 @@ export async function getPageFanProfileVersion(
   platformUserId: string,
   version: number,
 ): Promise<FanProfileDocument> {
-  requireDashboardUser(principal);
+  requireTeamReader(principal);
 
   const { page, fan } = await resolvePageFan(app, principal, pageLabel, platformUserId);
   const profile = await getFanProfileVersion(app.db, {

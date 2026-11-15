@@ -1,7 +1,7 @@
 /*
  * Layout of System › «Все параметры» (ConfigurationTab and its editors).
  * Buttons, fields, cards, badges, notices and disclosures come from
- * styles/ui.css (.btn, .input, .select, .card, .badge, .notice, .help); this
+ * packages/ui/src/styles/console.css (.btn, .input, .select, .card, .badge, .notice, .help); this
  * file only lays out a setting row and its editor. Theme tokens only.
  */
 .config-screen { container: config / inline-size; }

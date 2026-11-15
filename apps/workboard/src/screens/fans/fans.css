@@ -1,0 +1,114 @@
+/*
+ * «Фаны» in Workboard (products package M): its screens are the console's, drawn with the console's classes
+ * (packages/ui/src/styles/console*.css). What the console's frame gave them, given here.
+ */
+.console-kit {
+  --bar-height: 0px;
+  --gutter: 0px;
+  --content-max: none;
+}
+
+/* The AI's notes about a fan (moved with the card from the console's globals.css). */
+.fan-intelligence-markdown {
+  color: var(--color-text-primary);
+  font-size: 15px;
+  line-height: 24px;
+}
+
+.fan-intelligence-markdown > * + * {
+  margin-top: 12px;
+}
+
+.fan-intelligence-markdown h1,
+.fan-intelligence-markdown h2,
+.fan-intelligence-markdown h3,
+.fan-intelligence-markdown h4 {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 24px;
+}
+
+.fan-intelligence-markdown h1,
+.fan-intelligence-markdown h2 {
+  font-size: 17px;
+}
+
+.fan-intelligence-markdown h3,
+.fan-intelligence-markdown h4 {
+  font-size: 15px;
+}
+
+.fan-intelligence-markdown p,
+.fan-intelligence-markdown li {
+  color: var(--color-text-secondary);
+}
+
+.fan-intelligence-markdown strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.fan-intelligence-markdown ul,
+.fan-intelligence-markdown ol {
+  margin-left: 1.25rem;
+  padding-left: 0.25rem;
+}
+
+.fan-intelligence-markdown ul {
+  list-style: disc;
+}
+
+.fan-intelligence-markdown ol {
+  list-style: decimal;
+}
+
+.fan-intelligence-markdown li + li {
+  margin-top: 4px;
+}
+
+.fan-intelligence-markdown hr {
+  margin: 24px 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.fan-intelligence-markdown code {
+  border-radius: 4px;
+  background: var(--color-hover);
+  padding: 2px 4px;
+  font-size: 14px;
+}
+
+.fan-intelligence-markdown pre {
+  overflow-x: auto;
+  border-radius: var(--radius-button);
+  background: var(--color-hover-alt);
+  padding: 12px 16px;
+}
+
+/* «Кто с ним работал»: the shifts under the people. */
+.fan-worked-shifts {
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+/* Workboard's frame: the header's bar, line and tabs carry their own gutter; the screen's body gets it here, as
+   `.wb-content` gives it to Workboard's own screens. */
+.console-kit {
+  padding-bottom: 48px;
+}
+.console-kit > :not(.wb-header, .wb-meta, .wb-tabs, .fan-screen),
+.console-kit .fan-screen > :not(.wb-header, .wb-meta, .wb-tabs) {
+  margin-inline: var(--wb-gutter);
+}
+.console-kit .fan-screen > :is(.wb-meta, .wb-tabs) {
+  margin-top: -24px;
+}
+.console-kit .fan-screen > .wb-tabs + * {
+  margin-top: 0;
+}
+.console-kit > .wb-tabs + *,
+.console-kit > .wb-meta + :not(.wb-tabs) {
+  margin-top: 24px;
+}

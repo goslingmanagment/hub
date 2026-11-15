@@ -21,7 +21,7 @@ import {
   type DemoReply,
   type DemoRequest,
 } from "../core.ts";
-import { DEMO_OFAPI_OFF_DAY, DEMO_PAGES, DEMO_USERS, demoFanProfile, type DemoPage } from "../world.ts";
+import { DEMO_OFAPI_OFF_DAY, DEMO_PAGES, DEMO_USERS, demoFanProfile, demoUserByRole, type DemoPage } from "../world.ts";
 import {
   DAY_MS,
   FAN_LINES,
@@ -492,11 +492,16 @@ function scopeOf(request: DemoRequest): { kind: "page" | "model" | "agency"; pla
   const platform = (queryString(request, "platform") ?? request.params.platform ?? "fansly") as DemoPage["platform"];
   if (kind === "model") {
     const slug = queryString(request, "modelSlug") ?? "";
-    const pages = DEMO_PAGES.filter((page) => page.modelSlug === slug && page.platform === platform);
+    const pages = DEMO_PAGES.filter((page) => page.modelSlug === slug && page.platform === platform && reaches(request, page));
     if (pages.length === 0) return demoError(404, "not_found", `Модель ${slug} не найдена`);
     return { kind, platform, pages, page: null, model: { slug, name: pages[0]!.modelName } };
   }
-  return { kind, platform, pages: DEMO_PAGES.filter((page) => page.platform === platform), page: null, model: null };
+  return { kind, platform, pages: DEMO_PAGES.filter((page) => page.platform === platform && reaches(request, page)), page: null, model: null };
+}
+
+/** The viewer's pages: Hub answers a list by them (services/fan-reads.ts), and so does the demo. */
+function reaches(request: DemoRequest, page: DemoPage): boolean {
+  return demoUserByRole(request.role).pages.includes(page.label);
 }
 
 function scopeShape(scope: Exclude<ReturnType<typeof scopeOf>, DemoReply>) {
@@ -648,6 +653,32 @@ export const pageFanHandlers: DemoHandlers = {
     return fanCard(page, request.params.platformUserId ?? "", request.now);
   },
 
+  // «Кто с ним работал» (products package M): the chatters of the page wrote to the fan in some of their shifts.
+  pageFanWorkedWith: (request) => {
+    const page = resolvePage(request);
+    if (isReply(page)) return page;
+    const fanRef = request.params.platformUserId ?? "";
+    const random = rng(`worked:${page.label}:${fanRef}`);
+    const writers = DEMO_USERS.filter((user) => user.role === "chatter" && user.pages.includes(page.label));
+    const shifts = writers.flatMap((user) => Array.from({ length: intBetween(random, 0, 6) }, (_, index) => {
+      const start = hoursAgo(request.now, intBetween(random, 6, 24 * 60) + index * 30);
+      const messages = intBetween(random, 1, 14);
+      return {
+        shiftId: user.id * 1000 + index + 1, userId: user.id, username: user.username,
+        startedAt: iso(start), endedAt: iso(new Date(start.getTime() + 6 * 3_600_000)), messages, priced: Math.floor(messages * between(random, 0, 0.4)),
+      };
+    })).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    const authors = writers.map((user) => {
+      const own = shifts.filter((shift) => shift.userId === user.id);
+      return {
+        userId: user.id, username: user.username,
+        messages: own.reduce((sum, shift) => sum + shift.messages, 0), priced: own.reduce((sum, shift) => sum + shift.priced, 0),
+        firstAt: own.at(-1)?.startedAt ?? iso(request.now), lastAt: own[0]?.startedAt ?? iso(request.now), shifts: own.length,
+      };
+    }).filter((author) => author.messages > 0).sort((a, b) => b.messages - a.messages);
+    return { pageLabel: page.label, messages: authors.reduce((sum, author) => sum + author.messages, 0), authors, shifts: shifts.slice(0, 20), shiftsTotal: shifts.length };
+  },
+
   pageDeletedFans: (request) => {
     const page = resolvePage(request);
     if (isReply(page)) return page;
@@ -793,7 +824,7 @@ export const pageFanHandlers: DemoHandlers = {
 
   crossPageFanDetail: (request) => {
     const platformUserId = request.params.platformUserId ?? "";
-    const pages = DEMO_PAGES.filter((page) => page.platform === request.params.platform).flatMap((page) => {
+    const pages = DEMO_PAGES.filter((page) => page.platform === request.params.platform && reaches(request, page)).flatMap((page) => {
       const item = findPageFan(page, platformUserId);
       return item ? [{ page, item }] : [];
     });
@@ -934,7 +965,7 @@ export const pageFanHandlers: DemoHandlers = {
     const current = metricsOf(inside, request.now);
     const lifetime = metricsOf(all, request.now);
     // Every page of the platform the fan is on, as the server: the scope's marked, all time each.
-    const pages = DEMO_PAGES.filter((one) => one.platform === page.platform).flatMap((one) => {
+    const pages = DEMO_PAGES.filter((one) => one.platform === page.platform && reaches(request, one)).flatMap((one) => {
       const there = findPageFan(one, item.fan.platformUserId);
       if (!there) return [];
       const money = metricsOf(fanTransactions(one, there.fan), request.now);
@@ -978,7 +1009,7 @@ export const pageFanHandlers: DemoHandlers = {
 
   crossPageFanTransactions: (request) => {
     const platformUserId = request.params.platformUserId ?? "";
-    const rows = DEMO_PAGES.filter((page) => page.platform === request.params.platform).flatMap((page) => {
+    const rows = DEMO_PAGES.filter((page) => page.platform === request.params.platform && reaches(request, page)).flatMap((page) => {
       const item = findPageFan(page, platformUserId);
       return item ? fanTransactions(page, item.fan).map((tx) => ({ page, item, tx })) : [];
     }).sort((left, right) => left.tx.hoursAgo - right.tx.hoursAgo);

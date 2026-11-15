@@ -30,6 +30,7 @@ import { customOrderRouteSchemas } from "./routes-custom-orders.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
 import { teamRouteSchemas } from "./routes-teams.ts";
+import { fanRouteSchemas } from "./routes-fans.ts";
 import { shiftHandinRouteSchemas } from "./routes-shift-handins.ts";
 import { saleClaimRouteSchemas } from "./routes-sale-claims.ts";
 import { saleChainRouteSchemas } from "./routes-sale-chain.ts";
@@ -6520,6 +6521,18 @@ const baseRouteSchemas = {
       401: errorResponseSchema,
     },
   },
+  fanPages: {
+    auth: { kind: "any-session" },
+    tags: ["fans"],
+    summary: "The pages whose fans the viewer reads («Фаны» in Workboard)",
+    description: "The owner every page; anyone else the pages of their teams and of their login's grant "
+      + "(services/fan-reads.ts). The page filter and the page pickers of «Фаны» list these.",
+    response: {
+      200: z.array(assignedPageSchema),
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   voiceNoteCreate: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["voice"],
@@ -6804,7 +6817,7 @@ const baseRouteSchemas = {
     },
   },
   pageFanCard: {
-    auth: { kind: "session", scope: "page" },
+    auth: { kind: "any-session", scope: "page" },
     tags: ["fans"],
     summary: "The fan's card for the owner's console: the person's accounts, facts and customs",
     description: "Read-only and database-only. The card a chatter's client reads, for a dashboard session on a page it "
@@ -6867,7 +6880,7 @@ const baseRouteSchemas = {
     },
   },
   crossPageFanDetail: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["fans"],
     summary: "Get one fan across visible pages",
     params: fanLookupParamsSchema,
@@ -6906,7 +6919,7 @@ const baseRouteSchemas = {
     },
   },
   spenderSeries: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["spenders"],
     summary: "Get zero-filled spender trend series",
     params: fanLookupParamsSchema,
@@ -6946,7 +6959,7 @@ const baseRouteSchemas = {
     },
   },
   pageConversationPreview: {
-    auth: { kind: "session", scope: "page" },
+    auth: { kind: "any-session", scope: "page" },
     tags: ["conversations"],
     summary: "Return locally cached DM preview rows for one conversation",
     params: pageConversationPreviewParamsSchema,
@@ -7079,7 +7092,7 @@ const baseRouteSchemas = {
     },
   },
   pageFanTransactions: {
-    auth: { kind: "session", scope: "page" },
+    auth: { kind: "any-session", scope: "page" },
     tags: ["fans"],
     summary: "Get fan transaction history on a specific page",
     params: pageFanParamsSchema,
@@ -7092,7 +7105,7 @@ const baseRouteSchemas = {
     },
   },
   crossPageFanTransactions: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["fans"],
     summary: "Get cross-page fan transaction history",
     params: fanLookupParamsSchema,
@@ -8374,6 +8387,7 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof accountPayRouteSchemas
   & typeof peopleRouteSchemas
   & typeof teamRouteSchemas
+  & typeof fanRouteSchemas
   & typeof signinRouteSchemas
   & typeof systemStateRouteSchemas
   & typeof customOrderRouteSchemas
@@ -8398,6 +8412,7 @@ export const routeSchemas: RouteSchemas = {
   ...accountPayRouteSchemas,
   ...peopleRouteSchemas,
   ...teamRouteSchemas,
+  ...fanRouteSchemas,
   ...signinRouteSchemas,
   ...systemStateRouteSchemas,
   ...customOrderRouteSchemas,

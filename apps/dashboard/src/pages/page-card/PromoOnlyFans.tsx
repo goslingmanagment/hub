@@ -17,7 +17,7 @@ import { formatCount, formatMills } from "@/lib/format";
 import { decodeRouteSegment } from "@/lib/navigation";
 import { OfLinksTable } from "@/pages/marketing/OfLinksTable";
 import { filterLinks, moscowDateTime, pageWarnings, sortLinks, type LinkFilter } from "@/pages/marketing/ofLinksView";
-import { useListParams } from "@/pages/fans/listParts";
+import { useListParams } from "@agency_hub_core/ui/console/listParams";
 
 const FILTERS: ReadonlyArray<{ value: LinkFilter; label: string }> = [
   { value: "all", label: "Все" },

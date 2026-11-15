@@ -82,6 +82,19 @@ function positiveId(value: string | null | undefined): number | null {
 }
 
 /**
+ * «Фаны» and «Рассылки» (products package M) are Workboard's screens now: the console's `/fans…` lands on the same
+ * path in Workboard, `/content/mass-messages` on «Что продаёт → Рассылки», with the query and the anchor.
+ */
+export function movedToWorkboard(url: string): string | null {
+  const parsed = new URL(url, "https://hub.invalid");
+  const pathname = decodedPath(parsed.pathname).replace(/\/+$/, "") || "/";
+  const tail = `${parsed.search}${parsed.hash}`;
+  if (pathname === "/fans" || pathname.startsWith("/fans/")) return `${WORKBOARD_HREF}${parsed.pathname.replace(/^\/+/, "").replace(/\/+$/, "")}${tail}`;
+  if (pathname === "/content/mass-messages") return `${WORKBOARD_HREF}sales/mass${tail}`;
+  return null;
+}
+
+/**
  * Where an old address of «Команда» lands in Workboard, or null when it is not
  * one (`/team/applications` stays in the console). An unknown or removed screen
  * of the section lands on the nearest Workboard screen.
@@ -92,6 +105,8 @@ export function teamToWorkboard(url: string, today: MoscowDay = moscowToday()): 
   const old = parsed.searchParams;
   const hash = parsed.hash;
 
+  const moved = movedToWorkboard(url);
+  if (moved !== null) return moved;
   if (pathname === "/held-sends") return teamToWorkboard(`/team/held-sends${parsed.search}${hash}`, today);
   if (pathname !== "/team" && !pathname.startsWith("/team/")) return null;
   const [, , screen = "", rest = ""] = pathname.split("/");

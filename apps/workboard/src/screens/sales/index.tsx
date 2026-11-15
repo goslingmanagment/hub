@@ -1,5 +1,6 @@
 import { Navigate, useLocation, useParams } from "react-router";
 import { GreetingsTab } from "./GreetingsTab";
+import { MassMessagesTab } from "./MassMessagesTab";
 import { TABS, type SalesTab } from "./parts";
 import { PriceTab } from "./PriceTab";
 import { SpeedTab } from "./SpeedTab";
@@ -25,5 +26,7 @@ export function SalesScreen() {
       return <WinBackTab />;
     case "greetings":
       return <GreetingsTab />;
+    case "mass":
+      return <MassMessagesTab />;
   }
 }
