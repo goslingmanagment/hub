@@ -32,8 +32,12 @@ export interface TeamFacts {
   working: Array<{ personId: number; pageId: number }>;
   /** Live team records of people who have not left. */
   roles: TeamRoleRow[];
-  /** Which person each login is (logins that lead: signed in, not disabled or deleted — `signedInLoginSql`), and the login's role (a content manager's: `content_manager`). */
-  logins: Array<{ userId: number; personId: number; role?: string }>;
+  /**
+   * Which person each living login is (not disabled or deleted), the login's role (a content manager's:
+   * `content_manager`), and whether it LEADS (`signedInLoginSql`: signed in) — who the person is follows every living
+   * login; who leads, decides or takes a step follows the signed-in ones only (`loginOfPerson`, leaders.ts).
+   */
+  logins: Array<{ userId: number; personId: number; role?: string; signedIn?: boolean }>;
   /** The people (not left): name, realm and the registry's role (a content manager works pages and is not the chat team). */
   people: Array<{ personId: number; name: string; test: boolean; role: string }>;
 }
@@ -77,8 +81,8 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
        where t.revoked_at is null and p.state <> 'left'
        order by t.granted_at, t.id`),
     db.execute<Row>(sql`
-      select l.user_id, l.person_id, u.role from person_logins l join users u on u.id = l.user_id
-       where ${signedInLoginSql()}`),
+      select l.user_id, l.person_id, u.role, ${signedInLoginSql()} as signed_in from person_logins l join users u on u.id = l.user_id
+       where u.disabled_at is null and u.deleted_at is null`),
     db.execute<Row>(sql`select id, display_name, is_test, role from people where state <> 'left'`),
   ]);
   return {
@@ -86,7 +90,7 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
     models: models.rows.map((row) => ({ modelId: Number(row.id), slug: String(row.slug), name: String(row.name ?? row.slug), test: row.is_test === true })),
     working: working.rows.map((row) => ({ personId: Number(row.person_id), pageId: Number(row.page_id) })),
     roles: roles.rows.map(roleOf),
-    logins: logins.rows.map((row) => ({ userId: Number(row.user_id), personId: Number(row.person_id), role: String(row.role) })),
+    logins: logins.rows.map((row) => ({ userId: Number(row.user_id), personId: Number(row.person_id), role: String(row.role), signedIn: row.signed_in === true })),
     people: people.rows.map((row) => ({ personId: Number(row.id), name: String(row.display_name ?? ""), test: row.is_test === true, role: String(row.role ?? "") })),
   };
 }
