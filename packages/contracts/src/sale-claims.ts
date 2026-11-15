@@ -25,7 +25,12 @@ export const SALE_CLAIM_STATES = ["asked", "agreed", "owner", "decided", "withdr
 export const SALE_CLAIM_ANSWERS = ["agree", "disagree"] as const;
 export const SALE_DISPUTE_OUTCOMES = ["first", "second", "half", "nobody"] as const;
 /** «Закрыть без решения»: only a question carried over from the ledger whose people Hub could not tell. */
-export const SALE_DISPUTE_OUTCOMES_WITH_DISMISS = [...SALE_DISPUTE_OUTCOMES, "dismiss"] as const;
+export const SALE_DISPUTE_OUTCOMES_WITH_DISMISS = [...SALE_DISPUTE_OUTCOMES, "dismiss", "pot", "return"] as const;
+/**
+ * The answers to a sale its holder gave to the pot («<имя> отдаёт продажу в общак», the board): «В общак» (`pot`: the
+ * owner's decision of kind pot), «Вернуть <имени>» (`return`: the sale is the person's again) and «Никому» (`nobody`).
+ */
+export const POT_OFFER_OUTCOMES = ["pot", "return", "nobody"] as const;
 
 export const saleClaimStateEnum = z.enum(SALE_CLAIM_STATES);
 export const saleClaimAnswerEnum = z.enum(SALE_CLAIM_ANSWERS);

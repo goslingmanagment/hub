@@ -8,8 +8,12 @@ import type {
   ShiftReportClaim,
   ShiftReportLineFacts,
 } from "@agency_hub_core/contracts";
+import { personNameForms } from "@agency_hub_core/contracts";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 import {
+  listHandinMarks,
+  listOpenPotOffers,
+  setHandinMark,
   cancelSaleDecision,
   closeMatter,
   decideOffPlatform,
@@ -81,7 +85,7 @@ import {
   type OwnerOutcome,
   type ReportView,
 } from "./sale-claim-rules.ts";
-import { SALE_RULE, SALE_HOME_REASON_TEXT, type SaleHomeReason } from "./sale-rule.ts";
+import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, type SaleHomeReason } from "./sale-rule.ts";
 import { realmOf, testUserIds } from "./sandbox/realm.ts";
 import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, teamFactsFor, type Decider } from "./teams.ts";
 import { dayWords } from "./shift-handin-rules.ts";
@@ -819,7 +823,7 @@ function partiesOf(claims: readonly SaleClaimRow[]): { first: number | null; sec
 export async function decideSaleDispute(
   app: ClaimsApp,
   principal: HumanAuthPrincipal,
-  input: { transactionId?: number | undefined; claimId?: number | undefined; outcome: OwnerOutcome | "dismiss"; note: string | null },
+  input: { transactionId?: number | undefined; claimId?: number | undefined; outcome: OwnerOutcome | "dismiss" | "pot" | "return"; note: string | null },
   now: Date = new Date(),
 ) {
   const { db } = app;
@@ -827,6 +831,14 @@ export async function decideSaleDispute(
     ? await listSaleClaims(db, { transactionIds: [input.transactionId] })
     : await listSaleClaims(db, { ids: [input.claimId!] });
   const open = claims.filter((claim) => claim.state === "owner" || claim.state === "asked" || claim.state === "agreed");
+  // A sale its holder gave to the pot: the owner's three answers (the pot is always his: `deciderOf` kind pot).
+  const offer = open.length === 0 && input.transactionId !== undefined ? await potOfferOf(db, input.transactionId) : null;
+  if (offer !== null) {
+    if (principal.user.role !== "owner" || principal.narrowDeviceTokenId !== undefined) throw new ForbiddenError("Only the owner decides");
+    if (input.outcome !== "pot" && input.outcome !== "return" && input.outcome !== "nobody") throw new BadRequestError("A sale given to the pot takes «В общак», «Вернуть» or «Никому»", { reason: "pot_offer" });
+    return decidePotOffer(app, principal, { offer, outcome: input.outcome, note: input.note }, now);
+  }
+  if (input.outcome === "pot" || input.outcome === "return") throw new BadRequestError("Only a sale given to the pot takes this answer", { reason: "not_pot_offer" });
   if (principal.user.role !== "owner" && open.length === 0) throw new ForbiddenError("Only the owner decides");
   await requireDisputeDecider(app, principal, open);
   if (open.length === 0) throw new NotFoundError("No dispute of this sale waits for a decision");
@@ -1406,9 +1418,16 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
   };
 }
 
-/** `saleDispute`: the owner's dispute of a sale. */
+/** `saleDispute`: the owner's dispute of a sale — or a sale its holder gave to the pot, waiting for his word. */
 export async function readSaleDispute(app: ClaimsApp, principal: HumanAuthPrincipal, transactionId: number, now: Date = new Date()): Promise<SaleDisputeResponse> {
   const claims = (await listSaleClaims(app.db, { transactionIds: [transactionId] })).filter((claim) => claim.state !== "withdrawn");
+  if (claims.length === 0) {
+    const offer = await potOfferOf(app.db, transactionId);
+    if (offer !== null) {
+      if (principal.user.role !== "owner" || principal.narrowDeviceTokenId !== undefined) throw new ForbiddenError("Only the owner decides");
+      return potOfferDisputeOf(app, offer, now);
+    }
+  }
   if (principal.user.role !== "owner" && claims.length === 0) throw new ForbiddenError("Only the owner decides");
   await requireDisputeDecider(app, principal, claims);
   if (claims.length === 0) throw new NotFoundError("No dispute of this sale");
@@ -1422,6 +1441,104 @@ export async function readSaleDisputeOfClaim(app: ClaimsApp, principal: HumanAut
   await requireDisputeDecider(app, principal, claim === null ? [] : [claim]);
   if (claim === null) throw new NotFoundError("No such claim");
   return claim.transactionId === null ? disputeOf(app, [claim], now) : readSaleDispute(app, principal, claim.transactionId, now);
+}
+
+// ── A sale given to the pot ──────────────────────────────────────────────────
+
+type PotOffer = Awaited<ReturnType<typeof listOpenPotOffers>>[number] & { note: string | null };
+
+/** The open offer of the pot on a sale: its holder said «в общак» (their mark) and the owner has not decided. Null — none. */
+async function potOfferOf(db: Database, transactionId: number): Promise<PotOffer | null> {
+  const offer = (await listOpenPotOffers(db)).find((one) => one.transactionId === transactionId);
+  if (offer === undefined) return null;
+  const mark = (await listHandinMarks(db, offer.handinId)).find((one) => one.transactionId === transactionId);
+  return { ...offer, note: mark?.note ?? null };
+}
+
+/**
+ * What each answer to an offer of the pot decides, by the existing decisions (no kind, outcome or source the decisions'
+ * feed does not know): «В общак» — kind pot, the page's pot; «Вернуть» — the whole sale to the person; «Никому» — nobody.
+ * And what becomes of the person's word: kept «общак», withdrawn (the rule's word, the decision gives it back), «ничья».
+ * Pure (tests/sale-claim-rules.test.ts).
+ */
+export function potOfferDecision(outcome: "pot" | "return" | "nobody", userId: number): {
+  kind: "pot" | "split" | "nobody"; shares: Array<{ userId: number; percent: number }>; pot: string | null; outcome: "said" | "first" | "nobody";
+  word: "pot" | "not_mine" | null;
+} {
+  if (outcome === "pot") return { kind: "pot", shares: [], pot: POT_OBSHAK, outcome: "said", word: "pot" };
+  if (outcome === "return") return { kind: "split", shares: [{ userId, percent: 100 }], pot: null, outcome: "first", word: null };
+  return { kind: "nobody", shares: [], pot: null, outcome: "nobody", word: "not_mine" };
+}
+
+/** The owner's answer to an offer of the pot: a decision through `applySaleDecision` (the decisions door's own path), the word with it. */
+async function decidePotOffer(app: ClaimsApp, principal: HumanAuthPrincipal, input: { offer: PotOffer; outcome: "pot" | "return" | "nobody"; note: string | null }, now: Date) {
+  const { db } = app;
+  const { offer } = input;
+  const decision = potOfferDecision(input.outcome, offer.userId);
+  const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
+  const sale = (await listHandinSalesByIds(db, [offer.transactionId]))[0];
+  const applied = await applySaleDecision(app, {
+    transactionId: offer.transactionId,
+    insert: {
+      kind: decision.kind, shares: decision.shares, pot: decision.pot, outcome: decision.outcome, note, decidedByUserId: principal.user.id, decidedAt: now,
+      saidBy: null, source: "dispute", ledgerDecisionId: null, ledgerRef: null,
+    },
+    madeFor: (decisionId) => ({ kind: "decision", decisionId: decisionId!, transactionId: offer.transactionId, outcome: "said" }),
+    by: { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
+    // The person's word follows the answer in the same turn: the next «Исправить» starts from it.
+    first: async (txDb) => {
+      const mark = (await listHandinMarks(txDb, offer.handinId)).find((one) => one.transactionId === offer.transactionId);
+      if (mark?.statement !== "pot") throw new ConflictError("The sale is no longer given to the pot", { reason: "pot_offer_gone" });
+      if (decision.word !== "pot") {
+        await setHandinMark(txDb, {
+          handinId: offer.handinId, transactionId: offer.transactionId, statement: decision.word, shareWithUserId: null, note: mark.note,
+          byUserId: principal.user.id, byAgentKeyId: null, at: now,
+        });
+      }
+      return {};
+    },
+  }, sale, now);
+  return { decided: true, versions: applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
+}
+
+/** The window of an offer of the pot: the sale, the person and their why, the three answers with what each gives. */
+async function potOfferDisputeOf(app: ClaimsApp, offer: PotOffer, now: Date): Promise<SaleDisputeResponse> {
+  const { db } = app;
+  const sale = (await listHandinSalesByIds(db, [offer.transactionId]))[0];
+  const names = await listHandinNames(db, [offer.userId, ...(sale?.home?.shares.map((share) => share.userId) ?? [])]);
+  const name = names.get(offer.userId) ?? `#${offer.userId}`;
+  const reports = await listCurrentReportsOfSales(db, [offer.transactionId]);
+  const own = reports.find((report) => report.userId === offer.userId);
+  const line = own?.lines.find((one) => one.transactionId === offer.transactionId);
+  const net = sale?.netMills ?? 0;
+  const held = reports.filter((report) => report.lines.some((one) => one.transactionId === offer.transactionId));
+  const heldNames = await listHandinNames(db, held.map((report) => report.userId));
+  return {
+    sale: sale === undefined ? null : {
+      transactionId: sale.transactionId, pageLabel: sale.pageLabel, platform: sale.platform, kind: sale.kind, occurredAt: sale.occurredAt.toISOString(),
+      netMills: sale.netMills, fan: sale.fan,
+    },
+    home: sale?.home == null ? null : {
+      kind: sale.home.home, reason: sale.home.reason, words: SALE_HOME_REASON_TEXT[sale.home.reason as SaleHomeReason] ?? sale.home.reason,
+      shares: sale.home.shares.map((share) => ({ userId: share.userId, name: names.get(share.userId) ?? `#${share.userId}`, mills: share.mills })),
+    },
+    parties: [{
+      userId: offer.userId, name, role: "first",
+      says: [offer.note === null ? "в общак" : `в общак: ${offer.note}`],
+      countedMills: line === undefined ? null : line.amountMills, claimedMills: line?.claimedMills ?? null, shiftId: own?.shiftId ?? offer.shiftId,
+    }],
+    claims: [],
+    facts: null,
+    outcomes: [
+      { outcome: "pot", label: "В общак", gives: [{ userId: offer.userId, mills: 0 }] },
+      { outcome: "return", label: `Вернуть ${personNameForms(name).dat}`, gives: [{ userId: offer.userId, mills: net }] },
+      { outcome: "nobody", label: "Никому", gives: [{ userId: offer.userId, mills: 0 }] },
+    ],
+    decision: null,
+    reports: held.map((report) => ({ userId: report.userId, name: heldNames.get(report.userId) ?? `#${report.userId}`, shiftId: report.shiftId, reportDate: report.reportDate })),
+    potOffer: { userId: offer.userId, name, note: offer.note },
+    serverNow: now.toISOString(),
+  };
 }
 
 // ── The agent's read ─────────────────────────────────────────────────────────

@@ -308,6 +308,9 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       reason = "поменял Генгар";
     } else if (proposal !== null && proposal.state === "declined" && counted) {
       reason = `Генгар предлагал иначе, решит ${decider.words}`;
+    } else if (line.settled === "owner") {
+      // Decided by the decider («общак, решил владелец», «моя, решил владелец»): the word is what the decision gives.
+      reason = `решил ${decider.words}`;
     } else if (!sameOwner(current, rule)) {
       reason = `по правилу ${rule.kind === "me" ? "ваша" : rule.words}`;
     } else if (amount <= 0) {

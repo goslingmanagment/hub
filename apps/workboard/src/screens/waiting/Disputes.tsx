@@ -95,7 +95,7 @@ export function DisputeModal({ transactionId, claimId, onClose }: { transactionI
   const data = read.data;
   const nameOf = (userId: number) => data?.parties.find((one) => one.userId === userId)?.name ?? "";
   return (
-    <Modal title="Спор о продаже" size="wide" onClose={onClose}>
+    <Modal title={data?.potOffer ? "Продажа в общак" : "Спор о продаже"} size="wide" onClose={onClose}>
       {read.isPending && <div className="wt-modal"><Skeleton width="70%" /><Skeleton width="90%" /><Skeleton width="60%" /></div>}
       {read.isError && <ErrorState compact onRetry={() => void read.refetch()} retrying={read.isFetching}>Спор не пришёл.</ErrorState>}
       {data && (

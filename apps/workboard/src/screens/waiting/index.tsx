@@ -170,6 +170,16 @@ function lineOf(matter: Matter, context: Context): Line {
         ),
       };
     }
+    case "sale.pot_offer": {
+      // The board's «в общак»: the owner answers in the dispute window — «В общак», «Вернуть», «Никому».
+      const net = number(evidence.netMills);
+      const transactionId = number(evidence.transactionId);
+      return {
+        ...base,
+        about: [...pages, net === null ? null : formatMills(net), "отдают в общак"].filter((part): part is string => part !== null),
+        action: transactionId === null ? null : <Button size="sm" variant="secondary" onClick={() => context.open("dispute", String(transactionId))}>Решить</Button>,
+      };
+    }
     case "off_platform.pending": {
       const lines = Array.isArray(evidence.lines) ? (evidence.lines as Array<{ amountMills?: unknown; fromWhom?: unknown; whatFor?: unknown }>) : [];
       const shiftId = number(evidence.shiftId);
