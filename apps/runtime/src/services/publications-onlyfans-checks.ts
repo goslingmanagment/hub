@@ -147,7 +147,30 @@ export function surelyPublication(target: PublicationMatchTarget, item: Onlyfans
 export type PublicationMatch =
   | { kind: "one"; item: OnlyfansPlatformItem; ref: string }
   | { kind: "none" }
-  | { kind: "ambiguous"; reason: string };
+  | { kind: "ambiguous"; reason: PublicationMatchAmbiguity };
+
+/** Why a match is not one post: the reasons `findPublicationMatch` gives, written after a place (`timeline_…`). */
+export const PUBLICATION_MATCH_AMBIGUITIES = ["several_match", "claimed_by_another", "could_be_unproven"] as const;
+export type PublicationMatchAmbiguity = (typeof PUBLICATION_MATCH_AMBIGUITIES)[number];
+
+/**
+ * Every reason an OnlyFans check writes when it concludes a status (`conclude`): the plain codes here, and the
+ * prefixed ones of the type below. A new code is added here or the check does not compile; the words of each are in
+ * the one table (contracts publication-words.ts, tests/publication-words.test.ts walks them).
+ */
+export const ONLYFANS_CHECK_REASONS = [
+  "no_platform_ref", "id_reads_another_post", "not_out_yet", "read_by_id", "list_shows_the_id", "matched_by_content",
+  "still_in_schedule", "posts_incomplete", "absent_by_id_schedule_and_posts", "still_processing", "absent_by_id_and_live_stories",
+  "collected_post_by_id", "found_in_collected_posts", "found_in_schedule_by_id", "found_in_schedule", "withdraw_confirmed_by_read",
+  "found_in_posts", "reads_failed", "post_claimed_by_another", "still_processing_at_last_check", "readiness_unknown",
+] as const;
+/** The prefixes a reason carries a detail after (a match's ambiguity, the schedule's incomplete parts). */
+export const ONLYFANS_CHECK_REASON_PREFIXES = ["posts_", "stories_", "schedule_incomplete:"] as const;
+export type OnlyfansCheckReason =
+  | (typeof ONLYFANS_CHECK_REASONS)[number]
+  | `posts_${PublicationMatchAmbiguity}`
+  | `stories_${PublicationMatchAmbiguity}`
+  | `schedule_incomplete:${string}`;
 
 /**
  * The one post among `items` that is this publication: exactly one sure
@@ -255,7 +278,7 @@ interface Conclusion {
 }
 
 const failed = (reason: string, evidence: Record<string, unknown>): Conclusion => ({ outcome: "read_failed", status: null, reason, evidence });
-const conclude = (status: PublicationStatus & PublicationCheckOutcome, reason: string | null, evidence: Record<string, unknown>, platformPostRef?: string | null): Conclusion =>
+const conclude = (status: PublicationStatus & PublicationCheckOutcome, reason: OnlyfansCheckReason | null, evidence: Record<string, unknown>, platformPostRef?: string | null): Conclusion =>
   ({ outcome: status, status, reason, evidence, ...(platformPostRef === undefined ? {} : { platformPostRef }) });
 
 function targetOf(record: PublicationRecord, from: Date, to: Date): PublicationMatchTarget {
@@ -328,7 +351,7 @@ async function verifyStory(ctx: OnlyfansReadContext, c: OnlyfansCheckCandidate, 
   const byId = await readOnlyfansStoryById(ctx, ref);
   const evidence: Record<string, unknown> = { createRef: ref, intentIds: [...byId.intentIds] };
   if (!byId.ok) return failed(`story_read: ${byId.reason}`, evidence);
-  const readiness = (isReady: boolean | null, storyRef: string, reason: string): Conclusion => {
+  const readiness = (isReady: boolean | null, storyRef: string, reason: OnlyfansCheckReason): Conclusion => {
     if (isReady === true) return conclude("published", reason, evidence, storyRef);
     if (isReady === false && !final) return conclude("processing", "still_processing", evidence, storyRef);
     return conclude("unknown", isReady === false ? "still_processing_at_last_check" : "readiness_unknown", evidence);
