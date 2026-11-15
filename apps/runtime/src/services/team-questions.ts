@@ -467,7 +467,7 @@ export async function revokeSwap(app: QuestionsApp, principal: AuthPrincipal, id
     key: `${ANSWERED}:${id}`,
     kind: ANSWERED,
     source: "server",
-    title: `Подмена на ${row.swap.date} отменена`,
+    title: `Подмена на ${dayWords(row.swap.date).toLowerCase()} отменена`,
     object: { type: "team_question", id: String(id) },
     pageIds: [row.pageId],
     owner: { userId: row.askerUserId },
