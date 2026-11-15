@@ -175,7 +175,8 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
     const changed = (post?.models ?? []).filter((model) => model.copiedAt !== null && model.changedSinceCopy);
     if (changed.length > 0 && report.posts.length > 1) {
       postLines.push(<span className="k is-amb" key="changed"><Ico name="pen" size={14} />Пост {changed.map((model) => model.modelName).join(", ")} изменился. Исправьте прежний пост в «Отчётности», новый не пишите</span>);
-    } else if (post && post.copiedAt !== null && (post.changedSinceCopy || changed.length > 0)) {
+    } else if (post && post.copiedAt !== null && report.posts.length <= 1 && (post.changedSinceCopy || changed.length > 0)) {
+      // One model: the report's own mark. Two: only a model whose post was copied (above) — never one never sent.
       postLines.push(<span className="k is-amb" key="changed"><Ico name="pen" size={14} />Пост изменился. Исправьте прежний пост в «Отчётности», новый не пишите</span>);
     } else if (post && post.copiedAt !== null && post.seen === false) {
       postLines.push(<span className="k" key="unseen"><Ico name="clock" size={14} />Пост в «Отчётность» ещё не пришёл</span>);

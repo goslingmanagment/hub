@@ -1222,7 +1222,10 @@ export async function setShiftReportLine(
     if (wordChanged) {
       // A new word takes back a question asked from the draft about this sale.
       for (const claim of (await listSaleClaims(db, { transactionIds: [input.transactionId], states: ["asked", "owner"] }))) {
-        if (claim.claimantHandinId === handin.id && claim.origin === "draft") await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state });
+        // Not a disagreement with Gengar's card: that one is the decider's, whatever the word (review round 2).
+        if (claim.claimantHandinId === handin.id && claim.origin === "draft" && !(claim.escalatedWhy === "disagree" && claim.answer === null)) {
+          await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state });
+        }
       }
     }
     if (oldWayTo !== null) {
