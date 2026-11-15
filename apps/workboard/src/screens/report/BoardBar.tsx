@@ -58,7 +58,8 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
           </span>
         );
       }
-      case "unchecked": return <span className="k is-amb"><Ico name="clock" size={14} />Hub не сверил {named("unchecked")}. Можно подтвердить, сверка придёт позже.</span>;
+      // «Можно подтвердить» only where the person can: in «Проверка» there is no «Подтверждаю» yet.
+      case "unchecked": return <span className="k is-amb"><Ico name="clock" size={14} />Hub не сверил {named("unchecked")}. {board.phase === "checking" ? "Сверка придёт позже." : "Можно подтвердить, сверка придёт позже."}</span>;
       case "statement": return <span className="k"><i className="spin" />Ждём выписку {named("statement")}</span>;
     }
   };
