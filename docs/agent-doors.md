@@ -49,8 +49,11 @@ A page outside the key's grant is the plane's static 404, the same as one that d
 gets through any of these doors; an agent key never gets through a session's.
 
 **Not an agent door: the person door.** `/api/v1/person/*` (`services/person-door.ts`) is ContentOps' server acting
-AS the person signed in there (its key `signin:contentops` plus that person's live sign-in grant), for publications
-and content statistics; the rights are the person's, every change is recorded as the person's. No agent calls it.
+AS the person signed in there (its key `signin:contentops` plus that person's live sign-in grant): ContentOps' own
+screens «Публикации», «Статистика» and «Съёмка» (custom orders' shooting steps). The rights are the person's, every
+change is recorded as the person's. No agent calls it. Hub has no screens of publications or content statistics any
+more (their old addresses lead into ContentOps); an agent's own publication door is unchanged: `hub publication-*`,
+`/api/v1/agent/publications…`, `/api/v1/agent/pages/:pageLabel/publication…`, by its capabilities.
 
 **The test realm.** The test team on production (the model «Тест», pages `test-1` and `test-of`, people `t-*`) is
 behind a wall (`services/sandbox/realm.ts`): a live key never reads its people, shifts, sales, reports, questions or
