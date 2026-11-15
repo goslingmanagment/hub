@@ -746,7 +746,9 @@ function bodyOf(input: {
 export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: string | null): string | null {
   if (madeFor === null) return null;
   if (madeFor.kind === "off_platform") return madeFor.decision === "confirmed" ? "владелец подтвердил «мимо площадки»" : "владелец отклонил «мимо площадки»";
-  if (madeFor.kind === "decision" && madeFor.decisionId === null) return "смена отменена";
+  if (madeFor.kind === "decision" && madeFor.decisionId === null) {
+    return madeFor.outcome === "merged" ? "смена объединена с другой" : madeFor.outcome === "moved" ? "отчёт перенесён в объединённую смену" : "смена отменена";
+  }
   if (madeFor.kind === "decision") return madeFor.outcome === "cancelled" ? "решение о продаже отменено" : "решение о продаже, записанное со слов";
   switch (madeFor.outcome) {
     case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;

@@ -397,7 +397,12 @@ export type HandinVersionMadeFor =
    */
   | { kind: "decision"; decisionId: number; transactionId: number; outcome: "said" | "cancelled" }
   /** The shift row was cancelled after it was counted (0413): a version with no lines; no decision, no sale named. */
-  | { kind: "decision"; decisionId: null; transactionId: null; outcome: "cancelled" };
+  | { kind: "decision"; decisionId: null; transactionId: null; outcome: "cancelled" }
+  /**
+   * The shift row was merged into another after the hand-in (0426): `merged` — a version with no lines under the shift
+   * that is gone; `moved` — the report's last lines again, under the shift that remains.
+   */
+  | { kind: "decision"; decisionId: null; transactionId: null; outcome: "merged" | "moved" };
 
 export interface HandinVersionRow {
   id: number;
@@ -487,11 +492,11 @@ export async function insertHandinVersion(
   const madeFor = input.madeFor == null ? null : JSON.stringify(input.madeFor);
   const result = await db.execute<Row>(sql`
     insert into shift_handin_versions (handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for, report_date)
+      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for, report_date, shift_id)
     values (${input.handin.id}, ${version}, ${at}::timestamptz, ${input.door}, ${input.actorUserId}, ${input.agentKeyId},
       ${input.telegramMessageRef}, ${input.telegramSenderId}, ${input.totalMills}, ${JSON.stringify(input.pages)}::jsonb,
       ${JSON.stringify(input.lines)}::jsonb, ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment}, ${input.dayPaid},
-      ${input.ruleVersion}, ${madeFor}::jsonb, ${input.reportDate}::date)
+      ${input.ruleVersion}, ${madeFor}::jsonb, ${input.reportDate}::date, ${input.handin.shiftId})
     returning id, handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
       telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for,
       to_char(report_date, 'YYYY-MM-DD') as version_report_date`);
@@ -588,7 +593,9 @@ export interface HandinFeedHeld {
  */
 async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: readonly number[], limit: number, realm: "live" | "test" = "live") {
   const result = await db.execute<Row>(sql`
-    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code, ${testUserSql(sql`h.user_id`)} as realm_test,
+    -- The shift the version was made under (0426; null — older: the report's shift): a report moved by a merge keeps
+    -- its versions under the shifts they counted for, and the ledger's «a shift's highest version» stays one per sale.
+    select ${VERSION_COLUMNS}, f.seq, coalesce(v.shift_id, h.shift_id) as shift_id, h.user_id, p.code as person_code, ${testUserSql(sql`h.user_id`)} as realm_test,
       to_char(coalesce(v.report_date, h.report_date), 'YYYY-MM-DD') as report_date,
       array(
         select distinct line ->> 'pageLabel' from jsonb_array_elements(v.lines) as line
