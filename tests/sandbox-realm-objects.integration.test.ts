@@ -356,10 +356,12 @@ afterAll(async () => {
 function compared(status: number, body: string, method: string, named: string): string {
   if (method !== "GET") return String(status);
   const textKey = !/^\d+$/u.test(named);
-  const swap = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(swap);
-    if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, inner]) => [key, swap(inner)]));
-    if ((typeof value === "string" || typeof value === "number") && String(value) === named) return "<named>";
+  // A number is the named id only under an id's key (`pageId`, `userId`, `id`): a count that happens to equal it is a count.
+  const swap = (value: unknown, key = ""): unknown => {
+    if (Array.isArray(value)) return value.map((inner) => swap(inner, key));
+    if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, inner]) => [name, swap(inner, name)]));
+    if (typeof value === "number" && String(value) === named && /(^id|Id|Ids)$/u.test(key)) return "<named>";
+    if (typeof value === "string" && value === named) return "<named>";
     if (typeof value === "string") {
       const moments = value.replace(ISO_TIME, "<ts>");
       return textKey ? moments.split(named).join("<named>") : moments;
