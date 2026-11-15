@@ -208,6 +208,9 @@
 .rb .gate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;color:var(--ink-muted);font-size:13.5px;line-height:20px}
 .rb .gate b{font-size:15px;font-weight:600;color:var(--ink-strong)}
 .rb .gate .spin{width:16px;height:16px}
+/* the site did not find the row («Строка на сайте не найдена: 22:30, $48, Viggo»): a quiet line under it */
+.rb .miss{font-size:12px;line-height:16px;color:var(--amber-ink)}
+
 /* «От прошлой смены (Олег): „…“»: one quiet line over the columns of one's own board */
 .rb .prev{flex:none;display:flex;align-items:center;gap:7px;min-height:30px;padding:5px 16px;border-bottom:1px solid var(--rule-2);font-size:12.5px;line-height:18px;color:var(--ink-2);white-space:nowrap}
 .rb .prev .ico{color:var(--ink-faint)}

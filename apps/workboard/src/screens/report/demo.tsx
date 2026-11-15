@@ -96,6 +96,15 @@ function siteWords(sale: { platform: string; kind: string }): string {
   return sale.platform === "fansly" ? "Media Sale to" : "Payment for message from";
 }
 
+/** The demo site's answer to «show on the site» (the extension's `found`). */
+function foundOf(sale: { pageLabel: string; platform: string; occurredAt: string; netMills: number; fanName: string | null }): { ok: boolean; words?: string } {
+  if (sale.pageLabel === "Mia-2" || sale.pageLabel === "Mia Free") return { ok: true };
+  if (sale.platform === "fansly") return { ok: false, words: `Откройте вкладку ${sale.pageLabel}, строка найдётся сама` };
+  const time = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(sale.occurredAt));
+  const money = sale.netMills % 1000 === 0 ? `$${sale.netMills / 1000}` : `$${(sale.netMills / 1000).toFixed(2)}`;
+  return { ok: false, words: `Строка на сайте не найдена: ${time}, ${money}, ${sale.fanName ?? ""}` };
+}
+
 /** The extension's part, played by the demo: the frame over a «site», its port, its bar. */
 export function ReportDemoFrame() {
   const [search] = useSearchParams();
@@ -105,6 +114,7 @@ export function ReportDemoFrame() {
   const [open, setOpen] = useState(true);
   const [state, setState] = useState<Extract<FrameMessage, { t: "state" }> | null>(null);
   const [compare, setCompare] = useState<Extract<FrameMessage, { t: "find" }>["sale"] | null>(null);
+  const [missing, setMissing] = useState<string | null>(null);
   // The extension's key for this frame (handshake v2): in the frame's address only. `?v=1` plays an old extension.
   const [key] = useState(() => Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join(""));
   const version = Number(search.get("v") ?? 2);
@@ -138,6 +148,11 @@ export function ReportDemoFrame() {
         } else if (one.t === "find") {
           setCompare(one.sale);
           setOpen(false);
+          // The site under this demo frame is Mia-2's wallet and Mia Free's statement: their rows are found; a sale of
+          // another Fansly page waits for that page's tab; Mia VIP's row is not in the statement.
+          const result = foundOf(one.sale);
+          setMissing(result.ok ? null : result.words ?? null);
+          answer({ t: "found", transactionId: one.sale.transactionId, ...result });
         } else if (one.t === "copy") {
           void navigator.clipboard.writeText(one.text).then(() => answer({ t: "copy:result", ok: true }), () => answer({ t: "copy:result", ok: false }));
         }
@@ -159,6 +174,7 @@ export function ReportDemoFrame() {
     const transactionId = compare?.transactionId ?? null;
     setOpen(true);
     setCompare(null);
+    setMissing(null);
     portRef.current?.postMessage({ t: "show", transactionId } satisfies ExtensionMessage);
   };
   const src = `${BASE}/frame/report${shift ? `?shift=${encodeURIComponent(shift)}` : ""}#k=${key}&v=2`;
@@ -173,7 +189,8 @@ export function ReportDemoFrame() {
           <section className="mini" aria-label="Отчёт смены, свёрнут">
             <span className="mini-t"><Ico name="report" />Отчёт смены</span>
             {state && state.phase !== "none" && <span className={`chip${state.phase === "confirm" || state.phase === "fixing" ? " is-clay" : state.phase === "counted" ? " is-good" : ""}`}>{state.chip}</span>}
-            {compare && <span className="mini-c">Сверка: <b>{compare.pageLabel}</b>, {siteWords(compare)} {compare.fanName}, {compare.platformRef ? `#…${compare.platformRef.slice(-4)}` : new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(compare.occurredAt))}</span>}
+            {compare && missing !== null && <span className="mini-c">{missing}</span>}
+            {compare && missing === null && <span className="mini-c">Сверка: <b>{compare.pageLabel}</b>, {siteWords(compare)} {compare.fanName}, {compare.platformRef ? `#…${compare.platformRef.slice(-4)}` : new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(compare.occurredAt))}</span>}
             <span className="grow" />
             {state && state.phase !== "none" && <span className="mini-s">Ваши продажи: {state.count}, <b>{usd(state.totalMills)}</b></span>}
             <button type="button" className="btn btn--line btn--sm" onClick={back}>{compare ? "К отчёту" : "Отчёт"}</button>

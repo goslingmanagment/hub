@@ -100,6 +100,20 @@ describe("the board's requests over the port", () => {
     expect(seen[0]).toEqual({ t: "show", transactionId: 42 });
   });
 
+  it("passes the result of a find to the board, found or not", () => {
+    const { port, answer } = fakePort();
+    const transport = portTransport(port);
+    const seen: unknown[] = [];
+    transport.on((message) => seen.push(message));
+    answer({ t: "found", transactionId: 3, ok: false, words: "Строка на сайте не найдена: 22:30, $48, Viggo" });
+    answer({ t: "found", transactionId: 4, ok: true });
+    answer({ t: "fetch:result", id: 99, status: 200, body: "{}" });
+    expect(seen).toEqual([
+      { t: "found", transactionId: 3, ok: false, words: "Строка на сайте не найдена: 22:30, $48, Viggo" },
+      { t: "found", transactionId: 4, ok: true },
+    ]);
+  });
+
   it("rejects what waits when it is closed", async () => {
     const { port } = fakePort();
     const transport = portTransport(port);
