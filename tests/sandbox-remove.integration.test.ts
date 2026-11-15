@@ -100,7 +100,7 @@ async function seedLive(db: Database) {
 /** Everything of the live agency the removal must not touch, as rows. */
 async function liveSnapshot(db: Database): Promise<string> {
   const read = async (query: ReturnType<typeof sql>) => (await db.execute<Row>(query)).rows;
-  return JSON.stringify({
+  return JSON.stringify(({
     models: await read(sql`select id, slug from models where not is_test order by id`),
     pages: await read(sql`select id, label from pages where id = ${live.pageId}`),
     people: await read(sql`select id, code from people where not is_test order by id`),
@@ -115,7 +115,7 @@ async function liveSnapshot(db: Database): Promise<string> {
     questions: await read(sql`select id, state from team_questions where page_id = ${live.pageId} order by id`),
     sends: await read(sql`select count(*)::int as n from client_send_attributions where page_id = ${live.pageId}`),
     fans: await read(sql`select id from fans where username = 'live_fan'`),
-  });
+  }), (_key, value: unknown) => (typeof value === "bigint" ? value.toString() : value));
 }
 
 beforeAll(async () => {
