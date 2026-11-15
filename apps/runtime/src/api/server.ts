@@ -89,6 +89,7 @@ import { registerShiftHandinRoutes } from "../modules/shift-handins/index.ts";
 import { registerSaleClaimRoutes } from "../modules/sale-claims/index.ts";
 import { registerTeamRoutes } from "../modules/teams/index.ts";
 import { registerSaleChainRoutes } from "../modules/sale-chain/index.ts";
+import { registerTeamQuestionRoutes } from "../modules/team-questions/index.ts";
 import { registerErasureRoutes } from "../modules/erasures/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
 import { registerMatterRoutes } from "../modules/matters/index.ts";
@@ -770,6 +771,7 @@ export async function buildApiServer(appContext: AppContext) {
   registerSaleClaimRoutes(server, moduleContext);
   registerTeamRoutes(server, moduleContext);
   registerSaleChainRoutes(server, moduleContext);
+  registerTeamQuestionRoutes(server, moduleContext);
   registerErasureRoutes(server, moduleContext);
   // «Рассылки» kept by Hub: the page's outreaches, shared by its team, and each fan's send claimed once.
   registerOutreachRoutes(server, moduleContext);

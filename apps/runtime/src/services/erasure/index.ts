@@ -1042,6 +1042,8 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
   // platform's pages and (fan_ref = ref or conversation_ref = ref)`.
   { column: "client_send_attributions.fan_ref", target: "client_send_attributions", reach: "predicate" },
   { column: "client_note_attributions.fan_ref", target: "client_note_attributions", reach: "predicate" },
+  // A question to whoever decides (0418): teamQuestionPred, `page_id in the platform's pages and fan_platform_user_id = ref`.
+  { column: "team_questions.fan_platform_user_id", target: "team_questions", reach: "predicate" },
   // «Рассылки» (0346): every row names its fan by `fan_id` too (NOT NULL, ON
   // DELETE CASCADE), so the fans-row delete carries them; the plan counts them.
   { column: "client_outreach_fans.fan_ref", target: "client_outreach_fans", reach: "cascade" },
@@ -1373,6 +1375,16 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     plane: "hot", target: "client_note_attributions", action: "delete",
     rows: await countOf(app, sql`select count(*)::text as n from client_note_attributions where ${noteAttributionPred}`),
     run: tx => execCount(tx, sql`delete from client_note_attributions where ${noteAttributionPred}`),
+  });
+
+  // A question to whoever decides about the fan (0418): who asked, when, what kind and the answer stay; the fan and the
+  // words about him go.
+  const teamQuestionPred = sql`page_id in ${scope.pageIds} and fan_platform_user_id = ${ref}`;
+  targets.push({
+    plane: "hot", target: "team_questions", action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from team_questions where ${teamQuestionPred}`),
+    run: tx => execCount(tx, sql`update team_questions set fan_platform_user_id = null, fan_name = null, text = ${PEOPLE_MESSAGE_ERASED_TEXT},
+      answer_text = case when answer_text is null then null else ${PEOPLE_MESSAGE_ERASED_TEXT} end where ${teamQuestionPred}`),
   });
 
   // «Рассылки» (0346): the fan's versions, words and sends go with his fans row
@@ -2297,6 +2309,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fan_customs", "page_id"],
     // Custom orders (0399): the page's orders; their payments, cards and messages go with them by FK.
     ["custom_orders", "page_id"],
+    // Questions to whoever decides (0418): the page's.
+    ["team_questions", "page_id"],
     // Chat Memory week 4: the page's shift-report marks, confirmed lines and the owner's splits (0311).
     ["shift_report_marks", "page_id"],
     ["shift_report_lines", "page_id"],

@@ -512,4 +512,96 @@
     font-weight: 600;
     color: var(--ui-text);
   }
+
+  /* Вопросы тому, кто решает (products plan §4.6): the form, a question's facts, the asker's open ones. */
+  .wt-ask {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-3);
+  }
+
+  .wt-ask__lead {
+    margin: 0;
+    color: var(--ui-text-2);
+  }
+
+  .wt-question {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--ui-space-2) var(--ui-space-4);
+    margin: 0;
+  }
+
+  .wt-question dt {
+    color: var(--ui-text-3);
+  }
+
+  .wt-question dd {
+    margin: 0;
+  }
+
+  .wt-question__text {
+    font-weight: 600;
+  }
+
+  .wt-question__yes {
+    color: var(--ui-good-text, var(--ui-text));
+    font-weight: 600;
+  }
+
+  .wt-question__no {
+    color: var(--ui-bad-text);
+    font-weight: 600;
+  }
+
+  .wt-question__by {
+    color: var(--ui-text-3);
+    font-weight: 400;
+  }
+
+  .wt-asked {
+    margin-bottom: var(--ui-space-5);
+  }
+
+  .wt-asked__title {
+    margin: 0 0 var(--ui-space-2);
+    font-size: var(--ui-fs-14);
+    font-weight: 600;
+    color: var(--ui-text-2);
+  }
+
+  .wt-asked__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+    background: var(--ui-surface);
+  }
+
+  .wt-asked__list li + li {
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .wt-asked__line {
+    display: grid;
+    gap: 2px;
+    width: 100%;
+    padding: var(--ui-space-3) var(--ui-space-4);
+    border: 0;
+    background: none;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .wt-asked__line:hover {
+    background: var(--ui-line-soft);
+  }
+
+  .wt-asked__who {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+  }
 }

@@ -8,7 +8,7 @@
 import { MATTER_INFO_KINDS } from "./matter-checks.ts";
 
 export const WAITING_GROUP_IDS = [
-  "questions", "reports", "customs", "held", "publications", "content", "people", "ledger", "system", "other", "info",
+  "questions", "asks", "reports", "customs", "held", "publications", "content", "people", "ledger", "system", "other", "info",
 ] as const;
 export type WaitingGroupId = (typeof WAITING_GROUP_IDS)[number];
 
@@ -37,6 +37,8 @@ export interface WaitingGroup {
 /** The groups in the list's order: the old sections of «Решения» first (their anchors still open them), what only informs last. */
 export const WAITING_GROUPS: readonly WaitingGroup[] = [
   { id: "questions", title: "Чья продажа", product: "workboard" },
+  // A chatter's question to whoever decides (products plan §4.6): the decider's to answer, the asker's answer back.
+  { id: "asks", title: "Вопросы", product: "workboard" },
   { id: "reports", title: "Отчёты смен", product: "workboard" },
   { id: "customs", title: "Кастомы", product: "workboard" },
   { id: "held", title: "Зависшие отправки", product: "workboard" },
@@ -60,6 +62,8 @@ export function waitingGroupOf(kind: string): WaitingGroupId {
   if (INFO.has(kind)) return "info";
   // Whose a sale is: the ledger's questions and the claims' disputes (package G).
   if (kind === "ledger.sale_question" || kind.startsWith("sale.")) return "questions";
+  // A question to whoever decides and its answer (routes-team-questions.ts).
+  if (kind.startsWith("question.")) return "asks";
   // The shift's report: the ledger's posts and paid days, the author's post to fix, «мимо площадки», the hand-in (F).
   if (REPORT_KINDS.has(kind) || kind.startsWith("shift.report")) return "reports";
   if (kind.startsWith("custom.")) return "customs";

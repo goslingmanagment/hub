@@ -1,7 +1,7 @@
 import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ErrorState, Skeleton } from "@agency_hub_core/ui";
+import { Button, ErrorState, Skeleton } from "@agency_hub_core/ui";
 import { groupOfAnchor } from "@agency_hub_core/ui/waiting/kinds";
 import { WaitingList, waitingSummary, type WaitingContext, type WaitingListProps } from "@agency_hub_core/ui/waiting/WaitingList";
 import { heldSendsQuery, saleQuestionsQuery } from "@/shared/decisions";
@@ -14,6 +14,7 @@ import { ResolveSendModal } from "../decisions/HeldSends";
 import { DisputeModal, NobodyModal, OffPlatformModal, UnlinkedModal } from "./Disputes";
 import { goLink } from "./links";
 import { ClaimAnswer } from "./MyMatters";
+import { AskModal, MyOpenQuestions, QuestionModal, useMyOpenQuestions } from "./Questions";
 import { useFanNames, type FanRefOnPage, type HeldSend } from "../decisions/data";
 
 /**
@@ -38,6 +39,10 @@ export function WaitingScreen() {
   const matters = list.data?.matters ?? [];
   const has = (kind: string) => matters.some((matter) => matter.kind === kind);
   const attemptId = search.get("send");
+  // Вопросы тому, кто решает (products plan §4.6): «Спросить», a question by the address, the asker's open ones.
+  const questionParam = Number(search.get("question"));
+  const asking = search.get("ask") !== null;
+  const myQuestions = useMyOpenQuestions();
 
   // What a line needs beyond its matter: the question's words, the held send itself.
   const questions = useQuery({ ...saleQuestionsQuery, enabled: isOwner && has("ledger.sale_question"), refetchInterval: 5 * MINUTE });
@@ -123,6 +128,8 @@ export function WaitingScreen() {
       <ScreenHeader
         title="Ждут вас"
         pageFilter
+        // The owner decides, he does not ask: «Спросить» is everyone else's.
+        {...(isOwner ? {} : { actions: <Button size="sm" onClick={() => setParam("ask", "1")}>Спросить</Button> })}
         meta={meta}
         updatedAt={list.dataUpdatedAt}
         stale={list.isRefetchError}
@@ -137,7 +144,10 @@ export function WaitingScreen() {
         ) : list.isError && !list.data ? (
           <ErrorState onRetry={() => void list.refetch()} retrying={list.isFetching} />
         ) : (
-          <WaitingList {...listProps} />
+          <>
+            <MyOpenQuestions questions={myQuestions} onOpen={(id) => setParam("question", String(id))} />
+            <WaitingList {...listProps} />
+          </>
         )}
       </div>
       {/* A dispute is its decider's: the owner, or the lead of the sale's team (Hub answers anyone else 403). */}
@@ -154,6 +164,10 @@ export function WaitingScreen() {
       )}
       {isOwner && nobodyParam !== null && /^\d{4}-\d{2}-\d{2}$/.test(nobodyParam) && <NobodyModal key={nobodyParam} week={nobodyParam} onClose={() => setParam("nobody", null)} />}
       {isOwner && unlinkedParam && <UnlinkedModal onClose={() => setParam("unlinked", null)} />}
+      {Number.isSafeInteger(questionParam) && questionParam > 0 && (
+        <QuestionModal key={questionParam} id={questionParam} onClose={() => setParam("question", null)} />
+      )}
+      {asking && <AskModal onClose={() => setParam("ask", null)} />}
       {openSend && held.data && (
         <ResolveSendModal
           key={openSend.attemptId}
