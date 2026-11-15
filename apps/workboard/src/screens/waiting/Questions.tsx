@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { TEAM_QUESTION_KINDS, TEAM_QUESTION_KIND_WORDS, type TeamQuestion, type TeamQuestionKind, type TeamQuestionSwap } from "@agency_hub_core/contracts";
+import { TEAM_QUESTION_KINDS, TEAM_QUESTION_KIND_WORDS, isChatTeamRole, type TeamQuestion, type TeamQuestionKind, type TeamQuestionSwap } from "@agency_hub_core/contracts";
 import { Button, ErrorState, Field, Modal, PageLabel, Select, Skeleton, TextInput, toast } from "@agency_hub_core/ui";
 import { formatDateTime, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { addDays, moscowToday } from "@agency_hub_core/ui/moscow";
@@ -85,8 +85,10 @@ export function AskModal({ onClose, start }: { onClose: () => void; start?: AskS
   const model = modelOf(swapPages[0] ?? page);
   const own = (people.data?.people ?? []).find((person) => person.logins.some((login) => login.userId === user?.id))?.code ?? null;
   const absentCode = start?.swap?.absentPersonCode ?? own;
+  // The chat team of the model (contracts chat-team.ts), working already: a content manager is not offered, nor a
+  // newcomer not working yet (invited or set up); Hub checks the same.
   const covers = useMemo(() => (people.data?.people ?? [])
-    .filter((person) => person.kind === "human" && person.state === "working" && person.code !== absentCode
+    .filter((person) => person.kind === "human" && person.state === "working" && isChatTeamRole(person.role) && person.code !== absentCode
       && person.workingPages.some((one) => one.modelSlug === model))
     .sort((a, b) => a.displayName.localeCompare(b.displayName, "ru")), [people.data, absentCode, model]);
   const coverName = covers.find((person) => person.code === cover)?.displayName ?? "";

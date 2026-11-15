@@ -10,6 +10,7 @@ import {
   type TeamQuestionSwapBody,
   type TeamQuestionWriteResponse,
   type TeamSwapsResponse,
+  isChatTeamRole,
 } from "@agency_hub_core/contracts";
 import {
   answerTeamQuestion,
@@ -331,6 +332,9 @@ async function swapOfBody(
   if (pageIds.some((id) => !absentPages.has(id))) throw new BadRequestError("The absent person does not work one of these pages");
   const cover = await personOf(body.coverPersonCode);
   if (cover.id === absentPersonId) throw new BadRequestError("Someone else covers");
+  // The chat team (contracts chat-team.ts) and working already: a content manager or a newcomer not working yet
+  // (invited, set up) does not cover a shift.
+  if (!isChatTeamRole(cover.role) || cover.state !== "working") throw new BadRequestError("The covering person is not of the chat team at work");
   const teamPages = new Set(input.modelId === null ? [] : pagesOfModels(facts, [input.modelId]));
   if (![...works(cover.id)].some((id) => teamPages.has(id))) throw new BadRequestError("The covering person is not of this team");
   return { date: body.date, pageIds, startMinute, endMinute, absentPersonId, coverPersonId: cover.id };

@@ -58,12 +58,16 @@ beforeAll(async () => {
   const modelB = await createModel(db, { slug: "bravo", name: "Bravo" });
   pageA = (await createFanslyPage(db, { modelId: modelA.id, label: "alfa-1" })).id;
   const pageB = (await createFanslyPage(db, { modelId: modelB.id, label: "bravo-1" })).id;
-  for (const [name, label, pageId] of [["anna", "alfa-1", pageA], ["carl", "alfa-1", pageA], ["lena", "alfa-1", pageA], ["boris", "bravo-1", pageB]] as const) {
+  // Kim is the model's content manager and Nina a newcomer not working yet: both work alfa-1, neither covers a shift.
+  const roles: Record<string, { role: "chatter" | "content_manager"; state: "working" | "set_up" }> = {
+    kim: { role: "content_manager", state: "working" }, nina: { role: "chatter", state: "set_up" },
+  };
+  for (const [name, label, pageId] of [["anna", "alfa-1", pageA], ["carl", "alfa-1", pageA], ["lena", "alfa-1", pageA], ["boris", "bravo-1", pageB], ["kim", "alfa-1", pageA], ["nina", "alfa-1", pageA]] as const) {
     const user = await createUserAccount(app, { username: name, role: "chatter" }, { source: "cli" });
     await db.execute(sql`update users set password_hash = ${hash} where id = ${user.id}`);
     await assignPageToUser(app, { userId: user.id, pageLabel: label }, { source: "cli" });
     const row = await insertPersonRow(db, {
-      code: name, displayName: name, kind: "human", role: "chatter", state: "working", leftOn: null, telegramUserId: null,
+      code: name, displayName: name, kind: "human", role: roles[name]?.role ?? "chatter", state: roles[name]?.state ?? "working", leftOn: null, telegramUserId: null,
       telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
     });
     await insertPersonLogin(db, { personId: row.id, userId: user.id, linkedByUserId: null });
@@ -90,6 +94,11 @@ describe("«Подмена»: a question whose «Можно» writes the day's l
     // A covering person of another team is refused.
     const wrong = await as("anna", "POST", "/api/v1/team/questions", { pageLabel: "alfa-1", kind: "swap", text: "Не выйду", swap: { ...swap, coverPersonCode: "boris" } });
     expect(wrong.statusCode, wrong.body).toBe(400);
+    // The model's content manager and a newcomer not working yet work alfa-1 too, and are not the chat team at work.
+    for (const code of ["kim", "nina"]) {
+      const refused = await as("anna", "POST", "/api/v1/team/questions", { pageLabel: "alfa-1", kind: "swap", text: "Не выйду", swap: { ...swap, coverPersonCode: code } });
+      expect(refused.statusCode, `${code}: ${refused.body}`).toBe(400);
+    }
 
     const asked = await as("anna", "POST", "/api/v1/team/questions", { pageLabel: "alfa-1", kind: "swap", text: "Не выйду, Карл выйдет", swap });
     expect(asked.statusCode, asked.body).toBe(200);
