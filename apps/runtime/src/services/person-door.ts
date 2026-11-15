@@ -28,6 +28,12 @@ import { principalOfServerGrant } from "./signin-handoff.ts";
 /** Who opens a row: the owner and a content manager (her pages), or the owner alone. A row may name any roles. */
 const SCREEN = ["owner", "content_manager"] as const satisfies readonly UserRole[];
 const OWNER = ["owner"] as const satisfies readonly UserRole[];
+/**
+ * «Съёмка»'s custom orders: the owner, a content manager, and whoever leads customs of a model — a chatter's login
+ * (package C3; a team lead's side of an order is the check, in Workboard). Who reads and moves which order is cut by
+ * services/custom-orders/person.ts: a chatter who leads no customs reads none.
+ */
+const SHOOTING = ["owner", "content_manager", "chatter"] as const satisfies readonly UserRole[];
 
 export const PERSON_DOOR_OPERATIONS = {
   // «Публикации»: the feed, the card, the platforms' schedules and the settings, and their actions.
@@ -52,6 +58,9 @@ export const PERSON_DOOR_OPERATIONS = {
   personCreatorStatsContent: { console: "creatorStatsContent", roles: SCREEN },
   personCreatorStatsMedia: { console: "creatorStatsMedia", roles: SCREEN },
   personContentComments: { console: "contentComments", roles: SCREEN },
+  // «Съёмка» (package C3): the shooting side of custom orders, and its steps.
+  personCustomOrderList: { console: "customOrdersBoard", roles: SHOOTING },
+  personCustomOrderStep: { console: "customOrderAct", roles: SHOOTING },
 } as const satisfies Record<string, PersonDoorRow>;
 
 /**

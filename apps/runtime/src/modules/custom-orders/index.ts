@@ -14,6 +14,8 @@ import {
   agentUpdateCustomOrder,
   type AgentCustomScope,
 } from "../../services/custom-orders/agent.ts";
+import { personCustomOrders, personCustomOrderStep } from "../../services/custom-orders/person.ts";
+import { doorPerson, type PersonDoorOperation } from "../../services/person-door.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -29,6 +31,16 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
   const { appContext } = ctx;
   const { requirePrincipal, requireAgentKeyPrincipal } = ctx.auth;
   const db = appContext.db;
+
+  // «Съёмка» AS THE SIGNED-IN PERSON (package C3): ContentOps' key and the person's grant (services/person-door.ts).
+  const as = async (request: { body: { client: string; grant: string } } & Parameters<typeof requireAgentKeyPrincipal>[0], operation: PersonDoorOperation) =>
+    doorPerson(appContext, await requireAgentKeyPrincipal(request), request.body, operation);
+  server.post("/api/v1/person/custom-orders/list", { schema: routeSchemas.personCustomOrderList }, async (request) =>
+    personCustomOrders(appContext, await as(request, "personCustomOrderList"), { modelSlug: request.body.modelSlug }));
+  server.post("/api/v1/person/custom-orders/step", { schema: routeSchemas.personCustomOrderStep }, async (request) => {
+    const { client: _client, grant: _grant, ...body } = request.body;
+    return personCustomOrderStep(appContext, await as(request, "personCustomOrderStep"), body);
+  });
 
   server.get("/api/v1/custom-orders", { schema: routeSchemas.customOrdersBoard }, async (request) => {
     const principal = await requirePrincipal(request);
