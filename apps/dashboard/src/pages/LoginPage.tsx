@@ -12,9 +12,7 @@ import { isChatterSite, isConsoleSite } from "@/lib/sites";
 // The console's is the one word its sidebar and browser titles say: one word,
 // one tone (the wordmark's strong one), no muted half.
 function Wordmark() {
-  return isChatterSite()
-    ? <><span>Chat</span>Goose</>
-    : <>{PLACES.hub}</>;
+  return <>{isChatterSite() ? PLACES.workboard : PLACES.hub}</>;
 }
 
 /** Back to Workboard, or on to the other name, after the sign-in: outside the console's router, so a page load. */

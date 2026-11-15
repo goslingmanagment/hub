@@ -56,7 +56,7 @@ export function StartScreen() {
     <>
       <ScreenHeader
         title="Начало"
-        meta={<span className="start-hello">Здравствуйте, {firstName(data)}! {done ? "Всё готово к работе." : `${leftWords(start)}: каждая строка закроется сама, когда Hub это увидит.`}</span>}
+        meta={<span className="start-hello">Здравствуйте, {firstName(data)}! {done ? "Всё готово к работе." : `${leftWords(start)}: каждая строка закроется сама, когда Workboard это увидит.`}</span>}
         updatedAt={read.dataUpdatedAt}
         onRefresh={() => void read.refetch()}
         refreshing={read.isFetching}
@@ -70,10 +70,10 @@ export function StartScreen() {
                   <span className="start-mark start-mark--done start-mark--lg" aria-hidden><Check size={20} strokeWidth={2.25} /></span>
                   <div>
                     <h2 className="start-done__title">Всё готово</h2>
-                    <p className="start-text">Hub видит расширение, страницу и вашу работу на ней. Дальше ваши смены и отчёты по ним в «Мои смены».</p>
+                    <p className="start-text">Workboard видит расширение, страницу и вашу работу на ней. Дальше ваши смены и отчёты по ним в «Смены».</p>
                   </div>
                 </div>
-                <LinkButton variant="primary" to="/shifts/mine">Мои смены</LinkButton>
+                <LinkButton variant="primary" to="/shifts/mine">Смены</LinkButton>
               </Card>
             )}
             <Card

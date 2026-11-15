@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useLocation } from "react-router";
+import { PLACES } from "@agency_hub_core/look";
 import { useInspectAccountLink, useRedeemAccountLink } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { WORKBOARD_HOME } from "@/lib/navigation";
@@ -30,7 +31,7 @@ import {
 function Card({ children }: { children: ReactNode }) {
   return (
     <div className="entry-screen">
-      <h1 className="entry-logo"><span>Chat</span>Goose</h1>
+      <h1 className="entry-logo">{PLACES.workboard}</h1>
       <div className="entry-card entry-card-wide">{children}</div>
     </div>
   );
