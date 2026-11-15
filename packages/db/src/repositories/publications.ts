@@ -1239,6 +1239,29 @@ export async function findModelSlugOf(db: Database, of: { publicationId: number 
   return null;
 }
 
+/**
+ * The names of who drafted, approved and moved posts, for the person's door (products package C2): a login's person by
+ * the registry's display name — a login without one is left out, never named by the login — and an agent key's name.
+ */
+export async function listPublicationActorNames(
+  db: Database,
+  input: { userIds: readonly number[]; agentKeyIds: readonly number[] },
+): Promise<{ users: { id: number; name: string }[]; agentKeys: { id: number; name: string }[] }> {
+  const users = [...new Set(input.userIds)];
+  const keys = [...new Set(input.agentKeyIds)];
+  const [people, agents] = await Promise.all([
+    users.length === 0 ? { rows: [] as Row[] } : db.execute<Row>(sql`
+      select pl.user_id as id, p.display_name as name from person_logins pl join people p on p.id = pl.person_id
+       where pl.user_id = any(${sql.param(users)}::bigint[]) and nullif(btrim(p.display_name), '') is not null`),
+    keys.length === 0 ? { rows: [] as Row[] } : db.execute<Row>(sql`
+      select id, name from agent_keys where id = any(${sql.param(keys)}::bigint[])`),
+  ]);
+  return {
+    users: people.rows.map((row) => ({ id: num(row.id), name: String(row.name) })),
+    agentKeys: agents.rows.map((row) => ({ id: num(row.id), name: String(row.name) })),
+  };
+}
+
 /** The pages of one model by Hub's slug (any case): ContentOps' «Публикации» shows one model (products plan §2.4). */
 export async function listModelPageIds(db: Database, modelSlug: string): Promise<number[]> {
   const result = await db.execute<Row>(sql`

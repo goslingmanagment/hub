@@ -11,9 +11,10 @@ import { ofLinksRouteSchemas } from "./routes-of-links.ts";
 import { pageBrowserRouteSchemas } from "./routes-page-browser.ts";
 import { publicationRouteSchemas } from "./routes-publications.ts";
 import {
+  agentPublicationTargetsResponseSchema,
+  personPublicationDetailSchema,
   publicationApproveBodySchema,
   publicationApproveResponseSchema,
-  publicationDetailSchema,
   publicationListQuerySchema,
   publicationListResponseSchema,
   publicationQueueListResponseSchema,
@@ -6054,9 +6055,15 @@ export const personDoorRouteSchemas = {
   },
   personPublicationGet: {
     auth: personDoor, tags: ["person-door"],
-    summary: "As the signed-in person: one publication with its findings, journal and approval",
+    summary: "As the signed-in person: one publication with its findings, journal and approval, and who drafted, approved and moved it by name",
     body: personIdBodySchema,
-    response: { 200: publicationDetailSchema, ...personDoorErrors },
+    response: { 200: personPublicationDetailSchema, ...personDoorErrors },
+  },
+  personPublicationTargets: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: where a post of their page goes — its Fansly walls and subscription tiers by name, no prices",
+    body: personPageBodySchema,
+    response: { 200: agentPublicationTargetsResponseSchema, ...personDoorErrors },
   },
   personPublicationApprove: {
     auth: personDoor, tags: ["person-door"],

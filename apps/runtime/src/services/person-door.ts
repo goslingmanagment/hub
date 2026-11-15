@@ -39,6 +39,8 @@ export const PERSON_DOOR_OPERATIONS = {
   // «Публикации»: the feed, the card, the platforms' schedules and the settings, and their actions.
   personPublicationList: { console: "adminPublicationList", roles: SCREEN },
   personPublicationGet: { console: "adminPublicationGet", roles: SCREEN },
+  // The card's «Стена» and «Тиры»: the page's walls and tiers by name, never prices (the agents' read).
+  personPublicationTargets: { console: "adminPublicationGet", roles: SCREEN },
   personPublicationApprove: { console: "adminPublicationApprove", roles: SCREEN },
   personPublicationCancel: { console: "adminPublicationCancel", roles: SCREEN },
   personPublicationWithdraw: { console: "adminPublicationWithdraw", roles: SCREEN },

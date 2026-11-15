@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 84 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (568)
+## Routes (569)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -508,6 +508,7 @@ A full device token is not affected.
 | POST | `/api/v1/person/publications/settings/update` | `personPublicationSettingsUpdate` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/publications/switches` | `personPublicationSwitches` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/publications/switches/set` | `personPublicationSwitchSet` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/targets` | `personPublicationTargets` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/publications/withdraw` | `personPublicationWithdraw` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/publications/withdraw-page` | `personPublicationWithdrawPage` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/stats/comments` | `personContentComments` | `agentKey` | — | — | no |

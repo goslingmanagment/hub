@@ -481,6 +481,7 @@ export const kernelOperations = {
   personPublicationSettingsUpdate: { method: "POST", path: "/api/v1/person/publications/settings/update" },
   personPublicationSwitchSet: { method: "POST", path: "/api/v1/person/publications/switches/set" },
   personPublicationSwitches: { method: "POST", path: "/api/v1/person/publications/switches" },
+  personPublicationTargets: { method: "POST", path: "/api/v1/person/publications/targets" },
   personPublicationWithdraw: { method: "POST", path: "/api/v1/person/publications/withdraw" },
   personPublicationWithdrawPage: { method: "POST", path: "/api/v1/person/publications/withdraw-page" },
   publicVaultUploadFile: { method: "GET", path: "/api/v1/public/vault-upload-files/:token" },
