@@ -136,11 +136,10 @@ describe("a post's matters wait for the content manager of its page (products pl
     expect(publicationItems("publication.draft", [{ ...post, pageLabel: "lora-1" }], managerOf)[0]?.owner).toBeUndefined();
   });
 
-  it("«не вышел» too; any other failure stays the owner's", () => {
-    const managerOf = new Map([["test-1", 77]]);
+  it("«не вышел» stays the owner's: only he can close that latch (round 2, N10); she sees the post in «Публикации»", () => {
     const incident = { id: 5, incidentKey: "k", kind: "publication_not_published", pageLabel: "test-1", platform: "fansly", openedAt: new Date() };
-    const [notOut, other] = failureItems([incident, { ...incident, id: 6, kind: "auth_blocked" }], { loginPages: new Set(), ofapiOff: false, managerOf });
-    expect(notOut?.owner).toEqual({ userId: 77 });
+    const [notOut, other] = failureItems([incident, { ...incident, id: 6, kind: "auth_blocked" }], { loginPages: new Set(), ofapiOff: false });
+    expect(notOut?.owner).toBeUndefined();
     expect(other?.owner).toBeUndefined();
   });
 });

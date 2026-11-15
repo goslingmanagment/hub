@@ -200,7 +200,7 @@ export function isOfapiOffIncident(item: { kind: string; platform: string | null
  */
 export function failureItems(
   incidents: ReadonlyArray<{ id: number; incidentKey: string; kind: string; pageLabel: string | null; platform: string | null; openedAt: Date | string }>,
-  input: { loginPages: ReadonlySet<string>; ofapiOff: boolean; managerOf?: ReadonlyMap<string, number> },
+  input: { loginPages: ReadonlySet<string>; ofapiOff: boolean },
 ): MirrorItem[] {
   return incidents
     .filter((incident) => !(input.ofapiOff && isOfapiOffIncident(incident)))
@@ -217,8 +217,8 @@ export function failureItems(
         openedAt: new Date(incident.openedAt).toISOString(),
       },
       link: "/system/failures?page=all",
-      // «Не вышел» is the post's outcome: it waits for the content manager of its page, like the post did.
-      ...(incident.kind === "publication_not_published" ? ownerOfPage(input.managerOf ?? new Map(), incident.pageLabel) : {}),
+      // «Не вышел» stays the owner's: only he closes that latch (modules/ops, an owner's route). The content manager
+      // sees the post itself in ContentOps' «Публикации → Не вышли» (round 2, N10).
     }));
 }
 
@@ -561,7 +561,7 @@ export async function runMattersMirror(
   }
   await read(["incident.open"], async () => {
     const incidents = await listNotificationIncidentsWithPages(app.db, { status: "open", limit: INCIDENTS_LIMIT });
-    return [{ kind: "incident.open", items: failureItems(incidents.items, { loginPages, ofapiOff: !ofapiOn, managerOf }) }];
+    return [{ kind: "incident.open", items: failureItems(incidents.items, { loginPages, ofapiOff: !ofapiOn }) }];
   });
   await read(["extension.critical"], async () => {
     const range = { from: new Date(Date.parse(`${today}T00:00:00Z`) - 6 * DAY_MS).toISOString().slice(0, 10), to: today };
