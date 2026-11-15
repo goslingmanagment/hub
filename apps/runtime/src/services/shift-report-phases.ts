@@ -222,3 +222,13 @@ export function signedLines(input: {
     .map((line) => (line.transactionId !== null && input.oldWay.has(line.transactionId) ? lineWithWord(line, { statement: "not_mine" }) : line));
 }
 
+/**
+ * Whether a line of what is checked or counted holds its sale: it counts it, or it carries the person's word, a dispute
+ * or a settlement. A line at $0 with nothing on it («Рядом», nobody's) holds nothing: when the rule gives the sale to the
+ * person after the hand-in — a colleague gave it, a decision — it comes «после сдачи» and «Досдать» takes it, as a sale
+ * that came after does. `countLateSales` (packages/db shift-handin-check.ts) reads the same in SQL. Pure.
+ */
+export function holdsSale(line: Pick<HandinVersionLine, "amountMills" | "statement" | "disputed" | "settled">): boolean {
+  return line.amountMills > 0 || line.statement !== null || line.disputed || line.settled !== undefined;
+}
+

@@ -6,6 +6,7 @@ import { linesPageSums } from "../apps/runtime/src/services/shift-handins.ts";
 import {
   checkLetsConfirm,
   confirmedLines,
+  holdsSale,
   lineWithWord,
   mayAct,
   phaseAfter,
@@ -215,6 +216,16 @@ describe("what «Подтверждаю» signs is what «Подтвердите
       proposals: [{ transactionId: 45, kind: "owner_change", toWord: "give", toUserId: 7, note: null, state: "proposed" }],
     });
     expect(given).toMatchObject({ statement: "not_mine" });
+  });
+});
+
+describe("which line of a counted version holds its sale (`holdsSale`)", () => {
+  it("holds what it counts or says something of; a $0 line with nothing on it holds nothing", () => {
+    expect(holdsSale(line(50))).toBe(true);
+    expect(holdsSale(line(51, { shareMills: 0 }))).toBe(false);
+    expect(holdsSale(line(52, { shareMills: 0, statement: "not_mine" }))).toBe(true);
+    expect(holdsSale(line(53, { shareMills: 0, statement: "mine", disputed: true }))).toBe(true);
+    expect(holdsSale(line(54, { shareMills: 0, settled: "owner" }))).toBe(true);
   });
 });
 

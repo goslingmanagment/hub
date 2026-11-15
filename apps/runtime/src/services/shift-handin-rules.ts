@@ -167,9 +167,9 @@ export function slotWindowOf(
 ): { from: number; to: number; pageIds: Array<number | null> } | null {
   const own = slots.filter((slot) => input.userIds.has(slot.personId));
   if (own.length === 0) return null;
-  let from = Number.POSITIVE_INFINITY;
-  let to = Number.NEGATIVE_INFINITY;
-  const pageIds = new Set<number | null>();
+  // Each line's runs over the days around the shift. A swap's `off` line widens nothing: it takes its own hours out of
+  // the person's standing lines of its page that day (sale-rule.ts `slotRuns`); a `cover` line runs as a line of its own.
+  const runs: Array<{ slot: RuleSlot; start: number; end: number }> = [];
   const first = moscowDay(input.startedAt - DAY_MS);
   for (let day = first; Date.parse(`${day}T00:00:00+03:00`) <= input.endedAt; day = moscowDay(Date.parse(`${day}T12:00:00+03:00`) + DAY_MS)) {
     const midnight = Date.parse(`${day}T00:00:00+03:00`);
@@ -180,14 +180,40 @@ export function slotWindowOf(
       const minutes = (slot.endMinute - slot.startMinute + MINUTES_OF_DAY) % MINUTES_OF_DAY || (slot.endMinute === MINUTES_OF_DAY ? MINUTES_OF_DAY - slot.startMinute : 0);
       if (minutes <= 0) continue;
       const start = midnight + slot.startMinute * MINUTE_MS;
-      const end = start + minutes * MINUTE_MS;
-      if (end <= input.startedAt || start >= input.endedAt) continue;
-      from = Math.min(from, start);
-      to = Math.max(to, end);
-      pageIds.add(slot.pageId);
+      runs.push({ slot, start, end: start + minutes * MINUTE_MS });
+    }
+  }
+  const offs = runs.filter((run) => run.slot.day === "off");
+  let from = Number.POSITIVE_INFINITY;
+  let to = Number.NEGATIVE_INFINITY;
+  const pageIds = new Set<number | null>();
+  for (const run of runs) {
+    if (run.slot.day === "off") continue;
+    const pieces = run.slot.day === "cover" ? [{ start: run.start, end: run.end }]
+      : withoutHours({ start: run.start, end: run.end }, offs.filter((off) => off.slot.pageId === run.slot.pageId));
+    for (const piece of pieces) {
+      if (piece.end <= input.startedAt || piece.start >= input.endedAt) continue;
+      from = Math.min(from, piece.start);
+      to = Math.max(to, piece.end);
+      pageIds.add(run.slot.pageId);
     }
   }
   return Number.isFinite(from) ? { from, to, pageIds: [...pageIds] } : null;
+}
+
+/** An interval with the hours of others taken out: what is left of it, in order. Pure. */
+function withoutHours(run: { start: number; end: number }, out: ReadonlyArray<{ start: number; end: number }>): Array<{ start: number; end: number }> {
+  let left = [run];
+  for (const cut of out) {
+    left = left.flatMap((piece) => {
+      if (cut.end <= piece.start || cut.start >= piece.end) return [piece];
+      return [
+        ...(cut.start > piece.start ? [{ start: piece.start, end: cut.start }] : []),
+        ...(cut.end < piece.end ? [{ start: cut.end, end: piece.end }] : []),
+      ];
+    });
+  }
+  return left;
 }
 
 const DAY_MS = 86_400_000;

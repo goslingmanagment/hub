@@ -205,7 +205,9 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     // The side answers on their own board or in «Ждут вас» only when they hand shifts in by the board too: a person who
     // posts the old way is paid by a post Gengar writes from decisions, never agreements (arena round 3) — so anyone
     // else, and nobody to ask, is the decider's at once (`no_side`), and no day of silence runs.
-    const askable = claim.kind === "claim" && side !== null && side.submitsShiftSince !== null && side.state !== "left";
+    // A sale of the pot is the owner's alone («по общаку решаю я»): never asked of a colleague, so no «Согласен» and no
+    // day of silence settles it between two chatters.
+    const askable = claim.kind === "claim" && side !== null && side.submitsShiftSince !== null && side.state !== "left" && sale?.home?.home !== "pot";
     const why = claim.kind === "double" ? "double" as const : askable ? null : "no_side" as const;
     const asked = { state: why === null ? "asked" as const : "owner" as const, escalatedAt: why === null ? null : now, escalatedWhy: why };
     const said = {
@@ -239,7 +241,9 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
   // is outside the settlements' turn: each write goes through only while the claim is in the state read here, so an
   // answer or a decision committed since is never written over — and only what was really changed is counted.
   const open = await listSaleClaims(db, { states: [...OPEN_STATES], kinds: ["claim", "double"] });
-  const holding = (await listCurrentReportsOfSales(db, [...new Set(open.flatMap((claim) => (claim.transactionId === null ? [] : [claim.transactionId])))])).map(viewOf);
+  const openSales = [...new Set(open.flatMap((claim) => (claim.transactionId === null ? [] : [claim.transactionId])))];
+  const holding = (await listCurrentReportsOfSales(db, openSales)).map(viewOf);
+  const potSales = new Set((await listHandinSalesByIds(db, openSales)).filter((sale) => sale.home?.home === "pot").map((sale) => sale.transactionId));
   for (const claim of open) {
     // A question asked from the draft (the board, 0412) stands while the person's draft says it: until «Отменить» or a
     // version of their report that no longer counts the sale.
@@ -248,6 +252,12 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     const draftAsk = claim.origin === "draft" && (claim.statement === null || !holding.some((report) => report.handinId === claim.claimantHandinId));
     if (!draftAsk && !claimStands(claim, holding)) {
       if (await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state })) tally.withdrawn += 1;
+      continue;
+    }
+    // Asked of a colleague, and the sale is the pot's (it became so after the question): the owner's now, as a claim with
+    // nobody to ask is.
+    if (claim.kind === "claim" && claim.state === "asked" && claim.transactionId !== null && potSales.has(claim.transactionId)) {
+      if (await updateSaleClaim(db, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "no_side" }, now, { ifState: "asked" })) tally.escalated += 1;
       continue;
     }
     // A day of silence settles it for the one who asked (R-board §4): the sale stays with them; the side may still
@@ -343,7 +353,7 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
       // Who decides is `deciderOf` (services/teams.ts): the lead of the sale's model, the owner when the team has none,
       // when the lead is a side, and for the pot's and the ledger's questions. A lead's dispute carries no money of
       // people (the sale's amount is the team's, as on «Смены»); the owner's stays his alone as before.
-      ...disputeOwnerOf(teams, list, label === null ? null : pages.idOf.get(label) ?? null),
+      ...disputeOwnerOf(teams, list, label === null ? null : pages.idOf.get(label) ?? null, sale?.home?.home === "pot"),
       evidence: {
         transactionId: first.transactionId, claimIds: list.map((claim) => claim.id), netMills: sale?.netMills ?? null,
         why: [...new Set(list.map((claim) => claim.escalatedWhy))], saidAt: list.map((claim) => claim.claimedAt.toISOString()).sort()[0],
@@ -792,14 +802,15 @@ function requireOwnerSession(principal: HumanAuthPrincipal) {
  * продажа» — the lead of the model's team (not a side); a sale with no colleague to ask (the pot's, nobody's) and a
  * question carried over from the ledger — the owner.
  */
-export function disputeDeciderOf(facts: TeamFacts, claims: readonly SaleClaimRow[], pageId: number | null): Decider {
-  const kind = claims.some((claim) => claim.sideUserId === null || claim.kind === "imported" || claim.kind === "question") ? "pot" : "dispute";
+export function disputeDeciderOf(facts: TeamFacts, claims: readonly SaleClaimRow[], pageId: number | null, potSale = false): Decider {
+  // A sale of the pot is the owner's whoever claims it («по общаку решаю я»).
+  const kind = potSale || claims.some((claim) => claim.sideUserId === null || claim.kind === "imported" || claim.kind === "question") ? "pot" : "dispute";
   const sides = personsOfLogins(facts, claims.flatMap((claim) => [claim.claimantUserId, claim.sideUserId]));
   return deciderOf(facts, modelOfPageId(facts, pageId ?? claims.find((claim) => claim.pageId !== null)?.pageId ?? null), kind, sides);
 }
 
-function disputeOwnerOf(facts: TeamFacts, claims: readonly SaleClaimRow[], pageId: number | null): { owner: MatterOwner; money: boolean } {
-  const decider = disputeDeciderOf(facts, claims, pageId);
+function disputeOwnerOf(facts: TeamFacts, claims: readonly SaleClaimRow[], pageId: number | null, potSale = false): { owner: MatterOwner; money: boolean } {
+  const decider = disputeDeciderOf(facts, claims, pageId, potSale);
   return decider.kind === "team_lead" ? { owner: { userId: decider.userId }, money: false } : { owner: { role: "owner" }, money: true };
 }
 
@@ -808,7 +819,9 @@ async function requireDisputeDecider(app: ClaimsApp, principal: HumanAuthPrincip
   if (principal.user.role === "owner" && principal.narrowDeviceTokenId === undefined) return;
   if (principal.narrowDeviceTokenId !== undefined) throw new ForbiddenError("Only the owner decides");
   const facts = await teamFactsFor(app);
-  const decider = disputeDeciderOf(facts, claims, null);
+  const transactionId = claims.find((claim) => claim.transactionId !== null)?.transactionId ?? null;
+  const potSale = transactionId !== null && (await listHandinSalesByIds(app.db, [transactionId]))[0]?.home?.home === "pot";
+  const decider = disputeDeciderOf(facts, claims, null, potSale);
   const me = personOfLogin(facts, principal.user.id);
   if (decider.kind !== "team_lead" || me === null || decider.personId !== me) throw new ForbiddenError("Only the owner decides");
 }
