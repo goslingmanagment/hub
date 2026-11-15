@@ -581,7 +581,9 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & P
     // Settled: what it gives, for a line the person said something of or that counts either way. Another report of the
     // person holding it still counts it there, not here.
     const given = facts.settled?.get(one.sale.transactionId) ?? null;
-    const settled = given !== null && one.alreadyIn === null && (statement !== null || plain.amountMills > 0 || given.amountMills > 0) ? given : null;
+    // A decision settles the line whatever it counts now: the rule may have moved the sale off the person by it (a sale
+    // the owner gave a colleague is «Рядом» here), and what was handed in must take the decision, not the card (N3).
+    const settled = given !== null && one.alreadyIn === null && (statement !== null || plain.amountMills > 0 || given.amountMills > 0 || given.settled === "owner") ? given : null;
     // The person's own «моё» still open (`facts.waiting`): it waits, counting nothing, and says what it claims.
     const waits = settled === null && plain.amountMills > 0 && facts.waiting?.has(one.sale.transactionId) === true;
     if (waits) plain.claimedMills = plain.amountMills;
