@@ -45,7 +45,9 @@ const PAY_LINK_KEYS = new Set(["accrual", "payout"]);
 
 const today = new Date();
 const dayOf = (at: number) => new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
-const shiftStart = today.getTime() - DAY_MS - 4 * 3_600_000;
+// On a whole minute, as every time the fixture writes: the normaliser below tells the data's moments from the clock's
+// by that (a window counted back from the request's own now carries its seconds).
+const shiftStart = Math.floor((today.getTime() - DAY_MS - 4 * 3_600_000) / 60_000) * 60_000;
 
 function unwrap(schema: Zod): { schema: Zod; optional: boolean } {
   let current = schema;
@@ -80,7 +82,9 @@ function valueFor(name: string, schema: Zod): unknown {
   if (def.format === "date" || pattern.startsWith("^\\d{4}-\\d{2}-\\d{2}$")) return name === "to" ? dayOf(today.getTime()) : dayOf(today.getTime() - 2 * DAY_MS);
   if (def.format === "datetime" || pattern.includes("T\\d{2}")) {
     if (name === "at") return new Date(shiftStart + 60 * 60_000).toISOString();
-    return name === "to" ? new Date(today.getTime() + 2 * 3_600_000).toISOString() : new Date(today.getTime() - 2 * DAY_MS).toISOString();
+    // Whole minutes, as the fixture's moments: an answer that echoes them back keeps them as data (`normalize`).
+    const minute = Math.floor(today.getTime() / 60_000) * 60_000;
+    return name === "to" ? new Date(minute + 2 * 3_600_000).toISOString() : new Date(minute - 2 * DAY_MS).toISOString();
   }
   if (pattern.includes("(0[1-9]|1[0-2])")) return dayOf(today.getTime()).slice(0, 7);
   if (name === "pageLabel") return "bravo-1";
@@ -130,8 +134,12 @@ function normalize(value: unknown): unknown {
   }
   if (typeof value === "string" && ISO.test(value)) {
     // A moment of this run, or a window counted back from it by whole hours (`from` = now − 24 h): the clock, not data.
+    // The data's moments are whole minutes (the fixture writes them so); the clock's carry its seconds. Without that
+    // rule a data minute that happens to sit a whole number of hours back from the reading moment was taken for the
+    // clock in one read and not in the next, and a read looked as if it moved by itself.
     const at = Date.parse(value);
     if (at > Date.now() - 10 * 60_000) return "<now>";
+    if (at % 60_000 === 0) return value;
     const back = (Date.now() - at) % 3_600_000;
     if (back < 120_000 || back > 3_600_000 - 120_000) return "<clock>";
   }
@@ -293,16 +301,17 @@ describe("teams: who sees whom (package T)", () => {
       const response = await get(read.url, "olga");
       const after = `${response.statusCode} ${JSON.stringify(normalize(safeJson(response.body)))}`;
       if (ownerBefore.get(read.url) !== after) {
-        ownerChanged.push(read.key);
-        if (process.env.TEAMS_DIFF) console.log("DIFF", read.key, "\nBEFORE", ownerBefore.get(read.url)?.slice(0, 700), "\nAFTER ", after.slice(0, 700));
+        ownerChanged.push(`${read.key} at ${answerDiff(ownerBefore.get(read.url) ?? "", after).join(", ")}`);
       }
     }
-    expect(ownerChanged).toEqual([]);
+    expect(ownerChanged, ownerChanged.join("; ")).toEqual([]);
     // Only these may move by themselves between two of the owner's reads, by name: the live operations' minute
     // («Сейчас»), the OnlyFans API credits and spend counted to the second, and an observation payload read by a fresh
     // id. Every team read is among the proven ones.
     const MOVING = new Set(["opsLive", "adminOfapiCreditsSummary", "adminOfapiSpendComparison", "agentObservationPayload"]);
-    expect(reads.filter((read) => unstable.has(read.url) && !MOVING.has(read.key)).map((read) => read.key)).toEqual([]);
+    const moved = reads.filter((read) => unstable.has(read.url) && !MOVING.has(read.key))
+      .map((read) => `${read.key} at ${answerDiff(ownerFirst.get(read.url) ?? "", ownerBefore.get(read.url) ?? "").join(", ")}`);
+    expect(moved, moved.join("; ")).toEqual([]);
   }, 600_000);
 
   it("the team reads open for team A: both see its shifts, the lead opens a teammate's review, a chatter reads the team's people", async (context) => {
@@ -341,6 +350,27 @@ describe("teams: who sees whom (package T)", () => {
     await testDb.pool.query("update team_roles set revoked_at = now() where kind = 'view'");
   });
 });
+
+/** Where two answers («<status> <json>») differ: the JSON paths, each with both values, at most five. */
+function answerDiff(left: string, right: string): string[] {
+  const split = (answer: string) => [answer.slice(0, 3), safeJson(answer.slice(4))] as const;
+  const [leftStatus, leftBody] = split(left);
+  const [rightStatus, rightBody] = split(right);
+  if (leftStatus !== rightStatus) return [`status ${leftStatus} → ${rightStatus}`];
+  const out: string[] = [];
+  const walk = (a: unknown, b: unknown, path: string) => {
+    if (out.length >= 5) return;
+    if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+      for (const key of new Set([...Object.keys(a as object), ...Object.keys(b as object)])) {
+        walk((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], Array.isArray(a) ? `${path}[${key}]` : `${path}.${key}`);
+      }
+      return;
+    }
+    if (JSON.stringify(a) !== JSON.stringify(b)) out.push(`${path || "$"} ${JSON.stringify(a)?.slice(0, 80)} → ${JSON.stringify(b)?.slice(0, 80)}`);
+  };
+  walk(leftBody, rightBody, "");
+  return out;
+}
 
 function safeJson(body: string): unknown {
   try { return JSON.parse(body); } catch { return body; }
