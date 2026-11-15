@@ -52,6 +52,7 @@ import {
 } from "../services/errors.ts";
 import { sandboxOwnerRefusal } from "../services/sandbox/owner-operations.ts";
 import { teamLeadRefusal } from "../services/team-lead-reads.ts";
+import { contentManagerRefusal } from "../services/content-manager-operations.ts";
 import {
   buildRoutePolicyIndex,
   computeAuthPolicyVerdict,
@@ -507,6 +508,11 @@ export async function buildApiServer(appContext: AppContext) {
       const leadRefusal = teamLeadRefusal(entry.key, request.auth);
       if (leadRefusal) {
         throw leadRefusal;
+      }
+      // A content manager's login opens ContentOps alone: one table of what it may call (content-manager-operations.ts).
+      const contentManager = contentManagerRefusal(entry.key, request.auth);
+      if (contentManager) {
+        throw contentManager;
       }
     }
 

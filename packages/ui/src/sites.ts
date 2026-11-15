@@ -133,6 +133,16 @@ export function workboardEntryHref(origin: string, path: string): string {
 }
 
 /**
+ * Where a content manager's login is sent from any page of Hub's two names (products plan §4.1): ContentOps, signed
+ * in through Hub. ContentOps signs in on the console's name, so from the team's name the session crosses there first
+ * and the console sends it on; anywhere else, ContentOps' own entry at once.
+ */
+export function contentopsEntryHref(origin: string): string {
+  const hub = siteOf(origin) === "team" ? peerOriginOf(origin) : null;
+  return hub === null ? CONTENTOPS_SIGNIN_HREF : signInHopHref(hub, `${hub}/`);
+}
+
+/**
  * A Hub address (`/money/month`) as a page on `origin` opens it: from the team's name, on the console's name through
  * the one-time hand-off; anywhere else the address is this name's own.
  */

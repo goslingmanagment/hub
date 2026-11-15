@@ -76,6 +76,17 @@ export function waitingGroupOf(kind: string): WaitingGroupId {
 }
 
 /**
+ * The kinds ContentOps' «Ждут вас» shows of what Hub holds for a person (products plan §2.4, §4.4): its product's
+ * groups in the table above (content, publications), and a custom order's shooting late at the model — the customs
+ * group is Workboard's (the chat's side of an order), its shooting is ContentOps'.
+ */
+const CONTENTOPS_CUSTOM_KINDS: ReadonlySet<string> = new Set(["custom.overdue", "custom.overdue_owner"]);
+
+export function waitsInContentops(kind: string): boolean {
+  return waitingProductOf(kind) === "contentops" || CONTENTOPS_CUSTOM_KINDS.has(kind);
+}
+
+/**
  * The tone of what waits, beside its group (the one place): `bad` — something is broken (an open failure, a critical
  * failure of the extension, a page that needs sign-in, a routine that failed or went silent, a stale copy or a silent
  * reporter, a red check of the ledger); `warn` — the outcome is not known (a publication's, a held send's; and a group

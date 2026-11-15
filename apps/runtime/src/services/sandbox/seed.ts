@@ -33,7 +33,7 @@ const JOIN_ORIGIN = "https://chatgoose.gosling-agency.ru";
  * live stops the run before it writes (`SandboxSeedRefused`). Nothing here deletes.
  *
  * Passwords come from the environment at run time (`SANDBOX_PASSWORD_T_OWNER`, `…_T_LEAD`, `…_T_CHAT_1`,
- * `…_T_CHAT_2`), are never written to the repository and never printed. A login whose variable is not set keeps the
+ * `…_T_CHAT_2`, `…_T_KM`), are never written to the repository and never printed. A login whose variable is not set keeps the
  * password it has (none on the first run: it cannot sign in until one is given).
  *
  * Scenarios write the INPUTS of a day «now» and let the ordinary jobs build the rest (shift rows, whose a sale is,
@@ -54,7 +54,7 @@ export const SANDBOX_PAGES = [
   { label: "test-of", platform: "onlyfans" },
 ] as const;
 
-type LoginRole = "owner" | "team_lead" | "chatter";
+type LoginRole = "owner" | "team_lead" | "chatter" | "content_manager";
 
 interface SandboxPersonSpec {
   code: string;
@@ -80,8 +80,9 @@ export const SANDBOX_PEOPLE: readonly SandboxPersonSpec[] = [
     login: { username: "t-chat-2", role: "chatter", passwordEnv: "SANDBOX_PASSWORD_T_CHAT_2" } },
   { code: "t-new", displayName: "Тест: новичок", role: "chatter", state: "invited", works: true,
     login: { username: "t-new", role: "chatter", invited: true } },
-  // The content manager's sign-in role is not back yet: the person now, the login on a later run of a later seed.
-  { code: "t-km", displayName: "Тест: КМ", role: "content_manager", state: "working", works: false, login: null },
+  // The content manager's login opens ContentOps alone (content-manager-operations.ts); its models are the test one.
+  { code: "t-km", displayName: "Тест: КМ", role: "content_manager", state: "working", works: true,
+    login: { username: "t-km", role: "content_manager", passwordEnv: "SANDBOX_PASSWORD_T_KM" } },
 ];
 
 /**

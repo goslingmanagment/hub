@@ -34,9 +34,9 @@ const ROLE_OPTIONS: readonly { value: InviteRole; label: string }[] = [
   { value: "contractor", label: "Подрядчик" },
 ];
 
-/** Only who works in the chats signs in to Hub (the extension, Workboard). */
-function signsIn(role: InviteRole): role is "chatter" | "team_lead" {
-  return role === "chatter" || role === "team_lead";
+/** Who signs in through Hub: who works in the chats (the extension, Workboard) and a content manager (ContentOps). */
+function signsIn(role: InviteRole): role is "chatter" | "team_lead" | "content_manager" {
+  return role === "chatter" || role === "team_lead" || role === "content_manager";
 }
 
 const HANDLE = /^@?[A-Za-z0-9_]{3,64}$/;
@@ -116,7 +116,7 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
       workingPageLabels: working,
       ...(slotEmpty(slot) ? {} : { schedule: { from, slot: slotBody(slot) } }),
       ...(payTerms.length > 0 ? { payTerms } : {}),
-      ...(withLogin ? { invite: { username: login.trim(), role: role === "team_lead" ? "team_lead" as const : "chatter" as const, pageLabels: working, expiresInHours: daysToHours(days) } } : {}),
+      ...(withLogin ? { invite: { username: login.trim(), role: signsIn(role) ? role : "chatter" as const, pageLabels: working, expiresInHours: daysToHours(days) } } : {}),
     };
     create.mutate(body, {
       onSuccess: (created) => {
@@ -187,7 +187,9 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
           <span className="ui-field__label">Роль</span>
           <Segmented label="Роль" value={role} onChange={setRole} options={ROLE_OPTIONS} />
           <p className="ui-field__hint">
-            {withLogin
+            {role === "content_manager"
+              ? "Получит вход в ContentOps: план, приёмку и библиотеку моделей своих страниц. Ссылку на пароль вы отправите сами."
+              : withLogin
               ? "Получит вход в расширение и Workboard: ссылку на пароль вы отправите сами."
               : "Без входа в Hub: человек в реестре, со страницами и графиком, но расширение ему не нужно."}
           </p>

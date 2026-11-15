@@ -255,7 +255,8 @@ export const personInviteInputSchema = z.object({
     /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
     "username may contain latin letters, digits, dots, underscores and dashes",
   ),
-  role: z.enum(["chatter", "team_lead"]).optional(),
+  /** The login's role: a content manager's login opens ContentOps alone (products plan §4.1). */
+  role: z.enum(["chatter", "team_lead", "content_manager"]).optional(),
   /** The pages the login may open (access), which may be wider than the working pages. */
   pageLabels: z.array(z.string().min(1)).max(100),
   expiresInHours: z.number().int().min(1).max(720).optional(),

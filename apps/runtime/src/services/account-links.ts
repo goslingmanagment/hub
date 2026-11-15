@@ -156,7 +156,7 @@ export async function createInvite(
   app: AppContext,
   input: {
     username: string;
-    role?: "chatter" | "team_lead" | undefined;
+    role?: "chatter" | "team_lead" | "content_manager" | undefined;
     pageLabels: string[];
     expiresInHours?: number | undefined;
   },

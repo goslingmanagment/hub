@@ -4,7 +4,7 @@ import { useAuthMe, usePages } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { QueryNotice } from "@/components/shared/QueryNotice";
-import { CABINET_PATH, buildLoginRoute, hasHub, leavesTheConsole, workboardExit } from "@/lib/navigation";
+import { CABINET_PATH, buildLoginRoute, contentopsExit, hasHub, leavesTheConsole, opensContentopsOnly, workboardExit } from "@/lib/navigation";
 import { isChatterSite } from "@/lib/sites";
 import { LeaveForWorkboard } from "@/routes/ToWorkboard";
 import { ConsoleFrame } from "./ConsoleFrame.js";
@@ -59,6 +59,10 @@ function ConsoleLayout() {
   // have Workboard alone. Send them to its home — another product: a page
   // load — instead of a console that is not theirs; on the console's own name,
   // to that home on the team's name, signed in on the way.
+  // A content manager's login has ContentOps alone: on there, signed in through this name.
+  if (opensContentopsOnly(data.user.role)) {
+    return <LeaveForWorkboard href={contentopsExit()} words="Открываем ContentOps…" />;
+  }
   if (!hasHub(data.user.role)) {
     const exit = workboardExit();
     return leavesTheConsole(exit) ? <LeaveForWorkboard href={exit} /> : <Navigate to={exit} replace />;

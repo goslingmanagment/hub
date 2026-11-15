@@ -180,7 +180,7 @@ interface Rec {
 interface NewLogin {
   id: number;
   username: string;
-  role: "chatter" | "team_lead";
+  role: "chatter" | "team_lead" | "content_manager";
 }
 
 interface Registry {
@@ -294,7 +294,7 @@ function currentOf(slots: readonly PersonScheduleSlot[], today: string): PersonS
 
 function loginsOf(rec: Rec, reg: Registry, now: Date, scenario: string | undefined): Person["logins"] {
   const users = teamUsers();
-  return rec.logins.flatMap((id) => {
+  return rec.logins.flatMap((id): Person["logins"] => {
     const made = reg.logins.find((one) => one.id === id);
     if (made) return [{ userId: made.id, username: made.username, role: made.role, state: "invited" as const, lastSeenAt: null }];
     const user = users.find((one) => one.id === id);

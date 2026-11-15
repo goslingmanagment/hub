@@ -18,6 +18,9 @@
  *   TaskIndex, server-monitor) exchanges a code for «who is this» — and whether
  *   it is the owner — with its own agent key (`signin:<client>`), and re-checks
  *   that sign-in later. It never receives a Hub session token.
+ *   To ContentOps both answers carry the `person` (products plan §4.1): enough
+ *   to make, change and close its own person without a second registry; and
+ *   `authSsoWaiting` reads what waits in Hub for a person signed in that way.
  * - `authWebLink`: the extension's device token asks for a one-time link into
  *   the team's place (web-link-v1).
  */
@@ -27,6 +30,7 @@ import { userRoles } from "@agency_hub_core/shared";
 
 import type { AgentCapability } from "./agent-read-capabilities.ts";
 import { errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
+import { PRODUCTS } from "./products.ts";
 
 /** How long a minted code may be accepted or redeemed. */
 export const SIGNIN_CODE_TTL_SECONDS = 60;
@@ -99,6 +103,22 @@ export const authSsoRedeemBodySchema = z.object({
   code: codeParam,
 }).strict();
 
+/**
+ * The person behind a sign-in, as ContentOps needs it (products plan §4.1): the registry's code, name, role and state;
+ * the models of their working pages (lower-case slugs); the models where they lead customs («ведёт кастомы»); the
+ * products `auth/me` gives them (the frame's switcher). null — the login is nobody's in the registry. Sent to ContentOps
+ * only.
+ */
+export const signinPersonSchema = z.object({
+  code: z.string(),
+  displayName: z.string(),
+  role: z.string(),
+  state: z.string(),
+  models: z.array(z.string()),
+  customsModels: z.array(z.string()),
+  products: z.array(z.enum(PRODUCTS)),
+}).nullable();
+
 export const authSsoRedeemResponseSchema = z.object({
   user: signinUserSchema,
   /** The agency's owner (`user.role` is `owner`): TaskIndex and server-monitor open only for them. */
@@ -107,6 +127,8 @@ export const authSsoRedeemResponseSchema = z.object({
   grant: z.string(),
   /** When the Hub session behind it ends at the latest. */
   expiresAt: isoTimestamp,
+  /** ContentOps only: who this is in the registry. */
+  person: signinPersonSchema.optional(),
 });
 
 export const authSsoCheckBodySchema = z.object({
@@ -115,8 +137,27 @@ export const authSsoCheckBodySchema = z.object({
 }).strict();
 
 export const authSsoCheckResponseSchema = z.discriminatedUnion("active", [
-  z.object({ active: z.literal(true), user: signinUserSchema, owner: z.boolean(), expiresAt: isoTimestamp }),
+  z.object({ active: z.literal(true), user: signinUserSchema, owner: z.boolean(), expiresAt: isoTimestamp, person: signinPersonSchema.optional() }),
   /** Signed out, revoked, expired, or the person is deactivated: end the client's own session. */
+  z.object({ active: z.literal(false) }),
+]);
+
+export const authSsoWaitingBodySchema = authSsoCheckBodySchema;
+
+/** One open matter of the person, as ContentOps lists it: it opens where it is decided (`link`). */
+export const signinWaitingMatterSchema = z.object({
+  id: intId,
+  kind: z.string(),
+  title: z.string(),
+  /** Where it is decided: a path of Hub or Workboard, or an address of ContentOps; null — the list in Hub. */
+  link: z.string().nullable(),
+  pageLabels: z.array(z.string()),
+  openedAt: isoTimestamp,
+});
+
+export const authSsoWaitingResponseSchema = z.discriminatedUnion("active", [
+  z.object({ active: z.literal(true), matters: z.array(signinWaitingMatterSchema), serverNow: isoTimestamp }),
+  /** The sign-in is over: nothing to read. */
   z.object({ active: z.literal(false) }),
 ]);
 
@@ -133,6 +174,8 @@ export const authWebLinkResponseSchema = z.object({
 
 export type AuthSsoRedeemResponse = z.infer<typeof authSsoRedeemResponseSchema>;
 export type AuthSsoCheckResponse = z.infer<typeof authSsoCheckResponseSchema>;
+export type SigninPerson = z.infer<typeof signinPersonSchema>;
+export type AuthSsoWaitingResponse = z.infer<typeof authSsoWaitingResponseSchema>;
 export type AuthWebLinkResponse = z.infer<typeof authWebLinkResponseSchema>;
 
 export const signinRouteSchemas = {
@@ -206,6 +249,21 @@ export const signinRouteSchemas = {
     body: authSsoCheckBodySchema,
     response: {
       200: authSsoCheckResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      429: errorResponseSchema,
+    },
+  },
+  authSsoWaiting: {
+    auth: { kind: "agentKey" },
+    tags: ["auth"],
+    summary: "What waits in Hub for the person of a live sign-in, for ContentOps' «Ждут вас» (needs signin:contentops)",
+    description: "Reads only. The person's own open matters whose kind ContentOps shows (waiting-groups.ts "
+      + "`waitsInContentops`): the owner's also those of the owner's role. Inactive once the sign-in is over.",
+    body: authSsoWaitingBodySchema,
+    response: {
+      200: authSsoWaitingResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,

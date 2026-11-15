@@ -62,7 +62,7 @@ export function productLinks(products: readonly Product[] | undefined, here: Scr
 }
 
 /** The account's role under its name. */
-const ROLE_WORDS: Readonly<Record<string, string>> = { owner: "Владелец", team_lead: "Тимлид", chatter: "Чаттер" };
+const ROLE_WORDS: Readonly<Record<string, string>> = { owner: "Владелец", team_lead: "Тимлид", chatter: "Чаттер", content_manager: "Контент-менеджер" };
 
 export function roleWord(role: string | null | undefined): string {
   return ROLE_WORDS[role ?? ""] ?? "Сотрудник";

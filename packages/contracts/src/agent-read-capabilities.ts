@@ -117,6 +117,8 @@ export const AGENT_CAPABILITIES = [
    * the owner, never a Hub session token — and re-checks that sign-in later
    * (`authSsoRedeem`, `authSsoCheck`; ecosystem plan §3.2). Reads nothing of a
    * page: the key's page grant does not widen it. SIGNIN_CLIENT_CAPABILITIES.
+   * ContentOps' answers also carry the person in the registry, and it reads
+   * what waits for a person it signed in (`authSsoWaiting`, products plan §4.1).
    */
   "signin:contentops",
   "signin:taskindex",

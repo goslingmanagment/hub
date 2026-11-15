@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Button, EmptyState, ErrorState, Spinner } from "@agency_hub_core/ui";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
-import { peerOriginOf, signInHopHref, siteOf } from "@agency_hub_core/ui/sites";
+import { contentopsEntryHref, peerOriginOf, signInHopHref, siteOf } from "@agency_hub_core/ui/sites";
 import { signInHref } from "@/shared/hub";
 import { useMe } from "@/shared/useMe";
 
@@ -45,12 +45,31 @@ export function AuthGate({ children }: { children: ReactNode }) {
     );
   }
 
+  // A content manager's login has ContentOps alone (products plan §4.1): no Workboard screen is theirs. The way goes
+  // through the console's name, where ContentOps signs in — the same after «/join» sets the password.
+  if (me.data?.user.role === "content_manager") {
+    return <ToContentOps />;
+  }
+
   const team = siteOf(window.location.origin) === "console" ? peerOriginOf(window.location.origin) : null;
   if (team !== null) {
     return <ToTeamsName team={team} />;
   }
 
   return <>{children}</>;
+}
+
+/** A content manager: ContentOps, signed in through Hub (a page load). */
+function ToContentOps() {
+  useEffect(() => {
+    window.location.replace(contentopsEntryHref(window.location.origin));
+  }, []);
+  return (
+    <div className="wb-gate" role="status">
+      <Spinner />
+      <span>Открываем ContentOps…</span>
+    </div>
+  );
 }
 
 /** Anyone on the console's name: the same screen on the team's name, signed in on the way (a page load). */
