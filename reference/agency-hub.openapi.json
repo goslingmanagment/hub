@@ -305574,8 +305574,15 @@
                               "nobody",
                               "dismiss",
                               "pot",
-                              "return"
+                              "return",
+                              "give",
+                              "split",
+                              "rule"
                             ]
+                          },
+                          "key": {
+                            "default": "",
+                            "type": "string"
                           },
                           "label": {
                             "type": "string"
@@ -305602,12 +305609,38 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "shares": {
+                            "default": [],
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "userId": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "percent": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              },
+                              "required": [
+                                "userId",
+                                "percent"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
                           "outcome",
+                          "key",
                           "label",
-                          "gives"
+                          "gives",
+                          "shares"
                         ],
                         "additionalProperties": false
                       }
@@ -305944,8 +305977,43 @@
                       "nobody",
                       "dismiss",
                       "pot",
-                      "return"
+                      "return",
+                      "give",
+                      "split",
+                      "rule"
                     ]
+                  },
+                  "shares": {
+                    "maxItems": 3,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "userId": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "percent": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "userId",
+                        "percent"
+                      ]
+                    }
+                  },
+                  "seenSides": {
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
                   },
                   "note": {
                     "anyOf": [
@@ -306911,8 +306979,15 @@
                               "nobody",
                               "dismiss",
                               "pot",
-                              "return"
+                              "return",
+                              "give",
+                              "split",
+                              "rule"
                             ]
+                          },
+                          "key": {
+                            "default": "",
+                            "type": "string"
                           },
                           "label": {
                             "type": "string"
@@ -306939,12 +307014,38 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "shares": {
+                            "default": [],
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "userId": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "percent": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 100
+                                }
+                              },
+                              "required": [
+                                "userId",
+                                "percent"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
                           "outcome",
+                          "key",
                           "label",
-                          "gives"
+                          "gives",
+                          "shares"
                         ],
                         "additionalProperties": false
                       }

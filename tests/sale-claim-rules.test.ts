@@ -4,6 +4,8 @@ import {
   claimStands,
   decisionOfOutcome,
   deriveClaims,
+  disputeAnswersOf,
+  disputeSidesOf,
   reportSums,
   ruleDecisionOf,
   ruleMarksOf,
@@ -261,3 +263,28 @@ describe("what a settlement gives, in mills", () => {
     });
   });
 });
+
+describe("the sides of a disputed sale and the decider's answers (review round 2, N1–N3)", () => {
+  it("names the askers by the question's number, then the holders, the questions' sides and whoever counts it — each once", () => {
+    const claims = [
+      { id: 51, claimantUserId: 36, sideUserId: null, state: "owner" },
+      { id: 47, claimantUserId: 37, sideUserId: null, state: "owner" },
+      { id: 40, claimantUserId: 38, sideUserId: 39, state: "withdrawn" },
+    ];
+    expect(disputeSidesOf({ claims, holders: [], counting: [] })).toEqual([37, 36]);
+    expect(disputeSidesOf({ claims: [{ id: 5, claimantUserId: 2, sideUserId: 3, state: "owner" }], holders: [3, 4], counting: [1, 4] })).toEqual([2, 3, 4, 1]);
+  });
+
+  it("gives each side whole, each pair in halves, the pot's own answer, and «никому»; never a place in a list", () => {
+    const pot = disputeAnswersOf({ sides: [37, 36], pot: true, ruleNamesSomeone: false });
+    expect(pot.map((one) => [one.outcome, one.shares])).toEqual([
+      ["give", [{ userId: 37, percent: 100 }]],
+      ["give", [{ userId: 36, percent: 100 }]],
+      ["split", [{ userId: 36, percent: 50 }, { userId: 37, percent: 50 }]],
+      ["pot", []],
+      ["nobody", []],
+    ]);
+    expect(disputeAnswersOf({ sides: [2], pot: false, ruleNamesSomeone: true }).map((one) => one.outcome)).toEqual(["give", "rule", "nobody"]);
+  });
+});
+

@@ -772,6 +772,7 @@ export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: st
     case "second": return "решение владельца по спору о продаже";
     case "half": return "решение владельца: пополам";
     case "nobody": return "решение владельца: никому";
+    case "pot": return "решение владельца: в общак";
     default: return null;
   }
 }

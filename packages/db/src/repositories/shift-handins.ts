@@ -389,7 +389,7 @@ export interface HandinVersionOffPlatform {
  * the owner — or the owner's word on «мимо площадки». Null — the person handed it in.
  */
 export type HandinVersionMadeFor =
-  | { kind: "claim"; claimId: number; transactionId: number; outcome: "agreed" | "first" | "second" | "half" | "nobody" }
+  | { kind: "claim"; claimId: number; transactionId: number; outcome: "agreed" | "first" | "second" | "half" | "nobody" | "pot" }
   | { kind: "off_platform"; offPlatformId: number; decision: "confirmed" | "rejected" }
   /**
    * A decision about the sale recorded «со слов» through the agent's door (review R2b-3): `said` — made, the version
