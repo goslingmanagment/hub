@@ -41,7 +41,7 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
 import { draftFacts, draftLines, linesPageSums, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
-import { gengarState, mayAct, signedLines, type BoardActor } from "./shift-report-phases.ts";
+import { gengarState, holdsSale, mayAct, signedLines, type BoardActor } from "./shift-report-phases.ts";
 
 /**
  * The «Отчёт» board as a reader sees it (products plan 2026-11-13, package R; the contract shift-report-board.ts): a
@@ -197,14 +197,19 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   const cut = input.cutTo;
   const visible = (label: string | null) => label !== null && (cut === null || cut.has(label));
   base = base.filter((line) => line.transactionId !== null && visible(line.pageLabel));
-  const baseIds = new Set(base.map((line) => line.transactionId!));
 
-  // «После сдачи»: the person's by the rule and not in what is checked or counted — it came after the hand-in, or Hub
-  // received it after (a candidate holds every sale the draft had at its cutoff).
+  // «После сдачи»: the person's by the rule and not held by what is checked or counted — it came after the hand-in, Hub
+  // received it after (a candidate holds every sale the draft had at its cutoff), or it lies there at $0 with nothing on
+  // it and the rule gave it to the person since (a colleague's «отдать», a decision): `holdsSale`.
+  const heldIds = new Set(base.filter(holdsSale).map((line) => line.transactionId!));
   const late = own && !preview && phase !== "draft" && phase !== "fixing" && candidate !== null && input.draft !== null
-    ? input.draft.filter((line) => line.transactionId !== null && !baseIds.has(line.transactionId) && line.group === "mine" && line.amountMills > 0
+    ? input.draft.filter((line) => line.transactionId !== null && !heldIds.has(line.transactionId) && line.group === "mine" && line.amountMills > 0
       && visible(line.pageLabel))
     : [];
+  // Its $0 line gives way to the row «после сдачи».
+  const lateIds = new Set(late.map((line) => line.transactionId!));
+  base = base.filter((line) => !lateIds.has(line.transactionId!));
+  const baseIds = new Set(base.map((line) => line.transactionId!));
   // Rows Hub's re-read added: the candidate re-made at the same cutoff names what the one before lacked.
   const previousCandidate = candidate === null ? null : candidates.find((one) => one.supersededBy === candidate.id && one.cutoffAt.getTime() === candidate.cutoffAt.getTime()) ?? null;
   const foundIds = new Set(previousCandidate === null || candidate === null ? [] : candidate.lines

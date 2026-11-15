@@ -127,6 +127,19 @@ describe("the report's window and sales added by hand", () => {
     expect(slotWindowOf(slots, { userIds: new Set([OTHER]), startedAt: 0, endedAt: 1 })).toBeNull();
   });
 
+  it("gives no window and no pages from a slot the person was taken off for the day (a swap's «off» line acts on its own hours)", () => {
+    const standing = { personId: ME, pageId: 11, startMinute: 18 * 60, endMinute: 2 * 60, weekdays: null, validFrom: null, validTo: null };
+    const off = { ...standing, validFrom: "2026-11-09", validTo: "2026-11-09", day: "off" as const };
+    const shift = { userIds: new Set([ME]), startedAt: Date.parse("2026-11-09T19:53:00+03:00"), endedAt: Date.parse("2026-11-10T02:04:00+03:00") };
+    expect(slotWindowOf([standing, off], shift)).toBeNull();
+    // Taken off for 18:00–20:00 only: the rest of the slot runs.
+    expect(slotWindowOf([standing, { ...off, endMinute: 20 * 60 }], shift))
+      .toEqual({ from: Date.parse("2026-11-09T20:00:00+03:00"), to: Date.parse("2026-11-10T02:00:00+03:00"), pageIds: [11] });
+    // The next day the standing slot runs again.
+    const next = { ...shift, startedAt: shift.startedAt + 86_400_000, endedAt: shift.endedAt + 86_400_000 };
+    expect(slotWindowOf([standing, off], next)).toEqual({ from: Date.parse("2026-11-10T18:00:00+03:00"), to: Date.parse("2026-11-11T02:00:00+03:00"), pageIds: [11] });
+  });
+
   it("shows a sale nobody held in the report's window nearby, «ничья», and «моё» counts it plainly", () => {
     const nobody = sale({
       transactionId: 21, heldByShift: false, inReportWindow: true, netMills: 4_000,

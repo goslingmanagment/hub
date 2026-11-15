@@ -183,7 +183,7 @@ export async function listOpenPotOffers(db: Database): Promise<Array<{ handinId:
 
 /**
  * «После сдачи», cheaply: for each counted report, how many sales the rule gives the person on that shift (`sale_homes`
- * shares naming the shift) that its newest version does not hold.
+ * shares naming the shift) that its newest version does not hold (no line, or a $0 line with nothing on it).
  */
 export async function countLateSales(db: Database, input: { since: Date }): Promise<Array<{ handinId: number; lateSales: number; current: number }>> {
   const result = await db.execute<Row>(sql`
@@ -195,7 +195,10 @@ export async function countLateSales(db: Database, input: { since: Date }): Prom
       and s.occurred_at < sh.ended_at + interval '7 days'
       and exists (select 1 from jsonb_array_elements(s.shares) as share
         where (share ->> 'shiftId') = h.shift_id::text and coalesce((share ->> 'mills')::bigint, 0) > 0)
-      and not exists (select 1 from jsonb_array_elements(v.lines) as line where (line ->> 'transactionId') = s.transaction_id::text)
+      -- A line holds its sale when it counts it or says something of it (runtime shift-report-phases.ts, holdsSale).
+      and not exists (select 1 from jsonb_array_elements(v.lines) as line where (line ->> 'transactionId') = s.transaction_id::text
+        and (coalesce((line ->> 'amountMills')::bigint, 0) > 0 or (line ->> 'statement') is not null
+          or coalesce((line ->> 'disputed')::boolean, false) or (line ->> 'settled') is not null))
     where h.state = 'submitted' and sh.started_at >= ${input.since.toISOString()}::timestamptz
     group by h.id, h.late_sales`);
   return result.rows.map((row) => ({ handinId: num(row.handin_id), lateSales: num(row.n), current: num(row.current) }));

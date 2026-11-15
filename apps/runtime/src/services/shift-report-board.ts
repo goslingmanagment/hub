@@ -93,7 +93,7 @@ import {
   type PageCatalog,
   type Subject,
 } from "./shift-handins.ts";
-import { checkLetsConfirm, lineWithProposal, lineWithWord, mayAct, proposalDelta, type BoardAction } from "./shift-report-phases.ts";
+import { checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, proposalDelta, type BoardAction } from "./shift-report-phases.ts";
 import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
 
 /**
@@ -403,8 +403,10 @@ export async function resendShiftReport(
     if (latest === undefined) throw new NotFoundError("Nothing counted yet");
     const marks = await listHandinMarks(db, locked.id);
     const draft = draftLines(await draftFacts(db, subject, locked, catalog, now, marks), marks);
-    // Held: any line of the counted version (a word of the person's, even «не моё», keeps it theirs to change by «Исправить»).
-    const held = new Set(latest.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])));
+    // Held: a line of the counted version that counts the sale or says something of it (a word of the person's, even
+    // «не моё», keeps it theirs to change by «Исправить»). A $0 line with nothing on it holds nothing (`holdsSale`): the
+    // sale the rule gave the person since is taken here, in its place.
+    const held = new Set(latest.lines.filter(holdsSale).flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])));
     const open = await listSaleClaims(db, { transactionIds: [...input.transactionIds], states: ["asked", "owner"] });
     const take: HandinVersionLine[] = [];
     for (const id of new Set(input.transactionIds)) {
@@ -469,6 +471,12 @@ export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, in
     };
     const existing = (await listSaleClaims(db, { transactionIds: [input.body.transactionId] }))
       .find((claim) => claim.claimantHandinId === handin.id && (claim.sideUserId ?? 0) === (side ?? 0));
+    // Settled — agreed (by an answer or a day of silence) or decided: its terms made the reports' versions; a new word
+    // here would change one side's share and not the other's. The sale's terms change only by the decider now.
+    const changes = existing !== undefined && (existing.statement !== fields.statement || (existing.shareWithUserId ?? null) !== fields.shareWithUserId);
+    if (existing !== undefined && changes && (existing.state === "agreed" || existing.state === "decided")) {
+      throw new ConflictError("This sale is already settled: only the decider changes it now", { reason: "claim_settled" });
+    }
     if (existing !== undefined) {
       if (existing.state === "withdrawn") await reopenSaleClaim(db, existing.id, fields, now);
       else await updateSaleClaim(db, existing.id, { claimantNote: note, statement: fields.statement, shareWithUserId: fields.shareWithUserId }, now);
