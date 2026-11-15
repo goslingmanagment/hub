@@ -5,7 +5,9 @@ import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { AGENT_KEY_TOKEN_PREFIX, SESSION_COOKIE_NAME, authenticateSessionToken, createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import {
+  AGENT_KEY_TOKEN_PREFIX, LOGIN_BACKOFF_FREE_FAILURES, SESSION_COOKIE_NAME, authenticateSessionToken, createUserAccount, setUserPassword,
+} from "../apps/runtime/src/services/auth.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
@@ -156,5 +158,78 @@ describe("a content manager", () => {
       payload: { username: "kira", password: "a-strong-password-for-tests", label: "Firefox · Windows", mode: "active" },
     });
     expect(device.statusCode).toBe(403);
+  });
+});
+
+describe("ContentOps' own entrance (package C4)", () => {
+  const door = (path: string, payload: object) =>
+    request("POST", `${HUB}/api/v1/auth/sso/${path}`, { headers: { authorization: `Bearer ${KEY}` }, payload: { client: "contentops", ...payload } });
+  const signIn = (username: string, password: string) =>
+    door("password", { username, password, ip: "203.0.113.7", userAgent: "Firefox · Windows" });
+
+  it("signs a content manager in by login and password: the person and a grant, journaled as via ContentOps", async (context) => {
+    if (!server) return context.skip();
+    const created = await request("POST", `${HUB}/api/v1/admin/people`, {
+      session: ownerCookie,
+      headers: { origin: HUB },
+      payload: {
+        code: "lina", displayName: "Лина", role: "content_manager", state: "invited", workingPageLabels: ["mia-1"],
+        invite: { username: "lina", role: "content_manager", pageLabels: ["mia-1"] },
+      },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const token = created.json<{ invite: { link: { token: string } } }>().invite.link.token;
+
+    // The invitation ends on ContentOps' page: the password is set in the registry, the person is signed in.
+    const joined = await door("link", { token, password: "a-strong-password-for-lina" });
+    expect(joined.json()).toMatchObject({ result: "signed_in", user: { username: "lina" }, person: { code: "lina", products: ["contentops"] } });
+    expect((await door("link", { token, password: "a-strong-password-for-lina" })).json()).toMatchObject({ result: "refused", reason: "link_used" });
+
+    const signed = await signIn("lina", "a-strong-password-for-lina");
+    expect(signed.statusCode, signed.body).toBe(200);
+    expect(signed.json()).toMatchObject({ result: "signed_in", owner: false, user: { username: "lina" }, person: { models: ["mia"] } });
+    const grant = signed.json<{ grant: string }>().grant;
+    const check = await door("check", { grant });
+    expect(check.json()).toMatchObject({ active: true, user: { username: "lina" } });
+    const journal = await testDb!.pool.query<{ metadata: Record<string, unknown> }>(
+      "select metadata from audit_events where event_type = 'auth.login' and metadata->>'username' = 'lina' order by id desc limit 1");
+    expect(journal.rows[0]?.metadata).toMatchObject({ via: "contentops", ip: "203.0.113.7" });
+    expect(JSON.stringify(journal.rows)).not.toContain("a-strong-password");
+
+    // «Выйти» on ContentOps ends the session its page opened, and the grant with it.
+    expect((await door("logout", { grant })).json()).toEqual({ ended: true });
+    expect((await door("check", { grant })).json()).toEqual({ active: false });
+  });
+
+  it("answers one word for an unknown login and a wrong password, and locks after Hub's own number of tries", async (context) => {
+    if (!server) return context.skip();
+    expect((await signIn("nobody-here", "whatever-password")).json()).toEqual({ result: "refused", reason: "wrong" });
+    let last: unknown = null;
+    for (let i = 0; i < LOGIN_BACKOFF_FREE_FAILURES; i += 1) last = (await signIn("lina", "not-her-password")).json();
+    expect(last).toEqual({ result: "refused", reason: "wrong" });
+    // Locked now, the right password too, as on Hub's own page.
+    expect((await signIn("lina", "a-strong-password-for-lina")).json()).toEqual({ result: "refused", reason: "locked" });
+  });
+
+  it("refuses the owner before the password, and a person without ContentOps after it", async (context) => {
+    if (!server) return context.skip();
+    expect((await signIn("boss", "boss-password-for-tests")).json()).toEqual({ result: "refused", reason: "owner" });
+    expect((await signIn("boss", "anything")).json()).toEqual({ result: "refused", reason: "owner" });
+    await createUserAccount(app, { username: "chatty", role: "chatter" }, { source: "cli" });
+    await setUserPassword(app, { userId: await fixtureUserId(app, "chatty"), password: "chatty-password-for-tests" }, { source: "cli" });
+    expect((await signIn("chatty", "chatty-password-for-tests")).json()).toEqual({ result: "refused", reason: "no_access" });
+    expect((await signIn("chatty", "wrong-password-here")).json()).toEqual({ result: "refused", reason: "wrong" });
+  });
+
+  it("does not sign out a session the person opened in Hub themselves", async (context) => {
+    if (!server) return context.skip();
+    const hubSession = sessionOf(await request("POST", `${HUB}/api/v1/auth/login`, {
+      headers: { origin: HUB }, payload: { username: "kira", password: "a-strong-password-for-tests" },
+    }));
+    const minted = await request("GET", `${HUB}/api/v1/auth/sso?${new URLSearchParams({ to: "contentops", state: "client-state-0123456789", next: "/" })}`, { session: hubSession });
+    const code = new URL(String(minted.headers.location)).searchParams.get("code")!;
+    const grant = (await door("redeem", { code })).json<{ grant: string }>().grant;
+    expect((await door("logout", { grant })).json()).toEqual({ ended: false });
+    expect((await request("GET", `${HUB}/api/v1/auth/me`, { session: hubSession })).statusCode).toBe(200);
   });
 });

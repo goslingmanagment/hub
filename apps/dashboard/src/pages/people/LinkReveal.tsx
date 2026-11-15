@@ -22,12 +22,14 @@ export interface RevealedLink {
   expiresAt: string;
   /** How the agency calls the person: the message greets them by it. */
   name?: string;
+  /** The login's role: a content manager's link opens ContentOps (products plan C4). */
+  role?: string;
 }
 
 export function LinkReveal({ link, onClose }: { link: RevealedLink; onClose: () => void }) {
   const [copied, setCopied] = useState<"link" | "message" | null>(null);
-  const joinLink = buildJoinLink(currentOrigin(), link.secret);
-  const message = telegramMessage(link.kind, link.username, joinLink, link.name);
+  const joinLink = buildJoinLink(currentOrigin(), link.secret, link.role);
+  const message = telegramMessage(link.kind, link.username, joinLink, link.name, link.role);
 
   async function copy(value: string, what: "link" | "message") {
     try {

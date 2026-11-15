@@ -1865,6 +1865,8 @@ export const authSessions = pgTable(
     /** 0388: a NARROW web session's device token (opened from the extension); null — a full session. */
     narrowDeviceTokenId: bigint("narrow_device_token_id", { mode: "number" })
       .references((): AnyPgColumn => deviceTokens.id, { onDelete: "cascade" }),
+    /** 0423: the service whose own page opened this session (`contentops`); null — Hub's own pages. */
+    openedBy: text("opened_by"),
   },
   (table) => ({
     userIdx: index("auth_sessions_user_idx").on(table.userId),

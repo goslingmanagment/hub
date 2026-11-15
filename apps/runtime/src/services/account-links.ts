@@ -410,6 +410,8 @@ const CONFLICT_MESSAGES: Record<Exclude<AccountLinkState, "active">, string> = {
 export async function redeemAccountLink(
   app: AppContext,
   input: { token: string; password: string },
+  /** Another service's page redeems the link (products plan C4): its session is marked, the journal says where. */
+  via?: { openedBy: "contentops"; ip?: string | undefined; userAgent?: string | undefined; onlyRoles?: readonly string[] },
 ) {
   if (!(await accountLinksEnabled(app))) {
     throw new NotFoundError();
@@ -449,6 +451,10 @@ export async function redeemAccountLink(
     if (user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) {
       throw new ConflictError(CONFLICT_MESSAGES.revoked, { reason: "revoked" });
     }
+    // Another service redeems only the links of its own people (a content manager's on ContentOps' page).
+    if (via?.onlyRoles !== undefined && !via.onlyRoles.includes(user.role)) {
+      throw new ConflictError("This link opens elsewhere", { reason: "not_here" });
+    }
 
     await updateUserPasswordHash(dbTx, user.id, passwordHash);
     await markAccountLinkUsed(dbTx, link.id, now);
@@ -486,14 +492,22 @@ export async function redeemAccountLink(
     // /join signs the person in at once (ecosystem plan §3.2 p.6): the session
     // is made here, after the old sign-ins were ended, in the same transaction
     // as the password — a redeem that rolls back leaves no session behind.
-    const session = await createWebSessionTx(app, dbTx, { userId: user.id });
+    const session = await createWebSessionTx(app, dbTx, { userId: user.id, ...(via ? { openedBy: via.openedBy } : {}) });
     await recordAudit({ db: dbTx }, {
       source: "api",
       actorUserId: user.id,
       targetUserId: user.id,
       eventType: "auth.login",
-      metadata: { username: user.username, via: "account_link" },
+      metadata: {
+        username: user.username,
+        via: via ? `account_link:${via.openedBy}` : "account_link",
+        ...(via?.ip ? { ip: via.ip } : {}),
+        ...(via?.userAgent ? { userAgent: via.userAgent } : {}),
+      },
     });
-    return { username: user.username, sessionToken: session.sessionToken, sessionExpiresAt: session.expiresAt };
+    return {
+      username: user.username, userId: user.id, sessionId: session.sessionId,
+      sessionToken: session.sessionToken, sessionExpiresAt: session.expiresAt,
+    };
   });
 }

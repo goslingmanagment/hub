@@ -161,6 +161,67 @@ export const authSsoWaitingResponseSchema = z.discriminatedUnion("active", [
   z.object({ active: z.literal(false) }),
 ]);
 
+/**
+ * ContentOps' own entrance (products plan, package C4): its server signs a person in by the login and the password
+ * they typed on ContentOps' page — the same sign-in as Hub's own page (lockout, journal) — and gets what `authSsoRedeem`
+ * gives. The person's address and browser come along for the journal; the password is never logged or kept.
+ */
+const clientOrigin = {
+  /** The person's address as ContentOps saw it (for the journal). */
+  ip: z.string().max(64).optional(),
+  /** The person's browser as ContentOps saw it (for the journal). */
+  userAgent: z.string().max(512).optional(),
+};
+
+export const authSsoPasswordBodySchema = z.object({
+  client: signinClientNameSchema,
+  username: z.string().min(1).max(100),
+  password: z.string().min(1).max(256),
+  ...clientOrigin,
+}).strict();
+
+/**
+ * Why a sign-in on another service's page was refused, in one word each: `wrong` — an unknown login or a wrong
+ * password, one answer for both; `locked` — too many tries, wait; `owner` — the owner's password never passes through
+ * another service: the owner enters through Hub; `no_access` — the person has no ContentOps; `link_unknown`,
+ * `link_used`, `link_expired`, `link_revoked` — an invitation or a new password's link that cannot be used;
+ * `not_here` — a link of a login that opens elsewhere; `weak` — a password Hub does not take (`message` says why).
+ */
+export const SIGNIN_REFUSALS = [
+  "wrong", "locked", "owner", "no_access", "link_unknown", "link_used", "link_expired", "link_revoked", "not_here", "weak",
+] as const;
+
+export const authSsoSignedInResponseSchema = z.discriminatedUnion("result", [
+  authSsoRedeemResponseSchema.extend({ result: z.literal("signed_in") }),
+  z.object({ result: z.literal("refused"), reason: z.enum(SIGNIN_REFUSALS), message: z.string().optional() }),
+]);
+
+export const authSsoLinkBodySchema = z.object({
+  client: signinClientNameSchema,
+  /** The secret of an invitation or of a new password's link (`/join#…`). */
+  token: z.string().min(1).max(256),
+  password: z.string().min(1).max(256),
+  ...clientOrigin,
+}).strict();
+
+export const authSsoPasswordChangeBodySchema = z.object({
+  client: signinClientNameSchema,
+  grant: z.string().min(1).max(128),
+  currentPassword: z.string().min(1).max(256),
+  newPassword: z.string().min(8).max(256),
+  ...clientOrigin,
+}).strict();
+
+export const authSsoLogoutBodySchema = z.object({
+  client: signinClientNameSchema,
+  grant: z.string().min(1).max(128),
+}).strict();
+
+export const authSsoLogoutResponseSchema = z.object({
+  /** A Hub session the service's own page opened is ended; one the person opened in Hub stays. */
+  ended: z.boolean(),
+});
+
 export const authWebLinkBodySchema = z.object({
   /** A path of the team's place to open (`/workboard/my/shifts`); absent — Workboard's home. */
   next: nextParam.optional(),
@@ -176,6 +237,8 @@ export type AuthSsoRedeemResponse = z.infer<typeof authSsoRedeemResponseSchema>;
 export type AuthSsoCheckResponse = z.infer<typeof authSsoCheckResponseSchema>;
 export type SigninPerson = z.infer<typeof signinPersonSchema>;
 export type AuthSsoWaitingResponse = z.infer<typeof authSsoWaitingResponseSchema>;
+export type AuthSsoSignedInResponse = z.infer<typeof authSsoSignedInResponseSchema>;
+export type SigninRefusal = (typeof SIGNIN_REFUSALS)[number];
 export type AuthWebLinkResponse = z.infer<typeof authWebLinkResponseSchema>;
 
 export const signinRouteSchemas = {
@@ -264,6 +327,66 @@ export const signinRouteSchemas = {
     body: authSsoWaitingBodySchema,
     response: {
       200: authSsoWaitingResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      429: errorResponseSchema,
+    },
+  },
+  authSsoPassword: {
+    auth: { kind: "agentKey" },
+    tags: ["auth"],
+    summary: "ContentOps' own page signs a person in by login and password (needs signin:contentops)",
+    description: "The same sign-in as Hub's own page: lockout and journal (`auth.login`, via contentops). The owner role is refused "
+      + "(`owner`): the owner enters through Hub. A person without ContentOps is refused (`no_access`) after the password. "
+      + "Signed in: what `authSsoRedeem` answers.",
+    body: authSsoPasswordBodySchema,
+    response: {
+      200: authSsoSignedInResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      429: errorResponseSchema,
+    },
+  },
+  authSsoLink: {
+    auth: { kind: "agentKey" },
+    tags: ["auth"],
+    summary: "ContentOps' own page sets the password of an invitation or a reset link and signs the person in (needs signin:contentops)",
+    description: "The same redemption as Hub's `/join`, for a login whose only product is ContentOps (else `not_here`). Signed in: "
+      + "what `authSsoRedeem` answers.",
+    body: authSsoLinkBodySchema,
+    response: {
+      200: authSsoSignedInResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      429: errorResponseSchema,
+    },
+  },
+  authSsoPasswordChange: {
+    auth: { kind: "agentKey" },
+    tags: ["auth"],
+    summary: "A person changes their password from ContentOps' profile (needs signin:contentops)",
+    description: "The same change as Hub's own: every sign-in of the person ends; the person is signed in again here with the new "
+      + "password and a new grant comes back.",
+    body: authSsoPasswordChangeBodySchema,
+    response: {
+      200: authSsoSignedInResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      429: errorResponseSchema,
+    },
+  },
+  authSsoLogout: {
+    auth: { kind: "agentKey" },
+    tags: ["auth"],
+    summary: "ContentOps' «Выйти»: ends the Hub session its own page opened (needs signin:contentops)",
+    description: "A session the person opened in Hub or Workboard themselves stays. Idempotent.",
+    body: authSsoLogoutBodySchema,
+    response: {
+      200: authSsoLogoutResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
