@@ -43,9 +43,10 @@ export type MenuCount = "waiting";
 /**
  * A row a menu lists only while something about the person is true; the app
  * that draws the menu answers it (absent: listed whenever the role may open it):
- * - `newcomer` — a newcomer with a step of «Начало» still open (Workboard's `accountStart`).
+ * - `newcomer` — a newcomer with a step of «Начало» still open (Workboard's `accountStart`);
+ * - `leads` — the owner, a team lead, or anyone who leads a team by its records (products package T, `me.teams.lead`).
  */
-export type MenuWhen = "newcomer";
+export type MenuWhen = "newcomer" | "leads";
 
 /**
  * What the page filter does on a screen:
@@ -78,7 +79,7 @@ export interface ScreenPeriod {
   default?: PeriodKey;
 }
 
-export type SectionId = "home" | "waiting" | "money" | "fans" | "stats" | "content" | "traffic" | "team" | "applications" | "settings" | "system";
+export type SectionId = "home" | "waiting" | "money" | "fans" | "stats" | "content" | "traffic" | "team" | "applications" | "people" | "settings" | "system";
 
 export interface Crumb {
   label: string;
@@ -336,10 +337,13 @@ export const SCREENS: readonly Screen[] = [
     keywords: "команда заработок кто работал на смене неделя журнал разбор смены без автора",
   },
   {
-    id: "people", path: "/workboard/people", label: "Люди", title: "Люди", section: "team", product: "workboard", icon: "Users",
-    why: "Кто в команде: работа, продажи, доступ и входы, график и условия.",
+    // The team at work (products plan §2.3, §4.3; it was «Люди» at /workboard/people, which leads here): the owner every
+    // team, a team lead theirs, and a chatter who leads a team by its records (`leads`); a plain chatter has no item.
+    id: "team", path: "/workboard/team", label: "Команда", title: "Команда", section: "team", product: "workboard", icon: "Users",
+    roles: ["owner", "team_lead", "chatter"], when: "leads",
+    why: "Кто в команде и как работает: смены, продажи, качество, график и условия.",
     pageFilter: "any",
-    keywords: "чаттеры сотрудники кабинет чаттера числа доступ приглашение пользователи устройства логины страницы",
+    keywords: "люди чаттеры сотрудники кабинет чаттера числа график условия оплаты новички",
   },
   // ── Фаны ───────────────────────────────────────────────────────────────
   // Workboard's since products package M: everyone's, Hub answers by the viewer's teams (services/fan-reads.ts). The
@@ -444,6 +448,24 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "none",
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Анкеты", to: "/team/applications" }],
+  },
+
+  // ── Люди ───────────────────────────────────────────────────────────────
+  // The people registry (products plan §2.2, §4.3): who a person is and what they may — the person, logins and
+  // devices, access to pages, teams and rights, history; «Пригласить»; the agents' proposals. The work of each person
+  // is Workboard «Команда» (the card links it). The old addresses of a person's access lead here.
+  {
+    id: "hub-people", path: "/people", label: "Люди", title: "Люди", section: "people", product: "hub", ownerOnly: true,
+    why: "Кто есть в агентстве, с какими входами и правами; приглашение нового человека.",
+    pageFilter: "none",
+    keywords: "реестр сотрудники чаттеры тимлиды агенты доступ приглашение пригласить пользователи устройства логины входы права",
+  },
+  {
+    id: "hub-person", path: "/people/:ref/:tab?", label: "Человек", title: "Человек", section: "people", product: "hub", ownerOnly: true,
+    why: "Один человек: кто он, входы и устройства, страницы, команды и права, история.",
+    pageFilter: "none",
+    deep: true, notSearched: true,
+    crumbs: () => [{ label: "Люди", to: "/people" }],
   },
 
   // ── Настройки ──────────────────────────────────────────────────────────
@@ -810,6 +832,11 @@ export const SECTIONS: readonly Section[] = [
     tabs: [tab("applications", "Анкеты", "team-applications", "team-application")],
   },
   {
+    // The people registry (products plan §2.2): the owner's; the team at work is Workboard «Команда».
+    id: "people", label: "Люди", title: "Люди", icon: "Users", product: "hub", ownerOnly: true, nav: "none",
+    tabs: [tab("people", "Люди", "hub-people", "hub-person")],
+  },
+  {
     id: "settings", label: "Настройки", title: "Настройки", icon: "Settings", product: "hub", ownerOnly: true, lower: true, nav: "side",
     tabs: [
       tab("pages", "Модели и страницы", "settings-pages", "settings-connect", "settings-connect-profile", "settings-page-account", "settings-page-login"),
@@ -897,11 +924,11 @@ export interface MenuItem {
 
 /**
  * A product's menu for a role, the items above the rule and under it, from the one table:
- * - Hub, the owner's alone: its sections (Главная · Ждут вас · Деньги · Фаны · Страницы · Контент · Трафик · Анкеты,
- *   then Настройки · Система under the rule); a section without a screen the owner may open is not there.
+ * - Hub, the owner's alone: its sections (Главная · Ждут вас · Деньги · Фаны · Страницы · Контент · Трафик · Анкеты ·
+ *   Люди, then Настройки · Система under the rule); a section without a screen the owner may open is not there.
  * - Workboard, every role's: its screens the role opens, in the table's order, with their own icons (the owner and a
- *   team lead: Ждут вас · Смены · Люди · Кастомы · Что продаёт, the owner also Выплаты; a chatter: Мои смены ·
- *   Кастомы, «Начало» first while a newcomer's step is open).
+ *   team lead: Ждут вас · Смены · Команда · Кастомы · Что продаёт, the owner also Выплаты; a chatter: Мои смены ·
+ *   Смены · Кастомы, «Начало» first while a newcomer's step is open, «Команда» while they lead a team).
  */
 export function productMenu(product: ScreenProduct, role: Role, holds: Partial<Record<MenuWhen, boolean>> = {}): { upper: MenuItem[]; lower: MenuItem[] } {
   const upper: MenuItem[] = [];
@@ -927,7 +954,7 @@ export function productMenu(product: ScreenProduct, role: Role, holds: Partial<R
   return { upper, lower };
 }
 
-/** The first two segments of a Workboard address (`/workboard/people/7` → `/workboard/people`): a screen and everything under it. */
+/** The first two segments of a Workboard address (`/workboard/team/7` → `/workboard/team`): a screen and everything under it. */
 function workboardBranch(pathname: string): string | null {
   const parts = decodedPath(pathname).split("/");
   return parts[1] === WORKBOARD_PATH.slice(1, -1) && parts[2] ? `/${parts[1]}/${parts[2]}` : null;
@@ -935,7 +962,7 @@ function workboardBranch(pathname: string): string | null {
 
 /**
  * The menu item an address lights: a Hub screen's section, a Workboard screen itself. A Workboard address lights the
- * screen it is under (a person's card lights «Люди», a review «Смены»); an address with no item lights nothing.
+ * screen it is under (a person's card lights «Команда», a review «Смены»); an address with no item lights nothing.
  */
 export function menuItemAt(pathname: string): string | null {
   let screen = matchScreen(pathname)?.screen ?? null;

@@ -19,7 +19,17 @@ function principal(request: DemoRequest) {
     },
     // The products' switcher, as the server answers (a narrow session: Workboard alone).
     products: productsOf({ role: user.role, narrow: request.narrow === true }),
+    // The teams (products package T, model ids): the team lead leads «Mia Hart»; a chatter works it, and leads it too in
+    // the scenario `chatter-lead` (`hub-demo-scenario`), as a chatter with a «ведёт команду» record.
+    teams: user.role === "team_lead" ? { mine: [], view: [], lead: [1] }
+      : user.role === "chatter" ? { mine: [1], view: [], lead: chatterLeads(request) ? [1] : [] }
+        : { mine: [], view: [], lead: [] },
   };
+}
+
+/** The demo's chatter leads «Mia Hart» by a record (scenario `chatter-lead`). */
+export function chatterLeads(request: DemoRequest): boolean {
+  return request.role === "chatter" && request.narrow !== true && request.scenario === "chatter-lead";
 }
 
 function pageRef(page: DemoPage) {

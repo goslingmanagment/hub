@@ -8,7 +8,7 @@ import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_
 import { usePeopleIndex } from "@/shared/people";
 import { SHIFT_SALES_KEY } from "@/shared/reads";
 import { placeNotes } from "@/shared/reportNotes";
-import { liveLogins, personOfLogin, useTeamPeople } from "@/screens/people/teamPeople";
+import { liveLogins, personOfLogin, useTeamPeople } from "@/screens/team/teamPeople";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { ShiftsTabs } from "@/shared/ShiftsTabs";
 import { usePageFilter } from "@/shared/usePageFilter";

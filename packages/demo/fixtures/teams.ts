@@ -1,6 +1,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { demoError, queryNumber, type DemoHandlers } from "../core.ts";
 import { DEMO_MODELS } from "../world.ts";
+import { chatterLeads } from "./shell.ts";
 
 /**
  * Teams (products package T): the team records and a lead's notes on a shift, kept in memory. The demo's team lead
@@ -20,7 +21,7 @@ export const teamsHandlers: DemoHandlers = {
   teamRoles: (request) => ({
     models: DEMO_MODELS.map((model) => ({
       id: model.id, slug: model.slug, name: model.name,
-      canGrant: request.role === "owner" || (request.role === "team_lead" && model.id === 1),
+      canGrant: request.role === "owner" || ((request.role === "team_lead" || chatterLeads(request)) && model.id === 1),
       canGrantLead: request.role === "owner",
       leadName: model.id === 1 ? "Тимлид" : null,
     })),
@@ -29,7 +30,8 @@ export const teamsHandlers: DemoHandlers = {
   }),
   teamRoleSet: (request) => {
     const body = request.body as { personCode: string; modelId: number; kind: "lead" | "customs" | "view"; granted: boolean };
-    if (request.role === "chatter" || (request.role === "team_lead" && (body.kind === "lead" || body.modelId !== 1))) {
+    const lead = request.role === "team_lead" || chatterLeads(request);
+    if ((request.role === "chatter" && !lead) || (lead && (body.kind === "lead" || body.modelId !== 1))) {
       return demoError(403, "Forbidden", "Это может тот, кто ведёт команду этой модели");
     }
     const at = records.findIndex((one) => one.personCode === body.personCode && one.modelId === body.modelId && one.kind === body.kind);

@@ -1,0 +1,14 @@
+/* Hub «Люди»: the list and the person's card stack their blocks; the blocks themselves are packages/ui styles/people.css. */
+@layer components {
+  .hub-people,
+  .hub-person {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+  }
+
+  .hub-person > .ui-tabs {
+    margin-bottom: 4px;
+  }
+}

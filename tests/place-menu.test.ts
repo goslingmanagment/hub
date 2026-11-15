@@ -7,7 +7,7 @@ import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN } from "../packages/ui/src/sites.ts
 
 /** Each product's menu from the one table (products plan §2.2–2.3): who sees which item, where it leads, what an address lights. */
 
-const items = (product: "hub" | "workboard", role: string, holds: { newcomer?: boolean } = {}) => {
+const items = (product: "hub" | "workboard", role: string, holds: { newcomer?: boolean; leads?: boolean } = {}) => {
   const menu = productMenu(product, role, holds);
   return [...menu.upper, ...menu.lower];
 };
@@ -22,9 +22,9 @@ describe("each screen's product", () => {
 });
 
 describe("Hub's menu", () => {
-  it("is the owner's: Главная · Ждут вас · Деньги · Страницы · Контент · Трафик · Анкеты, then Настройки · Система", () => {
+  it("is the owner's: Главная · Ждут вас · Деньги · Страницы · Контент · Трафик · Анкеты · Люди, then Настройки · Система", () => {
     const menu = productMenu("hub", "owner");
-    expect(menu.upper.map((item) => item.label)).toEqual(["Главная", "Ждут вас", "Деньги", "Страницы", "Контент", "Трафик", "Анкеты"]);
+    expect(menu.upper.map((item) => item.label)).toEqual(["Главная", "Ждут вас", "Деньги", "Страницы", "Контент", "Трафик", "Анкеты", "Люди"]);
     expect(menu.lower.map((item) => item.label)).toEqual(["Настройки", "Система"]);
   });
 
@@ -46,9 +46,9 @@ describe("Hub's menu", () => {
 });
 
 describe("Workboard's menu", () => {
-  it("is the owner's and a team lead's own: Ждут вас · Смены · Люди · Фаны · Кастомы · Что продаёт, the owner also Выплаты", () => {
-    expect(items("workboard", "owner").map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Люди", "Фаны", "Кастомы", "Что продаёт", "Выплаты"]);
-    expect(items("workboard", "team_lead").map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Люди", "Фаны", "Кастомы", "Что продаёт"]);
+  it("is the owner's and a team lead's own: Ждут вас · Смены · Команда · Фаны · Кастомы · Что продаёт, the owner also Выплаты", () => {
+    expect(items("workboard", "owner", { leads: true }).map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Что продаёт", "Выплаты"]);
+    expect(items("workboard", "team_lead", { leads: true }).map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Что продаёт"]);
   });
 
   it("gives a chatter «Мои смены», «Смены», «Фаны» and «Кастомы», «Начало» first only while a step is open", () => {
@@ -56,9 +56,14 @@ describe("Workboard's menu", () => {
     expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "my-shifts", "shifts", "fans", "customs"]);
   });
 
+  it("gives «Команда» to a chatter who leads a team by its records, and never to a plain chatter", () => {
+    expect(items("workboard", "chatter", { leads: true }).map((item) => item.id)).toEqual(["my-shifts", "shifts", "team", "fans", "customs"]);
+    expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).not.toContain("team");
+  });
+
   it("leads every role only to Workboard screens it may open", () => {
     for (const role of ["owner", "team_lead", "chatter"]) {
-      for (const item of items("workboard", role, { newcomer: true })) {
+      for (const item of items("workboard", role, { newcomer: true, leads: true })) {
         const screen = matchScreen(item.to)?.screen;
         expect(screen?.product, item.to).toBe("workboard");
         expect(screenVisible(screen!, role), `${role} ${item.to}`).toBe(true);
@@ -70,7 +75,8 @@ describe("Workboard's menu", () => {
   it("lights the item of the screen an address is on, deep pages and the old «Решения» included", () => {
     expect(menuItemAt("/money/transactions")).toBe("money");
     expect(menuItemAt("/stats/income")).toBe("stats");
-    expect(menuItemAt("/workboard/people/7/access")).toBe("people");
+    expect(menuItemAt("/workboard/team/7/schedule")).toBe("team");
+    expect(menuItemAt("/people/alex/logins")).toBe("people");
     expect(menuItemAt("/workboard/shifts/17/2026-11-08T16:08")).toBe("shifts");
     expect(menuItemAt("/workboard/sales/price")).toBe("sales");
     expect(menuItemAt("/workboard/waiting")).toBe("waiting");

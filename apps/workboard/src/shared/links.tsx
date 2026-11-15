@@ -3,6 +3,8 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { Link, useLocation, type To } from "react-router";
 import { Person, type PersonStatus } from "@agency_hub_core/ui";
 import { pickPeriodParams } from "@agency_hub_core/ui/period";
+import type { TeamPersonTab } from "@agency_hub_core/contracts";
+import { hubEntryHref } from "@agency_hub_core/ui/sites";
 
 /**
  * The app's addresses and the links between screens. Every drill-down carries
@@ -25,23 +27,30 @@ function withSearch(path: string, params: URLSearchParams): string {
 }
 
 /**
- * The tabs of Человек (spec §4.4, D2): Работа · Продажи · Доступ и входы ·
- * График и условия. `shifts` is the old Смены tab: its address redirects to
- * Работа (app/routes.tsx).
+ * The tabs of a person's card in «Команда» (products plan §4.3): Работа · Продажи · График и условия. Who the person is
+ * and what they may (logins, page access, rights) is Hub «Люди» (`hubHref`, contracts people-paths.ts).
  */
-export type PersonTab = "work" | "shifts" | "sales" | "access" | "schedule";
+export type PersonTab = TeamPersonTab;
 
 /**
- * `/people/:userId` (the «Работа» tab) or one of its tabs, with the period and page carried. The address of a login:
- * it opens the card of the person holding it (`/people/<code>`, screens/people/PersonScreen.tsx).
+ * `/team/:userId` (the «Работа» tab) or one of its tabs, with the period and page carried. The address of a login:
+ * it opens the card of the person holding it (`/team/<code>`, screens/team/PersonRoute.tsx).
  */
 export function personPath(userId: number, search: URLSearchParams | string = "", tab: PersonTab = "work"): string {
-  return withSearch(`/people/${userId}${tab === "work" ? "" : `/${tab}`}`, carryParams(search));
+  return withSearch(`/team/${userId}${tab === "work" ? "" : `/${tab}`}`, carryParams(search));
 }
 
-/** A person's card by the registry's code, `/people/<code>[/tab]`, with the period and page carried. */
+/** A person's card by the registry's code, `/team/<code>[/tab]`, with the period and page carried. */
 export function personCodePath(code: string, search: URLSearchParams | string = "", tab: PersonTab = "work"): string {
-  return withSearch(`/people/${encodeURIComponent(code)}${tab === "work" ? "" : `/${tab}`}`, carryParams(search));
+  return withSearch(`/team/${encodeURIComponent(code)}${tab === "work" ? "" : `/${tab}`}`, carryParams(search));
+}
+
+/**
+ * A Hub address (`/people/alex/logins`) as a page here opens it: on Hub's name, through the one-time sign-in hand-off
+ * (packages/ui/src/sites.ts). A full page load.
+ */
+export function hubHref(path: string): string {
+  return hubEntryHref(window.location.origin, path);
 }
 
 /**
@@ -156,7 +165,7 @@ export function BackLink({ back, className = "wb-back" }: { back: BackTarget; cl
 }
 
 /**
- * A person's name that opens their card (`/people/:userId`) for the same period
+ * A person's name that opens their card (`/team/:userId`) for the same period
  * and page. Not inside a table row that already opens something: there use
  * <Person> and the row's own link.
  */

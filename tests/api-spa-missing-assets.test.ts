@@ -123,7 +123,7 @@ describe("SPA static serving: missing build assets", () => {
     ["/assets", DASHBOARD_SHELL],
     ["/workboard", WORKBOARD_SHELL],
     ["/workboard/", WORKBOARD_SHELL],
-    ["/workboard/people/5", WORKBOARD_SHELL],
+    ["/workboard/team/5", WORKBOARD_SHELL],
   ])("GET %s: app routes keep the shell", async (url, shell) => {
     const response = await server.inject({ method: "GET", url });
     expect(response.statusCode).toBe(200);

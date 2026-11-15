@@ -43,5 +43,10 @@ export function useMe() {
     fullOwner: !narrow && user?.role === "owner" && query.data?.test !== true,
     /** The person's teams by model id (products package T): in, given «видит», leading; null — the owner, or not read. */
     teams: query.data?.teams ?? null,
+    /**
+     * Opens «Команда» (products plan §2.3): the owner, a team lead, or a chatter who leads a team by its records (package
+     * T: authority comes from the records, so a chatter with one leads that team and stays a chatter). Never a narrow session.
+     */
+    leadsTeam: !narrow && (user?.role === "owner" || user?.role === "team_lead" || (query.data?.teams?.lead.length ?? 0) > 0),
   };
 }
