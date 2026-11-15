@@ -770,7 +770,7 @@ function withRepeats(review: Response): Response {
 }
 
 export function teamShiftReview(request: DemoRequest): Response | DemoReply {
-  if (request.role !== "owner") return demoError(403, "Forbidden", "Разбор смены — только для владельца.");
+  // Open to the team since products package T (the review of a shift of the viewer's teams); the demo team is one.
   const userId = queryNumber(request, "userId", Number.NaN);
   const at = Date.parse(queryString(request, "at") ?? "");
   if (!Number.isInteger(userId) || Number.isNaN(at)) return demoError(400, "Bad Request", "userId и at обязательны.");

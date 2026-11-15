@@ -13,6 +13,7 @@ import { accountHandlers } from "./account.ts";
 import { accountReports } from "./account-shift-reports.ts";
 import { chatterLeads } from "./shell.ts";
 import { shiftReportHandlers } from "./shift-reports.ts";
+import { teamWorld } from "./team-world.ts";
 
 type Shifts = KernelOperationResponse<"accountShifts">;
 type Today = KernelOperationResponse<"workboardToday">;
@@ -84,10 +85,15 @@ function workboardToday(request: DemoRequest): Today {
     gaps: empty ? [] : model.id === 1 ? [{ day: tomorrow, start: "02:00", end: "10:00" }, { day: addDays(today, 2), start: "22:00", end: "24:00" }] : [],
     noSchedule: empty || model.id !== 1,
   }));
-  const reviews = empty ? [] : [
-    { userId: 5, name: "Катя", startedAt: iso(now - 30 * HOUR_MS), endedAt: iso(now - 22 * HOUR_MS), pages: ["mia-1"], workedMinutes: 452 },
-    { userId: 7, name: "Оля", startedAt: iso(now - 27 * HOUR_MS), endedAt: iso(now - 20 * HOUR_MS), pages: ["mia-of"], workedMinutes: 398 },
-  ];
+  // Yesterday's closed shifts of the demo team (team-world.ts): their reviews open.
+  const yesterday = moscowDay(now - DAY_MS);
+  const reviews = empty ? [] : teamWorld(request.now).shifts
+    .filter((shift) => !shift.ongoing && moscowDay(shift.startedAt) === yesterday && shift.user.role === "chatter")
+    .slice(0, 4)
+    .map((shift) => ({
+      userId: shift.user.id, name: shift.user.name, startedAt: iso(shift.startedAt), endedAt: iso(shift.endedAt),
+      pages: shift.pages.map((page) => page.pageLabel), workedMinutes: shift.workedMinutes,
+    }));
   return {
     ...own,
     team: { firstDay: (request.scenario === "today-first" || request.scenario === "today-noteam") && user.role !== "owner", teams, reviews },
