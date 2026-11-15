@@ -146,6 +146,8 @@ describe("a content manager", () => {
     const waiting = await request("POST", `${HUB}/api/v1/auth/sso/waiting`, { headers: { authorization: `Bearer ${KEY}` }, payload: { client: "contentops", grant } });
     expect(waiting.statusCode, waiting.body).toBe(200);
     expect(waiting.json<{ matters: Array<{ key?: string; title: string }> }>().matters.map((matter) => matter.title)).toEqual(["content.week_approve:mia-1"]);
+    // Each matter names its model as Hub's slug: ContentOps cuts by Hub's model, not by its own pages' binding.
+    expect(waiting.json<{ matters: Array<{ models: string[] }> }>().matters[0]?.models).toEqual(["mia"]);
 
     // Closed in the registry: the re-check says so, ContentOps closes its own person.
     await testDb!.pool.query("update people set state = 'left', left_on = current_date where code = 'kira'");

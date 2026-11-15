@@ -217545,6 +217545,12 @@
                                   "type": "string"
                                 }
                               },
+                              "models": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
                               "openedAt": {
                                 "type": "string"
                               }
