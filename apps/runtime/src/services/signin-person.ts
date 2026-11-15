@@ -62,13 +62,17 @@ export async function contentopsWaitingOf(app: Pick<AppContext, "db">, user: Sig
     const slug = slugOfModel.get(page.modelId);
     return slug === undefined ? [] : [[page.pageId, slug] as const];
   }));
-  const matters = rows.filter((row) => waitsInContentops(row.kind)).slice(0, WAITING_LIMIT).map((row) => ({
+  // A post that did not go out is a failure of Hub's list, but its outcome is the content manager's (C4).
+  const contentops = (row: (typeof rows)[number]) =>
+    waitsInContentops(row.kind) || (row.kind === "incident.open" && row.evidence.incidentKind === "publication_not_published");
+  const matters = rows.filter(contentops).slice(0, WAITING_LIMIT).map((row) => ({
     id: row.id,
     kind: row.kind,
     title: row.title,
     link: row.link,
     pageLabels: row.pageIds.map((id) => pages.labelOf.get(id)).filter((label): label is string => label !== undefined),
     models: [...new Set(row.pageIds.map((id) => slugOfPage.get(id)).filter((slug): slug is string => slug !== undefined))].sort(),
+    object: row.kind === "incident.open" ? { type: "publication_not_published", id: String(row.object?.id ?? "") } : row.object,
     openedAt: row.openedAt.toISOString(),
   }));
   return { active: true, matters, serverNow: now.toISOString() };
