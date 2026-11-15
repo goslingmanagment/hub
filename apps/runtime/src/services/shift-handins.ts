@@ -74,7 +74,7 @@ import {
   type OffPlatformRow,
   findPersonRowByCode,
 } from "@agency_hub_core/db";
-import { userIsTest } from "./sandbox/realm.ts";
+import { testPageIds, userIsTest } from "./sandbox/realm.ts";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
@@ -197,7 +197,10 @@ export interface PageCatalog {
 
 export async function pageCatalog(db: Database): Promise<PageCatalog> {
   const labels = await listMatterPageLabels(db);
-  const visible = await listVisiblePages(db);
+  // Both realms: the catalog only names pages (who may read which is `accessOf`'s and the realm wall's). Without the
+  // test pages a test shift's OnlyFans column read as Fansly and its model as unknown.
+  const test = [...await testPageIds({ db })];
+  const visible = [...await listVisiblePages(db), ...(test.length > 0 ? await listVisiblePages(db, test) : [])];
   return {
     idOf: labels.idOf,
     labelOf: labels.labelOf,
