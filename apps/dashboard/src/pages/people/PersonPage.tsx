@@ -9,10 +9,10 @@ import { TeamRolesCard } from "@agency_hub_core/ui/people/TeamRoles";
 import { formatDay } from "@agency_hub_core/ui/format";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { workboardHere } from "@/lib/navigation";
-import { AccessTab } from "./AccessTab";
+import { AccessTab, TestRealmNote } from "./AccessTab";
 import { PersonAccess } from "./PersonAccess";
 import { DecidedBlock, PersonBlock, PersonModal, RightsBlock, WaitingBlock } from "./PersonBlocks";
-import { useOwnerCard, useSetTeamRole, useTeamPeople, useTeamRoles } from "./registry";
+import { useOwnerCard, useSetTeamRole, useTeamPeople, useTeamRoles, useViewer } from "./registry";
 import "./people.css";
 
 /** The card's tabs (products plan §2.2): who the person is and what they may. Their work is Workboard «Команда». */
@@ -175,6 +175,7 @@ function TeamsTab({ person }: { person: RegistryPerson }) {
         onRetry={() => void roles.refetch()}
         saving={set.isPending ? set.variables : null}
         onSet={(change) => set.mutate(change, { onError: () => toast.error("Не сохранилось. Попробуйте ещё раз.") })}
+        title="Команды"
       />
       {person.kind === "human" && person.state === "left" && <p className="people-note">Человек ушёл: записи команд у ушедших не ведут.</p>}
     </div>
@@ -222,6 +223,7 @@ type RegistryProposals = Parameters<typeof DecidedBlock>[0]["proposals"] | null;
  */
 function LoginCard({ userId, tab }: { userId: number; tab: "logins" | "pages" }) {
   const list = useTeamPeople();
+  const { fullOwner } = useViewer();
   const login = list.data?.unlinkedLogins.find((one) => one.userId === userId) ?? null;
   return (
     <>
@@ -239,7 +241,9 @@ function LoginCard({ userId, tab }: { userId: number; tab: "logins" | "pages" })
           label="Разделы карточки"
           items={(["logins", "pages"] as const).map((item) => ({ to: hubPersonPath(userId, item), label: TAB_LABEL[item], end: true }))}
         />
-        <PersonAccess userId={userId} variant="page" part={tab} onChanged={() => void list.refetch()} onDeleted={() => void list.refetch()} />
+        {fullOwner
+          ? <PersonAccess userId={userId} variant="page" part={tab} onChanged={() => void list.refetch()} onDeleted={() => void list.refetch()} />
+          : <TestRealmNote />}
       </div>
     </>
   );

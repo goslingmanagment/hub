@@ -8,9 +8,9 @@ import { INVITE_DEFAULT_DAYS, INVITE_MAX_DAYS, daysToHours, findByLogin, isValid
 import { EMPTY_SLOT, SlotFields, WorkingPagesPicker, fixMills, shareBasisPoints, slotBody, slotEmpty, slotProblem, type SlotDraft } from "@agency_hub_core/ui/people/forms";
 import { refusal, type CreatedPerson, type RegistryPerson } from "@agency_hub_core/ui/people/registry";
 import { codeFromName } from "@agency_hub_core/ui/people/words";
-import { useAccessPages, useAccessUsers } from "./data";
+import { useAccessUsers, useFormPages } from "./data";
 import type { RevealedLink } from "./LinkReveal";
-import type { useCreatePerson } from "./registry";
+import { useViewer, type useCreatePerson } from "./registry";
 
 /**
  * «Пригласить» (the owner's): a person of the registry in ONE call
@@ -50,8 +50,11 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
   /** A person without a login was added. */
   onAdded: (created: CreatedPerson) => void;
 }) {
-  const pages = useAccessPages();
-  const users = useAccessUsers();
+  // The test owner may not read the logins nor the catalog (Hub refuses them it): its own pages, and Hub's own answer
+  // when a login is taken.
+  const { fullOwner } = useViewer();
+  const pages = useFormPages(fullOwner);
+  const users = useAccessUsers(fullOwner);
   const [name, setName] = useState("");
   const [codeTyped, setCodeTyped] = useState<string | null>(null);
   const [role, setRole] = useState<InviteRole>("chatter");
@@ -91,7 +94,7 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
       return term !== undefined && term.share.trim() !== "" && (shareBasisPoints(term.share) === null || fixMills(term.fix) === null);
     }) ? "Доля: от 0 до 100 %, фикс: сумма в долларах." : null,
   };
-  const ready = Object.values(errors).every((error) => error === null) && Boolean(pages.data) && (!withLogin || Boolean(users.data)) && !pending;
+  const ready = Object.values(errors).every((error) => error === null) && Boolean(pages.data) && (!withLogin || !fullOwner || Boolean(users.data)) && !pending;
   const dirty = name.trim() !== "" || working.length > 0 || !slotEmpty(slot) || handle !== "";
 
   function submit() {
@@ -133,7 +136,7 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
         else if (status === 400 && /already exists/i.test(message)) setProblem("Этот логин уже занят: выберите другой.");
         else if (status === 404) setProblem("Страница или модель не нашлась в Hub: обновите экран и выберите снова.");
         else setProblem("Не удалось: Hub вернул ошибку. Ничего не создано, попробуйте ещё раз.");
-        void users.refetch();
+        if (fullOwner) void users.refetch();
       },
     });
   }

@@ -196,7 +196,7 @@ const COLUMNS: Column<RegistryPerson>[] = [
       return (
         <Person
           name={person.displayName}
-          status={person.state === "invited" ? "invited" : "away"}
+          status="away"
           nameEnd={marks}
           hint={`${PERSON_ROLE_WORD[person.role] ?? person.role} · ${person.code}`}
           className="registry-who"

@@ -54,6 +54,18 @@ export function useAccessPages(enabled = true) {
   return useQuery({ queryKey: PAGES_KEY, queryFn: () => kernel.adminPages(), enabled, staleTime: 5 * 60_000 });
 }
 
+/**
+ * The pages a form chooses working pages from: the catalog (`adminPages`) for the agency's owner; the test owner's own
+ * pages (`pages`, the same shape: its test realm) — Hub refuses it the catalog (`SANDBOX_OWNER_OPERATIONS`).
+ */
+export function useFormPages(fullOwner: boolean) {
+  return useQuery({
+    queryKey: [...PAGES_KEY, fullOwner ? "catalog" : "own"] as const,
+    queryFn: () => (fullOwner ? kernel.adminPages() : kernel.pages()),
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function useUserDevices(userId: number) {
   return useQuery({ queryKey: devicesKey(userId), queryFn: () => kernel.adminListDeviceTokens({ params: { userId } }) });
 }

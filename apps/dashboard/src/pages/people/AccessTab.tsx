@@ -4,6 +4,7 @@ import { liveLogins, type RegistryLogin, type RegistryPerson } from "@agency_hub
 import { whenWords } from "@agency_hub_core/ui/people/when";
 import { ROLE_WORD } from "@agency_hub_core/ui/people/words";
 import { PersonAccess } from "./PersonAccess";
+import { useViewer } from "./registry";
 
 /**
  * «Входы и устройства» (`part: "logins"`) and «Доступ к страницам» (`part: "pages"`) of a person's card in Hub
@@ -14,6 +15,8 @@ import { PersonAccess } from "./PersonAccess";
  * (a content manager, a contractor) has nothing here.
  */
 export function AccessTab({ person, part, onChanged }: { person: RegistryPerson; part: "logins" | "pages"; onChanged: () => void }) {
+  const { fullOwner } = useViewer();
+  if (!fullOwner) return <TestRealmNote />;
   const logins = liveLogins(person);
   const deleted = person.logins.filter((login) => login.state === "deleted");
   return (
@@ -73,6 +76,20 @@ function AgentKeys({ person }: { person: RegistryPerson }) {
           ))}
         </ul>
       )}
+    </Card>
+  );
+}
+
+/**
+ * The test owner (the test team, sandbox/realm.ts): Hub refuses it every login's reads and writes
+ * (`SANDBOX_OWNER_OPERATIONS`), so the tab asks nothing and says so.
+ */
+export function TestRealmNote() {
+  return (
+    <Card>
+      <EmptyState title="Входы тестовой команды здесь не меняют">
+        Тестовая команда работает с готовыми входами. Пароли, устройства и страницы её входов меняет владелец агентства.
+      </EmptyState>
     </Card>
   );
 }
