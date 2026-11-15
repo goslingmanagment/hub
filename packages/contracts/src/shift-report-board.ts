@@ -203,8 +203,8 @@ export const shiftReportChoiceSchema = z.object({
   }).nullable(),
   /** The menu's grey text: «по правилу», «спросим Олега», «решит владелец»; empty — none. */
   hint: z.string(),
-  /** The current word. */
-  current: z.boolean(),
+  /** The current word (absent from a reader that marks it itself). */
+  current: z.boolean().optional(),
 });
 
 /** One row of a column: two lines, never more; the question, the claim, the card and the comment go under it. */

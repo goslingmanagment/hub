@@ -189580,8 +189580,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -190660,8 +190659,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -194463,8 +194461,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -195543,8 +195540,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -287243,8 +287239,7 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint",
-                                                      "current"
+                                                      "hint"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -288323,8 +288318,7 @@
                                                         "required": [
                                                           "owner",
                                                           "asks",
-                                                          "hint",
-                                                          "current"
+                                                          "hint"
                                                         ],
                                                         "additionalProperties": false
                                                       }
@@ -291433,8 +291427,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -292513,8 +292506,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -295636,8 +295628,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -296716,8 +296707,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -299747,8 +299737,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -300827,8 +300816,7 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint",
-                                                      "current"
+                                                      "hint"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -303747,8 +303735,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -304827,8 +304814,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -307858,8 +307844,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -308938,8 +308923,7 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint",
-                                                      "current"
+                                                      "hint"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -312446,8 +312430,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -313526,8 +313509,7 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint",
-                                                      "current"
+                                                      "hint"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -316867,8 +316849,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -317947,8 +317928,7 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint",
-                                                      "current"
+                                                      "hint"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -321395,8 +321375,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -322475,8 +322454,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -325585,8 +325563,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -326665,8 +326642,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -329742,8 +329718,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -330822,8 +330797,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -333899,8 +333873,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -334979,8 +334952,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -338081,8 +338053,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -339161,8 +339132,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -342248,8 +342218,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -343328,8 +343297,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -346359,8 +346327,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -347439,8 +347406,7 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint",
-                                                      "current"
+                                                      "hint"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -350349,8 +350315,7 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint",
-                                              "current"
+                                              "hint"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -351429,8 +351394,7 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint",
-                                                  "current"
+                                                  "hint"
                                                 ],
                                                 "additionalProperties": false
                                               }

@@ -415,7 +415,7 @@ export function MyShiftsScreen() {
           columns={columns}
           rows={rows ?? []}
           rowKey={(row) => row.key}
-          rowHref={(row) => (row.hub === null ? undefined : `/my/shifts/${row.hub.shiftId}`)}
+          rowHref={(row) => (row.hub === null ? undefined : `/report/${row.hub.shiftId}`)}
           rowState={backHere}
           rowDetail={(row) => (row.hub === null && row.report ? <ReportBody report={row.report} /> : null)}
           openKeys={open}

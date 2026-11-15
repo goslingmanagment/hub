@@ -4,6 +4,7 @@ import { millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 import { demoError, hashString, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_USERS, demoUserByRole, type DemoUser } from "../world.ts";
 import { DAY_MS, HOUR_MS, MINUTE_MS, chatterWorld, mskDay, type DemoSale, type DemoShift } from "./account-model.ts";
+import { demoBoardClaimAnswer } from "./shift-report-board.ts";
 
 /**
  * Заявки и договорённости (ecosystem package G) in the demo, kept in memory
@@ -402,6 +403,8 @@ function settle(claim: DemoClaim, now: Date, madeFor: string) {
 
 export const saleClaimHandlers: DemoHandlers = {
   saleClaimAnswer: (request) => {
+    const board = demoBoardClaimAnswer(request);
+    if (board !== null) return board as never;
     const claim = world(request.now).claims.find((one) => one.id === Number(request.params.claimId));
     if (claim === undefined) return demoError(404, "Not Found", "No such claim");
     if (demoUserByRole(request.role).id !== claim.side.id) return demoError(403, "Forbidden", "Only the other side answers a claim");

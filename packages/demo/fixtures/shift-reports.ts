@@ -4,7 +4,7 @@ import { millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/
 import { demoError, intBetween, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_USERS, demoPage, demoUserByRole, type DemoUser } from "../world.ts";
 import { DAY_MS, MINUTE_MS, chatterWorld, mskDay, type DemoSale, type DemoShift } from "./account-model.ts";
-import { demoBoardReport, demoBoardSubmit } from "./shift-report-board.ts";
+import { demoBoardReport, demoBoardWrite, demoPreviewBoardOf } from "./shift-report-board.ts";
 import { demoClaimedLines, demoLineId, demoLineOutcome, demoOffPlatformOf, demoOwnShare, demoReportClaims, demoShiftId, onDemoSettle } from "./sale-claims.ts";
 
 /**
@@ -276,7 +276,8 @@ function reportOf(request: DemoRequest, found: Found): Report | DemoReply {
     posts: own && latest ? postOf(latest.body, found.shift, found.owner) : [],
     colleagues: own ? DEMO_USERS.filter((user) => user.active && user.id !== found.owner.id && user.role === "chatter" && user.pages.some((page) => found.shift.pages.includes(page))).map((user) => ({ userId: user.id, name: user.name })) : [],
     claims: demoReportClaims({ now: request.now, shiftId: found.id, ownerId: found.owner.id, lineIds: new Set((view?.lines ?? draft.lines).map((row) => row.transactionId)), own }),
-    board: null,
+    // The «Отчёт» board's preview of the shift (the demo chatter hands in the old way): read only, from this report.
+    board: own ? demoPreviewBoardOf(draft, { startedAt: new Date(found.shift.start).toISOString(), pages: found.shift.pages }, { userId: found.owner.id, name: found.owner.name }) : null,
     serverNow: request.now.toISOString(),
   };
 }
@@ -395,6 +396,8 @@ export const shiftReportHandlers: DemoHandlers = {
     };
   },
   shiftReportClaimable: (request) => {
+    const board = demoBoardWrite(request, "claimable");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const words = keptOf(found.id).words;
@@ -408,6 +411,8 @@ export const shiftReportHandlers: DemoHandlers = {
     return found === null ? demoError(404, "Not Found", "No such shift") : reportOf(request, found);
   },
   shiftReportLineSet: (request) => {
+    const board = demoBoardWrite(request, "lineSet");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const body = request.body as { statement: Word["statement"]; shareWithUserId?: number | null; note?: string | null };
@@ -418,12 +423,16 @@ export const shiftReportHandlers: DemoHandlers = {
     return { savedAt: request.now.toISOString() };
   },
   shiftReportCommentSet: (request) => {
+    const board = demoBoardWrite(request, "comment");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     keptOf(found.id).comment = String((request.body as { comment: string }).comment);
     return { savedAt: request.now.toISOString() };
   },
   shiftReportOffPlatformAdd: (request) => {
+    const board = demoBoardWrite(request, "offPlatformAdd");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const body = request.body as { amountMills: number; fromWhom: string; whatFor: string };
@@ -432,6 +441,8 @@ export const shiftReportHandlers: DemoHandlers = {
     return { line: row, savedAt: request.now.toISOString() };
   },
   shiftReportOffPlatformWithdraw: (request) => {
+    const board = demoBoardWrite(request, "offPlatformWithdraw");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const one = keptOf(found.id);
@@ -439,8 +450,8 @@ export const shiftReportHandlers: DemoHandlers = {
     return { savedAt: request.now.toISOString() };
   },
   shiftReportSubmit: (request) => {
-    const board = demoBoardSubmit(request, idOf(request));
-    if (board !== null) return board;
+    const board = demoBoardWrite(request, "submit");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const one = keptOf(found.id);
