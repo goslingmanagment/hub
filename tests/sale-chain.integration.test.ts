@@ -213,7 +213,7 @@ describe("a sale's chain of money: who reads it and how much", () => {
     expect(chain.people).toHaveLength(1);
     const [anna] = chain.people;
     expect(anna).toMatchObject({ name: "anna", shareMills: 20_000, reportDate: "2026-11-10" });
-    expect(anna!.shift.link).toMatch(/^\/workboard\/shifts\/report\/\d+\?sale=\d+$/u);
+    expect(anna!.shift.link).toMatch(/^\/workboard\/report\/\d+\?sale=\d+$/u);
     expect(anna!.accrual).toMatchObject({ state: "done", amountMills: 40_000, link: "/workboard/payouts?person=anna" });
     expect(anna!.payout).toMatchObject({ state: "done", amountMills: 40_000 });
     expect(anna!.payout.words).toMatch(/^оплачено/u);
@@ -229,7 +229,7 @@ describe("a sale's chain of money: who reads it and how much", () => {
     // anna, «видит свои деньги»: her own sale with her own sums, the link to her own shift.
     const own = await chainOf("anna", sales.anna);
     expect(own.people.map((one) => one.name)).toEqual(["anna"]);
-    expect(own.people[0]!.shift.link).toMatch(/^\/workboard\/my\/shifts\/\d+\?sale=\d+$/u);
+    expect(own.people[0]!.shift.link).toMatch(/^\/workboard\/report\/\d+\?sale=\d+$/u);
     expect(own.people[0]!.accrual.amountMills).toBe(40_000);
     expect(own.home.link).toBeNull();
     // bella, without the switch: her own sale, the states without sums.
