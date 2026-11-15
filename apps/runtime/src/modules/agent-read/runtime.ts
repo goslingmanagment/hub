@@ -35,6 +35,7 @@ import type { AgentCursorSigning } from "./cursors.ts";
 import { ServiceUnavailableError } from "../../services/errors.ts";
 import { AgentCapabilityMissingError } from "./errors.ts";
 import { AGENT_PLANE_MODE, type AgentPlaneMode } from "./epistemics.ts";
+import { realmOf } from "../../services/sandbox/realm.ts";
 
 /**
  * The per-request scaffolding every agent operation shares: the capability
@@ -473,7 +474,7 @@ export async function beginAgentRequest(
     AGENT_TIMEOUT_MS.short,
     async (tx) => [
       await listAgentGrantPages(tx, pageIds),
-      await countAgentVisiblePages(tx),
+      await countAgentVisiblePages(tx, realmOf(principal)),
       await readArchiveGeneration(tx),
     ] as const,
     "agent_scope",

@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { truncateUtf16Safe } from "@agency_hub_core/shared";
 
-import { livePageSql } from "./realm.ts";
+import { livePageSql, testPageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import { agentDatasetSqlMapping } from "./agent-dataset-map.ts";
 import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
@@ -208,10 +208,10 @@ export async function listAgentGrantPages(
 /** Total live pages in the deployment. The DIFFERENCE from a grant is exactly
  *  what an agent is allowed to know, and it is what lets #3/#4 answer
  *  200-with-empty instead of becoming an existence oracle. */
-export async function countAgentVisiblePages(db: Database): Promise<number> {
+export async function countAgentVisiblePages(db: Database, realm: "live" | "test" = "live"): Promise<number> {
   const result = await db.execute<{ count: string }>(
     // The live agency's pages (0414): the test realm is no page a key could have been granted.
-    sql`select count(*)::text as count from pages where deleted_at is null and ${livePageSql(sql`pages.id`)}`,
+    sql`select count(*)::text as count from pages where deleted_at is null and ${realm === "test" ? testPageSql(sql`pages.id`) : livePageSql(sql`pages.id`)}`,
   );
   return Number(result.rows[0]?.count ?? 0);
 }

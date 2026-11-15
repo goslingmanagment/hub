@@ -20,6 +20,7 @@ import {
   recordAiGatewayQuotaDenied,
   reserveAiGatewayUsageEvent,
   type AiGatewayFailurePhase,
+  isTestPage,
 } from "@agency_hub_core/db";
 import {
   normalizeProviderStreamFailure,
@@ -34,7 +35,8 @@ import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
 import { evaluatePersonalAiLimit } from "./ai-chatter-limits.ts";
 import { rewriteWordsStream } from "./ai-gateway-word-rewrite.ts";
-import { BadRequestError, ConflictError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
+import { realmOf } from "./sandbox/realm.ts";
 import {
   anthropicGatewayRequestEffort,
   buildAnthropicGatewayStreamRequest,
@@ -394,11 +396,19 @@ export async function prepareAiGatewayStream(
   input: AiGatewayStreamInput,
   internal?: AiGatewayStreamInternalOptions,
 ): Promise<PreparedAiGatewayStream> {
+  // THE GATEWAY'S WALL (sandbox/realm.ts): the test team spends no AI money, whatever the door, the feature or the
+  // limit: a test login is refused here, before anything is reserved, and so is a test page for anyone.
+  if (realmOf(principal) === "test") {
+    throw new ForbiddenError("ИИ тестовой команде не положен");
+  }
   if (!isChatMuseAiGatewayEnabled(app.config)) {
     throw new ServiceUnavailableError("ChatMuse AI gateway is disabled");
   }
 
   const storedPage = await findPageByLabel(app.db, input.pageLabel);
+  if (storedPage && await isTestPage(app.db, storedPage.page.id)) {
+    throw new ForbiddenError("ИИ на тестовых страницах не положен");
+  }
   if (
     !storedPage ||
     !canAccessPage(principal, storedPage.page.id) ||

@@ -876,11 +876,13 @@ export async function decidePersonProposal(
 /** The registry's feed for an agent key: no money unless `includeTerms` (read:pay_terms). */
 export async function readAgentPeople(
   app: Pick<AppContext, "db">,
-  input: { since?: Date; grantedPageIds: readonly number[]; keyGrantExcludedPages: number; includeTerms: boolean },
+  input: { since?: Date; grantedPageIds: readonly number[]; keyGrantExcludedPages: number; includeTerms: boolean; realm?: "live" | "test" },
   now = new Date(),
 ): Promise<AgentPeopleResponse> {
   const db = app.db;
-  const rows = input.since ? await listPersonRowsChangedSince(db, input.since) : await listPersonRows(db);
+  // The key's realm (sandbox/realm.ts): every live key gets the agency, the test team's checker the test team.
+  const realm = input.realm ?? "live";
+  const rows = input.since ? await listPersonRowsChangedSince(db, input.since, realm) : await listPersonRows(db, realm);
   const personIds = rows.map((row) => row.id);
   const parts = await loadParts(db, personIds);
   const terms = input.includeTerms ? termViewsByPerson(await listPersonPayTermRows(db, personIds)) : null;

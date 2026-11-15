@@ -123,3 +123,17 @@ export async function readSandboxSummary(db: Database): Promise<{ people: number
   if (row === undefined || Number(row.people) === 0) return null;
   return { people: Number(row.people), lastWorkedAt: row.last_worked === null ? null : new Date(row.last_worked) };
 }
+
+/** Whether an off-platform line (a report's money outside the platforms) is a test person's (null: no such line). */
+export async function isTestOffPlatformLine(db: Database, id: number): Promise<boolean | null> {
+  const result = await db.execute(sql`select ${testUserSql(sql`o.user_id`)} as test from off_platform_sales o where o.id = ${id}`);
+  const row = result.rows[0] as { test?: boolean } | undefined;
+  return row === undefined ? null : row.test === true;
+}
+
+/** Whether a page (by label) is a test page (null: no such page). */
+export async function isTestPageLabel(db: Database, label: string): Promise<boolean | null> {
+  const result = await db.execute(sql`select ${testPageSql(sql`p.id`)} as test from pages p where p.label = ${label}`);
+  const row = result.rows[0] as { test?: boolean } | undefined;
+  return row === undefined ? null : row.test === true;
+}

@@ -37,7 +37,7 @@ function kindOf(decision: Pick<SaleDecisionRow, "kind" | "shares">): AgentSaleDe
 
 export async function readSaleDecisionsFeed(
   app: FeedApp,
-  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined },
+  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined; realm?: "live" | "test" },
   now: Date = new Date(),
 ): Promise<AgentSaleDecisionsFeedResponse> {
   const { db } = app;
@@ -49,7 +49,9 @@ export async function readSaleDecisionsFeed(
   // A decision about a test page is no key's (sandbox/realm.ts): dropped BEFORE the held list (a held change fails the
   // ledger's check «дайте ключу эти страницы»). The cursor still moves past it.
   const testPages = await testPageIds(app);
-  const live = (change: SaleDecisionChangeRow) => change.pageId === null || !testPages.has(change.pageId);
+  // The reader's realm: a live key's are the live agency's; the test team's checker reads only test pages' changes.
+  const live = (change: SaleDecisionChangeRow) =>
+    (change.pageId !== null && testPages.has(change.pageId)) === (input.realm === "test");
   const fresh = { ...placed, changes: placed.changes.filter(live) };
   const readable = (change: SaleDecisionChangeRow) => change.pageId !== null && input.pageIds.includes(change.pageId);
   let held = fresh.changes.filter((change) => !readable(change));

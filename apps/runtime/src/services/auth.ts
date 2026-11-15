@@ -59,7 +59,7 @@ import {
   UnauthorizedError,
   type AuthFailureReason,
 } from "./errors.ts";
-import { findPageSummaryByLabel } from "@agency_hub_core/db";
+import { findPageSummaryByLabel, listTestPageIds } from "@agency_hub_core/db";
 import { ownerCanAccessPage, principalSandboxOf, type PrincipalSandbox } from "./sandbox/realm.ts";
 
 export const SESSION_COOKIE_NAME = "agency_hub_core_session";
@@ -176,6 +176,11 @@ export interface AgentAuthPrincipal {
   capabilities: readonly string[];
   /** The explicit page grant. No wildcard, never widened by role. */
   pageIds: number[];
+  /**
+   * The test realm (0414, sandbox/realm.ts): a key granted test pages only (the test team's checker) is a test
+   * principal; every other key is live. A key never holds pages of both realms (the database refuses it).
+   */
+  sandbox?: { test: true };
 }
 
 export type AuthPrincipal = HumanAuthPrincipal | AgentAuthPrincipal;
@@ -1394,6 +1399,8 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
     return null;
   }
 
+  const testPages = record.pageIds.length === 0 ? [] : await listTestPageIds(app.db);
+  const test = testPages.length > 0 && record.pageIds.every((pageId) => testPages.includes(pageId));
   return {
     kind: "agent" as const,
     authMethod: "agent_key" as const,
@@ -1401,6 +1408,7 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
     keyName: record.name,
     capabilities: record.capabilities,
     pageIds: record.pageIds,
+    ...(test ? { sandbox: { test: true as const } } : {}),
   } satisfies AgentAuthPrincipal;
 }
 

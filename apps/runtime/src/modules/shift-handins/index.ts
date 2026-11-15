@@ -32,7 +32,7 @@ import {
   withdrawShiftReportAsk,
 } from "../../services/shift-report-board.ts";
 import { recordSaleSightings } from "../../services/shift-handin-check.ts";
-import { requireShiftOfRealm } from "../../services/sandbox/realm.ts";
+import { realmOf, requireShiftOfRealm } from "../../services/sandbox/realm.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -290,7 +290,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportsFeed", ["read:team", "read:money"]);
     let delivered = 0;
     try {
-      const feed = await readShiftReportsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId });
+      const feed = await readShiftReportsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId, realm: realmOf(principal) });
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId,
         operation: "agentShiftReportsFeed",

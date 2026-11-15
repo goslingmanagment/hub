@@ -4,6 +4,7 @@ import { readAgentFanWatch, readAgentSaleContext, readAgentShiftReview } from ".
 import { readAgentTeamSales } from "../../services/agent-team-sales.ts";
 import { beginAgentRequest, staticNotFound, withAgentTimeout, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+import { realmOf } from "../../services/sandbox/realm.ts";
 
 /**
  * The team's sale facts for the agency ledger (`agentTeamSales`, ledger
@@ -30,7 +31,7 @@ export function registerAgentTeamRoutes(server: ApiServer, ctx: ApiModuleContext
       const pages = scope.pages.map((page) => ({ id: page.id, label: page.pageLabel }));
       const from = new Date(request.body.from);
       const to = new Date(request.body.to);
-      const result = await withAgentTimeout(appContext.db, AGENT_TEAM_TIMEOUT_MS, (tx) => readAgentTeamSales(tx, { from, to, now: new Date(), pages }), "agent_team_sales");
+      const result = await withAgentTimeout(appContext.db, AGENT_TEAM_TIMEOUT_MS, (tx) => readAgentTeamSales(tx, { from, to, now: new Date(), pages, realm: realmOf(principal) }), "agent_team_sales");
       await writeAgentAudit(appContext.db, {
         agentKeyId: principal.agentKeyId,
         operation: "agentTeamSales",

@@ -173,6 +173,14 @@ export const signinRouteSchemas = {
     description: "Reads only (no last-seen write); a cookie session only — a bearer and a narrow web session are 401.",
     response: { 200: authIntrospectResponseSchema, 401: errorResponseSchema },
   },
+  authStaticReports: {
+    auth: { kind: "public" },
+    tags: ["auth"],
+    summary: "For nginx's guard of the static reports on chatgoose. (`/customs/`, `/fyp/`): 204 for a signed-in live person",
+    description: "The reports hold the agency's real data: 204 for any signed-in person of the live agency (what `auth/me` "
+      + "let in before), 401 with no sign-in, 403 for a person of the test team (Hub's sandbox/realm.ts). Reads only.",
+    response: { 204: z.null(), 401: errorResponseSchema, 403: errorResponseSchema },
+  },
   authSsoRedeem: {
     auth: { kind: "agentKey" },
     tags: ["auth"],

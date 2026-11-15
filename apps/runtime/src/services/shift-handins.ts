@@ -1431,7 +1431,7 @@ export function feedLineOf(line: HandinVersionLine): AgentShiftReportsFeedRespon
  */
 export async function readShiftReportsFeed(
   app: HandinApp,
-  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined },
+  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined; realm?: "live" | "test" },
   now: Date = new Date(),
 ): Promise<AgentShiftReportsFeedResponse> {
   const afterSeq = input.since === undefined ? 0 : Number(input.since);
@@ -1440,7 +1440,7 @@ export async function readShiftReportsFeed(
   // it like any other, so an answer that is lost is asked again and brings it again.
   if (input.agentKeyId !== undefined) await releaseHandinFeedHeld(app.db, { agentKeyId: input.agentKeyId, pageIds: input.pageIds });
   await placeHandinVersionsInFeed(app.db);
-  const read = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds });
+  const read = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds, realm: input.realm ?? "live" });
   let held = read.held;
   if (input.agentKeyId !== undefined) {
     await holdHandinFeedVersions(app.db, { agentKeyId: input.agentKeyId, versionIds: read.held.map((one) => one.id) });

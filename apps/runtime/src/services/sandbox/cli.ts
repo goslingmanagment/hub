@@ -11,20 +11,26 @@ export function registerSandboxCommands(program: Command) {
     .description("Seed the test team (model «Тест», pages test-1 and test-of, the t-* people); additive and idempotent")
     .option("--scenario <name...>", `scenarios to add for now: ${SANDBOX_SCENARIOS.join(", ")}`)
     .option("--print-invite", "mint a fresh invitation link of t-new and print it (for the coordinator)")
-    .action(async (options: { scenario?: string[]; printInvite?: boolean }) => {
+    .option("--print-checker-key", "mint the sandbox-checker agent's key (replacing its live one) and print its value once")
+    .action(async (options: { scenario?: string[]; printInvite?: boolean; printCheckerKey?: boolean }) => {
       const scenarios = [...new Set(options.scenario ?? [])];
       const unknown = scenarios.filter((name) => !(SANDBOX_SCENARIOS as readonly string[]).includes(name));
       if (unknown.length > 0) throw new Error(`Unknown scenario: ${unknown.join(", ")}`);
       const app = await createAppContext();
       try {
-        const result = await seedSandbox(app, { scenarios: scenarios as SandboxScenario[], printInvite: options.printInvite === true });
+        const result = await seedSandbox(app, {
+          scenarios: scenarios as SandboxScenario[], printInvite: options.printInvite === true, printCheckerKey: options.printCheckerKey === true,
+        });
         // Never a password: only whether one was set from the environment.
         console.log(JSON.stringify({
           model: result.model,
           pages: result.pages,
           people: result.people,
           scenarios: result.scenarios,
+          checker: result.checker,
           ...(result.invite === null ? {} : { invite: result.invite }),
+          // The key's value, this once, only when asked for; never logged anywhere else.
+          ...(result.checkerKey === null ? {} : { checkerKey: result.checkerKey }),
         }, null, 2));
       } catch (error) {
         if (error instanceof SandboxSeedRefused) {

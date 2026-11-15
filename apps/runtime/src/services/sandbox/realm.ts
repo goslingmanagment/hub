@@ -1,5 +1,7 @@
 import {
   isTestPage,
+  isTestOffPlatformLine,
+  isTestPageLabel,
   isTestShift,
   listTestTransactionIds,
   listLivePageIds,
@@ -70,9 +72,14 @@ export async function principalSandboxOf(
   return { test, testPageIds: testPages, livePageIds: livePages };
 }
 
-/** Whether a principal is a test person's login. Agent keys are always live. */
+/** Whether a principal is a test person's login. */
 export function isTestPrincipal(principal: AuthPrincipal): principal is HumanAuthPrincipal & { sandbox: PrincipalSandbox } {
   return principal.kind !== "agent" && principal.sandbox?.test === true;
+}
+
+/** Whether an agent key is the test realm's (granted test pages only: the test team's checker). */
+export function isTestAgent(principal: AuthPrincipal): boolean {
+  return principal.kind === "agent" && principal.sandbox?.test === true;
 }
 
 /** The test owner («the owner of the test team»): denied by default outside its table. */
@@ -120,7 +127,7 @@ export async function testPageIds(app: { db: Database }): Promise<Set<number>> {
 
 /** The realm a principal reads and writes: test for a test person's login, live for everyone else (agents too). */
 export function realmOf(principal: AuthPrincipal): "live" | "test" {
-  return isTestPrincipal(principal) ? "test" : "live";
+  return isTestPrincipal(principal) || isTestAgent(principal) ? "test" : "live";
 }
 
 /**
@@ -143,4 +150,25 @@ export async function requireSalesOfRealm(app: { db: Database }, principal: Auth
   if (transactionIds.length === 0) return;
   const test = new Set(await listTestTransactionIds(app.db, transactionIds));
   for (const id of transactionIds) requireSameRealm(principal, test.has(id), () => new NotFoundError("The sale was not found"));
+}
+
+/**
+ * The objects a decider names, of the principal's realm only, or «not found»: sales, an off-platform line, a page. One
+ * check for every decider of whose a sale is (sale-claims module), whatever the role.
+ */
+export async function requireDecidedOfRealm(
+  app: { db: Database },
+  principal: AuthPrincipal,
+  named: { transactionIds: readonly number[]; offPlatformId?: number | undefined; pageLabel?: string | undefined },
+): Promise<void> {
+  await requireSalesOfRealm(app, principal, named.transactionIds);
+  const notFound = () => new NotFoundError("Not found");
+  if (named.offPlatformId !== undefined) {
+    const test = await isTestOffPlatformLine(app.db, named.offPlatformId);
+    if (test !== null) requireSameRealm(principal, test, notFound);
+  }
+  if (named.pageLabel !== undefined) {
+    const test = await isTestPageLabel(app.db, named.pageLabel);
+    if (test !== null) requireSameRealm(principal, test, notFound);
+  }
 }

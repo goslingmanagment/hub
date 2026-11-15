@@ -16,6 +16,8 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { createAccountLinkForUserId } from "../account-links.ts";
 import { createUserOrRefuseDuplicate } from "../auth.ts";
+import { issueAgentKey, replaceAgentKey } from "../agent-keys.ts";
+import { AGENT_CAPABILITIES, type AgentCapability } from "@agency_hub_core/contracts";
 import { recordCustomOrder } from "../custom-orders/index.ts";
 import { openMatter } from "@agency_hub_core/db";
 
@@ -80,6 +82,21 @@ export const SANDBOX_PEOPLE: readonly SandboxPersonSpec[] = [
   { code: "t-km", displayName: "Тест: КМ", role: "content_manager", state: "working", works: false, login: null },
 ];
 
+/**
+ * The test team's checker: an AGENT of the test realm (it plays Gengar on the test team) with one key granted the test
+ * pages only. Reads the team and, once the board's capability exists, reviews shift reports. Its key's value is minted
+ * and printed only on `--print-checker-key` (a second time: the live key is replaced, the old one ends in 24 hours).
+ * Without `review:shift_reports` in this build, add it later:
+ *   cli.js agent-keys:capabilities sandbox-checker --add review:shift_reports --owner-user-id <owner> --note "test team"
+ */
+export const SANDBOX_CHECKER = { code: "sandbox-checker", displayName: "Тест: проверяющий агент", keyName: "sandbox-checker" } as const;
+const CHECKER_CAPABILITIES = ["read:team", "read:money", "review:shift_reports"] as const;
+
+/** The checker's capabilities this build knows (`review:shift_reports` comes with the board). */
+export function sandboxCheckerCapabilities(): AgentCapability[] {
+  return CHECKER_CAPABILITIES.filter((one) => (AGENT_CAPABILITIES as readonly string[]).includes(one)) as AgentCapability[];
+}
+
 export const SANDBOX_SCENARIOS = ["shift", "customs", "matters"] as const;
 export type SandboxScenario = (typeof SANDBOX_SCENARIOS)[number];
 
@@ -92,6 +109,8 @@ export interface SandboxSeedInput {
   scenarios: readonly SandboxScenario[];
   /** Mint a fresh invitation link of `t-new` and answer it (for the coordinator only). */
   printInvite?: boolean;
+  /** Mint the checker's key (replacing its live one) and answer its value once (for the coordinator only). */
+  printCheckerKey?: boolean;
   env?: NodeJS.ProcessEnv;
   now?: Date;
 }
@@ -102,6 +121,9 @@ export interface SandboxSeedResult {
   people: Array<{ code: string; personId: number; created: boolean; login: string | null; passwordSet: boolean }>;
   scenarios: Record<string, Record<string, number>>;
   invite: string | null;
+  checker: { personId: number; created: boolean; liveKey: boolean; capabilities: string[] };
+  /** The checker key's value: only on `printCheckerKey`, this once. */
+  checkerKey: string | null;
 }
 
 type Row = Record<string, unknown>;
@@ -455,13 +477,54 @@ export async function seedSandbox(app: AppContext, input: SandboxSeedInput): Pro
     if (scenario === "customs") scenarios.customs = await seedCustoms(app, result.pages, now);
     if (scenario === "matters") scenarios.matters = await seedMatters(app.db, result.pages, now);
   }
+  const checker = await ensureChecker(app);
+  let checkerKey: string | null = null;
+  if (input.printCheckerKey === true) checkerKey = await mintCheckerKey(app, checker);
   let invite: string | null = null;
   if (input.printInvite === true) {
     const userId = await testLogin(app.db, "t-new");
     const link = await createAccountLinkForUserId(app, { userId, kind: "invite", expiresInHours: 72 }, { source: "cli" });
     invite = `${env.SANDBOX_JOIN_ORIGIN ?? JOIN_ORIGIN}/join#${link.token}`;
   }
-  return { ...result, scenarios, invite };
+  const live = await liveCheckerKey(app.db, checker.personId);
+  return {
+    ...result, scenarios, invite, checkerKey,
+    checker: { personId: checker.personId, created: checker.created, liveKey: live !== null, capabilities: live?.capabilities ?? [] },
+  };
+}
+
+async function ensureChecker(app: AppContext): Promise<{ personId: number; created: boolean }> {
+  const found = await findPersonRowByCode(app.db, SANDBOX_CHECKER.code);
+  if (found !== null) {
+    if (!found.isTest) throw new SandboxSeedRefused(`A live person has the code «${SANDBOX_CHECKER.code}»: nothing written`);
+    return { personId: found.id, created: false };
+  }
+  const person = await insertPersonRow(app.db, {
+    code: SANDBOX_CHECKER.code, displayName: SANDBOX_CHECKER.displayName, kind: "agent", role: "agent", state: "working",
+    leftOn: null, telegramUserId: null, telegramHandle: null, reportTag: null, onboarding: [],
+    note: "Тестовая команда (sandbox:seed): играет Генгара", importNotes: [], origin: "owner", createdByUserId: null, isTest: true,
+  });
+  return { personId: person.id, created: true };
+}
+
+async function liveCheckerKey(db: Database, personId: number): Promise<{ id: number; capabilities: string[] } | null> {
+  const [row] = await rows(db, sql`select a.id, a.capabilities from person_agent_keys k join agent_keys a on a.id = k.agent_key_id
+    where k.person_id = ${personId} and a.revoked_at is null and a.replaced_at is null and a.expires_at > now()
+    order by a.id desc limit 1`);
+  return row ? { id: Number(row.id), capabilities: (row.capabilities as string[] | null) ?? [] } : null;
+}
+
+async function mintCheckerKey(app: AppContext, checker: { personId: number }): Promise<string> {
+  const existing = await liveCheckerKey(app.db, checker.personId);
+  if (existing !== null) {
+    const replaced = await replaceAgentKey(app, { id: existing.id, name: `${SANDBOX_CHECKER.keyName}-${Date.now()}`, expiresInDays: 90 }, { source: "cli" });
+    return replaced.token;
+  }
+  const issued = await issueAgentKey(app, {
+    name: SANDBOX_CHECKER.keyName, agentCode: SANDBOX_CHECKER.code, capabilities: sandboxCheckerCapabilities(),
+    pageLabels: SANDBOX_PAGES.map((page) => page.label), expiresInDays: 90,
+  }, { source: "cli" });
+  return issued.token;
 }
 
 /** The page ids of the test realm, for a caller that has only the labels. */

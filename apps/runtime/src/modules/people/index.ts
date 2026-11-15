@@ -18,6 +18,7 @@ import { readAccountStart, setOwnPayoutDetails } from "../../services/people/sta
 import { auditCtx } from "../../api/request-auth.ts";
 import { beginAgentRequest, withAgentTimeout, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+import { realmOf } from "../../services/sandbox/realm.ts";
 
 /**
  * The people registry (ecosystem plan 2026-11-12, package A), in shadow. Twin
@@ -100,6 +101,7 @@ export function registerPeopleRoutes(server: ApiServer, ctx: ApiModuleContext) {
         grantedPageIds: scope.pages.map((page) => page.id),
         keyGrantExcludedPages: scope.scopeNarrowing.keyGrantExcludedPages,
         includeTerms: scope.has("read:pay_terms"),
+        realm: realmOf(principal),
       }), "agent_people");
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId,
