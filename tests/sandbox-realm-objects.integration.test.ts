@@ -43,8 +43,11 @@ const SANDBOX_PASSWORDS = {
 };
 const CLOCK_KEYS = new Set(["serverNow", "generatedAt", "now", "asOf", "computedAt", "checkedAt", "fetchedAt", "readAt", "requestId", "savedAt"]);
 const HUMAN_KINDS = new Set(["any", "any-session", "session"]);
-/** POST operations that only read. */
-const POST_READS = new Set(["spenderBatch"]);
+/**
+ * POST operations whose success on a value that names nothing changes nothing: a read, and a batch over sales that
+ * keeps the ones that exist (a missing sale is nothing kept, no row written).
+ */
+const POST_READS = new Set(["spenderBatch", "saleNobodyKeep"]);
 
 type Server = Awaited<ReturnType<typeof buildApiServer>>;
 type Zod = { _zod: { def: Record<string, unknown> & { type: string } } };
