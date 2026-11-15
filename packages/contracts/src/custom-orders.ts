@@ -11,12 +11,16 @@ import { z } from "zod";
 
 import { intId, isoDateTime, isoTimestamp, mills } from "./primitives.ts";
 
+/**
+ * The states. `checked` («Проверен», products plan §4.5, package C3): the team's customs lead (with a team lead — the
+ * lead) checked the card and gave it to shooting; the content side (ContentOps «Съёмка») takes it from there.
+ */
 export const CUSTOM_ORDER_STATES = [
-  "recorded", "paid", "at_model", "partly", "shot", "revision", "refused", "given", "closed", "cancelled",
+  "recorded", "paid", "checked", "at_model", "partly", "shot", "revision", "refused", "given", "closed", "cancelled",
 ] as const;
 export type CustomOrderState = (typeof CUSTOM_ORDER_STATES)[number];
 /** Still in work: neither given to the fan nor ended. */
-export const CUSTOM_ORDER_OPEN_STATES: readonly CustomOrderState[] = ["recorded", "paid", "at_model", "partly", "shot", "revision", "refused"];
+export const CUSTOM_ORDER_OPEN_STATES: readonly CustomOrderState[] = ["recorded", "paid", "checked", "at_model", "partly", "shot", "revision", "refused"];
 /** Ended: nothing moves it any more but a person's «правка» after «отдали». */
 export const CUSTOM_ORDER_FINAL_STATES: readonly CustomOrderState[] = ["closed", "cancelled"];
 
@@ -27,7 +31,7 @@ export const CUSTOM_ORDER_ORIGINS = ["extension", "agent", "workboard", "import"
  * writer of each: an agent key opens or closes none of them.
  */
 export const CUSTOM_ORDER_CHECK_KINDS = [
-  "custom.not_at_model", "custom.overdue", "custom.overdue_owner", "custom.shot_not_given", "custom.give_on_shift",
+  "custom.not_at_model", "custom.checked_not_at_model", "custom.overdue", "custom.overdue_owner", "custom.shot_not_given", "custom.give_on_shift",
   "custom.unrecorded", "custom.card_without_order",
 ] as const;
 export type CustomOrderCheckKind = (typeof CUSTOM_ORDER_CHECK_KINDS)[number];
@@ -160,6 +164,8 @@ export const customOrderSchema = z.object({
   pageLabel: z.string().nullable(),
   platform: z.string().nullable(),
   model: z.string().nullable(),
+  /** The model's slug (ContentOps' address of the model: «Съёмка в ContentOps»); null — the page is not known. */
+  modelSlug: z.string().nullable(),
   /** Null — the fan is not confirmed (`buyer` is what the card says) or was erased (`fanErased`). */
   fan: customOrderFanSchema.nullable(),
   buyer: z.string().nullable(),
@@ -169,6 +175,18 @@ export const customOrderSchema = z.object({
   what: z.string(),
   deadlineOn: day.nullable(),
   state: z.enum(CUSTOM_ORDER_STATES),
+  /** The state in people's words (`CUSTOM_STATE_WORDS`): every door shows the same word. */
+  stateWord: z.string(),
+  /**
+   * «У кого сейчас»: who leads the order's current step (products plan §4.5, one rule — services/custom-orders/
+   * leaders.ts) and where it is done; null — an ended order. `name` null — the owner (nobody leads it).
+   */
+  leader: z.object({
+    name: z.string().nullable(),
+    /** The step's side: the chat's (`check`, `give`) is Workboard's, the shooting is ContentOps'. */
+    phase: z.enum(["check", "shoot", "give"]),
+    product: z.enum(["workboard", "contentops"]),
+  }).nullable(),
   stateAt: isoTimestamp,
   /** A refusal's reason; what a revision or a partial delivery is about. */
   stateNote: z.string().nullable(),
@@ -257,7 +275,7 @@ export const customLookalikeSaleSchema = z.object({
 });
 
 export const CUSTOM_ORDER_ACTIONS = [
-  "edit", "deadline", "fan", "card", "payment", "unpay", "at_model", "partly", "shot", "revision", "refused", "given", "close", "cancel",
+  "edit", "deadline", "fan", "card", "payment", "unpay", "checked", "at_model", "partly", "shot", "revision", "refused", "given", "close", "cancel",
 ] as const;
 export type CustomOrderAction = (typeof CUSTOM_ORDER_ACTIONS)[number];
 
@@ -341,13 +359,19 @@ export const customOrderActionBodySchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("card"), telegramRef: telegramRefInputSchema }).strict(),
   z.object({ action: z.literal("payment"), transactionRef: ref }).strict(),
   z.object({ action: z.literal("unpay"), transactionRef: ref }).strict(),
-  z.object({ action: z.literal("at_model"), telegramRef: telegramRefInputSchema.optional() }).strict(),
+  /** «Проверен»: the card is checked, the order goes to shooting. */
+  z.object({ action: z.literal("checked") }).strict(),
+  z.object({ action: z.literal("at_model"), telegramRef: telegramRefInputSchema.optional(), deadlineOn: day.optional() }).strict(),
   z.object({ action: z.literal("partly"), note: note.optional() }).strict(),
   z.object({ action: z.literal("shot") }).strict(),
   /** «Правка»: a request about one part (`part`), or — none named — about the whole order. */
   z.object({ action: z.literal("revision"), note: note.optional(), part: z.enum(["video", "photos"]).optional() }).strict(),
   z.object({ action: z.literal("refused"), reason: note }).strict(),
-  z.object({ action: z.literal("given"), messageRef: ref }).strict(),
+  /**
+   * «Отдан»: by the message the hub suggests, or — none named — by the person's word (an order given before the hub
+   * saw the chat, a Fansly chat the hub does not read).
+   */
+  z.object({ action: z.literal("given"), messageRef: ref.optional() }).strict(),
   z.object({ action: z.literal("close") }).strict(),
   z.object({ action: z.literal("cancel"), reason: note.optional() }).strict(),
 ]);
@@ -506,6 +530,18 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   }).strict(),
   /** Attach a Telegram card (a copy in another chat) to the order. */
   z.object({ action: z.literal("card"), telegramRef: telegramRefInputSchema, onBehalfOf: login.optional() }).strict(),
+  /**
+   * A step a PERSON takes in another product (ContentOps «Съёмка», package C3): the key only carries it, the person
+   * (`onBehalfOf`, required) must lead that step of the order by the one rule (services/custom-orders/leaders.ts),
+   * else 409 `not_allowed`. Written as theirs: the history names the key and the person. «Передать модели» may set
+   * the deadline with it; «Правка» names its part or the whole order.
+   */
+  z.object({
+    action: z.literal("person_step"), step: z.enum(["at_model", "partly", "shot", "revision", "refused"]), onBehalfOf: login,
+    deadlineOn: day.optional(), note: note.optional(), part: z.enum(["video", "photos"]).optional(),
+  }).strict().superRefine((body, context) => {
+    if (body.step === "refused" && body.note === undefined) context.addIssue({ code: "custom", path: ["note"], message: "a refusal names its reason" });
+  }),
 ]).superRefine((body, context) => {
   // A message step is known by its Telegram link, or by the sender's own eventRef; a repost is a card, so a link.
   if ((body.action === "delivery" || body.action === "revision" || body.action === "message") && body.message.telegramRef === undefined

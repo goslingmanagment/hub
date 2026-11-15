@@ -123,6 +123,8 @@ export function worstWaitingTone(tones: Iterable<WaitingTone | null>): WaitingTo
 
 /** The product a matter's kind is decided in: its group's. */
 export function waitingProductOf(kind: string): WaitingProductId {
+  // A custom order's shooting steps are ContentOps' (the customs group holds both sides of an order).
+  if (CONTENTOPS_CUSTOM_KINDS.has(kind)) return "contentops";
   const group = waitingGroupOf(kind);
   return WAITING_GROUPS.find((one) => one.id === group)?.product ?? "hub";
 }

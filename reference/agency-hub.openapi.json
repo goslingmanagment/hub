@@ -110540,6 +110540,12 @@
                               "null"
                             ]
                           },
+                          "modelSlug": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "fan": {
                             "anyOf": [
                               {
@@ -110691,6 +110697,7 @@
                             "enum": [
                               "recorded",
                               "paid",
+                              "checked",
                               "at_model",
                               "partly",
                               "shot",
@@ -110699,6 +110706,48 @@
                               "given",
                               "closed",
                               "cancelled"
+                            ]
+                          },
+                          "stateWord": {
+                            "type": "string"
+                          },
+                          "leader": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "check",
+                                      "shoot",
+                                      "give"
+                                    ]
+                                  },
+                                  "product": {
+                                    "type": "string",
+                                    "enum": [
+                                      "workboard",
+                                      "contentops"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "phase",
+                                  "product"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "stateAt": {
@@ -110919,6 +110968,7 @@
                           "pageLabel",
                           "platform",
                           "model",
+                          "modelSlug",
                           "fan",
                           "buyer",
                           "fanErased",
@@ -110926,6 +110976,8 @@
                           "what",
                           "deadlineOn",
                           "state",
+                          "stateWord",
+                          "leader",
                           "stateAt",
                           "stateNote",
                           "stateRef",
@@ -111407,6 +111459,12 @@
                             "null"
                           ]
                         },
+                        "modelSlug": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "fan": {
                           "anyOf": [
                             {
@@ -111558,6 +111616,7 @@
                           "enum": [
                             "recorded",
                             "paid",
+                            "checked",
                             "at_model",
                             "partly",
                             "shot",
@@ -111566,6 +111625,48 @@
                             "given",
                             "closed",
                             "cancelled"
+                          ]
+                        },
+                        "stateWord": {
+                          "type": "string"
+                        },
+                        "leader": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "phase": {
+                                  "type": "string",
+                                  "enum": [
+                                    "check",
+                                    "shoot",
+                                    "give"
+                                  ]
+                                },
+                                "product": {
+                                  "type": "string",
+                                  "enum": [
+                                    "workboard",
+                                    "contentops"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "phase",
+                                "product"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "stateAt": {
@@ -111786,6 +111887,7 @@
                         "pageLabel",
                         "platform",
                         "model",
+                        "modelSlug",
                         "fan",
                         "buyer",
                         "fanErased",
@@ -111793,6 +111895,8 @@
                         "what",
                         "deadlineOn",
                         "state",
+                        "stateWord",
+                        "leader",
                         "stateAt",
                         "stateNote",
                         "stateRef",
@@ -113169,6 +113273,54 @@
                       "telegramRef"
                     ],
                     "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "person_step"
+                        ]
+                      },
+                      "step": {
+                        "type": "string",
+                        "enum": [
+                          "at_model",
+                          "partly",
+                          "shot",
+                          "revision",
+                          "refused"
+                        ]
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "deadlineOn": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                      },
+                      "note": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "part": {
+                        "type": "string",
+                        "enum": [
+                          "video",
+                          "photos"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "step",
+                      "onBehalfOf"
+                    ],
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -113224,6 +113376,12 @@
                           ]
                         },
                         "model": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "modelSlug": {
                           "type": [
                             "string",
                             "null"
@@ -113380,6 +113538,7 @@
                           "enum": [
                             "recorded",
                             "paid",
+                            "checked",
                             "at_model",
                             "partly",
                             "shot",
@@ -113388,6 +113547,48 @@
                             "given",
                             "closed",
                             "cancelled"
+                          ]
+                        },
+                        "stateWord": {
+                          "type": "string"
+                        },
+                        "leader": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "phase": {
+                                  "type": "string",
+                                  "enum": [
+                                    "check",
+                                    "shoot",
+                                    "give"
+                                  ]
+                                },
+                                "product": {
+                                  "type": "string",
+                                  "enum": [
+                                    "workboard",
+                                    "contentops"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "phase",
+                                "product"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "stateAt": {
@@ -113608,6 +113809,7 @@
                         "pageLabel",
                         "platform",
                         "model",
+                        "modelSlug",
                         "fan",
                         "buyer",
                         "fanErased",
@@ -113615,6 +113817,8 @@
                         "what",
                         "deadlineOn",
                         "state",
+                        "stateWord",
+                        "leader",
                         "stateAt",
                         "stateNote",
                         "stateRef",
@@ -239822,6 +240026,12 @@
                               "null"
                             ]
                           },
+                          "modelSlug": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "fan": {
                             "anyOf": [
                               {
@@ -239973,6 +240183,7 @@
                             "enum": [
                               "recorded",
                               "paid",
+                              "checked",
                               "at_model",
                               "partly",
                               "shot",
@@ -239981,6 +240192,48 @@
                               "given",
                               "closed",
                               "cancelled"
+                            ]
+                          },
+                          "stateWord": {
+                            "type": "string"
+                          },
+                          "leader": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "check",
+                                      "shoot",
+                                      "give"
+                                    ]
+                                  },
+                                  "product": {
+                                    "type": "string",
+                                    "enum": [
+                                      "workboard",
+                                      "contentops"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "phase",
+                                  "product"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "stateAt": {
@@ -240103,6 +240356,7 @@
                           "pageLabel",
                           "platform",
                           "model",
+                          "modelSlug",
                           "fan",
                           "buyer",
                           "fanErased",
@@ -240110,6 +240364,8 @@
                           "what",
                           "deadlineOn",
                           "state",
+                          "stateWord",
+                          "leader",
                           "stateAt",
                           "stateNote",
                           "stateRef",
@@ -240582,6 +240838,12 @@
                             "null"
                           ]
                         },
+                        "modelSlug": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "fan": {
                           "anyOf": [
                             {
@@ -240733,6 +240995,7 @@
                           "enum": [
                             "recorded",
                             "paid",
+                            "checked",
                             "at_model",
                             "partly",
                             "shot",
@@ -240741,6 +241004,48 @@
                             "given",
                             "closed",
                             "cancelled"
+                          ]
+                        },
+                        "stateWord": {
+                          "type": "string"
+                        },
+                        "leader": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "phase": {
+                                  "type": "string",
+                                  "enum": [
+                                    "check",
+                                    "shoot",
+                                    "give"
+                                  ]
+                                },
+                                "product": {
+                                  "type": "string",
+                                  "enum": [
+                                    "workboard",
+                                    "contentops"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "phase",
+                                "product"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "stateAt": {
@@ -240863,6 +241168,7 @@
                         "pageLabel",
                         "platform",
                         "model",
+                        "modelSlug",
                         "fan",
                         "buyer",
                         "fanErased",
@@ -240870,6 +241176,8 @@
                         "what",
                         "deadlineOn",
                         "state",
+                        "stateWord",
+                        "leader",
                         "stateAt",
                         "stateNote",
                         "stateRef",
@@ -241178,6 +241486,7 @@
                           "card",
                           "payment",
                           "unpay",
+                          "checked",
                           "at_model",
                           "partly",
                           "shot",
@@ -241670,6 +241979,12 @@
                             "null"
                           ]
                         },
+                        "modelSlug": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "fan": {
                           "anyOf": [
                             {
@@ -241821,6 +242136,7 @@
                           "enum": [
                             "recorded",
                             "paid",
+                            "checked",
                             "at_model",
                             "partly",
                             "shot",
@@ -241829,6 +242145,48 @@
                             "given",
                             "closed",
                             "cancelled"
+                          ]
+                        },
+                        "stateWord": {
+                          "type": "string"
+                        },
+                        "leader": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "phase": {
+                                  "type": "string",
+                                  "enum": [
+                                    "check",
+                                    "shoot",
+                                    "give"
+                                  ]
+                                },
+                                "product": {
+                                  "type": "string",
+                                  "enum": [
+                                    "workboard",
+                                    "contentops"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "phase",
+                                "product"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "stateAt": {
@@ -241951,6 +242309,7 @@
                         "pageLabel",
                         "platform",
                         "model",
+                        "modelSlug",
                         "fan",
                         "buyer",
                         "fanErased",
@@ -241958,6 +242317,8 @@
                         "what",
                         "deadlineOn",
                         "state",
+                        "stateWord",
+                        "leader",
                         "stateAt",
                         "stateNote",
                         "stateRef",
@@ -242266,6 +242627,7 @@
                           "card",
                           "payment",
                           "unpay",
+                          "checked",
                           "at_model",
                           "partly",
                           "shot",
@@ -242714,6 +243076,21 @@
                       "action": {
                         "type": "string",
                         "enum": [
+                          "checked"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
                           "at_model"
                         ]
                       },
@@ -242721,6 +243098,10 @@
                         "type": "string",
                         "minLength": 3,
                         "maxLength": 300
+                      },
+                      "deadlineOn": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                       }
                     },
                     "required": [
@@ -242828,8 +243209,7 @@
                       }
                     },
                     "required": [
-                      "action",
-                      "messageRef"
+                      "action"
                     ],
                     "additionalProperties": false
                   },
@@ -242922,6 +243302,12 @@
                           ]
                         },
                         "model": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "modelSlug": {
                           "type": [
                             "string",
                             "null"
@@ -243078,6 +243464,7 @@
                           "enum": [
                             "recorded",
                             "paid",
+                            "checked",
                             "at_model",
                             "partly",
                             "shot",
@@ -243086,6 +243473,48 @@
                             "given",
                             "closed",
                             "cancelled"
+                          ]
+                        },
+                        "stateWord": {
+                          "type": "string"
+                        },
+                        "leader": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "phase": {
+                                  "type": "string",
+                                  "enum": [
+                                    "check",
+                                    "shoot",
+                                    "give"
+                                  ]
+                                },
+                                "product": {
+                                  "type": "string",
+                                  "enum": [
+                                    "workboard",
+                                    "contentops"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "name",
+                                "phase",
+                                "product"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "stateAt": {
@@ -243208,6 +243637,7 @@
                         "pageLabel",
                         "platform",
                         "model",
+                        "modelSlug",
                         "fan",
                         "buyer",
                         "fanErased",
@@ -243215,6 +243645,8 @@
                         "what",
                         "deadlineOn",
                         "state",
+                        "stateWord",
+                        "leader",
                         "stateAt",
                         "stateNote",
                         "stateRef",
@@ -243523,6 +243955,7 @@
                           "card",
                           "payment",
                           "unpay",
+                          "checked",
                           "at_model",
                           "partly",
                           "shot",

@@ -14,7 +14,7 @@ const LEAD = { userId: 900 } as const;
 
 function order(id: number, fields: Partial<CustomOrderRow>): CustomOrderRow {
   return {
-    id, pageId: 1, pageLabel: "lora-1", platform: "fansly", modelName: "Lora", fanId: 7, fanRef: "7400000001", fanUsername: "fan_one",
+    id, pageId: 1, pageLabel: "lora-1", platform: "fansly", modelName: "Lora", modelSlug: "lora", fanId: 7, fanRef: "7400000001", fanUsername: "fan_one",
     fanDisplayName: null, buyer: null, fanErasedAt: null, conversationRef: null, card: { task: "Заказ" }, deadlineOn: null, state: "recorded",
     stateAt: NOW, stateNote: null, stateRef: null, givenMessageRef: null, givenAt: null, acceptedByUserId: 11, acceptedBy: "alice",
     acceptedByName: "Alice", origin: "agent", contentopsRef: null, sourceText: null, partsDone: [], shotByHandAt: null, personFields: [], version: 1, openRevisions: 0,
@@ -39,18 +39,23 @@ describe("custom checks: every finding waits for someone", () => {
     ]);
   });
 
-  it("puts an order left «записан» or «отказ модели» before the lead, deadline or not", () => {
+  it("puts an order left «записан» before the check's leader, and «проверен» or «отказ модели» before the shooting's", () => {
     const orders = [
       order(101, { state: "recorded", stateAt: new Date(NOW.getTime() - 25 * HOUR) }),
       order(102, { state: "recorded", stateAt: new Date(NOW.getTime() - 2 * HOUR) }),
       order(103, { state: "refused", stateAt: new Date(NOW.getTime() - 13 * HOUR), stateNote: "не снимаю такое" }),
       order(104, { state: "refused", stateAt: new Date(NOW.getTime() - 1 * HOUR) }),
+      order(105, { state: "checked", stateAt: new Date(NOW.getTime() - 25 * HOUR) }),
     ];
-    const findings = orderFindings({ orders, now: NOW, lead: LEAD, recorders: new Set(), onShift: new Map() })["custom.not_at_model"];
-    expect(findings.map((finding) => [finding.key, finding.owner])).toEqual([
-      ["custom.not_at_model:K-101", LEAD],
-      ["custom.not_at_model:K-103", LEAD],
+    const SHOOT = { userId: 901 } as const;
+    const phaseLead = (_page: number | null, phase: "check" | "shoot") => (phase === "check" ? LEAD : SHOOT);
+    const all = orderFindings({ orders, now: NOW, lead: LEAD, phaseLead, recorders: new Set(), onShift: new Map() });
+    expect(all["custom.not_at_model"].map((finding) => [finding.key, finding.owner])).toEqual([["custom.not_at_model:K-101", LEAD]]);
+    const shooting = all["custom.checked_not_at_model"];
+    expect(shooting.map((finding) => [finding.key, finding.owner])).toEqual([
+      ["custom.checked_not_at_model:K-103", SHOOT],
+      ["custom.checked_not_at_model:K-105", SHOOT],
     ]);
-    expect(findings[1]!.title).toContain("отказ");
+    expect(shooting[0]!.title).toContain("отказ");
   });
 });

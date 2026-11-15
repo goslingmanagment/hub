@@ -14,7 +14,7 @@ import {
  * (apps/runtime services/custom-orders); Workboard and the demo read them.
  */
 
-const OPEN: readonly CustomOrderState[] = ["recorded", "paid", "at_model", "partly", "shot", "revision", "refused"];
+const OPEN: readonly CustomOrderState[] = ["recorded", "paid", "checked", "at_model", "partly", "shot", "revision", "refused"];
 const NOT_ENDED: readonly CustomOrderState[] = [...OPEN, "given"];
 const ALL: readonly CustomOrderState[] = [...NOT_ENDED, "closed", "cancelled"];
 
@@ -33,7 +33,7 @@ export function isBoardAction(step: CustomStepName): step is CustomOrderAction {
 }
 
 /** The states a delivery moves the order from (to «сдан частично», «снят» or back to «правка»). */
-export const DELIVERY_MOVES_FROM: readonly CustomOrderState[] = ["recorded", "paid", "at_model", "partly", "revision"];
+export const DELIVERY_MOVES_FROM: readonly CustomOrderState[] = ["recorded", "paid", "checked", "at_model", "partly", "revision"];
 
 /** The states each step may be taken from. A step that moves the order names its new state in `STEP_TO`. */
 export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderState[]>> = {
@@ -44,13 +44,15 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
   // «100$ после готовности»: a payment may come at any step, after «отдали» too; never to a cancelled order.
   payment: [...NOT_ENDED, "closed"],
   unpay: NOT_ENDED,
-  at_model: ["recorded", "paid", "refused"],
+  // «Проверен» before the model; a routine «со слов из Telegram» may still put a recorded or paid order there.
+  checked: ["recorded", "paid"],
+  at_model: ["recorded", "paid", "checked", "refused"],
   partly: ["at_model", "partly", "revision"],
   shot: ["at_model", "partly", "revision"],
   // A fan's complaint after «отдали» is a revision too; one more request while it is in revision as well.
   revision: ["partly", "shot", "revision", "given"],
   refused: ["at_model", "partly", "revision"],
-  given: ["recorded", "paid", "at_model", "partly", "shot", "revision"],
+  given: ["recorded", "paid", "checked", "at_model", "partly", "shot", "revision"],
   close: ["given"],
   cancel: OPEN,
   // A delivery is kept in every state (its sender must know it is in the hub); it moves the order only from the
@@ -63,6 +65,7 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
 };
 
 export const STEP_TO: Partial<Readonly<Record<CustomOrderAction, CustomOrderState>>> = {
+  checked: "checked",
   at_model: "at_model",
   partly: "partly",
   shot: "shot",
@@ -80,6 +83,7 @@ export const STEP_TO: Partial<Readonly<Record<CustomOrderAction, CustomOrderStat
 export const CUSTOM_STATE_WORDS: Readonly<Record<CustomOrderState, string>> = {
   recorded: "Записан",
   paid: "Оплачен",
+  checked: "Проверен",
   at_model: "У модели",
   partly: "Сдан частично",
   shot: "Снят",
@@ -96,8 +100,14 @@ export interface CustomViewer {
   role: "owner" | "team_lead" | "chatter";
   /** The pages the person reaches (user_page_assignments). */
   pageIds: readonly number[];
-  /** «Ведёт кастомы». */
+  /** «Ведёт кастомы» (the person right): the steps of an order of no known page. */
   lead: boolean;
+  /**
+   * The pages whose orders' steps the viewer leads, by phase (products plan §4.5; the one rule is the server's,
+   * services/custom-orders/leaders.ts): `check` — «Проверен» and the card's fixes, `shoot` — the content side's steps.
+   * Absent: every lead's step by `lead` and the role, as before the rule.
+   */
+  leads?: { check: readonly number[]; shoot: readonly number[] };
   /**
    * The test realm (0414, apps/runtime/src/services/sandbox/realm.ts): whether the viewer is a test person's login, and
    * the test pages. A live viewer never sees a test page's order, a test viewer only those. Absent: no test realm.
@@ -128,6 +138,35 @@ export function seesOrder(viewer: CustomViewer, order: { pageId: number | null }
   return viewer.pageIds.includes(order.pageId);
 }
 
+// ── Who leads which step (products plan §4.5) ───────────────────────────────
+
+/**
+ * The side of an order's step: `check` — recorded, the card checked and given to shooting (the chat's side, Workboard);
+ * `shoot` — handed to the model, delivered, revision, refusal, shot (ContentOps «Съёмка»); `give` — given to the fan
+ * (the chatter, Workboard). Null — an ended order.
+ */
+export type CustomPhase = "check" | "shoot" | "give";
+export function customPhaseOf(state: CustomOrderState): CustomPhase | null {
+  if (state === "recorded" || state === "paid") return "check";
+  if (state === "checked" || state === "at_model" || state === "partly" || state === "revision" || state === "refused") return "shoot";
+  if (state === "shot") return "give";
+  return null;
+}
+/** Where a phase is done. */
+export function customPhaseProduct(phase: CustomPhase): "workboard" | "contentops" {
+  return phase === "shoot" ? "contentops" : "workboard";
+}
+
+/** The content side's steps: whoever leads the shooting takes them. */
+const SHOOT_STEPS: ReadonlySet<CustomOrderAction> = new Set(["at_model", "partly", "shot", "revision", "refused"]);
+
+/** Whether the viewer leads a phase of the order (the owner always; an order of no page: the person right, a team lead). */
+export function leadsPhase(viewer: CustomViewer, order: { pageId: number | null }, phase: "check" | "shoot"): boolean {
+  if (viewer.role === "owner") return true;
+  if (viewer.leads === undefined || order.pageId === null) return leadsSteps(viewer);
+  return viewer.leads[phase].includes(order.pageId);
+}
+
 /** A chatter's steps: a payment, «отдали»; on their own order also its card, its fan and «отменить». */
 const CHATTER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["payment", "given"]);
 const OWN_ORDER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["edit", "fan", "unpay", "cancel"]);
@@ -136,7 +175,17 @@ const OWN_ORDER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["edit", "fan", 
 export function mayTakeStep(viewer: CustomViewer, order: { pageId: number | null; state: CustomOrderState; acceptedByUserId: number | null }, step: CustomOrderAction): boolean {
   if (!seesOrder(viewer, order)) return false;
   if (!STEP_FROM[step].includes(order.state)) return false;
-  if (leadsSteps(viewer)) return true;
+  if (viewer.leads !== undefined) {
+    const check = leadsPhase(viewer, order, "check");
+    const shoot = leadsPhase(viewer, order, "shoot");
+    // «Проверен» is the check's; the content side's steps the shooting's (a fan's complaint after «отдан» either's).
+    if (step === "checked") return check;
+    if (SHOOT_STEPS.has(step)) return shoot || (step === "revision" && order.state === "given" && check);
+    // The card's fixes, its fan, its deadline, a payment, «отменить», «закрыть»: whoever leads a step of it.
+    if (check || shoot) return true;
+  } else if (leadsSteps(viewer)) {
+    return true;
+  }
   if (CHATTER_STEPS.has(step)) return true;
   return OWN_ORDER_STEPS.has(step) && order.acceptedByUserId === viewer.userId;
 }
@@ -162,7 +211,7 @@ export function waitedParts(order: { card: CustomOrderCard; partsDone: ReadonlyA
 
 /** Days past the deadline while the model has not delivered it whole (as ContentOps counts «просрочено»); null — not overdue. */
 export function overdueDaysOf(order: { state: CustomOrderState; deadlineOn: string | null }, now: Date): number | null {
-  if (!["recorded", "paid", "at_model", "partly", "revision"].includes(order.state) || order.deadlineOn === null) return null;
+  if (!["recorded", "paid", "checked", "at_model", "partly", "revision"].includes(order.state) || order.deadlineOn === null) return null;
   const today = moscowDay(now);
   if (today <= order.deadlineOn) return null;
   return Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${order.deadlineOn}T00:00:00Z`)) / 86_400_000);

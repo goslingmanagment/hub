@@ -32,6 +32,8 @@ import { useBackState, useBackTarget } from "@/shared/links";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
+import { useMe } from "@/shared/useMe";
+import { contentopsHref } from "@agency_hub_core/ui/sites";
 import {
   COLUMNS,
   DOOR_WORDS,
@@ -41,6 +43,7 @@ import {
   STATE_TONE,
   columnOf,
   deadlineWords,
+  leaderWords,
   fanWords,
   partsWords,
   stepFailure,
@@ -113,23 +116,35 @@ function OrderCard({ order, serverNow }: { order: CustomOrder; serverNow: string
       <PaidLine order={order} />
       <span className="cus-card__foot">
         <Deadline order={order} serverNow={serverNow} />
-        {acceptorOf(order) !== null && <span className="cus-muted">{acceptorOf(order)}</span>}
+        {leaderWords(order) !== null && <span className="cus-muted">у кого: {leaderWords(order)}</span>}
       </span>
     </Link>
   );
 }
 
-function RecordFromSaleModal({ sale, onClose }: { sale: CustomLookalikeSale; onClose: () => void }) {
+/**
+ * «Записать кастом»: from a sale that looks like one (its page, fan and payment), or for a fan of a page — the board's
+ * button, and the extension's fan panel opening `/workboard/customs?record=1&page=<page>&fan=<fan>` in one step with the
+ * fan filled in.
+ */
+function RecordFromSaleModal({ sale, page: initialPage, fan: initialFan, onClose }: { sale?: CustomLookalikeSale; page?: string; fan?: string; onClose: () => void }) {
   const create = useCustomCreate();
+  const pages = usePages();
   const navigate = useNavigate();
   const back = useBackState("Кастомы");
   const [task, setTask] = useState("");
   const [price, setPrice] = useState("");
+  const [pageLabel, setPageLabel] = useState(initialPage ?? "");
+  const [fan, setFan] = useState(initialFan ?? "");
   const [failure, setFailure] = useState<string | null>(null);
+  const ready = task.trim() !== "" && (sale !== undefined || pageLabel !== "");
   const submit = () => {
-    if (task.trim() === "" || create.isPending) return;
+    if (!ready || create.isPending) return;
     const card: CustomOrderCard = { task: task.trim(), ...(price.trim() ? { price: price.trim() } : {}) };
-    create.mutate({ transactionRef: sale.transactionRef, card }, {
+    const body = sale !== undefined
+      ? { transactionRef: sale.transactionRef, card }
+      : { pageLabel, ...(fan.trim() ? { fan: fan.trim() } : {}), card };
+    create.mutate(body, {
       onSuccess: (detail) => {
         toast.success(`Записан ${detail.order.code}`);
         navigate(`/customs/${detail.order.code}`, { state: back });
@@ -145,12 +160,24 @@ function RecordFromSaleModal({ sale, onClose }: { sale: CustomLookalikeSale; onC
       actions={(
         <>
           <Button onClick={onClose} disabled={create.isPending}>Отмена</Button>
-          <Button variant="primary" loading={create.isPending} disabled={task.trim() === ""} onClick={submit}>Записать</Button>
+          <Button variant="primary" loading={create.isPending} disabled={!ready} onClick={submit}>Записать</Button>
         </>
       )}
     >
       <div className="cus-form">
-        <p className="cus-muted">Фан, страница и оплата возьмутся из продажи: <Money mills={sale.grossMills} />, <TimeMsk at={sale.at} />. Карточку для модели потом можно дописать.</p>
+        {sale !== undefined ? (
+          <p className="cus-muted">Фан, страница и оплата возьмутся из продажи: <Money mills={sale.grossMills} />, <TimeMsk at={sale.at} />. Карточку для модели потом можно дописать.</p>
+        ) : (
+          <>
+            <Field label="Страница">{(control) => (
+              <Select {...control} value={pageLabel} onChange={(event) => setPageLabel(event.target.value)}>
+                <option value="">Выберите страницу</option>
+                {(pages.data ?? []).map((one) => <option key={one.label} value={one.label}>{one.label}</option>)}
+              </Select>
+            )}</Field>
+            <Field label="Фан" hint="Ссылка на профиль, ник или номер">{(control) => <TextInput {...control} value={fan} onChange={(event) => setFan(event.target.value)} />}</Field>
+          </>
+        )}
         <Field label="Что снять">{(control) => <Textarea {...control} rows={4} value={task} onChange={(event) => setTask(event.target.value)} />}</Field>
         <Field label="Цена, как договорились" hint="Например: 100$ тир Master + 50$">{(control) => <TextInput {...control} value={price} onChange={(event) => setPrice(event.target.value)} />}</Field>
         {failure && <Notice tone="danger">{failure}</Notice>}
@@ -203,7 +230,17 @@ function Lookalikes({ sales, highlight }: { sales: readonly CustomLookalikeSale[
 
 export function CustomsBoardScreen() {
   const { page } = usePageFilter();
-  const [search] = useSearchParams();
+  const [search, setSearch] = useSearchParams();
+  // «Записать кастом» from the extension's fan panel: `?record=1&page=…&fan=…` opens the form with the fan filled in.
+  const [recording, setRecording] = useState(() => search.get("record") === "1");
+  const closeRecording = () => {
+    setRecording(false);
+    if (search.has("record")) {
+      const next = new URLSearchParams(search);
+      for (const key of ["record", "page", "fan"]) next.delete(key);
+      setSearch(next, { replace: true });
+    }
+  };
   const board = useCustomBoard(page);
   const data = board.data;
   const leads = data?.leads ?? [];
@@ -236,10 +273,13 @@ export function CustomsBoardScreen() {
             <a href={telegramHref(card)} target="_blank" rel="noreferrer">Открыть карточку</a>. Найдите её заказ на доске и привяжите на его странице («Карточка в Telegram»), или запишите заказ.
           </Notice>
         )}
+        <div className="cus-actions">
+          <Button variant="primary" onClick={() => setRecording(true)}>Записать кастом</Button>
+        </div>
         <Lookalikes sales={data.lookalikes} highlight={search.get("sale")} />
         {data.orders.length === 0 ? (
           <EmptyState title="Заказов пока нет">
-            Кастом записывают в расширении («Записать кастом» в панели фана) или через Генгара командой /tz. Здесь он появится сразу.
+            Кастом записывают здесь («Записать кастом»), в панели фана расширения или через Генгара командой /tz. Здесь он появится сразу.
           </EmptyState>
         ) : (
           <div className="cus-board" role="list" aria-label="Заказы по шагам">
@@ -271,6 +311,13 @@ export function CustomsBoardScreen() {
         stale={board.isError && board.data !== undefined}
       />
       <div className="wb-content cus">{body}</div>
+      {recording && (
+        <RecordFromSaleModal
+          {...(search.get("page") ? { page: search.get("page")! } : page ? { page } : {})}
+          {...(search.get("fan") ? { fan: search.get("fan")! } : {})}
+          onClose={closeRecording}
+        />
+      )}
     </>
   );
 }
@@ -293,6 +340,8 @@ const CARD_FIELDS: ReadonlyArray<{ key: keyof CustomOrderCard & string; label: s
 type Ask = { action: CustomOrderAction; title: string; field?: "note" | "reason" | "telegram" | "date"; required?: boolean; confirm: string; hint?: string };
 
 const ASKS: Partial<Record<CustomOrderAction, Ask>> = {
+  checked: { action: "checked", title: "Проверен", confirm: "Проверен", hint: "Карточка проверена, спорное решено: заказ уходит в съёмку." },
+  given: { action: "given", title: "Отдан фану", confirm: "Отдан" },
   at_model: { action: "at_model", title: "Карточка у модели", field: "telegram", confirm: "У модели", hint: "Ссылка на карточку в группе модели, если есть: так сдачу найдут сами." },
   deadline: { action: "deadline", title: "Срок", field: "date", confirm: "Сохранить" },
   partly: { action: "partly", title: "Сдано частично", field: "note", confirm: "Сдано частично", hint: "Что пришло и что ещё ждём." },
@@ -310,18 +359,21 @@ const ASKS: Partial<Record<CustomOrderAction, Ask>> = {
  */
 type RowItem = CustomOrderAction | "copy";
 const ROW_BY_STATE: Partial<Record<CustomOrder["state"], { main: CustomOrderAction | null; frequent: readonly RowItem[] }>> = {
-  recorded: { main: "at_model", frequent: ["copy", "deadline"] },
-  paid: { main: "at_model", frequent: ["copy", "deadline"] },
+  recorded: { main: "checked", frequent: ["copy", "deadline"] },
+  paid: { main: "checked", frequent: ["copy", "deadline"] },
+  checked: { main: "at_model", frequent: ["copy", "deadline"] },
   at_model: { main: "shot", frequent: ["partly", "deadline"] },
   partly: { main: "shot", frequent: ["partly", "deadline"] },
   revision: { main: "shot", frequent: ["partly", "deadline"] },
   refused: { main: "at_model", frequent: ["copy"] },
-  shot: { main: null, frequent: ["revision"] },
+  shot: { main: "given", frequent: ["revision"] },
   given: { main: "close", frequent: ["revision"] },
 };
-const ROW_ORDER: readonly RowItem[] = ["copy", "at_model", "shot", "partly", "revision", "close", "deadline", "card", "refused", "cancel"];
+const ROW_ORDER: readonly RowItem[] = ["copy", "checked", "at_model", "given", "shot", "partly", "revision", "close", "deadline", "card", "refused", "cancel"];
 
 const STEP_LABEL: Partial<Record<CustomOrderAction, string>> = {
+  checked: "Проверен",
+  given: "Отдан",
   at_model: "У модели",
   shot: "Снято",
   partly: "Сдано частично",
@@ -345,6 +397,9 @@ function bodyOf(ask: Ask, value: string, part: CustomPart | null): CustomOrderAc
     case "refused": return { action: "refused", reason: text };
     case "cancel": return text === "" ? { action: "cancel" } : { action: "cancel", reason: text };
     case "shot": return { action: "shot" };
+    case "checked": return { action: "checked" };
+    // «Отдан» by the person's word: the message is named on the order when Hub suggests it (below).
+    case "given": return { action: "given" };
     case "close": return { action: "close" };
     default: return null;
   }
@@ -514,6 +569,9 @@ function RevisionWaits({ detail }: { detail: CustomOrderDetailResponse }) {
 
 function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
   const { order, serverNow, actions } = detail;
+  const me = useMe();
+  // «Съёмка в ContentOps» for whoever has ContentOps (the owner, who leads customs, a content manager's person).
+  const hasContentops = me.data?.products?.includes("contentops") === true;
   const may = (action: CustomOrderAction) => actions.includes(action);
   const step = useCustomStep(order.code);
   const [ask, setAsk] = useState<Ask | null>(null);
@@ -545,6 +603,10 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
         <span className="cus-muted">с <TimeMsk at={order.stateAt} /></span>
         {order.stateNote && !waitsListed && <span>{order.stateNote}</span>}
         {deadline && <span className={deadline.late ? "cus-late" : undefined}>{deadline.text}</span>}
+        {leaderWords(order) !== null && <span>у кого сейчас: {leaderWords(order)}</span>}
+        {hasContentops && order.modelSlug !== null && (
+          <a href={contentopsHref(order.modelSlug, `shooting?order=${encodeURIComponent(order.code)}`)} target="_blank" rel="noreferrer">Съёмка в ContentOps</a>
+        )}
       </div>
       <RevisionWaits detail={detail} />
       <div className="cus-actions">
