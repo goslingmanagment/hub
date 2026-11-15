@@ -224,10 +224,14 @@ describe("nothing of the test team leaves Hub through a background path", () => 
     const testLabels = new Set(testPages.map((page) => page.label));
     const live = pages.find((page) => !page.test)!;
     expect(testPages.map((page) => page.platform).sort()).toEqual(["fansly", "onlyfans"]);
-    // The test pages carry what the lists read: fans who wrote, in the archive.
-    const archived = await db.execute<{ n: number }>(sql`select count(*)::int as n from message_archive a
-      where not a.is_sent_by_me and ${testPageSql(sql`a.account_id`)}`);
-    expect(archived.rows[0]!.n).toBeGreaterThan(0);
+    const later = new Date(Date.now() + 2 * DAY);
+    // Every page gets what the lists read: a fan who wrote last and waits (the seed writes only the model's messages).
+    for (const page of pages) {
+      await db.execute(sql`insert into message_archive (account_id, platform, conversation_ref, message_ref, fan_native_id, sender_role,
+          is_sent_by_me, occurred_at, text_plain, backfill_source)
+        values (${page.id}, ${page.platform}, ${`sweep-fan-${page.id}`}, ${`sweep-msg-${page.id}`}, ${`sweep-fan-${page.id}`}, 'fan',
+          false, ${new Date(later.getTime() - 2 * HOUR).toISOString()}::timestamptz, 'Привет', 'sandbox')`);
+    }
 
     // A producer of the paging pipeline fires for every page alike; the test OnlyFans page holds an account as if bound.
     for (const page of pages) {
@@ -238,7 +242,6 @@ describe("nothing of the test team leaves Hub through a background path", () => 
     const testOnlyfans = testPages.find((page) => page.platform === "onlyfans")!;
     await db.execute(sql`update pages set ofapi_account_id = 'acct_realm_sweep' where id = ${testOnlyfans.id}`);
     await ensureFanslySyncPages(db, { createdBy: "realm-sweep" });
-    const later = new Date(Date.now() + 2 * DAY);
     await runNotificationPagingSweep(app, { now: later });
     await runPeopleMessages(app, { now: new Date(T0 + 7 * DAY + HOUR), transport: async () => { throw new Error("nothing is sent in this test"); } });
 
@@ -267,6 +270,7 @@ describe("nothing of the test team leaves Hub through a background path", () => 
     expect((await listNotificationIncidentsWithPages(db, { limit: 500 })).items.filter((item) => item.pageLabel !== null && testLabels.has(item.pageLabel))).toEqual([]);
     expect((await listNotificationPagingCandidates(db, { resolvedSince: new Date(0) })).filter((one) => testLabels.has(one.pageLabel ?? ""))).toEqual([]);
     const waiting = await listFansWaitingSince(db, { now: later, minWaitHours: 0, maxDays: 60 });
+    expect(waiting.map((row) => row.pageLabel)).toContain(live.label);
     expect(waiting.filter((row) => testLabels.has(row.pageLabel))).toEqual([]);
     const due = await listDueFanFactConversations(db, { pageIds: pages.map((page) => page.id), now: later, quietMinutes: 0, activeHours: 60 * 24, limit: 1000 });
     expect(due.filter((one) => testLabels.has(one.pageLabel))).toEqual([]);
