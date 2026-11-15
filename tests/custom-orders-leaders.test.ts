@@ -134,7 +134,7 @@ const TWO: TeamFacts = {
     { userId: 172, personId: 72, role: "content_manager" },
     { userId: 179, personId: 79, role: "chatter" },
   ],
-  people: [71, 72, 79].map((personId) => ({ personId, name: `P${personId}`, test: false })),
+  people: [71, 72, 79].map((personId) => ({ personId, name: `P${personId}`, test: false, role: personId === 79 ? "chatter" : "content_manager" })),
 };
 
 describe("the shooting goes by the order's page", () => {
