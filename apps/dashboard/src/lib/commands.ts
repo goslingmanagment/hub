@@ -9,6 +9,7 @@ import { pagePlaces, type Role } from "@agency_hub_core/ui/screens";
 import { configHomeHref } from "@/pages/settings/featureCatalog";
 import { buildFanProfileNavigation, buildFansRoute, buildPageCollectionRoute, buildPageRoute, buildPageSectionRoute, type FanProfileNavigationState } from "./navigation.js";
 import { platformName } from "./platformUrls.js";
+import { contentopsScreen } from "./contentops.js";
 
 export { groupCommands, searchCommands, type CommandGroup } from "@agency_hub_core/ui/palette";
 
@@ -41,7 +42,7 @@ function pageCommands(pages: readonly CommandPage[], role: Role): Command[] {
       ] : []),
       ...(owner && isFansly ? [{ label: "Статистика", to: `/stats?page=${encodeURIComponent(page.label)}`, keywords: "аналитика" }] : []),
       ...(owner && hasData ? [
-        { label: "Публикации", to: `/content/publications?page=${encodeURIComponent(page.label)}` },
+        { label: "Публикации", to: contentopsScreen("publications", { page: page.label }) },
         { label: "Сбор данных", to: buildPageCollectionRoute(page.label), keywords: "синк" },
       ] : []),
       ...(owner && isFansly ? [{ label: "Войти в Fansly", to: buildPageSectionRoute(page.label, "browser-login"), keywords: "вход в браузер" }] : []),

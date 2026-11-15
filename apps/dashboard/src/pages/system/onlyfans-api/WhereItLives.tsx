@@ -4,6 +4,7 @@ import { buildPageSectionRoute } from "@/lib/navigation";
 import type { OfapiStatus } from "@/lib/statusWords";
 import { AppLink } from "@/components/shared/AppLink";
 import { workboardHref } from "@/lib/workboard";
+import { contentopsScreen } from "@/lib/contentops";
 
 interface Place {
   what: string;
@@ -24,7 +25,7 @@ const PLACES: readonly Place[] = [
   { what: "Сохранённые ответы, события, словарь", now: "По 1 ноября", where: { label: "События и ключ", to: "/system/onlyfans-api#tools" } },
   { what: "Что и как часто собирал Hub", now: "Настройки сохранены", where: { label: "Правила сбора", to: "/system/onlyfans-api#collection" } },
   { what: "Действия с аккаунтом", now: "Не выполняются", where: { label: "Действия с аккаунтом", to: "/system/onlyfans-api#actions" } },
-  { what: "Расписание OnlyFans", now: "Скрыто", where: { label: "Публикации", to: "/content/publications" } },
+  { what: "Расписание OnlyFans", now: "Скрыто", where: { label: "Публикации в ContentOps", to: contentopsScreen("publications") } },
   { what: "Состояние сбора страниц", now: "Серое «Выключено с 1 ноября»", where: { label: "Сбор данных", to: "/system/collection" } },
   { what: "Старые сбои OnlyFans API", now: "Серая группа", where: { label: "Сбои", to: "/system/failures" } },
   { what: "Заявки OnlyFans на историю", now: "«Одобрить» отключено", where: { label: "Заявки на историю", to: "/system/history-requests" } },

@@ -2,6 +2,7 @@ import type { NotificationsIncidentItem } from "@agency_hub_core/contracts";
 import { INCIDENT_KIND_WORDS } from "@agency_hub_core/look";
 
 import { buildPageSectionRoute } from "@/lib/navigation";
+import { contentopsScreen } from "@/lib/contentops";
 
 /**
  * The failures that are only the switched-off OnlyFans API: while it is off there
@@ -205,14 +206,12 @@ export function failureWords(item: Pick<NotificationsIncidentItem, "kind" | "inc
     case "publishing_stopped":
       return says("Hub сам выключил публикацию страницы.", "Посмотрите причину и включите снова.", {
         label: "Настройки публикации",
-        to: page === null ? "/content/publications?panel=settings" : `/content/publications?page=${encodeURIComponent(page)}&panel=settings`,
+        to: contentopsScreen("publications", page === null ? { panel: "settings" } : { page, panel: "settings" }),
       });
     case "publication_not_published":
       return says("Утверждённый пост не вышел вовремя.", "Посмотрите пост и решите, что с ним делать.", {
         label: "К публикациям",
-        to: page === null
-          ? "/content/publications?status=not_published&window=last7"
-          : `/content/publications?page=${encodeURIComponent(page)}&status=not_published&window=last7`,
+        to: contentopsScreen("publications", { ...(page === null ? {} : { page }), status: "not_published", window: "last7" }),
       });
     case "ofapi_platform_notice":
       return says(

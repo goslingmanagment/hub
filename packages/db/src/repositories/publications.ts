@@ -1216,6 +1216,29 @@ export async function listPublicationPages(db: Database, realm: "live" | "test" 
   return result.rows.map((row) => ({ id: num(row.id), label: String(row.label), platform: String(row.platform) }));
 }
 
+/**
+ * The model (Hub's slug) of a live post, else of a page by its label (either realm: the test team's links name test
+ * pages): where ContentOps opens an old address of Hub's «Публикации» or «Статистика» (products package C2). Null
+ * when neither is known.
+ */
+export async function findModelSlugOf(db: Database, of: { publicationId: number | null; pageLabel: string | null }): Promise<string | null> {
+  if (of.publicationId !== null) {
+    const result = await db.execute<Row>(sql`
+      select m.slug from publications p join pages pg on pg.id = p.page_id join models m on m.id = pg.model_id
+       where p.id = ${of.publicationId} and ${livePageSql(sql`pg.id`)}
+    `);
+    if (result.rows[0]) return String(result.rows[0].slug);
+  }
+  if (of.pageLabel !== null) {
+    const result = await db.execute<Row>(sql`
+      select m.slug from pages pg join models m on m.id = pg.model_id
+       where pg.label = ${of.pageLabel} and pg.deleted_at is null
+    `);
+    if (result.rows[0]) return String(result.rows[0].slug);
+  }
+  return null;
+}
+
 /** The pages of one model by Hub's slug (any case): ContentOps' «Публикации» shows one model (products plan §2.4). */
 export async function listModelPageIds(db: Database, modelSlug: string): Promise<number[]> {
   const result = await db.execute<Row>(sql`

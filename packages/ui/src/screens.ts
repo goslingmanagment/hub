@@ -247,14 +247,6 @@ export const SCREENS: readonly Screen[] = [
     keywords: "аналитика обзор",
   },
   {
-    id: "stats-content", path: "/stats/content", label: "Контент", title: "Статистика Fansly: контент", section: "stats", product: "hub", ownerOnly: true,
-    why: "Какие медиа смотрят, покупают и комментируют.",
-    pageFilter: "one", onePageWay: "substitute", platforms: FANSLY,
-    platformsNote: "Статистику Hub собирает только для Fansly.", platformsShort: "только Fansly",
-    period: { class: "shared", options: STATS_PERIODS },
-    keywords: "аналитика медиа посты",
-  },
-  {
     id: "stats-audience", path: "/stats/audience", label: "Аудитория", title: "Статистика Fansly: аудитория", section: "stats", product: "hub", ownerOnly: true,
     why: "Откуда и когда смотрят, по каким тегам находят.",
     pageFilter: "one", onePageWay: "substitute", platforms: FANSLY,
@@ -272,15 +264,8 @@ export const SCREENS: readonly Screen[] = [
   },
 
   // ── Контент ────────────────────────────────────────────────────────────
-  // Публикации and Рассылки here; План, Приехало and Библиотека are ContentOps' (links of the section).
-  {
-    id: "publications", path: "/content/publications", label: "Публикации", title: "Публикации", section: "content", product: "hub", ownerOnly: true,
-    why: "Что и когда выйдет на стенах страниц.",
-    pageFilter: "any", platforms: REPORTED,
-    platformsNote: "Hub не публикует в Telegram.",
-    telegramNote: { title: "Hub не публикует в Telegram", text: "У страниц Telegram публикаций нет." },
-    keywords: "посты стена расписание утвердить настройки публикации",
-  },
+  // «Публикации» and «Статистика → Контент» are ContentOps' own screens since package C2 (their old addresses:
+  // apps/runtime/src/services/content-screens-moved.ts). Рассылки are Workboard's.
   {
     // A page's mass messages (a tab of the page's card until 12.11).
     id: "content-mass-messages", tabOf: "sales", path: "/workboard/sales/mass", label: "Рассылки", title: "Рассылки", section: "team", product: "workboard", ownerOnly: true,
@@ -819,13 +804,11 @@ export interface Section {
   /** Under the rule at the bottom of the menu. */
   lower?: boolean;
   /**
-   * The section's places elsewhere, after its tabs. ContentOps': they open it on
-   * the model of the chosen page (it keeps a model's content at `/<model>/<path>`).
-   * Workboard's: a list whose one place is a Workboard screen, linked from here
-   * (another product: the team's name), for the roles that open it.
+   * The section's places elsewhere, after its tabs: another section of Hub, or a
+   * list whose one place is a Workboard screen, linked from here (another product:
+   * the team's name), for the roles that open it.
    */
   outside?:
-    | { site: "contentops"; label: string; links: readonly { label: string; path: string }[] }
     | { site: "workboard"; links: readonly { label: string; to: string; title: string; ownerOnly?: boolean }[] }
     | { site: "hub"; links: readonly { label: string; to: string; title: string }[] };
   nav: "tabs" | "side" | "none";
@@ -861,24 +844,12 @@ export const SECTIONS: readonly Section[] = [
   {
     // The pages' Fansly statistics (it was «Статистика»; its screens and addresses are the same).
     id: "stats", label: "Страницы", title: "Страницы", icon: "ChartColumn", product: "hub", ownerOnly: true, nav: "tabs",
-    // «Контент» left the section for ContentOps (products plan §2.2): its address still opens until the content
-    // package moves it, and the search still finds it, but the section's row does not list it.
     tabs: [
       tab("stats", "Главное", "stats"),
       tab("income", "Доход Fansly", "stats-income"),
       tab("audience", "Аудитория", "stats-audience"),
     ],
     outside: { site: "hub", links: [{ label: "Модели и страницы", to: "/settings/pages", title: "Модели и страницы в Настройках" }] },
-  },
-  {
-    // «Публикации» until 12.11: the content, the hub's part and ContentOps' (the model of the chosen page).
-    id: "content", label: "Контент", title: "Контент", icon: "Newspaper", product: "hub", ownerOnly: true, nav: "tabs",
-    tabs: [tab("publications", "Публикации", "publications")],
-    outside: { site: "contentops", label: "ContentOps", links: [
-      { label: "План", path: "plan" },
-      { label: "Приехало", path: "inbox" },
-      { label: "Библиотека", path: "library" },
-    ] },
   },
   {
     id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", product: "hub", ownerOnly: true, nav: "tabs",

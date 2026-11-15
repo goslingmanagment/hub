@@ -44,30 +44,6 @@ export function useCreatorStats(pageLabel: string, days: CreatorStatsDays, optio
   });
 }
 
-/** The page's media by views in the window and what sells (`/stats/creator/content`). */
-export function useCreatorStatsContent(pageLabel: string, days: CreatorStatsDays, options: { enabled?: boolean } = {}) {
-  return useQuery({
-    meta: STATS_META,
-    queryKey: ["creatorStatsContent", pageLabel, days],
-    queryFn: () => kernel.creatorStatsContent({ params: { pageLabel }, query: { days } }),
-    enabled: (options.enabled ?? true) && pageLabel.length > 0,
-    placeholderData: samePage(pageLabel),
-    staleTime: STALE,
-  });
-}
-
-/** One media offer's days, hours, retention and tags. */
-export function useCreatorStatsMedia(pageLabel: string, mediaOfferId: string | null, days: CreatorStatsDays) {
-  return useQuery({
-    meta: STATS_META,
-    queryKey: ["creatorStatsMedia", pageLabel, mediaOfferId, days],
-    queryFn: () => kernel.creatorStatsMedia({ params: { pageLabel, mediaOfferId: mediaOfferId! }, query: { days } }),
-    enabled: pageLabel.length > 0 && mediaOfferId !== null,
-    retry: false,
-    staleTime: STALE,
-  });
-}
-
 /** Countries, tags, active hours, benchmarks and media shown (`/stats/creator/audience`). */
 export function useCreatorStatsAudience(pageLabel: string, days: CreatorStatsDays, options: { enabled?: boolean } = {}) {
   return useQuery({

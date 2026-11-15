@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { teamPeopleInHub, teamToWorkboard } from "../apps/dashboard/src/lib/workboard.ts";
 import { signinNamesOf, workboardOnConsoleRedirect } from "../apps/runtime/src/services/signin-handoff.ts";
+import { contentopsAddress, contentScreenOf, pageOf, postOf } from "../apps/runtime/src/services/content-screens-moved.ts";
 import { OLD_ADDRESSES, WORKBOARD_OLD_PATHS, registryTabLanding, workboardOldAddress } from "../packages/ui/src/old-addresses.ts";
 import { matchScreen } from "../packages/ui/src/screens.ts";
 import { hubEntryHref, workboardEntryHref } from "../packages/ui/src/sites.ts";
@@ -14,6 +15,13 @@ const NAMES = signinNamesOf({ isProduction: true } as Parameters<typeof signinNa
 const HUB = NAMES.console;
 const TEAM = NAMES.team;
 const BASE = "/workboard";
+const CONTENTOPS = "https://contentops.gosling-agency.ru";
+
+/** Hub's models of the posts and pages the rows name (the server reads them from its database: findModelSlugOf). */
+function modelOf(of: { publicationId: number | null; pageLabel: string | null }): string | null {
+  if (of.publicationId === 55 || of.publicationId === 5101) return "Mia";
+  return of.pageLabel?.startsWith("mia-") ? "Mia" : null;
+}
 
 /** The hand-off's address (`/api/v1/auth/sso?to=…&next=…`) on `origin`: where it leads, signed in. */
 function handOff(origin: string, href: string): URL {
@@ -29,6 +37,14 @@ function follow(start: string, owner = true): { at: string; steps: string[] } {
   for (let step = 0; step < 8; step += 1) {
     const path = `${url.pathname}${url.search}`;
     if (url.origin === HUB) {
+      // Hub's server: «Публикации» and «Статистика → Контент» leave for ContentOps (services/content-screens-moved.ts),
+      // the owner signed in.
+      const moved = contentScreenOf(path);
+      if (moved !== null) {
+        url = new URL(contentopsAddress(moved, modelOf({ publicationId: postOf(moved.search), pageLabel: pageOf(moved.search) }), CONTENTOPS));
+        steps.push("server→contentops");
+        continue;
+      }
       // Hub's server: a Workboard address leaves for the team's name.
       const server = workboardOnConsoleRedirect({ here: HUB, method: "GET", url: path }, NAMES);
       if (server !== null && !server.startsWith("/api/v1/auth/sso")) {
@@ -63,6 +79,12 @@ function follow(start: string, owner = true): { at: string; steps: string[] } {
         continue;
       }
       return { at: url.href, steps };
+    }
+    if (url.origin === CONTENTOPS && url.pathname === "/auth/hub/start") {
+      // ContentOps' sign-in by Hub: signed in to Hub, it lands on `next`.
+      url = new URL(url.searchParams.get("next")!, CONTENTOPS);
+      steps.push("contentops sign-in");
+      continue;
     }
     if (url.origin === TEAM && (url.pathname === BASE || url.pathname.startsWith(`${BASE}/`))) {
       const at = { pathname: url.pathname.slice(BASE.length) || "/", search: url.search, hash: url.hash };
@@ -105,7 +127,10 @@ describe("old addresses", () => {
     const { at } = follow(from);
     expect(at).toBe(to);
     const url = new URL(at);
-    if (url.origin === TEAM) {
+    if (url.origin === CONTENTOPS) {
+      // ContentOps' entry for Hub's addresses (apps/web/src/app/redirects.tsx HubEntryRedirect there).
+      expect(["/hub/publications", "/hub/stats"], at).toContain(url.pathname);
+    } else if (url.origin === TEAM) {
       const route = url.pathname.slice(BASE.length) || "/";
       expect(WORKBOARD_ROUTES.some((pattern) => matchesRoute(pattern, route)), at).toBe(true);
     } else {

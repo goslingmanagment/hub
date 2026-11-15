@@ -2,13 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import type { MattersWaitingResponse, WaitingProductId } from "@agency_hub_core/contracts";
 import { WAITING_PRODUCTS } from "@agency_hub_core/contracts";
 import { addDays, moscowDayStart, moscowToday } from "@agency_hub_core/ui/moscow";
-import { contentopsHref } from "@agency_hub_core/ui/sites";
 import { waitedFor } from "@agency_hub_core/ui/waiting/kinds";
 import { useAuthMe } from "@/api/queries";
 import { kernel } from "@/api/sdk";
 import { useTeamShifts } from "@/api/team";
 import { AppLink } from "@/components/shared/AppLink";
 import { ruPlural } from "@/lib/plural";
+import { contentopsScreen } from "@/lib/contentops";
 
 /**
  * The owner's lines above the money on Главная (products plan §2.2): «Ждут вас» as three tiles, one per product (its
@@ -104,7 +104,8 @@ function ProductLines() {
       text: `на смене ${known(onShift, String)}, не сдано отчётов ${known(notHandedIn, String)}`,
     },
     {
-      id: "contentops", name: "ContentOps", to: contentopsHref(null, ""), external: true,
+      // What goes out today is ContentOps' «Публикации» (package C2): Hub's hop opens it there, signed in.
+      id: "contentops", name: "ContentOps", to: contentopsScreen("publications"), external: true,
       text: `${testRealm ? "" : `сегодня выйдет ${known(outToday, String)}, `}${known(gaps, (value) => count(value, "дыра", "дыры", "дыр"))} на неделе`,
     },
     { id: "system", name: "Система", to: "/system/failures", text: `сбоев ${known(failures, String)}` },

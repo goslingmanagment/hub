@@ -11,7 +11,9 @@ import {
   paidDayChangeItems,
   reportPostItems,
   reportQuestionsWindow,
+  publicationItems,
 } from "../apps/runtime/src/services/matters-mirror.ts";
+import { contentopsAddress, contentScreenOf, pageOf, postOf } from "../apps/runtime/src/services/content-screens-moved.ts";
 
 // The mirror of «Ждут вас» (package D) holds the rules of what waits. Two of
 // them still have a twin in the console — «Публикации» says which Fansly pages
@@ -108,5 +110,18 @@ describe("the matters mirror keeps the screens' rules", () => {
     expect(posts.map((item) => item.pageLabels)).toEqual([["page-a"], []]);
     expect(reportPostItems(reports, { reportsFrom: null } as never)).toEqual([]);
     expect(paidDayChangeItems(payouts).map((item) => Number(item.object!.id))).toEqual([7]);
+  });
+
+  it("links a post to approve or to check to its card in ContentOps, on its page's model, through Hub's hop", () => {
+    const post = { id: 5101, pageLabel: "mia-1", kind: "subscriber_post", publishAt: "2026-11-15T12:00:00.000Z", version: 1 };
+    for (const [kind, status] of [["publication.draft", "draft"], ["publication.unknown", "unknown"]] as const) {
+      const [item] = publicationItems(kind, [post]);
+      const moved = contentScreenOf(item!.link!);
+      expect(moved, item!.link!).not.toBeNull();
+      const next = new URL(contentopsAddress(moved!, "mia", "https://contentops.example")).searchParams.get("next");
+      expect(next).toBe(`/hub/publications?model=mia&page=mia-1&status=${status}&window=all&post=5101`);
+      expect(pageOf(moved!.search)).toBe("mia-1");
+      expect(postOf(moved!.search)).toBe(5101);
+    }
   });
 });
