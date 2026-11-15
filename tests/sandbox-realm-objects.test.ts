@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
 
-import { fieldObject, requestObjects } from "../apps/runtime/src/services/sandbox/objects.ts";
+import { fieldObject, KIND_TABLES, requestObjects, restoreHidden, type RealmObjectKind } from "../apps/runtime/src/services/sandbox/objects.ts";
 import { SANDBOX_OWNER_OPERATIONS } from "../apps/runtime/src/services/sandbox/owner-operations.ts";
 import { PERSON_DOOR_OPERATIONS } from "../apps/runtime/src/services/person-door.ts";
 
@@ -94,5 +94,81 @@ describe("the wall by object classifies every field a test principal can send", 
     expect(requestObjects("ofapiActionPrepare", [{}, {}, { command: { userId: 5, pageId: 7 } }])).toEqual([]);
     expect(requestObjects("authRevokeDevice", [{ deviceId: 3 }])).toEqual([]);
     expect(requestObjects("adminPublicationApprove", [{}, {}, { items: [{ id: 5, version: 2 }, { id: 6, version: 1 }] }]).map((one) => one.value)).toEqual(["5", "6"]);
+  });
+});
+
+/**
+ * What each route's field really names, read from its handler, for every name that more than one table uses or that
+ * means nothing by itself (`id`, `code`, `proposalId`, `questionId`): a route carrying one of these names is listed here
+ * by hand, or this test fails. The unambiguous names (`pageLabel`, `userId`, `shiftId`, …) name one table everywhere.
+ */
+const AMBIGUOUS = new Set(["id", "code", "slug", "proposalId", "questionId", "candidateId", "sightingId", "publicationId"]);
+const HANDLER_TABLES: Readonly<Record<string, string>> = {
+  "adminPublicationGet id": "publications",
+  "adminPublicationApprove id": "publications",
+  "adminPublicationCancel id": "publications",
+  "adminPublicationResolve id": "publications",
+  "adminPublicationWithdraw id": "publications",
+  "adminPublicationDeletePost id": "publications",
+  "adminPublicationReplace id": "publications",
+  "agentMediaLookCreate publicationId": "publications",
+  "teamQuestions id": "team_questions",
+  "teamQuestionAnswer id": "team_questions",
+  "teamQuestionClose id": "team_questions",
+  "teamSwapRevoke id": "team_questions",
+  // A sale question of the agents' door is a row of sale_claims (kind `question`, sale-decisions-door.ts).
+  "agentSaleQuestionAnswer questionId": "sale_claims",
+  "agentSaleQuestionClose questionId": "sale_claims",
+  // «Предложение» of a report card (the board) and an agent's proposal about a person: two tables, one name.
+  "shiftReportProposalAnswer proposalId": "shift_handin_proposals",
+  "adminPersonProposalDecide proposalId": "person_proposals",
+  "shiftReportConfirm candidateId": "shift_handin_candidates",
+  "agentShiftReportCheckAnswer candidateId": "shift_handin_candidates",
+  "shiftReportSightingAdd sightingId": "sale_sightings",
+  "customOrder code": "custom_orders",
+  "customOrderAct code": "custom_orders",
+  "adminPerson code": "people",
+  "adminPersonUpdate code": "people",
+};
+
+function classified(key: string, schema: Zod | undefined, depth = 0): Array<{ name: string; kind: RealmObjectKind }> {
+  const out: Array<{ name: string; kind: RealmObjectKind }> = [];
+  for (const [name, field] of shapeOf(schema)) {
+    const kind = fieldObject(key, name);
+    if (kind === "nested") { if (depth < 5) out.push(...classified(key, field, depth + 1)); continue; }
+    if (kind !== undefined && kind !== "none") out.push({ name, kind });
+  }
+  return out;
+}
+
+describe("the wall by object reads the table each route's field really names", () => {
+  it("every classified field of every route of the contract: the kind's table is the handler's", () => {
+    const wrong: string[] = [];
+    for (const [key, schema] of Object.entries(schemas)) {
+      for (const part of [schema.params, schema.querystring, schema.body]) {
+        for (const { name, kind } of classified(key, part)) {
+          const listed = HANDLER_TABLES[`${key} ${name}`];
+          if (AMBIGUOUS.has(name) && listed === undefined) { wrong.push(`${key} ${name}: not listed in HANDLER_TABLES`); continue; }
+          if (listed !== undefined && KIND_TABLES[kind] !== listed) wrong.push(`${key} ${name}: the wall reads ${KIND_TABLES[kind]}, the handler ${listed}`);
+        }
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+});
+
+describe("the wall by object costs nothing where it has nothing to look at", () => {
+  it("never walks a raw body: a 1 MB buffer, a typed array, a date, a class instance are not entered", () => {
+    const untouchable = new Proxy(Buffer.alloc(1024 * 1024, 1), { ownKeys() { throw new Error("walked"); } });
+    class Thing { pageLabel = "test-1"; }
+    const started = performance.now();
+    expect(requestObjects("ingestObservations", [{}, {}, untouchable as unknown as Record<string, unknown>])).toEqual([]);
+    expect(requestObjects("teamShifts", [{}, { pageLabel: new Date(), when: new Uint8Array(1024) }, new Thing() as unknown as Record<string, unknown>])).toEqual([]);
+    expect(performance.now() - started).toBeLessThan(50);
+  });
+
+  it("puts nothing back when nothing was hidden: the answer is the same string", () => {
+    const payload = JSON.stringify({ message: "∅1 9007199254740990" });
+    expect(restoreHidden([{ a: 1 }, null, Buffer.alloc(8)], payload)).toBe(payload);
   });
 });

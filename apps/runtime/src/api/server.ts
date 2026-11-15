@@ -580,13 +580,17 @@ export async function buildApiServer(appContext: AppContext) {
   server.addHook("preHandler", async (request) => {
     const entry = request.routeOptions.config.hubAuthPolicy;
     if (!entry) return;
+    // Nobody to compare a realm with: no session, no bearer (a webhook, a public form) — nothing is looked at.
+    if (request.auth === null || (request.auth === undefined && request.headers.authorization === undefined && request.cookies[SESSION_COOKIE_NAME] === undefined)) {
+      return;
+    }
     const parts = [request.params, request.query, request.body] as Array<Record<string, unknown> | null>;
     if (requestObjects(entry.key, parts).length === 0) return;
     await hideObjectsOfOtherRealm(appContext, await resolvePrincipal(request), entry.key, parts);
   });
   // …and the values it hid are put back wherever the answer repeats them («No person «x»»), as for a missing object.
   server.addHook("onSend", async (request, _reply, payload) => {
-    if (typeof payload !== "string") return payload;
+    if (typeof payload !== "string" || request.auth === null || request.auth === undefined) return payload;
     return restoreHidden([request.params, request.query, request.body], payload);
   });
 

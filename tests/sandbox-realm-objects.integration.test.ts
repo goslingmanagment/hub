@@ -46,7 +46,8 @@ const MISSING: Record<RealmObjectKind, string> = {
   page: String(Number.MAX_SAFE_INTEGER), pageLabel: "nowhere-page", model: String(Number.MAX_SAFE_INTEGER), modelSlug: "nowhere-model",
   login: String(Number.MAX_SAFE_INTEGER), personCode: "nowhere-person", shift: String(Number.MAX_SAFE_INTEGER), sale: String(Number.MAX_SAFE_INTEGER),
   claim: String(Number.MAX_SAFE_INTEGER), offPlatformLine: String(Number.MAX_SAFE_INTEGER), candidate: String(Number.MAX_SAFE_INTEGER),
-  proposal: String(Number.MAX_SAFE_INTEGER), sighting: String(Number.MAX_SAFE_INTEGER), question: String(Number.MAX_SAFE_INTEGER),
+  proposal: String(Number.MAX_SAFE_INTEGER), personProposal: String(Number.MAX_SAFE_INTEGER), sighting: String(Number.MAX_SAFE_INTEGER),
+  question: String(Number.MAX_SAFE_INTEGER),
   order: `K-${Number.MAX_SAFE_INTEGER}`, publication: String(Number.MAX_SAFE_INTEGER),
 };
 const ISO_TIME = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/gu;
@@ -69,6 +70,8 @@ const cookies: Record<string, string> = {};
 /** One object of each kind per realm, as a request names it. */
 const objects = {} as Record<RealmObjectKind, { live: string; test: string }>;
 const now = new Date();
+/** The live person proposal whose number a test report card also has. */
+const live = { personProposal: "" };
 
 function unwrap(schema: Zod): { schema: Zod; optional: boolean } {
   let current = schema;
@@ -314,6 +317,14 @@ beforeAll(async () => {
   };
   const liveRows = await realmRows("live", liveShift);
   const testRows = await realmRows("test", testShift);
+  // Agents' proposals about people, one per realm. The live one carries the NUMBER of the test report card: the same
+  // name (`proposalId`) names another table on the owner's door, and the live owner must decide it.
+  const livePersonProposal = await one(db, sql`insert into person_proposals (id, person_id, change, reason, agent_key_id)
+    values (${testRows.proposal}, ${person.id}, '{}'::jsonb, 'проверка', ${keyId}) returning id`);
+  const testPerson = await one(db, sql`select id from people where code = 't-chat-1'`);
+  const testPersonProposal = await one(db, sql`insert into person_proposals (person_id, change, reason, agent_key_id)
+    values (${testPerson}, '{}'::jsonb, 'проверка', ${keyId}) returning id`);
+  live.personProposal = livePersonProposal;
   const pick = async (query: (test: boolean) => ReturnType<typeof sql>) => ({ live: await one(db, query(false)), test: await one(db, query(true)) });
   Object.assign(objects, {
     page: { live: String(page.id), test: String(testPages[0]) },
@@ -328,6 +339,7 @@ beforeAll(async () => {
     offPlatformLine: { live: liveRows.line, test: testRows.line },
     candidate: { live: liveRows.candidate, test: testRows.candidate },
     proposal: { live: liveRows.proposal, test: testRows.proposal },
+    personProposal: { live: livePersonProposal, test: testPersonProposal },
     sighting: { live: liveRows.sighting, test: testRows.sighting },
     question: { live: String(liveQuestion), test: String(testQuestion) },
     order: await pick((test) => sql`select 'K-' || o.id from custom_orders o join pages p on p.id = o.page_id join models m on m.id = p.model_id
@@ -463,6 +475,19 @@ describe("the wall by object, generated from the contract", () => {
     expect(list.length).toBeGreaterThan(100);
     expect(await holes("dima", list)).toEqual([]);
   }, 600_000);
+
+  it("the live owner decides an agent's proposal about a live person whose number a test report card also has", async (context) => {
+    if (!server) return context.skip();
+    const card = await testDb!.pool.query("select count(*)::int as n from shift_handin_proposals where id = $1", [live.personProposal]);
+    expect(card.rows[0]!.n).toBe(1);
+    const decided = await server.inject({
+      method: "POST", url: `/api/v1/admin/people-proposals/${live.personProposal}/decide`,
+      headers: { cookie: cookies.dima!, "content-type": "application/json" }, payload: { decision: "reject", note: "проверка" },
+    });
+    expect(decided.statusCode, decided.body).toBe(200);
+    const row = await testDb!.pool.query("select state from person_proposals where id = $1", [live.personProposal]);
+    expect(row.rows[0]!.state).toBe("rejected");
+  });
 
   it("the test owner invites a test chatter with a test page and a test team lead leading the test model; a live page or model is refused", async (context) => {
     if (!server) return context.skip();
