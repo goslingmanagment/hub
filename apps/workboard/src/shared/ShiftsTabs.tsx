@@ -12,7 +12,7 @@ export function ShiftsTabs() {
     <Tabs
       label="Чьи смены"
       className="wb-shifts-tabs"
-      items={[{ to: "/my/shifts", label: "Мои", end: true }, { to: "/shifts", label: "Команда", end: true }]}
+      items={[{ to: "/shifts/mine", label: "Мои", end: true }, { to: "/shifts/team", label: "Команда", end: true }]}
     />
   );
 }

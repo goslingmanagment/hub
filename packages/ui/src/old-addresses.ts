@@ -27,8 +27,10 @@ export function workboardOldAddress(at: RouterAddress): RouterAddress | null {
   // The old screen «Смена» is the «Отчёт» board: a chatter's address (the extension, Telegram reminders) and the team's.
   const shift = /^\/(?:my\/shifts|shifts\/report)\/([^/]+)$/.exec(path);
   if (shift) return { ...at, pathname: `/report/${shift[1]}` };
-  // The first chatter screen, «Мои отчёты»: a shift and its report are one row of «Мои смены»; `?days=` is the app's period.
-  if (path === "/my/reports") return { pathname: "/my/shifts", search: at.search, hash: "" };
+  // «Мои смены» is «Смены → Мои» (products package W; the released extension opens it), and so is the first chatter
+  // screen, «Мои отчёты»: a shift and its report are one row there; `?days=`, `?week=`, `?report=` carry over.
+  if (path === "/my/shifts") return { ...at, pathname: "/shifts/mine" };
+  if (path === "/my/reports") return { pathname: "/shifts/mine", search: at.search, hash: "" };
   // «Выплаты» is «Деньги» (products plan §2.3): its two views are the tabs «Долги» and «Отчёты»; the rest it carried
   // (the period, `person`, `questions`) stays.
   if (path === "/payouts") {
@@ -74,7 +76,7 @@ export function registryTabLanding(at: RouterAddress, owner: boolean): { hub: st
 
 /** Workboard's router paths of its old addresses (routes.tsx registers `OldAddress` on each). */
 export const WORKBOARD_OLD_PATHS: readonly string[] = [
-  "decisions", "my/shifts/:shiftId", "shifts/report/:shiftId", "my/reports", "sales", "people", "people/:ref", "people/:ref/:tab", "access", "payouts",
+  "decisions", "my/shifts", "my/shifts/:shiftId", "shifts/report/:shiftId", "my/reports", "sales", "people", "people/:ref", "people/:ref/:tab", "access", "payouts",
 ];
 
 /** One address opened today and where it lands: both absolute, as a browser shows them. */
@@ -91,7 +93,7 @@ const TEAM = "https://chatgoose.gosling-agency.ru";
 /** Every address opened today that must keep working, and where it lands now (an address of a person's access: the owner's landing). */
 export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   // The released extension 3.29.1: «Мои смены» by its one-time link, Workboard's plain address, the shift to hand in.
-  { who: "extension 3.29.1", from: `${TEAM}/workboard/my/shifts`, to: `${TEAM}/workboard/my/shifts` },
+  { who: "extension 3.29.1", from: `${TEAM}/workboard/my/shifts`, to: `${TEAM}/workboard/shifts/mine` },
   { who: "extension 3.29.1", from: `${TEAM}/workboard/`, to: `${TEAM}/workboard/` },
   { who: "extension 3.29.1, matter", from: `${TEAM}/workboard/my/shifts/812`, to: `${TEAM}/workboard/report/812` },
   { who: "extension, matter", from: `${TEAM}/workboard/report/812`, to: `${TEAM}/workboard/report/812` },
@@ -111,7 +113,8 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "owner's bookmark", from: `${HUB}/workboard/decisions`, to: `${HUB}/waiting` },
   { who: "owner's bookmark", from: `${HUB}/workboard/decisions#held`, to: `${HUB}/waiting#held` },
   { who: "owner's bookmark", from: `${HUB}/workboard/decisions?send=a1#held`, to: `${TEAM}/workboard/waiting?send=a1#held` },
-  { who: "owner's bookmark", from: `${HUB}/workboard/my/shifts`, to: `${TEAM}/workboard/my/shifts` },
+  { who: "owner's bookmark", from: `${HUB}/workboard/my/shifts`, to: `${TEAM}/workboard/shifts/mine` },
+  { who: "matter, a post to fix", from: `${TEAM}/workboard/my/shifts?week=2026-11-09&report=2026-11-10`, to: `${TEAM}/workboard/shifts/mine?week=2026-11-09&report=2026-11-10` },
   // The console's old «Команда» (apps/dashboard/src/lib/workboard.ts).
   { who: "console's old «Команда»", from: `${HUB}/team/shifts?period=30d`, to: `${TEAM}/workboard/shifts?days=30` },
   { who: "console's old «Команда»", from: `${HUB}/team/payouts#disputes`, to: `${TEAM}/workboard/waiting#reports` },
@@ -131,7 +134,7 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "matter", from: `${TEAM}/workboard/people`, to: `${TEAM}/workboard/team` },
   { who: "people's message", from: `${TEAM}/workboard/customs/K-14`, to: `${TEAM}/workboard/customs/K-14` },
   // Workboard's own older addresses.
-  { who: "Workboard, old", from: `${TEAM}/workboard/my/reports?days=14`, to: `${TEAM}/workboard/my/shifts?days=14` },
+  { who: "Workboard, old", from: `${TEAM}/workboard/my/reports?days=14`, to: `${TEAM}/workboard/shifts/mine?days=14` },
   { who: "Workboard, old", from: `${TEAM}/workboard/access?person=7`, to: `${HUB}/people/7/logins` },
   { who: "Workboard, old", from: `${TEAM}/workboard/sales`, to: `${TEAM}/workboard/sales/price` },
   { who: "Workboard, old", from: `${TEAM}/workboard/people/7/shifts`, to: `${TEAM}/workboard/team/7` },

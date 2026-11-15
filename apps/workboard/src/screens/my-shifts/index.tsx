@@ -460,7 +460,7 @@ export function MyShiftsScreen() {
   return (
     <>
       <ScreenHeader
-        title="Мои смены"
+        title="Смены"
         period
         meta={meta}
         updatedAt={data ? read.dataUpdatedAt : undefined}

@@ -51,15 +51,15 @@ describe("Workboard's menu", () => {
     expect(items("workboard", "team_lead", { leads: true }).map((item) => item.label)).toEqual(["Сегодня", "Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Продажи"]);
   });
 
-  it("gives a chatter «Сегодня», «Ждут вас», «Мои смены», «Смены», «Фаны», «Кастомы» and «Продажи», «Начало» first only while a step is open", () => {
-    expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["today", "waiting", "my-shifts", "shifts", "fans", "customs", "sales"]);
-    expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "today", "waiting", "my-shifts", "shifts", "fans", "customs", "sales"]);
+  it("gives a chatter «Сегодня», «Ждут вас», «Смены», «Фаны», «Кастомы» and «Продажи», «Начало» first only while a step is open", () => {
+    expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["today", "waiting", "shifts", "fans", "customs", "sales"]);
+    expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "today", "waiting", "shifts", "fans", "customs", "sales"]);
     // «Деньги» only while the person's right «видит свои деньги» is on.
-    expect(items("workboard", "chatter", { money: true }).map((item) => item.id)).toEqual(["today", "waiting", "my-shifts", "shifts", "fans", "customs", "sales", "money"]);
+    expect(items("workboard", "chatter", { money: true }).map((item) => item.id)).toEqual(["today", "waiting", "shifts", "fans", "customs", "sales", "money"]);
   });
 
   it("gives «Команда» to a chatter who leads a team by its records, and never to a plain chatter", () => {
-    expect(items("workboard", "chatter", { leads: true }).map((item) => item.id)).toEqual(["today", "waiting", "my-shifts", "shifts", "team", "fans", "customs", "sales"]);
+    expect(items("workboard", "chatter", { leads: true }).map((item) => item.id)).toEqual(["today", "waiting", "shifts", "team", "fans", "customs", "sales"]);
     expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).not.toContain("team");
   });
 

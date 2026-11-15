@@ -85,7 +85,7 @@ function CellView({ row, cell, back }: { row: GridRow; cell: GridCell; back: Bac
     const search = withPeriod(new URLSearchParams(location.search), { kind: "range", from: column.from, to: column.to });
     return (
       <Tooltip content={`${team ? "" : `${row.username}, `}${formatDayRange(column.from, column.to)}: ${tip}. Открыть по дням`}>
-        <Link to={{ pathname: "/shifts", search: search.toString() }} className="shifts-cell">{money}</Link>
+        <Link to={{ pathname: location.pathname, search: search.toString() }} className="shifts-cell">{money}</Link>
       </Tooltip>
     );
   }

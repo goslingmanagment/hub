@@ -109,7 +109,7 @@ export function ShiftsScreen() {
     body = (
       <EmptyState
         title={`Hub считает смены с ${formatDay(model.knownSince!)}`}
-        action={<LinkButton to={{ pathname: "/shifts", search: thisWeek }}>К этой неделе</LinkButton>}
+        action={<LinkButton to={{ pathname: location.pathname, search: thisWeek }}>К этой неделе</LinkButton>}
       >
         Раньше этого дня расширение ChatGoose не сообщало Hub о работе чаттеров, поэтому смен здесь нет.
       </EmptyState>
@@ -132,7 +132,7 @@ export function ShiftsScreen() {
     ) : (
       <EmptyState
         title={`${words[0]!.toUpperCase()}${words.slice(1)} смен нет`}
-        action={previousWeek ? <LinkButton to={{ pathname: "/shifts", search: previousWeek }}>Показать прошлую неделю</LinkButton> : undefined}
+        action={previousWeek ? <LinkButton to={{ pathname: location.pathname, search: previousWeek }}>Показать прошлую неделю</LinkButton> : undefined}
       >
         Никто не работал в расширении ChatGoose, или у чаттеров ещё старая версия расширения.
       </EmptyState>

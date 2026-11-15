@@ -98,7 +98,7 @@ function matchesRoute(pattern: string, path: string): boolean {
 }
 
 /** Workboard's routes a resting address may open (apps/workboard/src/app/routes.tsx). */
-const WORKBOARD_ROUTES = ["/", "/start", "/my/shifts", "/shifts", "/team", "/team/:ref/:tab?", "/customs", "/customs/:code", "/sales/:tab", "/waiting", "/money", "/money/debts", "/money/reports", "/money/mine", "/report/:shiftId", "/account", "/fans", "/fans/subscribers", "/fans/followers", "/fans/gone", "/fans/by-spend", "/fans/by-spend/:bucketKey", "/fans/:pageLabel/:platform/:platformUserId", "/fans/:platform/:platformUserId"];
+const WORKBOARD_ROUTES = ["/", "/today", "/start", "/shifts", "/shifts/mine", "/shifts/team", "/team", "/team/:ref/:tab?", "/customs", "/customs/:code", "/sales/:tab", "/waiting", "/money", "/money/debts", "/money/reports", "/money/mine", "/report/:shiftId", "/account", "/fans", "/fans/subscribers", "/fans/followers", "/fans/gone", "/fans/by-spend", "/fans/by-spend/:bucketKey", "/fans/:pageLabel/:platform/:platformUserId", "/fans/:platform/:platformUserId"];
 
 describe("old addresses", () => {
   it.each(OLD_ADDRESSES.map((row) => [row.from, row.to, row.who]))("%s lands on %s (%s)", (from, to) => {
@@ -119,8 +119,8 @@ describe("old addresses", () => {
     expect(follow(`${TEAM}/workboard/people/7/access`, true).at).toBe(`${HUB}/people/7/logins`);
   });
 
-  it("keeps the released extension's «Мои смены» where it is, forever", () => {
-    expect(follow(`${TEAM}/workboard/my/shifts`).steps).toEqual([]);
+  it("keeps the released extension's «Мои смены» on the team's name, without a sign-in hop: «Смены → Мои»", () => {
+    expect(follow(`${TEAM}/workboard/my/shifts`)).toEqual({ at: `${TEAM}/workboard/shifts/mine`, steps: ["workboard"] });
   });
 
   it("has a router path for every old path of Workboard, and every one of them leads somewhere new", () => {

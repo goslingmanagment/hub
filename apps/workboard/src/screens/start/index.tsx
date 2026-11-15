@@ -73,7 +73,7 @@ export function StartScreen() {
                     <p className="start-text">Hub видит расширение, страницу и вашу работу на ней. Дальше ваши смены и отчёты по ним в «Мои смены».</p>
                   </div>
                 </div>
-                <LinkButton variant="primary" to="/my/shifts">Мои смены</LinkButton>
+                <LinkButton variant="primary" to="/shifts/mine">Мои смены</LinkButton>
               </Card>
             )}
             <Card

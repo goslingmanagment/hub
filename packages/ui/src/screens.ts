@@ -334,7 +334,9 @@ export const SCREENS: readonly Screen[] = [
     keywords: "решения чья продажа вопросы генгар отчёты посты не разобраны оплаченный день изменён кастомы проверить отправки зависшие",
   },
   {
-    id: "my-shifts", path: "/workboard/my/shifts", label: "Мои смены", title: "Мои смены", section: "team", product: "workboard", roles: ["chatter"], icon: "CalendarClock",
+    // «Мои» of «Смены» (products package W: one «Смены»; `/workboard/my/shifts` leads here): a chatter's own shifts with
+    // their reports. The owner and a team lead land on the journal of their own shifts.
+    id: "my-shifts", tabOf: "shifts", path: "/workboard/shifts/mine", label: "Мои", title: "Смены", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
     why: "Свои смены и отчёты по ним.",
     pageFilter: "none",
     notSearched: true,
