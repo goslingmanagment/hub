@@ -44,7 +44,7 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
 import { draftFacts, draftLines, linesPageSums, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
-import { gengarState, holdsSale, mayAct, signedLines, type BoardActor } from "./shift-report-phases.ts";
+import { cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor } from "./shift-report-phases.ts";
 
 /**
  * The «Отчёт» board as a reader sees it (products plan 2026-11-13, package R; the contract shift-report-board.ts): a
@@ -310,6 +310,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     const proposal = proposalOf(id);
     const noteProposal = noteProposalOf(id);
     const rowDecider = deciderOfLine(line);
+    // A card of whose the sale is, outranked by a decision or an agreement made since: «решено иначе», it changes nothing.
+    const superseded = proposal !== null && (proposal.state === "proposed" || proposal.state === "late") && cardSuperseded(proposal, line);
     let current = lineOwner(line, people, me);
     let reason = "";
     const oldWay = ask !== null && ask.sideUserId !== null && ask.escalatedWhy === "no_side" && (ask.state === "owner" || ask.state === "asked") && !onBoard(ask.sideUserId);
@@ -333,7 +335,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       reason = ask.silenceAt !== null ? `${people.nameOf(ask.sideUserId)} не ответил за сутки` : `${people.nameOf(ask.sideUserId)} согласился`;
     } else if (incoming !== null && (incoming.state === "asked" || incoming.state === "owner") && incoming.claimantUserId !== null) {
       reason = `${people.nameOf(incoming.claimantUserId)} оспаривает`;
-    } else if (proposal !== null && (proposal.state === "accepted" || (proposal.state === "proposed" && phase === "confirm"))) {
+    } else if (proposal !== null && !superseded && (proposal.state === "accepted" || (proposal.state === "proposed" && phase === "confirm"))) {
       reason = "поменял Генгар";
     } else if (proposal !== null && proposal.state === "declined" && counted) {
       reason = `Генгар предлагал иначе, решит ${rowDecider.words}`;
@@ -375,7 +377,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       from: shownProposal.kind === "owner_change" ? wordOwner(shownProposal.fromWord, shownProposal.fromUserId, line, people, me) : null,
       to: shownProposal.kind === "owner_change" ? wordOwner(shownProposal.toWord, shownProposal.toUserId, line, people, me) : null,
       note: shownProposal.note,
-      deltaMills: shownProposal.deltaMills,
+      deltaMills: superseded && shownProposal === proposal ? 0 : shownProposal.deltaMills,
+      ...(superseded && shownProposal === proposal ? { superseded: true } : {}),
       why: shownProposal.why,
       state: shownProposal.state,
       afterCounted: shownProposal.afterCounted,
@@ -384,8 +387,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     const noteText = line.note ?? (noteProposal !== null && noteProposal.state !== "declined" ? noteProposal.note : null);
     const noteBy = line.noteByAgent === true || (line.note === null && noteText !== null) ? "agent" as const : "person" as const;
     const attention = isLate || (incomingWire?.canAnswer ?? false)
-      || (phase === "confirm" && shownProposal !== null && shownProposal.state === "proposed")
-      || (shownProposal?.state === "late");
+      || (phase === "confirm" && shownProposal !== null && shownProposal.state === "proposed" && !superseded)
+      || (shownProposal?.state === "late" && !superseded);
     return {
       key: `t${id}`,
       transactionId: id,
@@ -726,9 +729,14 @@ export async function oldWayGives(db: Database, proposals: ReadonlyArray<Pick<Pr
 export async function signableOf(db: Database, input: { subject: Subject; catalog: PageCatalog; handin: HandinRow; candidate: CandidateRow }) {
   const { subject, catalog, handin, candidate } = input;
   const proposals = (await listHandinProposals(db, handin.id)).filter((one) => one.candidateId === candidate.id);
-  const applied = proposals.filter((one) => one.state === "proposed");
   const marks = await listHandinMarks(db, handin.id);
   const draft = draftLines(await draftFacts(db, subject, handin, catalog, candidate.cutoffAt, marks), marks);
+  // The cards kept are written as the person's words at «Подтверждаю» — never one a decision or an agreement outranks.
+  const settledNow = new Map(withSettlementsNow(candidate.lines, draft).flatMap((line) => (line.transactionId === null ? [] : [[line.transactionId, line] as const])));
+  const applied = proposals.filter((one) => {
+    const line = settledNow.get(one.transactionId);
+    return one.state === "proposed" && (line === undefined || !cardSuperseded(one, line));
+  });
   const oldWay = await oldWayGives(db, applied);
   const lines = signedLines({ candidate: candidate.lines, draft, proposals, notes: new Map(marks.map((mark) => [mark.transactionId, mark.note])), oldWay });
   const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);

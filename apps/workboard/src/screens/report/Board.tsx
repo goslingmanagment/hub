@@ -557,7 +557,15 @@ export function ReportBoard({ report, host, transport, light }: {
       const from = upper(card.from?.words ?? "");
       const to = upper(card.to?.words ?? "");
       const proposalId = card.id;
-      if (card.state === "proposed" || card.state === "late") {
+      if (card.superseded === true) {
+        // Decided or agreed since: the settlement outranks the card, which changes nothing.
+        parts.push(
+          <div className="gc is-no" key="card">
+            <div className="gc-h"><b>{card.by}</b><span>предлагал «{to}»</span></div>
+            <div className="gc-a"><span className="grow">Решено иначе: {row.reasonWords}.</span></div>
+          </div>,
+        );
+      } else if (card.state === "proposed" || card.state === "late") {
         parts.push(
           <div className="gc" key="card">
             <div className="gc-h"><b>{card.by}</b><span>было «{from}», стало «{to}»</span>{card.deltaMills !== 0 && <span className={`gc-d${card.deltaMills > 0 ? " is-up" : ""}`}>{signed(card.deltaMills)}</span>}</div>

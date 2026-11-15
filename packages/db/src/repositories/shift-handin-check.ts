@@ -49,14 +49,24 @@ export async function listTransactionChecks(db: Database, transactionIds: readon
   return new Map(result.rows.map((row) => [num(row.id), { netMills: num(row.creator_net_amount_mills), state: String(row.state), statementSeen: Boolean(row.statement_seen) }]));
 }
 
-/** Reports whose shift row was cancelled (dropped) or merged into another, still waiting or counted with lines. */
+/**
+ * Whether a version counts money — a line, a «мимо площадки» amount, or a total — the ONE predicate of «this report
+ * counts», in TS here and in SQL (`versionCountsMoneySql`, a version aliased `v`): a report that holds only an owner's
+ * confirmed «мимо площадки» counts as much as one with sales (a merge or a cancel must leave it at nothing).
+ */
+export function versionCountsMoney(version: { lines: readonly unknown[]; offPlatform: readonly unknown[]; totalMills: number }): boolean {
+  return version.lines.length > 0 || version.offPlatform.length > 0 || version.totalMills !== 0;
+}
+const versionCountsMoneySql = sql`(jsonb_array_length(v.lines) > 0 or jsonb_array_length(v.off_platform) > 0 or v.total_mills <> 0)`;
+
+/** Reports whose shift row was cancelled (dropped) or merged into another, still waiting or counting money (`versionCountsMoney`). */
 export async function listHandinsOfGoneShifts(db: Database): Promise<Array<{ handinId: number; shiftId: number; userId: number; state: string; mergedInto: number | null; phase: string }>> {
   const result = await db.execute<Row>(sql`
     select h.id, h.shift_id, h.user_id, s.state, s.merged_into, h.phase
     from shift_handins h join shifts s on s.id = h.shift_id
     where s.state in ('dropped', 'merged')
       and (h.phase in ('checking', 'confirm', 'fixing')
-        or exists (select 1 from shift_handin_versions v where v.handin_id = h.id and v.version = h.current_version and jsonb_array_length(v.lines) > 0))
+        or exists (select 1 from shift_handin_versions v where v.handin_id = h.id and v.version = h.current_version and ${versionCountsMoneySql}))
     order by h.id`);
   return result.rows.map((row) => ({
     handinId: num(row.id), shiftId: num(row.shift_id), userId: num(row.user_id), state: String(row.state),

@@ -190,6 +190,11 @@ export const shiftReportProposalSchema = z.object({
    * was counted: «Принять» / «Не согласен», nothing changes by itself.
    */
   state: z.enum(["proposed", "declined", "accepted", "late"]),
+  /**
+   * A decision or an agreement on the sale was made after the card: it outranks the card, which changes nothing
+   * («решено иначе»); absent — not so.
+   */
+  superseded: z.boolean().optional(),
   afterCounted: z.boolean(),
   /** The agent's name as people know it: «Генгар». */
   by: z.string(),
