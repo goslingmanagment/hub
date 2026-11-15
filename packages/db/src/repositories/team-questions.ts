@@ -36,7 +36,7 @@ export interface TeamQuestionRow {
   withdrawnAt: Date | null;
 }
 
-const SELECT = sql`select q.id, q.asker_user_id, q.page_id, p.label as page_label, q.model_id, q.fan_ref, q.fan_name, q.kind, q.text,
+const SELECT = sql`select q.id, q.asker_user_id, q.page_id, p.label as page_label, q.model_id, q.fan_platform_user_id, q.fan_name, q.kind, q.text,
   q.decider_user_id, q.door, q.asked_at, q.state, q.answer, q.answer_text, q.answered_by_user_id, q.answered_at, q.seen_at, q.withdrawn_at
   from team_questions q join pages p on p.id = q.page_id`;
 
@@ -47,7 +47,7 @@ function questionOf(row: Row): TeamQuestionRow {
     pageId: num(row.page_id),
     pageLabel: String(row.page_label),
     modelId: nullableNum(row.model_id),
-    fanRef: text(row.fan_ref),
+    fanRef: text(row.fan_platform_user_id),
     fanName: text(row.fan_name),
     kind: String(row.kind),
     text: String(row.text),
@@ -72,7 +72,7 @@ export async function insertTeamQuestion(
   },
 ): Promise<number> {
   const result = await db.execute<Row>(sql`
-    insert into team_questions (asker_user_id, page_id, model_id, fan_ref, fan_name, kind, text, decider_user_id, door, asked_at)
+    insert into team_questions (asker_user_id, page_id, model_id, fan_platform_user_id, fan_name, kind, text, decider_user_id, door, asked_at)
     values (${input.askerUserId}, ${input.pageId}, ${input.modelId}, ${input.fanRef}, ${input.fanName}, ${input.kind}, ${input.text},
       ${input.deciderUserId}, ${input.door}, ${input.at.toISOString()}::timestamptz)
     returning id`);

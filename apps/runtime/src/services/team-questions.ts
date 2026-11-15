@@ -116,7 +116,8 @@ async function openAsked(app: QuestionsApp, row: TeamQuestionRow, askerName: str
     pageIds: [row.pageId],
     owner: row.deciderUserId === null ? { role: "owner" } : { userId: row.deciderUserId },
     money: false,
-    evidence: { questionId: row.id, kind: row.kind, text: row.text, fanName: row.fanName, askedAt: row.askedAt.toISOString() },
+    // No words of the question here: they may name a fan, and the matter outlives a fan's erasure of the question.
+    evidence: { questionId: row.id, kind: row.kind, askedAt: row.askedAt.toISOString() },
     link: linkOf(row.id),
   }, SYSTEM, now);
 }
@@ -178,12 +179,12 @@ export async function answerQuestion(
     key: `${ANSWERED}:${id}`,
     kind: ANSWERED,
     source: "server",
-    title: `${body.answer === "yes" ? "Можно" : "Нельзя"}: ${kindWord(answered.kind).toLowerCase()}${text === null ? "" : `. ${text}`}`,
+    title: `${body.answer === "yes" ? "Можно" : "Нельзя"}: ${kindWord(answered.kind).toLowerCase()}`,
     object: { type: "team_question", id: String(id) },
     pageIds: [answered.pageId],
     owner: { userId: answered.askerUserId },
     money: false,
-    evidence: { questionId: id, kind: answered.kind, answer: body.answer, answerText: text, askedAt: answered.askedAt.toISOString(), answeredAt: now.toISOString() },
+    evidence: { questionId: id, kind: answered.kind, answer: body.answer, askedAt: answered.askedAt.toISOString(), answeredAt: now.toISOString() },
     link: linkOf(id),
   }, SYSTEM, now);
   const [question] = await wireOf(app, facts, principal, [answered]);

@@ -42,7 +42,7 @@ const as = (who: string, method: "GET" | "POST", url: string, payload?: object) 
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
 
 async function openMatters(kind: string): Promise<Array<{ owner_user_id: string | null; owner_role: string | null; reason_key: string }>> {
-  const result = await testDb!.pool.query("select owner_user_id, owner_role, reason_key from matters where kind = $1 and state = 'open' order by id", [kind]);
+  const result = await testDb!.pool.query("select owner_user_id::text, owner_role, reason_key from matters where kind = $1 and state = 'open' order by id", [kind]);
   return result.rows;
 }
 

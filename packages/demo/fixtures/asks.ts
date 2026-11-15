@@ -95,7 +95,7 @@ export function demoAskMatters(now: number): DemoAskMatter[] {
       return [{ kind: "question.asked", key: `question.asked:${kept.id}`, title: `${nameOf(kept.askerId)} спрашивает: ${word}`, pages: [kept.pageLabel], owner: "team_lead", evidence: { questionId: kept.id, askedAt: new Date(kept.askedAt).toISOString() }, link: `/workboard/waiting?question=${kept.id}#asks`, agoMs: now - kept.askedAt }];
     }
     if (kept.state === "answered" && !kept.seen) {
-      return [{ kind: "question.answered", key: `question.answered:${kept.id}`, title: `${kept.answer === "yes" ? "Можно" : "Нельзя"}: ${word}${kept.answerText ? `. ${kept.answerText}` : ""}`, pages: [kept.pageLabel], owner: kept.askerId, evidence: { questionId: kept.id }, link: `/workboard/waiting?question=${kept.id}#asks`, agoMs: now - (kept.answeredAt ?? now) }];
+      return [{ kind: "question.answered", key: `question.answered:${kept.id}`, title: `${kept.answer === "yes" ? "Можно" : "Нельзя"}: ${word}`, pages: [kept.pageLabel], owner: kept.askerId, evidence: { questionId: kept.id }, link: `/workboard/waiting?question=${kept.id}#asks`, agoMs: now - (kept.answeredAt ?? now) }];
     }
     return [];
   });

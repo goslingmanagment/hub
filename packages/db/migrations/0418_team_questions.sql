@@ -16,8 +16,8 @@ create table if not exists team_questions (
   asker_user_id bigint not null references users(id) on delete restrict,
   page_id bigint not null references pages(id) on delete restrict,
   model_id bigint references models(id) on delete restrict,
-  -- The fan it is about, when there is one: the platform's id of the fan on the page, and the name the asker saw.
-  fan_ref text,
+  -- The fan it is about, when there is one: the platform's id of the fan on the page (`fan_platform_user_id`), and the name the asker saw.
+  fan_platform_user_id text,
   fan_name text,
   kind text not null,
   text text not null,
