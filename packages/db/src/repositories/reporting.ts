@@ -39,7 +39,7 @@ import {
 import { egressKeySql } from "./egress.ts";
 import { settledTransactionState } from "./transaction-settled-state.ts";
 
-/** The page scope of a read: the pages named, or (none named) every page of the live agency (0412: the test realm's
+/** The page scope of a read: the pages named, or (none named) every page of the live agency (0414: the test realm's
  * pages only to whoever names them). */
 function applyPageScope<T>(clauses: T[], pageIds?: number[]) {
   if (pageIds !== undefined) {

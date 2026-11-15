@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — two columns with a false default and checks and triggers that refuse only rows naming a test model or a test person; none exist before the seed, and the previous image never names them.
--- 0412_sandbox_realm.sql
+-- 0414_sandbox_realm.sql
 --
 -- The test realm (products plan 2026-11-13 §8 «Тестовая команда на проде»): a test team on production that every
 -- role is accepted under, and that nothing live ever sees. Additive: nothing existing changes value.
@@ -33,9 +33,9 @@ create index if not exists models_is_test_idx on models (id) where is_test;
 create index if not exists people_is_test_idx on people (id) where is_test;
 
 comment on column models.is_test is
-  'A test model (0412): its pages are the test realm, which no live principal, feed or routine reads. Fixed at birth.';
+  'A test model (0414): its pages are the test realm, which no live principal, feed or routine reads. Fixed at birth.';
 comment on column people.is_test is
-  'A test person (0412): their logins work only test pages; no Telegram. Fixed at birth.';
+  'A test person (0414): their logins work only test pages; no Telegram. Fixed at birth.';
 
 -- The realm of a page / person / login. Null ids are live (no page: every page's, the live realm).
 create or replace function hub_page_is_test(p_page_id bigint) returns boolean
@@ -60,7 +60,7 @@ create or replace function hub_realm_mark_fixed() returns trigger
 language plpgsql as $$
 begin
   if new.is_test is distinct from old.is_test then
-    raise exception 'realm mark of %.% is fixed at birth (0412)', tg_table_name, old.id
+    raise exception 'realm mark of %.% is fixed at birth (0414)', tg_table_name, old.id
       using errcode = 'check_violation';
   end if;
   return new;
@@ -80,7 +80,7 @@ begin
   if new.model_id is distinct from old.model_id
      and (select is_test from models where id = new.model_id) is distinct from
          (select is_test from models where id = old.model_id) then
-    raise exception 'page % cannot move between the live and the test realm (0412)', old.id
+    raise exception 'page % cannot move between the live and the test realm (0414)', old.id
       using errcode = 'check_violation';
   end if;
   return new;
@@ -95,7 +95,7 @@ create or replace function hub_realm_person_page() returns trigger
 language plpgsql as $$
 begin
   if new.page_id is not null and hub_person_is_test(new.person_id) is distinct from hub_page_is_test(new.page_id) then
-    raise exception 'person % and page % are of different realms (0412)', new.person_id, new.page_id
+    raise exception 'person % and page % are of different realms (0414)', new.person_id, new.page_id
       using errcode = 'check_violation';
   end if;
   return new;
@@ -113,7 +113,7 @@ create or replace function hub_realm_user_page() returns trigger
 language plpgsql as $$
 begin
   if hub_user_is_test(new.user_id) is distinct from hub_page_is_test(new.platform_account_id) then
-    raise exception 'login % and page % are of different realms (0412)', new.user_id, new.platform_account_id
+    raise exception 'login % and page % are of different realms (0414)', new.user_id, new.platform_account_id
       using errcode = 'check_violation';
   end if;
   return new;
@@ -134,11 +134,11 @@ begin
     select 1 from user_page_assignments upa
     where upa.user_id = new.user_id and hub_page_is_test(upa.platform_account_id) is distinct from person_test
   ) then
-    raise exception 'login % opens pages of the other realm than person % (0412)', new.user_id, new.person_id
+    raise exception 'login % opens pages of the other realm than person % (0414)', new.user_id, new.person_id
       using errcode = 'check_violation';
   end if;
   if tg_op = 'UPDATE' and hub_person_is_test(old.person_id) is distinct from person_test then
-    raise exception 'login % cannot move between the live and the test realm (0412)', new.user_id
+    raise exception 'login % cannot move between the live and the test realm (0414)', new.user_id
       using errcode = 'check_violation';
   end if;
   return new;
@@ -153,7 +153,7 @@ create or replace function hub_realm_agent_key_pages() returns trigger
 language plpgsql as $$
 begin
   if (select count(distinct hub_page_is_test(page_id)) from unnest(new.page_ids) as page_id) > 1 then
-    raise exception 'agent key % is granted pages of both realms (0412)', new.id
+    raise exception 'agent key % is granted pages of both realms (0414)', new.id
       using errcode = 'check_violation';
   end if;
   return new;
@@ -173,7 +173,7 @@ begin
   if (any_test_page or owner_test) and not (
     owner_test and not exists (select 1 from unnest(new.page_ids) as page_id where not hub_page_is_test(page_id))
   ) then
-    raise exception 'matter % mixes the live and the test realm (0412)', new.reason_key
+    raise exception 'matter % mixes the live and the test realm (0414)', new.reason_key
       using errcode = 'check_violation';
   end if;
   return new;
@@ -188,7 +188,7 @@ create or replace function hub_realm_people_message() returns trigger
 language plpgsql as $$
 begin
   if new.recipient_user_id is not null and hub_user_is_test(new.recipient_user_id) then
-    raise exception 'people message % is for a test login (0412)', new.idempotency_key
+    raise exception 'people message % is for a test login (0414)', new.idempotency_key
       using errcode = 'check_violation';
   end if;
   return new;

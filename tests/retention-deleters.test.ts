@@ -245,7 +245,7 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/top-spenders.ts",
   "packages/db/src/repositories/transactions.ts",
   "packages/db/src/repositories/voice-profiles.ts",
-  // The test team's removal (0412): the owner's word only, a dry run by default, `--execute --confirm <model id>`;
+  // The test team's removal (0414): the owner's word only, a dry run by default, `--execute --confirm <model id>`;
   // it selects by the test marks alone and is never scheduled (apps/runtime/src/services/sandbox/remove.ts).
   "apps/runtime/src/services/sandbox/remove.ts",
 ];

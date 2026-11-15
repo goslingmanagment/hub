@@ -77,7 +77,7 @@ export async function findUserById(db: Database, userId: number) {
   });
 }
 
-/** Every login of the live agency (0412: a test person's login is the test realm's, never in this list). */
+/** Every login of the live agency (0414: a test person's login is the test realm's, never in this list). */
 export async function listUsers(db: Database) {
   return db.query.users.findMany({
     where: and(isNull(users.deletedAt), liveUserSql(users.id)),

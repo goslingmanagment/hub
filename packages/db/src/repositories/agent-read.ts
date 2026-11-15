@@ -210,7 +210,7 @@ export async function listAgentGrantPages(
  *  200-with-empty instead of becoming an existence oracle. */
 export async function countAgentVisiblePages(db: Database): Promise<number> {
   const result = await db.execute<{ count: string }>(
-    // The live agency's pages (0412): the test realm is no page a key could have been granted.
+    // The live agency's pages (0414): the test realm is no page a key could have been granted.
     sql`select count(*)::text as count from pages where deleted_at is null and ${livePageSql(sql`pages.id`)}`,
   );
   return Number(result.rows[0]?.count ?? 0);

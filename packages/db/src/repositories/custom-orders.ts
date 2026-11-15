@@ -188,7 +188,7 @@ export async function listPageCustomOrdersInWork(db: Database, input: { pageId: 
  * «Кастомы оплачены, не отданы» counts. The oldest payment first.
  */
 export async function listCustomOrdersAwaitingGiving(db: Database, input: { pageIds: "all" | readonly number[]; limit: number }): Promise<CustomOrderRow[]> {
-  // "all": every order of the live agency (0412: the test realm's orders only to whoever names its pages).
+  // "all": every order of the live agency (0414: the test realm's orders only to whoever names its pages).
   const pages = input.pageIds === "all" ? livePageSql(sql`o.page_id`) : input.pageIds.length === 0 ? sql`false` : sql`o.page_id = any(${ids(input.pageIds)})`;
   const result = await db.execute<Row>(sql`${ORDER_SELECT}
     where ${pages} and o.state in ('paid', 'at_model', 'partly', 'shot', 'revision')

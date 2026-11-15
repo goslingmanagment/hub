@@ -1003,7 +1003,7 @@ export async function ensurePageSyncStates(
     .filter((platform) => LEGACY_EXECUTOR_PLATFORMS.includes(platform));
   // Tombstoned pages (deletePageByLabel) must never get sync states seeded
   // or maintained — a deleted page otherwise re-enters the planner forever.
-  // A test page is never synced (0412, sandbox/realm.ts): no sync states are seeded or kept for it.
+  // A test page is never synced (0414, sandbox/realm.ts): no sync states are seeded or kept for it.
   const clauses = [sql`p.status = 'active'`, pageSyncPlatformScopeSql("p.id", platforms), livePageSql(sql`p.id`)];
   if (input?.pageId !== undefined) {
     clauses.push(sql`p.id = ${input.pageId}`);

@@ -36,7 +36,7 @@ export type TransactionSource =
   // or a tip the page's socket announced, a row of the page's sales ledger.
   | "chatspace:ws"
   | "chatspace:ledger"
-  // 0412: the test realm's seed (apps/runtime/src/services/sandbox/seed.ts), on test pages only.
+  // 0414: the test realm's seed (apps/runtime/src/services/sandbox/seed.ts), on test pages only.
   | "sandbox";
 
 export interface UpsertTransactionInput {

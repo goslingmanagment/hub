@@ -633,7 +633,7 @@ async function createPersonTx(
   let created: CreatedPerson["invite"] = null;
   if (invite) {
     // createInvite runs in a savepoint of this transaction: a taken login rolls the person back too.
-    // A test person's login is linked BEFORE its pages are given (0412: the database checks a login's pages against
+    // A test person's login is linked BEFORE its pages are given (0414: the database checks a login's pages against
     // its person's realm), so the test team's invitation takes its pages after the link.
     created = await createInvite({ ...app, db }, {
       username: invite.username,
@@ -660,7 +660,7 @@ async function createPersonTx(
   return { row, invite: created };
 }
 
-/** A test person's logins come only by its own invitation: never an existing login, never an agent key (0412). */
+/** A test person's logins come only by its own invitation: never an existing login, never an agent key (0414). */
 function refuseForeignLogins(principal: AuthPrincipal | undefined, body: { logins?: unknown; agentKeys?: unknown }) {
   if (principal !== undefined && realmOf(principal) === "test" && (body.logins !== undefined || body.agentKeys !== undefined)) {
     throw new BadRequestError("В тестовой команде вход появляется только по приглашению");

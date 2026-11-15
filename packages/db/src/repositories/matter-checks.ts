@@ -95,7 +95,7 @@ function groupIds(rows: ReadonlyArray<{ owner: unknown; item: unknown }>): Map<n
 
 /** Everything the people checks need, in a handful of reads over small tables. */
 export async function readPeopleCheckSnapshot(db: Database, input: { today: string; idleSince: Date; now: Date }): Promise<PeopleCheckSnapshot> {
-  // The people checks are the live agency's (0412): the test team opens no matter of the owner's.
+  // The people checks are the live agency's (0414): the test team opens no matter of the owner's.
   const now = input.now.toISOString();
   const [people, logins, keys, pages, working, access, terms, inputs, since, proposals] = await Promise.all([
     db.execute<Row>(sql`select id, code, display_name, kind, role, state, left_on::text as left_on from people where not is_test order by id`),

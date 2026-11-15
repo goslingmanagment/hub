@@ -8,9 +8,9 @@ import type { Database } from "@agency_hub_core/db";
  *
  * - a dry run unless `--execute` is given: it counts what it would take, and writes nothing;
  * - `--execute` also needs `--confirm <the test model's id>`, read from the dry run: a wrong or stale id stops it;
- * - it selects ONLY by the test marks (0412): rows of test pages (through a test model), of test logins (through a test
+ * - it selects ONLY by the test marks (0414): rows of test pages (through a test model), of test logins (through a test
  *   person), the test people and the test model. A row of a live page or a live login is never in its reach; mixed rows
- *   cannot exist (the realm triggers of 0412).
+ *   cannot exist (the realm triggers of 0414).
  *
  * What it takes, in one transaction: every row of a table with a foreign key to a test page, a test login, a test person
  * or a test fan (found from the catalog, so a table added later is covered), the rows of the seed's tables that name a

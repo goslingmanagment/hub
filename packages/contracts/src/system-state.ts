@@ -213,7 +213,7 @@ export const systemStateResponseSchema = z.object({
   routines: z.array(systemStateRoutineSchema),
   copies: z.array(systemStateCopySchema),
   /**
-   * The test team on production (0412; Hub's sandbox/realm.ts), one honest line: how many people, when one of them last
+   * The test team on production (0414; Hub's sandbox/realm.ts), one honest line: how many people, when one of them last
    * worked. Null: there is none. Nothing of it is in any other number of the owner's.
    */
   sandbox: z.object({ people: z.number().int().nonnegative(), lastWorkedAt: isoTimestamp.nullable() }).nullable(),

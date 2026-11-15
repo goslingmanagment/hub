@@ -150,7 +150,7 @@ export interface HumanAuthPrincipal {
    */
   narrowDeviceTokenId?: number;
   /**
-   * The test realm (0412, services/sandbox/realm.ts): set for an owner of either realm and for every test login,
+   * The test realm (0414, services/sandbox/realm.ts): set for an owner of either realm and for every test login,
    * from the person behind the login. Absent: a live non-owner, whose pages are live by the database.
    */
   sandbox?: PrincipalSandbox;

@@ -2584,7 +2584,7 @@ export async function listOnlyFansPagesForOfapiMapping(db: Database) {
       metadata: pages.metadata,
     })
     .from(pages)
-    // A test page has no OnlyFans API account and is never offered one (0412).
+    // A test page has no OnlyFans API account and is never offered one (0414).
     .where(and(eq(pages.platform, "onlyfans"), eq(pages.status, "active"), livePageSql(pages.id)))
     .orderBy(asc(pages.label));
 }

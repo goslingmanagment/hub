@@ -605,7 +605,7 @@ async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: re
   const served: HandinFeedRow[] = [];
   const held: HandinFeedHeld[] = [];
   for (const row of rows) {
-    // A test person's version is no key's (0412): never served, never held (a held version fails the ledger's check).
+    // A test person's version is no key's (0414): never served, never held (a held version fails the ledger's check).
     if (row.realm_test === true) continue;
     const outside = (Array.isArray(row.outside) ? row.outside : []).map(String);
     const base = { seq: num(row.seq), shiftId: num(row.shift_id), userId: num(row.user_id), personCode: text(row.person_code), reportDate: String(row.report_date) };

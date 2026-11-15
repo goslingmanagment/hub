@@ -13,7 +13,7 @@ import { NotFoundError } from "../errors.ts";
 import type { AuthenticatedUser, AuthPrincipal, HumanAuthPrincipal } from "../auth.ts";
 
 /**
- * THE WALL of the test realm (migration 0412; products plan 2026-11-13 §8 «Тестовая команда на проде»).
+ * THE WALL of the test realm (migration 0414; products plan 2026-11-13 §8 «Тестовая команда на проде»).
  *
  * A model and a person can be test; a page is test through its model, a login through its person. The test team
  * lives on production beside the agency, and the wall runs both ways:

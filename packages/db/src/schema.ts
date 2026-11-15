@@ -258,7 +258,7 @@ export const models = pgTable("models", {
   slug: text("slug").notNull().unique(),
   name: text("name").notNull(),
   sortOrder: integer("sort_order").default(0).notNull(),
-  // The test realm (0412): a test model's pages are what no live principal reads. Fixed at birth.
+  // The test realm (0414): a test model's pages are what no live principal reads. Fixed at birth.
   isTest: boolean("is_test").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });

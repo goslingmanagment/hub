@@ -188,7 +188,7 @@ export async function listCurrentHandinVersionsSubmitted(
     from shift_handin_versions v
     join shift_handins h on h.id = v.handin_id and h.current_version = v.version
     where v.submitted_at >= ${input.from.toISOString()}::timestamptz and v.submitted_at < ${input.to.toISOString()}::timestamptz
-      -- A test person's report goes to no Telegram chat (0412).
+      -- A test person's report goes to no Telegram chat (0414).
       and ${liveUserSql(sql`h.user_id`)}
     order by v.id
     limit ${input.limit}`);
@@ -213,7 +213,7 @@ export async function listCustomOrdersMovedToModel(db: Database, input: { from: 
   const result = await db.execute<Row>(sql`
     select e.object_id, e.created_at from object_events e
     where e.object_type = 'custom_order' and e.event = 'custom_order.at_model' and (e.changes ->> 'telegramRef') is null
-      -- A test page's order goes to no model's group (0412).
+      -- A test page's order goes to no model's group (0414).
       and not exists (select 1 from custom_orders o where o.id::text = e.object_id and not ${livePageSql(sql`o.page_id`)})
       and e.created_at >= ${input.from.toISOString()}::timestamptz and e.created_at < ${input.to.toISOString()}::timestamptz
     order by e.created_at limit ${input.limit}`);

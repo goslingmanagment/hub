@@ -83,7 +83,7 @@ export const SANDBOX_PEOPLE: readonly SandboxPersonSpec[] = [
 export const SANDBOX_SCENARIOS = ["shift", "customs", "matters"] as const;
 export type SandboxScenario = (typeof SANDBOX_SCENARIOS)[number];
 
-/** Provenance of every sale the seed writes (0412). */
+/** Provenance of every sale the seed writes (0414). */
 export const SANDBOX_TRANSACTION_SOURCE = "sandbox";
 
 export class SandboxSeedRefused extends Error {}
@@ -164,7 +164,7 @@ async function ensurePerson(db: Database, spec: SandboxPersonSpec, pageIds: read
   let person = await findPersonRowByCode(db, spec.code);
   const created = person === null;
   if (person === null) {
-    // Born test (0412: the mark is fixed at birth). No Telegram: the database refuses one.
+    // Born test (0414: the mark is fixed at birth). No Telegram: the database refuses one.
     person = await insertPersonRow(db, {
       code: spec.code, displayName: spec.displayName, kind: "human", role: spec.role, state: spec.state, leftOn: null,
       telegramUserId: null, telegramHandle: null, reportTag: null, onboarding: [], note: "Тестовая команда (sandbox:seed)",

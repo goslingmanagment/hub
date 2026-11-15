@@ -99,7 +99,7 @@ export interface CustomViewer {
   /** «Ведёт кастомы». */
   lead: boolean;
   /**
-   * The test realm (0412, apps/runtime/src/services/sandbox/realm.ts): whether the viewer is a test person's login, and
+   * The test realm (0414, apps/runtime/src/services/sandbox/realm.ts): whether the viewer is a test person's login, and
    * the test pages. A live viewer never sees a test page's order, a test viewer only those. Absent: no test realm.
    */
   realm?: { test: boolean; testPageIds: readonly number[] };

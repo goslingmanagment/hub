@@ -2,7 +2,7 @@ import { sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
-// The test realm (0412): a model and a person can be test; a page is test through its model, a login through its
+// The test realm (0414): a model and a person can be test; a page is test through its model, a login through its
 // person. These are the database half of the wall; what it means for a principal, a feed or a routine is decided in
 // apps/runtime/src/services/sandbox/realm.ts, which every reader goes through.
 //

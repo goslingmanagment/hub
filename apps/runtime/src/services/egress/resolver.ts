@@ -106,7 +106,7 @@ export async function resolveEgress(
   if (!stored) {
     throw new NotFoundError(`Page ${scope.pageId} not found for egress resolution`);
   }
-  // A test page never reaches a platform (0412, sandbox/realm.ts): no egress at all, whoever asks.
+  // A test page never reaches a platform (0414, sandbox/realm.ts): no egress at all, whoever asks.
   if (await isTestPage(app.db, scope.pageId)) {
     throw new ForbiddenError(`Page ${scope.pageId} is a test page: it never reaches a platform`);
   }

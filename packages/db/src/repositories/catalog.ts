@@ -423,7 +423,7 @@ export async function listAdminModels(db: Database) {
     pageCount: sql<number>`count(${pages.id})::int`,
   }).from(models)
     .leftJoin(pages, eq(pages.modelId, models.id))
-    // The owner's catalog is the live agency's (0412): the test model is the test realm's.
+    // The owner's catalog is the live agency's (0414): the test model is the test realm's.
     .where(eq(models.isTest, false))
     .groupBy(models.id, models.slug, models.name, models.sortOrder)
     .orderBy(models.sortOrder, models.slug);
@@ -519,7 +519,7 @@ export async function listAdminPages(
     }
     clauses.push(inArray(pages.id, input.pageIds));
   } else {
-    // Every page of the live agency (0412): a test page is listed only to whoever names it.
+    // Every page of the live agency (0414): a test page is listed only to whoever names it.
     clauses.push(eq(models.isTest, false));
   }
 

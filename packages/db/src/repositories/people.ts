@@ -74,14 +74,14 @@ export interface PersonRow {
   note: string | null;
   importNotes: PersonImportNoteRow[];
   origin: PersonRowOrigin;
-  /** A test person (0412): the test realm's, never in a live answer. */
+  /** A test person (0414): the test realm's, never in a live answer. */
   isTest: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
 
 /**
- * Which realm a listing reads (0412, apps/runtime/src/services/sandbox/realm.ts): `live` (the default, every live
+ * Which realm a listing reads (0414, apps/runtime/src/services/sandbox/realm.ts): `live` (the default, every live
  * reader) or `test` (a test principal). A listing never mixes them.
  */
 export type PeopleRealm = "live" | "test";
@@ -191,7 +191,7 @@ export interface NewPersonRow {
   importNotes: PersonImportNoteRow[];
   origin: PersonRowOrigin;
   createdByUserId: number | null;
-  /** A test person (0412), fixed at birth: only the test realm's seed writes one. */
+  /** A test person (0414), fixed at birth: only the test realm's seed writes one. */
   isTest?: boolean;
 }
 

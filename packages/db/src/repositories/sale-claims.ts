@@ -658,7 +658,7 @@ export async function listDaysHandedIn(db: Database, input: { from: string; to: 
     select to_char(s.report_date, 'YYYY-MM-DD') as day
     from shifts s
     join person_logins l on l.user_id = s.user_id
-    -- The live agency's days (0412): a test shift never takes a real day out of the complete ones.
+    -- The live agency's days (0414): a test shift never takes a real day out of the complete ones.
     join people p on p.id = l.person_id and p.kind = 'human' and not p.is_test
     join person_rights r on r.person_id = p.id and r."right" = 'submits_shift' and s.started_at >= r.granted_at
     left join shift_handins h on h.shift_id = s.id

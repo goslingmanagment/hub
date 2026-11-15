@@ -86,7 +86,7 @@ export interface MatterViewer {
   role: MatterOwnerRole;
   /** The pages the person reaches (a team lead's role matters are cut to them). */
   pageIds: readonly number[];
-  /** A test person's login (0412): reads the test realm's matters only; absent, the live realm's only. */
+  /** A test person's login (0414): reads the test realm's matters only; absent, the live realm's only. */
   realm?: "test";
 }
 
@@ -212,7 +212,7 @@ const matterEvent = (db: Database, matter: MatterRow, event: string, actor: Matt
  * Refuses a key another writer holds (`MatterWriterConflictError`).
  */
 /**
- * The realm of a matter (0412, apps/runtime/src/services/sandbox/realm.ts), decided here for every writer: a matter
+ * The realm of a matter (0414, apps/runtime/src/services/sandbox/realm.ts), decided here for every writer: a matter
  * about test pages is a test person's by name — a role becomes the test person of that role who holds a login, else
  * the test owner; one about live and test pages alike stays live and drops the test pages. A live matter is unchanged.
  */
@@ -377,7 +377,7 @@ export async function listClosedMattersOfKinds(db: Database, input: { kinds: rea
  * with money.
  */
 export function matterVisibility(viewer: MatterViewer): SQL {
-  // The realm first (0412): a test matter always waits for a test login by name (matterOfRealm and the trigger).
+  // The realm first (0414): a test matter always waits for a test login by name (matterOfRealm and the trigger).
   const realm = viewer.realm === "test"
     ? sql`(m.owner_user_id is not null and ${testUserSql(sql`m.owner_user_id`)})`
     : sql`(m.owner_user_id is null or ${liveUserSql(sql`m.owner_user_id`)})`;
@@ -408,7 +408,7 @@ export function matterHeldBy(viewer: MatterViewer, heldRoles: readonly MatterOwn
  * whose person has not left, or a working person of that role in the registry.
  * Nobody — the owner is the acting team lead.
  */
-/** Whether someone of the realm holds the team lead's role (0412: a test team lead holds it for the test realm only). */
+/** Whether someone of the realm holds the team lead's role (0414: a test team lead holds it for the test realm only). */
 export async function teamLeadRoleHeld(db: Database, realm: "live" | "test" = "live"): Promise<boolean> {
   const userRealm = realm === "test" ? testUserSql(sql`u.id`) : liveUserSql(sql`u.id`);
   const result = await db.execute<{ held: boolean }>(sql`
