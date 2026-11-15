@@ -320,7 +320,7 @@ function snippetIn(chat: ShiftReviewChat, needle: string): Snippet | null {
   return null;
 }
 
-/** The shift, read and derived once per answer. Off (`enabled` false) for anyone but the owner: Hub answers them 403. */
+/** The shift, read and derived once per answer. Off (`enabled` false) until the viewer is known; Hub answers 403 to anyone outside the shift's team. */
 export function useShiftReview(userId: number, at: string, enabled = true) {
   const query = useQuery({ ...reviewQuery(userId, at), enabled });
   const data = query.data;
