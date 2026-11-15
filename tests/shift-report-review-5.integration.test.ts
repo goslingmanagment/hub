@@ -244,7 +244,6 @@ describe("the board's money, the final review's second reader", () => {
     const merged = await sale(21 * 60);
     // anna's work of 22–20 hours ago: two shift rows of it; the one handed in is then joined into the other.
     const gone = await shiftRow(anna, 22.5, 19.5);
-    const kept = await shiftRow(anna, 22.6, 19.4);
     await handInAndConfirm(asSession, "anna", gone);
     // The ledger's side: every version kept by id under the shift the feed served it with; a shift's report is its
     // highest version (ledger internal/reports/hub.go).
@@ -275,6 +274,7 @@ describe("the board's money, the final review's second reader", () => {
     await readFeed();
     expect(countedByLedger()).toBe(NET);
     // The row handed in is joined into the other; the report moves there and is handed in again.
+    const kept = await shiftRow(anna, 22.6, 19.4);
     await q("update shifts set state = 'merged', merged_into = $2 where id = $1", [gone, kept]);
     await settleGoneShifts(app, new Date());
     expect((await q("select shift_id::int as shift_id from shift_handins where shift_id in ($1, $2)", [gone, kept])).rows).toEqual([{ shift_id: kept }]);
