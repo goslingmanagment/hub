@@ -326,6 +326,15 @@ describe("the person's door", () => {
     const list = await inject("POST", "/api/v1/person/publications/list", { bearer: KEY, payload: { client: "contentops", grant: grants.testKm } });
     expect(list.statusCode, list.body).toBe(200);
     expect(leaks(list.body, ["mia-1", "mia-2", "zoe-1"])).toEqual([]);
+    // ContentOps asks for a model by Hub's slug (`test`), never by a page it binds: the pages come from Hub's answer.
+    for (const path of ["publications/settings", "publications/list"]) {
+      const ofModel = await inject("POST", `/api/v1/person/${path}`, { bearer: KEY, payload: { client: "contentops", grant: grants.testKm, modelSlug: "test" } });
+      expect(ofModel.statusCode, ofModel.body).toBe(200);
+      expect(ofModel.body, path).toContain('"test-1"');
+      expect(leaks(ofModel.body, ["mia-1", "mia-2", "zoe-1"]), path).toEqual([]);
+    }
+    const otherModel = await inject("POST", "/api/v1/person/publications/settings", { bearer: KEY, payload: { client: "contentops", grant: grants.owner, modelSlug: "zoe" } });
+    expect(otherModel.json<{ pages: Array<{ pageLabel: string }> }>().pages.map((page) => page.pageLabel)).toEqual(["zoe-1"]);
     // The test pages' seeded posts are hers to see; a live person's lists never name them.
     expect(list.body).toContain('"test-1"');
     for (const who of ["owner", "kmA", "kmB"]) {
