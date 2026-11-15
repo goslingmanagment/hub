@@ -492,11 +492,52 @@ async function seedMatters(db: Database, pages: SandboxSeedResult["pages"], now:
   return { matters: opened.length };
 }
 
+const APPROVABLE_DRAFT = "Тест: ждёт утверждения";
+
+/**
+ * Two drafts with no finding in the way — one on each test page — so «Утвердить» and the feed's «Утвердить выбранные»
+ * have something to take. Kept waiting, not dated: a run adds the pair whenever none of them is a draft any more
+ * (approved or cancelled in a walk), whatever the day. The Fansly one carries a file of this run's own (a file posted
+ * again within the page's threshold would wait for a person's word); the OnlyFans one is text alone.
+ */
+async function seedApprovableDrafts(db: AppContext["db"], pages: SandboxSeedResult["pages"], km: number, now: Date): Promise<number> {
+  const fansly = pages.find((page) => page.label === "test-1")!.id;
+  const onlyfans = pages.find((page) => page.label === "test-of")!.id;
+  const [waiting] = await rows(db, sql`
+    select count(*)::int as n from publications
+     where page_id in (${fansly}, ${onlyfans}) and status = 'draft' and text like ${`${APPROVABLE_DRAFT}%`}`);
+  if (Number(waiting?.n ?? 0) > 0) return 0;
+  const ref = `sandbox-test-1-${stampOf(now)}-m4`;
+  await db.execute(sql`
+    insert into creator_raw_media (page_id, platform, media_ref, source_kind, first_origin, first_observed_at,
+                                   last_observed_at, content_hash, source_event_id, source_observation_id, source_account_seq)
+    select ${fansly}, 'fansly', ${ref}, 'vault_media', 'vault', ${now}, ${now}, ${"0".repeat(64)}, 1, 1, 1
+     where not exists (select 1 from creator_raw_media where page_id = ${fansly} and media_ref = ${ref})`);
+  const dayStart = Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`);
+  const posts = [
+    { pageId: fansly, text: `${APPROVABLE_DRAFT}`, hourUtc: 13, media: [ref] },
+    { pageId: onlyfans, text: `${APPROVABLE_DRAFT}, без файлов`, hourUtc: 14, media: [] as string[] },
+  ];
+  for (const post of posts) {
+    const made = await createPublicationDraft(db, {
+      pageId: post.pageId, author: { kind: "human" as const, userId: km }, idempotencyKey: null, now,
+      body: publicationContentSchema.parse({
+        kind: "subscriber_post", text: post.text, media: post.media.map((mediaRef) => ({ source: "vault", mediaRef })),
+        publishAt: new Date(dayStart + 2 * 24 * 60 * MINUTE + post.hourUtc * 60 * MINUTE).toISOString(),
+      }),
+    });
+    const blocking = made.findings.filter((one) => one.severity === "blocking");
+    if (blocking.length > 0) throw new SandboxSeedRefused(`A test draft meant to be approvable has a finding in the way: ${blocking.map((one) => one.code).join(", ")}`);
+  }
+  return posts.length;
+}
+
 /**
  * Posts of the test pages in every state the feed tells apart. A draft is made by Hub's own draft (its checks run), an
  * approval by Hub's own approval (as the test content manager); the states only a platform's answer gives (published,
  * unknown, withdrawn) are written directly with a journal row by «Hub». The test pages' vault holds three files the
- * seed names, so the posts show files. Once per UTC day: a second run that day adds nothing.
+ * seed names, so the posts show files. Once per UTC day: a second run that day adds nothing — except the pair of
+ * drafts a person can approve (`seedApprovableDrafts`), which every run keeps waiting.
  */
 async function seedPublications(app: AppContext, pages: SandboxSeedResult["pages"], now: Date): Promise<Record<string, number>> {
   const db = app.db;
@@ -512,7 +553,16 @@ async function seedPublications(app: AppContext, pages: SandboxSeedResult["pages
   const [done] = await rows(db, sql`
     select count(*)::int as n from publication_status_events
      where reason like 'sandbox %' and at >= ${dayStart} and at < ${dayEnd}`);
-  if (Number(done?.n ?? 0) > 0) return { publications: 0 };
+  const fansly = pages.find((page) => page.label === "test-1")!.id;
+  const onlyfans = pages.find((page) => page.label === "test-of")!.id;
+  // The Fansly test page's one wall, as Fansly would name it: a post goes to the default wall.
+  await db.execute(sql`
+    insert into page_walls (page_id, platform, wall_ref, name, default_wall, main_wall, first_observed_at, last_observed_at,
+                            content_hash, source_event_id, source_observation_id, source_account_seq)
+    select ${fansly}, 'fansly', 'sandbox-wall', 'Posts', true, true, ${now}, ${now}, ${"0".repeat(64)}, 1, 1, 1
+     where not exists (select 1 from page_walls where page_id = ${fansly})`);
+  const waiting = await seedApprovableDrafts(db, pages, km, now);
+  if (Number(done?.n ?? 0) > 0) return { publications: waiting };
   for (const page of pages.filter((one) => one.label === "test-1")) {
     const platform = "fansly";
     for (const n of [1, 2, 3]) {
@@ -525,14 +575,6 @@ async function seedPublications(app: AppContext, pages: SandboxSeedResult["pages
          where not exists (select 1 from creator_raw_media where page_id = ${page.id} and media_ref = ${ref})`);
     }
   }
-  const fansly = pages.find((page) => page.label === "test-1")!.id;
-  const onlyfans = pages.find((page) => page.label === "test-of")!.id;
-  // The Fansly test page's one wall, as Fansly would name it: a post goes to the default wall.
-  await db.execute(sql`
-    insert into page_walls (page_id, platform, wall_ref, name, default_wall, main_wall, first_observed_at, last_observed_at,
-                            content_hash, source_event_id, source_observation_id, source_account_seq)
-    select ${fansly}, 'fansly', 'sandbox-wall', 'Posts', true, true, ${now}, ${now}, ${"0".repeat(64)}, 1, 1, 1
-     where not exists (select 1 from page_walls where page_id = ${fansly})`);
   const day = 24 * 60 * MINUTE;
   const author = { kind: "human" as const, userId: km };
   const at = (days: number, hourUtc: number) => new Date(Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`) + days * day + hourUtc * 60 * MINUTE);
@@ -566,7 +608,7 @@ async function seedPublications(app: AppContext, pages: SandboxSeedResult["pages
     await db.execute(sql`insert into publication_status_events (publication_id, from_status, to_status, actor_kind, reason, at)
                           values (${made.id}, 'approved', ${one.status}, 'hub', ${mark}, ${now})`);
   }
-  return { publications: 2 + outcomes.length };
+  return { publications: waiting + 2 + outcomes.length };
 }
 
 /** Seeds the test team (and the scenarios asked for). Additive, idempotent; refuses before writing on a live name. */
