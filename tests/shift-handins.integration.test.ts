@@ -437,5 +437,28 @@ describe("the shift report: who reads, who writes", () => {
     const claims = await testDb.pool.query("select state, escalated_why, origin from sale_claims where transaction_id = $1 and side_user_id = $2", [gift, dina]);
     expect(claims.rows).toEqual([{ state: "owner", escalated_why: "no_side", origin: "draft" }]);
   });
+
+  it("lists the reports standing in «Подтвердите» for Gengar's reminder, with when they got there; not a counted one, not across the realm wall", async (context) => {
+    if (!testDb) return context.skip();
+    const checks = async () => agentShiftReportChecksResponseSchema.parse((await asKey("reviewer", "GET", "/api/v1/agent/shift-reports/checks")).json());
+    const phase = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shiftA}`)).json()).board?.phase;
+    if (phase === "counted" || phase === "confirm") expect((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/reopen`)).statusCode).toBe(200);
+    const handed = shiftReportResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`)).json());
+    const candidateId = handed.board!.candidate!.id;
+    // Still checked: not yet waiting for the person.
+    expect((await checks()).awaitingConfirm.map((one) => one.shiftId)).not.toContain(shiftA);
+    expect((await asKey("reviewer", "POST", `/api/v1/agent/shift-reports/checks/${candidateId}`, { proposals: [] })).statusCode).toBe(200);
+    const since = (await testDb.pool.query("select phase, phase_at from shift_handins where shift_id = $1", [shiftA])).rows[0];
+    expect(since.phase).toBe("confirm");
+    const waiting = (await checks()).awaitingConfirm.find((one) => one.shiftId === shiftA);
+    expect(waiting).toMatchObject({ candidateId, person: "anna", pages: ["mia-1"], confirmSince: new Date(since.phase_at).toISOString() });
+    // The test realm's checker never sees a live report.
+    const { readShiftReportChecks } = await import("../apps/runtime/src/services/shift-report-board.ts");
+    const pageIds = (await testDb.pool.query("select id from pages")).rows.map((row: { id: string }) => Number(row.id));
+    expect((await readShiftReportChecks(app, { pageIds, limit: 50, realm: "test" })).awaitingConfirm).toEqual([]);
+    // Counted: no longer waiting.
+    expect(shiftReportConfirmResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId })).json()).confirmed).toBe(true);
+    expect((await checks()).awaitingConfirm.map((one) => one.shiftId)).not.toContain(shiftA);
+  });
 });
 

@@ -643,7 +643,29 @@ export async function readShiftReportChecks(app: BoardApp, input: { pageIds: rea
       colleagues: await listHandinColleagues(app.db, { pageIds, exceptUserIds: subject.userIds }),
     });
   }
-  return { checks, serverNow: now.toISOString() };
+  // The reports standing in «Подтвердите»: the same wall — the key's realm, every page of the shift in its grant.
+  const awaitingConfirm: AgentShiftReportChecksResponse["awaitingConfirm"] = [];
+  for (const one of await listConfirmHandins(app.db)) {
+    const subject = await subjectOf(app.db, one.shiftId).catch(() => null);
+    if (subject === null) continue;
+    if (testLogins.has(subject.shift.userId) !== (input.realm === "test")) continue;
+    const labels = subject.shift.pages.map((page) => page.pageLabel);
+    if (!labels.every((label) => granted.has(catalog.idOf.get(label) ?? -1))) continue;
+    const candidate = (await listHandinCandidates(app.db, one.handinId)).filter((row) => row.supersededAt === null && row.confirmedAt === null).at(-1);
+    if (candidate === undefined) continue;
+    const names = await listHandinNames(app.db, [subject.shift.userId]);
+    awaitingConfirm.push({
+      shiftId: subject.shift.id,
+      candidateId: candidate.id,
+      person: subject.person?.code ?? null,
+      personName: subject.person?.displayName ?? names.get(subject.shift.userId) ?? "",
+      pages: labels,
+      startedAt: subject.shift.startedAt.toISOString(),
+      // Entered «Подтвердите» for this candidate: the phase's moment, or the candidate's own hand-in when it was re-made later.
+      confirmSince: new Date(Math.max(one.phaseAt.getTime(), candidate.madeAt.getTime())).toISOString(),
+    });
+  }
+  return { checks, awaitingConfirm, serverNow: now.toISOString() };
 }
 
 /**

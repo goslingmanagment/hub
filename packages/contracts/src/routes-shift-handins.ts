@@ -423,6 +423,22 @@ export const agentShiftReportCheckSchema = z.object({
 export const agentShiftReportChecksResponseSchema = z.object({
   /** Candidates waiting for the check on the key's pages (every page of the shift in the grant), oldest first. */
   checks: z.array(agentShiftReportCheckSchema),
+  /**
+   * The reports standing in «Подтвердите» on the key's pages and of its realm (every page of the shift in the grant;
+   * a report with a page outside is left out whole), oldest first: what the reminder «Отчёт не подтверждён сутки» reads.
+   * `confirmSince` — when the report entered «Подтвердите» for its current candidate (the check finished, or the 10
+   * minutes ran out; a candidate re-made since counts from its own hand-in).
+   */
+  awaitingConfirm: z.array(z.object({
+    shiftId: intId,
+    candidateId: intId,
+    /** The person's code; null — a login no person holds. */
+    person: z.string().nullable(),
+    personName: z.string(),
+    pages: z.array(z.string()),
+    startedAt: isoTimestamp,
+    confirmSince: isoTimestamp,
+  })).default([]),
   serverNow: isoTimestamp,
 });
 
