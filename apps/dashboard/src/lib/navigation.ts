@@ -1,4 +1,6 @@
 import { pathSegment } from "@agency_hub_core/ui/path";
+import { isSafeInAppPath, withQuery } from "@agency_hub_core/ui/fanLinks";
+export { buildFanProfileNavigation, buildFansRoute, buildPageSpenderAutoListRoute, decodeRouteSegment, isSafeInAppPath, resolveFanProfileBackTarget, type FanProfileNavigationState } from "@agency_hub_core/ui/fanLinks";
 import { NO_SILENT_SIGNIN, isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref, silentSignInHref, workboardEntryHref } from "./sites.js";
 import type { Period, PeriodOption } from "../stores/periodStore.js";
 
@@ -23,10 +25,6 @@ export function resolveDashboardPeriod(value: string | null, fallback: Period): 
   return revenuePeriod(askedPeriod(value, fallback));
 }
 
-export interface FanProfileNavigationState {
-  backTo: string;
-  fanLabel?: string;
-}
 
 /**
  * A page itself: Главная on that page. The page is a filter (its card left on
@@ -36,13 +34,6 @@ export function buildPageRoute(pageLabel: string, params: Readonly<Record<string
   return withQuery("/", { page: pageLabel, ...params });
 }
 
-export function decodeRouteSegment(value: string) {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
 
 /**
  * A page's own screen (they were the tabs of its card): its Fansly account and
@@ -55,52 +46,10 @@ export function buildPageSectionRoute(pageLabel: string, section: "account" | "p
   return withQuery(section === "promo" ? "/traffic/promo" : "/content/mass-messages", { page: pageLabel });
 }
 
-function withQuery(path: string, params: Readonly<Record<string, string | null | undefined>>): string {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value !== null && value !== undefined && value !== "") query.set(key, value);
-  }
-  const text = query.toString();
-  return text ? `${path}?${text}` : path;
-}
 
-/** A list of fans of one page. `?page=` only narrows the list. */
-export function buildFansRoute(
-  view: "paying" | "subscribers" | "followers" | "gone" | "by-spend",
-  pageLabel: string,
-  params: Readonly<Record<string, string | null | undefined>> = {},
-) {
-  return withQuery(view === "paying" ? "/fans" : `/fans/${view}`, { page: pageLabel, ...params });
-}
 
-export function buildPageSpenderAutoListRoute(
-  pageLabel: string,
-  bucketKey: string,
-  params: Readonly<Record<string, string | null | undefined>> = {},
-) {
-  return withQuery(`/fans/by-spend/${pathSegment(bucketKey)}`, { page: pageLabel, ...params });
-}
 
-function buildFanProfileRoute(
-  pageLabel: string,
-  platform: string,
-  platformUserId: string,
-) {
-  return `/fans/${pathSegment(pageLabel)}/${pathSegment(platform)}/${pathSegment(platformUserId)}`;
-}
 
-export function buildFanProfileNavigation(
-  pageLabel: string,
-  platform: string,
-  platformUserId: string,
-  backTo: string,
-  fanLabel?: string,
-) {
-  return {
-    to: buildFanProfileRoute(pageLabel, platform, platformUserId),
-    state: { backTo, ...(fanLabel === undefined ? {} : { fanLabel }) } satisfies FanProfileNavigationState,
-  };
-}
 
 /** A page's collection screen: the page is in the path, so a lever on it cannot
  *  take its target from anywhere else. */
@@ -108,19 +57,6 @@ export function buildPageCollectionRoute(pageLabel: string) {
   return `/system/collection/${pathSegment(pageLabel)}`;
 }
 
-export function isSafeInAppPath(value: string) {
-  if (!value.startsWith("/") || value.startsWith("//") || /[\\\p{Cc}\s]/u.test(value))
-    return false;
-  try {
-    const url = new URL(value, "https://hub.invalid");
-    const decoded = decodeURIComponent(url.pathname);
-    return url.origin === "https://hub.invalid"
-      && !/[\\\p{Cc}]/u.test(decoded)
-      && !decoded.startsWith("//");
-  } catch {
-    return false;
-  }
-}
 
 export function resolveLoginReturnPath(value: string | null | undefined): string {
   if (!value || !isSafeInAppPath(value)) return "/";
@@ -300,22 +236,6 @@ function opensWorkboard(path: string): boolean {
   return isWorkboardPath(new URL(path, "https://hub.invalid").pathname);
 }
 
-export function resolveFanProfileBackTarget(
-  state: unknown,
-  pageLabel: string | undefined,
-) {
-  if (
-    typeof state === "object"
-    && state !== null
-    && "backTo" in state
-    && typeof state.backTo === "string"
-    && isSafeInAppPath(state.backTo)
-  ) {
-    return state.backTo;
-  }
-
-  return pageLabel ? buildFansRoute("paying", pageLabel) : "/";
-}
 
 /** The second part of connecting a page: its browser, by its profile. */
 export function browserProfileRoute(profileId: string): string {

@@ -63,6 +63,7 @@ import { formatRequestValidationMessage, requestBodyErrorStatus } from "./error-
 import { createRequestAuth, unauthorizedFor } from "./request-auth.ts";
 import { crossOriginRefusal } from "./origin-check.ts";
 import { narrowWebSessionRefusal } from "../services/narrow-web-session.ts";
+import { asFanReader, FAN_READ_OPERATIONS } from "../services/fan-reads.ts";
 import { signinNamesOf, workboardOnConsoleRedirect } from "../services/signin-handoff.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
@@ -470,7 +471,9 @@ export async function buildApiServer(appContext: AppContext) {
         if (!page) {
           return "not-found";
         }
-        const principal = await resolvePrincipal(request);
+        const resolved = await resolvePrincipal(request);
+        // A fans read answers by the viewer's teams (services/fan-reads.ts), every other read by the page's grant.
+        const principal = resolved && FAN_READ_OPERATIONS.has(entry.key) ? await asFanReader(appContext, resolved) : resolved;
         return principal && canAccessPage(principal, page.id) ? "ok" : "denied";
       },
       pageLabelParam,

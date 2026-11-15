@@ -8,6 +8,7 @@ export * from "./password-policy.ts";
 export * from "./proxy-string.ts";
 export * from "./proxy-paste.ts";
 export * from "./page-browser-env.ts";
+export * from "./spender-buckets.ts";
 export * from "./spender-retention.ts";
 export * from "./time.ts";
 export * from "./types.ts";

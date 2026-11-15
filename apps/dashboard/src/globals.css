@@ -1,16 +1,16 @@
 /* The shared design system's layer sits between the reset and the console's own, as in Workboard. */
 @layer theme, base, ui, components, utilities;
 @import "tailwindcss";
-@import "./styles/tokens.css";
+@import "../../../packages/ui/src/styles/console-tokens.css";
 /* The frame of the owner's place is packages/ui's, the same file as Workboard's: its tokens, its components, its frame. */
 @import "../../../packages/ui/src/styles/tokens.css";
 @import "../../../packages/ui/src/styles/components.css";
 @import "../../../packages/ui/src/styles/place.css";
 @import "../../../packages/ui/src/styles/waiting.css";
-@import "./styles/ui.css";
+@import "../../../packages/ui/src/styles/console.css";
 @import "./pages/settings/settings-ui.css";
 @import "./styles/screens/home-money.css";
-@import "./styles/screens/fans-page.css";
+@import "../../../packages/ui/src/styles/console-pages.css";
 @import "./styles/screens/stats.css";
 @import "./styles/screens/publications.css";
 @import "./styles/screens/team.css";
@@ -19,7 +19,7 @@
 
 /*
  * The console's tokens (colours, the type scale, radii, the two shadows) are
- * generated from packages/look/src/tokens.ts into ./styles/tokens.css, imported
+ * generated from packages/look/src/tokens.ts into packages/ui/src/styles/console-tokens.css, imported
  * above: one source with Workboard's copy. Every colour is light-dark(light,
  * dark); `color-scheme` on :root picks the side (the system's, or the account
  * menu's choice).
@@ -68,80 +68,3 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.fan-intelligence-markdown {
-  color: var(--color-text-primary);
-  font-size: 15px;
-  line-height: 24px;
-}
-
-.fan-intelligence-markdown > * + * {
-  margin-top: 12px;
-}
-
-.fan-intelligence-markdown h1,
-.fan-intelligence-markdown h2,
-.fan-intelligence-markdown h3,
-.fan-intelligence-markdown h4 {
-  color: var(--color-text-primary);
-  font-weight: 600;
-  letter-spacing: -0.005em;
-  line-height: 24px;
-}
-
-.fan-intelligence-markdown h1,
-.fan-intelligence-markdown h2 {
-  font-size: 17px;
-}
-
-.fan-intelligence-markdown h3,
-.fan-intelligence-markdown h4 {
-  font-size: 15px;
-}
-
-.fan-intelligence-markdown p,
-.fan-intelligence-markdown li {
-  color: var(--color-text-secondary);
-}
-
-.fan-intelligence-markdown strong {
-  color: var(--color-text-primary);
-  font-weight: 600;
-}
-
-.fan-intelligence-markdown ul,
-.fan-intelligence-markdown ol {
-  margin-left: 1.25rem;
-  padding-left: 0.25rem;
-}
-
-.fan-intelligence-markdown ul {
-  list-style: disc;
-}
-
-.fan-intelligence-markdown ol {
-  list-style: decimal;
-}
-
-.fan-intelligence-markdown li + li {
-  margin-top: 4px;
-}
-
-.fan-intelligence-markdown hr {
-  margin: 24px 0;
-  border: 0;
-  border-top: 1px solid var(--color-border);
-}
-
-.fan-intelligence-markdown code {
-  border-radius: 4px;
-  background: var(--color-hover);
-  padding: 2px 4px;
-  font-size: 14px;
-}
-
-.fan-intelligence-markdown pre {
-  overflow-x: auto;
-  border-radius: var(--radius-button);
-  background: var(--color-hover-alt);
-  padding: 12px 16px;
-}

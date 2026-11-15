@@ -1,6 +1,8 @@
 import type { CrossPageTransactionListQuery } from "@agency_hub_core/contracts";
 import type { Period, PeriodOption } from "@/stores/periodStore";
-import { buildFansRoute, isSafeInAppPath, resolveDashboardPeriod } from "./navigation.js";
+import { buildFansRoute, resolveDashboardPeriod } from "./navigation.js";
+import type { SubscriberFilter } from "@agency_hub_core/ui/fanLinks";
+export { listOffset, safeBackTo, SUBSCRIBER_FILTERS, subscriberFilter, type SubscriberFilter } from "@agency_hub_core/ui/fanLinks";
 
 export const PERIOD_LABELS: Record<PeriodOption, string> = {
   today: "Сегодня",
@@ -40,10 +42,6 @@ export function overviewSearch(state: OverviewState) {
   return params;
 }
 
-export function safeBackTo(params: URLSearchParams): string {
-  const backTo = params.get("backTo");
-  return backTo && isSafeInAppPath(backTo) ? backTo : "/";
-}
 
 export function buildRevenueTransactionsRoute(input: {
   pageLabel: string;
@@ -69,24 +67,6 @@ export function buildRevenueTransactionsRoute(input: {
   return `/money/transactions?${params}`;
 }
 
-export const SUBSCRIBER_FILTERS = [
-  "all",
-  "paid",
-  "free",
-  "expiring7d",
-  "new24h",
-  "norenew",
-] as const;
-export type SubscriberFilter = (typeof SUBSCRIBER_FILTERS)[number];
-export function subscriberFilter(value: string | null): SubscriberFilter {
-  return SUBSCRIBER_FILTERS.includes(value as SubscriberFilter)
-    ? (value as SubscriberFilter)
-    : "all";
-}
-export function listOffset(value: string | null): number {
-  const offset = Number(value);
-  return Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
-}
 export function buildSubscriberRoute(
   pageLabel: string,
   filter: SubscriberFilter,

@@ -88,6 +88,28 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "teamWinBackResults",
   "teamShiftReview",
   "reviewNotes",
+  // «Фаны» (products package M): the fans of the pages of the person's teams, cut on the server (services/fan-reads.ts).
+  // Reads only: a fan's note and flags need the password.
+  "spenders",
+  "spenderDetail",
+  "spenderSeries",
+  "spenderBatch",
+  "pageSpenderAutoLists",
+  "pageSpenderAutoListDetail",
+  "pageSubscribers",
+  "pageFollowers",
+  "pageDeletedFans",
+  "pageFanCard",
+  "pageFanDetail",
+  "pageFanProfile",
+  "pageFanProfileVersions",
+  "pageFanProfileVersion",
+  "pageFanTransactions",
+  "pageFanWorkedWith",
+  "crossPageFanDetail",
+  "crossPageFanTransactions",
+  "pageConversationPreview",
+  "fanPages",
 ] as const satisfies readonly KernelOperationKey[];
 
 /**
@@ -108,6 +130,8 @@ export const NARROW_WEB_SESSION_PASSWORD_ONLY = [
   "authMyUsage",
   // «Разбор смены»: a lead's note to the chatter (products package T).
   "reviewNoteAdd",
+  // «Фаны» (products package M): a note on a fan's card.
+  "createFanNote",
 ] as const satisfies readonly KernelOperationKey[];
 
 /** Whether a narrow web session may call the route with this key. */

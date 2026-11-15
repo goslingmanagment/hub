@@ -20,7 +20,7 @@ import {
   type ResolveDraft,
   type ResolveFailure,
 } from "@agency_hub_core/ui/heldSends";
-import { consoleFanHref } from "@/shared/links";
+import { fanCardHref } from "@/shared/links";
 import { useResolveHeldSend, type HeldSend, type KnownFan } from "./data";
 import "./decisions.css";
 
@@ -98,7 +98,7 @@ export function ResolveSendModal({ item, serverNow, platform, fan, onClose }: {
     { label: "Страница", value: pageWords(item.pageLabel, platform) },
     {
       label: "Фан",
-      value: <Fan name={fan?.name ?? null} username={fan?.username ?? null} fanRef={item.fanRef} {...(platform ? { href: consoleFanHref(item.pageLabel, platform, item.fanRef) } : {})} />,
+      value: <Fan name={fan?.name ?? null} username={fan?.username ?? null} fanRef={item.fanRef} {...(platform ? { href: fanCardHref(item.pageLabel, platform, item.fanRef) } : {})} />,
     },
     { label: "Что отправляли", value: `${purposeLabel(item.purpose)}, ${partLabel(item)}` },
     // The extension's install is for telling two installs of one person apart: on hover (Р8).

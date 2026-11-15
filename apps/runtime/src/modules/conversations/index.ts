@@ -15,6 +15,7 @@ import {
   getPageFanProfileVersion,
   listPageFanProfileVersions,
 } from "../../services/fan-profiles.ts";
+import { asFanReader } from "../../services/fan-reads.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Conversations module (target §6.1): threads, messages, archive search, fan
@@ -28,7 +29,7 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
   server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile", {
     schema: routeSchemas.pageFanProfile,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     return getPageFanProfile(
       appContext,
       principal,
@@ -40,7 +41,7 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
   server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions", {
     schema: routeSchemas.pageFanProfileVersions,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     return listPageFanProfileVersions(
       appContext,
       principal,
@@ -52,7 +53,7 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
   server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions/:version", {
     schema: routeSchemas.pageFanProfileVersion,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     return getPageFanProfileVersion(
       appContext,
       principal,
@@ -77,7 +78,7 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
   server.get("/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview", {
     schema: routeSchemas.pageConversationPreview,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     return getPageConversationPreviewReport(appContext, principal, request.params, request.query);
   });
 

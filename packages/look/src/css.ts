@@ -135,7 +135,7 @@ function productAccentBlocks(): string[] {
 }
 
 /**
- * The console's copy (`apps/dashboard/src/styles/tokens.css`): the colours as
+ * The console's copy (`packages/ui/src/styles/console-tokens.css`): the colours as
  * `--color-*` and the type scale, radii and bold weight under Tailwind's
  * `@theme static` (so its utilities and `var()` read them), the two shadows on `:root`.
  */
