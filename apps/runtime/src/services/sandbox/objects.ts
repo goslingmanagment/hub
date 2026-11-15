@@ -108,15 +108,16 @@ const BY_TEXT = new Set<RealmObjectKind>(["pageLabel", "modelSlug", "personCode"
 /** A test-ness query per kind: one row `test` (true/false) when the object exists, no row when it does not. */
 function realmQuery(kind: RealmObjectKind, value: string): SQL {
   const id = sql`${value}::bigint`;
+  const text = sql`${value}`;
   const pageOf = (table: string, column = "page_id") =>
     sql`select ${testPageSql(sql.raw(`o.${column}`))} as test from ${sql.raw(table)} o where o.id = ${id}`;
   switch (kind) {
     case "page": return sql`select ${testPageSql(sql`p.id`)} as test from pages p where p.id = ${id}`;
-    case "pageLabel": return sql`select ${testPageSql(sql`p.id`)} as test from pages p where p.label = ${id}`;
+    case "pageLabel": return sql`select ${testPageSql(sql`p.id`)} as test from pages p where p.label = ${text}`;
     case "model": return sql`select m.is_test as test from models m where m.id = ${id}`;
-    case "modelSlug": return sql`select m.is_test as test from models m where m.slug = ${id}`;
+    case "modelSlug": return sql`select m.is_test as test from models m where m.slug = ${text}`;
     case "login": return sql`select ${testUserSql(sql`u.id`)} as test from users u where u.id = ${id}`;
-    case "personCode": return sql`select p.is_test as test from people p where p.code = ${id}`;
+    case "personCode": return sql`select p.is_test as test from people p where p.code = ${text}`;
     case "shift": return sql`select ${testUserSql(sql`s.user_id`)} as test from shifts s where s.id = ${id}`;
     case "sale": return pageOf("transactions", "platform_account_id");
     case "claim": return pageOf("sale_claims");
