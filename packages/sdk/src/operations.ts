@@ -7,6 +7,7 @@ export const kernelOperations = {
   accountPay: { method: "GET", path: "/api/v1/account/pay" },
   accountPayoutDetailsSet: { method: "PUT", path: "/api/v1/account/payout-details" },
   accountReports: { method: "GET", path: "/api/v1/account/reports" },
+  accountShiftNumbers: { method: "GET", path: "/api/v1/account/shift-numbers" },
   accountStart: { method: "GET", path: "/api/v1/account/start" },
   adminAiAccountUpdate: { method: "PATCH", path: "/api/v1/admin/ai/accounts/:accountId" },
   adminAiAccountsList: { method: "GET", path: "/api/v1/admin/ai/accounts" },

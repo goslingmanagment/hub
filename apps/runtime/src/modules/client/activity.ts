@@ -3,6 +3,7 @@ import {
   type ClientActivityResponse,
   type ClientChatspaceTabStateResponse,
   type TeamAuthorshipResponse,
+  type AccountShiftNumbersResponse,
   type TeamChatterNumbersResponse,
   type TeamShiftReviewResponse,
   type TeamShiftsResponse,
@@ -13,6 +14,7 @@ import { listTeamShifts, recordClientActivity } from "../../services/chatter-shi
 import { countClientMatters } from "../../services/matters.ts";
 import { pulseReport } from "../../services/shift-report-board.ts";
 import { readTeamChatterNumbers } from "../../services/chatter-numbers.ts";
+import { readAccountShiftNumbers } from "../../services/account-shift-numbers.ts";
 import { readTeamAuthorship } from "../../services/team-authorship.ts";
 import { readTeamShiftReview } from "../../services/shift-review.ts";
 import { teamPagesFor } from "../../services/teams.ts";
@@ -86,5 +88,13 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
     return readTeamChatterNumbers(appContext, principal, {
       from: request.query.from, to: request.query.to, userId: request.query.userId, pageScope: await teamPagesFor(appContext, principal),
     });
+  });
+
+  // «Мои смены»: the person's own shift numbers, the team's average beside them (package N); a narrow session too.
+  server.get("/api/v1/account/shift-numbers", {
+    schema: routeSchemas.accountShiftNumbers,
+  }, async (request): Promise<AccountShiftNumbersResponse> => {
+    const principal = await requirePrincipal(request);
+    return readAccountShiftNumbers(appContext, principal, { from: request.query.from, to: request.query.to });
   });
 }

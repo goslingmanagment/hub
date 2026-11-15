@@ -3444,19 +3444,84 @@ export const chatterNumbersSchema = z.object({
 export const teamChatterNumbersQuerySchema = z.object({
   from: isoTimestamp.optional(),
   to: isoTimestamp.optional(),
-  /** Only this person: one person's shifts are read in seconds, everyone's take most of a minute. */
+  /** Only this person (the person behind this login, every login of theirs): one person's shifts are read in seconds. */
   userId: z.coerce.number().int().positive().optional(),
+});
+
+/**
+ * A period's quality, «в среднем за смену»: each number the plain average over the shifts that have one (the reply
+ * median over shifts with replies, «ИИ без правки» over shifts with texts). The rules: `shiftQualityOf` and
+ * `averageShiftQuality` (shift-review-rules.ts).
+ */
+export const periodQualitySchema = z.object({
+  /** The shifts averaged. */
+  shifts: count,
+  replyMedianSeconds: count.nullable(),
+  /** Not rounded: «1,4 в среднем за смену». */
+  unansweredAtEnd: z.number().nonnegative().nullable(),
+  /** 0…1. */
+  aiUneditedShare: z.number().min(0).max(1).nullable(),
+});
+
+export const accountShiftNumbersQuerySchema = z.object({
+  /** [from, to): the shifts whose middle falls in it; default the last 7 days, at most 31. */
+  from: isoTimestamp.optional(),
+  to: isoTimestamp.optional(),
+});
+
+/**
+ * The signed-in person's own numbers (products plan §5, package N): every login of theirs, all pages. Beside each
+ * quality number the team's average of the same period: the team is the person's (the models of their working pages,
+ * services/teams.ts), the average is of its closed shifts with stored numbers — never a list of people. Sales by the
+ * rule only: the reports' sums stay the reports' (`accountReports`). No pay here.
+ */
+export const accountShiftNumbersResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  personId: intId.nullable(),
+  period: z.object({
+    shifts: count,
+    workedMinutes: count,
+    quality: periodQualitySchema,
+    /** The period's numbers together (`teamChatterNumbers`' week). */
+    numbers: chatterNumbersSchema,
+  }),
+  /** The team's average; null — the person is in no team, or no shift of it has stored numbers yet. */
+  team: periodQualitySchema.extend({ people: count }).nullable(),
+  shifts: z.array(z.object({
+    userId: intId,
+    startedAt: isoTimestamp,
+    endedAt: isoTimestamp,
+    ongoing: z.boolean(),
+    pages: z.array(z.string()),
+    workedMinutes: count,
+    quality: z.object({
+      replyMedianSeconds: count.nullable(),
+      unansweredAtEnd: count,
+      aiUneditedShare: z.number().min(0).max(1).nullable(),
+    }),
+    numbers: chatterNumbersSchema,
+  })),
+  serverNow: isoTimestamp,
 });
 
 export const teamChatterNumbersResponseSchema = z.object({
   from: isoTimestamp,
   to: isoTimestamp,
+  /** One line a PERSON (the registry's `person_logins`): a person with two logins is one line of both logins' shifts. */
   chatters: z.array(z.object({
+    /** The person's login that worked the most shifts of the answer: the line's login. */
     userId: intId,
     username: z.string(),
+    /** The registry's person; null — a login of nobody (a person of its own). */
+    personId: intId.nullable(),
+    /** Every login of the person in the answer, `userId` first. */
+    userIds: z.array(intId),
     /** `unconfirmedShifts` is every shift, and a shift's `confirmed` always false: the confirmed reports are gone (`revenueMills`). */
     week: chatterNumbersSchema.extend({ shifts: count, unconfirmedShifts: count }),
     shifts: z.array(z.object({
+      /** The login that worked the shift. */
+      userId: intId,
       startedAt: isoTimestamp,
       endedAt: isoTimestamp,
       ongoing: z.boolean(),
@@ -4564,6 +4629,22 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  accountShiftNumbers: {
+    auth: { kind: "any-session" },
+    tags: ["client"],
+    summary: "The caller's own shift numbers, with the team's average beside each quality number",
+    description: "Workboard «Мои смены» (and «Сегодня»); read-only, database only; the session's person, every login of "
+      + "theirs, a narrow session too. Per shift and for the period: the reply median, the fans left without an answer, "
+      + "«ИИ без правки» (the review's rules) and the period's numbers; `team` — the average of the person's team for the "
+      + "same period, never a list of people. A guide, not a basis for pay.",
+    querystring: accountShiftNumbersQuerySchema,
+    response: {
+      200: accountShiftNumbersResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   teamChatterNumbers: {
     auth: { kind: "any-session" },
     tags: ["client"],
@@ -4778,6 +4859,7 @@ export type TeamEmptyHoursResponse = z.infer<typeof teamEmptyHoursResponseSchema
 export type TeamGreetingsResponse = z.infer<typeof teamGreetingsResponseSchema>;
 export type ChatterNumbers = z.infer<typeof chatterNumbersSchema>;
 export type TeamChatterNumbersResponse = z.infer<typeof teamChatterNumbersResponseSchema>;
+export type AccountShiftNumbersResponse = z.infer<typeof accountShiftNumbersResponseSchema>;
 export type TeamSalesQuery = z.infer<typeof teamSalesQuerySchema>;
 export type TeamSalesPpvResponse = z.infer<typeof teamSalesPpvResponseSchema>;
 export type TeamSalesRepliesResponse = z.infer<typeof teamSalesRepliesResponseSchema>;

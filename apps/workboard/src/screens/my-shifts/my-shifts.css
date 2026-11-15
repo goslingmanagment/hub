@@ -19,6 +19,51 @@
     min-height: 28px;
   }
 
+  .mys-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .mys-quality__list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 24px;
+    margin: 0;
+    font-size: 13px;
+  }
+
+  .mys-quality__list--shift {
+    padding: 4px 0 8px 24px;
+  }
+
+  .mys-quality__item {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .mys-quality__item dt,
+  .mys-quality__item dd {
+    margin: 0;
+  }
+
+  .mys-quality__label {
+    color: var(--ui-text-2);
+  }
+
+  .mys-quality__value {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mys-quality__team {
+    color: var(--ui-text-3);
+    font-variant-numeric: tabular-nums;
+  }
+
   .mys-facts .ui-facts {
     align-items: center;
     gap: 8px 28px;

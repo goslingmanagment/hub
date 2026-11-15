@@ -225,15 +225,17 @@ function pagesOf(shift: Pick<SalesShift, "pages">): ShiftPage[] {
  * shift that overlaps it most.
  */
 export function numbersFor(shift: { userId: number; startedAt: string; endedAt: string }, numbers: NumbersResponse | undefined): NumbersShift | undefined {
-  const chatter = numbers?.chatters.find((one) => one.userId === shift.userId);
+  // Hub answers by person (a line holds every login's shifts, each saying its login): the shift's own login's.
+  const chatter = numbers?.chatters.find((one) => one.userIds.includes(shift.userId));
   if (!chatter) return undefined;
-  const exact = chatter.shifts.find((one) => one.startedAt === shift.startedAt);
+  const own = chatter.shifts.filter((one) => one.userId === shift.userId);
+  const exact = own.find((one) => one.startedAt === shift.startedAt);
   if (exact) return exact;
   const start = Date.parse(shift.startedAt);
   const end = Date.parse(shift.endedAt);
   let best: NumbersShift | undefined;
   let bestOverlap = 0;
-  for (const one of chatter.shifts) {
+  for (const one of own) {
     const overlap = Math.min(end, Date.parse(one.endedAt)) - Math.max(start, Date.parse(one.startedAt));
     if (overlap > bestOverlap) {
       best = one;

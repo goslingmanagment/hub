@@ -28,6 +28,8 @@ import type { KernelOperationKey } from "./sdk-runtime.ts";
 export const NARROW_WEB_SESSION_OPERATIONS = [
   "me",
   "accountChatterStats",
+  // «Мои смены»: the person's own shift numbers and the team's average (package N).
+  "accountShiftNumbers",
   "accountReports",
   // The chatter's strip «Ждут вас» above «Мои смены»: a narrow session reads as a chatter (their own, never money).
   "mattersList",
