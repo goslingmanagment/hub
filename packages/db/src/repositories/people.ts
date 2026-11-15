@@ -310,6 +310,45 @@ export async function findPersonIdOfLogin(db: Database, userId: number): Promise
   return nullableNumber(result.rows[0]?.person_id);
 }
 
+/**
+ * The person behind a login as a service that signs people in through Hub needs it (ContentOps, products plan §4.1):
+ * the code, the name, the role and the state in the registry, the models of their working pages (lower-case slugs),
+ * and the ids of every page of those models (a content manager's page scope).
+ * null — the login is nobody's in the registry.
+ */
+export interface LoginPersonScope {
+  code: string;
+  displayName: string;
+  role: string;
+  state: string;
+  modelSlugs: string[];
+  modelPageIds: number[];
+}
+
+export async function findLoginPersonScope(db: Database, userId: number): Promise<LoginPersonScope | null> {
+  const result = await db.execute<Row>(sql`
+    select p.code, p.display_name, p.role, p.state,
+           coalesce((select array_agg(distinct lower(m.slug) order by lower(m.slug))
+                       from person_working_pages w join pages pg on pg.id = w.page_id join models m on m.id = pg.model_id
+                      where w.person_id = p.id), '{}') as model_slugs,
+           coalesce((select array_agg(distinct all_pages.id order by all_pages.id)
+                       from person_working_pages w join pages pg on pg.id = w.page_id
+                       join pages all_pages on all_pages.model_id = pg.model_id
+                      where w.person_id = p.id), '{}') as model_page_ids
+      from person_logins l join people p on p.id = l.person_id
+     where l.user_id = ${userId}`);
+  const row = result.rows[0];
+  if (row === undefined) return null;
+  return {
+    code: String(row.code),
+    displayName: String(row.display_name),
+    role: String(row.role),
+    state: String(row.state),
+    modelSlugs: (row.model_slugs as unknown[]).map(String),
+    modelPageIds: (row.model_page_ids as unknown[]).map(Number),
+  };
+}
+
 export async function insertPersonLogin(db: Database, input: { personId: number; userId: number; linkedByUserId: number | null }) {
   await db.execute(sql`
     insert into person_logins (user_id, person_id, linked_by_user_id) values (${input.userId}, ${input.personId}, ${input.linkedByUserId})`);

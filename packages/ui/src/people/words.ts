@@ -14,7 +14,7 @@ import type { ResolvedPeriod } from "../period.js";
 export type SaleKind = NonNullable<KernelOperationResponse<"teamChatterStats">["stats"]>["shifts"][number]["sales"][number]["kind"];
 
 /** A login's role. */
-export type PersonRole = "owner" | "team_lead" | "chatter";
+export type PersonRole = "owner" | "team_lead" | "chatter" | "content_manager";
 /** A login's state. */
 export type PersonState = "active" | "invited" | "disabled";
 
@@ -32,6 +32,7 @@ export const ROLE_WORD: Readonly<Record<PersonRole, string>> = {
   owner: "Владелец",
   team_lead: "Тимлид",
   chatter: "Чаттер",
+  content_manager: "Контент-менеджер",
 };
 
 /**

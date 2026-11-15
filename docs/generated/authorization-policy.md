@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 84 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (529)
+## Routes (530)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -332,6 +332,7 @@ A full device token is not affected.
 | GET | `/api/v1/auth/sso/begin` | `authSsoBegin` | `public` | — | — | — |
 | POST | `/api/v1/auth/sso/check` | `authSsoCheck` | `agentKey` | — | — | no |
 | POST | `/api/v1/auth/sso/redeem` | `authSsoRedeem` | `agentKey` | — | — | no |
+| POST | `/api/v1/auth/sso/waiting` | `authSsoWaiting` | `agentKey` | — | — | no |
 | GET | `/api/v1/auth/static-reports` | `authStaticReports` | `public` | — | — | — |
 | GET | `/api/v1/auth/usage` | `authMyUsage` | `any-session` | — | — | no |
 | POST | `/api/v1/auth/web-link` | `authWebLink` | `device-token` | — | — | yes |

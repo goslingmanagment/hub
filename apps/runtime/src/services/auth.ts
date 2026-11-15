@@ -50,6 +50,7 @@ import {
   type UserRole,
 } from "@agency_hub_core/shared";
 
+import { findLoginPersonScope } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import {
   BadRequestError,
@@ -222,8 +223,20 @@ function roleNeedsPassword(role: UserRole) {
 
 export function roleCanUseSession(role: UserRole) {
   // Every human role is session-capable; dashboard route access
-  // stays a separate, narrower check below.
-  return role === "owner" || role === "team_lead" || role === "chatter";
+  // stays a separate, narrower check below. A content manager's session opens
+  // ContentOps alone (content-manager-operations.ts).
+  return role === "owner" || role === "team_lead" || role === "chatter" || role === "content_manager";
+}
+
+/**
+ * The pages a login reads: its own assignments (`user_page_assignments`) — except a content manager's, which are the
+ * pages of the models of their working pages in the registry and nothing else (products plan §4.1); a person who
+ * left, or a login nobody holds, reads none.
+ */
+async function pageScopeOfLogin(app: AppContext, user: { id: number; role: UserRole; assignedPages: readonly { id: number }[] }): Promise<number[]> {
+  if (user.role !== "content_manager") return user.assignedPages.map((page) => page.id);
+  const person = await findLoginPersonScope(app.db, user.id);
+  return person === null || person.state === "left" ? [] : person.modelPageIds;
 }
 
 function roleCanUseDashboard(role: UserRole) {
@@ -1132,7 +1145,7 @@ export async function authenticateSessionToken(app: AppContext, sessionToken: st
   return {
     authMethod: "session" as const,
     user,
-    assignedPageIds: user.assignedPages.map((page) => page.id),
+    assignedPageIds: await pageScopeOfLogin(app, user),
     authSessionId: session.id,
     ...(session.narrowDeviceTokenId === null ? {} : { narrowDeviceTokenId: session.narrowDeviceTokenId }),
     ...(sandbox === undefined ? {} : { sandbox }),
@@ -1361,7 +1374,7 @@ export async function authenticateDeviceToken(
     principal: {
       authMethod: "device_token" as const,
       user,
-      assignedPageIds: user.assignedPages.map((page) => page.id),
+      assignedPageIds: await pageScopeOfLogin(app, user),
       deviceTokenId: record.id,
       ...(isClientTokenProfile(record.clientProfile) ? { clientProfile: record.clientProfile } : {}),
       ...(sandbox === undefined ? {} : { sandbox }),
@@ -1559,6 +1572,10 @@ export async function issueDeviceTokenWithPassword(
   const clientProfile = input.clientProfile ?? null;
   const material = mintDeviceTokenMaterial();
   return verifyPasswordAndLockUser(app, input, async (dbTx, user) => {
+    // A content manager's login has no extension and no desktop client: ContentOps alone (products plan §4.1).
+    if (user.role === "content_manager") {
+      throw new ForbiddenError("У контент-менеджера нет входа в расширение: его рабочее место в ContentOps.");
+    }
     // Time is sampled after the lock wait.
     const expiresAt = new Date(Date.now() + DEVICE_TOKEN_TTL_MS);
     const created = await createDeviceToken(dbTx, {

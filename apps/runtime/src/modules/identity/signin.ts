@@ -6,6 +6,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import { SESSION_COOKIE_NAME, isAgentPrincipal, requireDeviceTokenUser, readSessionIdentity } from "../../services/auth.ts";
 import { isTestPrincipal, userIsTest } from "../../services/sandbox/realm.ts";
 import { AppError, BadRequestError } from "../../services/errors.ts";
+import { PERSON_CLIENT, contentopsWaitingOf, personForContentops } from "../../services/signin-person.ts";
 import {
   SSO_STATE_TTL_SECONDS,
   acceptHandoffCode,
@@ -278,7 +279,10 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     if (!signinNamesOf(appContext.config).clients.has(request.body.client)) {
       throw new BadRequestError("Not a sign-in client of this Hub");
     }
-    return redeemServerCode(appContext, { client: request.body.client, code: request.body.code }, auditCtx(principal));
+    const redeemed = await redeemServerCode(appContext, { client: request.body.client, code: request.body.code }, auditCtx(principal));
+    // ContentOps learns who this is in the registry (products plan §4.1); other services' answers stay as they were.
+    if (request.body.client !== PERSON_CLIENT) return redeemed;
+    return { ...redeemed, person: await personForContentops(appContext, redeemed.user, await userIsTest(appContext, redeemed.user.id)) };
   });
 
   server.post("/api/v1/auth/sso/check", {
@@ -287,7 +291,25 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     requireSigninCapability(principal.capabilities, request.body.client);
-    return checkServerGrant(appContext, { client: request.body.client, grant: request.body.grant });
+    const checked = await checkServerGrant(appContext, { client: request.body.client, grant: request.body.grant });
+    // Every re-check carries the person as the registry has them now: ContentOps changes or closes its own person.
+    if (!checked.active || request.body.client !== PERSON_CLIENT) return checked;
+    return { ...checked, person: await personForContentops(appContext, checked.user, await userIsTest(appContext, checked.user.id)) };
+  });
+
+  server.post("/api/v1/auth/sso/waiting", {
+    schema: routeSchemas.authSsoWaiting,
+    config: { rateLimit: SERVER_RATE_LIMIT },
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    requireSigninCapability(principal.capabilities, request.body.client);
+    if (request.body.client !== PERSON_CLIENT) {
+      throw new BadRequestError("What waits for a person is read by ContentOps only");
+    }
+    // The grant proves the person signed in through this very service and still is: no grant, nothing to read.
+    const checked = await checkServerGrant(appContext, { client: request.body.client, grant: request.body.grant });
+    if (!checked.active) return { active: false as const };
+    return contentopsWaitingOf(appContext, checked.user, await userIsTest(appContext, checked.user.id));
   });
 
   server.post("/api/v1/auth/web-link", {

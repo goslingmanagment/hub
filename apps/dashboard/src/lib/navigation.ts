@@ -1,7 +1,7 @@
 import { pathSegment } from "@agency_hub_core/ui/path";
 import { isSafeInAppPath, withQuery } from "@agency_hub_core/ui/fanLinks";
 export { buildFanProfileNavigation, buildFansRoute, buildPageSpenderAutoListRoute, decodeRouteSegment, isSafeInAppPath, resolveFanProfileBackTarget, type FanProfileNavigationState } from "@agency_hub_core/ui/fanLinks";
-import { NO_SILENT_SIGNIN, isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref, silentSignInHref, workboardEntryHref } from "./sites.js";
+import { NO_SILENT_SIGNIN, contentopsEntryHref, isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref, silentSignInHref, workboardEntryHref } from "./sites.js";
 import type { Period, PeriodOption } from "../stores/periodStore.js";
 
 /**
@@ -151,9 +151,19 @@ export function isSigninContinuation(path: string): boolean {
   return (path.split(/[?#]/)[0] ?? "") === "/api/v1/auth/sso";
 }
 
-/** A place outside the console's router on this host: Workboard, or the way to the other name. */
+/** A place outside the console's router on this host: Workboard, the way to the other name, or another site. */
 export function leavesTheConsole(path: string): boolean {
-  return isWorkboardPath(path) || isSigninContinuation(path);
+  return isWorkboardPath(path) || isSigninContinuation(path) || /^https?:\/\//.test(path);
+}
+
+/** A content manager's login: ContentOps alone, no console and no Workboard (products plan §4.1). */
+export function opensContentopsOnly(role: string): boolean {
+  return role === "content_manager";
+}
+
+/** Where a content manager is sent from any page here: ContentOps, signed in through the console's name. */
+export function contentopsExit(): string {
+  return contentopsEntryHref(typeof window === "undefined" ? "" : window.location.origin);
 }
 
 /**
@@ -200,6 +210,7 @@ export function resolveRoleHome(role: string, requested: string): string {
  */
 export function afterSignIn(role: string, requested: string): string {
   if (isSigninContinuation(requested)) return requested;
+  if (opensContentopsOnly(role)) return contentopsExit();
   const home = resolveRoleHome(role, requested);
   const peer = peerSiteOrigin();
   if (peer === null || typeof window === "undefined") return home;

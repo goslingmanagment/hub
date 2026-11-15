@@ -73,15 +73,17 @@ async function productsOfPrincipal(app: AppContext, principal: Awaited<ReturnTyp
   // The person's role only widens the list (a content manager's ContentOps): a registry that does not answer leaves it
   // to the login's role rather than failing «who am I».
   let personRole: string | null = null;
-  if (!narrow && principal.user.role !== "owner") {
+  let leadsCustoms = false;
+  if (!narrow && principal.user.role !== "owner" && principal.kind !== "agent") {
     try {
       const personId = await findPersonIdOfLogin(app.db, principal.user.id);
       personRole = personId === null ? null : (await findPersonRowById(app.db, personId))?.role ?? null;
+      leadsCustoms = (await viewerTeams(app, principal)).customs.length > 0;
     } catch {
       personRole = null;
     }
   }
-  return productsOf({ role: principal.user.role, narrow, test, personRole });
+  return productsOf({ role: principal.user.role, narrow, test, personRole, leadsCustoms });
 }
 
 /** `me`'s teams; a registry that does not answer leaves them empty rather than failing «who am I». */

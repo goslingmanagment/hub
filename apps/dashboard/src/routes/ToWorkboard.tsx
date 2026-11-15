@@ -8,11 +8,11 @@ import { teamToWorkboard, WORKBOARD_HREF } from "@/lib/workboard";
  * not in the history and «Назад» goes to where the owner came from. Only
  * navigates; Workboard checks the sign-in and the rights itself.
  */
-export function LeaveForWorkboard({ href }: { href: string }) {
+export function LeaveForWorkboard({ href, words = "Открываем Workboard…" }: { href: string; words?: string }) {
   useLayoutEffect(() => {
     window.location.replace(href);
   }, [href]);
-  return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Открываем Workboard…</div>;
+  return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">{words}</div>;
 }
 
 /** An old address of «Команда» (`/team/*`, `/held-sends`): its Workboard screen (lib/workboard.ts), on the team's name. */

@@ -651,19 +651,25 @@ describe("§7 — roles", () => {
     expect(foreign.json()).not.toEqual(narrowRefusal);
   }, 60_000);
 
-  it("content_manager: cannot sign in anywhere, by either lane", async (context) => {
+  it("content_manager: a session that opens ContentOps alone, no extension token", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
-    // Decision 370 took the role out of the wire enum too; the PG enum value
-    // stays, so a historical row is still expressible — by raw SQL and nothing
-    // else. What the row can do is the point: nothing, on either lane.
+    // The role is back for the content manager's product (products plan §4.1): the login holds a session, its
+    // products are ContentOps alone, and every operation off its table is refused (content-manager-operations.ts).
     const hash = await argon2.hash(CHATTER_PASSWORD, { type: argon2.argon2id });
     await setup.testDb.pool.query(
       "insert into users (username, role, password_hash) values ($1, 'content_manager', $2)",
       ["archivist", hash],
     );
 
-    expect((await login(setup.server, "archivist", CHATTER_PASSWORD)).statusCode).toBe(401);
+    const cookie = await loginCookie(setup.server, "archivist", CHATTER_PASSWORD);
+    const me = await get(setup.server, "/api/v1/auth/me", { cookie });
+    expect(me.statusCode, me.body).toBe(200);
+    expect(me.json<{ user: { role: string }; products: string[] }>()).toMatchObject({ user: { role: "content_manager" }, products: ["contentops"] });
+    for (const path of ["/api/v1/overview", "/api/v1/team/shifts", "/api/v1/matters/waiting", "/api/v1/pages"]) {
+      expect((await get(setup.server, path, { cookie })).statusCode, path).toBe(403);
+    }
+
     const device = await setup.server.inject({
       method: "POST",
       url: "/api/v1/auth/device-tokens/password",
@@ -674,7 +680,7 @@ describe("§7 — roles", () => {
         mode: "active",
       },
     });
-    expect(device.statusCode).toBe(401);
+    expect(device.statusCode).toBe(403);
 
     // And nothing was minted on the way out.
     const minted = await setup.testDb.pool.query<{ count: string }>(

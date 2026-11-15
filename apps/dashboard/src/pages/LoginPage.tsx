@@ -3,7 +3,7 @@ import { useNavigate, Navigate, useSearchParams } from "react-router";
 import { PLACES } from "@agency_hub_core/look";
 import { useLogin, useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { afterSignIn, hasHub, isSigninContinuation, leavesTheConsole, resolveLoginReturnPath, resolveRoleHome, silentSignInTry, workboardExit, workboardHere } from "@/lib/navigation";
+import { afterSignIn, contentopsExit, hasHub, opensContentopsOnly, isSigninContinuation, leavesTheConsole, resolveLoginReturnPath, resolveRoleHome, silentSignInTry, workboardExit, workboardHere } from "@/lib/navigation";
 import { isChatterSite, isConsoleSite } from "@/lib/sites";
 
 // One sign-in screen for two names. A chatter signs in to the product they
@@ -77,6 +77,7 @@ export function LoginPage() {
   if (auth?.user && signedIn && !login.isPending && !login.isSuccess) {
     const home = isSigninContinuation(returnTo)
       ? returnTo
+      : opensContentopsOnly(auth.user.role) ? contentopsExit()
       : !hasHub(auth.user.role) && isConsoleSite() ? workboardExit() : workboardHere(resolveRoleHome(auth.user.role, returnTo));
     return leavesTheConsole(home) ? <LeaveFor href={home} /> : <Navigate to={home} replace />;
   }

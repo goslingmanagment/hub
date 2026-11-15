@@ -250,6 +250,7 @@ export const kernelOperations = {
   authSsoBegin: { method: "GET", path: "/api/v1/auth/sso/begin" },
   authSsoCheck: { method: "POST", path: "/api/v1/auth/sso/check" },
   authSsoRedeem: { method: "POST", path: "/api/v1/auth/sso/redeem" },
+  authSsoWaiting: { method: "POST", path: "/api/v1/auth/sso/waiting" },
   authStaticReports: { method: "GET", path: "/api/v1/auth/static-reports" },
   authWebLink: { method: "POST", path: "/api/v1/auth/web-link" },
   chatspaceBrowserScreen: { method: "GET", path: "/api/v1/chatspace-browser/screen/*" },
