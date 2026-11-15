@@ -17,13 +17,11 @@ import type { AppContext } from "../../bootstrap.ts";
 import { createAccountLinkForUserId } from "../account-links.ts";
 import { createUserOrRefuseDuplicate } from "../auth.ts";
 import { issueAgentKey, replaceAgentKey } from "../agent-keys.ts";
-import { AGENT_CAPABILITIES, publicationContentSchema, type AgentCapability } from "@agency_hub_core/contracts";
+import { AGENT_CAPABILITIES, joinLink, publicationContentSchema, type AgentCapability } from "@agency_hub_core/contracts";
 import { recordCustomOrder } from "../custom-orders/index.ts";
 import { approvePublications, createPublicationDraft } from "../publications.ts";
 import { openMatter } from "@agency_hub_core/db";
 
-/** Where an invitation is opened (packages/ui/src/sites.ts `CHATTER_SITE_ORIGIN`); `SANDBOX_JOIN_ORIGIN` overrides it. */
-const JOIN_ORIGIN = "https://chatgoose.gosling-agency.ru";
 
 /**
  * `sandbox:seed` — the test team on production (products plan 2026-11-13 §8; the wall: sandbox/realm.ts).
@@ -115,7 +113,12 @@ export class SandboxSeedRefused extends Error {}
 export interface SandboxSeedInput {
   scenarios: readonly SandboxScenario[];
   /** Mint a fresh invitation link of `t-new` and answer it (for the coordinator only). */
-  printInvite?: boolean;
+  /**
+   * Mint a fresh link of a test login and answer it (for the coordinator only): `true` — `t-new`'s invitation, as
+   * before; a code (`t-km`) — that test person's login: an invitation while it has no password, else a new
+   * password's link. It opens where Hub «Люди» would send that login (`joinLink`: ContentOps for a content manager).
+   */
+  printInvite?: boolean | string;
   /** Mint the checker's key (replacing its live one) and answer its value once (for the coordinator only). */
   printCheckerKey?: boolean;
   env?: NodeJS.ProcessEnv;
@@ -344,6 +347,23 @@ function stampOf(now: Date): string {
   return now.toISOString().slice(0, 16).replace(/[-:T]/g, "");
 }
 
+/**
+ * A fresh link of the named test person's login, as Hub «Люди» would give it: an invitation while the login has no
+ * password, else «Сбросить пароль ссылкой»'s kind; opened where that login's role opens (`joinLink`, the one rule).
+ * `SANDBOX_JOIN_ORIGIN` replaces the chatters' site (a stand), never ContentOps. Only a test login: anything else
+ * is refused before a link is made.
+ */
+async function mintTestLink(app: AppContext, code: string, env: NodeJS.ProcessEnv): Promise<string> {
+  const [row] = await rows(app.db, sql`select u.id, u.role, u.password_hash is not null as has_password
+    from people pe join person_logins pl on pl.person_id = pe.id join users u on u.id = pl.user_id
+    where pe.code = ${code} and pe.is_test and u.disabled_at is null and u.deleted_at is null
+    order by u.id limit 1`);
+  if (!row) throw new SandboxSeedRefused(`«${code}» is not a login of the test team: no link made`);
+  const kind = row.has_password === true ? "password_reset" as const : "invite" as const;
+  const link = await createAccountLinkForUserId(app, { userId: Number(row.id), kind, expiresInHours: 72 }, { source: "cli" });
+  return joinLink(link.token, String(row.role), env.SANDBOX_JOIN_ORIGIN);
+}
+
 async function testLogin(db: Database, username: string): Promise<number> {
   const [row] = await rows(db, sql`select u.id from users u join person_logins pl on pl.user_id = u.id
     join people pe on pe.id = pl.person_id where u.username = ${username} and pe.is_test`);
@@ -565,10 +585,8 @@ export async function seedSandbox(app: AppContext, input: SandboxSeedInput): Pro
   let checkerKey: string | null = null;
   if (input.printCheckerKey === true) checkerKey = await mintCheckerKey(app, checker);
   let invite: string | null = null;
-  if (input.printInvite === true) {
-    const userId = await testLogin(app.db, "t-new");
-    const link = await createAccountLinkForUserId(app, { userId, kind: "invite", expiresInHours: 72 }, { source: "cli" });
-    invite = `${env.SANDBOX_JOIN_ORIGIN ?? JOIN_ORIGIN}/join#${link.token}`;
+  if (input.printInvite !== undefined && input.printInvite !== false) {
+    invite = await mintTestLink(app, input.printInvite === true ? "t-new" : input.printInvite, env);
   }
   const live = await liveCheckerKey(app.db, checker.personId);
   return {

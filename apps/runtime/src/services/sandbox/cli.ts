@@ -10,16 +10,16 @@ export function registerSandboxCommands(program: Command) {
     .command("sandbox:seed")
     .description("Seed the test team (model «Тест», pages test-1 and test-of, the t-* people); additive and idempotent")
     .option("--scenario <name...>", `scenarios to add for now: ${SANDBOX_SCENARIOS.join(", ")}`)
-    .option("--print-invite", "mint a fresh invitation link of t-new and print it (for the coordinator)")
+    .option("--print-invite [code]", "mint a fresh link of a test login and print it: t-new by default; t-km opens ContentOps (for the coordinator)")
     .option("--print-checker-key", "mint the sandbox-checker agent's key (replacing its live one) and print its value once")
-    .action(async (options: { scenario?: string[]; printInvite?: boolean; printCheckerKey?: boolean }) => {
+    .action(async (options: { scenario?: string[]; printInvite?: boolean | string; printCheckerKey?: boolean }) => {
       const scenarios = [...new Set(options.scenario ?? [])];
       const unknown = scenarios.filter((name) => !(SANDBOX_SCENARIOS as readonly string[]).includes(name));
       if (unknown.length > 0) throw new Error(`Unknown scenario: ${unknown.join(", ")}`);
       const app = await createAppContext();
       try {
         const result = await seedSandbox(app, {
-          scenarios: scenarios as SandboxScenario[], printInvite: options.printInvite === true, printCheckerKey: options.printCheckerKey === true,
+          scenarios: scenarios as SandboxScenario[], printInvite: options.printInvite ?? false, printCheckerKey: options.printCheckerKey === true,
         });
         // Never a password: only whether one was set from the environment.
         console.log(JSON.stringify({

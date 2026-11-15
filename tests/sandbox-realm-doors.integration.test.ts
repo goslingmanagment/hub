@@ -246,3 +246,29 @@ describe("the doors of the test realm", () => {
     await expect(prepareAiGatewayStream(app, principal!, { pageLabel: "test-1", platform: "fansly" } as never)).rejects.toThrow(/ИИ тестовой команде/);
   });
 });
+
+describe("sandbox:seed --print-invite [code]", () => {
+  it("mints a link of a test login where Hub «Люди» would send it: ContentOps for t-km, the chatters' site for t-new", async (context) => {
+    if (!app) return context.skip();
+    const km = await seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "t-km" });
+    expect(km.invite).toMatch(/^https:\/\/contentops\.gosling-agency\.ru\/join#.+/);
+    const fresh = await seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: true });
+    expect(fresh.invite).toMatch(/^https:\/\/chatgoose\.gosling-agency\.ru\/join#.+/);
+    // A login with a password gets a new password's link, as «Сбросить пароль ссылкой» gives.
+    await seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "t-chat-1" });
+    const kinds = await (app.db as Database).execute<{ username: string; kind: string }>(sql`
+      select u.username, l.kind from account_links l join users u on u.id = l.user_id
+       where u.username in ('t-km', 't-new', 't-chat-1') and l.used_at is null and l.revoked_at is null order by u.username`);
+    expect(kinds.rows).toEqual([
+      { username: "t-chat-1", kind: "password_reset" },
+      { username: "t-km", kind: "invite" },
+      { username: "t-new", kind: "invite" },
+    ]);
+  });
+
+  it("refuses a code that is not a test login, before making any link", async (context) => {
+    if (!app) return context.skip();
+    await expect(seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "live-chatter" })).rejects.toThrow(/not a login of the test team/);
+    await expect(seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "nobody" })).rejects.toThrow(/not a login of the test team/);
+  });
+});

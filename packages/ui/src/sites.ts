@@ -1,3 +1,4 @@
+import { CHATTER_SITE_ORIGIN, CONTENTOPS_ORIGIN } from "@agency_hub_core/contracts";
 /**
  * The names nginx serves Hub's web apps under in production. A session is a
  * host-only cookie on each name; a sign-in on one is planted on the other by
@@ -13,10 +14,10 @@ export const CONSOLE_ORIGIN = "https://hub.gosling-agency.ru";
 export const LEGACY_CONSOLE_ORIGIN = "https://gosling-agency.ru";
 
 /** The chatters' site and Workboard's one address (/workboard/), every role's. Only /account, /join and /login are the console's app there; every other path outside /workboard/ and /api/ is a static page. */
-export const CHATTER_SITE_ORIGIN = "https://chatgoose.gosling-agency.ru";
+export { CHATTER_SITE_ORIGIN };
 
 /** ContentOps, the content's own product: a model's plan, inbox and library at `/<model>/<section>` (its sign-in is Hub's). */
-export const CONTENTOPS_ORIGIN = "https://contentops.gosling-agency.ru";
+export { CONTENTOPS_ORIGIN };
 
 /** ContentOps' own entry through Hub's sign-in (its `/auth/hub/start`: one step, no second password). */
 export const CONTENTOPS_SIGNIN_HREF = `${CONTENTOPS_ORIGIN}/auth/hub/start`;
