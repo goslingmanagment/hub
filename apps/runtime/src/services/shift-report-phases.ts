@@ -168,21 +168,29 @@ export function confirmedLines(
 }
 
 /**
- * A candidate's lines with what was settled since the hand-in: a decision, an agreement or a cancel of the sale is read
- * in the confirmation's turn (`lockSaleSettlements`), the person's words and the sales stay the candidate's. A line the
- * draft now settles takes the draft's amount; one that was settled and is not any more goes back to the draft's. Pure.
+ * A candidate's lines with what changed since the hand-in outside the person's words, read in the confirmation's turn
+ * (`lockSaleSettlements`): a decision, an agreement or a cancel of a sale (a line the draft now settles takes the draft's
+ * amount; one settled before and not any more goes back to it), and the person's other reports — a sale another report
+ * of theirs took meanwhile counts 0 here (`alreadyIn`), and a «долёт» the draft no longer offers leaves the version. The
+ * sales and the words stay the candidate's: a sale counts in one report only (review 12.11, round 3). Pure.
  */
 export function withSettlementsNow(lines: readonly HandinVersionLine[], draft: readonly HandinVersionLine[]): HandinVersionLine[] {
   const now = new Map(draft.flatMap((line) => (line.transactionId === null ? [] : [[line.transactionId, line] as const])));
-  return lines.map((line) => {
+  return lines.flatMap((line) => {
     const fresh = line.transactionId === null ? undefined : now.get(line.transactionId);
-    if (fresh === undefined || (fresh.settled === undefined && line.settled === undefined)) return line;
+    if (fresh === undefined) return line.added ? [] : [line];
+    if (fresh.alreadyIn !== null && line.alreadyIn === null) {
+      const held: HandinVersionLine = { ...line, alreadyIn: fresh.alreadyIn, amountMills: 0, disputed: false };
+      delete held.settled;
+      delete held.claimedMills;
+      return [held];
+    }
+    if (fresh.settled === undefined && line.settled === undefined) return [line];
     const next: HandinVersionLine = { ...line, amountMills: fresh.amountMills, disputed: fresh.disputed };
     if (fresh.settled === undefined) delete next.settled;
     else next.settled = fresh.settled;
     if (fresh.claimedMills === undefined) delete next.claimedMills;
     else next.claimedMills = fresh.claimedMills;
-    return next;
+    return [next];
   });
 }
-

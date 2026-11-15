@@ -2,7 +2,7 @@ import {
   SHIFT_REPORT_PHASE_CHIPS, personNameForms,
   type KernelOperationResponse, type ShiftReportBody, type ShiftReportBoard, type ShiftReportOwner, type ShiftReportPhase, type ShiftReportRow,
 } from "@agency_hub_core/contracts";
-import { millsFromDollars, millsPercentOf } from "@agency_hub_core/shared";
+import { millsFromDollars, millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 
 import { demoError, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 
@@ -146,7 +146,7 @@ const SHIFT_END = at(13, "02:00");
 /** The prototype's clocks: handed in 02:04 (again 02:21), counted 02:09 (by Hub's check alone 02:16). */
 const HANDED_IN = [at(13, "02:04"), at(13, "02:21")] as const;
 const COUNTED = { found: at(13, "02:09"), silent: at(13, "02:16") } as const;
-const m = (usd: number) => Number(millsFromDollars(usd));
+const m = (usd: number) => millsToNumber(millsFromDollars(usd));
 
 const half = (own: Own): Who | null => (own.startsWith("half:") ? own.slice(5) as Who : null);
 const cut = (own: Own, net: number) => (own === "me" ? net : half(own) ? net / 2 : 0);
