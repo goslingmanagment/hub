@@ -381,7 +381,7 @@ export function LedgerPersonDrawer({ row, view, period, onClose }: { row: Ledger
       open
       onClose={onClose}
       size="lg"
-      title={person.hubUser ? <PersonLink userId={person.hubUser.userId} name={shownName} backLabel="Выплаты" /> : person.name}
+      title={person.hubUser ? <PersonLink userId={person.hubUser.userId} name={shownName} backLabel="Деньги" /> : person.name}
       subtitle={[person.hubUser && ![shownName, person.hubUser.username].some((word) => word.toLowerCase() === person.name.toLowerCase()) ? person.name : null, formatDayRange(view.from, view.to)].filter(Boolean).join(" · ")}
       footer={<Button onClick={onClose}>Закрыть</Button>}
     >

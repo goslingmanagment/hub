@@ -214,7 +214,7 @@ describe("a sale's chain of money: who reads it and how much", () => {
     const [anna] = chain.people;
     expect(anna).toMatchObject({ name: "anna", shareMills: 20_000, reportDate: "2026-11-10" });
     expect(anna!.shift.link).toMatch(/^\/workboard\/report\/\d+\?sale=\d+$/u);
-    expect(anna!.accrual).toMatchObject({ state: "done", amountMills: 40_000, link: "/workboard/payouts?person=anna" });
+    expect(anna!.accrual).toMatchObject({ state: "done", amountMills: 40_000, link: "/workboard/money/debts?person=anna" });
     expect(anna!.payout).toMatchObject({ state: "done", amountMills: 40_000 });
     expect(anna!.payout.words).toMatch(/^оплачено/u);
     // Another page's sale and a nobody's sale are the owner's too.

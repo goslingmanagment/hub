@@ -32,7 +32,7 @@ function WhenCell({ row }: { row: ReportRow }) {
 function WhoCell({ row }: { row: ReportRow }) {
   const { person } = row;
   const people = usePeopleIndex();
-  if (person.hubUser) return <PersonLink userId={person.hubUser.userId} name={people.nameOf(person.hubUser.userId, person.hubUser.username)} backLabel="Выплаты" />;
+  if (person.hubUser) return <PersonLink userId={person.hubUser.userId} name={people.nameOf(person.hubUser.userId, person.hubUser.username)} backLabel="Деньги" />;
   return <Person name={person.name} hint={person.slug === null ? "ledger не знает, чей пост" : "не связан с Hub"} />;
 }
 

@@ -1,5 +1,6 @@
-import { useSearchParams } from "react-router";
-import { Button, EmptyState, ErrorState, Segmented } from "@agency_hub_core/ui";
+import { useLocation, useSearchParams } from "react-router";
+import { Button, EmptyState, ErrorState, Tabs } from "@agency_hub_core/ui";
+import { carryParams } from "@/shared/links";
 import { useMe } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
@@ -10,9 +11,8 @@ import { useLedgerPayouts, useLedgerReports } from "./ledger";
 import "./payouts.css";
 
 /**
- * Выплаты (spec §4.7 r5: money comes from ledger) — the owner's one place for
- * what people are owed and why. Two views, one switch at the top that never
- * moves (`?view=`):
+ * Деньги → Долги, Отчёты (it was «Выплаты» at `/payouts`; spec §4.7 r5: money comes from ledger) — the owner's one
+ * place for what people are owed and why. Two tabs, each its own address (`/money/debts`, `/money/reports`):
  *   - «Долги»: what each person accrued and was paid in the period and what the
  *     agency owes them now (`?person=` opens one, with the days and where each
  *     day's amount came from, a day with a report opening to it);
@@ -26,9 +26,9 @@ import "./payouts.css";
 
 type View = "debts" | "reports";
 
-const VIEWS: ReadonlyArray<{ value: View; label: string; hint: string }> = [
-  { value: "debts", label: "Долги", hint: "Кому сколько агентство должно и за какие дни" },
-  { value: "reports", label: "Отчёты", hint: "Отчёты смен из «Отчётности»: что отправлено, что изменено, что не разобрано" },
+const VIEWS: ReadonlyArray<{ value: View; label: string }> = [
+  { value: "debts", label: "Долги" },
+  { value: "reports", label: "Отчёты" },
 ];
 
 export function PayoutsScreen() {
@@ -36,7 +36,8 @@ export function PayoutsScreen() {
   const { period, setPeriod } = usePeriod();
   const { page } = usePageFilter();
   const [search, setSearch] = useSearchParams();
-  const view: View = search.get("view") === "reports" ? "reports" : "debts";
+  const location = useLocation();
+  const view: View = location.pathname.replace(/\/+$/, "").endsWith("/reports") ? "reports" : "debts";
   const questionsOnly = search.get("questions") === "1";
   const ledger = useLedgerPayouts(period);
   const reports = useLedgerReports(period, view === "reports");
@@ -50,29 +51,16 @@ export function PayoutsScreen() {
   const personSlug = search.get("person");
   const openPerson = ledger.view?.rows.find((row) => row.person.slug === personSlug) ?? null;
 
-  const switcher = (
-    <Segmented<View>
-      label="Что показать"
-      value={view}
-      onChange={(value) => setSearch((current) => {
-        const next = new URLSearchParams(current);
-        if (value === "debts") next.delete("view");
-        else next.set("view", value);
-        // The person's panel belongs to «Долги».
-        if (value === "reports") next.delete("person");
-        return next;
-      })}
-      options={VIEWS.map((option) => ({ value: option.value, label: option.label, hint: option.hint }))}
-      size="sm"
-    />
-  );
+  // The tabs carry the period and the page, not the person (the panel belongs to «Долги») nor the questions' filter.
+  const carried = carryParams(location.search).toString();
+  const tabs = <Tabs label="Разделы" items={VIEWS.map((option) => ({ to: { pathname: `/money/${option.value}`, search: carried ? `?${carried}` : "" }, label: option.label }))} />;
 
   if (!isOwner) {
     return (
       <>
-        <ScreenHeader title="Выплаты" />
+        <ScreenHeader title="Деньги" />
         <div className="wb-content">
-          <EmptyState title="Выплаты видит только владелец" className="payouts-empty">
+          <EmptyState title="Долги и отчёты видит только владелец" className="payouts-empty">
             Начисления и долги людям считает ledger агентства, и показывает их только владельцу.
           </EmptyState>
         </div>
@@ -115,10 +103,10 @@ export function PayoutsScreen() {
   return (
     <>
       <ScreenHeader
-        title="Выплаты"
+        title="Деньги"
         period
         pageFilter={view === "reports"}
-        meta={switcher}
+        tabs={tabs}
         {...(read.dataUpdatedAt ? { updatedAt: read.dataUpdatedAt } : {})}
         onRefresh={() => void read.refetch()}
         refreshing={read.isFetching}

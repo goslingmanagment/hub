@@ -76,7 +76,7 @@ function chatterRoutes(): Array<{ path: string; module: string | null }> {
 
 /** The chatter's screens of Workboard's frame: its menu (a newcomer's, the longest) and the name menu. */
 function chatterScreens(): Array<{ id: string; path: string }> {
-  const menu = productMenu("workboard", "chatter", { newcomer: true }).upper.map((item) => ({ id: item.id, path: item.to }));
+  const menu = productMenu("workboard", "chatter", { newcomer: true, money: true }).upper.map((item) => ({ id: item.id, path: item.to }));
   return [...menu, { id: NAME_MENU_ACCOUNT.id, path: NAME_MENU_ACCOUNT.path }];
 }
 
@@ -99,9 +99,9 @@ describe("the narrow web session and the chatter's screens", () => {
     expect([...passwordOnly].filter((operation) => narrow.has(operation))).toEqual([]);
   });
 
-  it("knows the chatter's menu and name menu: «Начало», «Сегодня», «Ждут вас», «Мои смены», «Смены», «Фаны», «Кастомы», «Продажи», «Аккаунт и устройства»", () => {
+  it("knows the chatter's menu and name menu: «Начало», «Сегодня», «Ждут вас», «Мои смены», «Смены», «Фаны», «Кастомы», «Продажи», «Деньги», «Аккаунт и устройства»", () => {
     expect(chatterScreens().map((screen) => screen.path).sort()).toEqual([
-      "/workboard/account", "/workboard/customs", "/workboard/fans", "/workboard/my/shifts", "/workboard/sales", "/workboard/shifts", "/workboard/start", "/workboard/today", "/workboard/waiting",
+      "/workboard/account", "/workboard/customs", "/workboard/fans", "/workboard/money", "/workboard/my/shifts", "/workboard/sales", "/workboard/shifts", "/workboard/start", "/workboard/today", "/workboard/waiting",
     ]);
   });
 

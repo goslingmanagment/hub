@@ -181,7 +181,7 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
       words: `смена ${DAY_MONTH.format(new Date(entry.shift.start))}, ${CLOCK.format(new Date(entry.shift.start))}–${CLOCK.format(new Date(entry.shift.end))}${entry.shift.ongoing ? ", идёт" : ""}`,
       link: reportPath, amountMills: null,
     };
-  const postLink = viewer.kind === "owner" ? "/workboard/payouts?view=reports" : own ? "/workboard/my/shifts" : null;
+  const postLink = viewer.kind === "owner" ? "/workboard/money/reports" : own ? "/workboard/my/shifts" : null;
   let report: Link;
   // A console row's sale names no line of the demo's shifts: the shift's version stands for the one holding it.
   const line = entry?.handed?.line ?? (entry !== null && entry.handed !== null && entry.line === null ? { amountMills: share.mills, statement: null, disputed: false } : null);
@@ -208,7 +208,7 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
     const ownerOnly: Link = { state: "none", words: "видит только владелец", link: null, amountMills: null };
     return { userId: share.user.id, name: share.user.name, shareMills: share.mills, reportDate, shift, report, accrual: ownerOnly, payout: ownerOnly };
   }
-  const payLink = viewer.kind === "owner" ? `/workboard/payouts?person=${encodeURIComponent(share.user.username)}` : own ? "/workboard/my/shifts" : null;
+  const payLink = viewer.kind === "owner" ? `/workboard/money/debts?person=${encodeURIComponent(share.user.username)}` : own ? "/workboard/my/shifts" : null;
   return { userId: share.user.id, name: share.user.name, shareMills: share.mills, reportDate, shift, report, ...payLinks(share.user, reportDate, sums.pay, payLink, request.now) };
 }
 

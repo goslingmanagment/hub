@@ -93,7 +93,7 @@ function standing(request: DemoRequest): Seed[] {
   seeds.push({
     kind: "ledger.paid_day_changed", key: "ledger.paid_day_changed:77", title: "Выплаченный день изменён: kate.v", money: true,
     evidence: { changeId: 77, day: isoAt(now - 11 * DAY).slice(0, 10), model: "Mia", person: "kate-v", postedMills: 38_000, newMills: 43_000 },
-    link: "/workboard/payouts?person=kate-v", agoMs: 1.3 * DAY,
+    link: "/workboard/money/debts?person=kate-v", agoMs: 1.3 * DAY,
   });
   const held = wbHeldHandlers.clientSendCustodyList?.({ ...ownerRequest, query: { state: "held", limit: "100", offset: "0" } });
   if (held && !isDemoReply(held)) {

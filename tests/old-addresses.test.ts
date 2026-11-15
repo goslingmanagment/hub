@@ -98,7 +98,7 @@ function matchesRoute(pattern: string, path: string): boolean {
 }
 
 /** Workboard's routes a resting address may open (apps/workboard/src/app/routes.tsx). */
-const WORKBOARD_ROUTES = ["/", "/start", "/my/shifts", "/shifts", "/team", "/team/:ref/:tab?", "/customs", "/customs/:code", "/sales/:tab", "/waiting", "/payouts", "/report/:shiftId", "/account", "/fans", "/fans/subscribers", "/fans/followers", "/fans/gone", "/fans/by-spend", "/fans/by-spend/:bucketKey", "/fans/:pageLabel/:platform/:platformUserId", "/fans/:platform/:platformUserId"];
+const WORKBOARD_ROUTES = ["/", "/start", "/my/shifts", "/shifts", "/team", "/team/:ref/:tab?", "/customs", "/customs/:code", "/sales/:tab", "/waiting", "/money", "/money/debts", "/money/reports", "/money/mine", "/report/:shiftId", "/account", "/fans", "/fans/subscribers", "/fans/followers", "/fans/gone", "/fans/by-spend", "/fans/by-spend/:bucketKey", "/fans/:pageLabel/:platform/:platformUserId", "/fans/:platform/:platformUserId"];
 
 describe("old addresses", () => {
   it.each(OLD_ADDRESSES.map((row) => [row.from, row.to, row.who]))("%s lands on %s (%s)", (from, to) => {

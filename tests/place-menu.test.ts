@@ -7,7 +7,7 @@ import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN } from "../packages/ui/src/sites.ts
 
 /** Each product's menu from the one table (products plan §2.2–2.3): who sees which item, where it leads, what an address lights. */
 
-const items = (product: "hub" | "workboard", role: string, holds: { newcomer?: boolean; leads?: boolean } = {}) => {
+const items = (product: "hub" | "workboard", role: string, holds: { newcomer?: boolean; leads?: boolean; money?: boolean } = {}) => {
   const menu = productMenu(product, role, holds);
   return [...menu.upper, ...menu.lower];
 };
@@ -46,14 +46,16 @@ describe("Hub's menu", () => {
 });
 
 describe("Workboard's menu", () => {
-  it("is the owner's and a team lead's own: Сегодня · Ждут вас · Смены · Команда · Фаны · Кастомы · Продажи, the owner also Выплаты", () => {
-    expect(items("workboard", "owner", { leads: true }).map((item) => item.label)).toEqual(["Сегодня", "Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Продажи", "Выплаты"]);
+  it("is the owner's and a team lead's own: Сегодня · Ждут вас · Смены · Команда · Фаны · Кастомы · Продажи, the owner also Деньги", () => {
+    expect(items("workboard", "owner", { leads: true, money: true }).map((item) => item.label)).toEqual(["Сегодня", "Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Продажи", "Деньги"]);
     expect(items("workboard", "team_lead", { leads: true }).map((item) => item.label)).toEqual(["Сегодня", "Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Продажи"]);
   });
 
   it("gives a chatter «Сегодня», «Ждут вас», «Мои смены», «Смены», «Фаны», «Кастомы» and «Продажи», «Начало» first only while a step is open", () => {
     expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["today", "waiting", "my-shifts", "shifts", "fans", "customs", "sales"]);
     expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "today", "waiting", "my-shifts", "shifts", "fans", "customs", "sales"]);
+    // «Деньги» only while the person's right «видит свои деньги» is on.
+    expect(items("workboard", "chatter", { money: true }).map((item) => item.id)).toEqual(["today", "waiting", "my-shifts", "shifts", "fans", "customs", "sales", "money"]);
   });
 
   it("gives «Команда» to a chatter who leads a team by its records, and never to a plain chatter", () => {
@@ -102,7 +104,7 @@ describe("each product's search", () => {
   });
 
   it("finds a team lead only what they may open", () => {
-    expect(found("team_lead", "выплат", "workboard")).not.toContain("/workboard/payouts");
+    expect(found("team_lead", "долги", "workboard")).not.toContain("/workboard/money/debts");
     expect(found("team_lead", "смен", "workboard")).toContain("/workboard/shifts");
     for (const to of found("team_lead", "", "workboard")) expect(screenVisible(matchScreen(to)!.screen, "team_lead"), to).toBe(true);
   });

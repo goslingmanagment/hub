@@ -22,6 +22,8 @@ export interface MyMoneyRead {
   away: boolean;
   /** The ledger has no payouts of the person yet (the switch on). */
   none: boolean;
+  /** Hub answered that the switch is off: nothing of the person's pay is shown. */
+  off: boolean;
   retry: () => void;
   retrying: boolean;
 }
@@ -40,6 +42,7 @@ export function useMyMoney(window: Pick<MyShiftsWindow, "from" | "to">): MyMoney
     pay: answer?.enabled ? answer.pay : null,
     away: query.isError && hubErrorStatus(query.error) === 503,
     none: answer !== null && answer.enabled && answer.pay === null,
+    off: answer !== null && !answer.enabled,
     retry: () => void query.refetch(),
     retrying: query.isFetching,
   };
