@@ -239995,7 +239995,30 @@
                     "leads": {
                       "type": "array",
                       "items": {
-                        "type": "string"
+                        "type": "object",
+                        "properties": {
+                          "model": {
+                            "type": "string"
+                          },
+                          "check": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "shoot": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "model",
+                          "check",
+                          "shoot"
+                        ],
+                        "additionalProperties": false
                       }
                     },
                     "orders": {

@@ -368,7 +368,7 @@ export const wbCustomsHandlers: DemoHandlers = {
       .sort((left, right) => left.stateAt - right.stateAt);
     return {
       viewer: { lead: viewer.lead || viewer.role !== "chatter", owner: viewer.role === "owner" },
-      leads: ["Катя"],
+      leads: [{ model: "Mia Hart", check: "Катя", shoot: "Вера" }, { model: "Ivy", check: "Катя", shoot: "Катя" }],
       orders: orders.map((order) => wire(order, now)),
       capped: false,
       lookalikes: lookalikes(request).filter((sale) => page === null || sale.pageLabel === page),

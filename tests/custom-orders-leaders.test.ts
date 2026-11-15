@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { mayTakeStep, type CustomViewer } from "@agency_hub_core/contracts";
 import type { TeamFacts } from "@agency_hub_core/db";
 
-import { customStepLeader, ledPhasesOf, phaseLeader, type CustomLeader } from "../apps/runtime/src/services/custom-orders/leaders.ts";
+import { boardLeads, customStepLeader, ledPhasesOf, phaseLeader, type CustomLeader } from "../apps/runtime/src/services/custom-orders/leaders.ts";
 
 /**
  * Who leads each step of a custom order (products plan §4.5, package C3): the check — the team lead, else the customs
@@ -65,6 +65,16 @@ describe("who leads each step of a custom order", () => {
     expect(step("shot", 104)).toMatchObject({ phase: "give", product: "workboard", leader: { userId: 104, name: "P4" } });
     expect(step("shot", null)).toMatchObject({ phase: "give", leader: { userId: 101 } });
     expect(step("closed", 104)).toBeNull();
+  });
+
+  it("the board's header: per model of the viewer's pages and realm, by the same rule", () => {
+    expect(boardLeads(FACTS, [11, 21], false)).toEqual([
+      { model: "M1", check: "P1", shoot: "P3" },
+      { model: "M2", check: "P2", shoot: "P2" },
+    ]);
+    expect(boardLeads(FACTS, [31], false)).toEqual([{ model: "M3", check: null, shoot: null }]);
+    // A test viewer reads no live model, whatever pages it names.
+    expect(boardLeads(FACTS, "all", true)).toEqual([]);
   });
 
   it("a record of a person with no living login leads nothing", () => {

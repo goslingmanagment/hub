@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   CUSTOM_STATE_WORDS, waitedParts, wantedParts,
-  type CustomLookalikeSale, type CustomOrder, type CustomOrderAction, type CustomOrderActionBody, type CustomOrderCard, type CustomOrderDetailResponse,
+  type CustomLookalikeSale, type CustomOrder, type CustomOrderAction, type CustomOrderActionBody, type CustomOrderCard, type CustomOrderDetailResponse, type CustomOrdersBoardResponse,
 } from "@agency_hub_core/contracts";
 import {
   Badge,
@@ -228,6 +228,19 @@ function Lookalikes({ sales, highlight }: { sales: readonly CustomLookalikeSale[
   );
 }
 
+/**
+ * «Ведёт кастомы: Тест: Аня, съёмка: Вера» — per model of the pages the viewer sees, by Hub's one rule; nobody — «владелец».
+ * One model needs no model's name.
+ */
+function leadsLine(leads: CustomOrdersBoardResponse["leads"]): string {
+  if (leads.length === 0) return "Кастомов на ваших страницах нет";
+  const who = (name: string | null) => name ?? "владелец";
+  const one = (lead: CustomOrdersBoardResponse["leads"][number]) =>
+    lead.shoot === lead.check ? who(lead.check) : `${who(lead.check)}, съёмка: ${who(lead.shoot)}`;
+  if (leads.length === 1) return `Ведёт кастомы: ${one(leads[0]!)}`;
+  return `Ведёт кастомы: ${leads.map((lead) => `${lead.model}: ${one(lead)}`).join("; ")}`;
+}
+
 export function CustomsBoardScreen() {
   const { page } = usePageFilter();
   const [search, setSearch] = useSearchParams();
@@ -243,8 +256,7 @@ export function CustomsBoardScreen() {
   };
   const board = useCustomBoard(page);
   const data = board.data;
-  const leads = data?.leads ?? [];
-  const meta = leads.length > 0 ? `Ведёт кастомы: ${leads.join(", ")}` : "Ведущий кастомов не назначен";
+  const meta = leadsLine(data?.leads ?? []);
 
   let body: ReactNode;
   if (board.isPending) {

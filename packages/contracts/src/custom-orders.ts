@@ -290,8 +290,12 @@ export const customOrdersBoardResponseSchema = z.object({
     lead: z.boolean(),
     owner: z.boolean(),
   }),
-  /** Who leads customs (the people with the right, by their registry name), for the board's header. */
-  leads: z.array(z.string()),
+  /**
+   * Who leads customs, for the board's header: per model of the pages the viewer sees (of the viewer's realm only), by
+   * the one rule (services/custom-orders/leaders.ts) — the check (Workboard) and the shooting (ContentOps). A name null
+   * — nobody leads it: the owner.
+   */
+  leads: z.array(z.object({ model: z.string(), check: z.string().nullable(), shoot: z.string().nullable() })),
   /** Open orders, and the given and closed of the last 7 days, the oldest step first. */
   orders: z.array(customOrderSchema),
   capped: z.boolean(),

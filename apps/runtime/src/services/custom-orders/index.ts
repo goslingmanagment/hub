@@ -86,7 +86,7 @@ import {
   type CustomViewer,
 } from "./rules.ts";
 import { waitingCustomSaleIds } from "./readers.ts";
-import { customStepLeader, ledPhasesOf, type CustomLeader } from "./leaders.ts";
+import { boardLeads, customStepLeader, ledPhasesOf, type CustomLeader } from "./leaders.ts";
 import { personOfLogin, teamFactsFor, teamPagesFor } from "../teams.ts";
 
 /**
@@ -282,17 +282,17 @@ export async function readCustomOrdersBoard(
   }
   const everything = viewer.lead || viewer.role === "owner";
   const pageIds = pageId !== null ? [pageId] : everything ? "all" as const : viewer.pageIds;
-  const [rows, lookalikes, leads, leaders] = await Promise.all([
+  const [rows, lookalikes, leaders] = await Promise.all([
     listCustomOrders(app.db, { pageIds, unknownPage: everything || viewer.role === "team_lead", doneSince: new Date(now.getTime() - DONE_DAYS * DAY_MS), limit: BOARD_LIMIT + 1 }),
     // The last week's, and the older ones a matter still waits about: «Записать» or «Не кастом» closes it here.
     listCustomLookalikeSales(app.db, { from: new Date(now.getTime() - DONE_DAYS * DAY_MS), to: now, limit: 200, alsoIds: await waitingCustomSaleIds(app.db) }),
-    customLeads(app.db),
     customLeaderContext(app, principal),
   ]);
   const visible = rows.filter((row) => seesOrder(viewer, row));
   return {
     viewer: { lead: leadsSteps(viewer), owner: viewer.role === "owner" },
-    leads: [...new Set(leads.map((lead) => lead.displayName))],
+    // The header by the one rule, for the models of the pages the viewer sees, of their realm (never a global right).
+    leads: boardLeads(leaders.facts, pageIds, viewer.realm?.test === true),
     orders: visible.slice(0, BOARD_LIMIT).map((row) => orderWire(row, now, leaders)),
     capped: visible.length > BOARD_LIMIT,
     lookalikes: lookalikesFor(viewer, lookalikes)
