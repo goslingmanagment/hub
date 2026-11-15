@@ -22,7 +22,7 @@ import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in
 // more than the sale. (3) A report moved to the shift that remains after a merge never gives the ledger two current
 // versions of one sale. (4) A sale of the pot is never asked between two chatters: the owner decides it. Money: required.
 //
-// anna really works mia-1 from 30 to 25 and from 22 to 20 hours ago (minutes and messages): the rule gives her the
+// anna really works mia-1 from 30 to 25 and from 23 to 18 hours ago (minutes and messages): the rule gives her the
 // page's sales of those hours. bella hands shifts in on the board too; her shift rows cover some of those hours with no
 // work of hers, so the sales lie in her reports as «Рядом».
 
@@ -150,8 +150,8 @@ describe("the board's money, the final review's second reader", () => {
       expect(created.statusCode, created.body).toBe(200);
     }
     await q("update person_rights set granted_at = now() - interval '30 days'");
-    // anna's work on mia-1: every minute of 30–25 and 22–20 hours ago, a message every three minutes.
-    for (const [from, to] of [[30, 25], [22, 20]] as const) {
+    // anna's work on mia-1: every minute of 30–25 and 23–18 hours ago, a message every three minutes.
+    for (const [from, to] of [[30, 25], [23, 18]] as const) {
       await q(
         `insert into chatter_activity_minutes (user_id, page_id, minute, input)
          select $1, $2, minute, true
@@ -243,9 +243,9 @@ describe("the board's money, the final review's second reader", () => {
 
   it("gives the ledger one current version of a sale when the report's shift is merged into another after the hand-in (3)", async (context) => {
     if (!testDb) return context.skip();
-    const merged = await sale(21 * 60);
-    // anna's work of 22–20 hours ago: two shift rows of it; the one handed in is then joined into the other.
-    const gone = await shiftRow(anna, 22.5, 19.5);
+    const merged = await sale(20.5 * 60);
+    // anna's work of 23–18 hours ago: the shift row handed in; the row it is joined into comes with the merge.
+    const gone = await shiftRow(anna, 23.5, 17.5);
     await handInAndConfirm(asSession, "anna", gone);
     // The ledger's side: every version kept by id under the shift the feed served it with; a shift's report is its
     // highest version (ledger internal/reports/hub.go).
@@ -276,7 +276,7 @@ describe("the board's money, the final review's second reader", () => {
     await readFeed();
     expect(countedByLedger()).toBe(NET);
     // The row handed in is joined into the other; the report moves there and is handed in again.
-    const kept = await shiftRow(anna, 22.6, 19.4);
+    const kept = await shiftRow(anna, 23.6, 17.4);
     await q("update shifts set state = 'merged', merged_into = $2 where id = $1", [gone, kept]);
     await settleGoneShifts(app, new Date());
     expect((await q("select shift_id::int as shift_id from shift_handins where shift_id in ($1, $2)", [gone, kept])).rows).toEqual([{ shift_id: kept }]);
