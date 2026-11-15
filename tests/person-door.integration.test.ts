@@ -374,6 +374,21 @@ describe("the person's door", () => {
     expect(foreign.statusCode).toBe(404);
   });
 
+  it("takes «Вышел» on an unknown outcome with the post's number and where it is, and refuses it without them", async (context) => {
+    if (!server) return context.skip();
+    const list = await inject("POST", "/api/v1/person/publications/list", { bearer: KEY, payload: { client: "contentops", grant: grants.testKm, status: "unknown" } });
+    const [post] = list.json<{ publications: Array<{ id: number; pageLabel: string }> }>().publications;
+    expect(post?.pageLabel, list.body).toBe("test-1");
+    const resolve = (answer: Record<string, unknown>) =>
+      inject("POST", "/api/v1/person/publications/resolve", { bearer: KEY, payload: { client: "contentops", grant: grants.testKm, id: post!.id, answer } });
+    // What ContentOps' card sent before its form came back: refused, nothing changed.
+    const bare = await resolve({ outcome: "went_out" });
+    expect(bare.statusCode, bare.body).toBe(400);
+    const answered = await resolve({ outcome: "went_out", state: "scheduled", platformPostRef: "851203394123456789" });
+    expect(answered.statusCode, answered.body).toBe(200);
+    expect(answered.json()).toMatchObject({ publication: { id: post!.id, status: "scheduled", platformPostRef: "851203394123456789" }, replacement: null });
+  });
+
   it("records a change as the person's, never as ContentOps' key", async (context) => {
     if (!server) return context.skip();
     await draftOn("mia-1", "A", ownerSession);
