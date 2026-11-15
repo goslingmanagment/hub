@@ -540,4 +540,30 @@ describe("the wall of the test realm", () => {
     expect(answered.statusCode, answered.body).toBe(200);
     expect(namesLive(answered.body)).toBe(false);
   }, 300_000);
+  it("the customs board's header names whoever leads customs by the one rule, per model of the viewer's realm, both ways", async (context) => {
+    if (!server || !testDb) return context.skip();
+    await seedSandbox(createTestAppContext(testDb), { scenarios: [], env: SANDBOX_PASSWORDS });
+    // A live person who «ведёт кастомы» (the right, mirrored as a customs record on the live model).
+    const [person] = (await testDb.pool.query("select id from people where code = $1", [live.personCode])).rows as Array<{ id: string }>;
+    await testDb.pool.query("insert into person_rights (person_id, \"right\") values ($1, 'customs_lead') on conflict do nothing", [person!.id]);
+    await testDb.pool.query(
+      "insert into team_roles (person_id, model_id, kind) select $1, id, 'customs' from models where slug = $2 on conflict do nothing",
+      [person!.id, live.modelSlug],
+    );
+    const board = async (cookie: string) => {
+      const answer = await server!.inject({ method: "GET", url: "/api/v1/custom-orders", headers: { cookie } });
+      expect(answer.statusCode, answer.body).toBe(200);
+      return answer.json() as { leads: Array<{ model: string; check: string | null; shoot: string | null }> };
+    };
+    // The test team lead: the test model alone, led by the test team's own people — never the live «Anton».
+    const tLead = await login("t-lead", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_LEAD);
+    const theirs = await board(tLead);
+    expect(theirs.leads.map((lead) => lead.model)).toEqual([SANDBOX_MODEL.name]);
+    expect(JSON.stringify(theirs.leads).includes("Anton")).toBe(false);
+    // The live owner: the live model, its live customs lead; nothing of the test realm.
+    const ownerCookie = callers.find((one) => one.name === "owner")!.headers.cookie!;
+    const ours = await board(ownerCookie);
+    expect(ours.leads.map((lead) => lead.model)).not.toContain(SANDBOX_MODEL.name);
+    expect(ours.leads.find((lead) => lead.model === "Lana")).toMatchObject({ shoot: "Anton" });
+  }, 300_000);
 });

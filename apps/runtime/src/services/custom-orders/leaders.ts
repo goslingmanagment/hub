@@ -110,3 +110,26 @@ export function ledPhasesOf(facts: TeamFacts, userId: number, test: boolean): { 
   }
   return { check, shoot };
 }
+
+/**
+ * The board's header «Ведёт кастомы» (package C3): per model of the given pages — `"all"`, every model of the realm —
+ * who leads its check and its shooting by the rule above. Only models of the viewer's realm: a test account never
+ * reads a live person's name here, nor a live one a test person's.
+ */
+export function boardLeads(
+  facts: TeamFacts,
+  pages: "all" | readonly number[],
+  test: boolean,
+): Array<{ model: string; check: string | null; shoot: string | null }> {
+  const wanted = pages === "all" ? null : new Set(pages);
+  const name = (leader: CustomLeader) => (leader.kind === "owner" ? null : leader.name || null);
+  return facts.models
+    .filter((model) => model.test === test)
+    .flatMap((model) => {
+      const own = pagesOfModels(facts, [model.modelId]);
+      const first = own.find((pageId) => wanted === null || wanted.has(pageId));
+      if (first === undefined) return [];
+      return [{ model: model.name, check: name(phaseLeader(facts, first, "check", null)), shoot: name(phaseLeader(facts, first, "shoot", null)) }];
+    })
+    .sort((left, right) => left.model.localeCompare(right.model));
+}
