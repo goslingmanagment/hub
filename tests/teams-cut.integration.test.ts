@@ -293,8 +293,11 @@ describe("teams: who sees whom (package T)", () => {
       }
     }
     expect(ownerChanged).toEqual([]);
-    // The team reads themselves must be among the proven ones.
-    expect(reads.filter((read) => read.key.startsWith("team") && unstable.has(read.url)).map((read) => read.key)).toEqual([]);
+    // Only these may move by themselves between two of the owner's reads, by name: the live operations' minute
+    // («Сейчас»), the OnlyFans API credits and spend counted to the second, and an observation payload read by a fresh
+    // id. Every team read is among the proven ones.
+    const MOVING = new Set(["opsLive", "adminOfapiCreditsSummary", "adminOfapiSpendComparison", "agentObservationPayload"]);
+    expect(reads.filter((read) => unstable.has(read.url) && !MOVING.has(read.key)).map((read) => read.key)).toEqual([]);
   }, 600_000);
 
   it("the team reads open for team A: both see its shifts, the lead opens a teammate's review, a chatter reads the team's people", async (context) => {
