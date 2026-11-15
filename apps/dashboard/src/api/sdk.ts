@@ -1,6 +1,7 @@
 import { KernelApiError, createHubClient } from "@agency_hub_core/ui/hubClient";
 
 import { clearDashboardSession } from "@/lib/queryClient";
+import { isFramedContentScreen } from "@/lib/frameScope";
 import { buildLoginRoute } from "@/lib/navigation";
 
 // The dashboard's single API client — every domain module
@@ -14,6 +15,11 @@ function redirectToLogin() {
   }
 
   if (window.location.pathname === "/login") {
+    return;
+  }
+  // Inside ContentOps' frame Hub's sign-in cannot be shown (it is never framed): the screen tells the frame instead
+  // (src/frame/ContentScreen.tsx), and ContentOps offers «Войдите через Hub».
+  if (isFramedContentScreen()) {
     return;
   }
 

@@ -53,7 +53,7 @@ describe("the headers of every answer", () => {
       "content-security-policy": "frame-ancestors https://contentops.gosling-agency.ru",
       "strict-transport-security": HSTS_HEADER,
     });
-    const stand = signinNamesOf({ isProduction: false, webSigninClients: { contentops: "http://127.0.0.1:6180/auth/hub/callback" } } as Parameters<typeof signinNamesOf>[0]);
+    const stand = signinNamesOf({ isProduction: false, webSigninClients: { contentops: "http://127.0.0.1:6180/auth/hub/callback" } } as unknown as Parameters<typeof signinNamesOf>[0]);
     expect(contentScreenHeaders(false, contentopsOriginOf(stand))).toEqual({ "content-security-policy": "frame-ancestors http://127.0.0.1:6180" });
     expect(contentScreenHeaders(true, null)).toMatchObject({ "content-security-policy": "frame-ancestors 'none'" });
     for (const path of ["/frame/publications", "/frame/publications?model=lora&page=lora-1", "/frame/content-stats?period=30d"]) expect(isContentScreenPath(path), path).toBe(true);

@@ -20,3 +20,13 @@ export function isContentScreen(): boolean {
 export function frameModel(): string | null {
   return model;
 }
+
+/** A content screen inside another window (ContentOps' frame): a lost session is said to the frame, never a sign-in page here. */
+export function isFramedContentScreen(): boolean {
+  if (!screen || typeof window === "undefined") return false;
+  try {
+    return window.top !== window.self;
+  } catch {
+    return true;
+  }
+}

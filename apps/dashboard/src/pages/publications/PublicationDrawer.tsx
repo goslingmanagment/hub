@@ -2,6 +2,7 @@ import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router";
 import type { PublicationWire } from "@agency_hub_core/contracts";
 import { useAdminUsers } from "@/api/adminUsers";
+import { useAuthMe } from "@/api/auth";
 import { useAgentKeys } from "@/api/agentKeys";
 import { usePageProfile } from "@/api/page-profile";
 import { usePagePromo } from "@/api/page-promo";
@@ -132,8 +133,10 @@ function AlbumReason({ reason }: { reason: string | null }) {
 }
 
 function useNames(): Names {
-  const users = useAdminUsers();
-  const keys = useAgentKeys();
+  // People's logins and agents' keys are the owner's reads: a content manager's card names them in general words.
+  const owner = useAuthMe().data?.user.role === "owner";
+  const users = useAdminUsers({ enabled: owner });
+  const keys = useAgentKeys(owner);
   return useMemo(() => ({
     users: new Map((users.data ?? []).map((user) => [user.id, user.username])),
     agentKeys: new Map((keys.data ?? []).map((key) => [key.id, key.name])),
@@ -142,7 +145,9 @@ function useNames(): Names {
 
 /** Wall and tier names of a Fansly page, read only when the post names some. */
 function useTargetNames(publication: PublicationWire | undefined) {
-  const fansly = publication?.platform === "fansly";
+  // The page's profile and promo are the owner's reads (prices among them): a content manager's card counts them.
+  const owner = useAuthMe().data?.user.role === "owner";
+  const fansly = owner && publication?.platform === "fansly";
   const wants = (refs: readonly string[] | undefined) => fansly && (refs?.length ?? 0) > 0;
   const wallsWanted = wants(publication?.wallRefs) || wants(publication?.pinWallRefs);
   const tiersWanted = wants(publication?.tierRefs);
