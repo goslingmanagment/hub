@@ -113,6 +113,7 @@ const everyoneScreens: RouteObject[] = [
   { path: "shifts", lazy: () => import("../screens/shifts/entry.js").then((m) => ({ Component: m.ShiftsEntry })) },
   { path: "shifts/mine", lazy: () => import("../screens/shifts/entry.js").then((m) => ({ Component: m.MineEntry })) },
   { path: "shifts/team", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },
+  { path: "shifts/schedule", lazy: () => import("../screens/shifts/Schedule.js").then((m) => ({ Component: m.ScheduleScreen })) },
   {
     path: "shifts/:userId/:shiftStart",
     handle: { screenKey: (params) => `${params.userId ?? ""}/${params.shiftStart ?? ""}` } satisfies ScreenHandle,
