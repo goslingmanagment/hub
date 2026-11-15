@@ -323,6 +323,8 @@ export interface LoginPersonScope {
   state: string;
   modelSlugs: string[];
   modelPageIds: number[];
+  /** The person's own working pages: a content manager's plan and publications (plan §11 item 13). */
+  workingPageIds: number[];
 }
 
 export async function findLoginPersonScope(db: Database, userId: number): Promise<LoginPersonScope | null> {
@@ -334,7 +336,9 @@ export async function findLoginPersonScope(db: Database, userId: number): Promis
            coalesce((select array_agg(distinct all_pages.id order by all_pages.id)
                        from person_working_pages w join pages pg on pg.id = w.page_id
                        join pages all_pages on all_pages.model_id = pg.model_id
-                      where w.person_id = p.id), '{}') as model_page_ids
+                      where w.person_id = p.id), '{}') as model_page_ids,
+           coalesce((select array_agg(distinct w.page_id order by w.page_id)
+                       from person_working_pages w where w.person_id = p.id), '{}') as working_page_ids
       from person_logins l join people p on p.id = l.person_id
      where l.user_id = ${userId}`);
   const row = result.rows[0];
@@ -346,6 +350,7 @@ export async function findLoginPersonScope(db: Database, userId: number): Promis
     state: String(row.state),
     modelSlugs: (row.model_slugs as unknown[]).map(String),
     modelPageIds: (row.model_page_ids as unknown[]).map(Number),
+    workingPageIds: (row.working_page_ids as unknown[]).map(Number),
   };
 }
 
