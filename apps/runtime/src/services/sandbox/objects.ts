@@ -2,16 +2,15 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { testPageSql, testUserSql, type Database } from "@agency_hub_core/db";
 
-import { NotFoundError } from "../errors.ts";
 import type { AuthPrincipal } from "../auth.ts";
 import { isTestAgent, isTestPrincipal } from "./realm.ts";
 
 /**
  * THE WALL BY OBJECT (sandbox/realm.ts): what a request NAMES — a page, a login, a person, a model, a shift, a sale, a
  * claim, a report's candidate or proposal, a «мимо площадки» line, a question, an order, a publication — is of the
- * caller's realm, or the request is the same 404 as for an object that does not exist. One check, in the API's
- * preHandler (api/server.ts), for every route and every principal: a handler never has to remember which of its
- * parameters to look at.
+ * caller's realm, or the request is answered exactly as for an object that does not exist. One check, in the API's
+ * preHandler (api/server.ts) and the person's door, for every route and every principal: a handler never has to
+ * remember which of its parameters to look at.
  *
  * What a field names is decided here, once: by its name (`FIELD_OBJECTS`, the same word means the same object on every
  * route), or for a route whose field is ambiguous (`id`, `code`, `slug`) by `ROUTE_OBJECTS`. A field that names
@@ -173,22 +172,59 @@ export function requestObjects(
   return out;
 }
 
+/** A value of the kind that names no object at all: what a request naming the other realm's object is answered as. */
+export function absentValue(kind: RealmObjectKind, original: unknown): unknown {
+  if (kind === "order") return "K-9007199254740991";
+  if (BY_TEXT.has(kind)) return "∅";
+  return typeof original === "number" ? Number.MAX_SAFE_INTEGER : String(Number.MAX_SAFE_INTEGER);
+}
+
 /**
- * THE CHECK: every object the request names is of the principal's realm, or «not found» (no oracle across the wall).
- * A live agent key is left to its page grant (a live key never holds a test page, 0414): its hot read plane asks
- * nothing more.
+ * THE CHECK: every object the request names is of the principal's realm. One of the other realm is replaced, in the
+ * request itself, by a value that names nothing (`absentValue`), so the operation answers EXACTLY as for an object that
+ * does not exist — its own 404, its own empty list — and nothing tells «there, but not yours» from «not there» (no
+ * oracle across the wall). Returns how many were hidden. A live agent key is left to its page grant (a live key never
+ * holds a test page, 0414): its hot read plane asks nothing more.
  */
-export async function requireRequestObjectsOfRealm(
+export async function hideObjectsOfOtherRealm(
   app: { db: Database },
   principal: AuthPrincipal | null | undefined,
   routeKey: string,
   parts: ReadonlyArray<Record<string, unknown> | null | undefined>,
-): Promise<void> {
-  if (!principal) return;
+): Promise<number> {
+  if (!principal) return 0;
   const test = isTestPrincipal(principal) || isTestAgent(principal);
-  if (principal.kind === "agent" && !test) return;
-  for (const object of requestObjects(routeKey, parts)) {
-    const objectTest = await objectIsTest(app.db, object.kind, object.value);
-    if (objectTest !== null && objectTest !== test) throw new NotFoundError("Not found");
-  }
+  if (principal.kind === "agent" && !test) return 0;
+  let hidden = 0;
+  const visit = async (part: unknown, depth: number): Promise<void> => {
+    if (depth > 4 || part === null || typeof part !== "object") return;
+    if (Array.isArray(part)) {
+      for (const one of part) await visit(one, depth + 1);
+      return;
+    }
+    const record = part as Record<string, unknown>;
+    for (const [field, raw] of Object.entries(record)) {
+      const kind = fieldObject(routeKey, field);
+      if (kind === undefined) {
+        if (raw !== null && typeof raw === "object") await visit(raw, depth + 1);
+        continue;
+      }
+      if (kind === "none") continue;
+      const values = Array.isArray(raw) ? raw : [raw];
+      const kept: unknown[] = [];
+      for (const value of values) {
+        const named = typeof value === "number" || (typeof value === "string" && value.length > 0);
+        const objectTest = named ? await objectIsTest(app.db, kind, String(value)) : null;
+        if (objectTest !== null && objectTest !== test) {
+          kept.push(absentValue(kind, value));
+          hidden += 1;
+        } else {
+          kept.push(value);
+        }
+      }
+      record[field] = Array.isArray(raw) ? kept : kept[0];
+    }
+  };
+  for (const part of parts) await visit(part, 0);
+  return hidden;
 }

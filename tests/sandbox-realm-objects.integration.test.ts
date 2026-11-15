@@ -9,7 +9,7 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount, type HumanAuthPrincipal } from "../apps/runtime/src/services/auth.ts";
 import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { createPublicationDraft } from "../apps/runtime/src/services/publications.ts";
-import { fieldObject, type RealmObjectKind } from "../apps/runtime/src/services/sandbox/objects.ts";
+import { absentValue, fieldObject, type RealmObjectKind } from "../apps/runtime/src/services/sandbox/objects.ts";
 import { SANDBOX_OWNER_OPERATIONS } from "../apps/runtime/src/services/sandbox/owner-operations.ts";
 import { seedSandbox } from "../apps/runtime/src/services/sandbox/seed.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
@@ -28,10 +28,9 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 //   - as the test owner, every operation of its table (SANDBOX_OWNER_OPERATIONS);
 //   - as the test team lead and a test chatter, every operation their role may call by its declaration;
 //   - as the live owner, every operation, with test objects.
-// The answer must refuse: 403, 404, or 400 when the request's own shape was refused before anything ran (a 400 reveals
-// nothing). A 2xx, or any answer the handler gave after reading the object (409, 422, 500), is a hole. The reverse of the
-// sampled values (every field set to an object of the caller's own realm) is the ordinary use, proven by the routes'
-// own tests.
+// The answer must be EXACTLY the answer to the same request naming an object that does not exist (a GET's status and
+// body, clock fields aside; a write's status), and never a 5xx: nothing tells «there, but of the other realm» from «not
+// there». The ordinary use (every field naming an object of the caller's own realm) is proven by the routes' own tests.
 
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
@@ -42,7 +41,7 @@ const SANDBOX_PASSWORDS = {
   SANDBOX_PASSWORD_T_CHAT_1: "sandbox-chat-1",
   SANDBOX_PASSWORD_T_CHAT_2: "sandbox-chat-2",
 };
-const REFUSALS = new Set([400, 401, 403, 404]);
+const CLOCK_KEYS = new Set(["serverNow", "generatedAt", "now", "asOf", "computedAt", "checkedAt", "fetchedAt", "readAt", "requestId", "savedAt"]);
 const HUMAN_KINDS = new Set(["any", "any-session", "session"]);
 
 type Server = Awaited<ReturnType<typeof buildApiServer>>;
@@ -122,9 +121,12 @@ function fieldsOf(schema: Zod | undefined): string[] {
 
 interface Probe { key: string; method: string; url: string; body?: Record<string, unknown>; field: string; kind: RealmObjectKind }
 
-/** Every operation's every classified field, as a request naming `realm`'s object of its kind. */
-function probes(table: Server["routePolicyTable"], realm: "live" | "test", open: (key: string, auth: string) => boolean): Probe[] {
-  const out: Probe[] = [];
+/**
+ * Every operation's every classified field, as two requests: naming `realm`'s object of its kind, and naming nothing
+ * (the value no object has).
+ */
+function probes(table: Server["routePolicyTable"], realm: "live" | "test", open: (key: string, auth: string) => boolean): Array<[Probe, Probe]> {
+  const out: Array<[Probe, Probe]> = [];
   for (const row of table) {
     if (!row.url.startsWith("/api/")) continue;
     const schema = (routeSchemas as unknown as Record<string, RouteSchema>)[row.routeKey];
@@ -133,20 +135,31 @@ function probes(table: Server["routePolicyTable"], realm: "live" | "test", open:
       for (const field of fieldsOf(part)) {
         const kind = fieldObject(row.routeKey, field);
         if (kind === undefined || kind === "none") continue;
-        const target = { field, value: objects[kind][realm] };
-        const params = sample(schema.params, where === "params" ? target : null) ?? {};
-        let url = row.url.replace(/:([A-Za-z]+)/g, (_, name: string) => encodeURIComponent(String(params[name] ?? "1")));
-        const query = sample(schema.querystring, where === "query" ? target : null);
-        if (query && Object.keys(query).length > 0) {
-          url += `?${new URLSearchParams(Object.entries(query).flatMap(([key, value]) =>
-            (Array.isArray(value) ? value : [value]).map((one) => [key, String(one)]))).toString()}`;
-        }
-        const body = row.method === "GET" ? undefined : sample(schema.body, where === "body" ? target : null) ?? {};
-        out.push({ key: row.routeKey, method: row.method, url, ...(body === undefined ? {} : { body }), field: `${where}.${field}`, kind });
+        const build = (value: string): Probe => {
+          const target = { field, value };
+          const params = sample(schema.params, where === "params" ? target : null) ?? {};
+          let url = row.url.replace(/:([A-Za-z]+)/g, (_, name: string) => encodeURIComponent(String(params[name] ?? "1")));
+          const query = sample(schema.querystring, where === "query" ? target : null);
+          if (query && Object.keys(query).length > 0) {
+            url += `?${new URLSearchParams(Object.entries(query).flatMap(([key, one]) =>
+              (Array.isArray(one) ? one : [one]).map((item) => [key, String(item)]))).toString()}`;
+          }
+          const body = row.method === "GET" ? undefined : sample(schema.body, where === "body" ? target : null) ?? {};
+          return { key: row.routeKey, method: row.method, url, ...(body === undefined ? {} : { body }), field: `${where}.${field}`, kind };
+        };
+        out.push([build(objects[kind][realm]), build(String(absentValue(kind, objects[kind][realm])))]);
       }
     }
   }
   return out;
+}
+
+function normalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalize);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([key]) => !CLOCK_KEYS.has(key)).map(([key, inner]) => [key, normalize(inner)]));
+  }
+  return value;
 }
 
 async function call(probe: Probe, cookie: string) {
@@ -320,33 +333,49 @@ afterAll(async () => {
   await testDb?.stop();
 });
 
-async function holes(viewer: string, list: readonly Probe[]): Promise<string[]> {
+/** The probes whose answer differs from the answer for a missing object (or is a 5xx): the holes of the wall. */
+async function holes(viewer: string, list: ReadonlyArray<[Probe, Probe]>): Promise<string[]> {
   const out: string[] = [];
-  for (const probe of list) {
+  const answer = async (probe: Probe) => {
     const response = await call(probe, cookies[viewer]!);
-    if (!REFUSALS.has(response.statusCode)) out.push(`${viewer} ${probe.key} ${probe.field}=${probe.kind}: ${response.statusCode} ${response.body.slice(0, 160)}`);
+    let body: unknown = response.body;
+    try { body = normalize(JSON.parse(response.body)); } catch { /* not JSON */ }
+    return { status: response.statusCode, text: probe.method === "GET" ? `${response.statusCode} ${JSON.stringify(body)}` : String(response.statusCode) };
+  };
+  for (const [named, missing] of list) {
+    // The missing object first: a write that created something must not make the second answer differ.
+    const absent = await answer(missing);
+    const other = await answer(named);
+    if (other.status >= 500 || other.text !== absent.text) {
+      out.push(`${viewer} ${named.key} ${named.field}=${named.kind}: ${other.text.slice(0, 200)} ≠ missing ${absent.text.slice(0, 120)}`);
+    }
   }
   return out;
 }
 
 describe("the wall by object, generated from the contract", () => {
-  it("the cases found on production: a live dispute by its claim, a live chatter's reports by the login, are «not found» to the test owner", async (context) => {
+  it("the cases found on production: a live dispute by its claim, a live chatter's reports by the login, are answered as missing to the test owner", async (context) => {
     if (!server) return context.skip();
-    const claim = await server.inject({ method: "GET", url: `/api/v1/sale-disputes/claim/${objects.claim.live}`, headers: { cookie: cookies["t-owner"]! } });
+    const get = (url: string) => server!.inject({ method: "GET", url, headers: { cookie: cookies["t-owner"]! } });
+    const claim = await get(`/api/v1/sale-disputes/claim/${objects.claim.live}`);
     expect(claim.statusCode, claim.body).toBe(404);
+    expect(claim.body).toBe((await get(`/api/v1/sale-disputes/claim/${Number.MAX_SAFE_INTEGER}`)).body);
     const decide = await server.inject({
       method: "POST", url: "/api/v1/sale-disputes/decide", headers: { cookie: cookies["t-owner"]!, "content-type": "application/json" },
       payload: { claimId: Number(objects.claim.live), outcome: "rule" },
     });
-    expect([400, 404], decide.body).toContain(decide.statusCode);
+    expect(decide.statusCode, decide.body).toBeGreaterThanOrEqual(400);
+    expect(decide.statusCode).toBeLessThan(500);
     const decisions = await testDb!.pool.query("select count(*)::int as n from sale_owner_decisions where transaction_id = $1", [objects.sale.live]);
     expect(decisions.rows[0]!.n).toBe(0);
-    const from = dayOf(now.getTime() - 5 * DAY);
-    const reports = await server.inject({ method: "GET", url: `/api/v1/shift-reports?from=${from}&to=${dayOf(now.getTime())}&userId=${objects.login.live}`, headers: { cookie: cookies["t-owner"]! } });
-    expect(reports.statusCode, reports.body).toBe(404);
+    const window = `from=${dayOf(now.getTime() - 5 * DAY)}&to=${dayOf(now.getTime())}`;
+    const reports = await get(`/api/v1/shift-reports?${window}&userId=${objects.login.live}`);
+    expect(reports.body).toBe((await get(`/api/v1/shift-reports?${window}&userId=${Number.MAX_SAFE_INTEGER}`)).body);
+    expect(reports.body).not.toContain(`"shiftId":${objects.shift.live}`);
     // The test chatter's reports by the login stay open to the test owner.
-    const own = await server.inject({ method: "GET", url: `/api/v1/shift-reports?from=${from}&to=${dayOf(now.getTime())}&userId=${objects.login.test}`, headers: { cookie: cookies["t-owner"]! } });
+    const own = await get(`/api/v1/shift-reports?${window}&userId=${objects.login.test}`);
     expect(own.statusCode, own.body).toBe(200);
+    expect(own.body).toContain(`${objects.shift.test}`);
   });
 
   it("the test owner, the test lead and a test chatter: every field naming a live object is refused", async (context) => {

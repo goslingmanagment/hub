@@ -4,7 +4,7 @@ import type { UserRole } from "@agency_hub_core/shared";
 import type { AuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { AppError, ForbiddenError, UnauthorizedError } from "./errors.ts";
 import type { AppContext } from "../bootstrap.ts";
-import { requireRequestObjectsOfRealm } from "./sandbox/objects.ts";
+import { hideObjectsOfOtherRealm } from "./sandbox/objects.ts";
 import { sandboxOwnerRefusal } from "./sandbox/owner-operations.ts";
 import { principalOfServerGrant } from "./signin-handoff.ts";
 
@@ -115,8 +115,9 @@ export async function doorPerson(
   const sandbox = sandboxOwnerRefusal(row.console, person);
   if (sandbox) throw sandbox;
   // The wall by object, as the console's own operation would meet it (sandbox/objects.ts): the key is live, the person
-  // may be test, so the request's objects are checked against the PERSON's realm.
-  await requireRequestObjectsOfRealm(app, person, row.console, [body as unknown as Record<string, unknown>]);
+  // may be test, so the request's objects are checked against the PERSON's realm (the body is the request's own, so the
+  // operation below reads what was hidden).
+  await hideObjectsOfOtherRealm(app, person, row.console, [body as unknown as Record<string, unknown>]);
   if (row.pages === OWN && person.user.role === "content_manager") {
     const scope = await findLoginPersonScope(app.db, person.user.id);
     const own = scope === null || scope.state === "left" ? [] : scope.workingPageIds;

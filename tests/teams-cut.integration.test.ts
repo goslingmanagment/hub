@@ -49,7 +49,7 @@ function expectedRefusal(_who: string, status: number, key: string): string | nu
   if (status === 403) {
     if (/^(agent|client)[A-Z]/u.test(key)) return "the agent plane and the extension's device routes: not a web session's";
     if (/^(page|ofapi|overview|sync|ops|archive|voiceNote|aiPersona|aiRecap)[A-Z]/u.test(key)) return "the console's reads: the owner's, Workboard keeps its own";
-    if (["models", "healthSync", "crossPageTransactions", "modelRevenueDaily"].includes(key)) return "the console's reads: the owner's";
+    if (["models", "overview", "healthSync", "crossPageTransactions", "modelRevenueDaily"].includes(key)) return "the console's reads: the owner's";
     if (["saleDispute", "saleDisputeOfClaim", "shiftReportClaimable", "teamNewcomers"].includes(key)) return "the owner's or a decider's, by role";
     if (["reportsList", "reportGet"].includes(key)) return "agents' reports: the owner's and team leads'";
   }
