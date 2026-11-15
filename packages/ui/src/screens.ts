@@ -120,6 +120,8 @@ export interface Screen {
   icon?: MenuIcon;
   /** Listed only while this holds; its address opens whatever the menu says. */
   when?: MenuWhen;
+  /** Workboard's menu item's number (one read in both products, place.ts). */
+  count?: MenuCount;
   pageFilter: PageFilterMode;
   onePageWay?: OnePageWay;
   /** The platforms whose pages have this kind of data. Absent: all of them. */
@@ -185,10 +187,18 @@ export const SCREENS: readonly Screen[] = [
   },
 
   // ── Ждут вас ───────────────────────────────────────────────────────────
-  // Workboard's list of what waits (it was «Решения» at /workboard/decisions, which leads here); its number is the one
-  // read of «Ждут вас» (place.ts). Hub's «Ждут вас» opens it too, until Hub has the owner's combined list.
+  // The owner's whole list in Hub, grouped «Hub · Workboard · ContentOps» (products plan §4.4); the menu's number is
+  // the one read of «Ждут вас» (place.ts). `hub.…/workboard/decisions` leads here.
   {
-    id: "waiting", path: "/workboard/waiting", label: "Ждут вас", title: "Ждут вас", section: "waiting", product: "workboard", icon: "Inbox",
+    id: "hub-waiting", path: "/waiting", label: "Ждут вас", title: "Ждут вас", section: "waiting", product: "hub", ownerOnly: true,
+    why: "Всё, что ждёт вашего слова, по продуктам: Hub, Workboard, ContentOps.",
+    pageFilter: "any",
+    keywords: "решения дела чья продажа вопросы отчёты кастомы отправки люди доступ сбои ledger публикации контент",
+  },
+  // Workboard's list of what waits (it was «Решения» at /workboard/decisions): a team lead's and a chatter's whole,
+  // the owner's Workboard part (its number is that part of the same read).
+  {
+    id: "waiting", path: "/workboard/waiting", label: "Ждут вас", title: "Ждут вас", section: "team", product: "workboard", icon: "Inbox", count: "waiting",
     why: "Что ждёт вашего слова: вопросы, отчёты смен, кастомы, отправки.",
     pageFilter: "any",
     keywords: "решения чья продажа вопросы генгар отчёты посты не разобраны оплаченный день изменён кастомы проверить отправки зависшие",
@@ -733,7 +743,8 @@ export interface Section {
    */
   outside?:
     | { site: "contentops"; label: string; links: readonly { label: string; path: string }[] }
-    | { site: "workboard"; links: readonly { label: string; to: string; title: string; ownerOnly?: boolean }[] };
+    | { site: "workboard"; links: readonly { label: string; to: string; title: string; ownerOnly?: boolean }[] }
+    | { site: "hub"; links: readonly { label: string; to: string; title: string }[] };
   nav: "tabs" | "side" | "none";
   tabs: readonly SectionTab[];
 }
@@ -749,10 +760,9 @@ export const SECTIONS: readonly Section[] = [
     tabs: [tab("home", "Главная", "home")],
   },
   {
-    // What waits for the owner, right under Главная. For now it opens Workboard's list (another product, a page load
-    // on the team's name), with the same number; Hub's own combined list comes later.
+    // What waits for the owner, right under Главная: the whole list, grouped by product.
     id: "waiting", label: "Ждут вас", title: "Ждут вас", icon: "Inbox", product: "hub", nav: "none", count: "waiting",
-    tabs: [tab("waiting", "Ждут вас", "waiting")],
+    tabs: [tab("waiting", "Ждут вас", "hub-waiting")],
   },
   {
     id: "money", label: "Деньги", title: "Деньги", icon: "Wallet", product: "hub", nav: "tabs",
@@ -779,12 +789,14 @@ export const SECTIONS: readonly Section[] = [
   {
     // The pages' Fansly statistics (it was «Статистика»; its screens and addresses are the same).
     id: "stats", label: "Страницы", title: "Страницы", icon: "ChartColumn", product: "hub", ownerOnly: true, nav: "tabs",
+    // «Контент» left the section for ContentOps (products plan §2.2): its address still opens until the content
+    // package moves it, and the search still finds it, but the section's row does not list it.
     tabs: [
       tab("stats", "Главное", "stats"),
       tab("income", "Доход Fansly", "stats-income"),
-      moreTab("content", "Контент", "stats-content"),
-      moreTab("audience", "Аудитория", "stats-audience"),
+      tab("audience", "Аудитория", "stats-audience"),
     ],
+    outside: { site: "hub", links: [{ label: "Модели и страницы", to: "/settings/pages", title: "Модели и страницы в Настройках" }] },
   },
   {
     // «Публикации» until 12.11: the content, the hub's part and ContentOps' (the model of the chosen page).
@@ -907,7 +919,7 @@ export function productMenu(product: ScreenProduct, role: Role, holds: Partial<R
       const section = sectionById(screen.section);
       upper.push({
         id: screen.id, label: screen.label, icon: screen.icon ?? section?.icon ?? "Inbox", to: screen.path, app: "workboard",
-        ...(section?.count ? { count: section.count } : {}),
+        ...(screen.count ? { count: screen.count } : {}),
       });
     }
     return { upper, lower };

@@ -76,8 +76,10 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "owner's bookmark", from: `${HUB}/workboard/shifts?days=30`, to: `${TEAM}/workboard/shifts?days=30` },
   { who: "owner's bookmark", from: `${HUB}/workboard/people`, to: `${TEAM}/workboard/people` },
   { who: "owner's bookmark", from: `${HUB}/workboard/payouts?view=reports`, to: `${TEAM}/workboard/payouts?view=reports` },
-  { who: "owner's bookmark", from: `${HUB}/workboard/decisions`, to: `${TEAM}/workboard/waiting` },
-  { who: "owner's bookmark", from: `${HUB}/workboard/decisions#held`, to: `${TEAM}/workboard/waiting#held` },
+  // «Решения» on the console's name is the owner's whole «Ждут вас» in Hub (a window's parameter: Workboard's).
+  { who: "owner's bookmark", from: `${HUB}/workboard/decisions`, to: `${HUB}/waiting` },
+  { who: "owner's bookmark", from: `${HUB}/workboard/decisions#held`, to: `${HUB}/waiting#held` },
+  { who: "owner's bookmark", from: `${HUB}/workboard/decisions?send=a1#held`, to: `${TEAM}/workboard/waiting?send=a1#held` },
   { who: "owner's bookmark", from: `${HUB}/workboard/my/shifts`, to: `${TEAM}/workboard/my/shifts` },
   // The console's old «Команда» (apps/dashboard/src/lib/workboard.ts).
   { who: "console's old «Команда»", from: `${HUB}/team/shifts?period=30d`, to: `${TEAM}/workboard/shifts?days=30` },

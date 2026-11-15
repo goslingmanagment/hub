@@ -119,6 +119,9 @@ const WORKBOARD_PATH = "/workboard";
  * browser keeps the address's `#…` across the redirects. Null: not such a page (another name, the API, Workboard's
  * built files, which a page already open may still ask for, the board's bare frame), or the two names are one.
  */
+/** The parameters of «Ждут вас» that open one of Workboard's windows in place. */
+const WORKBOARD_WINDOW_PARAMS = ["send", "dispute", "claim", "offPlatform", "nobody", "unlinked"] as const;
+
 export function workboardOnConsoleRedirect(input: { here: string | null; method: string; url: string }, names: SigninNames): string | null {
   if (input.here === null || input.here !== names.console || names.console === names.team) return null;
   if (input.method !== "GET" && input.method !== "HEAD") return null;
@@ -128,6 +131,15 @@ export function workboardOnConsoleRedirect(input: { here: string | null; method:
   // The «Отчёт» board's frame for the extension (`/workboard/frame/*`) is a bare page wherever it is asked for: no
   // redirect, no sign-in, never `me` (page-headers.ts BOARD_FRAME_PATH).
   if (path.startsWith(`${WORKBOARD_PATH}/frame/`)) return null;
+  // The old «Решения» on the console's name is the owner's «Ждут вас» in Hub now (products plan §2.2), unless the
+  // address opens one of Workboard's windows (a dispute, a held send…): those are Workboard's, on the team's name.
+  if (path === `${WORKBOARD_PATH}/decisions` || path === `${WORKBOARD_PATH}/decisions/`) {
+    const query = new URL(input.url, "http://x").searchParams;
+    if (!WORKBOARD_WINDOW_PARAMS.some((param) => query.has(param))) {
+      const search = query.toString();
+      return `/waiting${search ? `?${search}` : ""}`;
+    }
+  }
   const next = resolveBrowserNext(input.url, names.team, names);
   if (next === null) return null;
   return `/api/v1/auth/sso?${new URLSearchParams({ to: names.team, next, silent: "1" }).toString()}`;

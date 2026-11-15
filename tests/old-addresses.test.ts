@@ -31,6 +31,14 @@ function follow(start: string): { at: string; steps: string[] } {
     if (url.origin === HUB) {
       // Hub's server: a Workboard address leaves for the team's name.
       const server = workboardOnConsoleRedirect({ here: HUB, method: "GET", url: path }, NAMES);
+      if (server !== null && !server.startsWith("/api/v1/auth/sso")) {
+        // An address that stays on the console's name (the old «Решения»: Hub's «Ждут вас»).
+        const next = new URL(server, HUB);
+        next.hash = url.hash;
+        url = next;
+        steps.push("server");
+        continue;
+      }
       if (server !== null) {
         const next = handOff(HUB, server);
         next.hash = url.hash;
