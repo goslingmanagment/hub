@@ -148,9 +148,12 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     return wire;
   }
 
-  async function scopedPages(person: Person) {
+  /** The person's publication pages; with `modelSlug`, that model's alone (ContentOps' screens are a model's). */
+  async function scopedPages(person: Person, modelSlug?: string) {
     const scope = scopeOf(person);
-    return (await listPublicationPages(db, realmOf(person))).filter((page) => scope === null || scope.has(page.id));
+    const ofModel = modelSlug === undefined ? null : new Set(await listModelPageIds(db, modelSlug));
+    return (await listPublicationPages(db, realmOf(person)))
+      .filter((page) => (scope === null || scope.has(page.id)) && (ofModel === null || ofModel.has(page.id)));
   }
 
   /** The owner's audit row of a withdrawal and the schedule's refresh after it.
@@ -186,9 +189,9 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       return { publications: await withOnlyfansAlbumRuns(appContext, await listPublicationsWire(db, { pageIds, status, from, to, limit })) };
     },
 
-    async settingsList(person: Person) {
+    async settingsList(person: Person, modelSlug?: string) {
       const effective = await loadEffectiveConfig(db, appContext.config);
-      return { globalEnabled: effective.publishingEnabled === true, pages: await listPublicationSettings(db, await scopedPages(person)) };
+      return { globalEnabled: effective.publishingEnabled === true, pages: await listPublicationSettings(db, await scopedPages(person, modelSlug)) };
     },
 
     async settingsUpdate(person: Person, pageLabel: string, body: Parameters<typeof updatePublicationSettings>[1]["body"]) {
@@ -208,10 +211,10 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       return settings;
     },
 
-    async queueList(person: Person) {
-      const labels = new Set((await scopedPages(person)).map((page) => page.label));
+    async queueList(person: Person, modelSlug?: string) {
+      const labels = new Set((await scopedPages(person, modelSlug)).map((page) => page.label));
       const pages = [...await listOnlyfansQueueWire(appContext), ...await listFanslyQueueWire(appContext)];
-      return { pages: scopeOf(person) === null ? pages : pages.filter((page) => labels.has(page.pageLabel)) };
+      return { pages: scopeOf(person) === null && modelSlug === undefined ? pages : pages.filter((page) => labels.has(page.pageLabel)) };
     },
 
     async queueRefresh(person: Person, pageLabel: string) {
@@ -376,11 +379,11 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   server.post("/api/v1/person/publications/resolve", { schema: routeSchemas.personPublicationResolve }, async (request) =>
     screen.resolve(await as(request, "personPublicationResolve"), request.body.id, request.body.answer));
   server.post("/api/v1/person/publications/queue", { schema: routeSchemas.personPublicationQueueList }, async (request) =>
-    screen.queueList(await as(request, "personPublicationQueueList")));
+    screen.queueList(await as(request, "personPublicationQueueList"), request.body.modelSlug));
   server.post("/api/v1/person/publications/queue/refresh", { schema: routeSchemas.personPublicationQueueRefresh }, async (request) =>
     screen.queueRefresh(await as(request, "personPublicationQueueRefresh"), request.body.pageLabel));
   server.post("/api/v1/person/publications/settings", { schema: routeSchemas.personPublicationSettingsList }, async (request) =>
-    screen.settingsList(await as(request, "personPublicationSettingsList")));
+    screen.settingsList(await as(request, "personPublicationSettingsList"), request.body.modelSlug));
   server.post("/api/v1/person/publications/settings/update", { schema: routeSchemas.personPublicationSettingsUpdate }, async (request) =>
     screen.settingsUpdate(await as(request, "personPublicationSettingsUpdate"), request.body.pageLabel, request.body.settings));
   server.post("/api/v1/person/publications/delete-post", { schema: routeSchemas.personPublicationDeletePost }, async (request) =>

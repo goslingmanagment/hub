@@ -6031,6 +6031,8 @@ const personDoorErrors = {
 const personDoor = { kind: "agentKey" } as const;
 const personIdBodySchema = personDoorBodySchema.extend({ id: z.coerce.number().int().positive() });
 const personPageBodySchema = personDoorBodySchema.extend({ pageLabel: z.string().min(1).max(100) });
+/** One model's pages only (Hub's slug, any case): ContentOps' screens are a model's; absent — every page of the person. */
+const personModelBodySchema = personDoorBodySchema.extend({ modelSlug: z.string().min(1).max(100).optional() });
 /** The keys of «Настройки публикации»'s switches and limits: the only config the door reads and (the owner) sets. */
 export const PUBLICATION_SWITCH_KEYS = [
   "publishingEnabled",
@@ -6089,7 +6091,7 @@ export const personDoorRouteSchemas = {
   personPublicationQueueList: {
     auth: personDoor, tags: ["person-door"],
     summary: "As the signed-in person: the platforms' schedules of their pages",
-    body: personDoorBodySchema,
+    body: personModelBodySchema,
     response: { 200: publicationQueueListResponseSchema, ...personDoorErrors },
   },
   personPublicationQueueRefresh: {
@@ -6101,7 +6103,7 @@ export const personDoorRouteSchemas = {
   personPublicationSettingsList: {
     auth: personDoor, tags: ["person-door"],
     summary: "As the signed-in person: the global switch and their pages' publishing settings",
-    body: personDoorBodySchema,
+    body: personModelBodySchema,
     response: { 200: publicationSettingsListResponseSchema, ...personDoorErrors },
   },
   personPublicationSwitches: {
