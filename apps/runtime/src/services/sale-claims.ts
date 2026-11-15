@@ -1423,9 +1423,10 @@ export async function readSaleDispute(app: ClaimsApp, principal: HumanAuthPrinci
   const claims = (await listSaleClaims(app.db, { transactionIds: [transactionId] })).filter((claim) => claim.state !== "withdrawn");
   if (claims.length === 0) {
     const offer = await potOfferOf(app.db, transactionId);
-    if (offer !== null) {
+    const decided = offer === null ? await decidedPotOfferOf(app.db, transactionId) : null;
+    if (offer !== null || decided !== null) {
       if (principal.user.role !== "owner" || principal.narrowDeviceTokenId !== undefined) throw new ForbiddenError("Only the owner decides");
-      return potOfferDisputeOf(app, offer, now);
+      return offer !== null ? potOfferDisputeOf(app, offer, now) : potOfferDisputeOf(app, decided!.offer, now, decided!.decision);
     }
   }
   if (principal.user.role !== "owner" && claims.length === 0) throw new ForbiddenError("Only the owner decides");
@@ -1498,11 +1499,41 @@ async function decidePotOffer(app: ClaimsApp, principal: HumanAuthPrincipal, inp
       return {};
     },
   }, sale, now);
+  // Answered: the owner's matter leaves «Ждут вас» at once, as a dispute's does (the minute pass would close it later).
+  await closeMatter(db, { key: `${POT_OFFER_MATTER_KIND}:${offer.transactionId}`, how: "resolved", writer: "server" }, SYSTEM, now).catch((error: unknown) => {
+    app.logger.warn({ transactionId: offer.transactionId, err: error instanceof Error ? error.message : String(error) }, "pot offer: the matter did not close; the next pass will");
+  });
   return { decided: true, versions: applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
 }
 
+const POT_OFFER_MATTER_KIND = "sale.pot_offer";
+
+/**
+ * An offer of the pot the owner already answered: the window re-read after the press shows what was decided, not a
+ * 404. The person is the one whose counted report holds the sale. Null — no such answered offer.
+ */
+async function decidedPotOfferOf(db: Database, transactionId: number): Promise<{ offer: PotOffer; decision: SaleDecisionRow } | null> {
+  const decision = (await listActiveSaleDecisions(db, [transactionId])).get(transactionId);
+  if (decision === undefined || decision.source !== "dispute" || !["pot", "split", "nobody"].includes(decision.kind)) return null;
+  const report = (await listCurrentReportsOfSales(db, [transactionId])).find((one) => one.lines.some((line) => line.transactionId === transactionId));
+  if (report === undefined) return null;
+  const handin = await findHandinByShift(db, report.shiftId);
+  if (handin === null) return null;
+  const mark = (await listHandinMarks(db, handin.id)).find((one) => one.transactionId === transactionId);
+  // Only a sale that was given to the pot: its word was «общак» (kept, or withdrawn/«ничья» by the answer, by the owner).
+  if (mark === undefined || (mark.statement !== "pot" && mark.statement !== null && mark.statement !== "not_mine")) return null;
+  const sale = (await listHandinSalesByIds(db, [transactionId]))[0];
+  return {
+    offer: {
+      handinId: handin.id, shiftId: report.shiftId, userId: report.userId, transactionId, pageId: sale?.pageId ?? 0, kind: sale?.kind ?? "",
+      netMills: sale?.netMills ?? 0, occurredAt: sale?.occurredAt ?? new Date(0), note: mark.note,
+    },
+    decision,
+  };
+}
+
 /** The window of an offer of the pot: the sale, the person and their why, the three answers with what each gives. */
-async function potOfferDisputeOf(app: ClaimsApp, offer: PotOffer, now: Date): Promise<SaleDisputeResponse> {
+async function potOfferDisputeOf(app: ClaimsApp, offer: PotOffer, now: Date, decided: SaleDecisionRow | null = null): Promise<SaleDisputeResponse> {
   const { db } = app;
   const sale = (await listHandinSalesByIds(db, [offer.transactionId]))[0];
   const names = await listHandinNames(db, [offer.userId, ...(sale?.home?.shares.map((share) => share.userId) ?? [])]);
@@ -1529,12 +1560,17 @@ async function potOfferDisputeOf(app: ClaimsApp, offer: PotOffer, now: Date): Pr
     }],
     claims: [],
     facts: null,
-    outcomes: [
+    outcomes: decided !== null ? [] : [
       { outcome: "pot", label: "В общак", gives: [{ userId: offer.userId, mills: 0 }] },
       { outcome: "return", label: `Вернуть ${personNameForms(name).dat}`, gives: [{ userId: offer.userId, mills: net }] },
       { outcome: "nobody", label: "Никому", gives: [{ userId: offer.userId, mills: 0 }] },
     ],
-    decision: null,
+    decision: decided === null ? null : {
+      outcome: decided.kind === "pot" ? "в общак" : decided.kind === "nobody" ? "никому" : `вернуть ${personNameForms(name).dat}`,
+      note: decided.note,
+      decidedAt: decided.decidedAt.toISOString(),
+      by: decided.decidedByUserId === null ? null : (await listHandinNames(db, [decided.decidedByUserId])).get(decided.decidedByUserId) ?? null,
+    },
     reports: held.map((report) => ({ userId: report.userId, name: heldNames.get(report.userId) ?? `#${report.userId}`, shiftId: report.shiftId, reportDate: report.reportDate })),
     potOffer: { userId: offer.userId, name, note: offer.note },
     serverNow: now.toISOString(),

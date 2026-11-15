@@ -271,6 +271,8 @@ export async function confirmShiftReport(
   });
   if (outcome.done === "confirmed") {
     await syncBoardMatters(app, now).catch((error: unknown) => warn(app, error, "the board's matters after a confirmation"));
+    // A kept «в общак» reaches the owner within the minute, not at the next pass.
+    await syncCheckMatters(app, now).catch((error: unknown) => warn(app, error, "the check's matters after a confirmation"));
     await afterPersonVersion(app, { subject, catalog, version: outcome.made, pages: outcome.pages, paidDay, dayPaid }, now);
   }
   const report = await readSubject(app, actor, subject, now);

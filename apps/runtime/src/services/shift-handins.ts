@@ -84,6 +84,7 @@ import { ledgerGet, readLedgerPayouts } from "./ledger-payouts.ts";
 import { parseLedgerReportDays } from "./ledger-reports.ts";
 import { pagesWithLines, reportSums, settledShareOf } from "./sale-claim-rules.ts";
 import { claimsOfReport, runSaleClaims } from "./sale-claims.ts";
+import { syncCheckMatters } from "./shift-handin-check.ts";
 import { handInShiftReport, PhaseConflictError } from "./shift-report-board.ts";
 import { boardOn, phaseOf, readBoard } from "./shift-report-board-view.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
@@ -1199,6 +1200,12 @@ export async function setShiftReportLine(
     }
   });
   if (oldWayTo !== null) await runSaleClaims(app, now).catch(() => undefined);
+  // «Общак» said or taken back: the owner's matter opens or closes now, not at the next pass.
+  if (statement === "pot" || before?.statement === "pot") {
+    await syncCheckMatters(app, now).catch((error: unknown) => {
+      app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the pot's matter did not follow the word; the next pass will");
+    });
+  }
   return { savedAt: now.toISOString() };
 }
 
