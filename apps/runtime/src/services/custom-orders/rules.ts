@@ -27,6 +27,7 @@ export {
   stepsFor,
   wantedParts,
   whatOf,
+  worksOnPage,
   type CustomStepName,
   type CustomViewer,
 } from "@agency_hub_core/contracts";
