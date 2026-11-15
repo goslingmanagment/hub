@@ -34,9 +34,11 @@ async function work(db: Database, userId: number, pageId: number, start: number,
   await db.execute(sql`insert into chatter_activity_minutes (user_id, page_id, minute, input)
     select ${userId}, ${pageId}, m, true from generate_series(date_trunc('minute', ${new Date(start).toISOString()}::timestamptz),
       date_trunc('minute', ${new Date(start + 3 * HOUR_MS).toISOString()}::timestamptz), interval '1 minute') m`);
+  // A fan's id as the platform writes it: digits (the table's check).
+  const fanRef = String(300_000_000_000_000_000n + BigInt(salt));
   for (let index = 0; index < 60; index += 1) {
     await db.execute(sql`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, conversation_ref, user_id,
-      source, priced, with_media, observed_at) values ('fansly', ${pageId}, ${String(salt + index)}, ${`fan-${salt}`}, ${`fan-${salt}`}, ${userId},
+      source, priced, with_media, observed_at) values ('fansly', ${pageId}, ${String(salt + index)}, ${fanRef}, ${fanRef}, ${userId},
       'fansly-extension', false, false, ${new Date(start + (index + 1) * 3 * 60_000).toISOString()}::timestamptz)`);
   }
 }
