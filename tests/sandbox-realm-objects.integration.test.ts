@@ -226,7 +226,7 @@ beforeAll(async () => {
   await insertPersonLogin(db, { personId: ownerPerson.id, userId: owner.id, linkedByUserId: null });
   const model = await createModel(db, { slug: "lana", name: "Lana" });
   const page = await createFanslyPage(db, { modelId: model.id, label: "live-1" });
-  await createOnlyFansPage(db, { modelId: model.id, label: "live-of" });
+  const liveOnlyfans = await createOnlyFansPage(db, { modelId: model.id, label: "live-of" });
   const chatter = await createUserAccount(app, { username: "anton", role: "chatter" }, { source: "cli" });
   await db.execute(sql`update users set password_hash = ${await argon2.hash("chatter-secret-1", { type: argon2.argon2id })} where id = ${chatter.id}`);
   const person = await insertPersonRow(db, {
@@ -257,8 +257,9 @@ beforeAll(async () => {
     acceptedByUserId: chatter.id, origin: "workboard", state: "paid", actor: { door: "workboard", userId: chatter.id }, now: new Date(now.getTime() - 2 * DAY),
     createdAt: new Date(now.getTime() - 2 * DAY),
   });
+  // On the OnlyFans page: a Fansly subscriber post needs a file of its own, an OnlyFans one may be text alone.
   await createPublicationDraft(db, {
-    pageId: page.id, author: { kind: "human", userId: owner.id }, idempotencyKey: null, now,
+    pageId: liveOnlyfans.id, author: { kind: "human", userId: owner.id }, idempotencyKey: null, now,
     body: publicationContentSchema.parse({ kind: "subscriber_post", text: "Live post", media: [], publishAt: new Date(now.getTime() + 2 * DAY).toISOString() }),
   });
 
