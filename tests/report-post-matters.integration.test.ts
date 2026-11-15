@@ -132,8 +132,8 @@ describe("report.post_fix: the author's own post to fix", () => {
     ]);
     expect(rows[0].title).toContain("Отчёт за 10 нояб. не начислен");
     // Where the author sees the post's numbers against Hub's: that day's report, open in «Мои смены», the day's week.
-    expect(rows[0].link).toBe("/workboard/my/shifts?week=2026-11-10&report=2026-11-10");
-    expect(rows[1].link).toBe("/workboard/my/shifts?week=2026-11-11&report=2026-11-11");
+    expect(rows[0].link).toBe("/workboard/shifts/mine?week=2026-11-10&report=2026-11-10");
+    expect(rows[1].link).toBe("/workboard/shifts/mine?week=2026-11-11&report=2026-11-11");
     // No sum anywhere a chatter reads: neither the post's total, nor its lines.
     for (const row of rows) {
       const text = `${row.title as string} ${row.evidence as string}`;

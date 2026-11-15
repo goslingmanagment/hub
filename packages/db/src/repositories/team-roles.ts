@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
@@ -32,8 +32,12 @@ export interface TeamFacts {
   working: Array<{ personId: number; pageId: number }>;
   /** Live team records of people who have not left. */
   roles: TeamRoleRow[];
-  /** Which person each login is (living logins only), and the login's role (a content manager's: `content_manager`). */
-  logins: Array<{ userId: number; personId: number; role?: string }>;
+  /**
+   * Which person each living login is (not disabled or deleted), the login's role (a content manager's:
+   * `content_manager`), and whether it LEADS (`signedInLoginSql`: signed in) — who the person is follows every living
+   * login; who leads, decides or takes a step follows the signed-in ones only (`loginOfPerson`, leaders.ts).
+   */
+  logins: Array<{ userId: number; personId: number; role?: string; signedIn?: boolean }>;
   /** The people (not left): name, realm and the registry's role (a content manager works pages and is not the chat team). */
   people: Array<{ personId: number; name: string; test: boolean; role: string }>;
 }
@@ -49,6 +53,22 @@ function roleOf(row: Row): TeamRoleRow {
   };
 }
 
+/**
+ * A login that LEADS: it has signed in (its password is set: the invitation was opened) and still may (not disabled or
+ * deleted). THE rule of «who may lead a model, decide, take a step», for the facts below and for the matters' SQL
+ * (`personLeadsSql`): a person invited and not signed in yet leads nothing — their matters and steps stay with whoever
+ * had them (the owner; the customs lead for the shooting) until they can answer.
+ */
+export function signedInLoginSql(user: SQL = sql`u`): SQL {
+  return sql`(${user}.password_hash is not null and ${user}.disabled_at is null and ${user}.deleted_at is null)`;
+}
+
+/** True for a person who has a login that leads (`signedInLoginSql`). */
+export function personLeadsSql(personId: SQL): SQL {
+  return sql`exists (select 1 from person_logins lead_pl join users lead_u on lead_u.id = lead_pl.user_id
+    where lead_pl.person_id = ${personId} and ${signedInLoginSql(sql`lead_u`)})`;
+}
+
 export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
   const [pages, models, working, roles, logins, people] = await Promise.all([
     db.execute<Row>(sql`select p.id, p.model_id, p.label, m.is_test from pages p join models m on m.id = p.model_id`),
@@ -61,7 +81,7 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
        where t.revoked_at is null and p.state <> 'left'
        order by t.granted_at, t.id`),
     db.execute<Row>(sql`
-      select l.user_id, l.person_id, u.role from person_logins l join users u on u.id = l.user_id
+      select l.user_id, l.person_id, u.role, ${signedInLoginSql()} as signed_in from person_logins l join users u on u.id = l.user_id
        where u.disabled_at is null and u.deleted_at is null`),
     db.execute<Row>(sql`select id, display_name, is_test, role from people where state <> 'left'`),
   ]);
@@ -70,7 +90,7 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
     models: models.rows.map((row) => ({ modelId: Number(row.id), slug: String(row.slug), name: String(row.name ?? row.slug), test: row.is_test === true })),
     working: working.rows.map((row) => ({ personId: Number(row.person_id), pageId: Number(row.page_id) })),
     roles: roles.rows.map(roleOf),
-    logins: logins.rows.map((row) => ({ userId: Number(row.user_id), personId: Number(row.person_id), role: String(row.role) })),
+    logins: logins.rows.map((row) => ({ userId: Number(row.user_id), personId: Number(row.person_id), role: String(row.role), signedIn: row.signed_in === true })),
     people: people.rows.map((row) => ({ personId: Number(row.id), name: String(row.display_name ?? ""), test: row.is_test === true, role: String(row.role ?? "") })),
   };
 }

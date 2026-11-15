@@ -143,7 +143,7 @@ function Week({ rows, loading }: { rows: readonly MyShiftRow[] | undefined; load
   const items: FactItem[] = [
     { label: "Смен", value: String(shifts.length) },
     { label: "Часов", value: <Duration minutes={worked} /> },
-    { label: "Продажи по правилу", value: <Money mills={rule} />, hint: "Продажи ваших смен по правилу «чья продажа». Суммы отчётов в «Моих сменах»." },
+    { label: "Продажи по правилу", value: <Money mills={rule} />, hint: "Продажи ваших смен по правилу «чья продажа». Суммы отчётов в «Смены → Мои»." },
     { label: "В час", value: perHourMills(rule, worked) === null ? "—" : <Money mills={perHourMills(rule, worked)!} />, hint: "Продажи по правилу за час работы, паузы не считаются." },
   ];
   return (

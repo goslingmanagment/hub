@@ -119,16 +119,29 @@ export async function findTeamQuestion(db: Database, id: number): Promise<TeamQu
  */
 export async function listTeamQuestions(
   db: Database,
-  input: { askerUserIds: readonly number[]; deciderUserIds: readonly number[]; ownerDecides: boolean; since: Date; pageIds?: readonly number[] },
+  input: {
+    askerUserIds: readonly number[]; deciderUserIds: readonly number[]; ownerDecides: boolean; since: Date; pageIds?: readonly number[];
+    /** The models whose questions the reader may decide now (the service asks the rule again, row by row). */
+    modelIds?: readonly number[];
+    /** The person who covers a swap: they are named in it. */
+    coverPersonId?: number | null;
+  },
 ): Promise<TeamQuestionRow[]> {
   const since = input.since.toISOString();
   const pages = input.pageIds === undefined ? sql`true` : sql`q.page_id = any(${ids(input.pageIds)})`;
-  const owner = input.ownerDecides ? sql`or (q.decider_user_id is null and (q.state = 'open' or q.answered_at >= ${since}::timestamptz))` : sql``;
+  // The owner decides whatever the rule gives him now: every open question (and the recent answers) of his realm.
+  const owner = input.ownerDecides ? sql`or (q.state = 'open' or q.answered_at >= ${since}::timestamptz)` : sql``;
+  const models = input.modelIds !== undefined && input.modelIds.length > 0
+    ? sql`or (q.model_id = any(${ids(input.modelIds)}) and (q.state = 'open' or q.answered_at >= ${since}::timestamptz))` : sql``;
+  const cover = input.coverPersonId !== undefined && input.coverPersonId !== null
+    ? sql`or (q.swap is not null and (q.swap->>'coverPersonId')::bigint = ${input.coverPersonId} and q.asked_at >= ${since}::timestamptz)` : sql``;
   const result = await db.execute<Row>(sql`${SELECT}
     where ${pages} and (
       (q.asker_user_id = any(${ids(input.askerUserIds)}) and q.asked_at >= ${since}::timestamptz)
       or (q.decider_user_id = any(${ids(input.deciderUserIds)}) and (q.state = 'open' or q.answered_at >= ${since}::timestamptz))
       ${owner}
+      ${models}
+      ${cover}
     )
     order by q.asked_at desc, q.id desc
     limit 200`);
