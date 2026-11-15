@@ -1266,6 +1266,7 @@ export const FAN_TEXT_ERASURE_COLUMNS: readonly FanTextErasureColumn[] = [
   { column: "shift_handin_versions.made_for", stance: "no_words", why: "why the system made it: a kind, ids and an outcome" },
   // The «Отчёт» board (0412).
   { column: "shift_handins.phase", stance: "no_words", why: ENUM },
+  { column: "shift_handins.fixing_from", stance: "no_words", why: ENUM },
   { column: "sale_claims.origin", stance: "no_words", why: ENUM },
   { column: "shift_handin_candidates.door", stance: "no_words", why: ENUM },
   { column: "shift_handin_candidates.telegram_message_ref", stance: "no_words", why: "the reference of the agent's message «со слов»" },

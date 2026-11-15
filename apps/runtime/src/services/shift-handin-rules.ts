@@ -430,11 +430,6 @@ export function postTexts(input: {
   /** A confirmed one is already in its page's sum (package G); a pending one is said to wait. */
   offPlatform: ReadonlyArray<{ amountMills: number; fromWhom: string; whatFor: string; state?: string; pageLabel?: string | null }>;
   /**
-   * The model's pages the shift did not work: «• Mia-1 - не в смене» under their platform (the ledger reads such a line
-   * as a page not in the shift).
-   */
-  offShift?: ReadonlyArray<{ pageLabel: string; platform: string; modelSlug: string }>;
-  /**
    * The version's number: the post's last line «Отчёт № N» (the board's prototype). The ledger's post reader stops at
    * «Основные продажи» and «Комментарий» (ledger internal/reports/postparse.go): nothing after them is money.
    */
@@ -452,9 +447,6 @@ export function postTexts(input: {
       const ofPlatform = pages.filter((page) => page.platform === platform);
       if (ofPlatform.length === 0) continue;
       out.push(platform === "onlyfans" ? "OF" : "Fansly");
-      for (const off of input.offShift ?? []) {
-        if (off.modelSlug === model.slug && off.platform === platform && !pages.some((page) => page.pageLabel === off.pageLabel)) out.push(`• ${off.pageLabel} - не в смене`);
-      }
       for (const page of ofPlatform) out.push(`• ${page.pageLabel} - ${money(page.amountMills)}`);
     }
     for (const page of pages.filter((one) => one.platform !== "fansly" && one.platform !== "onlyfans")) {

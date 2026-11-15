@@ -813,8 +813,8 @@ export function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "
     }])),
     comment: version.comment,
     offPlatform: version.offPlatform.filter((line) => line.state === "pending" || line.state === "confirmed"),
-    // The model's pages the shift did not work («• Mia-1 - не в смене») and «Отчёт № N» last, as the board's post has them.
-    offShift: [...context.catalog.info.entries()].map(([pageLabel, info]) => ({ pageLabel, platform: info.platform, modelSlug: info.modelSlug })),
+    // «Отчёт № N» last, as the board's post has it. No «не в смене» lines: a page the shift did not hold is never among the
+    // post's accounts (review 12.11 round 2, (8)).
     number: version.version,
   });
 }
