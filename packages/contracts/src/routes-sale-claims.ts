@@ -89,6 +89,11 @@ export const saleDisputeResponseSchema = z.object({
    * that is a post in «Отчётность» is recomputed by nobody: the decision is read by the next report.
    */
   reports: z.array(z.object({ userId: intId, name: z.string(), shiftId: intId, reportDate: z.string() })).default([]),
+  /**
+   * A sale its holder gave to the pot (the board's «в общак»), waiting for the owner: who gave it and their line of why.
+   * Then `outcomes` are «В общак», «Вернуть <имени>», «Никому». Absent — a dispute of claims.
+   */
+  potOffer: z.object({ userId: intId, name: z.string(), note: z.string().nullable() }).nullable().optional(),
   serverNow: isoTimestamp,
 });
 

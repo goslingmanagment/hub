@@ -241,6 +241,41 @@ export function demoOffPlatformOf(now: Date, shiftId: number) {
   }));
 }
 
+// ── A sale given to the pot (the board's «в общак») ─────────────────────────
+//
+// Lena kept Gengar's card «в общак» on a tip under a post: the owner answers «В общак», «Вернуть Лене» or «Никому» in the
+// dispute window. Kept in memory until the demo server restarts.
+
+const POT_OFFER_SALE = 9_130_001;
+const potOffer = { decided: null as null | { outcome: string; note: string | null; at: number } };
+
+function potOfferSale(now: Date) {
+  return {
+    transactionId: POT_OFFER_SALE, pageLabel: "mia-1", platform: "fansly", kind: "tip", occurredAt: new Date(now.getTime() - 20 * HOUR_MS).toISOString(),
+    netMills: 24_000, fan: { fanRef: "731009", name: "Harlan", username: "harlan_tx" },
+  };
+}
+
+function potOfferDispute(now: Date): KernelOperationResponse<"saleDispute"> {
+  const lena = LENA();
+  return {
+    sale: potOfferSale(now),
+    home: { kind: "shift", reason: "holder", words: "страницу держала одна смена", shares: [{ userId: lena.id, name: lena.name, mills: 24_000 }] },
+    parties: [{ userId: lena.id, name: lena.name, role: "first", says: ["в общак: фан написал, что это за пост, не за чат"], countedMills: 0, claimedMills: null, shiftId: null }],
+    claims: [],
+    facts: null,
+    outcomes: [
+      { outcome: "pot", label: "В общак", gives: [{ userId: lena.id, mills: 0 }] },
+      { outcome: "return", label: "Вернуть Лене", gives: [{ userId: lena.id, mills: 24_000 }] },
+      { outcome: "nobody", label: "Никому", gives: [{ userId: lena.id, mills: 0 }] },
+    ],
+    decision: potOffer.decided === null ? null : { outcome: potOffer.decided.outcome, note: potOffer.decided.note, decidedAt: new Date(potOffer.decided.at).toISOString(), by: "Владелец" },
+    reports: [],
+    potOffer: { userId: lena.id, name: lena.name, note: "фан написал, что это за пост, не за чат" },
+    serverNow: now.toISOString(),
+  };
+}
+
 // ── The matters ─────────────────────────────────────────────────────────────
 
 export interface DemoClaimMatter {
@@ -303,6 +338,13 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
       kind: "sale.nobody_week", key: `sale.nobody_week:${week.from}`,
       title: `Ничьи продажи за неделю с ${DAY_MONTH.format(new Date(`${week.from}T12:00:00+03:00`))} по ${DAY_MONTH.format(new Date(`${week.to}T12:00:00+03:00`))}: ${week.sales.length} на ${money(week.sales.reduce((sum, sale) => sum + sale.netMills, 0))}`,
       pages: [], owner: { kind: "role", role: "owner" }, money: true, evidence: { week: week.from, count: week.sales.length }, link: `/workboard/waiting?nobody=${week.from}#questions`, agoMs: 26 * HOUR_MS,
+    });
+  }
+  if (potOffer.decided === null) {
+    out.push({
+      kind: "sale.pot_offer", key: `sale.pot_offer:${POT_OFFER_SALE}`, title: `${LENA().name} отдаёт продажу в общак: $24.00, ${DAY_MONTH.format(new Date(now.getTime() - 20 * HOUR_MS))}`,
+      pages: ["mia-1"], owner: { kind: "role", role: "owner" }, money: true, evidence: { transactionId: POT_OFFER_SALE, netMills: 24_000 },
+      link: `/workboard/waiting?dispute=${POT_OFFER_SALE}#questions`, agoMs: 2 * HOUR_MS,
     });
   }
   const unlinked = UNLINKED.filter((one) => !world(now).linked.has(one.id));
@@ -426,6 +468,7 @@ export const saleClaimHandlers: DemoHandlers = {
   saleDispute: (request) => {
     const denied = ownerOnly(request);
     if (denied) return denied;
+    if (Number(request.params.transactionId) === POT_OFFER_SALE) return potOfferDispute(request.now);
     const claim = world(request.now).claims.find((one) => one.transactionId === Number(request.params.transactionId));
     return claim === undefined ? demoError(404, "Not Found", "No dispute of this sale") : disputeOf(claim, request.now);
   },
@@ -438,7 +481,12 @@ export const saleClaimHandlers: DemoHandlers = {
   saleDisputeDecide: (request) => {
     const denied = ownerOnly(request);
     if (denied) return denied;
-    const body = request.body as { transactionId?: number; outcome: Outcome | "dismiss"; note?: string | null };
+    const body = request.body as { transactionId?: number; outcome: Outcome | "dismiss" | "pot" | "return"; note?: string | null };
+    if (body.transactionId === POT_OFFER_SALE && (body.outcome === "pot" || body.outcome === "return" || body.outcome === "nobody")) {
+      potOffer.decided = { outcome: body.outcome, note: body.note?.trim() || null, at: request.now.getTime() };
+      return { decided: true, versions: body.outcome === "return" ? [{ shiftId: 2_611_201, version: 2 }] : [], savedAt: request.now.toISOString() };
+    }
+    if (body.outcome === "pot" || body.outcome === "return") return demoError(400, "Bad Request", "Only a sale given to the pot takes this answer");
     const claim = world(request.now).claims.find((one) => one.transactionId === body.transactionId && one.state === "owner");
     if (claim === undefined || body.outcome === "dismiss") return demoError(404, "Not Found", "No dispute of this sale waits for a decision");
     claim.state = "decided";

@@ -48,6 +48,7 @@ import {
   releaseHandinFeedHeld,
   listMatterPageLabels,
   listOffPlatform,
+  listOpenPotOffers,
   listPersonWorkingPageRows,
   listReportedSales,
   listSaleClaims,
@@ -1146,6 +1147,10 @@ export async function setShiftReportLine(
       throw new BadRequestError("This line does not take that word", { reason: "statement_not_allowed" });
     }
     if (statement === "mine" && note === null) throw new BadRequestError("«Это моё» needs one line of why", { reason: "note_required" });
+    // Given to the pot by its holder: the owner decides it; nobody takes it meanwhile.
+    if (statement === "mine" && (await listOpenPotOffers(app.db)).some((one) => one.transactionId === input.transactionId && !subject.userIds.includes(one.userId))) {
+      throw new ConflictError("This sale waits for the owner's word on the pot", { reason: "pot_offer_open" });
+    }
     if ((shareWith !== null || giveTo !== null) && line !== undefined) {
       const colleagues = await listHandinColleagues(app.db, {
         pageIds: [line.sale.pageLabel].map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined),
@@ -1228,7 +1233,15 @@ export async function readShiftReportClaimable(app: HandinApp, actor: HandinActo
   const handin = await findHandinByShift(app.db, subject.shift.id);
   const rows = await claimableSales(app.db, subject, actor, handin, now);
   const names = await listHandinNames(app.db, rows.flatMap((row) => row.home?.shares.map((share) => share.userId) ?? []));
+  // A sale someone gave to the pot waits for the owner: never «ничья → Это моё» meanwhile.
+  const potOffers = new Set((await listOpenPotOffers(app.db)).map((one) => one.transactionId));
   const sales = rows.map((row) => {
+    if (potOffers.has(row.transactionId)) {
+      return {
+        transactionId: row.transactionId, pageLabel: row.pageLabel, platform: row.platform, kind: row.kind, occurredAt: row.occurredAt.toISOString(),
+        netMills: row.netMills, fan: row.fan, home: "pot", words: "общак, решает владелец",
+      };
+    }
     const to = row.home?.shares.find((share) => !subject.userIds.includes(share.userId)) ?? null;
     const own = row.home?.shares.some((share) => subject.userIds.includes(share.userId)) ?? false;
     const homeKind = (row.home?.home ?? "unknown") as SaleHomeKind;

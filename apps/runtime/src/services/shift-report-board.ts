@@ -58,6 +58,7 @@ import {
   type HandinRow,
   type HandinVersionLine,
   type MatterActor,
+  type ProposalRow,
   type ProposalWord,
 } from "@agency_hub_core/db";
 
@@ -92,7 +93,7 @@ import {
   type PageCatalog,
   type Subject,
 } from "./shift-handins.ts";
-import { checkLetsConfirm, confirmedLines, lineWithProposal, mayAct, proposalDelta, withSettlementsNow, type BoardAction } from "./shift-report-phases.ts";
+import { checkLetsConfirm, confirmedLines, lineWithProposal, lineWithWord, mayAct, proposalDelta, withSettlementsNow, type BoardAction } from "./shift-report-phases.ts";
 import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
 
 /**
@@ -231,10 +232,15 @@ export async function confirmShiftReport(
     if (candidate.supersededAt !== null || candidate.confirmedAt !== null) return { done: "superseded" as const };
     if (phaseOf(locked) !== "confirm") return { done: "not_ready" as const };
     const proposals = (await listHandinProposals(db, locked.id)).filter((one) => one.candidateId === candidate.id);
+    const applied = proposals.filter((one) => one.state === "proposed");
     // What was settled since the hand-in (a decision, an agreement, a cancel), read here in the turn: the words stay the candidate's.
     const marks = await listHandinMarks(db, locked.id);
     const draft = draftLines(await draftFacts(db, subject, locked, catalog, candidate.cutoffAt, marks), marks);
-    const lines = confirmedLines(withSettlementsNow(candidate.lines, draft), proposals);
+    // «Отдать» a colleague without the board, by a card: no settlement at once — the person's share goes, the colleague's
+    // waits for the decider (as the person's own «отдать» does, shift-handins.ts `setShiftReportLine`).
+    const oldWay = await oldWayGives(db, applied);
+    const lines = confirmedLines(withSettlementsNow(candidate.lines, draft), proposals)
+      .map((line) => (line.transactionId !== null && oldWay.has(line.transactionId) ? lineWithWord(line, { statement: "not_mine" }) : line));
     const offPlatform = offPlatformOfRows(await listOffPlatform(db, locked.id), catalog.labelOf);
     const sums = linesPageSums(lines, candidate.pages.map((page) => page.pageLabel), offPlatform);
     // «Подтверждаю» signs what the person saw: a colleague's answer or a decision since the board was drawn changes it,
@@ -249,6 +255,9 @@ export async function confirmShiftReport(
       reportDate: subject.shift.reportDate, at: now,
     });
     await setCandidateConfirmed(db, { candidateId: candidate.id, version: made.version, at: now });
+    // Every card the person kept is their own word from now on, written as their mark in this transaction (R-board §2, §4):
+    // «Исправить» and «Досдать» start from the words the counted version has, and «в общак» opens the owner's matter.
+    await writeAcceptedWords(db, { handinId: locked.id, lines, proposals: applied, oldWay, claimantUserId: subject.shift.userId, byUserId: actor.userId, at: now });
     for (const proposal of proposals) {
       if (proposal.state === "proposed") await setHandinProposalState(db, { id: proposal.id, state: "accepted", byUserId: actor.userId, at: now });
     }
@@ -266,6 +275,67 @@ export async function confirmShiftReport(
   }
   const report = await readSubject(app, actor, subject, now);
   return { confirmed: outcome.done === "confirmed", refused: outcome.done === "confirmed" ? null : outcome.done, report };
+}
+
+/**
+ * The cards of «отдать» whose colleague hands shifts in the old way (no board): by transaction, the colleague. Such a gift
+ * is the decider's (a Telegram post knows decisions, not agreements): it is never settled in the colleague's favour.
+ */
+async function oldWayGives(db: Database, proposals: ReadonlyArray<Pick<ProposalRow, "kind" | "toWord" | "toUserId" | "transactionId">>): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  for (const proposal of proposals) {
+    if (proposal.kind !== "owner_change" || proposal.toWord !== "give" || proposal.toUserId === null) continue;
+    const colleague = await findHandinPersonOfUser(db, proposal.toUserId);
+    if (colleague?.submitsShiftSince == null) out.set(proposal.transactionId, proposal.toUserId);
+  }
+  return out;
+}
+
+/**
+ * The cards the person kept, written as their own marks (who: the person; which card: `by_proposal_id`): the word, the
+ * colleague of «пополам» and «отдать», and the note — Gengar's comment the person kept becomes theirs. A gift to a
+ * colleague without the board is the person's «не моё» and a question to the decider (no_side), as their own would be.
+ */
+async function writeAcceptedWords(
+  db: Database,
+  input: {
+    handinId: number;
+    lines: readonly HandinVersionLine[];
+    proposals: readonly ProposalRow[];
+    oldWay: ReadonlyMap<number, number>;
+    claimantUserId: number;
+    byUserId: number;
+    at: Date;
+  },
+): Promise<void> {
+  const marks = await listHandinMarks(db, input.handinId);
+  for (const proposal of input.proposals) {
+    const line = input.lines.find((one) => one.transactionId === proposal.transactionId);
+    if (line === undefined) continue;
+    const mark = marks.find((one) => one.transactionId === proposal.transactionId);
+    const note = line.note ?? mark?.note ?? null;
+    if (proposal.kind === "note" && note === (mark?.note ?? null) && mark !== undefined) continue;
+    await setHandinMark(db, {
+      handinId: input.handinId, transactionId: proposal.transactionId,
+      statement: proposal.kind === "note" ? mark?.statement ?? null : line.statement,
+      shareWithUserId: proposal.kind === "note" ? mark?.shareWithUserId ?? null : line.shareWithUserId,
+      toUserId: proposal.kind === "note" ? mark?.toUserId ?? null : line.toUserId ?? null,
+      note, byUserId: input.byUserId, byAgentKeyId: null, byProposalId: proposal.id, at: input.at,
+    });
+    const colleague = input.oldWay.get(proposal.transactionId);
+    if (colleague === undefined) continue;
+    const known = (await listSaleClaims(db, { transactionIds: [proposal.transactionId] }))
+      .find((claim) => claim.claimantHandinId === input.handinId && claim.sideUserId === colleague);
+    const fields = {
+      pageId: null, kind: "claim" as const, claimantVersion: null, statement: null, shareWithUserId: null, claimantNote: proposal.why,
+      claimedAt: input.at, sideShiftId: null, state: "owner" as const, escalatedAt: input.at, escalatedWhy: "no_side" as const,
+    };
+    if (known === undefined) {
+      await insertSaleClaim(db, { ...fields, transactionId: proposal.transactionId, claimantUserId: input.claimantUserId, claimantHandinId: input.handinId, sideUserId: colleague, origin: "draft" }, input.at);
+    } else if (known.state === "withdrawn") {
+      await reopenSaleClaim(db, known.id, fields, input.at);
+    }
+  }
 }
 
 // ── «Исправить», «Отмена», «Досдать» ─────────────────────────────────────────
@@ -480,13 +550,10 @@ export async function answerShiftReportProposal(
       if (proposal.state !== "late") throw new ConflictError("Only a card that came after the report was counted is accepted", { reason: "not_late" });
       const latest = (await listHandinVersions(db, handin.id)).at(-1);
       const line = latest?.lines.find((one) => one.transactionId === proposal.transactionId);
-      const mark = (await listHandinMarks(db, handin.id)).find((one) => one.transactionId === proposal.transactionId);
       if (line !== undefined) {
-        const applied = lineWithProposal(line, proposal);
-        await setHandinMark(db, {
-          handinId: handin.id, transactionId: proposal.transactionId, statement: applied.statement, shareWithUserId: applied.shareWithUserId,
-          toUserId: applied.toUserId ?? null, note: applied.note ?? mark?.note ?? null, byUserId: actor.userId, byAgentKeyId: null, at: now,
-        });
+        const oldWay = await oldWayGives(db, [proposal]);
+        const applied = oldWay.size > 0 ? lineWithWord(line, { statement: "not_mine" }) : lineWithProposal(line, proposal);
+        await writeAcceptedWords(db, { handinId: handin.id, lines: [applied], proposals: [proposal], oldWay, claimantUserId: subject.shift.userId, byUserId: actor.userId, at: now });
       }
       await setHandinProposalState(db, { id: proposal.id, state: "accepted", byUserId: actor.userId, at: now });
       await setHandinPhase(db, { handinId: handin.id, phase: "fixing", at: now });
