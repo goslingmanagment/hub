@@ -10,11 +10,12 @@ describe("route schema security", () => {
   it("marks conversation routes as cookie-only", () => {
     const cookieOnlySecurity = [{ cookieAuth: [] }];
 
-    for (const key of [
-      "pageConversationPreview",
-      "pageConversationMessages",
+    // The preview is every role's since «Фаны» moved to Workboard (products package M), still a cookie's only.
+    for (const [key, kind] of [
+      ["pageConversationPreview", "any-session"],
+      ["pageConversationMessages", "session"],
     ] as const) {
-      expect(routeSchemas[key].auth.kind, key).toBe("session");
+      expect(routeSchemas[key].auth.kind, key).toBe(kind);
       expect(routeSecurityFromAuth(routeSchemas[key].auth), key).toEqual(cookieOnlySecurity);
     }
   });
