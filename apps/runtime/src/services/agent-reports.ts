@@ -12,6 +12,7 @@ import { findAgentReport, listAgentReports, putAgentReport, type AgentReportRow 
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { NotFoundError } from "./errors.ts";
+import { isTestPrincipal } from "./sandbox/realm.ts";
 
 /**
  * Agent reports (ecosystem plan §2 «Канал трафика», package O): an agent key
@@ -73,6 +74,8 @@ export async function readAgentReportsForAgent(app: ReportsApp, now: Date = new 
 
 /** Whether a person reads every report (the owner) or only the team leads' ones; null — none. */
 function readerOf(principal: HumanAuthPrincipal): "all" | "team_leads" | null {
+  // Agents write about the live agency: a test person reads none of it (sandbox/realm.ts), whatever the role.
+  if (isTestPrincipal(principal)) return null;
   if (principal.user.role === "owner") return "all";
   if (principal.user.role === "team_lead") return "team_leads";
   return null;

@@ -273,6 +273,8 @@ export async function listCrossPageCandidatePages(db: Database): Promise<CrossPa
       join models m on m.id = p.model_id
      where p.deleted_at is null
        and p.status = 'active'
+       -- The live agency's pages: a test page is never read from a platform (sandbox/realm.ts).
+       and not m.is_test
      order by p.label collate "C"
   `);
   return result.rows.map((row) => ({

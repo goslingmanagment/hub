@@ -6,11 +6,14 @@ import {
   ensureFanslySyncPages,
   insertPersonLogin,
   insertPersonRow,
+  listCrossPageCandidatePages,
   listDueFanFactConversations,
   listFansWaitingSince,
   listNotificationIncidentsWithPages,
   listNotificationPagingCandidates,
   listOfapiMappedPages,
+  listPagesByPlatform,
+  listPlatformAccounts,
   livePageArraySql,
   liveUserSql,
   testPageSql,
@@ -267,6 +270,12 @@ describe("nothing of the test team leaves Hub through a background path", () => 
 
     // The lists those paths read, each the live agency's.
     expect((await listOfapiMappedPages(db)).map((page) => page.id)).not.toContain(testOnlyfans.id);
+    // The sync planner's and «sync all»'s listings (catalog.ts) and the cross-page fan lists: the live agency's.
+    const testIds = new Set(testPages.map((page) => page.id));
+    for (const listed of [await listPagesByPlatform(db, "onlyfans"), await listPagesByPlatform(db, "fansly"), await listPlatformAccounts(db), await listCrossPageCandidatePages(db)]) {
+      expect(listed.filter((page) => testIds.has(Number(page.id)))).toEqual([]);
+    }
+    expect((await listPlatformAccounts(db)).map((page) => Number(page.id))).toContain(live.id);
     expect((await listNotificationIncidentsWithPages(db, { limit: 500 })).items.filter((item) => item.pageLabel !== null && testLabels.has(item.pageLabel))).toEqual([]);
     expect((await listNotificationPagingCandidates(db, { resolvedSince: new Date(0) })).filter((one) => testLabels.has(one.pageLabel ?? ""))).toEqual([]);
     const waiting = await listFansWaitingSince(db, { now: later, minWaitHours: 0, maxDays: 60 });

@@ -134,11 +134,18 @@ describe("the doors of the test realm", () => {
       ["POST", "/api/v1/sale-decisions/1/link", { transactionId: sale }],
       ["POST", "/api/v1/off-platform/1/decide", { decision: "confirm", pageLabel: page }],
     ] as const;
-    for (const [method, url, body] of deciders(ids.testSale, "test-1")) {
+    const missing = deciders(Number.MAX_SAFE_INTEGER, "∅");
+    for (const [index, [method, url, body]] of deciders(ids.testSale, "test-1").entries()) {
       const answer = await call(method, url, cookie.owner, body);
-      expect(answer.statusCode, `live owner ${method} ${url} on a test object: ${answer.body}`).toBe(404);
-      // The refusal is the wall's (sandbox/realm.ts requireDecidedOfRealm), not a missing object.
-      expect(answer.body).toMatch(/"message":"(The sale was not found|Not found)"/);
+      // The wall answers exactly as for a sale that does not exist (sandbox/objects.ts): no «there, but not yours». A
+      // decider's 404, or the week's batch keeping nothing.
+      const [missingMethod, missingUrl, missingBody] = missing[index]!;
+      const absent = await call(missingMethod, missingUrl, cookie.owner, missingBody);
+      const unclocked = (text: string) => text.replace(/"savedAt":"[^"]*"/u, "");
+      // An answer that repeats the sale it was asked about repeats the one asked (the wall puts it back).
+      const asked = unclocked(absent.body).split(String(Number.MAX_SAFE_INTEGER)).join(String(ids.testSale)).split("∅").join("test-1");
+      expect(`${answer.statusCode} ${unclocked(answer.body)}`, `live owner ${method} ${url} on a test object`).toBe(`${absent.statusCode} ${asked}`);
+      expect(answer.body).not.toMatch(/"kept":[1-9]/u);
     }
     for (const [method, url, body] of deciders(ids.liveSale, "live-1")) {
       const answer = await call(method, url, cookie.tOwner, body);
