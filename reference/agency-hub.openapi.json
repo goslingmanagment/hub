@@ -186843,12 +186843,63 @@
                         "additionalProperties": false
                       }
                     },
+                    "awaitingConfirm": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "shiftId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "candidateId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "person": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "personName": {
+                            "type": "string"
+                          },
+                          "pages": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "startedAt": {
+                            "type": "string"
+                          },
+                          "confirmSince": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "shiftId",
+                          "candidateId",
+                          "person",
+                          "personName",
+                          "pages",
+                          "startedAt",
+                          "confirmSince"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "serverNow": {
                       "type": "string"
                     }
                   },
                   "required": [
                     "checks",
+                    "awaitingConfirm",
                     "serverNow"
                   ],
                   "additionalProperties": false
