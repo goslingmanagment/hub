@@ -144,7 +144,7 @@ describe("the products' switcher", () => {
   });
 
   it("gives the test team's owner Hub, Workboard and ContentOps, never the outside tools; a content manager ContentOps", () => {
-    expect(productsOf({ role: "owner", narrow: false, test: true })).toEqual(["hub", "workboard", "contentops"]);
+    expect(productsOf({ role: "owner", narrow: false, test: true })).toEqual(["hub", "workboard"]);
     expect(productsOf({ role: "chatter", narrow: false, test: true, personRole: "content_manager" })).toEqual(["workboard", "contentops"]);
     // A content manager's own login: ContentOps alone; a chatter who leads customs: Workboard and ContentOps.
     expect(productsOf({ role: "content_manager", narrow: false })).toEqual(["contentops"]);

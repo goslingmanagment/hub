@@ -392,6 +392,8 @@ interface ResolvedChange {
 /** The person as it would be: what a change is checked against. */
 interface Subject {
   id: number | null;
+  /** The person's realm (0414): the catalogue a change names pages and models from (sandbox/realm.ts). */
+  test: boolean;
   kind: PersonRow["kind"];
   role: PersonRow["role"];
   state: PersonRow["state"];
@@ -450,7 +452,7 @@ async function resolveChange(db: Db, subject: Subject, fields: ChangeFields): Pr
   if (fields.workingPageLabels !== undefined) {
     const labels = fields.workingPageLabels;
     if (new Set(labels).size !== labels.length) throw new BadRequestError("A working page is listed twice");
-    const pages = await listPeopleCatalogPages(db);
+    const pages = await listPeopleCatalogPages(db, subject.test ? "test" : "live");
     const byLabel = new Map(pages.map((page) => [page.label, page]));
     const missing = labels.filter((label) => !byLabel.has(label));
     if (missing.length > 0) throw new NotFoundError(`No active page ${missing.map((label) => `«${label}»`).join(", ")}`);
@@ -475,7 +477,7 @@ async function resolveChange(db: Db, subject: Subject, fields: ChangeFields): Pr
     let pageId: number | null = null;
     const pageLabel = fields.schedule.pageLabel ?? null;
     if (pageLabel !== null) {
-      const page = (await listPeopleCatalogPages(db)).find((one) => one.label === pageLabel);
+      const page = (await listPeopleCatalogPages(db, subject.test ? "test" : "live")).find((one) => one.label === pageLabel);
       if (!page) throw new NotFoundError(`No active page «${pageLabel}»`);
       pageId = page.id;
     }
@@ -604,7 +606,7 @@ function changeMetadata(code: string, change: ResolvedChange): Record<string, un
 }
 
 function subjectOf(row: PersonRow): Subject {
-  return { id: row.id, kind: row.kind, role: row.role, state: row.state, leftOn: row.leftOn };
+  return { id: row.id, test: row.isTest, kind: row.kind, role: row.role, state: row.state, leftOn: row.leftOn };
 }
 
 // ── the owner's writes ───────────────────────────────────────────────────────
@@ -652,7 +654,7 @@ async function createPersonTx(
     throw new BadRequestError("A model's pay term from one day is given twice");
   }
   const state = fields.state ?? "invited";
-  const subject: Subject = { id: null, kind, role: fields.role, state, leftOn: null };
+  const subject: Subject = { id: null, test: isTest, kind, role: fields.role, state, leftOn: null };
   const change = await resolveChange(db, subject, fields);
   let row: PersonRow;
   try {
@@ -751,7 +753,7 @@ export async function createPerson(app: AppContext, body: AdminPersonCreateBody,
 /** Sets a pay term in the caller's transaction (the person's row locked). Money: the owner's only. */
 async function setPayTermTx(db: Db, person: PersonRow, body: AdminPersonPayTermBody, audit: AuditContext): Promise<PersonRow> {
   if (person.kind !== "human") throw new BadRequestError(`Only a human has pay terms, not a${person.kind === "agent" ? "n" : ""} ${person.kind}`);
-  const models = await listPeopleCatalogModels(db);
+  const models = await listPeopleCatalogModels(db, person.isTest ? "test" : "live");
   const model = models.find((one) => one.slug === body.modelSlug)
     ?? models.find((one) => one.slug.toLowerCase() === body.modelSlug.toLowerCase());
   if (!model) throw new NotFoundError(`No model «${body.modelSlug}»`);
@@ -846,7 +848,7 @@ export async function createAgentPersonProposal(app: Pick<AppContext, "db">, inp
     } else {
       const { code, kind: givenKind, ...fields } = change.person;
       if (await findPersonRowByCode(db, code)) throw new ConflictError("Another person has this code", { reason: "code_taken" });
-      await resolveChange(db, { id: null, kind: givenKind ?? "human", role: fields.role, state: fields.state ?? "invited", leftOn: null }, fields);
+      await resolveChange(db, { id: null, test: false, kind: givenKind ?? "human", role: fields.role, state: fields.state ?? "invited", leftOn: null }, fields);
       proposedCode = code;
     }
     const row = await insertPersonProposal(db, {

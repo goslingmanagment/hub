@@ -51,6 +51,7 @@ import {
   TooManyRequestsError,
   UnauthorizedError,
 } from "../services/errors.ts";
+import { requestObjects, requireRequestObjectsOfRealm } from "../services/sandbox/objects.ts";
 import { sandboxOwnerRefusal } from "../services/sandbox/owner-operations.ts";
 import { teamLeadRefusal } from "../services/team-lead-reads.ts";
 import { contentManagerRefusal } from "../services/content-manager-operations.ts";
@@ -565,6 +566,16 @@ export async function buildApiServer(appContext: AppContext) {
           throw new ForbiddenError(`Authorization policy denied this request (${verdict.reason})`);
       }
     }
+  });
+
+  // The wall by object (sandbox/objects.ts): what the request names — params, query and body, parsed and validated by
+  // now — is of the principal's realm, else the same 404 as a missing object. Every route, every principal.
+  server.addHook("preHandler", async (request) => {
+    const entry = request.routeOptions.config.hubAuthPolicy;
+    if (!entry) return;
+    const parts = [request.params, request.query, request.body] as Array<Record<string, unknown> | null>;
+    if (requestObjects(entry.key, parts).length === 0) return;
+    await requireRequestObjectsOfRealm(appContext, await resolvePrincipal(request), entry.key, parts);
   });
 
   // pg-boss for enqueuing sync trigger jobs (skip when no DB, e.g. contract

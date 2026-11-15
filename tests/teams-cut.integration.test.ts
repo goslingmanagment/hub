@@ -41,6 +41,12 @@ const FORBIDDEN_KEYS = new Set([
   // The ledger-fed pay of a person («Мои деньги», `accountPay`: the person's own only).
   "accruedMills", "paidMills", "unpaidMills", "balanceMills", "owedMills", "payoutMills", "lastPayout", "oldestUnpaidDate",
 ]);
+/**
+ * The reads that refuse a team-A chatter (anna) and a team-A lead (lena) on this fixture other than a console read's
+ * 403 by its declaration, each with why: a refusal is a finding only when it is not listed here.
+ */
+const EXPECTED_REFUSALS: Record<string, string[]> = { anna: [], lena: [] };
+
 /** A sale chain's links to a person's pay (`saleChain`): present for everyone, their sum only for whom it is. */
 const PAY_LINK_KEYS = new Set(["accrual", "payout"]);
 
@@ -276,11 +282,18 @@ describe("teams: who sees whom (package T)", () => {
 
     const leaks: string[] = [];
     const money: string[] = [];
+    const refused: Record<string, string[]> = { anna: [], lena: [] };
     let walked = 0;
     for (const who of ["anna", "lena"]) {
       for (const read of reads) {
         const response = await get(read.url, who);
-        if (response.statusCode !== 200) continue;
+        if (response.statusCode !== 200) {
+          // A refusal is said, never skipped: a console read refuses a chatter and a lead by its declaration (403); every
+          // other refusal is named in EXPECTED_REFUSALS with why.
+          const auth = (routeSchemas as unknown as Record<string, { auth?: { kind: string } }>)[read.key]?.auth?.kind;
+          if (!(response.statusCode === 403 && auth === "owner-session")) refused[who]!.push(`${response.statusCode} ${read.key}`);
+          continue;
+        }
         walked += 1;
         const idKeys: Array<[string, number]> = [["pageId", ids.pageB], ["userId", ids.chatterB], ["modelId", ids.modelB]];
         const named = teamBWords.filter((word) => response.body.includes(`"${word}"`))
@@ -293,6 +306,7 @@ describe("teams: who sees whom (package T)", () => {
       }
     }
     expect(walked).toBeGreaterThan(5);
+    expect(refused).toEqual(EXPECTED_REFUSALS);
     expect(leaks).toEqual([]);
     expect(money).toEqual([]);
 

@@ -414,7 +414,10 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   // owner, through the config's one write path (services/live-config.ts). Nothing else of the config passes the door.
   const switchKeys: ReadonlySet<string> = new Set(PUBLICATION_SWITCH_KEYS);
   server.post("/api/v1/person/publications/switches", { schema: routeSchemas.personPublicationSwitches }, async (request) => {
-    await as(request, "personPublicationSwitches");
+    const person = await as(request, "personPublicationSwitches");
+    // The switches are the live agency's publishing; a test person's pages never reach a platform (sandbox/realm.ts),
+    // so a test person is shown none of them.
+    if (realmOf(person) === "test") return { generatedAt: new Date().toISOString(), roleStatuses: [], instances: [], subsystems: [] };
     const view = await buildConfigView(db, (appContext.rawConfig ?? appContext.config) as unknown as Record<string, unknown>);
     return {
       generatedAt: view.generatedAt,

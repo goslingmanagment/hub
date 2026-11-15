@@ -30,6 +30,7 @@ import {
   pauseUnmappedOnlyFansDmForPage,
 } from "./sync/onlyfans-dm-polling.ts";
 import { BadRequestError, LegacySyncRetiredError } from "./errors.ts";
+import { pageIsTest } from "./sandbox/realm.ts";
 import {
   getOnlyFansPostsCaptureIneligibility,
   pauseIneligibleOnlyFansPostsForPage,
@@ -77,6 +78,10 @@ export async function requestPageSync(
     throw new Error(`Page not found for label "${input.pageLabel}"`);
   }
   assertLegacyExecutorServes(storedPage.page);
+  // A test page is never read from a platform (sandbox/realm.ts), by hand or by «sync all».
+  if (await pageIsTest(app, storedPage.page.id)) {
+    throw new BadRequestError("Тестовая страница не синхронизируется");
+  }
 
   if (input.scope === "posts") {
     if (input.reason !== "manual") {

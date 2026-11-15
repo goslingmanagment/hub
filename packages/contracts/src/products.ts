@@ -20,8 +20,8 @@ export interface ProductsAsker {
 
 /**
  * The products of a person, in the switcher's order (products plan §2.1–2.2, decided for the owner):
- * - the owner: all of them; the test team's owner: Hub, Workboard, ContentOps (the hand-off refuses a test person
- *   TaskIndex and the monitor);
+ * - the owner: all of them; the test team's owner: Hub and Workboard (the hand-off refuses a test person TaskIndex and
+ *   the monitor, and ContentOps refuses an owner's login);
  * - a content manager's login (`content_manager`): ContentOps alone — it has no console and no Workboard
  *   (content-manager-operations.ts), so no switcher is drawn for it;
  * - a person of the content manager's role on another login, or one who leads customs: Workboard and ContentOps;
@@ -31,7 +31,7 @@ export interface ProductsAsker {
 export function productsOf(asker: ProductsAsker): Product[] {
   if (asker.role === "content_manager") return ["contentops"];
   if (asker.narrow) return ["workboard"];
-  if (asker.role === "owner") return asker.test ? ["hub", "workboard", "contentops"] : [...PRODUCTS];
+  if (asker.role === "owner") return asker.test ? ["hub", "workboard"] : [...PRODUCTS];
   if (asker.personRole === "content_manager" || asker.leadsCustoms === true) return ["workboard", "contentops"];
   return ["workboard"];
 }

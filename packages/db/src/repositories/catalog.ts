@@ -3,6 +3,7 @@ import { and, eq, inArray, ne, sql, type SQL } from "drizzle-orm";
 import { buildProxyEgressKey, type Platform } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
+import { livePageSql } from "./realm.ts";
 import { requireSingleRow } from "../rows.ts";
 import {
   models,
@@ -390,15 +391,20 @@ export async function getPageTransactionsWriterInfo(db: Database, platformAccoun
 // readers (rollup rebuilds, fact-presence, model page counts) intentionally
 // keep seeing all pages: the facts remain and deleting a model under a
 // tombstoned page must still be refused.
+/**
+ * Every active page of the live agency (sandbox/realm.ts: a test page is never synced, bound or read from a platform).
+ * A caller that wants the test pages asks for them by the realm's own reads (`listTestPageIds`).
+ */
 export async function listPlatformAccounts(db: Database) {
   return db.query.pages.findMany({
-    where: eq(pages.status, "active"),
+    where: and(eq(pages.status, "active"), livePageSql(pages.id)),
   });
 }
 
+/** Every active page of a platform, of the live agency (the sync planner's, the OnlyFans sweeps'; sandbox/realm.ts). */
 export async function listPagesByPlatform(db: Database, platform: Platform) {
   return db.query.pages.findMany({
-    where: and(eq(pages.platform, platform), eq(pages.status, "active")),
+    where: and(eq(pages.platform, platform), eq(pages.status, "active"), livePageSql(pages.id)),
   });
 }
 
