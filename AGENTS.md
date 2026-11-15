@@ -16,6 +16,8 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
   Hub = the console (`apps/dashboard`, the owner's alone, `hub.`), Workboard = `apps/workboard` (every role, ONE address:
   `chatgoose.…/workboard/`; Hub's server sends `hub.…/workboard/*` there through the sign-in hand-off). The product's
   name opens the switcher (`auth/me` `products`). Old addresses: one table, `packages/ui/src/old-addresses.ts`.
+  ContentOps (the content managers' product) is its own repository, `~/code/4-content/contentops`; a `content_manager`
+  login holds a session that opens ContentOps alone (`services/content-manager-operations.ts`).
   `pnpm dev:workboard:demo` → http://localhost:5190/workboard/ on the same demo data (`/workboard/__specimen` — every
   component). Against a local API: `pnpm dev:workboard` (proxies `/api` to :3000). The console's dev servers proxy
   `/workboard` to Workboard's (5190 for `dev:demo`, 5191 for `dev:dashboard`), run it beside. To see both names and the
@@ -85,8 +87,10 @@ the owner's machine (outside this repository); a change that moves a home or add
   key, one writer per kind, closes itself when the cause is gone. No new list, counter or inbox beside it. An
   object's history goes to `object_events`.
 - **A shift's report**: `services/shift-handins.ts` (tables `shift_handin_*`; a handed-in version is immutable, the
-  newest is the report). Three doors, one service: Workboard «Смена», the extension (it opens the same screen), an
-  agent key «со слов» (`hub shift-report …`). Behind the person's right `submits_shift`. Sums only through
+  newest is the report). Three doors, one service: Workboard's board «Отчёт» (`/workboard/report/:shiftId`), the
+  extension (its fifth button opens the same board in a frame, `/workboard/frame/report`), an agent key «со слов»
+  (`hub shift-report …`). Gengar's check after a hand-in is `…/agent/shift-reports/checks` (`review:shift_reports`).
+  Behind the person's right `submits_shift`, which is on for the test team only until the owner's word. Sums only through
   `reportSums`; the ledger takes versions through `agentShiftReportsFeed` and accrues, Hub never does.
 - **What people say about a sale**: claims, agreements and the owner's decisions (`services/sale-claims.ts`, tables
   `sale_claims`, `sale_owner_decisions`). They reach the rule as its inputs (`sale-homes.ts`), never around it; a

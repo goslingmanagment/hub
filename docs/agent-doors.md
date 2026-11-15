@@ -48,6 +48,13 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 A page outside the key's grant is the plane's static 404, the same as one that does not exist. A session never
 gets through any of these doors; an agent key never gets through a session's.
 
+**The test realm.** The test team on production (the model «Тест», pages `test-1` and `test-of`, people `t-*`) is
+behind a wall (`services/sandbox/realm.ts`): a live key never reads its people, shifts, sales, reports, questions or
+matters, and no feed serves them to it; a test key reads only them. The one test key is `sandbox-checker`
+(`read:team`, `read:money`, `review:shift_reports` on the two test pages): it plays Gengar's check of a handed-in
+report without touching anything live. A `t-…` login or a `test-…` page in a live key's answer is a hole in the
+wall.
+
 ## Shift reports «со слов»
 
 The shift report is one object in Hub with three doors to one service: the person's Workboard, the chat extension,
