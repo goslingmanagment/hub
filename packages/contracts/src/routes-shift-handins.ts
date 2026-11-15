@@ -190,7 +190,11 @@ export const shiftReportResponseSchema = z.object({
   /** Own, handed in: the draft's sales of the person that the report does not hold yet («после сдачи»); null — none. */
   afterSubmission: z.object({ count: z.number().int().positive(), mills }).nullable(),
   /** Own: the newest version as today's post in «Отчётность», one per model. */
-  posts: z.array(z.object({ modelName: z.string(), text: z.string() })),
+  /**
+   * One post per model of the shift, each its own text: «Отчётность» takes one post per model (the ledger's post reader
+   * reads one model from a text), so they are copied one by one, never joined.
+   */
+  posts: z.array(z.object({ modelSlug: z.string(), modelName: z.string(), text: z.string() })),
   /** Own: the people a «делим с…» may name. */
   colleagues: z.array(z.object({ userId: intId, name: z.string() })),
   /**
@@ -345,8 +349,15 @@ export const shiftReportAskBodySchema = z.object({
 });
 
 /** A card of Gengar: decline it («Не согласен»), restore it («Вернуть правку»), or accept a late one («Принять»). */
+export const shiftReportPostCopiedQuerySchema = z.object({
+  /** The model whose post was copied: its slug, as the report's `posts` name it. */
+  model: z.string().trim().min(1).max(100).optional(),
+});
+
 export const shiftReportProposalAnswerBodySchema = z.object({
   answer: z.enum(["decline", "restore", "accept"]),
+  /** With «Не согласен» on a card of whose the sale is: the person's line of why, for whoever decides it. */
+  note: z.string().trim().max(SHIFT_REPORT_NOTE_MAX).nullable().optional(),
 });
 
 export const shiftReportCurrentResponseSchema = z.object({
@@ -775,9 +786,10 @@ export const shiftHandinRouteSchemas = {
   },
   shiftReportPostCopied: {
     auth: { kind: "any" }, tags: ["client"],
-    summary: "«Скопировать пост»: remember the copy, so a later version that changes a page sum says «Пост изменился»",
-    description: `${ANY} Own counted report.`,
+    summary: "«Скопировать пост»: remember the copy of one model's post, so a later version that changes its page sums says «Пост изменился»",
+    description: `${ANY} Own counted report. \`model\` — the model whose post was copied (one of the report's posts); absent — every post (a client before the per-model copy).`,
     params: shiftReportParamsSchema,
+    querystring: shiftReportPostCopiedQuerySchema,
     response: { 200: shiftReportResponseSchema, ...personErrors },
   },
   shiftReportReopen: {

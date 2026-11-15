@@ -128,7 +128,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
   });
 
   server.post("/api/v1/shift-reports/:shiftId/post-copied", { schema: routeSchemas.shiftReportPostCopied }, async (request) => {
-    return markShiftReportPostCopied(appContext, await person(request), { shiftId: request.params.shiftId });
+    return markShiftReportPostCopied(appContext, await person(request), { shiftId: request.params.shiftId, model: request.query.model ?? null });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/reopen", { schema: routeSchemas.shiftReportReopen }, async (request) => {
@@ -155,7 +155,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
 
   server.post("/api/v1/shift-reports/:shiftId/proposals/:proposalId/answer", { schema: routeSchemas.shiftReportProposalAnswer }, async (request) => {
     return answerShiftReportProposal(appContext, await person(request), {
-      shiftId: request.params.shiftId, proposalId: request.params.proposalId, answer: request.body.answer,
+      shiftId: request.params.shiftId, proposalId: request.params.proposalId, answer: request.body.answer, note: request.body.note ?? null,
     });
   });
 

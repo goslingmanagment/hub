@@ -211,7 +211,7 @@ function postOf(body: ShiftReportBody, shift: DemoShift, user: DemoUser): Report
   }
   lines.push("", "📝 Комментарий:");
   if (body.comment) lines.push(body.comment);
-  return [{ modelName: "Mia", text: lines.join("\n") }];
+  return [{ modelSlug: "mia", modelName: "Mia", text: lines.join("\n") }];
 }
 
 interface Found { shift: DemoShift; back: number; id: number; owner: DemoUser }

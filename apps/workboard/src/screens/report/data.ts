@@ -78,8 +78,8 @@ export type Write =
   | { op: "claim"; claimId: number; answer: "agree" | "disagree" }
   | { op: "offPlatformAdd"; body: ShiftReportOffPlatformBody }
   | { op: "offPlatformWithdraw"; offPlatformId: number }
-  /** «Скопировать пост»: Hub remembers the copy (a later version that changes a page sum then says «Пост изменился»). */
-  | { op: "postCopied" };
+  /** «Скопировать пост» of one model's post: Hub remembers the copy (a later version that changes its page sums says «Пост изменился»). */
+  | { op: "postCopied"; model: string };
 
 function send(kernel: KernelClient, shiftId: number, write: Write): Promise<unknown> {
   const params = { shiftId };
@@ -98,7 +98,7 @@ function send(kernel: KernelClient, shiftId: number, write: Write): Promise<unkn
     case "claim": return kernel.saleClaimAnswer({ params: { claimId: write.claimId }, body: { answer: write.answer, note: null } });
     case "offPlatformAdd": return kernel.shiftReportOffPlatformAdd({ params, body: write.body });
     case "offPlatformWithdraw": return kernel.shiftReportOffPlatformWithdraw({ params: { shiftId, offPlatformId: write.offPlatformId } });
-    case "postCopied": return kernel.shiftReportPostCopied({ params });
+    case "postCopied": return kernel.shiftReportPostCopied({ params, query: { model: write.model } });
   }
 }
 
