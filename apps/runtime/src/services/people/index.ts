@@ -83,7 +83,7 @@ import { millsFromInteger, millsToNumber, toBusinessDate } from "@agency_hub_cor
 import type { AppContext } from "../../bootstrap.ts";
 import { createInvite } from "../account-links.ts";
 import { assignPageToUserTx, recordAudit, withAuditTransaction, type AuditContext, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
-import { findPageSummaryByLabel } from "@agency_hub_core/db";
+import { findModelBySlug, findPageSummaryByLabel, grantTeamRole } from "@agency_hub_core/db";
 import { realmOf, requireSameRealm } from "../sandbox/realm.ts";
 import { pagesOfModels, personOfLogin, readModelsOf, teamFactsFor, teamsOfPerson } from "../teams.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.ts";
@@ -281,14 +281,32 @@ function proposalView(row: PersonProposalRow): PersonProposal {
 
 /** A person as their team reads them: nothing of how to reach them, how they sign in, or what the owner noted. */
 function teamPersonView(person: Person): Person {
+  // A WHITE LIST, field by field: a field added to a person later is not shown to a colleague until it is named here
+  // (the type makes it a compile error to forget). What a colleague reads: who the person is, their role and state,
+  // their pages and schedule, their logins' names and states (shifts are by login), their rights. Never Telegram, keys,
+  // when a login was last used, the owner's notes and onboarding notes, import notes, proposals.
   return {
-    ...person,
+    id: person.id,
+    code: person.code,
+    displayName: person.displayName,
+    kind: person.kind,
+    role: person.role,
+    state: person.state,
+    leftOn: person.leftOn,
     telegram: { userId: null, handle: null, reportTag: null },
-    logins: person.logins.map((login) => ({ ...login, lastSeenAt: null })),
+    logins: person.logins.map((login) => ({ userId: login.userId, username: login.username, role: login.role, state: login.state, lastSeenAt: null })),
     agentKeys: [],
+    workingPages: person.workingPages.map((page) => ({ pageLabel: page.pageLabel, platform: page.platform, modelSlug: page.modelSlug, modelName: page.modelName })),
+    schedule: person.schedule,
+    pageSchedules: person.pageSchedules,
+    rights: person.rights.map((right) => ({ right: right.right, grantedAt: right.grantedAt })),
+    onboarding: [],
     note: null,
     importNotes: [],
+    origin: person.origin,
     openProposals: 0,
+    createdAt: person.createdAt,
+    updatedAt: person.updatedAt,
   };
 }
 
@@ -624,7 +642,10 @@ async function createPersonTx(
   importNotes: PersonImportNoteRow[] = [],
   isTest = false,
 ): Promise<CreatedPerson> {
-  const { code, kind: givenKind, invite, payTerms, ...fields } = body;
+  const { code, kind: givenKind, invite, payTerms, leadModelSlugs, ...fields } = body;
+  if (leadModelSlugs !== undefined && leadModelSlugs.length > 0 && (fields.role !== "team_lead" || (givenKind ?? "human") !== "human")) {
+    throw new BadRequestError("«Ведёт команды» is a team lead's");
+  }
   const kind = givenKind ?? "human";
   if (invite && kind !== "human") throw new BadRequestError("Only a human is invited");
   if (payTerms && new Set(payTerms.map((term) => `${term.modelSlug.toLowerCase()}\u0000${term.validFrom}`)).size !== payTerms.length) {
@@ -660,6 +681,13 @@ async function createPersonTx(
   row = await applyChange(db, row, { ...change, patch: {} }, audit);
   // Money, in the same transaction: a refused term (a model that does not exist, not a human) leaves nothing behind.
   for (const term of payTerms ?? []) row = await setPayTermTx(db, row, term, audit);
+  // «Ведёт команды»: the `lead` records in the same transaction (team-roles.ts' one record table); a model of the other
+  // realm is not found (and the database refuses it too, 0415).
+  for (const slug of new Set(leadModelSlugs ?? [])) {
+    const model = await findModelBySlug(db, slug);
+    if (!model || model.isTest !== isTest) throw new NotFoundError(`No model «${slug}»`);
+    await grantTeamRole(db, { personId: row.id, modelId: model.id, kind: "lead", grantedByUserId: audit.actorUserId ?? null });
+  }
   let created: CreatedPerson["invite"] = null;
   if (invite) {
     // createInvite runs in a savepoint of this transaction: a taken login rolls the person back too.

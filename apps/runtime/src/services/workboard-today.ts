@@ -167,12 +167,14 @@ export async function readWorkboardToday(app: TodayApp, principal: HumanAuthPrin
   // The person's own part: the pages their login works.
   const myLabels = labelsOfIds(principal.assignedPageIds);
   const [handover, orders] = await Promise.all([
-    myLabels.size === 0 ? Promise.resolve([]) : listHandoverComments(app.db, { since: new Date(at - HANDOVER_MS), exceptUserIds: ownLogins, limit: 20 }),
+    myLabels.size === 0 ? Promise.resolve([]) : listHandoverComments(app.db, {
+      since: new Date(at - HANDOVER_MS), exceptUserIds: ownLogins, pageLabels: [...myLabels], realm: principal.sandbox?.test === true ? "test" : "live", limit: 5,
+    }),
     principal.assignedPageIds.length === 0 ? Promise.resolve([]) : awaitingGivingOf(app, { pageIds: principal.assignedPageIds, limit: 200 }),
   ]);
 
   return {
-    handover: handover.filter((row) => touches(row.shift, myLabels)).slice(0, 5).map((row) => ({
+    handover: handover.map((row) => ({
       shiftId: row.shift.id,
       person: { userId: row.shift.userId, name: nameOfLogin(facts, row.shift.userId, row.shift.username) },
       pages: row.shift.pageLabels.filter((label) => myLabels.has(label)),

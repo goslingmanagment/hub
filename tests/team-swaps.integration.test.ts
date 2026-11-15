@@ -146,6 +146,24 @@ describe("«Подмена»: a question whose «Можно» writes the day's l
     expect(teamSwapsResponseSchema.parse((await as("anna", "GET", "/api/v1/team/swaps")).json()).swaps).toEqual([]);
   });
 
+  it("refuses «Можно» once the swap's hours began (Moscow): it would re-decide whose its junction's sales were", async (context) => {
+    if (!testDb) return context.skip();
+    const asked = await as("anna", "POST", "/api/v1/team/questions", {
+      pageLabel: "alfa-1", kind: "swap", text: "Не выйду", swap: { date: day, pageLabels: ["alfa-1"], start: "00:00", end: "08:00", coverPersonCode: "carl" },
+    });
+    expect(asked.statusCode, asked.body).toBe(200);
+    const id = teamQuestionWriteResponseSchema.parse(asked.json()).question.id;
+    // Its day comes: today, from midnight.
+    await testDb.pool.query("update team_questions set swap = jsonb_set(swap, '{date}', to_jsonb($2::text)) where id = $1", [id, moscowDay(Date.now())]);
+    const late = await as("lena", "POST", `/api/v1/team/questions/${id}/answer`, { answer: "yes" });
+    expect(late.statusCode, late.body).toBe(409);
+    expect((late.json() as { reason?: string }).reason).toBe("swap_started");
+    const lines = await testDb.pool.query("select count(*)::int as n from person_schedule_slots where question_id = $1", [id]);
+    expect(lines.rows[0]!.n).toBe(0);
+    // «Нельзя» still answers it.
+    expect((await as("lena", "POST", `/api/v1/team/questions/${id}/answer`, { answer: "no" })).statusCode).toBe(200);
+  });
+
   it("sends a lead's «Предложить сетку» to the owner", async (context) => {
     if (!testDb) return context.skip();
     const asked = await as("lena", "POST", "/api/v1/team/questions", { pageLabel: "alfa-1", kind: "schedule", text: "Анна с понедельника 18:00–02:00" });
