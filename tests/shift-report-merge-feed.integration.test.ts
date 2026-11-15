@@ -115,9 +115,8 @@ describe("a report whose shift is merged after the hand-in", () => {
     const sale = Number(inserted.rows[0].id);
     const now = new Date();
     await refreshSaleHomes(app.db, { from: new Date(now.getTime() - 48 * HOUR_MS), to: now, now });
-    // anna's work of 22–20 hours ago: two shift rows of it; the one handed in is then joined into the other.
+    // anna's work of 22–20 hours ago: the shift row handed in; the row it is joined into comes with the merge.
     const gone = await shiftRow(22.5, 19.5);
-    const kept = await shiftRow(22.6, 19.4);
     await handInAndConfirm(asSession, "anna", gone);
 
     // The ledger's side: every version kept by id under the shift the feed served it with; a shift's report is its
@@ -150,6 +149,7 @@ describe("a report whose shift is merged after the hand-in", () => {
     expect(countedByLedger()).toBe(NET);
 
     // Merged: the report moves to the shift that remains; the ledger reads; anna hands it in again; the ledger reads.
+    const kept = await shiftRow(22.6, 19.4);
     await q("update shifts set state = 'merged', merged_into = $2 where id = $1", [gone, kept]);
     await settleGoneShifts(app, new Date());
     expect((await q("select shift_id::int as shift_id from shift_handins where shift_id in ($1, $2)", [gone, kept])).rows).toEqual([{ shift_id: kept }]);
