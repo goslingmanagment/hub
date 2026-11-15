@@ -135,6 +135,20 @@ export async function readTeamLedgerPayoutPerson(
 }
 
 /**
+ * The person of a login who sees their own money (the person right «Видит свои деньги», `seesOwnPaySince`); null —
+ * no person, or the switch is off. The one rule behind `accountPay`'s `enabled` and `me`'s `ownMoney`.
+ */
+export async function ownMoneyPersonOf(db: AppContext["db"], userId: number): Promise<{ readonly code: string } | null> {
+  const person = await findOwnPayPerson(db, userId);
+  return person === null || person.seesOwnPaySince === null ? null : person;
+}
+
+/** Whether a login's person sees their own money (`me`'s `ownMoney`): the same switch as `accountPay`. */
+export async function seesOwnMoney(db: AppContext["db"], userId: number): Promise<boolean> {
+  return (await ownMoneyPersonOf(db, userId)) !== null;
+}
+
+/**
  * The chatter's «Мои деньги»: the session user's person, through the registry; their switch off (or no person) — the
  * answer says so and carries no sums. On, the ledger's read of that person's code alone, the days added up by date
  * (every model of a day is one accrual on the screen) and nothing of the journal: no document numbers, no posts, no
@@ -151,8 +165,8 @@ export async function readAccountPay(
   checkWindow(query.from, query.to, ACCOUNT_PAY_MAX_DAYS);
   const serverNow = (options.now ?? new Date()).toISOString();
   const off: AccountPayResponse = { enabled: false, from: query.from, to: query.to, pay: null, serverNow };
-  const person = await findOwnPayPerson(app.db, principal.user.id);
-  if (person === null || person.seesOwnPaySince === null) return off;
+  const person = await ownMoneyPersonOf(app.db, principal.user.id);
+  if (person === null) return off;
   // A test person's money is never asked of the ledger (sandbox/realm.ts): «нет данных».
   if (isTestPrincipal(principal)) return { ...off, enabled: true };
 
