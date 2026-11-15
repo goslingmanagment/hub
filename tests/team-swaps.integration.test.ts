@@ -97,8 +97,9 @@ describe("«Подмена»: a question whose «Можно» writes the day's l
     expect(question.decider).toMatchObject({ kind: "team_lead" });
     expect(question.swap).toMatchObject({ date: day, start: "16:00", end: "00:00", absent: { code: "anna" }, cover: { code: "carl" }, approved: false });
 
-    // Nobody but the decider answers it.
-    expect((await as("carl", "POST", `/api/v1/team/questions/${question.id}/answer`, { answer: "yes" })).statusCode).toBe(403);
+    // Nobody but the decider answers it: the covering person is neither asker nor decider, the question is not theirs.
+    expect((await as("carl", "POST", `/api/v1/team/questions/${question.id}/answer`, { answer: "yes" })).statusCode).toBe(404);
+    expect((await as("anna", "POST", `/api/v1/team/questions/${question.id}/answer`, { answer: "yes" })).statusCode).toBe(403);
     // Before «Можно»: the standing schedule alone.
     expect(await runs("anna", at(day, "18:00"))).toBe(true);
     expect(await runs("carl", at(day, "18:00"))).toBe(false);
