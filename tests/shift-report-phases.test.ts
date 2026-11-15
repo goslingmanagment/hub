@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { linesPageSums } from "../apps/runtime/src/services/shift-handins.ts";
 import {
   checkLetsConfirm,
+  cardSuperseded,
   confirmedLines,
   holdsSale,
   lineWithWord,
@@ -245,6 +246,25 @@ describe("the sites' words of a row (third reader, 8)", () => {
     expect(saleSiteWords("onlyfans", "ppv")).toBe("Payment for message from");
     expect(saleSiteWords("onlyfans", "stream_tip")).toBe("Tip from");
     expect(saleSiteWords("fansly", "something")).toBe("Sale to");
+  });
+});
+
+describe("a settlement outranks Gengar's card (round 2, N3)", () => {
+  const share = { transactionId: 70, kind: "owner_change" as const, toWord: "share" as const, toUserId: 9, note: null, state: "proposed" as const };
+
+  it("signs the decision made after the card: «пополам» on a sale decided away changes nothing", () => {
+    const own = line(70, { netMills: 10_000 });
+    const decided = { ...own, amountMills: 0, settled: "owner" as const };
+    const [signed] = signedLines({ candidate: [own], draft: [decided], proposals: [share], notes: new Map(), oldWay: new Map() });
+    expect(signed).toMatchObject({ amountMills: 0, settled: "owner" });
+    expect(cardSuperseded(share, decided)).toBe(true);
+    // Without a settlement the card applies, as before.
+    const [carded] = signedLines({ candidate: [own], draft: [own], proposals: [share], notes: new Map(), oldWay: new Map() });
+    expect(carded).toMatchObject({ amountMills: 5_000, statement: "share" });
+  });
+
+  it("never supersedes a comment card", () => {
+    expect(cardSuperseded({ kind: "note" }, { settled: "owner" })).toBe(false);
   });
 });
 

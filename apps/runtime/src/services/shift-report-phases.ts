@@ -161,10 +161,20 @@ export function confirmedLines(
     let out = line;
     for (const proposal of proposals) {
       if (proposal.transactionId !== line.transactionId || proposal.state !== "proposed") continue;
+      // A decision or an agreement on the sale outranks a card: it changes nothing of whose the sale is (`cardSuperseded`).
+      if (cardSuperseded(proposal, out)) continue;
       out = lineWithProposal(out, proposal);
     }
     return out;
   });
+}
+
+/**
+ * A card of whose the sale is, on a line a decision or an agreement settles: the settlement outranks it — the card
+ * changes nothing and is shown «решено иначе» (round 2, N3). A note card is never superseded. Pure.
+ */
+export function cardSuperseded(proposal: Pick<ProposalRow, "kind">, line: Pick<HandinVersionLine, "settled">): boolean {
+  return proposal.kind === "owner_change" && line.settled !== undefined;
 }
 
 /**
@@ -223,7 +233,7 @@ export function signedLines(input: {
     return next;
   });
   return confirmedLines(settled, input.proposals)
-    .map((line) => (line.transactionId !== null && input.oldWay.has(line.transactionId) ? lineWithWord(line, { statement: "not_mine" }) : line));
+    .map((line) => (line.transactionId !== null && input.oldWay.has(line.transactionId) && line.settled === undefined ? lineWithWord(line, { statement: "not_mine" }) : line));
 }
 
 /**

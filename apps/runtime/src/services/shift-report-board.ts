@@ -94,7 +94,7 @@ import {
   type PageCatalog,
   type Subject,
 } from "./shift-handins.ts";
-import { checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, proposalDelta, type BoardAction } from "./shift-report-phases.ts";
+import { cardSuperseded, checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, proposalDelta, type BoardAction } from "./shift-report-phases.ts";
 import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
 
 /**
@@ -543,6 +543,8 @@ export async function answerShiftReportProposal(
       if (proposal.state !== "late") throw new ConflictError("Only a card that came after the report was counted is accepted", { reason: "not_late" });
       const latest = (await listHandinVersions(db, handin.id)).at(-1);
       const line = latest?.lines.find((one) => one.transactionId === proposal.transactionId);
+      // Decided or agreed since: the settlement outranks the card, there is nothing to take.
+      if (line !== undefined && cardSuperseded(proposal, line)) throw new ConflictError("The sale was settled after the card", { reason: "card_superseded" });
       if (line !== undefined) {
         const oldWay = await oldWayGives(db, [proposal]);
         const applied = oldWay.size > 0 ? lineWithWord(line, { statement: "not_mine" }) : lineWithProposal(line, proposal);

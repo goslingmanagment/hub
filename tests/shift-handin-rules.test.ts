@@ -10,6 +10,7 @@ import {
   type DraftContext,
   type DraftSale,
 } from "../apps/runtime/src/services/shift-handin-rules.ts";
+import { versionCountsMoney } from "@agency_hub_core/db";
 import { draftLines } from "../apps/runtime/src/services/shift-handins.ts";
 
 // The shift report's money (ecosystem package F): which sales a draft holds,
@@ -284,3 +285,13 @@ describe("the post in «Отчётность»", () => {
     expect(posts[1]!.text).not.toContain("Мимо площадки");
   });
 });
+
+describe("a version that counts money (round 2, N1)", () => {
+  it("counts by a line, by «мимо площадки», or by a total; an empty version counts nothing", () => {
+    expect(versionCountsMoney({ lines: [], offPlatform: [], totalMills: 0 })).toBe(false);
+    expect(versionCountsMoney({ lines: [{}], offPlatform: [], totalMills: 0 })).toBe(true);
+    expect(versionCountsMoney({ lines: [], offPlatform: [{}], totalMills: 5_000 })).toBe(true);
+    expect(versionCountsMoney({ lines: [], offPlatform: [], totalMills: 5_000 })).toBe(true);
+  });
+});
+

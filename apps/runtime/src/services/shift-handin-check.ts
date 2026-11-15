@@ -28,6 +28,7 @@ import {
   listWalletRescans,
   lockSaleSettlements,
   moveHandinToShift,
+  versionCountsMoney,
   openMatter,
   setCandidateHubCheck,
   setHandinLateSales,
@@ -393,7 +394,7 @@ async function moveToMerged(db: Database, input: { handinId: number; from: numbe
     const handin = await findHandinByShift(txDb, input.from, { lock: true });
     if (handin === null || handin.id !== input.handinId || (await findHandinByShift(txDb, input.to)) !== null) return false;
     const latest = (await listHandinVersions(txDb, handin.id)).at(-1);
-    const counts = latest !== undefined && latest.lines.length > 0;
+    const counts = latest !== undefined && versionCountsMoney(latest);
     const system = (outcome: "merged" | "moved") => ({
       door: latest!.door === "telegram" ? "workboard" as const : latest!.door, actorUserId: latest!.actorUserId ?? handin.userId, agentKeyId: null,
       telegramMessageRef: null, telegramSenderId: null, comment: latest!.comment, dayPaid: null, ruleVersion: latest!.ruleVersion,
@@ -434,7 +435,7 @@ export async function settleGoneShifts(app: CheckApp, now: Date): Promise<number
       await supersedeOpenCandidates(txDb, { handinId: one.handinId, at: now });
       const handin = (await findHandinById(txDb, one.handinId))!;
       const latest = (await listHandinVersions(txDb, one.handinId)).at(-1);
-      if (latest !== undefined && latest.lines.length > 0) {
+      if (latest !== undefined && versionCountsMoney(latest)) {
         // A version with no lines, made by the system (`decision`, outcome `cancelled`: what rules without the shift).
         await insertHandinVersion(txDb, {
           handin, door: latest.door === "telegram" ? "workboard" : latest.door, actorUserId: latest.actorUserId ?? one.userId, agentKeyId: null,
