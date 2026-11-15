@@ -1,8 +1,8 @@
 import { useEffect } from "react";
-import { mutationOptions, queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { mutationOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { SpenderBatchBody, SpenderBatchResponse } from "@agency_hub_core/contracts";
 
-import { kernel, queryClient } from "@/shared/hub";
+import { kernel } from "@/shared/hub";
 
 type QueryOptions = { enabled?: boolean; windowAt?: string };
 

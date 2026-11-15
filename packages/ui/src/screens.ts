@@ -754,8 +754,6 @@ export interface Section {
 }
 
 const tab = (id: string, label: string, ...screens: string[]): SectionTab => ({ id, label, screens });
-/** A tab under «Ещё» (L2, 12.11: not opened in 14 days, not a duplicate). */
-const moreTab = (id: string, label: string, ...screens: string[]): SectionTab => ({ id, label, screens, more: true });
 
 /** Hub's menu is this table's order (Главная, Ждут вас, its sections, then Настройки and Система under the rule); then Workboard's section. */
 export const SECTIONS: readonly Section[] = [
