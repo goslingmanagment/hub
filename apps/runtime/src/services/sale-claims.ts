@@ -208,7 +208,11 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     // else, and nobody to ask, is the decider's at once (`no_side`), and no day of silence runs.
     // A sale of the pot is the owner's alone («по общаку решаю я»): never asked of a colleague, so no «Согласен» and no
     // day of silence settles it between two chatters.
-    const askable = claim.kind === "claim" && side !== null && side.submitsShiftSince !== null && side.state !== "left" && sale?.home?.home !== "pot";
+    // The home as stored, else as the claimant's version has it (the hourly job may not have stored one yet): a pot's
+    // sale, or one whose home nobody knows, is the decider's — never asked of a colleague.
+    const home = sale?.home?.home ?? claim.home;
+    const askable = claim.kind === "claim" && side !== null && side.submitsShiftSince !== null && side.state !== "left"
+      && home !== null && home !== "pot" && home !== "unknown";
     const why = claim.kind === "double" ? "double" as const : askable ? null : "no_side" as const;
     const asked = { state: why === null ? "asked" as const : "owner" as const, escalatedAt: why === null ? null : now, escalatedWhy: why };
     const said = {
@@ -244,7 +248,11 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
   const open = await listSaleClaims(db, { states: [...OPEN_STATES], kinds: ["claim", "double"] });
   const openSales = [...new Set(open.flatMap((claim) => (claim.transactionId === null ? [] : [claim.transactionId])))];
   const holding = (await listCurrentReportsOfSales(db, openSales)).map(viewOf);
-  const potSales = new Set((await listHandinSalesByIds(db, openSales)).filter((sale) => sale.home?.home === "pot").map((sale) => sale.transactionId));
+  // The pot's: as stored, or as any report holding the sale has it (no home stored yet).
+  const potSales = new Set([
+    ...(await listHandinSalesByIds(db, openSales)).filter((sale) => sale.home?.home === "pot").map((sale) => sale.transactionId),
+    ...holding.flatMap((report) => report.lines.filter((line) => line.rule.home === "pot").map((line) => line.transactionId!)),
+  ]);
   for (const claim of open) {
     // A question asked from the draft (the board, 0412) stands while the person's draft says it: until «Отменить» or a
     // version of their report that no longer counts the sale.
@@ -695,6 +703,31 @@ export async function settleDueSilences(app: Pick<AppContext, "db" | "logger">, 
 }
 
 /**
+ * Whether a report of someone outside the claim (neither its claimant nor its side) counts the sale: a 50/50 of two
+ * holders taken by a third, say. Settling the claim would give the claimant all while that report keeps its share.
+ */
+async function othersCount(db: Database, claim: Pick<SaleClaimRow, "transactionId" | "claimantUserId">, sideIds: readonly number[]): Promise<boolean> {
+  if (claim.transactionId === null) return false;
+  return (await listCurrentReportsOfSales(db, [claim.transactionId])).some((report) => report.userId !== claim.claimantUserId
+    && !sideIds.includes(report.userId) && report.lines.some((line) => line.transactionId === claim.transactionId && line.amountMills > 0));
+}
+
+/**
+ * Whether a sale is the pot's: as any report holding it has it, or as stored — and when nothing is stored yet, its day
+ * is computed now (the hourly job's own computation) rather than taken for anyone's.
+ */
+async function isPotSale(db: Database, transactionId: number, now: Date): Promise<boolean> {
+  const lines = (await listCurrentReportsOfSales(db, [transactionId])).flatMap((report) => report.lines).filter((line) => line.transactionId === transactionId);
+  if (lines.some((line) => line.rule.home === "pot")) return true;
+  let sale = (await listHandinSalesByIds(db, [transactionId]))[0];
+  if (sale !== undefined && sale.home === null) {
+    await refreshHomeWithin(db, sale.occurredAt, now).catch(() => undefined);
+    sale = (await listHandinSalesByIds(db, [transactionId]))[0];
+  }
+  return sale?.home?.home === "pot";
+}
+
+/**
  * One settlement per sale: when a claim on a sale settles (an agreement, a day of silence), every other question still
  * asked on that sale — another person who took it too — goes to the decider. Each alone would give its claimant the
  * whole sale. In the caller's transaction, in the settlements' turn.
@@ -715,6 +748,11 @@ async function othersToDecider(db: Database, settled: Pick<SaleClaimRow, "id" | 
 async function settleBySilence(app: Pick<AppContext, "db" | "logger">, claim: SaleClaimRow, now: Date): Promise<boolean> {
   const { db } = app;
   if (claim.transactionId === null || claim.claimantUserId === null || claim.sideUserId === null) return false;
+  // A sale of the pot is never settled between two chatters: the owner's.
+  if (await isPotSale(db, claim.transactionId, now)) {
+    await updateSaleClaim(db, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "no_side" }, now, { ifState: "asked" });
+    return false;
+  }
   const side = await findHandinPersonOfUser(db, claim.sideUserId);
   const sideIds = side?.userIds ?? [claim.sideUserId];
   const paid = await paidDaysOf(app as ClaimsApp, await listCurrentReportsOfSales(db, [claim.transactionId])).catch(() => new Map<number, boolean | null>());
@@ -724,6 +762,12 @@ async function settleBySilence(app: Pick<AppContext, "db" | "logger">, claim: Sa
     await lockSaleSettlements(txDb);
     const locked = await findSaleClaim(txDb, claim.id, { lock: true });
     if (locked === null || locked.state !== "asked" || locked.answer !== null) return false;
+    // Someone else counts the sale too: silence between two cannot settle it — the decider.
+    if (await othersCount(txDb, locked, sideIds)) {
+      await updateSaleClaim(txDb, locked.id, { state: "owner", escalatedAt: now, escalatedWhy: "double" }, now, { ifState: "asked" });
+      await othersToDecider(txDb, locked, now);
+      return false;
+    }
     await updateSaleClaim(txDb, locked.id, { state: "agreed", closedAt: now, silenceAt: now }, now, { ifState: "asked" });
     await othersToDecider(txDb, locked, now);
     const reports = await listCurrentReportsOfSales(txDb, [claim.transactionId!]);
@@ -786,6 +830,12 @@ export async function answerSaleClaim(
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
   if (actor.kind === "agent" && input.answer === "disagree" && note === null) throw new BadRequestError("«Не согласен» со слов needs the person's line of why", { reason: "note_required" });
   if (!answerable(found)) throw new ConflictError("This claim is already answered or decided", { reason: "claim_closed" });
+  // «Согласен» never settles a sale of the pot between two chatters (its home stored or not): the owner decides it.
+  if (input.answer === "agree" && found.transactionId !== null && (await isPotSale(db, found.transactionId, now))) {
+    await updateSaleClaim(db, found.id, { state: "owner", escalatedAt: now, escalatedWhy: "no_side" }, now, { ifState: found.state });
+    await runSaleClaims(app, now).catch(() => undefined);
+    throw new ConflictError("A sale of the pot is the owner's to decide", { reason: "pot_sale" });
+  }
 
   const door: HandinDoor = actor.kind === "agent" ? "telegram" : actor.door;
   const by: SettleBy = actor.kind === "person"
@@ -800,12 +850,16 @@ export async function answerSaleClaim(
     await lockSaleSettlements(txDb);
     const claim = await findSaleClaim(txDb, input.claimId, { lock: true });
     if (claim === null || !answerable(claim)) throw new ConflictError("This claim is already answered or decided", { reason: "claim_closed" });
+    // Someone else counts the sale too (a holder of the other half): the two sides alone cannot settle it — the decider.
+    const thirdHolds = input.answer === "agree" && (await othersCount(txDb, claim, sideIds));
     await updateSaleClaim(txDb, claim.id, {
       answer: input.answer, answerNote: note, answeredAt: now, answerDoor: door, answerRef: actor.kind === "agent" ? actor.sourceRef : null,
       answeredByUserId: actor.kind === "person" ? actor.userId : null, answeredByAgentKeyId: actor.kind === "agent" ? actor.agentKeyId : null,
-      ...(input.answer === "agree" ? { state: "agreed" as const, closedAt: now } : { state: "owner" as const, escalatedAt: now, escalatedWhy: "disagree" as const }),
+      ...(input.answer === "agree" && !thirdHolds ? { state: "agreed" as const, closedAt: now }
+        : { state: "owner" as const, escalatedAt: now, escalatedWhy: thirdHolds ? "double" as const : "disagree" as const }),
     }, now);
-    if (input.answer !== "agree" || claim.transactionId === null || claim.claimantUserId === null) return;
+    if (thirdHolds) await othersToDecider(txDb, claim, now);
+    if (input.answer !== "agree" || thirdHolds || claim.transactionId === null || claim.claimantUserId === null) return;
     await othersToDecider(txDb, claim, now);
     // Agreed: every report that counts the sale gets what the agreement gives — the claimant all (or a half), the side none (or the other half).
     const reports = await listCurrentReportsOfSales(txDb, [claim.transactionId]);

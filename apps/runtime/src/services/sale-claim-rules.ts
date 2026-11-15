@@ -76,6 +76,8 @@ export interface DerivedClaim {
   sideUserId: number | null;
   /** The side's report that counts the sale, if any. */
   sideShiftId: number | null;
+  /** The sale's home as the claimant's version has it (the rule at the hand-in): known before `sale_homes` stores one. */
+  home: string | null;
 }
 
 /** A line that holds its sale: it counts, or it claims it while disputed (counting nothing until settled). */
@@ -104,6 +106,7 @@ export function deriveClaims(reports: readonly ReportView[]): DerivedClaim[] {
     claimantVersion: report.version,
     note: line.note,
     claimedAt: report.submittedAt,
+    home: line.rule.home ?? null,
   });
   for (const [sale, held] of bySale) {
     for (const { report, line } of held) {

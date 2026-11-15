@@ -88,6 +88,7 @@ import { claimsOfReport, runSaleClaims, settleDueSilences } from "./sale-claims.
 import { checkReportNow, syncCheckMatters } from "./shift-handin-check.ts";
 import { handInShiftReport, moveWhenDue, PhaseConflictError } from "./shift-report-board.ts";
 import { boardOn, phaseOf, readBoard } from "./shift-report-board-view.ts";
+import { holdsSale } from "./shift-report-phases.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { computeSaleHomes, registrySlots, ruleWorksOf } from "./sale-homes.ts";
 import {
@@ -932,7 +933,8 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
 
   let afterSubmission: ShiftReportResponse["afterSubmission"] = null;
   if (own && latest !== null && draft !== null) {
-    const held = new Set(latest.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])));
+    // Held as the board holds it (`holdsSale`): a $0 line with nothing on it holds nothing.
+    const held = new Set(latest.lines.filter(holdsSale).flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])));
     const fresh = draft.filter((line) => line.group === "mine" && line.amountMills > 0 && line.transactionId !== null && !held.has(line.transactionId));
     if (fresh.length > 0) afterSubmission = { count: fresh.length, mills: fresh.reduce((sum, line) => sum + line.amountMills, 0) };
   }
