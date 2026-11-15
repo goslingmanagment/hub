@@ -666,9 +666,13 @@ describe("§7 — roles", () => {
     const me = await get(setup.server, "/api/v1/auth/me", { cookie });
     expect(me.statusCode, me.body).toBe(200);
     expect(me.json<{ user: { role: string }; products: string[] }>()).toMatchObject({ user: { role: "content_manager" }, products: ["contentops"] });
-    for (const path of ["/api/v1/overview", "/api/v1/team/shifts", "/api/v1/matters/waiting", "/api/v1/pages"]) {
+    for (const path of ["/api/v1/overview", "/api/v1/team/shifts", "/api/v1/matters/waiting"]) {
       expect((await get(setup.server, path, { cookie })).statusCode, path).toBe(403);
     }
+    // The pages of its scope (products package C2: the screens Hub draws inside ContentOps); a login nobody holds has none.
+    const pages = await get(setup.server, "/api/v1/pages", { cookie });
+    expect(pages.statusCode, pages.body).toBe(200);
+    expect(pages.json<unknown[]>()).toEqual([]);
 
     const device = await setup.server.inject({
       method: "POST",
