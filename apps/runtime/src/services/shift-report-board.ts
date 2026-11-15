@@ -211,6 +211,8 @@ export async function confirmShiftReport(
   options: { now?: Date; dayPaid?: (input: { personCode: string | null; reportDate: string }) => Promise<boolean | null> } = {},
 ): Promise<ShiftReportConfirmResponse> {
   const now = options.now ?? new Date();
+  // Due by now (Gengar's 10 minutes up, the checks done): «Подтвердите» before the press is judged, not at the next pass.
+  await moveWhenDue(app.db, { shiftId: input.shiftId, catalog: await pageCatalog(app.db) }, now);
   let board: Board;
   try {
     board = await boardFor(app, actor, input.shiftId, "confirm");
@@ -740,20 +742,36 @@ export async function runShiftReportBoardPass(app: Pick<AppContext, "db" | "logg
   await settleGoneShifts(app, now).catch((error: unknown) => warn(app, error, "cancelled and merged shifts"));
   await syncLateMarks(app, now).catch((error: unknown) => warn(app, error, "the «после сдачи» mark"));
   const catalog = await pageCatalog(db);
+  // The backstop: a read or «Подтверждаю» moves a report when it is due (`moveWhenDue`); this catches the rest.
   for (const one of await listCheckingHandins(db, { limit: 500 })) {
-    const candidate = (await listHandinCandidates(db, one.handinId)).filter((row) => row.supersededAt === null).at(-1);
-    if (candidate === undefined) continue;
-    const subject = await subjectOf(db, one.shiftId).catch(() => null);
-    const pageIds = subject === null ? [] : subject.shift.pages.map((page) => catalog.idOf.get(page.pageLabel)).filter((id): id is number => id !== undefined);
-    const gengarPending = candidate.gengarAnsweredAt === null && (await hasShiftReportReviewer(db, pageIds));
-    if (!checkLetsConfirm({ handedInAt: candidate.madeAt, now, hubPending: hubPending(candidate), gengarPending })) continue;
-    if (await setHandinPhase(db, { handinId: one.handinId, phase: "confirm", at: now, from: ["checking"] })) moved += 1;
+    if (await moveWhenDue(db, { shiftId: one.shiftId, catalog }, now)) moved += 1;
   }
   const matters = await syncBoardMatters(app, now) + await syncCheckMatters(app, now).catch((error: unknown) => {
     warn(app, error, "the check's matters");
     return 0;
   });
   return { moved, matters };
+}
+
+/**
+ * «Проверка» → «Подтвердите» when it is due: Hub's check done and Gengar answered (or nobody reviews the pages), or the
+ * 10 minutes since the hand-in are up (`checkLetsConfirm`). The moment it is due, not at the next pass: a read of the
+ * board and «Подтверждаю» call it, so «Генгар молчит 10 минут. Можно подтвердить» is true when the board says it. Its own
+ * transaction, the report locked; true — moved.
+ */
+export async function moveWhenDue(db: Database, input: { shiftId: number; catalog: PageCatalog }, now: Date): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const locked = await findHandinByShift(txDb, input.shiftId, { lock: true });
+    if (locked === null || phaseOf(locked) !== "checking") return false;
+    const candidate = (await listHandinCandidates(txDb, locked.id)).filter((row) => row.supersededAt === null).at(-1);
+    if (candidate === undefined) return false;
+    const subject = await subjectOf(txDb, input.shiftId).catch(() => null);
+    const pageIds = subject === null ? [] : subject.shift.pages.map((page) => input.catalog.idOf.get(page.pageLabel)).filter((id): id is number => id !== undefined);
+    const gengarPending = candidate.gengarAnsweredAt === null && (await hasShiftReportReviewer(txDb, pageIds));
+    if (!checkLetsConfirm({ handedInAt: candidate.madeAt, now, hubPending: hubPending(candidate), gengarPending })) return false;
+    return setHandinPhase(txDb, { handinId: locked.id, phase: "confirm", at: now, from: ["checking"] });
+  });
 }
 
 /**

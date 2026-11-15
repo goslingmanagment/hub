@@ -665,6 +665,33 @@ async function refreshHomeOf(app: ClaimsApp, occurredAt: Date | null, now: Date)
 }
 
 /**
+ * A day of silence due now on the questions of one report (asked by it, or of its person): settled the moment a board
+ * is read, not at the next pass. The pass stays the backstop for everything else.
+ */
+export async function settleDueSilences(app: Pick<AppContext, "db" | "logger">, input: { handinId: number; userIds: readonly number[] }, now: Date): Promise<number> {
+  let settled = 0;
+  for (const claim of await listSaleClaims(app.db, { states: ["asked"] })) {
+    const ours = claim.claimantHandinId === input.handinId || (claim.sideUserId !== null && input.userIds.includes(claim.sideUserId));
+    if (!ours || !silenceSettles(claim, now)) continue;
+    if (await settleBySilence(app, claim, now)) settled += 1;
+  }
+  return settled;
+}
+
+/**
+ * One settlement per sale: when a claim on a sale settles (an agreement, a day of silence), every other question still
+ * asked on that sale — another person who took it too — goes to the decider. Each alone would give its claimant the
+ * whole sale. In the caller's transaction, in the settlements' turn.
+ */
+async function othersToDecider(db: Database, settled: Pick<SaleClaimRow, "id" | "transactionId">, now: Date): Promise<void> {
+  if (settled.transactionId === null) return;
+  for (const other of await listSaleClaims(db, { transactionIds: [settled.transactionId], states: ["asked"] })) {
+    if (other.id === settled.id || other.kind !== "claim") continue;
+    await updateSaleClaim(db, other.id, { state: "owner", escalatedAt: now, escalatedWhy: "double" }, now, { ifState: "asked" });
+  }
+}
+
+/**
  * A day of silence: the claim is settled for the one who asked, as an agreement is (the claimant all or the half, the
  * side none or the other half), in the settlements' turn; every counted report holding the sale gets its version made
  * by the system. False — the claim was answered or moved meanwhile.
@@ -682,6 +709,7 @@ async function settleBySilence(app: Pick<AppContext, "db" | "logger">, claim: Sa
     const locked = await findSaleClaim(txDb, claim.id, { lock: true });
     if (locked === null || locked.state !== "asked" || locked.answer !== null) return false;
     await updateSaleClaim(txDb, locked.id, { state: "agreed", closedAt: now, silenceAt: now }, now, { ifState: "asked" });
+    await othersToDecider(txDb, locked, now);
     const reports = await listCurrentReportsOfSales(txDb, [claim.transactionId!]);
     const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === claim.transactionId)?.netMills ?? 0;
     const by: SettleBy = { door: "workboard", actorUserId: claim.claimantUserId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null };
@@ -762,6 +790,7 @@ export async function answerSaleClaim(
       ...(input.answer === "agree" ? { state: "agreed" as const, closedAt: now } : { state: "owner" as const, escalatedAt: now, escalatedWhy: "disagree" as const }),
     }, now);
     if (input.answer !== "agree" || claim.transactionId === null || claim.claimantUserId === null) return;
+    await othersToDecider(txDb, claim, now);
     // Agreed: every report that counts the sale gets what the agreement gives — the claimant all (or a half), the side none (or the other half).
     const reports = await listCurrentReportsOfSales(txDb, [claim.transactionId]);
     const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === claim.transactionId)?.netMills ?? sale?.netMills ?? 0;

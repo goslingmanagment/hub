@@ -83,9 +83,9 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import { ledgerGet, readLedgerPayouts } from "./ledger-payouts.ts";
 import { parseLedgerReportDays } from "./ledger-reports.ts";
 import { pagesWithLines, reportSums, settledShareOf } from "./sale-claim-rules.ts";
-import { claimsOfReport, runSaleClaims } from "./sale-claims.ts";
-import { syncCheckMatters } from "./shift-handin-check.ts";
-import { handInShiftReport, PhaseConflictError } from "./shift-report-board.ts";
+import { claimsOfReport, runSaleClaims, settleDueSilences } from "./sale-claims.ts";
+import { checkReportNow, syncCheckMatters } from "./shift-handin-check.ts";
+import { handInShiftReport, moveWhenDue, PhaseConflictError } from "./shift-report-board.ts";
 import { boardOn, phaseOf, readBoard } from "./shift-report-board-view.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { computeSaleHomes, registrySlots, ruleWorksOf } from "./sale-homes.ts";
@@ -854,11 +854,29 @@ export async function readHandinVersionPosts(
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
+/** What is due on a report by now, done before it is read; a failure is logged and the pass does it later. */
+async function dueNow(app: HandinApp, input: { handin: HandinRow; subject: Subject; catalog: PageCatalog }, now: Date): Promise<void> {
+  const { handin, subject, catalog } = input;
+  const logged = (what: string) => (error: unknown) => {
+    app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, `shift report: ${what} on read failed; the pass will`);
+    return false;
+  };
+  if (phaseOf(handin) === "checking") {
+    await checkReportNow(app, { handinId: handin.id, shiftId: subject.shift.id, catalog }, now).catch(logged("Hub's check"));
+    await moveWhenDue(app.db, { shiftId: subject.shift.id, catalog }, now).catch(logged("the move to «Подтвердите»"));
+  }
+  await settleDueSilences(app, { handinId: handin.id, userIds: subject.userIds }, now).catch(logged("a day of silence"));
+}
+
 export async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject, now: Date, options: { withPost?: boolean } = {}): Promise<ShiftReportResponse> {
   const { db } = app;
   const catalog = await pageCatalog(db);
   const access = accessOf(actor, subject, catalog);
-  const handin = await findHandinByShift(db, subject.shift.id);
+  // What is due by now happens before the board is drawn (the pass is only the backstop): Hub's check of a report in
+  // «Проверка», its move to «Подтвердите» when Gengar's 10 minutes are up, a day of silence on its questions.
+  const found = await findHandinByShift(db, subject.shift.id);
+  if (found !== null) await dueNow(app, { handin: found, subject, catalog }, now);
+  const handin = found === null ? null : await findHandinByShift(db, subject.shift.id);
   const versions = handin === null ? [] : await listHandinVersions(db, handin.id);
   const latest = versions.at(-1) ?? null;
   const own = access.access === "own";

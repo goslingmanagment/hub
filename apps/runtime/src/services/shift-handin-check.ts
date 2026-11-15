@@ -173,6 +173,13 @@ export async function runHubChecks(app: CheckApp, now: Date): Promise<number> {
   return touched;
 }
 
+/** Hub's check of one report's open candidate now (a read of its board in «Проверка»), as the pass does it. */
+export async function checkReportNow(app: CheckApp, input: { handinId: number; shiftId: number; catalog: PageCatalog }, now: Date): Promise<boolean> {
+  const candidate = (await listHandinCandidates(app.db, input.handinId)).filter((one) => one.supersededAt === null && one.hubCheckedAt === null).at(-1);
+  if (candidate === undefined) return false;
+  return checkCandidate(app, { candidateId: candidate.id, handinId: input.handinId, shiftId: input.shiftId, catalog: input.catalog }, now);
+}
+
 async function checkCandidate(app: CheckApp, input: { candidateId: number; handinId: number; shiftId: number; catalog: PageCatalog }, now: Date): Promise<boolean> {
   const { db } = app;
   const candidate = (await listHandinCandidates(db, input.handinId)).find((one) => one.id === input.candidateId);

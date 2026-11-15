@@ -33,6 +33,28 @@ export const SHIFT_REPORT_PHASE_CHIPS: Record<ShiftReportPhase, string> = {
  * decides whether it joins a pot). A version's line in the ledger's feed keeps the three words: `give` and `pot` read
  * there as `not_mine` (the line counts nothing for the person), the feed's format does not change.
  */
+/**
+ * How each site's own list words a sale, by the sale's kind — Fansly's Wallet activity («Media Sale to», approved
+ * prototype `report-panel-mockups/columns.html`), OnlyFans' statement («Payment for message from»). The ONE dictionary:
+ * the board's rows take their words from it (`saleSiteWords`). A row's kind is the rule's (`ppv`, `post`, `tip`,
+ * `subscription`); a sale's stored kind (`message_purchase`, `post_purchase`, `stream_tip`) reads as the same.
+ */
+export const SALE_SITE_WORDS = {
+  fansly: { ppv: "Media Sale to", post: "Media Sale to", subscription: "Subscription Sale to", tip: "Tip from" },
+  onlyfans: { ppv: "Payment for message from", post: "Payment for post from", subscription: "Subscription from", tip: "Tip from" },
+} as const satisfies Record<"fansly" | "onlyfans", Record<"ppv" | "post" | "subscription" | "tip", string>>;
+
+const SALE_KIND_OF: Record<string, "ppv" | "post" | "subscription" | "tip"> = {
+  ppv: "ppv", message_purchase: "ppv", post: "post", post_purchase: "post", subscription: "subscription", tip: "tip", stream_tip: "tip",
+};
+
+/** The site's words before the fan for a sale of a kind; a kind it does not know — the plain «Sale to» / «Payment from». Pure. */
+export function saleSiteWords(platform: "fansly" | "onlyfans", kind: string): string {
+  const one = SALE_KIND_OF[kind];
+  if (one === undefined) return platform === "fansly" ? "Sale to" : "Payment from";
+  return SALE_SITE_WORDS[platform][one];
+}
+
 export const SHIFT_REPORT_WORDS = ["mine", "not_mine", "share", "give", "pot"] as const;
 export const shiftReportWordEnum = z.enum(SHIFT_REPORT_WORDS);
 export type ShiftReportWord = z.infer<typeof shiftReportWordEnum>;

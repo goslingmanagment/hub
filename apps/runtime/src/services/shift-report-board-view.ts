@@ -1,6 +1,7 @@
 import {
   SHIFT_REPORT_PHASE_CHIPS,
   personNameForms,
+  saleSiteWords,
   type ShiftReportBoard,
   type ShiftReportOwner,
   type ShiftReportPhase,
@@ -24,6 +25,8 @@ import {
   listHandinSalesOnPages,
   listOpenSaleSightings,
   listSaleClaims,
+  listActiveSaleDecisions,
+  listUserRoles,
   listTransactionPlatformRefs,
   type CandidateRow,
   type Database,
@@ -93,12 +96,9 @@ export function boardOn(subject: Pick<Subject, "person" | "shift">): boolean {
   return since !== null && since.getTime() <= subject.shift.startedAt.getTime();
 }
 
-const SITE_WORDS: Record<"fansly" | "onlyfans", Record<string, string>> = {
-  fansly: { message_purchase: "Media Sale to", post_purchase: "Media Sale to", subscription: "Subscription Sale to", tip: "Tip from", stream_tip: "Tip from" },
-  onlyfans: { message_purchase: "Payment for message from", post_purchase: "Payment for post from", subscription: "Subscription from", tip: "Tip from", stream_tip: "Tip from" },
-};
+/** The site's words of a row (contracts `saleSiteWords`, the one dictionary): rows carry the rule's kinds (`ppv`, `post`…). */
 export function siteWordsOf(platform: "fansly" | "onlyfans", kind: string): string {
-  return SITE_WORDS[platform][kind] ?? (platform === "fansly" ? "Sale to" : "Payment from");
+  return saleSiteWords(platform, kind);
 }
 
 const platformOf = (value: string | undefined): "fansly" | "onlyfans" => (value === "onlyfans" ? "onlyfans" : "fansly");
@@ -258,10 +258,26 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   };
   const testShift = await isTestUser(db, subject.shift.userId);
   const teamFacts = await teamFactsFor({ db });
-  const decider = disputeDecider({
-    modelSlug: catalog.info.get(labels[0] ?? "")?.modelSlug ?? null, testOwner: testShift ? await findTestOwnerLogin(db) : null,
-    facts: teamFacts, sidePersonIds: personsOfLogins(teamFacts, [subject.shift.userId]),
-  });
+  const testOwner = testShift ? await findTestOwnerLogin(db) : null;
+  const sidePersonIds = personsOfLogins(teamFacts, [subject.shift.userId]);
+  // Who decides is each sale's own (`deciderOf`): the lead of ITS page's model; the pot's and «стык смен» — the owner's.
+  const deciderOfPage = (label: string | null) => disputeDecider({ modelSlug: catalog.info.get(label ?? "")?.modelSlug ?? null, testOwner, facts: teamFacts, sidePersonIds });
+  const ownerDecider = disputeDecider({ modelSlug: null, testOwner });
+  const deciderOfLine = (line: Pick<HandinVersionLine, "pageLabel" | "rule">) =>
+    (line.rule.home === "pot" || line.rule.home === "decide" ? ownerDecider : deciderOfPage(line.pageLabel));
+  // The board's own (the first page's), for a text that names no sale.
+  const decider = deciderOfPage(labels[0] ?? null);
+  // «решил …»: the decision's own author — the owner («владелец», the test team's owner by name), else the lead by name.
+  const decisions = await listActiveSaleDecisions(db, ids);
+  const authors = [...new Set([...decisions.values()].flatMap((one) => (one.decidedByUserId === null ? [] : [one.decidedByUserId])))];
+  const authorRoles = await listUserRoles(db, authors);
+  const authorNames = await listHandinNames(db, authors);
+  const decidedBy = (transactionId: number, line: Pick<HandinVersionLine, "pageLabel" | "rule">): string => {
+    const author = decisions.get(transactionId)?.decidedByUserId ?? null;
+    if (author === null) return deciderOfLine(line).words;
+    if (authorRoles.get(author) === "owner") return testOwner?.name ?? "владелец";
+    return authorNames.get(author) ?? deciderOfLine(line).words;
+  };
   const editable = own && mayAct(actor, "edit", phase);
   const canNote = own && mayAct(actor, "note", phase);
   const counted = phase === "counted";
@@ -290,13 +306,14 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     const incoming = incomingOf(id);
     const proposal = proposalOf(id);
     const noteProposal = noteProposalOf(id);
+    const rowDecider = deciderOfLine(line);
     let current = lineOwner(line, people, me);
     let reason = "";
     const oldWay = ask !== null && ask.sideUserId !== null && ask.escalatedWhy === "no_side" && (ask.state === "owner" || ask.state === "asked") && !onBoard(ask.sideUserId);
     if (oldWay && ask !== null && ask.sideUserId !== null) {
       // The other side hands shifts in the old way: the decider decides, no day of silence runs.
       current = ask.statement === null ? owner("user", ask.sideUserId, people, me) : ask.statement === "share" ? owner("share", ask.sideUserId, people, me) : rule;
-      reason = `${people.nameOf(ask.sideUserId)} сдаёт смену по-старому, решит ${decider.words}`;
+      reason = `${people.nameOf(ask.sideUserId)} сдаёт смену по-старому, решит ${rowDecider.words}`;
     } else if (line.statement === "give" && takenBack.has(id) && line.toUserId != null) {
       current = owner("nobody", null, people, me);
       reason = `${people.nameOf(line.toUserId)} не взял`;
@@ -308,7 +325,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       reason = ask.sideUserId === null ? "ждём владельца" : `ждём ответа ${personNameForms(people.nameOf(ask.sideUserId)).gen}`;
     } else if (ask !== null && ask.answer === "disagree" && ask.state === "owner" && ask.sideUserId !== null) {
       current = rule;
-      reason = `${people.nameOf(ask.sideUserId)} не согласен, решит ${decider.words}`;
+      reason = `${people.nameOf(ask.sideUserId)} не согласен, решит ${rowDecider.words}`;
     } else if (ask !== null && ask.state === "agreed" && ask.sideUserId !== null) {
       reason = ask.silenceAt !== null ? `${people.nameOf(ask.sideUserId)} не ответил за сутки` : `${people.nameOf(ask.sideUserId)} согласился`;
     } else if (incoming !== null && (incoming.state === "asked" || incoming.state === "owner") && incoming.claimantUserId !== null) {
@@ -316,10 +333,10 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     } else if (proposal !== null && (proposal.state === "accepted" || (proposal.state === "proposed" && phase === "confirm"))) {
       reason = "поменял Генгар";
     } else if (proposal !== null && proposal.state === "declined" && counted) {
-      reason = `Генгар предлагал иначе, решит ${decider.words}`;
+      reason = `Генгар предлагал иначе, решит ${rowDecider.words}`;
     } else if (line.settled === "owner") {
       // Decided by the decider («общак, решил владелец», «моя, решил владелец»): the word is what the decision gives.
-      reason = `решил ${decider.words}`;
+      reason = `решил ${decidedBy(id, line)}`;
     } else if (!sameOwner(current, rule)) {
       reason = `по правилу ${rule.kind === "me" ? "ваша" : rule.words}`;
     } else if (amount <= 0) {
@@ -397,12 +414,14 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       attention,
       choices: editable && !isLate ? choicesOf(line, current) : [],
       foundByHub: foundIds.has(id),
+      decider: rowDecider,
     };
   };
 
   /** What a row's «чья» menu offers, and whom each choice would ask (R-board §3, §4; arena round 3: the board on both sides). */
   function choicesOf(line: HandinVersionLine, current: ShiftReportOwner): NonNullable<ShiftReportRow["choices"]> {
     const rule = ruleOwner(line, people, me);
+    const decider = deciderOfLine(line);
     const is = (one: ShiftReportOwner) => sameOwner(one, current);
     const hintOf = (one: ShiftReportOwner, asks: { words: string } | null) => (sameOwner(one, rule) ? "по правилу" : asks?.words ?? "");
     const askOf = (userId: number | null, pot: boolean): { to: "colleague" | "decider"; user: ReturnType<People["person"]> | null; words: string } | null => {
