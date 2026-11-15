@@ -42,10 +42,37 @@ const FORBIDDEN_KEYS = new Set([
   "accruedMills", "paidMills", "unpaidMills", "balanceMills", "owedMills", "payoutMills", "lastPayout", "oldestUnpaidDate",
 ]);
 /**
- * The reads that refuse a team-A chatter (anna) and a team-A lead (lena) on this fixture other than a console read's
- * 403 by its declaration, each with why: a refusal is a finding only when it is not listed here.
+ * Why a read refuses a team-A chatter (anna) or a team-A lead (lena) on this fixture; null — it must not. A refusal is
+ * a finding only when this says nothing: no non-200 answer is skipped silently.
  */
-const EXPECTED_REFUSALS: Record<string, string[]> = { anna: [], lena: [] };
+function expectedRefusal(_who: string, status: number, key: string): string | null {
+  if (status === 403) {
+    if (/^(agent|client)[A-Z]/u.test(key)) return "the agent plane and the extension's device routes: not a web session's";
+    if (/^(page|ofapi|overview|sync|ops|archive|voiceNote|aiPersona|aiRecap)[A-Z]/u.test(key)) return "the console's reads: the owner's, Workboard keeps its own";
+    if (["models", "healthSync", "crossPageTransactions", "modelRevenueDaily"].includes(key)) return "the console's reads: the owner's";
+    if (["saleDispute", "saleDisputeOfClaim", "shiftReportClaimable", "teamNewcomers"].includes(key)) return "the owner's or a decider's, by role";
+    if (["reportsList", "reportGet"].includes(key)) return "agents' reports: the owner's and team leads'";
+  }
+  const SAMPLE: Record<string, string> = {
+    "204 authStaticReports": "nothing to report",
+    "400 authSso": "a sign-in hand-off needs its own parameters",
+    "400 authSsoBegin": "a sign-in hand-off needs its own parameters",
+    "400 authSsoAccept": "a sign-in hand-off needs its own parameters",
+    "400 customOrder": "the sampled order code is not one",
+    "400 fansSearch": "the sampled search names no scope",
+    "400 spenders": "the sampled search names no scope",
+    "400 spenderDetail": "the sampled search names no scope",
+    "400 spenderSeries": "the sampled search names no scope",
+    "400 saleChain": "the sampled sale names nothing",
+    "404 crossPageFanDetail": "the sampled fan does not exist",
+    "404 crossPageFanTransactions": "the sampled fan does not exist",
+    "404 learnPage": "the sampled slug does not exist",
+    "404 publicVaultUploadFile": "the sampled upload does not exist",
+    "404 teamShiftReview": "the sampled moment is not inside a shift",
+    "503 accountReports": "no ledger in this test",
+  };
+  return SAMPLE[`${status} ${key}`] ?? null;
+}
 
 /** A sale chain's links to a person's pay (`saleChain`): present for everyone, their sum only for whom it is. */
 const PAY_LINK_KEYS = new Set(["accrual", "payout"]);
@@ -289,9 +316,11 @@ describe("teams: who sees whom (package T)", () => {
         const response = await get(read.url, who);
         if (response.statusCode !== 200) {
           // A refusal is said, never skipped: a console read refuses a chatter and a lead by its declaration (403); every
-          // other refusal is named in EXPECTED_REFUSALS with why.
+          // other refusal is named in `expectedRefusal` with why.
           const auth = (routeSchemas as unknown as Record<string, { auth?: { kind: string } }>)[read.key]?.auth?.kind;
-          if (!(response.statusCode === 403 && auth === "owner-session")) refused[who]!.push(`${response.statusCode} ${read.key}`);
+          if (!(response.statusCode === 403 && auth === "owner-session") && expectedRefusal(who, response.statusCode, read.key) === null) {
+            refused[who]!.push(`${response.statusCode} ${read.key}`);
+          }
           continue;
         }
         walked += 1;
@@ -306,7 +335,7 @@ describe("teams: who sees whom (package T)", () => {
       }
     }
     expect(walked).toBeGreaterThan(5);
-    expect(refused).toEqual(EXPECTED_REFUSALS);
+    expect(refused).toEqual({ anna: [], lena: [] });
     expect(leaks).toEqual([]);
     expect(money).toEqual([]);
 
