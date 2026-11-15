@@ -350,13 +350,25 @@ afterAll(async () => {
 
 /**
  * An answer as compared: the status, and for a read its body with clock fields and moments set aside, and the value the
- * request named written as `<named>` (an answer may repeat what it was asked: «No person «x»»).
+ * request named written as `<named>` wherever the answer repeats it (a whole value; inside a text only a text key, so a
+ * short numeric id never rewrites a date).
  */
 function compared(status: number, body: string, method: string, named: string): string {
   if (method !== "GET") return String(status);
-  let parsed: unknown = body;
-  try { parsed = normalize(JSON.parse(body)); } catch { /* not JSON */ }
-  return `${status} ${JSON.stringify(parsed).split(JSON.stringify(named).slice(1, -1)).join("<named>").replace(ISO_TIME, "<ts>")}`;
+  const textKey = !/^\d+$/u.test(named);
+  const swap = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(swap);
+    if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, inner]) => [key, swap(inner)]));
+    if ((typeof value === "string" || typeof value === "number") && String(value) === named) return "<named>";
+    if (typeof value === "string") {
+      const moments = value.replace(ISO_TIME, "<ts>");
+      return textKey ? moments.split(named).join("<named>") : moments;
+    }
+    return value;
+  };
+  let parsed: unknown;
+  try { parsed = swap(normalize(JSON.parse(body))); } catch { parsed = textKey ? body.split(named).join("<named>") : body; }
+  return `${status} ${JSON.stringify(parsed)}`;
 }
 
 /** The probes whose answer differs from the answer for a missing object, or a write that succeeded on a hidden object. */
