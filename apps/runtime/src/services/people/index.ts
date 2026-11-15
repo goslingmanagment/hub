@@ -280,7 +280,7 @@ function proposalView(row: PersonProposalRow): PersonProposal {
 }
 
 /** A person as their team reads them: nothing of how to reach them, how they sign in, or what the owner noted. */
-function teamPersonView(person: Person): Person {
+function teamPersonView(person: Person, viewer: { leads: boolean }): Person {
   // A WHITE LIST, field by field: a field added to a person later is not shown to a colleague until it is named here
   // (the type makes it a compile error to forget). What a colleague reads: who the person is, their role and state,
   // their pages and schedule, their logins' names and states (shifts are by login), their rights. Never Telegram, keys,
@@ -294,12 +294,16 @@ function teamPersonView(person: Person): Person {
     state: person.state,
     leftOn: person.leftOn,
     telegram: { userId: null, handle: null, reportTag: null },
-    logins: person.logins.map((login) => ({ userId: login.userId, username: login.username, role: login.role, state: login.state, lastSeenAt: null })),
+    // Shifts are by login: every colleague's screen joins them by the login's number (whose a shift is, its name). Its
+    // name — the login itself — only for whoever leads the team (the card's «Чей вход» picks a person's login by it);
+    // never for a chatter («никогда: входы»).
+    logins: person.logins.map((login) => ({ userId: login.userId, username: viewer.leads ? login.username : "", role: login.role, state: login.state, lastSeenAt: null })),
     agentKeys: [],
     workingPages: person.workingPages.map((page) => ({ pageLabel: page.pageLabel, platform: page.platform, modelSlug: page.modelSlug, modelName: page.modelName })),
     schedule: person.schedule,
     pageSchedules: person.pageSchedules,
-    rights: person.rights.map((right) => ({ right: right.right, grantedAt: right.grantedAt })),
+    // No screen of a colleague reads a person's rights (they are Hub «Люди»'s, the owner's).
+    rights: [],
     onboarding: [],
     note: null,
     importNotes: [],
@@ -328,7 +332,7 @@ export async function readTeamPeople(app: Pick<AppContext, "db">, principal: Hum
     const members = new Set(facts.working.filter((row) => pages.has(row.pageId)).map((row) => row.personId));
     if (teams.personId !== null) members.add(teams.personId);
     return {
-      people: rows.filter((row) => members.has(row.id)).map((row) => teamPersonView(personView(row, parts, now))),
+      people: rows.filter((row) => members.has(row.id)).map((row) => teamPersonView(personView(row, parts, now), { leads: teams.lead.length > 0 })),
       unlinkedLogins: [],
       serverNow: now.toISOString(),
     };

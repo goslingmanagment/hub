@@ -358,7 +358,7 @@ export async function readSaleChain(
     const reportDate = handedIn?.reportDate ?? shift?.reportDate ?? moscowDayOf(sale.occurredAt);
     let report: SaleChainLink;
     let model: string | null = null;
-    const postLink = viewer.kind === "owner" ? `/workboard/money/reports` : own ? "/workboard/my/shifts" : null;
+    const postLink = viewer.kind === "owner" ? `/workboard/money/reports` : own ? "/workboard/shifts/mine" : null;
     if (handedIn !== null) {
       report = hubReportLinkOf({ report: handedIn, transactionId: sale.transactionId, own, sums });
     } else if (testRealm) {
@@ -399,7 +399,7 @@ export async function readSaleChain(
           why = unknownWords(error);
         }
       }
-      const payLink = viewer.kind === "owner" && person !== null ? `/workboard/money/debts?person=${encodeURIComponent(person.code)}` : own ? "/workboard/my/shifts" : null;
+      const payLink = viewer.kind === "owner" && person !== null ? `/workboard/money/debts?person=${encodeURIComponent(person.code)}` : own ? "/workboard/money/mine" : null;
       ({ accrual, payout } = payLinksOf({ pay, unknown: why, reportDate, model, sums, link: payLink }));
     }
     out.push({

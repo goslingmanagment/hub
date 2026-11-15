@@ -311,6 +311,8 @@ export const publicationWordsSchema = z.object({
   statusReasonParts: z.array(z.object({ text: z.string(), names: z.array(z.string()) })).nullable(),
   /** Each check of the draft, in the order of `findings`. */
   findings: z.array(z.string()),
+  /** What happened to the withdrawal or the deletion Hub sent, when the status does not say it; null — nothing. */
+  command: z.string().nullable(),
 });
 export const personPublicationSchema = publicationSchema.extend({ words: publicationWordsSchema });
 export const personPublicationListResponseSchema = z.object({ publications: z.array(personPublicationSchema) });

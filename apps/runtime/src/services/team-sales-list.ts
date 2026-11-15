@@ -179,7 +179,7 @@ export async function readTeamSalesList(
     } else {
       const mine = viewer.logins.includes(share.userId);
       const sums: ChainSums = { share: true, hubLine: true, post: owner || mine, pay: false };
-      const postLink = owner ? "/workboard/money/reports" : mine ? "/workboard/my/shifts" : null;
+      const postLink = owner ? "/workboard/money/reports" : mine ? "/workboard/shifts/mine" : null;
       const person = people.get(share.userId);
       report = reportOfShare({
         sale,

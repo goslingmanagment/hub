@@ -6,8 +6,8 @@ import { peerOriginOf, siteOf } from "@agency_hub_core/ui/sites";
 
 export { CHATTER_SITE_ORIGIN, NO_SILENT_SIGNIN, contentopsEntryHref, peerOriginOf, signInHopHref, silentSignInHref, workboardEntryHref } from "@agency_hub_core/ui/sites";
 
-/** What the browser tab is called there; index.html names the console. */
-export const CHATTER_SITE_TITLE = "ChatGoose";
+/** What the browser tab is called there (sign-in, the invitation, the password link): the product the person opens, Workboard. */
+export const CHATTER_SITE_TITLE = "Workboard";
 
 /** Guarded: the settings tree also renders server-side in tests, where there
  *  is no window. Locally `chatgoose.localhost` plays the chatters' site. */

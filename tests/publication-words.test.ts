@@ -5,6 +5,7 @@ import {
   albumRunWords,
   approveRefusalWords,
   autostopReasonWords,
+  commandNoteWords,
   deleteResultWords,
   findingWords,
   statusReasonWords,
@@ -53,5 +54,11 @@ describe("publications' words", () => {
     expect(autostopReasonWords("browser_login_lost")).toBe("Fansly вышел из аккаунта в браузере страницы");
     expect(findingWords({ code: "media_not_on_page", severity: "blocking", mediaKey: "vault:m1", at: null, publicationId: null, detail: {} },
       [{ role: "media", position: 1, source: "vault", mediaRef: "m1" }])).toBe("Файл 2 из медиатеки: его нет среди файлов этой страницы");
+  });
+
+  it("says what happened to a withdrawal or a deletion Hub sent, when the status does not", () => {
+    expect(commandNoteWords({ status: "scheduled", platform: "fansly", withdrawal: { state: "confirmed" }, deletion: null })).toBe("Fansly принял команду — Hub проверяет расписание");
+    expect(commandNoteWords({ status: "published", platform: "fansly", withdrawal: null, deletion: { state: "rejected" } })).toBe("Fansly отказал в удалении: пост на стене, удалите на площадке");
+    expect(commandNoteWords({ status: "withdrawn", platform: "fansly", withdrawal: { state: "confirmed" }, deletion: null })).toBeNull();
   });
 });

@@ -20,6 +20,7 @@ import {
   listApprovedSwaps,
   listStandingSwapQuestionIds,
   listMatterPageLabels,
+  listOpenMattersOfKinds,
   listPersonRows,
   revokePersonDayLines,
   findPageSummaryByLabel,
@@ -42,7 +43,10 @@ import { moscowDayOf } from "./chatter-shifts.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { slotMinute, slotTime } from "./people/index.ts";
 import { pageIsTest, requireSameRealm } from "./sandbox/realm.ts";
-import { deciderOf, leadsModel, modelOfPageId, pagesOfModels, personOfLogin, personsOfLogins, requireTeamReader, teamFactsFor, teamPagesFor } from "./teams.ts";
+import {
+  deciderOf, leadsModel, loginOfPerson, modelOfPageId, pagesOfModels, personOfLogin, personsOfLogins, requireTeamReader, teamFactsFor, teamPagesFor,
+  teamsOfPerson, type Decider,
+} from "./teams.ts";
 
 /**
  * Вопросы тому, кто решает (products plan 2026-11-13 §4.6): the one service of a question — its row (`team_questions`,
@@ -65,6 +69,8 @@ type QuestionsApp = Pick<AppContext, "db">;
 const SYSTEM: MatterActor = { door: "system" };
 const ASKED = "question.asked";
 const ANSWERED = "question.answered";
+/** «Вы выходите вместо …»: the covering person of an approved swap is told, until its day has passed or it is taken back. */
+const COVER = "question.cover";
 const RECENT_MS = 30 * 86_400_000;
 
 const notFound = () => new NotFoundError("No such question");
@@ -82,10 +88,14 @@ function loginsOf(facts: TeamFacts, userId: number): number[] {
 
 const kindWord = (kind: string) => TEAM_QUESTION_KIND_WORDS[kind as TeamQuestionKind] ?? kind;
 
-/** Whether the viewer decides the question: its decider (any login of their person) or the owner; never a narrow session. */
+/** Whether the viewer decides the question NOW (`deciderNow`), or is the owner; never a narrow session. */
 function decidesIt(facts: TeamFacts, principal: HumanAuthPrincipal, row: TeamQuestionRow): boolean {
   if (principal.narrowDeviceTokenId !== undefined) return false;
-  return isOwnerSession(principal) || (row.deciderUserId !== null && loginsOf(facts, principal.user.id).includes(row.deciderUserId));
+  if (isOwnerSession(principal)) return true;
+  const now = deciderNow(facts, row);
+  if (now.kind !== "team_lead") return false;
+  const me = personOfLogin(facts, principal.user.id);
+  return me === null ? loginsOf(facts, principal.user.id).includes(now.userId) : now.personId === me;
 }
 
 /** A swap's details as a reader sees them: the people by code and name, the pages by label; whether it stands. */
@@ -117,14 +127,32 @@ async function swapsOf(app: QuestionsApp, facts: TeamFacts, principal: HumanAuth
   return out;
 }
 
+/**
+ * Who decides a question NOW: the rule (`deciderOf` of the page's model, kind `work`, the asker and a swap's absent
+ * person as sides) at the moment of reading and answering — the decider stored at asking is history. «График» (a lead's
+ * proposal of the standing schedule) is always the owner's.
+ */
+function deciderNow(facts: TeamFacts, row: TeamQuestionRow): Decider {
+  if (row.kind === "schedule") return { kind: "owner" };
+  const sides = personsOfLogins(facts, [row.askerUserId]);
+  if (row.swap !== null && !sides.includes(row.swap.absentPersonId)) sides.push(row.swap.absentPersonId);
+  return deciderOf(facts, row.modelId, "work", sides);
+}
+
 /** A question as its reader sees it. */
 async function wireOf(app: QuestionsApp, facts: TeamFacts, principal: HumanAuthPrincipal, rows: readonly TeamQuestionRow[], now: Date = new Date()): Promise<TeamQuestion[]> {
   const names = await listHandinNames(app.db, rows.flatMap((row) => [row.askerUserId, row.deciderUserId, row.answeredByUserId].filter((id): id is number => id !== null)));
   const own = loginsOf(facts, principal.user.id);
   const owner = isOwnerSession(principal);
   const swaps = await swapsOf(app, facts, principal, rows, now);
+  const me = personOfLogin(facts, principal.user.id);
   return rows.map((row) => {
-    const decides = row.deciderUserId === null ? owner : own.includes(row.deciderUserId);
+    // An open question's decider is the rule's now; an answered one keeps whom it was asked of (history).
+    const now = row.state === "open" ? deciderNow(facts, row) : null;
+    const decides = now !== null && now.kind === "team_lead" && principal.narrowDeviceTokenId === undefined && (me === null ? own.includes(now.userId) : now.personId === me);
+    const decider = now === null
+      ? (row.deciderUserId === null ? { kind: "owner" as const, name: "Владелец" } : { kind: "team_lead" as const, name: names.get(row.deciderUserId) ?? `#${row.deciderUserId}` })
+      : now.kind === "owner" ? { kind: "owner" as const, name: "Владелец" } : { kind: "team_lead" as const, name: now.name };
     return {
       id: row.id,
       kind: row.kind as TeamQuestionKind,
@@ -132,9 +160,7 @@ async function wireOf(app: QuestionsApp, facts: TeamFacts, principal: HumanAuthP
       pageLabel: row.pageLabel,
       fan: row.fanRef === null && row.fanName === null ? null : { fanRef: row.fanRef, name: row.fanName },
       asker: { userId: row.askerUserId, name: names.get(row.askerUserId) ?? `#${row.askerUserId}` },
-      decider: row.deciderUserId === null
-        ? { kind: "owner" as const, name: "Владелец" }
-        : { kind: "team_lead" as const, name: names.get(row.deciderUserId) ?? `#${row.deciderUserId}` },
+      decider,
       door: row.door,
       askedAt: row.askedAt.toISOString(),
       state: row.state,
@@ -150,11 +176,18 @@ async function wireOf(app: QuestionsApp, facts: TeamFacts, principal: HumanAuthP
   });
 }
 
-/** Whether the reader may see the question: its asker, its decider, the owner. */
+/**
+ * Whether the reader may see the question: its asker, its decider now (`deciderNow`), whom it was asked of (history),
+ * the person who covers a swap (they are named in it), the owner.
+ */
 function reads(facts: TeamFacts, principal: HumanAuthPrincipal, row: TeamQuestionRow): boolean {
   if (isOwnerSession(principal)) return true;
   const own = loginsOf(facts, principal.user.id);
-  return own.includes(row.askerUserId) || (row.deciderUserId !== null && own.includes(row.deciderUserId));
+  const me = personOfLogin(facts, principal.user.id);
+  const now = deciderNow(facts, row);
+  return own.includes(row.askerUserId) || (row.deciderUserId !== null && own.includes(row.deciderUserId))
+    || (now.kind === "team_lead" && (me === null ? own.includes(now.userId) : now.personId === me))
+    || (row.swap !== null && me !== null && row.swap.coverPersonId === me);
 }
 
 /** A question of the principal's realm (its page's), else «not found»: no question crosses the wall, by id or by list. */
@@ -173,7 +206,9 @@ async function openAsked(app: QuestionsApp, row: TeamQuestionRow, askerName: str
     title: `${askerName} спрашивает: ${kindWord(row.kind).toLowerCase()}`,
     object: { type: "team_question", id: String(row.id) },
     pageIds: [row.pageId],
-    owner: row.deciderUserId === null ? { role: "owner" } : { userId: row.deciderUserId },
+    // By role, so it follows the records (matters.ts): a team lead's role matter of the page waits for the lead of its
+    // model now, and for the owner while the model has none; the owner's when the rule names the owner.
+    owner: row.deciderUserId === null ? { role: "owner" } : { role: "team_lead" },
     money: false,
     // No words of the question here: they may name a fan, and the matter outlives a fan's erasure of the question.
     evidence: { questionId: row.id, kind: row.kind, askedAt: row.askedAt.toISOString() },
@@ -192,13 +227,18 @@ export async function readTeamQuestions(app: QuestionsApp, principal: AuthPrinci
   }
   const own = loginsOf(facts, principal.user.id);
   const owner = isOwnerSession(principal);
-  // The owner's are cut to his realm (a test owner's to the test pages); anyone else's are their own by person.
+  const me = personOfLogin(facts, principal.user.id);
+  // The owner's are cut to his realm (a test owner's to the test pages); anyone else's: their own, the ones of the models
+  // they lead now (the rule decides below, `reads`), the swaps they cover.
   const pageScope = owner ? await teamPagesFor(app, principal) : undefined;
+  const led = me === null ? [] : teamsOfPerson(facts, me).lead;
   const rows = await listTeamQuestions(app.db, {
     askerUserIds: own, deciderUserIds: own, ownerDecides: owner, since: new Date(now.getTime() - RECENT_MS),
+    modelIds: led, coverPersonId: me,
     ...(pageScope !== undefined ? { pageIds: pageScope } : {}),
   });
-  return { questions: await wireOf(app, facts, principal, rows), serverNow: now.toISOString() };
+  const seen = rows.filter((row) => reads(facts, principal, row));
+  return { questions: await wireOf(app, facts, principal, seen), serverNow: now.toISOString() };
 }
 
 export async function askTeamQuestion(app: QuestionsApp, principal: AuthPrincipal, body: TeamQuestionAskBody, now: Date = new Date()): Promise<TeamQuestionWriteResponse> {
@@ -251,7 +291,10 @@ export async function answerQuestion(
     }
     if (swap !== null) await writeSwapLines(tx, row.id, swap, principal.user.id);
   });
-  if (swap !== null) await auditSwap(app, principal, row.id, swap, "person.schedule_swap");
+  if (swap !== null) {
+    await auditSwap(app, principal, row.id, swap, "person.schedule_swap");
+    await tellCover(app, facts, row, swap, "approved", now);
+  }
   const answered = (await findTeamQuestion(app.db, id))!;
   await closeMatter(app.db, { key: `${ASKED}:${id}`, how: "resolved", writer: "server" }, SYSTEM, now);
   await openMatter(app.db, {
@@ -383,6 +426,7 @@ export async function revokeSwap(app: QuestionsApp, principal: AuthPrincipal, id
   const taken = await revokePersonDayLines(app.db, { questionId: id, byUserId: principal.user.id, at: now });
   if (taken === 0) throw new ConflictError("Nothing to take back: the swap is not standing");
   await auditSwap(app, principal, id, row.swap, "person.schedule_swap_revoked");
+  await tellCover(app, facts, row, row.swap, "revoked", now);
   await openMatter(app.db, {
     key: `${ANSWERED}:${id}`,
     kind: ANSWERED,
@@ -418,4 +462,49 @@ export async function readTeamSwaps(app: QuestionsApp, principal: AuthPrincipal,
     }),
     serverNow: now.toISOString(),
   };
+}
+
+/** «Пн, 16 нояб.» of a Moscow day. */
+function dayWords(day: string): string {
+  return new Intl.DateTimeFormat("ru-RU", { weekday: "short", day: "numeric", month: "short", timeZone: "Europe/Moscow" })
+    .format(new Date(`${day}T12:00:00+03:00`)).replace(/^./, (first) => first.toUpperCase());
+}
+
+/**
+ * The covering person of an approved swap is told in «Ждут вас» («Вы выходите вместо …», the swap's day, hours and
+ * pages), and told again when it is taken back. The matter closes itself once the day has passed
+ * (`closePassedCoverMatters`). The question service is its one writer.
+ */
+async function tellCover(app: QuestionsApp, facts: TeamFacts, row: TeamQuestionRow, swap: TeamQuestionSwapRow, how: "approved" | "revoked", now: Date): Promise<void> {
+  const userId = loginOfPerson(facts, swap.coverPersonId);
+  if (userId === null) return;
+  const absent = facts.people.find((person) => person.personId === swap.absentPersonId)?.name ?? "";
+  const labels = (await listMatterPageLabels(app.db)).labelOf;
+  const pages = swap.pageIds.map((id) => labels.get(id) ?? `#${id}`).join(", ");
+  const when = `${dayWords(swap.date)}, ${slotTime(swap.startMinute)}–${slotTime(swap.endMinute)}, ${pages}`;
+  await openMatter(app.db, {
+    key: `${COVER}:${row.id}`,
+    kind: COVER,
+    source: "server",
+    title: how === "approved" ? `Вы выходите вместо ${absent}: ${when}` : `Подмена отменена, вы не выходите вместо ${absent}: ${when}`,
+    object: { type: "team_question", id: String(row.id) },
+    pageIds: swap.pageIds,
+    owner: { userId },
+    money: false,
+    evidence: { questionId: row.id, date: swap.date, how },
+    link: linkOf(row.id),
+  }, SYSTEM, now);
+}
+
+/** The covering persons' matters of swaps whose day has passed (Moscow): closed, the cause gone. Every ten minutes. */
+export async function closePassedCoverMatters(app: QuestionsApp, now: Date = new Date()): Promise<{ closed: number }> {
+  const today = moscowDayOf(now.getTime());
+  let closed = 0;
+  for (const matter of await listOpenMattersOfKinds(app.db, [COVER])) {
+    const date = typeof matter.evidence.date === "string" ? matter.evidence.date : null;
+    if (date === null || date >= today) continue;
+    const result = await closeMatter(app.db, { key: matter.key, how: "cause_gone", writer: "server" }, SYSTEM, now);
+    if (result.transition === "closed") closed += 1;
+  }
+  return { closed };
 }

@@ -85,6 +85,7 @@ const HUB_SCHEDULE_TITLES: Readonly<Record<string, string>> = {
   "ops.metrics.sample": "Замеры работы Hub",
   "people-messages.sweep": "Сообщения людям: отправка с сервера",
   "people.start": "Ввод новичков: дела владельцу",
+  "team.questions": "Подмены: дела тех, кто выходит",
   "projections.dm-reconcile.sweep": "Сверка личных сообщений",
   "projections.message-archive.sweep": "Архив сообщений",
   "publications.fansly": "Публикации на Fansly",
