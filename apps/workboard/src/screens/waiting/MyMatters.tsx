@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Link } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isMatterInfoKind, type Matter } from "@agency_hub_core/contracts";
+import { toast } from "@agency_hub_core/ui";
 import { formatDateTime } from "@agency_hub_core/ui/format";
+import { kernel } from "@/shared/hub";
 import { consoleHref } from "@/shared/links";
 import { mattersListQuery } from "@/shared/myMatters";
 import { waitedFor, waitingSince } from "./kinds";
@@ -23,21 +25,48 @@ function Go({ link }: { link: string }) {
   return <a href={consoleHref(link)} className="wt-go">Открыть</a>;
 }
 
-/** A claim of a colleague on your sale (package G) waits a day for your answer, then goes to the owner. */
+/** A colleague's question on your sale waits a day for your answer; after a day of silence the sale stays with the one who asked (`silenceSettles`). */
 const CLAIM_KIND = "sale.claim";
+
+/**
+ * The answer to a colleague's question, in the line itself: the sale may be on none of the person's boards (it waits
+ * for their next shift), and one press is all an answer is. «Не согласен» sends the question to whoever decides.
+ */
+function ClaimAnswer({ claimId }: { claimId: number }) {
+  const client = useQueryClient();
+  const answer = useMutation({
+    mutationFn: (word: "agree" | "disagree") => kernel.saleClaimAnswer({ params: { claimId }, body: { answer: word, note: null } }),
+    onSuccess: (_saved, word) => {
+      toast.success(word === "agree" ? "Продажа отдана" : "Записано: вы не согласны");
+      void client.invalidateQueries({ queryKey: ["matters"] });
+      void client.invalidateQueries({ queryKey: ["report"] });
+    },
+    onError: () => toast.error("Не получилось. Попробуйте ещё раз"),
+  });
+  return (
+    <span className="wt-answer">
+      <button type="button" className="wt-go wt-answer__one" disabled={answer.isPending} onClick={() => answer.mutate("agree")}>Согласен</button>
+      <button type="button" className="wt-go wt-answer__one" disabled={answer.isPending} onClick={() => answer.mutate("disagree")}>Не согласен</button>
+    </span>
+  );
+}
 
 function Row({ matter, now }: { matter: Matter; now: number }) {
   const since = waitingSince(matter);
-  const answerBy = matter.kind === CLAIM_KIND && typeof matter.evidence.answerBy === "string" ? matter.evidence.answerBy : null;
-  const about = [matter.pageLabels.join(", "), answerBy === null ? "" : `ответьте до ${formatDateTime(answerBy)}, потом решит владелец`].filter((part) => part !== "");
+  const claim = matter.kind === CLAIM_KIND;
+  const answerBy = claim && typeof matter.evidence.answerBy === "string" ? matter.evidence.answerBy : null;
+  const claimId = claim && typeof matter.evidence.claimId === "number" ? matter.evidence.claimId : null;
+  const why = claim && typeof matter.evidence.note === "string" && matter.evidence.note.trim() !== "" ? matter.evidence.note.trim() : null;
+  const about = [matter.pageLabels.join(", "), answerBy === null ? "" : `ответьте до ${formatDateTime(answerBy)}, иначе продажа останется за тем, кто забрал`].filter((part) => part !== "");
   return (
     <li className="wt-line">
       <div className="wt-line__main">
         <span className="wt-line__title">{matter.title}</span>
+        {why !== null && <span className="wt-line__about">«{why}»</span>}
         {about.length > 0 && <span className="wt-line__about">{about.join(" · ")}</span>}
       </div>
       <span className="wt-line__age" title={`С ${formatDateTime(since, { yearUnlessCurrent: true })}`}>{waitedFor(since, now)}</span>
-      <span className="wt-line__go">{matter.link ? <Go link={matter.link} /> : null}</span>
+      <span className="wt-line__go">{claimId !== null ? <ClaimAnswer claimId={claimId} /> : matter.link ? <Go link={matter.link} /> : null}</span>
     </li>
   );
 }

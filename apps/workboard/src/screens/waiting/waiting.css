@@ -142,6 +142,27 @@
     outline-offset: 2px;
   }
 
+  /* The two answers to a colleague's question, in the line. */
+  .wt-answer {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--ui-space-3);
+  }
+
+  .wt-answer__one {
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .wt-answer__one:disabled {
+    color: var(--ui-text-3);
+    cursor: default;
+  }
+
   .wt-quiet {
     color: var(--ui-text-3);
     font-size: var(--ui-fs-13);
