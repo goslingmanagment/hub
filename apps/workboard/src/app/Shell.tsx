@@ -10,6 +10,7 @@ import { kernel, queryClient, signInHref } from "@/shared/hub";
 import { carryParams } from "@/shared/links";
 import { usePeopleIndex } from "@/shared/people";
 import { startOpen, useAccountStart } from "@/shared/start";
+import { useOwnPayOn } from "@/shared/ownPay";
 import { useMe } from "@/shared/useMe";
 import { useRestoredPeriod } from "@/shared/usePeriod";
 import { useScrollMemory } from "@/shared/scroll";
@@ -79,7 +80,9 @@ function WorkboardFrame({ children }: { children: ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   // «Начало» is listed while a newcomer has a step open (the address still opens it).
   const start = useAccountStart();
-  const menu: { upper: MenuItem[]; lower: MenuItem[] } = role === null ? { upper: [], lower: [] } : productMenu("workboard", role, { newcomer: startOpen(start.data), leads: me.leadsTeam });
+  // «Деньги»: the owner's always; anyone else's only while their right «видит свои деньги» is on.
+  const ownPay = useOwnPayOn(role !== null && !me.isOwner);
+  const menu: { upper: MenuItem[]; lower: MenuItem[] } = role === null ? { upper: [], lower: [] } : productMenu("workboard", role, { newcomer: startOpen(start.data), leads: me.leadsTeam, money: me.isOwner || ownPay });
   const waiting = useWaitingCount(menu.upper.some((item) => item.count === "waiting"), role === "owner");
   const ownName = useOwnName();
   const own = carryParams(location.search).toString();

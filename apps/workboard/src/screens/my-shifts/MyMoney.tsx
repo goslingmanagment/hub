@@ -25,7 +25,7 @@ function AccrualLine({ day }: { day: MoneyDay }) {
   );
 }
 
-function MoneyBlock({ read }: { read: MyMoneyRead }) {
+export function MoneyBlock({ read }: { read: MyMoneyRead }) {
   if (read.away) {
     return (
       <section className="mym" aria-label="Мои деньги">

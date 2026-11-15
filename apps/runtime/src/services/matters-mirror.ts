@@ -325,7 +325,7 @@ export function paidDayChangeItems(payouts: Pick<TeamLedgerPayoutsResponse, "peo
     pageLabels: [],
     money: true,
     evidence: { changeId: change.id, day: change.day, model: change.model, person: person.slug, postedMills: change.postedMills, newMills: change.newMills },
-    link: `/workboard/payouts?person=${encodeURIComponent(person.slug)}`,
+    link: `/workboard/money/debts?person=${encodeURIComponent(person.slug)}`,
   })));
 }
 

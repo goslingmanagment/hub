@@ -134,7 +134,7 @@ function lineOf(matter: Matter, context: Context): Line {
       // «Выплаты → Отчёты» of that week: where each reader sees the post's numbers against Hub's.
       if (matter.mine) return base;
       const day = text(evidence.day);
-      return { ...base, action: context.link(`/workboard/payouts?view=reports${day === null ? "" : `&week=${day}`}&questions=1`, "Открыть") };
+      return { ...base, action: context.link(`/workboard/money/reports?${day === null ? "" : `week=${day}&`}questions=1`, "Открыть") };
     }
     case "ledger.paid_day_changed": {
       const was = number(evidence.postedMills);

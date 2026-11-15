@@ -29,6 +29,15 @@ export function workboardOldAddress(at: RouterAddress): RouterAddress | null {
   if (shift) return { ...at, pathname: `/report/${shift[1]}` };
   // The first chatter screen, «Мои отчёты»: a shift and its report are one row of «Мои смены»; `?days=` is the app's period.
   if (path === "/my/reports") return { pathname: "/my/shifts", search: at.search, hash: "" };
+  // «Выплаты» is «Деньги» (products plan §2.3): its two views are the tabs «Долги» and «Отчёты»; the rest it carried
+  // (the period, `person`, `questions`) stays.
+  if (path === "/payouts") {
+    const search = new URLSearchParams(at.search);
+    const reports = search.get("view") === "reports";
+    search.delete("view");
+    const query = search.toString();
+    return { pathname: reports ? "/money/reports" : "/money/debts", search: query ? `?${query}` : "", hash: at.hash };
+  }
   // «Что продаёт» opens its first tab.
   if (path === "/sales") return { pathname: "/sales/price", search: at.search, hash: "" };
   // «Люди» is «Команда» (products plan §4.3): the team at work. A person's old «Смены» and «Работа» are Работа, the
@@ -65,7 +74,7 @@ export function registryTabLanding(at: RouterAddress, owner: boolean): { hub: st
 
 /** Workboard's router paths of its old addresses (routes.tsx registers `OldAddress` on each). */
 export const WORKBOARD_OLD_PATHS: readonly string[] = [
-  "decisions", "my/shifts/:shiftId", "shifts/report/:shiftId", "my/reports", "sales", "people", "people/:ref", "people/:ref/:tab", "access",
+  "decisions", "my/shifts/:shiftId", "shifts/report/:shiftId", "my/reports", "sales", "people", "people/:ref", "people/:ref/:tab", "access", "payouts",
 ];
 
 /** One address opened today and where it lands: both absolute, as a browser shows them. */
@@ -95,7 +104,9 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "owner's bookmark", from: `${HUB}/workboard/people`, to: `${TEAM}/workboard/team` },
   { who: "owner's bookmark", from: `${HUB}/workboard/people/alex/schedule?days=7`, to: `${TEAM}/workboard/team/alex/schedule?days=7` },
   { who: "owner's bookmark", from: `${HUB}/workboard/people/7/access`, to: `${HUB}/people/7/logins` },
-  { who: "owner's bookmark", from: `${HUB}/workboard/payouts?view=reports`, to: `${TEAM}/workboard/payouts?view=reports` },
+  { who: "owner's bookmark", from: `${HUB}/workboard/payouts?view=reports`, to: `${TEAM}/workboard/money/reports` },
+  { who: "owner's bookmark", from: `${TEAM}/workboard/payouts?week=2026-11-02`, to: `${TEAM}/workboard/money/debts?week=2026-11-02` },
+  { who: "matter, before «Деньги»", from: `${TEAM}/workboard/payouts?person=kate-v`, to: `${TEAM}/workboard/money/debts?person=kate-v` },
   // «Решения» on the console's name is the owner's whole «Ждут вас» in Hub (a window's parameter: Workboard's).
   { who: "owner's bookmark", from: `${HUB}/workboard/decisions`, to: `${HUB}/waiting` },
   { who: "owner's bookmark", from: `${HUB}/workboard/decisions#held`, to: `${HUB}/waiting#held` },

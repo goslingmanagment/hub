@@ -44,9 +44,10 @@ export type MenuCount = "waiting";
  * A row a menu lists only while something about the person is true; the app
  * that draws the menu answers it (absent: listed whenever the role may open it):
  * - `newcomer` — a newcomer with a step of «Начало» still open (Workboard's `accountStart`);
- * - `leads` — the owner, a team lead, or anyone who leads a team by its records (products package T, `me.teams.lead`).
+ * - `leads` — the owner, a team lead, or anyone who leads a team by its records (products package T, `me.teams.lead`);
+ * - `money` — the owner, or a person whose right «видит свои деньги» is on (Workboard's `accountPay` says `enabled`).
  */
-export type MenuWhen = "newcomer" | "leads";
+export type MenuWhen = "newcomer" | "leads" | "money";
 
 /**
  * What the page filter does on a screen:
@@ -444,11 +445,31 @@ export const SCREENS: readonly Screen[] = [
     keywords: "список продаж чья продажа правило отчёт цепочка",
   },
   {
-    // People's pay is the owner's alone (the ledger's answer reaches no other session).
-    id: "payouts", path: "/workboard/payouts", label: "Выплаты", title: "Выплаты", section: "team", product: "workboard", ownerOnly: true, icon: "Banknote",
-    why: "Сколько начислено, к выплате и выплачено каждому.",
+    // «Деньги» (products plan §2.3; it was «Выплаты» at /workboard/payouts, which leads here): the owner's «Долги» and
+    // «Отчёты» — people's pay, the ledger's answer to no other session — and a person's own «Мои деньги», listed only
+    // while their right «видит свои деньги» is on. The address opens the role's tab.
+    id: "money", path: "/workboard/money", label: "Деньги", title: "Деньги", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"], icon: "Banknote", when: "money",
+    why: "Сколько начислено, к выплате и выплачено.",
     pageFilter: "any",
-    keywords: "долги начислено выплачено отчёты смен отчётность сумма изменена пост не разобран",
+    keywords: "деньги выплаты долги начислено выплачено отчёты смен отчётность мои деньги",
+  },
+  {
+    id: "money-debts", tabOf: "money", path: "/workboard/money/debts", label: "Долги", title: "Долги", section: "team", product: "workboard", ownerOnly: true,
+    why: "Кому сколько агентство должно, за какие дни, расчёт выплаты человеку.",
+    pageFilter: "any",
+    keywords: "долги выплаты начислено выплачено расчёт выплаты",
+  },
+  {
+    id: "money-reports", tabOf: "money", path: "/workboard/money/reports", label: "Отчёты", title: "Отчёты смен", section: "team", product: "workboard", ownerOnly: true,
+    why: "Отчёты смен: что отправлено, что изменено, что не разобрано.",
+    pageFilter: "any",
+    keywords: "отчёты смен отчётность сумма изменена пост не разобран",
+  },
+  {
+    id: "money-mine", tabOf: "money", path: "/workboard/money/mine", label: "Мои деньги", title: "Мои деньги", section: "team", product: "workboard", roles: ["team_lead", "chatter"],
+    why: "Сколько вам начислено, к выплате и выплачено.",
+    pageFilter: "any",
+    keywords: "мои деньги начислено к выплате выплачено",
   },
 
   // ── Анкеты ─────────────────────────────────────────────────────────
@@ -812,9 +833,9 @@ export const SECTIONS: readonly Section[] = [
       tab("costs", "Расходы", "costs-ai", "costs-anthropic", "costs-onlyfans-api"),
       tab("transactions", "Операции", "transactions"),
     ],
-    // The shift reports' list has one place, Workboard → Выплаты → Отчёты (L2, 12.11); Деньги links it.
+    // The shift reports' list has one place, Workboard → Деньги → Отчёты (L2, 12.11); Деньги links it.
     outside: { site: "workboard", links: [
-      { label: "Отчёты смен", to: "/workboard/payouts?view=reports", title: "Отчёты смен в Workboard, Выплаты", ownerOnly: true },
+      { label: "Отчёты смен", to: "/workboard/money/reports", title: "Отчёты смен в Workboard, Деньги", ownerOnly: true },
     ] },
   },
 

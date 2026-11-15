@@ -44,7 +44,10 @@ const teamScreens: RouteObject[] = [
   // The team's tabs of «Продажи» (a chatter's session never reaches their operations): «Возврат фанов», «Рассылки».
   { path: "sales/win-back", lazy: () => import("../screens/sales/team.js").then((m) => ({ Component: m.WinBackScreen })) },
   { path: "sales/mass", lazy: () => import("../screens/sales/team.js").then((m) => ({ Component: m.MassScreen })) },
-  { path: "payouts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
+  // «Деньги» of the owner (it was «Выплаты» at `/payouts`, which leads here): «Долги» and «Отчёты»; Hub answers the
+  // owner's session alone.
+  { path: "money/debts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
+  { path: "money/reports", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
 ];
 
 /**
@@ -115,6 +118,9 @@ const everyoneScreens: RouteObject[] = [
   // «Продажи» (products plan §2.3): every role's; Hub cuts each read to the viewer's teams (a tab of the owner's alone
   // says so itself: «Рассылки»).
   { path: "sales/:tab", lazy: () => import("../screens/sales/index.js").then((m) => ({ Component: m.SalesScreen })) },
+  // «Деньги»: the address opens the role's tab; «Мои деньги» is the person's own, behind their right «видит свои деньги».
+  { path: "money", lazy: () => import("../screens/money/index.js").then((m) => ({ Component: m.MoneyHome })) },
+  { path: "money/mine", lazy: () => import("../screens/money/index.js").then((m) => ({ Component: m.MineScreen })) },
   // «Фаны» (products package M): moved from the console; Hub answers by the viewer's teams.
   { path: "fans", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansScreen })) },
   { path: "fans/subscribers", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansSubscribersScreen })) },
