@@ -179,7 +179,7 @@ function fansForcedPeriod(search: URLSearchParams): ForcedPeriod | null {
 export const SCREENS: readonly Screen[] = [
   {
     id: "home", path: "/", label: "Главная", title: "Главная", section: "home", product: "hub",
-    why: "Сколько заработали, что выросло и упало, что ждёт вас и кто на смене.",
+    why: "Сколько заработали, что выросло и упало, что ждёт вас и что в продуктах.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
     period: { class: "shared", options: COMMON_PERIODS },
