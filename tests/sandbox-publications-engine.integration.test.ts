@@ -52,7 +52,8 @@ beforeAll(async () => {
   if (!testDb) return;
   app = createTestAppContext(testDb);
   const seeded = await seedSandbox(app, { scenarios: ["publications"], env: PASSWORDS, now: SEEDED_AT });
-  expect(seeded.scenarios.publications).toEqual({ publications: 5 });
+  // Five posts of the day's states and the pair a person can approve.
+  expect(seeded.scenarios.publications).toEqual({ publications: 7 });
   // A second run the same day adds nothing (below).
   testPages = seeded.pages.map((page) => page.id);
   // The worst case: the test pages' publishing switched on and the Fansly page on its browser, as a live page's would be.
@@ -88,7 +89,21 @@ describe("a test page's publications", () => {
     const again = await seedSandbox(app, { scenarios: ["publications"], env: PASSWORDS, now: new Date(SEEDED_AT.getTime() + 60_000) });
     expect(again.scenarios.publications).toEqual({ publications: 0 });
     const states = await testDb.pool.query<{ status: string }>("select status from publications where page_id = any($1) order by status", [testPages]);
-    expect(states.rows.map((row) => row.status)).toEqual(["approved", "draft", "published", "unknown", "withdrawn"]);
+    expect(states.rows.map((row) => row.status)).toEqual(["approved", "draft", "draft", "draft", "published", "unknown", "withdrawn"]);
+  });
+
+  it("keep a pair of drafts a person can approve: none in the way, and a new pair once the old one no longer waits", async (context) => {
+    if (!testDb) return context.skip();
+    const pair = await testDb.pool.query<{ id: number; findings: Array<{ severity: string }> }>(
+      "select id, findings from publications where page_id = any($1) and status = 'draft' and text like 'Тест: ждёт утверждения%' order by id", [testPages]);
+    expect(pair.rows).toHaveLength(2);
+    expect(pair.rows.flatMap((row) => row.findings).filter((one) => one.severity === "blocking")).toEqual([]);
+    // The pair leaves the drafts (approved or cancelled in a walk): the next run of the same day adds a new one — and only it.
+    await testDb.pool.query("update publications set status = 'cancelled', status_changed_at = now() where id = any($1)", [pair.rows.map((row) => row.id)]);
+    const next = await seedSandbox(app, { scenarios: ["publications"], env: PASSWORDS, now: new Date(SEEDED_AT.getTime() + 120_000) });
+    expect(next.scenarios.publications).toEqual({ publications: 2 });
+    const same = await seedSandbox(app, { scenarios: ["publications"], env: PASSWORDS, now: new Date(SEEDED_AT.getTime() + 180_000) });
+    expect(same.scenarios.publications).toEqual({ publications: 0 });
   });
 
   it("are never taken by the scheduler, the sender, the checks, the vault albums or the schedules' reads", async (context) => {
