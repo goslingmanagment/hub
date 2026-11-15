@@ -1,4 +1,4 @@
-import { listNotedShiftStarts, listPersonRows } from "@agency_hub_core/db";
+import { listMatterPageLabels, listNotedShiftStarts, listPersonRows } from "@agency_hub_core/db";
 import { shiftQualityOf, type TeamNewcomersResponse } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -35,6 +35,18 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
   // THE cut of every team read (services/teams.ts): a lead's newcomers' shifts are the ones on the pages of the teams the
   // lead reads, never a shift worked wholly on another model's pages; the names of the newcomer's teams likewise.
   const pageScope = await teamPagesFor(app, principal);
+  const labels = (await listMatterPageLabels(app.db)).labelOf;
+  // The page labels the reader may see; null — every one (the owner of the live realm).
+  const seenLabels = pageScope === undefined ? null : new Set(pageScope.map((id) => labels.get(id)).filter((label): label is string => label !== undefined));
+  /** «Начало» as the reader may see it: the pages opened to the newcomer and where they first worked, of the reader's pages only. */
+  const startSeen = (start: ReturnType<typeof personStart>) => {
+    if (start === null || seenLabels === null) return start;
+    return {
+      ...start,
+      pages: start.pages.filter((page) => seenLabels.has(page.pageLabel)),
+      firstActivity: start.firstActivity !== null && seenLabels.has(start.firstActivity.pageLabel) ? start.firstActivity : null,
+    };
+  };
   const seenModels = owner ? realm : new Set(readModelsOf(facts, teamsOfPerson(facts, personOfLogin(facts, principal.user.id)), test));
 
   const modelOfPage = new Map(facts.pages.map((page) => [page.pageId, page.modelId]));
@@ -89,8 +101,9 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
       name: row.displayName,
       state: row.state === "invited" || row.state === "set_up" ? row.state : "working",
       teams,
-      start: mine ? personStart(row, mine, now) : null,
-      firstActiveAt: first?.toISOString() ?? null,
+      start: mine ? startSeen(personStart(row, mine, now)) : null,
+      // When they first worked: only when it was on a page the reader sees (else a moment of another team's page).
+      firstActiveAt: first !== null && (seenLabels === null || seenLabels.has(startFacts.get(row.id)?.firstActive?.pageLabel ?? "")) ? first.toISOString() : null,
       shifts,
       team: teams.length === 0 ? null : await teamAverage(app, { personId: row.id, test, from: new Date(now.getTime() - NORM_DAYS * DAY_MS), to: now, now, models: seenModels }),
     });
