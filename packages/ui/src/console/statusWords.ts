@@ -1,3 +1,5 @@
+import { PUBLICATION_STATUS_WORDS } from "@agency_hub_core/contracts";
+
 /**
  * The one dictionary of states (design/design-language.md §2.5): six tones and
  * the word of every state, so no screen keeps a table of its own. A tone answers
@@ -89,23 +91,25 @@ export function collectionWord(page:
   }
 }
 
+/** The words are the one table of publications' words (contracts publication-words.ts); the tones are this screen's. */
+const P = PUBLICATION_STATUS_WORDS as Readonly<Record<string, string>>;
 export const PUBLICATION_STATUS: Readonly<Record<string, StatusWord>> = {
-  draft: status("Ждёт утверждения", "waiting"),
-  approved: status("Утверждён", "moving"),
-  submitting: status("Ставится", "moving"),
-  scheduled: status("В расписании", "moving"),
-  processing: status("Обрабатывается", "moving"),
-  published: status("Вышел", "good"),
+  draft: status(P.draft!, "waiting"),
+  approved: status(P.approved!, "moving"),
+  submitting: status(P.submitting!, "moving"),
+  scheduled: status(P.scheduled!, "moving"),
+  processing: status(P.processing!, "moving"),
+  published: status(P.published!, "good"),
   /** A vault album out with files left out (its reason names them). */
   publishedInPart: status("Вышел не весь", "attention"),
-  unknown: status("Исход неизвестен", "attention"),
-  missed: status("Пропущен", "attention"),
-  not_published: status("Не вышел", "broken"),
-  rejected: status("Отклонён", "broken"),
-  withdrawn: status("Убран из расписания", "off"),
+  unknown: status(P.unknown!, "attention"),
+  missed: status(P.missed!, "attention"),
+  not_published: status(P.not_published!, "broken"),
+  rejected: status(P.rejected!, "broken"),
+  withdrawn: status(P.withdrawn!, "off"),
   /** `withdrawn` with the reason `deleted_after_publish`: it left the wall, not the schedule. */
   deletedFromWall: status("Удалён со стены", "off"),
-  cancelled: status("Отменён", "off"),
+  cancelled: status(P.cancelled!, "off"),
 };
 
 export const TRANSACTION_STATUS: Readonly<Record<string, StatusWord | null>> = {
