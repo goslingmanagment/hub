@@ -152,6 +152,8 @@ export const signinWaitingMatterSchema = z.object({
   /** Where it is decided: a path of Hub or Workboard, or an address of ContentOps; null — the list in Hub. */
   link: z.string().nullable(),
   pageLabels: z.array(z.string()),
+  /** The models of those pages (Hub's lower-case slugs); none — a matter of no page, every model's. */
+  models: z.array(z.string()).optional(),
   openedAt: isoTimestamp,
 });
 
