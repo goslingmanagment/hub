@@ -49,7 +49,7 @@ const userIds: Record<string, number> = {};
 const drafts: Record<"A" | "B", Array<{ id: number; version: number }>> = { A: [], B: [] };
 let ownerSession = "";
 /** «Съёмка»: an order «Проверен» on each model's page (A, B, the test page T, and Ivy, whose customs lead shoots too). */
-const orders: Record<"A" | "B" | "T" | "I", string> = { A: "", B: "", T: "", I: "" };
+const orders: Record<"A" | "A2" | "B" | "T" | "I", string> = { A: "", A2: "", B: "", T: "", I: "" };
 
 type Injected = Awaited<ReturnType<Awaited<ReturnType<typeof buildApiServer>>["inject"]>>;
 
@@ -154,7 +154,7 @@ beforeAll(async () => {
     await testDb.pool.query("insert into team_roles (person_id, model_id, kind) values ($1, $2, 'customs')", [nik, model]);
   }
   const testPage = (await testDb.pool.query<{ id: string }>("select id from pages where label = 'test-1'")).rows[0]!.id;
-  for (const [key, pageId] of [["A", pages["mia-1"]], ["B", pages["zoe-1"]], ["T", Number(testPage)], ["I", pages["ivy-1"]]] as const) {
+  for (const [key, pageId] of [["A", pages["mia-1"]], ["A2", pages["mia-2"]], ["B", pages["zoe-1"]], ["T", Number(testPage)], ["I", pages["ivy-1"]]] as const) {
     const id = await recordCustomOrder(app, {
       pageId: pageId!, fanId: null, buyer: `buyer_${key}`, conversationRef: null, card: { task: `Съёмка ${key}` }, deadlineOn: null,
       acceptedByUserId: null, origin: "workboard", state: "checked", actor: { door: "system" },
@@ -168,6 +168,8 @@ beforeAll(async () => {
   const sessions = {
     owner,
     kmA: await contentManager("kira", "mia-1"),
+    // Mia's second content manager, on her other page (plan §11 item 13).
+    kmA2: await contentManager("mira", "mia-2"),
     kmB: await contentManager("zara", "zoe-1"),
     lead: await signIn("lead", "lead-password-for-tests"),
     chatter: await signIn("chat", "chat-password-for-tests"),
@@ -411,10 +413,12 @@ describe("the person's door", () => {
     const step = (who: string, code: string, extra: object = {}) =>
       inject("POST", "/api/v1/person/custom-orders/step", { bearer: KEY, payload: { client: "contentops", grant: grants[who], code, step: "partly", note: "пришло видео", ...extra } });
     // The owner: every live order, never a test one; a content manager: her model's; the customs lead: his models'.
-    expect(await list("owner")).toEqual([orders.A, orders.B, orders.I].sort());
+    expect(await list("owner")).toEqual([orders.A, orders.A2, orders.B, orders.I].sort());
+    // Two content managers of one model: each reads the orders of her own page only.
     expect(await list("kmA")).toEqual([orders.A]);
+    expect(await list("kmA2")).toEqual([orders.A2]);
     expect(await list("kmB")).toEqual([orders.B]);
-    expect(await list("customsLead")).toEqual([orders.A, orders.I].sort());
+    expect(await list("customsLead")).toEqual([orders.A, orders.A2, orders.I].sort());
     // The test content manager: the test order alone; a live one never sees it.
     expect(await list("testKm")).toEqual([orders.T]);
     expect((await step("testKm", orders.A)).statusCode).toBe(404);
@@ -437,5 +441,16 @@ describe("the person's door", () => {
       { event: "custom_order.deadline", door: "contentops", actor_user_id: String(userIds.nik), actor_agent_key_id: null },
       { event: "custom_order.at_model", door: "contentops", actor_user_id: String(userIds.nik), actor_agent_key_id: null },
     ]);
+  });
+  it("«Съёмка» goes by the order's page: Mia's second content manager moves her page's order and not the other's", async (context) => {
+    if (!server) return context.skip();
+    const step = (who: string, code: string) =>
+      inject("POST", "/api/v1/person/custom-orders/step", { bearer: KEY, payload: { client: "contentops", grant: grants[who], code, step: "at_model" } });
+    const mine = await step("kmA2", orders.A2);
+    expect(mine.statusCode, mine.body).toBe(200);
+    expect(mine.json<{ order: { state: string; leader: { name: string | null } } }>().order).toMatchObject({ state: "at_model", leader: { name: "mira" } });
+    // Kira's page is not hers to shoot, nor hers Kira's: outside their shooting, the order is not there.
+    expect([404, 409]).toContain((await step("kmA2", orders.A)).statusCode);
+    expect([404, 409]).toContain((await step("kmA", orders.A2)).statusCode);
   });
 });

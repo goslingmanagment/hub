@@ -15,7 +15,7 @@ import {
   applyCustomStep, cardTextOf, customLeaderContext, messageWire, notAllowed, orderMessagesOf, orderWire,
   type CustomActor, type CustomLeaderContext, type CustomStep,
 } from "./index.ts";
-import { phaseLeader } from "./leaders.ts";
+import { leadsPhaseOf, ledPhasesOf } from "./leaders.ts";
 import { STEP_FROM } from "./rules.ts";
 
 /**
@@ -25,7 +25,9 @@ import { STEP_FROM } from "./rules.ts";
  *
  * Whose orders a person reads here (`shootingScope`), of their realm only:
  *   the owner                 every page of his realm (the live owner also the orders of no known page);
- *   a content manager         her page scope: the pages of the models of her working pages (auth.ts);
+ *   a content manager         the pages whose shooting she leads by the rule (leaders.ts `shootLeaders`): her working
+ *                             pages, and a page of her model no content manager works on — never another content
+ *                             manager's page (her plan and publications are her pages' too, plan §11 item 13);
  *   anyone else               the pages of the models whose customs they lead (`team_roles` kind `customs`); a holder
  *                             of the person right «ведёт кастомы» also the live orders of no known page.
  * A step is taken by the step's leader by the one rule (leaders.ts), or the owner; the history names the person and the
@@ -47,7 +49,11 @@ export async function shootingScope(app: PersonApp, person: HumanAuthPrincipal):
   const realm = new Set(facts.pages.filter((page) => page.test === test).map((page) => page.pageId));
   const role = person.user.role;
   if (role === "owner") return { pageIds: [...realm], unknownPage: !test, test };
-  if (role === "content_manager") return { pageIds: person.assignedPageIds.filter((id) => realm.has(id)), unknownPage: false, test };
+  if (role === "content_manager") {
+    const assigned = new Set(person.assignedPageIds);
+    const led = ledPhasesOf(facts, person.user.id, test).shoot.filter((id) => realm.has(id) && assigned.has(id));
+    return { pageIds: led, unknownPage: false, test };
+  }
   const teams = teamsOfPerson(facts, personOfLogin(facts, person.user.id));
   const right = (await listUsersWithPersonRight(app.db, "customs_lead")).some((lead) => lead.userId === person.user.id);
   const pageIds = pagesOfModels(facts, teams.customs).filter((id) => realm.has(id));
@@ -110,10 +116,8 @@ export async function takeShootingStep(
   now: Date = new Date(),
 ): Promise<boolean> {
   const context = await customLeaderContext(app);
-  const mine = (phase: "check" | "shoot") => {
-    const leader = phaseLeader(context.facts, order.pageId, phase, context.fallback);
-    return leader.kind === "person" && leader.userId === person.userId;
-  };
+  // Any of the step's leaders takes it (several content managers of the order's page: plan §11 item 13).
+  const mine = (phase: "check" | "shoot") => leadsPhaseOf(context.facts, order.pageId, phase, person.userId, context.fallback);
   const leads = person.owner || mine("shoot") || (body.step === "revision" && order.state === "given" && mine("check"));
   if (!leads) throw notAllowed("This step of the order is not the person's: the shooting's leader takes it");
   let changed = false;
