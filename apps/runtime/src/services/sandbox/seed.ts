@@ -496,14 +496,22 @@ async function seedMatters(db: Database, pages: SandboxSeedResult["pages"], now:
  * Posts of the test pages in every state the feed tells apart. A draft is made by Hub's own draft (its checks run), an
  * approval by Hub's own approval (as the test content manager); the states only a platform's answer gives (published,
  * unknown, withdrawn) are written directly with a journal row by «Hub». The test pages' vault holds three files the
- * seed names, so the posts show files. Re-runnable for «now»: the same minute adds nothing.
+ * seed names, so the posts show files. Once per UTC day: a second run that day adds nothing.
  */
 async function seedPublications(app: AppContext, pages: SandboxSeedResult["pages"], now: Date): Promise<Record<string, number>> {
   const db = app.db;
   const km = await testLogin(db, "t-km");
   const stamp = stampOf(now);
   const mark = `sandbox ${stamp}`;
-  const [done] = await rows(db, sql`select count(*)::int as n from publication_status_events where reason = ${mark}`);
+  // Once per UTC day of «now», whatever the minute: a second run that day (a retry on production, the test's second
+  // call across a minute's edge) adds nothing. Every run marks its journal rows `sandbox <minute>` at «now», so a run
+  // of any minute of the day is seen, earlier marks included. A later day adds one fresh set: its posts are dated
+  // from that day («tomorrow», «yesterday»); nothing is deleted.
+  const dayStart = new Date(Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`));
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * MINUTE);
+  const [done] = await rows(db, sql`
+    select count(*)::int as n from publication_status_events
+     where reason like 'sandbox %' and at >= ${dayStart} and at < ${dayEnd}`);
   if (Number(done?.n ?? 0) > 0) return { publications: 0 };
   for (const page of pages.filter((one) => one.label === "test-1")) {
     const platform = "fansly";
