@@ -379,6 +379,45 @@ describe("the owner's answers newer than ledger's Go", () => {
     expect(slotRuns(withSwap, { personId: 103, pageId: PAGE_A, at: msk("2026-11-12 12:00") })).toBe(true);
   });
 
+  it("reads a swap for PART of a slot on its own hours: before and after it the absent person's slot runs, inside it the covering one's", () => {
+    const day = { validFrom: "2026-11-12", validTo: "2026-11-12" };
+    // 101 works 08:00–16:00; on 2026-11-12 103 covers 12:00–16:00 on page-a.
+    const partial = [
+      slot(101, "08:00", "16:00"),
+      slot(101, "12:00", "16:00", { pageId: PAGE_A, ...day, day: "off" }),
+      slot(103, "12:00", "16:00", { pageId: PAGE_A, ...day, day: "cover" }),
+    ];
+    const at = (who: number, when: string, pageId: number | null = PAGE_A) => slotRuns(partial, { personId: who, pageId, at: msk(when) });
+    expect([at(101, "2026-11-12 09:00"), at(101, "2026-11-12 11:59"), at(101, "2026-11-12 12:00"), at(101, "2026-11-12 15:59")]).toEqual([true, true, false, false]);
+    expect([at(103, "2026-11-12 11:59"), at(103, "2026-11-12 12:00"), at(103, "2026-11-12 15:59"), at(103, "2026-11-12 16:00")]).toEqual([false, true, true, false]);
+    expect(at(101, "2026-11-12 16:30")).toBe(false);
+    // The day before and another page: the standing slot alone.
+    expect(at(101, "2026-11-11 13:00")).toBe(true);
+    expect(at(101, "2026-11-12 13:00", 2)).toBe(true);
+    // A junction before the swap's hours stays the absent person's by their slot.
+    const mine = shift(101, "2026-11-12 08:00", "2026-11-12 12:00");
+    const other = shift(102, "2026-11-12 08:30", "2026-11-12 10:00");
+    expectHome(homeOfSale(sale("tip", "2026-11-12 09:00", 5_000, mine, other), [mine, other], partial, later), "shift", "slot_owner", whole100(mine, 5_000));
+    // Inside them, the covering person's.
+    const cover = shift(103, "2026-11-12 11:55", "2026-11-12 16:00");
+    expectHome(homeOfSale(sale("tip", "2026-11-12 13:00", 5_000, mine, cover), [mine, cover], partial, later), "shift", "slot_owner", whole100(cover, 5_000));
+  });
+
+  it("reads a swap over midnight on its own hours, on the night it began", () => {
+    const day = { validFrom: "2026-11-12", validTo: "2026-11-12" };
+    // 102 works 18:00–02:00; on the night of 2026-11-12 104 covers 22:00–02:00 on page-a.
+    const night = [
+      slot(102, "18:00", "02:00"),
+      slot(102, "22:00", "02:00", { pageId: PAGE_A, ...day, day: "off" }),
+      slot(104, "22:00", "02:00", { pageId: PAGE_A, ...day, day: "cover" }),
+    ];
+    const at = (who: number, when: string) => slotRuns(night, { personId: who, pageId: PAGE_A, at: msk(when) });
+    expect([at(102, "2026-11-12 19:00"), at(102, "2026-11-12 23:00"), at(102, "2026-11-13 01:00"), at(102, "2026-11-13 19:00")]).toEqual([true, false, false, true]);
+    expect([at(104, "2026-11-12 21:59"), at(104, "2026-11-12 23:00"), at(104, "2026-11-13 01:59"), at(104, "2026-11-13 02:00")]).toEqual([false, true, true, false]);
+    // The night before is untouched.
+    expect(at(102, "2026-11-12 01:00")).toBe(true);
+  });
+
   it("keeps the owner's split and the marks for a junction the slot does not settle", () => {
     const a = shift(101, "2026-11-05 09:00", "2026-11-05 13:00");
     const b = shift(102, "2026-11-05 10:30", "2026-11-05 14:00");

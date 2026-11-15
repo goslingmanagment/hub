@@ -7,7 +7,7 @@ import { requireSessionUser, type HumanAuthPrincipal } from "./auth.ts";
 import { numbersOf, shiftRowsOf, teamShiftJobs } from "./chatter-numbers.ts";
 import { ForbiddenError } from "./errors.ts";
 import { isNewcomerRow, loadStartFacts, personStart } from "./people/start.ts";
-import { personOfLogin, teamFactsFor, teamsOfPerson } from "./teams.ts";
+import { personOfLogin, readModelsOf, teamFactsFor, teamPagesFor, teamsOfPerson } from "./teams.ts";
 
 /**
  * «Команда → Новички» (products plan §2.3, §3; package W): each newcomer's first week in the teams the viewer leads — the
@@ -32,6 +32,10 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
   const realm = new Set(facts.models.filter((model) => model.test === test).map((model) => model.modelId));
   const led = owner ? realm : new Set(teamsOfPerson(facts, personOfLogin(facts, principal.user.id)).lead.filter((model) => realm.has(model)));
   if (!owner && led.size === 0) throw new ForbiddenError("«Новички» are the team lead's: lead a team to read them");
+  // THE cut of every team read (services/teams.ts): a lead's newcomers' shifts are the ones on the pages of the teams the
+  // lead reads, never a shift worked wholly on another model's pages; the names of the newcomer's teams likewise.
+  const pageScope = await teamPagesFor(app, principal);
+  const seenModels = owner ? realm : new Set(readModelsOf(facts, teamsOfPerson(facts, personOfLogin(facts, principal.user.id)), test));
 
   const modelOfPage = new Map(facts.pages.map((page) => [page.pageId, page.modelId]));
   const modelsOf = (personId: number) => new Set(facts.working.filter((row) => row.personId === personId).flatMap((row) => {
@@ -60,7 +64,7 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
     if (first !== null && userIds.length > 0) {
       const from = first;
       const to = new Date(Math.min(now.getTime(), first.getTime() + FIRST_WEEK_MS + DAY_MS));
-      const found = await teamShiftJobs(app, { from, to, now, scope: "all", userIds });
+      const found = await teamShiftJobs(app, { from, to, now, scope: pageScope ?? "all", userIds });
       const jobs = [...found.jobs].sort((a, b) => a.shift.startedAt - b.shift.startedAt).slice(0, FIRST_SHIFTS);
       const rows = await shiftRowsOf(app, { jobs, openings: found.openings }, { fromTable: true, liveFallback: false });
       const noted = new Set((await listNotedShiftStarts(app.db, userIds)).map((one) => `${one.userId}:${one.startedAt.getTime()}`));
@@ -78,7 +82,7 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
         };
       });
     }
-    const teams = [...modelsOf(row.id)].filter((model) => realm.has(model))
+    const teams = [...modelsOf(row.id)].filter((model) => realm.has(model) && seenModels.has(model))
       .map((model) => facts.models.find((one) => one.modelId === model)?.name ?? "").filter((name) => name !== "").sort((a, b) => a.localeCompare(b, "ru"));
     answer.push({
       code: row.code,
@@ -88,7 +92,7 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
       start: mine ? personStart(row, mine, now) : null,
       firstActiveAt: first?.toISOString() ?? null,
       shifts,
-      team: teams.length === 0 ? null : await teamAverage(app, { personId: row.id, test, from: new Date(now.getTime() - NORM_DAYS * DAY_MS), to: now, now }),
+      team: teams.length === 0 ? null : await teamAverage(app, { personId: row.id, test, from: new Date(now.getTime() - NORM_DAYS * DAY_MS), to: now, now, models: seenModels }),
     });
   }
   answer.sort((a, b) => (b.firstActiveAt ?? "9").localeCompare(a.firstActiveAt ?? "9") || a.name.localeCompare(b.name, "ru"));
