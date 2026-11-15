@@ -1,93 +1,126 @@
+import { useQuery } from "@tanstack/react-query";
+import type { MattersWaitingResponse, WaitingProductId } from "@agency_hub_core/contracts";
+import { WAITING_PRODUCTS } from "@agency_hub_core/contracts";
+import { addDays, moscowDayStart, moscowToday } from "@agency_hub_core/ui/moscow";
+import { contentopsHref } from "@agency_hub_core/ui/sites";
+import { waitedFor } from "@agency_hub_core/ui/waiting/kinds";
 import { useAuthMe } from "@/api/queries";
+import { kernel } from "@/api/sdk";
 import { useTeamShifts } from "@/api/team";
-import { usePeopleIndex } from "@/api/people";
-import { useWaitingCounts } from "@/api/waiting";
 import { AppLink } from "@/components/shared/AppLink";
-import { formatDuration, formatTimeOfDay } from "@/lib/format";
-import { workboardHref, workboardPersonHref } from "@/lib/workboard";
+import { ruPlural } from "@/lib/plural";
 
 /**
- * The two lines above the money on Главная: what waits for the owner and who is
- * working now. They only count and lead to where the thing is done; the trends
- * below stay the screen's main content.
+ * The owner's lines above the money on Главная (products plan §2.2): «Ждут вас» as three tiles, one per product (its
+ * number and the matter waiting longest), and «Продукты», one line per product that leads into it. They only count
+ * and lead; who is on shift lives in Workboard. Every number is a read the product's own screens make: the tiles are
+ * `mattersWaiting.products` (the menu's read), the lines the matters, the shifts and the publications of today.
  */
+const MINUTE = 60_000;
 const TONE_DOT: Readonly<Record<"bad" | "warn", string>> = { bad: "status-dot-error", warn: "status-dot-warn" };
 
 /** A shift's window, its end on the minute: one query key per minute, not per render. */
 function lastDay(now = Date.now()): { from: string; to: string } {
-  const to = Math.floor(now / 60_000) * 60_000;
-  return { from: new Date(to - 24 * 60 * 60_000).toISOString(), to: new Date(to).toISOString() };
+  const to = Math.floor(now / MINUTE) * MINUTE;
+  return { from: new Date(to - 24 * 60 * MINUTE).toISOString(), to: new Date(to).toISOString() };
 }
 
-function WaitingLine({ role }: { role: string }) {
-  const { rows, loading, failed, unanswered, refetchAll } = useWaitingCounts(role);
-  // Nothing waits: no line at all rather than a line saying so (owner, 2026-11-04). No answer is not «nothing waits».
-  if (!loading && !unanswered && rows.length === 0) return null;
+/** What a publication of today counts as: going out or gone out (not a draft, not refused, not taken back). */
+const OUT_TODAY: ReadonlySet<string> = new Set(["approved", "submitting", "scheduled", "processing", "published", "unknown"]);
+
+function WaitingTiles() {
+  const read = useQuery({
+    queryKey: ["matters", "waiting", ""],
+    queryFn: () => kernel.mattersWaiting({ query: {} }),
+    refetchInterval: MINUTE,
+    meta: { suppressGlobalError: true },
+  });
+  const data: MattersWaitingResponse | undefined = read.data;
+  const now = data ? Date.parse(data.serverNow) : Date.now();
   return (
-    <div className="home-strip-row">
-      <span className="home-strip-label">Ждут вас</span>
-      <div className="home-strip-items">
-        {loading && rows.length === 0 && <span className="text-text-muted">Проверяем…</span>}
-        {unanswered && <span className="text-text-muted">Не удалось проверить</span>}
-        {rows.map((row) => (
-          <AppLink key={row.id} to={row.to} className="home-strip-item">
-            {/* A group's tone (the one table): red broken, orange outcome unknown. */}
-            {row.tone && <span className={`status-dot ${TONE_DOT[row.tone]}`} aria-hidden="true" />}
-            {row.count === null ? (
-              <span>{row.label}: <span className="text-text-muted">не удалось проверить</span></span>
+    <div className="home-waiting" aria-label="Ждут вас по продуктам">
+      {WAITING_PRODUCTS.map((product) => {
+        const part = data?.products.find((one) => one.id === product.id);
+        return (
+          <AppLink key={product.id} to={`/waiting#product-${product.id}`} className="home-tile card">
+            <span className="home-tile-head">
+              {part?.tone && <span className={`status-dot ${TONE_DOT[part.tone]}`} aria-hidden="true" />}
+              <span className="home-tile-name">{product.title}</span>
+            </span>
+            {!data ? (
+              <span className="home-tile-none">{read.isError ? "Не удалось проверить" : "Проверяем…"}</span>
+            ) : !part || part.count === 0 ? (
+              <span className="home-tile-none">{part && !part.checked ? "Не удалось проверить" : "Ничего не ждёт"}</span>
             ) : (
               <>
-                <span>{row.label}</span>
-                <span className="home-count">{row.capped ? `${row.count}+` : row.count}</span>
+                <span className="home-tile-count">{part.checked ? part.count : `${part.count}+`}</span>
+                {part.oldest && (
+                  <span className="home-tile-oldest" title={part.oldest.title}>
+                    <span className="home-tile-oldest-text">{part.oldest.title}</span>
+                    <span className="home-tile-age">{waitedFor(part.oldest.since, now)}</span>
+                  </span>
+                )}
               </>
             )}
           </AppLink>
-        ))}
-        {(unanswered || failed.length > 0) && <button type="button" className="link" onClick={refetchAll}>Повторить</button>}
-      </div>
+        );
+      })}
     </div>
   );
 }
 
-function ShiftsLine({ role }: { role: string }) {
-  const shifts = useTeamShifts(lastDay());
-  const people = usePeopleIndex(role);
-  const data = shifts.data;
-  const now = data ? Date.parse(data.serverNow) : Date.now();
-  const ongoing = data?.shifts
-    .filter((shift) => shift.ongoing)
-    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt)) ?? [];
-  const last = data?.shifts.find((shift) => !shift.ongoing);
+function count(value: number, one: string, few: string, many: string): string {
+  return `${value} ${ruPlural(value, one, few, many)}`;
+}
 
+function ProductLines() {
+  const matters = useQuery({
+    queryKey: ["matters", "list", "open"],
+    queryFn: () => kernel.mattersList({ query: { state: "open", limit: 500 } }),
+    refetchInterval: MINUTE,
+    meta: { suppressGlobalError: true },
+  });
+  const shifts = useTeamShifts(lastDay());
+  const today = moscowToday();
+  const publications = useQuery({
+    queryKey: ["publications", "today", today],
+    queryFn: () => kernel.adminPublicationList({ query: { from: moscowDayStart(today), to: moscowDayStart(addDays(today, 1)), limit: 1000 } }),
+    refetchInterval: 5 * MINUTE,
+    meta: { suppressGlobalError: true },
+  });
+  const open = (kind: string): number | null => (matters.data ? matters.data.matters.filter((matter) => matter.kind === kind).length : null);
+  const known = (value: number | null, words: (value: number) => string) => (value === null ? "?" : words(value));
+  const onShift = shifts.data ? shifts.data.shifts.filter((shift) => shift.ongoing).length : null;
+  const notHandedIn = open("shift.report.missing");
+  const outToday = publications.data ? publications.data.publications.filter((one) => OUT_TODAY.has(one.status)).length : null;
+  const gaps = open("content.schedule_gap");
+  const failures = open("incident.open");
+  const lines: { id: WaitingProductId | "system"; name: string; to: string; external?: boolean; text: string }[] = [
+    {
+      id: "workboard", name: "Workboard", to: "/workboard/shifts",
+      text: `на смене ${known(onShift, String)}, не сдано отчётов ${known(notHandedIn, String)}`,
+    },
+    {
+      id: "contentops", name: "ContentOps", to: contentopsHref(null, ""), external: true,
+      text: `сегодня выйдет ${known(outToday, String)}, ${known(gaps, (value) => count(value, "дыра", "дыры", "дыр"))} на неделе`,
+    },
+    { id: "system", name: "Система", to: "/system/failures", text: `сбоев ${known(failures, String)}` },
+  ];
   return (
     <div className="home-strip-row">
-      <a href={workboardHref("shifts")} className="home-strip-label">На смене</a>
+      <span className="home-strip-label">Продукты</span>
       <div className="home-strip-items">
-        {!data && shifts.isError && (
-          <span className="text-text-muted">
-            Hub не ответил. <button type="button" className="link" onClick={() => void shifts.refetch()}>Повторить</button>
-          </span>
-        )}
-        {!data && !shifts.isError && <span className="text-text-muted">Проверяем…</span>}
-        {data && ongoing.length === 0 && (
-          <span className="text-text-muted">
-            {last
-              ? `Никого. Последняя смена: ${people.nameOf(last.userId, last.username)}, закончилась в ${formatTimeOfDay(last.endedAt)}`
-              : "Никого. За сутки смен не было"}
-          </span>
-        )}
-        {ongoing.map((shift) => {
-          const pages = shift.pages.filter((page) => page.messages > 0).map((page) => page.pageLabel);
-          const shown = pages.length > 0 ? pages : shift.pages.slice(0, 1).map((page) => page.pageLabel);
-          const minutes = Math.max(0, Math.round((now - Date.parse(shift.startedAt)) / 60_000));
-          return (
-            <a key={shift.userId} href={workboardPersonHref(shift.userId)} className="home-strip-item">
-              <span className="font-medium">{people.nameOf(shift.userId, shift.username)}</span>
-              <span className="text-text-secondary">{shown.slice(0, 2).join(", ")}{shown.length > 2 ? ` +${shown.length - 2}` : ""}</span>
-              <span className="text-text-muted">{formatDuration(minutes)}</span>
-            </a>
-          );
-        })}
+        {lines.map((line) => (line.external ? (
+          <a key={line.id} href={line.to} target="_blank" rel="noreferrer" className="home-strip-item">
+            <span className="font-medium">{line.name}</span>
+            <span className="text-text-secondary">{line.text}</span>
+          </a>
+        ) : (
+          <AppLink key={line.id} to={line.to} className="home-strip-item">
+            <span className="font-medium">{line.name}</span>
+            <span className="text-text-secondary">{line.text}</span>
+          </AppLink>
+        )))}
       </div>
     </div>
   );
@@ -95,12 +128,13 @@ function ShiftsLine({ role }: { role: string }) {
 
 export function HomeStrip() {
   const user = useAuthMe();
-  const role = user.data?.user.role;
-  if (!role) return null;
+  if (user.data?.user.role !== "owner") return null;
   return (
-    <section className="home-strip card" aria-label="Что ждёт вас и кто на смене">
-      <WaitingLine role={role} />
-      <ShiftsLine role={role} />
+    <section className="home-strip-block" aria-label="Что ждёт вас и что в продуктах">
+      <WaitingTiles />
+      <section className="home-strip card" aria-label="Продукты">
+        <ProductLines />
+      </section>
     </section>
   );
 }

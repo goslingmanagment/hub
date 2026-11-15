@@ -165,7 +165,9 @@ describe("the table of screens", () => {
         }
       }
     }
-    const orphans = SCREENS.filter((screen) => !seen.has(screen.id)).map((screen) => screen.id);
+    // «Статистика → Контент» left the menu for ContentOps (products plan §2.2); its address opens until it moves.
+    const addressOnly = new Set(["stats-content"]);
+    const orphans = SCREENS.filter((screen) => !seen.has(screen.id) && !addressOnly.has(screen.id)).map((screen) => screen.id);
     expect(orphans).toEqual([]);
   });
 

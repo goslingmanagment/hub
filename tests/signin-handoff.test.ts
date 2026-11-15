@@ -184,7 +184,10 @@ describe("the planted session's token, sealed by its code", () => {
     expect(sealed).not.toContain("session-token");
     expect(openSessionToken("code-one", sealed)).toBe("session-token");
     expect(openSessionToken("code-two", sealed)).toBeNull();
-    expect(openSessionToken("code-one", `${sealed.slice(0, -2)}xx`)).toBeNull();
+    // One character changed where every bit counts (the last one of a base64 string may carry unused bits, and two
+    // random characters equal «xx» once in a few hundred runs — the test went red by itself).
+    const changed = sealed.at(-2) === "A" ? "B" : "A";
+    expect(openSessionToken("code-one", `${sealed.slice(0, -2)}${changed}${sealed.at(-1)}`)).toBeNull();
   });
 });
 

@@ -5,7 +5,7 @@ import { formatCount, formatMills } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { shiftDurationHint } from "@agency_hub_core/ui/shiftWhen";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
-import { personPath, shiftPath, useRowBackState } from "@/shared/links";
+import { shiftPath, useRowBackState } from "@/shared/links";
 import { METRICS, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
 import { ReportNoteLine } from "@/shared/ReportNote";
 import type { PlacedNote } from "@/shared/reportNotes";
@@ -310,7 +310,7 @@ export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuali
   const columns = columnsOf(quality, model?.norms ?? NO_NORMS, page, reportNotes, ruled, mine, isOwner);
 
   const description = [
-    isOwner ? "Строка открывает разбор смены." : "Строка открывает карточку чаттера.",
+    "Строка открывает разбор смены.",
     page ? `Ответ, без ответа и ИИ — по всей смене, не только ${page}.` : null,
   ].filter(Boolean).join(" ");
 
@@ -331,7 +331,7 @@ export function Journal({ model, isOwner, quality, onRetryQuality, retryingQuali
         columns={columns}
         rows={shown}
         rowKey={(shift) => shift.key}
-        rowHref={(shift) => (isOwner ? shiftPath(shift.userId, shift.startedAt, location.search) : personPath(shift.userId, location.search))}
+        rowHref={(shift) => shiftPath(shift.userId, shift.startedAt, location.search)}
         rowState={rowState}
         sort={sort}
         onSortChange={setSort}

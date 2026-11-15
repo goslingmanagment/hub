@@ -10,7 +10,7 @@
  * one-time hand-off when the names differ (sites.ts), signed in on the way.
  */
 import type { KernelClient } from "@kernel/sdk";
-import type { MattersWaitingResponse, Product } from "@agency_hub_core/contracts";
+import type { MattersWaitingResponse, Product, WaitingProductId } from "@agency_hub_core/contracts";
 import { PLACES } from "@agency_hub_core/look/words";
 import { WORKBOARD_PATH, matchScreen, type MenuItem, type PeriodKey, type ScreenProduct } from "./screens.js";
 import { CONTENTOPS_SIGNIN_HREF, MONITOR_ORIGIN, TASKS_ORIGIN, hubEntryHref, workboardEntryHref } from "./sites.js";
@@ -144,8 +144,16 @@ export interface MenuCountView {
   unknown: boolean;
 }
 
-/** The number of «Ждут вас» from its read: nothing while it is read, «?» when it failed. */
-export function waitingCount(read: { data: MattersWaitingResponse | undefined; isError: boolean }): MenuCountView | null {
-  if (read.data) return { value: read.data.total, unknown: read.data.failed.length > 0 };
+/**
+ * The number of «Ждут вас» from its read: nothing while it is read, «?» when it failed. Hub's is the whole (the
+ * owner's combined list); with `product`, that product's part of the same read (the owner's Workboard: its list is
+ * Workboard's cut).
+ */
+export function waitingCount(read: { data: MattersWaitingResponse | undefined; isError: boolean }, product?: WaitingProductId): MenuCountView | null {
+  if (read.data) {
+    if (product === undefined) return { value: read.data.total, unknown: read.data.failed.length > 0 };
+    const part = (read.data.products ?? []).find((one) => one.id === product);
+    return { value: part?.count ?? 0, unknown: part !== undefined && !part.checked };
+  }
   return read.isError ? { value: 0, unknown: true } : null;
 }

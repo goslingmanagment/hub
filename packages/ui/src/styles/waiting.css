@@ -1,5 +1,5 @@
 /* «Ждут вас»: one sheet, quiet group titles inside it, one line per matter. Tokens only. */
-@layer components {
+@layer ui {
   .wt-content {
     display: flex;
     flex-direction: column;
@@ -491,5 +491,25 @@
       justify-content: flex-start;
       min-width: 0;
     }
+  }
+}
+
+/* The owner's combined list in Hub: a product's title over its groups' sheet. */
+@layer ui {
+  .wt-product {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-2);
+    scroll-margin-top: 96px;
+  }
+
+  .wt-product__title {
+    display: flex;
+    align-items: baseline;
+    gap: var(--ui-space-2);
+    margin: 0;
+    font-size: var(--ui-fs-16);
+    font-weight: 600;
+    color: var(--ui-text);
   }
 }

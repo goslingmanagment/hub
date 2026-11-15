@@ -6,6 +6,7 @@
 @import "../../../packages/ui/src/styles/tokens.css";
 @import "../../../packages/ui/src/styles/components.css";
 @import "../../../packages/ui/src/styles/place.css";
+@import "../../../packages/ui/src/styles/waiting.css";
 @import "./styles/ui.css";
 @import "./pages/settings/settings-ui.css";
 @import "./styles/screens/home-money.css";

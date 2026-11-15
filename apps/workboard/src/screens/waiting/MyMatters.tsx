@@ -7,8 +7,7 @@ import { formatDateTime } from "@agency_hub_core/ui/format";
 import { kernel } from "@/shared/hub";
 import { consoleHref } from "@/shared/links";
 import { mattersListQuery } from "@/shared/myMatters";
-import { waitedFor, waitingSince } from "./kinds";
-import "./waiting.css";
+import { waitedFor, waitingSince } from "@agency_hub_core/ui/waiting/kinds";
 
 /**
  * «Ждут вас» of a chatter: a strip above «Мои смены», not a menu item (ecosystem

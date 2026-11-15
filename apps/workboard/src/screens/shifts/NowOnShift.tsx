@@ -5,9 +5,8 @@ import { formatDay, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { addDays, moscowDayOf, moscowToday } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { shiftDurationHint } from "@agency_hub_core/ui/shiftWhen";
-import { ShiftLink, personPath, shiftPath, useBackState } from "@/shared/links";
+import { ShiftLink, shiftPath, useBackState } from "@/shared/links";
 import { UNANSWERED_NOW_LABEL } from "@/shared/metrics";
-import { useMe } from "@/shared/useMe";
 import { usePeopleIndex } from "@/shared/people";
 import { useNowOnShift, type NowShift } from "./data.js";
 
@@ -29,7 +28,6 @@ export function NowOnShift({ page, only = null }: { page: string | null; only?: 
     shifts: shown.shifts.map((shift) => ({ ...shift, username: people.nameOf(shift.userId, shift.username) })),
     last: shown.last && { ...shown.last, username: people.nameOf(shown.last.userId, shown.last.username) },
   };
-  const { isOwner } = useMe();
   const location = useLocation();
   const { back } = useBackState("Смены");
 
@@ -63,13 +61,9 @@ export function NowOnShift({ page, only = null }: { page: string | null; only?: 
             <>
               <span className="shifts-now-line__sep" aria-hidden>·</span>
               {"последняя смена — "}
-              {isOwner ? (
-                <ShiftLink userId={last.userId} startedAt={last.startedAt} backLabel="Смены" className="shifts-now-line__link">
-                  {last.username}, закончилась {ended}
-                </ShiftLink>
-              ) : (
-                <>{last.username}, закончилась {ended}</>
-              )}
+              <ShiftLink userId={last.userId} startedAt={last.startedAt} backLabel="Смены" className="shifts-now-line__link">
+                {last.username}, закончилась {ended}
+              </ShiftLink>
             </>
           )}
         </span>
@@ -84,10 +78,10 @@ export function NowOnShift({ page, only = null }: { page: string | null; only?: 
           {state.shifts.map((shift) => (
             <li key={shift.key}>
               <Link
-                to={isOwner ? shiftPath(shift.userId, shift.startedAt, location.search) : personPath(shift.userId, location.search)}
+                to={shiftPath(shift.userId, shift.startedAt, location.search)}
                 state={{ back }}
                 className="shifts-now__row"
-                aria-label={`${shift.username}: ${isOwner ? "открыть разбор идущей смены" : "открыть карточку"}`}
+                aria-label={`${shift.username}: открыть разбор идущей смены`}
               >
                 <NowRow shift={shift} />
                 <ChevronRight size={18} strokeWidth={1.75} aria-hidden className="shifts-now__go" />

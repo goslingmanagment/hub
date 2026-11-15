@@ -63,7 +63,7 @@ describe("«Ждут вас»: one table of groups", () => {
     const failed = buildWaitingGroups({
       matters: [], kindState: (kind) => (kind === "incident.open" ? { ...known, checked: false } : known), trackedKinds: ["incident.open", "people.no_pay_terms"],
     });
-    expect(failed).toEqual([{ id: "system", title: "Сбор, сбои и рутины", count: 0, checked: false, tone: "warn", to: "/workboard/waiting#system" }]);
+    expect(failed).toEqual([{ id: "system", title: "Сбор, сбои и рутины", count: 0, checked: false, tone: "warn", to: "/workboard/waiting#system", product: "hub" }]);
   });
 
   it("gives a group the worst tone of its matters: broken over unknown over none; not checked is at least unknown", () => {

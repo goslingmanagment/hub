@@ -12,25 +12,42 @@ export const WAITING_GROUP_IDS = [
 ] as const;
 export type WaitingGroupId = (typeof WAITING_GROUP_IDS)[number];
 
+/**
+ * The product a matter is decided in (products plan §4.4): Hub (the owner's: people and access, the ledger's checks,
+ * the system), Workboard (the chat team's: whose a sale is, shifts' reports, customs, held sends) or ContentOps
+ * (publications and content). The owner's «Ждут вас» in Hub lists them all, grouped by product; Workboard's list is
+ * its product's cut (a team lead's and a chatter's whole list: they have no Hub).
+ */
+export const WAITING_PRODUCT_IDS = ["hub", "workboard", "contentops"] as const;
+export type WaitingProductId = (typeof WAITING_PRODUCT_IDS)[number];
+
+export const WAITING_PRODUCTS: readonly { id: WaitingProductId; title: string }[] = [
+  { id: "hub", title: "Hub" },
+  { id: "workboard", title: "Workboard" },
+  { id: "contentops", title: "ContentOps" },
+];
+
 export interface WaitingGroup {
   id: WaitingGroupId;
   title: string;
+  /** Where its matters are decided. */
+  product: WaitingProductId;
 }
 
 /** The groups in the list's order: the old sections of «Решения» first (their anchors still open them), what only informs last. */
 export const WAITING_GROUPS: readonly WaitingGroup[] = [
-  { id: "questions", title: "Чья продажа" },
-  { id: "reports", title: "Отчёты смен" },
-  { id: "customs", title: "Кастомы" },
-  { id: "held", title: "Зависшие отправки" },
-  { id: "publications", title: "Публикации" },
+  { id: "questions", title: "Чья продажа", product: "workboard" },
+  { id: "reports", title: "Отчёты смен", product: "workboard" },
+  { id: "customs", title: "Кастомы", product: "workboard" },
+  { id: "held", title: "Зависшие отправки", product: "workboard" },
+  { id: "publications", title: "Публикации", product: "contentops" },
   // ContentOps' findings (`contentops.*`) and the content routines' (`content.*`): each line opens where it is decided.
-  { id: "content", title: "Контент" },
-  { id: "people", title: "Люди и доступ" },
-  { id: "ledger", title: "Проверки ledger" },
-  { id: "system", title: "Сбор, сбои и рутины" },
-  { id: "other", title: "Другие дела" },
-  { id: "info", title: "Для сведения" },
+  { id: "content", title: "Контент", product: "contentops" },
+  { id: "people", title: "Люди и доступ", product: "hub" },
+  { id: "ledger", title: "Проверки ledger", product: "hub" },
+  { id: "system", title: "Сбор, сбои и рутины", product: "hub" },
+  { id: "other", title: "Другие дела", product: "hub" },
+  { id: "info", title: "Для сведения", product: "hub" },
 ];
 
 const INFO: ReadonlySet<string> = new Set(MATTER_INFO_KINDS);
@@ -89,9 +106,20 @@ export function worstWaitingTone(tones: Iterable<WaitingTone | null>): WaitingTo
   return worst;
 }
 
-/** The list filtered to one group: `/workboard/waiting#<group>`. */
-export function waitingGroupLink(id: WaitingGroupId): string {
-  return `/workboard/waiting#${id}`;
+/** The product a matter's kind is decided in: its group's. */
+export function waitingProductOf(kind: string): WaitingProductId {
+  const group = waitingGroupOf(kind);
+  return WAITING_GROUPS.find((one) => one.id === group)?.product ?? "hub";
+}
+
+/** The owner's combined list in Hub (`/waiting`). */
+export const HUB_WAITING_PATH = "/waiting";
+/** Workboard's list (`/workboard/waiting`): a team lead's and a chatter's whole, the owner's Workboard part. */
+export const WORKBOARD_WAITING_PATH = "/workboard/waiting";
+
+/** The list filtered to one group: Workboard's `/workboard/waiting#<group>`, or the owner's in Hub (`/waiting#<group>`). */
+export function waitingGroupLink(id: WaitingGroupId, list: string = WORKBOARD_WAITING_PATH): string {
+  return `${list}#${id}`;
 }
 
 /** The kinds whose finding names when their reason began under a word of its own (the system state's, a shift's report). */
