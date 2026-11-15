@@ -62,8 +62,11 @@ export async function readAccountShiftNumbers(
   };
 }
 
-/** The average of the person's team's closed shifts with stored numbers in the period; null — no team, or no such shift. */
-async function teamAverage(
+/**
+ * The average of the person's team's closed shifts with stored numbers in the period; null — no team, or no such shift.
+ * «Команда → Новички» reads it as a newcomer's team norm.
+ */
+export async function teamAverage(
   app: AppContext,
   input: { personId: number; test: boolean; from: Date; to: Date; now: Date },
 ): Promise<AccountShiftNumbersResponse["team"]> {

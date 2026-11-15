@@ -1,7 +1,8 @@
-import { routeSchemas, type AccountShiftsResponse, type WorkboardTodayResponse } from "@agency_hub_core/contracts";
+import { routeSchemas, type AccountShiftsResponse, type TeamNewcomersResponse, type WorkboardTodayResponse } from "@agency_hub_core/contracts";
 
 import { requireHumanPrincipal } from "../../services/auth.ts";
 import { readAccountShifts } from "../../services/own-shift-rows.ts";
+import { readTeamNewcomers } from "../../services/team-newcomers.ts";
 import { readWorkboardToday } from "../../services/workboard-today.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -23,5 +24,11 @@ export function registerWorkboardTodayRoutes(server: ApiServer, ctx: ApiModuleCo
     const principal = await requirePrincipal(request);
     requireHumanPrincipal(principal);
     return readWorkboardToday(appContext, principal);
+  });
+
+  server.get("/api/v1/team/newcomers", { schema: routeSchemas.teamNewcomers }, async (request): Promise<TeamNewcomersResponse> => {
+    const principal = await requirePrincipal(request);
+    requireHumanPrincipal(principal);
+    return readTeamNewcomers(appContext, principal);
   });
 }

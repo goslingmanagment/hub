@@ -7,12 +7,13 @@
  */
 import { comparisonOf, ownShiftsWindow, pairShiftsWithReports, previousReportedMills, type KernelOperationResponse } from "@agency_hub_core/contracts";
 
-import { isDemoReply, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
+import { demoError, isDemoReply, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_MODELS, demoUserByRole } from "../world.ts";
 import { accountHandlers } from "./account.ts";
 import { accountReports } from "./account-shift-reports.ts";
 import { chatterLeads } from "./shell.ts";
 import { shiftReportHandlers } from "./shift-reports.ts";
+import { teamWorld } from "./team-world.ts";
 
 type Shifts = KernelOperationResponse<"accountShifts">;
 type Today = KernelOperationResponse<"workboardToday">;
@@ -84,10 +85,15 @@ function workboardToday(request: DemoRequest): Today {
     gaps: empty ? [] : model.id === 1 ? [{ day: tomorrow, start: "02:00", end: "10:00" }, { day: addDays(today, 2), start: "22:00", end: "24:00" }] : [],
     noSchedule: empty || model.id !== 1,
   }));
-  const reviews = empty ? [] : [
-    { userId: 5, name: "Катя", startedAt: iso(now - 30 * HOUR_MS), endedAt: iso(now - 22 * HOUR_MS), pages: ["mia-1"], workedMinutes: 452 },
-    { userId: 7, name: "Оля", startedAt: iso(now - 27 * HOUR_MS), endedAt: iso(now - 20 * HOUR_MS), pages: ["mia-of"], workedMinutes: 398 },
-  ];
+  // Yesterday's closed shifts of the demo team (team-world.ts): their reviews open.
+  const yesterday = moscowDay(now - DAY_MS);
+  const reviews = empty ? [] : teamWorld(request.now).shifts
+    .filter((shift) => !shift.ongoing && moscowDay(shift.startedAt) === yesterday && shift.user.role === "chatter")
+    .slice(0, 4)
+    .map((shift) => ({
+      userId: shift.user.id, name: shift.user.name, startedAt: iso(shift.startedAt), endedAt: iso(shift.endedAt),
+      pages: shift.pages.map((page) => page.pageLabel), workedMinutes: shift.workedMinutes,
+    }));
   return {
     ...own,
     team: { firstDay: (request.scenario === "today-first" || request.scenario === "today-noteam") && user.role !== "owner", teams, reviews },
@@ -95,4 +101,45 @@ function workboardToday(request: DemoRequest): Today {
   };
 }
 
-export const todayHandlers: DemoHandlers = { accountShifts, workboardToday };
+type Newcomers = KernelOperationResponse<"teamNewcomers">;
+
+/** «Команда → Новички»: one newcomer stuck on the extension's sign-in, one in her first week with two shifts. */
+function teamNewcomers(request: DemoRequest): Newcomers | ReturnType<typeof demoError> {
+  const user = demoUserByRole(request.role);
+  const leads = request.narrow !== true && (user.role === "owner" || user.role === "team_lead" || chatterLeads(request));
+  if (!leads) return demoError(403, "Forbidden", "«Новички» are the team lead's");
+  const now = request.now.getTime();
+  if (request.scenario === "today-empty") return { newcomers: [], serverNow: request.now.toISOString() };
+  const step = (id: "install" | "extension" | "pages" | "activity" | "payout", doneHoursAgo: number | null) => ({ step: id, done: doneHoursAgo !== null, doneAt: doneHoursAgo === null ? null : iso(now - doneHoursAgo * HOUR_MS) });
+  const quality = (reply: number, unanswered: number, ai: number) => ({ replyMedianSeconds: reply, unansweredAtEnd: unanswered, aiUneditedShare: ai });
+  return {
+    newcomers: [
+      {
+        code: "nika", name: "Ника", state: "working", teams: ["Mia Hart"],
+        start: {
+          newcomer: false, signedUp: true, steps: [step("install", 120), step("extension", 119), step("pages", 118), step("activity", 100), step("payout", 90)],
+          done: 5, total: 5, current: null, since: null, stuck: false,
+          extension: { label: "Firefox · Windows · ChatGoose", signedInAt: iso(now - 119 * HOUR_MS), active: true },
+          pages: [{ pageLabel: "mia-3", platform: "fansly", modelName: "Mia Hart" }], firstActivity: { at: iso(now - 100 * HOUR_MS), pageLabel: "mia-3" },
+        },
+        firstActiveAt: iso(now - 100 * HOUR_MS),
+        shifts: [
+          { userId: 10, startedAt: iso(now - 98 * HOUR_MS), endedAt: iso(now - 92 * HOUR_MS), ongoing: false, pages: ["mia-3"], workedMinutes: 331, quality: quality(412, 6, 0.12), noted: true },
+          { userId: 10, startedAt: iso(now - 50 * HOUR_MS), endedAt: iso(now - 43 * HOUR_MS), ongoing: false, pages: ["mia-3"], workedMinutes: 388, quality: quality(305, 4, 0.2), noted: false },
+        ],
+        team: { shifts: 31, replyMedianSeconds: 246, unansweredAtEnd: 3.1, aiUneditedShare: 0.3, people: 3 },
+      },
+      {
+        code: "sasha", name: "Саша", state: "set_up", teams: ["Mia Hart"],
+        start: {
+          newcomer: true, signedUp: true, steps: [step("install", 60), step("extension", null), step("pages", null), step("activity", null), step("payout", null)],
+          done: 1, total: 5, current: "extension", since: iso(now - 60 * HOUR_MS), stuck: true, extension: null, pages: [], firstActivity: null,
+        },
+        firstActiveAt: null, shifts: [], team: null,
+      },
+    ],
+    serverNow: request.now.toISOString(),
+  };
+}
+
+export const todayHandlers: DemoHandlers = { accountShifts, workboardToday, teamNewcomers };

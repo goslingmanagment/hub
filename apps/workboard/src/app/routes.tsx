@@ -57,6 +57,8 @@ const teamScreens: RouteObject[] = [
  */
 const leadScreens: RouteObject[] = [
   { path: "team", lazy: () => import("../screens/team/index.js").then((m) => ({ Component: m.TeamScreen })) },
+  // «Новички» (products package W): each newcomer's first week; a static path before a person's card.
+  { path: "team/newcomers", lazy: () => import("../screens/team/Newcomers.js").then((m) => ({ Component: m.NewcomersScreen })) },
   {
     path: "team/:ref/:tab?",
     handle: { screenKey: (params) => params.ref ?? "" } satisfies ScreenHandle,

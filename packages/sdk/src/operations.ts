@@ -519,6 +519,7 @@ export const kernelOperations = {
   teamLedgerPayouts: { method: "GET", path: "/api/v1/team/ledger-payouts" },
   teamLedgerQuestions: { method: "GET", path: "/api/v1/team/ledger-questions" },
   teamLedgerReports: { method: "GET", path: "/api/v1/team/ledger-reports" },
+  teamNewcomers: { method: "GET", path: "/api/v1/team/newcomers" },
   teamPeople: { method: "GET", path: "/api/v1/team/people" },
   teamQuestionAnswer: { method: "POST", path: "/api/v1/team/questions/:id/answer" },
   teamQuestionAsk: { method: "POST", path: "/api/v1/team/questions" },

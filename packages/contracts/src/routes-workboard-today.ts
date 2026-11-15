@@ -15,8 +15,10 @@
 import { z } from "zod";
 
 import { chatterStatsSchema } from "./chatter-stats.ts";
+import { personStartSchema } from "./person-start.ts";
 import { businessDate, errorResponseSchema, intId, isoTimestamp, mills } from "./primitives.ts";
 import { accountShiftReportSchema } from "./routes-account-reports.ts";
+import { periodQualitySchema } from "./routes-client.ts";
 import { shiftReportsListItemSchema } from "./routes-shift-handins.ts";
 
 const count = z.number().int().nonnegative();
@@ -119,6 +121,48 @@ export const workboardTodayResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+/** A shift's quality (the review's rules, shift-review-rules.ts), from the stored shift numbers. */
+const shiftQualitySchema = z.object({
+  replyMedianSeconds: count.nullable(),
+  unansweredAtEnd: count,
+  aiUneditedShare: z.number().min(0).max(1).nullable(),
+});
+
+export const teamNewcomersResponseSchema = z.object({
+  /**
+   * The newcomers of the viewer's teams (the owner: every one): a chatter not working yet (invited, set up), or working
+   * for less than a week since their first minute in the extension. The newest first.
+   */
+  newcomers: z.array(z.object({
+    code: z.string(),
+    name: z.string(),
+    state: z.enum(["invited", "set_up", "working"]),
+    /** The teams (models) of the person's working pages; empty — none yet (the owner gives the pages). */
+    teams: z.array(z.string()),
+    /** «Начало»: the steps as Hub sees them; null — no login yet. Never where the person is paid. */
+    start: personStartSchema.nullable(),
+    /** The first minute in the extension; null — none yet. */
+    firstActiveAt: isoTimestamp.nullable(),
+    /** The first shifts (up to 5, from the first minute), oldest first, each with its quality and whether a lead wrote a note. */
+    shifts: z.array(z.object({
+      userId: intId,
+      startedAt: isoTimestamp,
+      endedAt: isoTimestamp,
+      ongoing: z.boolean(),
+      pages: z.array(z.string()),
+      workedMinutes: count,
+      /** null — the shift's numbers are not stored yet. */
+      quality: shiftQualitySchema.nullable(),
+      /** A lead (or the owner) left a note on its review. */
+      noted: z.boolean(),
+    })),
+    /** The team's norm: its closed shifts of the last 14 days, «в среднем за смену»; null — no team, or no stored numbers. */
+    team: periodQualitySchema.extend({ people: count }).nullable(),
+  })),
+  serverNow: isoTimestamp,
+});
+
+export type TeamNewcomersResponse = z.infer<typeof teamNewcomersResponseSchema>;
 export type AccountShiftsQuery = z.infer<typeof accountShiftsQuerySchema>;
 export type AccountShiftsResponse = z.infer<typeof accountShiftsResponseSchema>;
 export type OwnShiftRow = z.infer<typeof ownShiftRowSchema>;
@@ -140,5 +184,13 @@ export const workboardTodayRouteSchemas = {
     description: "Any session; read-only, database only. The team part only for a person who leads a team by its "
       + "records and the owner (never a narrow session), cut to those teams. No money of people.",
     response: { 200: workboardTodayResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema },
+  },
+  teamNewcomers: {
+    auth: { kind: "any-session" }, tags: ["client"],
+    summary: "«Команда → Новички»: each newcomer's first week in the teams the viewer leads",
+    description: "The owner every team; a person who leads a team by its records, that team's newcomers; anyone else 403. "
+      + "A full session (not the extension's). «Начало» as Hub sees it, the first shifts with their quality and notes, the "
+      + "team's norm. Database only; no money of people, never where a person is paid.",
+    response: { 200: teamNewcomersResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema },
   },
 } as const;

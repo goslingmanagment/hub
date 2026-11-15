@@ -11,7 +11,7 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { assignPageToUser, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { issueAgentKey } from "../apps/runtime/src/services/agent-keys.ts";
 import { SANDBOX_OWNER_OPERATIONS } from "../apps/runtime/src/services/sandbox/owner-operations.ts";
-import { seedSandbox } from "../apps/runtime/src/services/sandbox/seed.ts";
+import { SANDBOX_MODEL, seedSandbox } from "../apps/runtime/src/services/sandbox/seed.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
 import { syncShiftRowsSince } from "../apps/runtime/src/services/shift-rows.ts";
 import { runCustomOrderChecks } from "../apps/runtime/src/services/custom-orders/checks.ts";
@@ -412,6 +412,26 @@ describe("the wall of the test realm", () => {
     expect(refused).toEqual([]);
     expect(leaked).toEqual([]);
   }, 300_000);
+
+  it("Workboard «Сегодня» and «Новички»: the test owner's name the test team alone, a live owner's nothing of it", async (context) => {
+    if (!server || !testDb) return context.skip();
+    if (tOwnerCookie === "") tOwnerCookie = await login("t-owner", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_OWNER);
+    const get = (url: string, cookie: string) => server!.inject({ method: "GET", url, headers: { cookie } });
+    const today = await get("/api/v1/workboard/today", tOwnerCookie);
+    expect(today.statusCode, today.body).toBe(200);
+    expect((today.json() as { team: { teams: Array<{ name: string }> } | null }).team?.teams.map((one) => one.name)).toEqual([SANDBOX_MODEL.name]);
+    for (const url of ["/api/v1/workboard/today", "/api/v1/account/shifts", "/api/v1/team/newcomers"]) {
+      const answer = await get(url, tOwnerCookie);
+      expect(answer.statusCode, `${url}: ${answer.body}`).toBe(200);
+      expect(liveWords.filter((word) => answer.body.includes(`"${word}"`)), url).toEqual([]);
+    }
+    const ownerCookie = callers.find((one) => one.name === "owner")!.headers.cookie!;
+    for (const url of ["/api/v1/workboard/today", "/api/v1/team/newcomers"]) {
+      const live = await get(url, ownerCookie);
+      expect(live.statusCode, live.body).toBe(200);
+      expect(live.body.includes(`"${SANDBOX_MODEL.name}"`), url).toBe(false);
+    }
+  });
 
   it("the test owner's decisions and team records reach the test realm only: a live sale, page or person is 404", async (context) => {
     if (!server || !testDb) return context.skip();

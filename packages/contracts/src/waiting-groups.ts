@@ -8,7 +8,7 @@
 import { MATTER_INFO_KINDS } from "./matter-checks.ts";
 
 export const WAITING_GROUP_IDS = [
-  "questions", "asks", "reports", "customs", "held", "publications", "content", "people", "ledger", "system", "other", "info",
+  "questions", "asks", "reports", "customs", "newcomers", "held", "publications", "content", "people", "ledger", "system", "other", "info",
 ] as const;
 export type WaitingGroupId = (typeof WAITING_GROUP_IDS)[number];
 
@@ -41,6 +41,8 @@ export const WAITING_GROUPS: readonly WaitingGroup[] = [
   { id: "asks", title: "Вопросы", product: "workboard" },
   { id: "reports", title: "Отчёты смен", product: "workboard" },
   { id: "customs", title: "Кастомы", product: "workboard" },
+  // A newcomer standing on one step of «Начало» two days: the team lead's (products package W), watched in «Команда».
+  { id: "newcomers", title: "Новички", product: "workboard" },
   { id: "held", title: "Зависшие отправки", product: "workboard" },
   { id: "publications", title: "Публикации", product: "contentops" },
   // ContentOps' findings (`contentops.*`) and the content routines' (`content.*`): each line opens where it is decided.
@@ -67,6 +69,7 @@ export function waitingGroupOf(kind: string): WaitingGroupId {
   // The shift's report: the ledger's posts and paid days, the author's post to fix, «мимо площадки», the hand-in (F).
   if (REPORT_KINDS.has(kind) || kind.startsWith("shift.report")) return "reports";
   if (kind.startsWith("custom.")) return "customs";
+  if (kind === "person.onboarding_stuck") return "newcomers";
   if (kind === "send.held") return "held";
   if (kind.startsWith("publication.")) return "publications";
   // ContentOps' findings and the content routines' own (`content.*`: a week to approve, a gap in the schedule).

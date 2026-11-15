@@ -247013,6 +247013,7 @@
                               "asks",
                               "reports",
                               "customs",
+                              "newcomers",
                               "held",
                               "publications",
                               "content",
@@ -247166,6 +247167,7 @@
                           "asks",
                           "reports",
                           "customs",
+                          "newcomers",
                           "held",
                           "publications",
                           "content",
@@ -373946,6 +373948,495 @@
             }
           },
           "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/team/newcomers": {
+      "get": {
+        "summary": "«Команда → Новички»: each newcomer's first week in the teams the viewer leads",
+        "tags": [
+          "client"
+        ],
+        "description": "The owner every team; a person who leads a team by its records, that team's newcomers; anyone else 403. A full session (not the extension's). «Начало» as Hub sees it, the first shifts with their quality and notes, the team's norm. Database only; no money of people, never where a person is paid.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "newcomers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "code": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "invited",
+                              "set_up",
+                              "working"
+                            ]
+                          },
+                          "teams": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "start": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "newcomer": {
+                                    "type": "boolean"
+                                  },
+                                  "signedUp": {
+                                    "type": "boolean"
+                                  },
+                                  "steps": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "step": {
+                                          "type": "string",
+                                          "enum": [
+                                            "install",
+                                            "extension",
+                                            "pages",
+                                            "activity",
+                                            "payout"
+                                          ]
+                                        },
+                                        "done": {
+                                          "type": "boolean"
+                                        },
+                                        "doneAt": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "step",
+                                        "done",
+                                        "doneAt"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "done": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "total": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "current": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "install",
+                                          "extension",
+                                          "pages",
+                                          "activity",
+                                          "payout"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "since": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "stuck": {
+                                    "type": "boolean"
+                                  },
+                                  "extension": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string"
+                                          },
+                                          "signedInAt": {
+                                            "type": "string"
+                                          },
+                                          "active": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "label",
+                                          "signedInAt",
+                                          "active"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "pages": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "pageLabel": {
+                                          "type": "string"
+                                        },
+                                        "platform": {
+                                          "type": "string",
+                                          "enum": [
+                                            "fansly",
+                                            "onlyfans",
+                                            "telegram"
+                                          ]
+                                        },
+                                        "modelName": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "pageLabel",
+                                        "platform",
+                                        "modelName"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "firstActivity": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "at": {
+                                            "type": "string"
+                                          },
+                                          "pageLabel": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "at",
+                                          "pageLabel"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "newcomer",
+                                  "signedUp",
+                                  "steps",
+                                  "done",
+                                  "total",
+                                  "current",
+                                  "since",
+                                  "stuck",
+                                  "extension",
+                                  "pages",
+                                  "firstActivity"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "firstActiveAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "shifts": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "userId": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "startedAt": {
+                                  "type": "string"
+                                },
+                                "endedAt": {
+                                  "type": "string"
+                                },
+                                "ongoing": {
+                                  "type": "boolean"
+                                },
+                                "pages": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "workedMinutes": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "quality": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "replyMedianSeconds": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "unansweredAtEnd": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "aiUneditedShare": {
+                                          "anyOf": [
+                                            {
+                                              "type": "number",
+                                              "minimum": 0,
+                                              "maximum": 1
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "replyMedianSeconds",
+                                        "unansweredAtEnd",
+                                        "aiUneditedShare"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "noted": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "userId",
+                                "startedAt",
+                                "endedAt",
+                                "ongoing",
+                                "pages",
+                                "workedMinutes",
+                                "quality",
+                                "noted"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "team": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "shifts": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "replyMedianSeconds": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "unansweredAtEnd": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number",
+                                        "minimum": 0
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "aiUneditedShare": {
+                                    "anyOf": [
+                                      {
+                                        "type": "number",
+                                        "minimum": 0,
+                                        "maximum": 1
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "people": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shifts",
+                                  "replyMedianSeconds",
+                                  "unansweredAtEnd",
+                                  "aiUneditedShare",
+                                  "people"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "name",
+                          "state",
+                          "teams",
+                          "start",
+                          "firstActiveAt",
+                          "shifts",
+                          "team"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "newcomers",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {
