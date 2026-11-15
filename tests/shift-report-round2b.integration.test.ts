@@ -231,7 +231,9 @@ describe("the board «Отчёт», round 2, the second reader", () => {
     const answered = await rawSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" });
     expect(answered.statusCode, answered.body).toBe(409);
     await runSaleClaims(app, new Date(Date.now() + 25 * HOUR_MS));
-    expect((await q("select state from sale_claims where id = $1", [claimId])).rows[0].state).toBe("owner");
+    // Never settled between them: the owner's, or withdrawn by the pass (no report of anna's holds it).
+    expect(["owner", "withdrawn"]).toContain((await q("select state from sale_claims where id = $1", [claimId])).rows[0].state);
+    expect((await q("select count(*)::int as n from shift_handin_versions v, jsonb_array_elements(v.lines) line where (line ->> 'transactionId')::bigint = $1 and line ? 'settled'", [pot])).rows[0].n).toBe(0);
   });
 
   it("files «не моё» with the reason when the person says «Не согласен» to Gengar's «это ваше» (B2)", async (context) => {

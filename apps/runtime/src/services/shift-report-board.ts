@@ -603,7 +603,9 @@ async function disputeCard(
   // The person's word is the opposite of the card's: a card that would give them more («это ваше», «пополам» of a
   // colleague's sale) refused — «не моё» (no statement: the sale stays as the rule has it, nothing waits); a card that
   // would take the sale from them refused — «моё», and it waits for the decider.
-  const refusesGain = proposal.deltaMills > 0;
+  const carded = (await findHandinCandidate(db, proposal.candidateId))?.lines.find((line) => line.transactionId === proposal.transactionId);
+  const someoneElses = carded !== undefined && carded.group !== "mine";
+  const refusesGain = proposal.deltaMills > 0 || (someoneElses && (proposal.toWord === "mine" || proposal.toWord === "share"));
   const side = refusesGain ? null : proposal.toWord === "give" || proposal.toWord === "share" ? proposal.toUserId : null;
   const fields = {
     pageId: sale?.pageId ?? catalog.idOf.get(subject.shift.pages[0]?.pageLabel ?? "") ?? null, kind: "claim" as const, claimantVersion: null,
