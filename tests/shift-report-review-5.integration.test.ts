@@ -226,6 +226,8 @@ describe("the board's money, the final review's second reader", () => {
     expect(await homeOf(pot)).toMatchObject({ home: "pot" });
     const hers = await shiftRow(bella, 27.0, 25.8);
     for (const [who, shiftId] of [["anna", worked], ["bella", hers]] as const) {
+      // «Исправить» first where the report is counted: a question is asked from the draft.
+      if (shiftId === worked) expect((await rawSession(who, "POST", `/api/v1/shift-reports/${shiftId}/reopen`)).statusCode).toBe(200);
       const said = await ask(who, shiftId, { transactionId: pot, statement: "mine", note: "мой фан" });
       expect(said.statusCode, said.body).toBe(200);
       await handInAndConfirm(asSession, who, shiftId);
