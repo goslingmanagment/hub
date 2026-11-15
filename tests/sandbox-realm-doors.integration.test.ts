@@ -10,6 +10,9 @@ import { issueAgentKey, updateAgentKeyPages } from "../apps/runtime/src/services
 import { prepareAiGatewayStream } from "../apps/runtime/src/services/ai-gateway.ts";
 import { authenticateSessionToken, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { seedSandbox, SANDBOX_CHECKER } from "../apps/runtime/src/services/sandbox/seed.ts";
+import { handinActorOf } from "../apps/runtime/src/services/shift-handins.ts";
+import { handInShiftReport } from "../apps/runtime/src/services/shift-report-board.ts";
+import { syncShiftRowsSince } from "../apps/runtime/src/services/shift-rows.ts";
 import { checkServerGrant, mintServerCode, redeemServerCode } from "../apps/runtime/src/services/signin-handoff.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -203,6 +206,37 @@ describe("the doors of the test realm", () => {
     expect(sales.statusCode, sales.body).toBe(200);
     expect(sales.body).toContain("t-chat-1");
     expect(sales.body).not.toContain("anton");
+  });
+
+  it("the agents' candidate checks: a live key never sees a test candidate, the checker only those", async (context) => {
+    if (!server || !app || !testDb) return context.skip();
+    const db = testDb.db;
+    await db.execute(sql`insert into person_rights (person_id, "right", granted_at)
+      select id, 'submits_shift', now() - interval '30 days' from people where code = 't-chat-2' on conflict do nothing`);
+    await syncShiftRowsSince(app.db, { from: new Date(Date.now() - 2 * 86_400_000), now: new Date() });
+    const [shift] = (await db.execute<{ id: string; user_id: string }>(sql`select s.id, s.user_id from shifts s join users u on u.id = s.user_id
+      where u.username = 't-chat-2' and s.state = 'closed' order by s.id limit 1`)).rows;
+    const principal = await authenticateSessionToken(app, (await login("t-chat-2", PASSWORDS.SANDBOX_PASSWORD_T_CHAT_2)).split("=")[1]!);
+    await handInShiftReport(app, handinActorOf(principal!), { shiftId: Number(shift!.id) });
+    await insertPersonRow(app.db, {
+      code: "reviewer", displayName: "reviewer", kind: "agent", role: "agent", state: "working", leftOn: null, telegramUserId: null,
+      telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
+    });
+    const { token: live } = await issueAgentKey(app, { name: "reviewer-key", agentCode: "reviewer", capabilities: ["review:shift_reports"], pageLabels: ["live-1"], expiresInDays: 30 },
+      { source: "cli", actorUserId: ids.ownerId });
+    const checksOf = async (key: string) => {
+      const answer = await server!.inject({ method: "GET", url: "/api/v1/agent/shift-reports/checks", headers: { authorization: `Bearer ${key}` } });
+      expect(answer.statusCode, answer.body).toBe(200);
+      return (JSON.parse(answer.body) as { checks: Array<{ candidateId: number; shiftId: number }> }).checks;
+    };
+    const tested = await checksOf(ids.checkerKey);
+    expect(tested.map((one) => one.shiftId)).toContain(Number(shift!.id));
+    expect(await checksOf(live)).toEqual([]);
+    const answer = await server.inject({
+      method: "POST", url: `/api/v1/agent/shift-reports/checks/${tested[0]!.candidateId}`, headers: { authorization: `Bearer ${live}` },
+      payload: { proposals: [] },
+    });
+    expect(answer.statusCode, answer.body).toBe(404);
   });
 
   it("the AI gateway refuses a test login before anything is reserved", async (context) => {

@@ -29,6 +29,8 @@ import {
   type ProposalRow,
   type SaleClaimRow,
   type SaleSightingRow,
+  findTestOwnerLogin,
+  isTestUser,
 } from "@agency_hub_core/db";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
@@ -48,7 +50,11 @@ const HOUR_MS = 3_600_000;
 const moscowDayStart = (at: number) => Date.parse(`${new Date(at + 3 * HOUR_MS).toISOString().slice(0, 10)}T00:00:00+03:00`);
 
 /** Who decides a dispute of a page's model, and how the texts name them. Today the owner (the team-lead package changes this one function). */
-export function disputeDecider(_input: { modelSlug: string | null }): ShiftReportBoard["decider"] {
+export function disputeDecider(input: { modelSlug: string | null; testOwner?: { userId: number; name: string } | null }): ShiftReportBoard["decider"] {
+  // A test shift's dispute is decided by the test team's owner BY NAME, never the live owner (sandbox/realm.ts).
+  if (input.testOwner) {
+    return { kind: "owner", user: { userId: input.testOwner.userId, name: input.testOwner.name, forms: personNameForms(input.testOwner.name) }, words: input.testOwner.name };
+  }
   return { kind: "owner", user: null, words: "владелец" };
 }
 
@@ -222,7 +228,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       return { userId, name, forms: personNameForms(name) };
     },
   };
-  const decider = disputeDecider({ modelSlug: catalog.info.get(labels[0] ?? "")?.modelSlug ?? null });
+  const testShift = await isTestUser(db, subject.shift.userId);
+  const decider = disputeDecider({ modelSlug: catalog.info.get(labels[0] ?? "")?.modelSlug ?? null, testOwner: testShift ? await findTestOwnerLogin(db) : null });
   const editable = own && mayAct(actor, "edit", phase);
   const canNote = own && mayAct(actor, "note", phase);
   const counted = phase === "counted";

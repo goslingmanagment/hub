@@ -137,3 +137,11 @@ export async function isTestPageLabel(db: Database, label: string): Promise<bool
   const row = result.rows[0] as { test?: boolean } | undefined;
   return row === undefined ? null : row.test === true;
 }
+
+/** The test team's owner by name (the decider of a test shift's dispute): a test person of the owner's role with a login. */
+export async function findTestOwnerLogin(db: Database): Promise<{ userId: number; name: string } | null> {
+  const result = await db.execute(sql`select pl.user_id, pe.display_name from person_logins pl join people pe on pe.id = pl.person_id
+    join users u on u.id = pl.user_id where pe.is_test and pe.role = 'owner' and u.deleted_at is null order by pl.user_id limit 1`);
+  const row = result.rows[0] as { user_id: number | string; display_name: string } | undefined;
+  return row === undefined ? null : { userId: Number(row.user_id), name: row.display_name };
+}

@@ -12,6 +12,9 @@ import { runSaleClaims } from "../apps/runtime/src/services/sale-claims.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
 import { seedSandbox } from "../apps/runtime/src/services/sandbox/seed.ts";
 import { runShiftReportMatters } from "../apps/runtime/src/services/shift-handin-matters.ts";
+import { handinActorOf } from "../apps/runtime/src/services/shift-handins.ts";
+import { confirmShiftReport, handInShiftReport, runShiftReportBoardPass } from "../apps/runtime/src/services/shift-report-board.ts";
+import type { HumanAuthPrincipal } from "../apps/runtime/src/services/auth.ts";
 import { syncShiftRowsSince } from "../apps/runtime/src/services/shift-rows.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -88,20 +91,22 @@ async function seedLiveAgency(testDb: StartedTestDatabase) {
 async function seedTestTeam(testDb: StartedTestDatabase) {
   const app = createTestAppContext(testDb);
   // The team's day: shifts, sales of every kind, orders, matters — on the frozen clock.
-  await seedSandbox(app, { scenarios: ["shift", "customs", "matters"], env: {}, now: new Date(T0 - 12 * HOUR) });
+  await seedSandbox(app, { scenarios: ["shift", "customs", "matters"], env: {}, now: new Date(T0 - 12 * HOUR), printCheckerKey: true });
   // «Сдаёт смену» on for the test chatters since before their shifts, nothing handed in.
   await app.db.execute(sql`insert into person_rights (person_id, "right", granted_at)
     select id, 'submits_shift', ${new Date(T0 - 30 * DAY).toISOString()}::timestamptz from people where is_test and role = 'chatter'
     on conflict do nothing`);
 }
 
-async function runPasses(testDb: StartedTestDatabase) {
+async function runPasses(testDb: StartedTestDatabase, between?: (at: number) => Promise<void>) {
   const app = createTestAppContext(testDb);
   const ledgerAway: typeof fetch = async () => { throw new Error("no ledger in this test"); };
   for (const at of CLOCK) {
     const now = new Date(at);
     await syncShiftRowsSince(app.db, { from: new Date(at - 3 * DAY), now });
     await refreshSaleHomes(app.db, { from: new Date(at - 9 * DAY), to: now, now });
+    await between?.(at);
+    await runShiftReportBoardPass(app, now);
     await runShiftReportMatters(app, now);
     await runSaleClaims(app, now);
     await runPeopleStartTick(app, now);
@@ -139,7 +144,38 @@ describe("background passes keep the test team out of the live agency's matters"
   it("the day's close, the silent day, 48 hours and the week's turn open the same live matters", async (context) => {
     if (!plain || !withTeam) return context.skip();
     await runPasses(plain);
-    await runPasses(withTeam);
+    // The test team's report goes the whole way on the same clock: drafted and handed in at the day's close
+    // («Проверка»), past the check by the silent day («Подтвердите»), confirmed («Учтён»).
+    const app = createTestAppContext(withTeam);
+    const [user] = (await withTeam.db.execute<{ id: string }>(sql`select id from users where username = 't-chat-2'`)).rows;
+    const testPages = (await withTeam.db.execute<{ id: string }>(sql`select p.id from pages p join models m on m.id = p.model_id where m.is_test`)).rows.map((row) => Number(row.id));
+    const principal = {
+      authMethod: "session", user: { id: Number(user!.id), username: "t-chat-2", role: "chatter", assignedPages: [], mustChangePassword: false },
+      assignedPageIds: testPages, sandbox: { test: true, testPageIds: testPages, livePageIds: null },
+    } as HumanAuthPrincipal;
+    const actor = handinActorOf(principal);
+    let shiftId = 0;
+    const phase = async () => String((await withTeam!.db.execute<{ phase: string }>(sql`select phase from shift_handins where shift_id = ${shiftId}`)).rows[0]?.phase ?? "draft");
+    const seen: string[] = [];
+    await runPasses(withTeam, async (at) => {
+      if (at === CLOCK[0]) {
+        const [shift] = (await withTeam!.db.execute<{ id: string }>(sql`select id from shifts where user_id = ${user!.id} and state = 'closed' order by id limit 1`)).rows;
+        shiftId = Number(shift!.id);
+        seen.push(await phase());
+        await handInShiftReport(app, actor, { shiftId }, new Date(at));
+        seen.push(await phase());
+      }
+      if (at === CLOCK[1]) {
+        // The minute pass of the silent day: the checker never answered, ten minutes are long gone.
+        await runShiftReportBoardPass(app, new Date(at));
+        seen.push(await phase());
+        const [candidate] = (await withTeam!.db.execute<{ id: string }>(sql`select c.id from shift_handin_candidates c join shift_handins h on h.id = c.handin_id
+          where h.shift_id = ${shiftId} order by c.id desc limit 1`)).rows;
+        await confirmShiftReport(app, actor, { shiftId, candidateId: Number(candidate!.id) }, { now: new Date(at), dayPaid: async () => null });
+        seen.push(await phase());
+      }
+    });
+    expect(seen).toEqual(["draft", "checking", "confirm", "counted"]);
     const live = await liveMatters(plain);
     expect(live.length).toBeGreaterThan(0);
     expect(await liveMatters(withTeam)).toEqual(live);
