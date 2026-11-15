@@ -22,7 +22,15 @@ import { isTestAgent, isTestPrincipal } from "./realm.ts";
 
 export type RealmObjectKind =
   | "page" | "pageLabel" | "model" | "modelSlug" | "login" | "personCode" | "shift" | "sale" | "claim" | "offPlatformLine"
-  | "candidate" | "proposal" | "sighting" | "question" | "order" | "publication";
+  | "candidate" | "proposal" | "personProposal" | "sighting" | "question" | "order" | "publication";
+
+/** The table each kind reads (tests/sandbox-realm-objects.test.ts holds it against what each route's handler reads). */
+export const KIND_TABLES: Readonly<Record<RealmObjectKind, string>> = {
+  page: "pages", pageLabel: "pages", model: "models", modelSlug: "models", login: "users", personCode: "people",
+  shift: "shifts", sale: "transactions", claim: "sale_claims", offPlatformLine: "off_platform_sales",
+  candidate: "shift_handin_candidates", proposal: "shift_handin_proposals", personProposal: "person_proposals",
+  sighting: "sale_sightings", question: "team_questions", order: "custom_orders", publication: "publications",
+};
 
 /**
  * A field's object: a kind; `none` (with the reason in a comment where it is declared); or `nested` — a container whose
@@ -92,6 +100,12 @@ export const ROUTE_OBJECTS: Readonly<Record<string, Readonly<Record<string, Fiel
   teamQuestionAnswer: { id: "question" },
   teamQuestionClose: { id: "question" },
   teamSwapRevoke: { id: "question" },
+  // A sale question of the agents' door is a row of sale_claims (kind `question`, sale-decisions-door.ts), not a team
+  // question: the same name, another table.
+  agentSaleQuestionAnswer: { questionId: "claim" },
+  agentSaleQuestionClose: { questionId: "claim" },
+  // An agent's proposal about a PERSON (person_proposals), not a report card's (shift_handin_proposals).
+  adminPersonProposalDecide: { proposalId: "personProposal" },
   customOrder: { code: "order" },
   customOrderAct: { code: "order" },
   adminPerson: { code: "personCode" },
@@ -143,6 +157,9 @@ function realmQuery(kind: RealmObjectKind, values: readonly string[]): SQL {
     case "claim": return pageOf("sale_claims");
     case "offPlatformLine": return byId("off_platform_sales", testUserSql(sql`o.user_id`));
     case "candidate": return byId("shift_handin_candidates", loginOfHandin);
+    // A proposal about a person is of that person's realm; one of a new person (no row yet) is the live agency's: only
+    // live keys propose people (the test team's checker cannot, `propose:people`).
+    case "personProposal": return byId("person_proposals", sql`coalesce((select p.is_test from people p where p.id = o.person_id), false)`);
     case "proposal": return byId("shift_handin_proposals", loginOfHandin);
     case "sighting": return pageOf("sale_sightings");
     case "question": return pageOf("team_questions");
@@ -172,7 +189,9 @@ function namedValues(routeKey: string, parts: ReadonlyArray<Record<string, unkno
   const out: NamedValue[] = [];
   const named = (value: unknown) => typeof value === "number" || (typeof value === "string" && value.length > 0);
   const walk = (part: unknown, depth: number) => {
-    if (depth > 4 || part === null || typeof part !== "object") return;
+    // Only what a JSON parser makes: a plain object or an array. A raw body (a webhook's Buffer), a typed array, a date
+    // or a class instance is never entered — a Buffer would be walked byte by byte.
+    if (depth > 4 || !isPlainContainer(part)) return;
     if (Array.isArray(part)) {
       for (const one of part) walk(one, depth + 1);
       return;
@@ -191,6 +210,14 @@ function namedValues(routeKey: string, parts: ReadonlyArray<Record<string, unkno
   };
   for (const part of parts) walk(part, 0);
   return out;
+}
+
+/** A plain object (`{}`, `Object.create(null)`) or an array: what the walk may enter. */
+function isPlainContainer(value: unknown): value is Record<string, unknown> | unknown[] {
+  if (value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return true;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  return prototype === Object.prototype || prototype === null;
 }
 
 /** The objects a request names (field-less view of `namedValues`, for the hook's quick «names nothing» exit and tests). */
@@ -268,8 +295,13 @@ export async function pageOfOtherRealm(app: { db: Database }, principal: AuthPri
 
 /** The answer with every hidden value of the request put back where the sentinel stands (a JSON or text answer). */
 export function restoreHidden(parts: ReadonlyArray<unknown>, payload: string): string {
-  const echoes = parts.flatMap((part) => (part !== null && typeof part === "object" ? HIDDEN.get(part) ?? [] : []));
-  if (echoes.length === 0) return payload;
+  // Per answer: one WeakMap read per part, nothing allocated while nothing was hidden.
+  let echoes: Array<{ sentinel: string; original: string }> | undefined;
+  for (const part of parts) {
+    const found = part !== null && typeof part === "object" ? HIDDEN.get(part) : undefined;
+    if (found !== undefined) echoes = echoes === undefined ? found : [...echoes, ...found];
+  }
+  if (echoes === undefined) return payload;
   let out = payload;
   // Longest first: «∅12» before «∅1».
   for (const { sentinel, original } of [...new Set(echoes)].sort((a, b) => b.sentinel.length - a.sentinel.length)) {
