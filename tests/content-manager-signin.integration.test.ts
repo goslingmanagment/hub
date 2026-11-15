@@ -4,6 +4,7 @@ import { createFanslyPage, createModel, insertAgentKey, openMatter } from "@agen
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import { createInvite } from "../apps/runtime/src/services/account-links.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   AGENT_KEY_TOKEN_PREFIX, LOGIN_BACKOFF_FREE_FAILURES, SESSION_COOKIE_NAME, authenticateSessionToken, createUserAccount, setUserPassword,
@@ -231,5 +232,29 @@ describe("ContentOps' own entrance (package C4)", () => {
     const grant = (await door("redeem", { code })).json<{ grant: string }>().grant;
     expect((await door("logout", { grant })).json()).toEqual({ ended: false });
     expect((await request("GET", `${HUB}/api/v1/auth/me`, { session: hubSession })).statusCode).toBe(200);
+  });
+  it("refuses the owner's password change before anything changes: the password stays, his sessions live", async (context) => {
+    if (!server) return context.skip();
+    const ownerSession = sessionOf(await request("POST", `${HUB}/api/v1/auth/login`, {
+      headers: { origin: HUB }, payload: { username: "boss", password: "boss-password-for-tests" },
+    }));
+    const minted = await request("GET", `${HUB}/api/v1/auth/sso?${new URLSearchParams({ to: "contentops", state: "client-state-0123456789", next: "/" })}`, { session: ownerSession });
+    const code = new URL(String(minted.headers.location)).searchParams.get("code")!;
+    const grant = (await door("redeem", { code })).json<{ grant: string }>().grant;
+    const refusedChange = await door("password-change", { grant, currentPassword: "boss-password-for-tests", newPassword: "a-brand-new-password-1" });
+    expect(refusedChange.json()).toEqual({ result: "refused", reason: "owner" });
+    expect((await request("GET", `${HUB}/api/v1/auth/me`, { session: ownerSession })).statusCode).toBe(200);
+    expect((await door("check", { grant })).json()).toMatchObject({ active: true });
+    const again = await request("POST", `${HUB}/api/v1/auth/login`, { headers: { origin: HUB }, payload: { username: "boss", password: "boss-password-for-tests" } });
+    expect(again.statusCode).toBe(200);
+  });
+
+  it("refuses a link of a login that opens elsewhere before the link is spent", async (context) => {
+    if (!server) return context.skip();
+    const invite = await createInvite(app, { username: "chat-newbie", pageLabels: [] }, { source: "cli" });
+    expect((await door("link", { token: invite.link.token, password: "a-strong-password-for-tests" })).json())
+      .toEqual({ result: "refused", reason: "not_here" });
+    const link = await testDb!.pool.query<{ used: boolean }>("select used_at is not null as used from account_links where user_id = $1", [invite.user.id]);
+    expect(link.rows[0]?.used).toBe(false);
   });
 });
