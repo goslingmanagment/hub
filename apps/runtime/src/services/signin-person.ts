@@ -51,16 +51,24 @@ export async function contentopsWaitingOf(app: Pick<AppContext, "db">, user: Sig
   const owner = user.role === "owner";
   const viewer: MatterViewer = { userId: user.id, role: owner ? "owner" : "chatter", pageIds: [], ...(test ? { realm: "test" as const } : {}) };
   const heldRoles = owner ? await heldRolesOf(app, viewer) : [];
-  const [rows, pages] = await Promise.all([
+  const [rows, pages, facts] = await Promise.all([
     listVisibleMatters(app.db, { viewer, state: "open", heldRoles, limit: 5000 }),
     listMatterPageLabels(app.db),
+    teamFactsFor(app),
   ]);
+  // The model of each page, as Hub's lower-case slug: ContentOps cuts «Ждут вас» by Hub's model, like its other screens.
+  const slugOfModel = new Map(facts.models.map((model) => [model.modelId, model.slug.toLowerCase()]));
+  const slugOfPage = new Map(facts.pages.flatMap((page) => {
+    const slug = slugOfModel.get(page.modelId);
+    return slug === undefined ? [] : [[page.pageId, slug] as const];
+  }));
   const matters = rows.filter((row) => waitsInContentops(row.kind)).slice(0, WAITING_LIMIT).map((row) => ({
     id: row.id,
     kind: row.kind,
     title: row.title,
     link: row.link,
     pageLabels: row.pageIds.map((id) => pages.labelOf.get(id)).filter((label): label is string => label !== undefined),
+    models: [...new Set(row.pageIds.map((id) => slugOfPage.get(id)).filter((slug): slug is string => slug !== undefined))].sort(),
     openedAt: row.openedAt.toISOString(),
   }));
   return { active: true, matters, serverNow: now.toISOString() };

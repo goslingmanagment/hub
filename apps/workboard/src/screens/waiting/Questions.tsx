@@ -263,7 +263,10 @@ export function QuestionModal({ id, onClose }: { id: number; onClose: () => void
     meta: { suppressGlobalError: true },
     mutationFn: (value: "yes" | "no") => kernel.teamQuestionAnswer({ params: { id }, body: { answer: value, ...(line.trim() ? { text: line.trim() } : {}) } }),
     onSuccess: (_data, value) => done(value === "yes" ? "Ответ «Можно» ушёл" : "Ответ «Нельзя» ушёл"),
-    onError: () => toast.error("Ответ не записан: вопрос могли уже закрыть"),
+    onError: (error) => {
+      const reason = (error as { body?: { reason?: unknown } } | null)?.body?.reason;
+      toast.error(reason === "swap_started" ? "Подмена уже началась: ответьте «Нельзя» или оставьте" : "Ответ не записан: вопрос могли уже закрыть");
+    },
   });
   const revoke = useMutation({
     meta: { suppressGlobalError: true },
@@ -282,11 +285,13 @@ export function QuestionModal({ id, onClose }: { id: number; onClose: () => void
   });
 
   let actions = <Button variant="ghost" onClick={onClose}>Закрыть</Button>;
+  // A swap is decided before its hours (Hub refuses «Можно» once they began, Moscow time).
+  const swapBegun = question?.swap ? Date.parse(`${question.swap.date}T${question.swap.start}:00+03:00`) <= Date.now() : false;
   if (question?.canAnswer && !narrow) {
     actions = (
       <>
         <Button variant="secondary" loading={answer.isPending && answer.variables === "no"} disabled={answer.isPending} onClick={() => answer.mutate("no")}>Нельзя</Button>
-        <Button variant="primary" loading={answer.isPending && answer.variables === "yes"} disabled={answer.isPending} onClick={() => answer.mutate("yes")}>Можно</Button>
+        <Button variant="primary" loading={answer.isPending && answer.variables === "yes"} disabled={answer.isPending || swapBegun} onClick={() => answer.mutate("yes")}>Можно</Button>
       </>
     );
   } else if (question?.swap?.canRevoke) {
@@ -323,6 +328,7 @@ export function QuestionModal({ id, onClose }: { id: number; onClose: () => void
             ))}
           {question.mine && question.state === "open" && <p className="wt-ask__lead">Ждёт ответа. Ответ придёт сюда, в «Ждут вас».</p>}
           {question.swap?.canRevoke && narrow && <PasswordWayIn text="Чтобы отменить подмену, войдите на сайте с паролем." />}
+          {question.canAnswer && swapBegun && <p className="wt-ask__lead">Подмена уже началась: ответьте «Нельзя» или оставьте.</p>}
         </div>
       )}
     </Modal>

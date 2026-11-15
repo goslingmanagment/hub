@@ -20,6 +20,7 @@ import {
   readModelsOf,
   requireTeamReader,
   teamFactsFor,
+  teamPagesFor,
   teamsOfPerson,
 } from "./teams.ts";
 
@@ -116,9 +117,17 @@ export async function setTeamRole(app: App, principal: HumanAuthPrincipal, body:
 
 // ── Review notes ────────────────────────────────────────────────────────────
 
+/**
+ * The shift a review names, as the principal may see it: of their realm, and on a page of their teams (`teamPagesFor`,
+ * the cut of every team read). A shift none of whose pages the reader may see is «no shift», as one of the other realm:
+ * a chatter of one model never learns that a chatter of another was on shift.
+ */
 async function shiftFor(app: App, principal: HumanAuthPrincipal, userId: number, at: string) {
   if ((await userIsTest(app, userId)) !== (principal.sandbox?.test === true)) throw new NotFoundError("The person has no shift at that time");
-  return findShiftAt(app.db, userId, new Date(at));
+  const shift = await findShiftAt(app.db, userId, new Date(at));
+  if (shift === null) return null;
+  const scope = await teamPagesFor(app, principal);
+  return scope === undefined || shift.pageIds.some((pageId) => scope.includes(pageId)) ? shift : null;
 }
 
 /** Whether the principal leads a model of the shift's pages (the owner: always). */

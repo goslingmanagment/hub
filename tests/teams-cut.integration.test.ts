@@ -352,6 +352,27 @@ describe("teams: who sees whom (package T)", () => {
     expect(lead.statusCode).toBe(403);
     await testDb.pool.query("update team_roles set revoked_at = now() where kind = 'view'");
   });
+  it("a shift review's notes name no shift of another team: «no shift» to a chatter and a lead, the shift to the owner", async (context) => {
+    if (!server || !testDb) return context.skip();
+    const at = encodeURIComponent(new Date(shiftStart + 60 * 60_000).toISOString());
+    const notes = async (userId: number, who: string) => {
+      const response = await get(`/api/v1/team/review-notes?userId=${userId}&at=${at}`, who);
+      expect(response.statusCode, response.body).toBe(200);
+      return (response.json() as { shiftId: number | null }).shiftId;
+    };
+    // The probe: was Boris (team B) on shift at that time? Nobody of team A may learn it, by reading or by writing.
+    expect(await notes(ids.chatterB, "anna")).toBeNull();
+    expect(await notes(ids.chatterB, "lena")).toBeNull();
+    const write = await server.inject({
+      method: "POST", url: "/api/v1/team/review-notes", headers: { cookie: cookies.lena! },
+      payload: { userId: ids.chatterB, at: new Date(shiftStart + 60 * 60_000).toISOString(), text: "probe" },
+    });
+    expect(write.statusCode, write.body).toBe(404);
+    // The team's own shifts and the owner's every shift stay as they were.
+    expect(await notes(ids.chatterA, "anna")).not.toBeNull();
+    expect(await notes(ids.chatterA, "lena")).not.toBeNull();
+    expect(await notes(ids.chatterB, "olga")).not.toBeNull();
+  });
 });
 
 /** Where two answers («<status> <json>») differ: the JSON paths, each with both values, at most five. */

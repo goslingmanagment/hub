@@ -288,6 +288,12 @@ export const adminPersonCreateBodySchema = z.object({
   invite: personInviteInputSchema.optional(),
   /** Pay terms set in the same transaction (a human only; one per model). Money: the owner's only — never in a proposal. */
   payTerms: z.array(adminPersonPayTermBodySchema).max(20).optional(),
+  /**
+   * «Ведёт команды» (products package W): a team lead invited as the lead of these models' teams — the `lead` records
+   * written in the same transaction, so the lead's first «Сегодня» names their teams. A team lead only; the owner's
+   * word, never in a proposal. Models of the person's realm only.
+   */
+  leadModelSlugs: z.array(z.string().trim().min(1).max(80)).max(20).optional(),
 });
 
 export const adminPersonUpdateBodySchema = z.object({
@@ -324,7 +330,7 @@ const proposalWords = {
 };
 
 const proposalUpdate = z.object({ kind: z.literal("update"), personCode: personCodeSchema, change: adminPersonUpdateBodySchema });
-const proposalCreate = z.object({ kind: z.literal("create"), person: adminPersonCreateBodySchema.omit({ invite: true, payTerms: true }) });
+const proposalCreate = z.object({ kind: z.literal("create"), person: adminPersonCreateBodySchema.omit({ invite: true, payTerms: true, leadModelSlugs: true }) });
 
 /** What a proposal changes: the owner's edit of an existing person, or a new person (never an invitation, never pay terms). */
 export const personProposalChangeSchema = z.discriminatedUnion("kind", [proposalUpdate, proposalCreate]);

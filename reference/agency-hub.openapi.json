@@ -76068,6 +76068,15 @@
                         "fixPerShiftMills"
                       ]
                     }
+                  },
+                  "leadModelSlugs": {
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    }
                   }
                 },
                 "required": [
@@ -217540,6 +217549,12 @@
                                 ]
                               },
                               "pageLabels": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "models": {
                                 "type": "array",
                                 "items": {
                                   "type": "string"
