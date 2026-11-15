@@ -26,7 +26,9 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import type { AuthPrincipal } from "./auth.ts";
 import { NotFoundError } from "./errors.ts";
+import { realmOf, requireSalesOfRealm } from "./sandbox/realm.ts";
 import { readTeamLedgerPayoutPerson } from "./ledger-person-pay.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
 import { SALE_HOME_REASON_TEXT, SALE_RULE, type SaleHomeReason } from "./sale-rule.ts";
@@ -264,6 +266,9 @@ export function payLinksOf(input: {
 /** «Начисление» and «Выплата» of another person for a reader who sees no pay but their own (a team lead). */
 const OWNER_ONLY: SaleChainLink = { state: "none", words: "видит только владелец", link: null, amountMills: null };
 
+/** A link of the test realm's sale: the ledger is never asked about the test team (sandbox/realm.ts). */
+export const TEST_REALM_NO_MONEY: SaleChainLink = { state: "none", words: "в тестовой команде денег нет", link: null, amountMills: null };
+
 // ── The read ─────────────────────────────────────────────────────────────────
 
 function unknownWords(error: unknown): string {
@@ -278,7 +283,12 @@ export async function readSaleChain(
   app: ChainApp,
   viewer: ChainViewer,
   query: { saleId?: number | undefined; pageLabel?: string | undefined; transactionRef?: string | undefined },
-  options: { fetchImpl?: typeof fetch; now?: Date } = {},
+  options: {
+    fetchImpl?: typeof fetch;
+    now?: Date;
+    /** A person's session: the sale must be of their realm (else 404), and a test realm's sale asks the ledger nothing. */
+    realmOf?: AuthPrincipal;
+  } = {},
 ): Promise<SaleChainResponse> {
   const { db } = app;
   const now = options.now ?? new Date();
@@ -286,6 +296,8 @@ export async function readSaleChain(
     ? await findSaleIdByPlatformRef(db, { pageLabel: query.pageLabel, transactionRef: query.transactionRef })
     : null);
   if (id === null) throw notFound();
+  if (options.realmOf !== undefined) await requireSalesOfRealm(app, options.realmOf, [id]);
+  const testRealm = options.realmOf !== undefined && realmOf(options.realmOf) === "test";
   const sale = (await listHandinSalesByIds(db, [id]))[0];
   if (sale === undefined) throw notFound();
 
@@ -349,6 +361,8 @@ export async function readSaleChain(
     const postLink = viewer.kind === "owner" ? `/workboard/money/reports` : own ? "/workboard/my/shifts" : null;
     if (handedIn !== null) {
       report = hubReportLinkOf({ report: handedIn, transactionId: sale.transactionId, own, sums });
+    } else if (testRealm) {
+      report = TEST_REALM_NO_MONEY;
     } else if (person === null) {
       report = { state: "unknown", words: "неизвестно: вход не связан с человеком в реестре, ledger его не знает", link: null, amountMills: null };
     } else {
@@ -366,7 +380,10 @@ export async function readSaleChain(
     // Another person's pay is the owner's to see (an agent with read:money its states): a team lead's read asks nothing.
     let accrual = OWNER_ONLY;
     let payout = OWNER_ONLY;
-    if (viewer.kind !== "team_lead") {
+    if (testRealm) {
+      accrual = TEST_REALM_NO_MONEY;
+      payout = TEST_REALM_NO_MONEY;
+    } else if (viewer.kind !== "team_lead") {
       let pay: TeamLedgerPayoutPersonResponse | null = null;
       let why: string | null = null;
       if (person === null) {

@@ -439,4 +439,85 @@ describe("the wall of the test realm", () => {
     expect(roles.statusCode).toBe(200);
     expect(liveWords.some((word) => roles.body.includes(`"${word}"`))).toBe(false);
   }, 300_000);
+
+  // Workboard's own reads and writes of the test owner (products packages W): «Список продаж» and a sale's chain, the
+  // questions to whoever decides. Each keeps to its realm by id as by list, and a test realm's money asks no ledger.
+  it("keeps the sales list, a sale's chain and the questions to their realm, both ways", async (context) => {
+    if (!server || !testDb) return context.skip();
+    const app = createTestAppContext(testDb);
+    const now = new Date();
+    await seedSandbox(app, { scenarios: ["shift"], env: SANDBOX_PASSWORDS, now });
+    await syncShiftRowsSince(app.db, { from: new Date(now.getTime() - 3 * DAY_MS), now });
+    await refreshSaleHomes(app.db, { from: new Date(now.getTime() - 3 * DAY_MS), to: now, now });
+    if (tOwnerCookie === "") tOwnerCookie = await login("t-owner", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_OWNER);
+    const tChat = await login("t-chat-1", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_CHAT_1);
+    const owner = callers.find((caller) => caller.name === "owner")!.headers.cookie!;
+    const as = (cookie: string, method: "GET" | "POST", url: string, payload?: Record<string, unknown>) => server!.inject({
+      method, url, headers: { cookie }, ...(payload === undefined ? {} : { payload }),
+    });
+    const namesLive = (body: string) => liveWords.some((word) => body.includes(`"${word}"`));
+
+    // The sales list of the last days: the test owner's names nothing live, the live owner's nothing of the test team.
+    const window = `from=${dayOf(now.getTime() - 3 * DAY_MS)}&to=${dayOf(now.getTime())}`;
+    const tList = await as(tOwnerCookie, "GET", `/api/v1/team/sales/list?${window}`);
+    expect(tList.statusCode, tList.body).toBe(200);
+    expect(namesLive(tList.body)).toBe(false);
+    const [testSale] = (await testDb.pool.query(`select t.id from transactions t join pages p on p.id = t.platform_account_id
+      join models m on m.id = p.model_id where m.is_test order by t.id limit 1`)).rows as Array<{ id: string }>;
+    const listed = (tList.json() as { sales: Array<{ transactionId: number; report: { words: string } }> }).sales;
+    if (testSale !== undefined) {
+      expect(listed.map((sale) => sale.transactionId)).toContain(Number(testSale.id));
+      // No ledger for the test team: never «неизвестно», never a post.
+      expect(listed.every((sale) => !sale.report.words.startsWith("неизвестно: ledger"))).toBe(true);
+    }
+    const liveList = await as(owner, "GET", `/api/v1/team/sales/list?${window}`);
+    expect(liveList.statusCode).toBe(200);
+    if (testSale !== undefined) expect((liveList.json() as { sales: Array<{ transactionId: number }> }).sales.map((sale) => sale.transactionId)).not.toContain(Number(testSale.id));
+
+    // A sale's chain: of its own realm only, the test one without the ledger.
+    expect((await as(tOwnerCookie, "GET", `/api/v1/sales/chain?saleId=${live.transactionId}`)).statusCode).toBe(404);
+    if (testSale !== undefined) {
+      expect((await as(owner, "GET", `/api/v1/sales/chain?saleId=${testSale.id}`)).statusCode).toBe(404);
+      const chain = await as(tOwnerCookie, "GET", `/api/v1/sales/chain?saleId=${testSale.id}`);
+      expect(chain.statusCode, chain.body).toBe(200);
+      expect(namesLive(chain.body)).toBe(false);
+      for (const person of (chain.json() as { people: Array<{ accrual: { words: string }; payout: { words: string } }> }).people) {
+        expect([person.accrual.words, person.payout.words]).toEqual(["в тестовой команде денег нет", "в тестовой команде денег нет"]);
+      }
+    }
+
+    // A live chatter's question: the test owner neither lists, opens nor answers it.
+    const [liveQuestion] = (await testDb.pool.query(`insert into team_questions (asker_user_id, page_id, kind, text)
+      values ($1, $2, 'late', 'опоздаю на час') returning id`, [live.chatterUserId, live.pageId])).rows as Array<{ id: string }>;
+    const tQuestions = await as(tOwnerCookie, "GET", "/api/v1/team/questions");
+    expect(tQuestions.statusCode).toBe(200);
+    expect((tQuestions.json() as { questions: Array<{ id: number }> }).questions.map((one) => one.id)).not.toContain(Number(liveQuestion!.id));
+    expect((await as(tOwnerCookie, "GET", `/api/v1/team/questions?id=${liveQuestion!.id}`)).statusCode).toBe(404);
+    expect((await as(tOwnerCookie, "POST", `/api/v1/team/questions/${liveQuestion!.id}/answer`, { answer: "yes" })).statusCode).toBe(404);
+    // The test owner cannot ask on a live page.
+    expect((await as(tOwnerCookie, "POST", "/api/v1/team/questions", { pageLabel: live.pageLabel, kind: "late", text: "x" })).statusCode).not.toBe(200);
+
+    // A test chatter's question is decided inside the test realm: the live owner neither sees nor answers it.
+    const [testPage] = (await testDb.pool.query(`select p.label from person_working_pages w
+      join person_logins l on l.person_id = w.person_id join users u on u.id = l.user_id join pages p on p.id = w.page_id
+      where u.username = 't-chat-1' order by w.position limit 1`)).rows as Array<{ label: string }>;
+    expect(testPage).toBeDefined();
+    const asked = await as(tChat, "POST", "/api/v1/team/questions", { pageLabel: testPage!.label, kind: "swap", text: "возьму смену" });
+    expect(asked.statusCode, asked.body).toBe(200);
+    const question = (asked.json() as { question: { id: number } }).question;
+    const [matter] = (await testDb.pool.query("select owner_user_id::text, owner_role from matters where reason_key = $1 and state = 'open'", [`question.asked:${question.id}`])).rows as Array<{ owner_user_id: string | null; owner_role: string | null }>;
+    expect(matter).toBeDefined();
+    if (matter!.owner_user_id !== null) {
+      // A decider by name is a test person's login.
+      const [decider] = (await testDb.pool.query("select u.username from users u where u.id = $1", [matter!.owner_user_id])).rows as Array<{ username: string }>;
+      expect(decider!.username.startsWith("t-")).toBe(true);
+    }
+    const liveOwnerList = await as(owner, "GET", "/api/v1/team/questions");
+    expect((liveOwnerList.json() as { questions: Array<{ id: number }> }).questions.map((one) => one.id)).not.toContain(question.id);
+    expect((await as(owner, "GET", `/api/v1/team/questions?id=${question.id}`)).statusCode).toBe(404);
+    expect((await as(owner, "POST", `/api/v1/team/questions/${question.id}/answer`, { answer: "no" })).statusCode).toBe(404);
+    const answered = await as(tOwnerCookie, "POST", `/api/v1/team/questions/${question.id}/answer`, { answer: "yes", text: "да" });
+    expect(answered.statusCode, answered.body).toBe(200);
+    expect(namesLive(answered.body)).toBe(false);
+  }, 300_000);
 });

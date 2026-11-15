@@ -36,6 +36,8 @@ export const SANDBOX_OWNER_OPERATIONS: ReadonlySet<string> = new Set([
   "teamSalesPpv",
   "teamSalesReplies",
   "teamSalesList",
+  // A sale's chain, opened from «Список продаж»: a sale of the test realm only (else 404), the ledger never asked.
+  "saleChain",
   "teamQuestions",
   "teamQuestionAsk",
   "teamQuestionAnswer",
