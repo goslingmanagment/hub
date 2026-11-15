@@ -43,6 +43,8 @@ const SANDBOX_PASSWORDS = {
 };
 const CLOCK_KEYS = new Set(["serverNow", "generatedAt", "now", "asOf", "computedAt", "checkedAt", "fetchedAt", "readAt", "requestId", "savedAt"]);
 const HUMAN_KINDS = new Set(["any", "any-session", "session"]);
+/** POST operations that only read. */
+const POST_READS = new Set(["spenderBatch"]);
 
 type Server = Awaited<ReturnType<typeof buildApiServer>>;
 type Zod = { _zod: { def: Record<string, unknown> & { type: string } } };
@@ -134,7 +136,7 @@ function probes(table: Server["routePolicyTable"], realm: "live" | "test", open:
     for (const [where, part] of [["params", schema.params], ["query", schema.querystring], ["body", schema.body]] as const) {
       for (const field of fieldsOf(part)) {
         const kind = fieldObject(row.routeKey, field);
-        if (kind === undefined || kind === "none") continue;
+        if (kind === undefined || kind === "none" || kind === "nested") continue;
         const build = (value: string): Probe => {
           const target = { field, value };
           const params = sample(schema.params, where === "params" ? target : null) ?? {};
@@ -348,6 +350,11 @@ async function holes(viewer: string, list: ReadonlyArray<[Probe, Probe]>): Promi
     const other = await answer(named);
     if (other.status >= 500 || other.text !== absent.text) {
       out.push(`${viewer} ${named.key} ${named.field}=${named.kind}: ${other.text.slice(0, 200)} ≠ missing ${absent.text.slice(0, 120)}`);
+    }
+    // A write never succeeds on a hidden object: the value that names nothing is refused by the service as unknown,
+    // never created or bound under it (a field naming the object an operation CREATES is `none` in objects.ts).
+    if (named.method !== "GET" && !POST_READS.has(named.key) && other.status < 300) {
+      out.push(`${viewer} ${named.key} ${named.field}=${named.kind}: a write succeeded on a hidden object (${other.status})`);
     }
   }
   return out;

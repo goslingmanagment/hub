@@ -134,11 +134,13 @@ describe("the doors of the test realm", () => {
       ["POST", "/api/v1/sale-decisions/1/link", { transactionId: sale }],
       ["POST", "/api/v1/off-platform/1/decide", { decision: "confirm", pageLabel: page }],
     ] as const;
-    for (const [method, url, body] of deciders(ids.testSale, "test-1")) {
+    const missing = deciders(Number.MAX_SAFE_INTEGER, "∅");
+    for (const [index, [method, url, body]] of deciders(ids.testSale, "test-1").entries()) {
       const answer = await call(method, url, cookie.owner, body);
       expect(answer.statusCode, `live owner ${method} ${url} on a test object: ${answer.body}`).toBe(404);
-      // The refusal is the wall's (sandbox/realm.ts requireDecidedOfRealm), not a missing object.
-      expect(answer.body).toMatch(/"message":"(The sale was not found|Not found)"/);
+      // The wall answers exactly as for a sale that does not exist (sandbox/objects.ts): no «there, but not yours».
+      const [missingMethod, missingUrl, missingBody] = missing[index]!;
+      expect(answer.body).toBe((await call(missingMethod, missingUrl, cookie.owner, missingBody)).body);
     }
     for (const [method, url, body] of deciders(ids.liveSale, "live-1")) {
       const answer = await call(method, url, cookie.tOwner, body);
