@@ -80,7 +80,8 @@ export async function teamAverage(
   const people = [...new Set([input.personId, ...facts.working.filter((row) => pages.has(row.pageId) && chatTeam.has(row.personId)).map((row) => row.personId)])];
   const logins = await loginsOfPeople(app.db, people);
   if (logins.length === 0) return null;
-  const found = await teamShiftJobs(app, { from: input.from, to: input.to, now: input.now, scope: "all", userIds: logins });
+  // Their shifts on the team's pages only: a shift on another model's page is not this team's norm.
+  const found = await teamShiftJobs(app, { from: input.from, to: input.to, now: input.now, scope: [...pages], userIds: logins });
   const closed = { jobs: found.jobs.filter((job) => !job.shift.ongoing), openings: found.openings };
   const rows = await shiftRowsOf(app, closed, { fromTable: true, liveFallback: false });
   const counted = closed.jobs.flatMap((job, index) => {

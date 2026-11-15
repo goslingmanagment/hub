@@ -194,31 +194,33 @@ export async function listStandingSwapQuestionIds(db: Database, questionIds: rea
   return new Set(result.rows.map((row) => num(row.question_id)));
 }
 
-/** Hours of a swap's day (Moscow minutes), as the clash check compares them. */
+/** Hours of a swap's day (Moscow minutes): `endMinute` at or before `startMinute` runs into the next day. */
 export interface SwapHours {
+  date: string;
   startMinute: number;
   endMinute: number;
 }
 
 /**
- * A person's swaps of one day on any of the pages, for «no swap stands twice over the same hours»: the hours of their
+ * A person's swaps of some days on any of the pages, for «no swap stands twice over the same hours»: the hours of their
  * standing `off` lines (approved, not taken back) and of the open swap questions where they are the absent person. The
- * hours are the caller's to compare.
+ * caller asks the day before, the day and the day after (a swap's hours may run past midnight) and compares real hours.
  */
-export async function listPersonDaySwaps(db: Database, input: { personId: number; day: string; pageIds: readonly number[] }): Promise<{ off: SwapHours[]; asked: SwapHours[] }> {
-  if (input.pageIds.length === 0) return { off: [], asked: [] };
-  const off = await db.execute<Row>(sql`select start_minute, end_minute from person_schedule_slots
-    where person_id = ${input.personId} and kind = 'off' and revoked_at is null and valid_from = ${input.day}::date
+export async function listPersonDaySwaps(db: Database, input: { personId: number; days: readonly string[]; pageIds: readonly number[] }): Promise<{ off: SwapHours[]; asked: SwapHours[] }> {
+  if (input.pageIds.length === 0 || input.days.length === 0) return { off: [], asked: [] };
+  const days = sql`${sql.param([...input.days])}::text[]`;
+  const off = await db.execute<Row>(sql`select to_char(valid_from, 'YYYY-MM-DD') as day, start_minute, end_minute from person_schedule_slots
+    where person_id = ${input.personId} and kind = 'off' and revoked_at is null and to_char(valid_from, 'YYYY-MM-DD') = any(${days})
       and page_id = any(${ids(input.pageIds)})`);
   const asked = await db.execute<Row>(sql`select swap from team_questions
-    where kind = 'swap' and state = 'open' and swap is not null and swap->>'date' = ${input.day}
+    where kind = 'swap' and state = 'open' and swap is not null and swap->>'date' = any(${days})
       and (swap->>'absentPersonId')::bigint = ${input.personId}`);
   const pages = new Set(input.pageIds);
   return {
-    off: off.rows.map((row) => ({ startMinute: num(row.start_minute), endMinute: num(row.end_minute) })),
+    off: off.rows.map((row) => ({ date: String(row.day), startMinute: num(row.start_minute), endMinute: num(row.end_minute) })),
     asked: asked.rows.flatMap((row) => {
       const swap = swapOf(row.swap);
-      return swap !== null && swap.pageIds.some((id) => pages.has(id)) ? [{ startMinute: swap.startMinute, endMinute: swap.endMinute }] : [];
+      return swap !== null && swap.pageIds.some((id) => pages.has(id)) ? [{ date: swap.date, startMinute: swap.startMinute, endMinute: swap.endMinute }] : [];
     }),
   };
 }
