@@ -40,6 +40,7 @@ import {
   revokeDeviceTokensForUser,
   updateDeviceTokenUse,
   updateUserDisabledAt,
+  findHandoffSession,
 } from "@agency_hub_core/db";
 import {
   creatableUserRoles,
@@ -1148,6 +1149,30 @@ export async function authenticateSessionToken(app: AppContext, sessionToken: st
     assignedPageIds: await pageScopeOfLogin(app, user),
     authSessionId: session.id,
     ...(session.narrowDeviceTokenId === null ? {} : { narrowDeviceTokenId: session.narrowDeviceTokenId }),
+    ...(sandbox === undefined ? {} : { sandbox }),
+  } satisfies AuthPrincipal;
+}
+
+/**
+ * The principal of a full session known by its id — the session behind another service's sign-in grant
+ * (signin-handoff.ts `principalOfServerGrant`): the same person, page scope and realm as a cookie of that session
+ * would be. Null for a narrow, revoked or expired session, or a user who may not hold one.
+ */
+export async function authenticateSessionById(app: AppContext, sessionId: number, userId: number) {
+  const session = await findHandoffSession(app.db, sessionId);
+  if (!session || session.userId !== userId || session.revokedAt || session.expiresAt <= new Date() || session.narrowDeviceTokenId !== null) {
+    return null;
+  }
+  const user = await getAuthenticatedUserById(app, userId);
+  if (!user || !roleCanUseSession(user.role)) {
+    return null;
+  }
+  const sandbox = await principalSandboxOf(app, user);
+  return {
+    authMethod: "session" as const,
+    user,
+    assignedPageIds: await pageScopeOfLogin(app, user),
+    authSessionId: sessionId,
     ...(sandbox === undefined ? {} : { sandbox }),
   } satisfies AuthPrincipal;
 }

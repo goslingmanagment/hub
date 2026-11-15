@@ -1,19 +1,27 @@
 import { createHash } from "node:crypto";
 
-import { routeSchemas } from "@agency_hub_core/contracts";
+import { PUBLICATION_SWITCH_KEYS, routeSchemas } from "@agency_hub_core/contracts";
+import type { PublicationStatus } from "@agency_hub_core/shared";
 import {
+  ConfigOverrideTransitionError,
+  ConfigOverrideVersionConflictError,
   getAgentKeyById,
   getPublication,
+  listModelPageIds,
   listPublicationPages,
   listPublicationPageTargets,
   requestPublicationQueueRefresh,
 } from "@agency_hub_core/db";
 
-import { auditCtx } from "../../api/request-auth.ts";
+import { auditCtx, pageScopeFor } from "../../api/request-auth.ts";
+import { doorPerson, type PersonDoorOperation } from "../../services/person-door.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { recordAudit } from "../../services/auth.ts";
 import { resolvePublishingStoppedIncident } from "../../services/notification-incidents.ts";
-import { ConflictError, NotFoundError } from "../../services/errors.ts";
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../../services/errors.ts";
+import { buildConfigView } from "../../services/app-config-service.ts";
+import { applyLiveConfigPatches } from "../../services/live-config.ts";
+import { fanslyLoginPageLabels } from "../../services/matters-mirror.ts";
 import {
   approvePublications,
   cancelPublication,
@@ -96,67 +104,38 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     return page;
   }
 
-  // --- The owner ---------------------------------------------------------
+  // --- The owner's screen, and ContentOps' as the signed-in person ---------
+  //
+  // One implementation behind two doors (products plan §2.4, package C2): the console's cookie routes (the owner) and
+  // the person's door (`/api/v1/person/…`, services/person-door.ts: ContentOps' key + the person's grant; the owner,
+  // or a content manager on the pages of her models). Every read and write is cut to the person's page scope
+  // (`pageScopeFor`); a page or publication outside it is the same 404 as one that does not exist.
 
-  server.get("/api/v1/admin/publications", { schema: routeSchemas.adminPublicationList }, async (request) => {
-    await requirePrincipal(request);
-    const { pageLabel, status, from, to, limit } = request.query;
-    const pageIds = pageLabel === undefined ? null : [(await pageByLabel(pageLabel)).id];
-    return { publications: await withOnlyfansAlbumRuns(appContext, await listPublicationsWire(db, { pageIds, status, from, to, limit })) };
-  });
+  type Person = Awaited<ReturnType<typeof requirePrincipal>>;
 
-  server.post("/api/v1/admin/publications", { schema: routeSchemas.adminPublicationCreate }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const { pageLabel, ...body } = request.body;
-    const page = await pageByLabel(pageLabel);
-    return createPublicationDraft(db, {
-      pageId: page.id, body, author: { kind: "human", userId: principal.user.id }, idempotencyKey: null, vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext),
-    });
-  });
+  function scopeOf(person: Person): ReadonlySet<number> | null {
+    const scope = pageScopeFor(person);
+    return scope === undefined ? null : new Set(scope);
+  }
 
-  // Static paths before `:id`, so "settings" and "approve" are never ids.
-  server.get("/api/v1/admin/publications/settings", { schema: routeSchemas.adminPublicationSettingsList }, async (request) => {
-    await requirePrincipal(request);
-    const effective = await loadEffectiveConfig(db, appContext.config);
-    return {
-      globalEnabled: effective.publishingEnabled === true,
-      pages: await listPublicationSettings(db, await listPublicationPages(db)),
-    };
-  });
+  async function scopedPage(person: Person, label: string) {
+    const page = await pageByLabel(label);
+    const scope = scopeOf(person);
+    if (scope !== null && !scope.has(page.id)) throw new NotFoundError("Page not found");
+    return page;
+  }
 
-  server.put("/api/v1/admin/publications/settings/:pageLabel", { schema: routeSchemas.adminPublicationSettingsUpdate }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const page = await pageByLabel(request.params.pageLabel);
-    const settings = await updatePublicationSettings(db, { page, body: request.body, userId: principal.user.id });
-    // Turning publishing on is the owner's answer to an autostop (spec §8.3):
-    // its incident is over.
-    if (request.body.enabled && (page.platform === "fansly" || page.platform === "onlyfans")) {
-      await resolvePublishingStoppedIncident(appContext, { pageId: page.id, pageLabel: page.label, platform: page.platform, recoveredAt: new Date() });
-    }
-    await recordAudit({ db }, {
-      ...auditCtx(principal),
-      eventType: PUBLICATION_SETTINGS_AUDIT_EVENT,
-      platformAccountId: page.id,
-      metadata: { pageLabel: page.label, ...request.body },
-    });
-    return settings;
-  });
+  async function requireInScope(person: Person, id: number) {
+    const scope = scopeOf(person);
+    if (scope === null) return;
+    const publication = await getPublication(db, id);
+    if (!publication || !scope.has(publication.pageId)) throw new NotFoundError("Publication not found");
+  }
 
-  // The platforms' own schedules (OnlyFans plan PR 5b, Fansly PR 9) and
-  // withdrawal. Static paths before `:id`.
-  server.get("/api/v1/admin/publications/queue", { schema: routeSchemas.adminPublicationQueueList }, async (request) => {
-    await requirePrincipal(request);
-    return { pages: [...await listOnlyfansQueueWire(appContext), ...await listFanslyQueueWire(appContext)] };
-  });
-
-  server.post("/api/v1/admin/publications/queue/refresh", { schema: routeSchemas.adminPublicationQueueRefresh }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const page = await pageByLabel(request.body.pageLabel);
-    if (page.platform !== "onlyfans" && page.platform !== "fansly") throw new NotFoundError("Not a page with a schedule");
-    // The minutely jobs read it: OnlyFans by an owner action, Fansly by the page's engine.
-    await requestPublicationQueueRefresh(db, { pageId: page.id, userId: principal.user.id });
-    return { requestedAt: new Date().toISOString() };
-  });
+  async function scopedPages(person: Person) {
+    const scope = scopeOf(person);
+    return (await listPublicationPages(db)).filter((page) => scope === null || scope.has(page.id));
+  }
 
   /** The owner's audit row of a withdrawal and the schedule's refresh after it.
    *  An agent key's row is its own (`auditCtx`: source agent_key, the key's id
@@ -179,27 +158,159 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     }
   }
 
-  server.post("/api/v1/admin/publications/withdraw-page", { schema: routeSchemas.adminPublicationWithdrawPage }, async (request) => {
+  const screen = {
+    async list(person: Person, query: { pageLabel?: string | undefined; modelSlug?: string | undefined; status?: PublicationStatus | undefined; from?: string | undefined; to?: string | undefined; limit: number }) {
+      const { pageLabel, modelSlug, status, from, to, limit } = query;
+      const scope = scopeOf(person);
+      const ofModel = modelSlug === undefined ? null : new Set(await listModelPageIds(db, modelSlug));
+      const pageIds = pageLabel !== undefined
+        ? [(await scopedPage(person, pageLabel)).id]
+        : scope === null && ofModel === null ? null
+          : scope === null ? [...ofModel!] : [...scope].filter((id) => ofModel === null || ofModel.has(id));
+      return { publications: await withOnlyfansAlbumRuns(appContext, await listPublicationsWire(db, { pageIds, status, from, to, limit })) };
+    },
+
+    async settingsList(person: Person) {
+      const effective = await loadEffectiveConfig(db, appContext.config);
+      return { globalEnabled: effective.publishingEnabled === true, pages: await listPublicationSettings(db, await scopedPages(person)) };
+    },
+
+    async settingsUpdate(person: Person, pageLabel: string, body: Parameters<typeof updatePublicationSettings>[1]["body"]) {
+      const page = await scopedPage(person, pageLabel);
+      const settings = await updatePublicationSettings(db, { page, body, userId: person.user.id });
+      // Turning publishing on is the owner's answer to an autostop (spec §8.3):
+      // its incident is over.
+      if (body.enabled && (page.platform === "fansly" || page.platform === "onlyfans")) {
+        await resolvePublishingStoppedIncident(appContext, { pageId: page.id, pageLabel: page.label, platform: page.platform, recoveredAt: new Date() });
+      }
+      await recordAudit({ db }, {
+        ...auditCtx(person),
+        eventType: PUBLICATION_SETTINGS_AUDIT_EVENT,
+        platformAccountId: page.id,
+        metadata: { pageLabel: page.label, ...body },
+      });
+      return settings;
+    },
+
+    async queueList(person: Person) {
+      const labels = new Set((await scopedPages(person)).map((page) => page.label));
+      const pages = [...await listOnlyfansQueueWire(appContext), ...await listFanslyQueueWire(appContext)];
+      return { pages: scopeOf(person) === null ? pages : pages.filter((page) => labels.has(page.pageLabel)) };
+    },
+
+    async queueRefresh(person: Person, pageLabel: string) {
+      const page = await scopedPage(person, pageLabel);
+      if (page.platform !== "onlyfans" && page.platform !== "fansly") throw new NotFoundError("Not a page with a schedule");
+      // The minutely jobs read it: OnlyFans by an owner action, Fansly by the page's engine.
+      await requestPublicationQueueRefresh(db, { pageId: page.id, userId: person.user.id });
+      return { requestedAt: new Date().toISOString() };
+    },
+
+    async withdrawPage(person: Person, pageLabel: string) {
+      const page = await scopedPage(person, pageLabel);
+      // Fansly: through the page's engine, the result as each post's status (plan PR 9).
+      const results = page.platform === "fansly"
+        ? await withdrawAllFanslyPublications(appContext, { pageId: page.id, userId: person.user.id })
+        : await withdrawAllOnlyfansPublications(appContext, { pageId: page.id, userId: person.user.id });
+      await auditWithdraw({ audit: auditCtx(person), refreshUserId: person.user.id }, page, results);
+      return { results };
+    },
+
+    async approve(person: Person, items: Array<{ id: number; version: number }>) {
+      // Every item in the person's pages, or none is approved.
+      for (const item of items) await requireInScope(person, item.id);
+      return { results: await approvePublications(db, { items, userId: person.user.id, vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) }) };
+    },
+
+    async get(person: Person, id: number) {
+      await requireInScope(person, id);
+      const [detail] = await withOnlyfansAlbumRuns(appContext, [await getPublicationDetail(db, id, { vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) })]);
+      return detail!;
+    },
+
+    async cancel(person: Person, id: number) {
+      await requireInScope(person, id);
+      return cancelPublication(db, { id, userId: person.user.id });
+    },
+
+    async withdraw(person: Person, id: number) {
+      await requireInScope(person, id);
+      const target = await getPublication(db, id);
+      const results = target?.platform === "fansly"
+        ? await withdrawFanslyPublications(appContext, { ids: [id], userId: person.user.id })
+        : await withdrawOnlyfansPublications(appContext, { ids: [id], userId: person.user.id });
+      const publication = results[0]?.publication;
+      if (publication) {
+        await auditWithdraw({ audit: auditCtx(person), refreshUserId: person.user.id }, await pageByLabel(publication.pageLabel), results);
+      }
+      return { results };
+    },
+
+    // «Удалить с площадки» (owner, 2026-10-24): a published Fansly post off the
+    // wall, through the page's engine; the outcome comes as the status.
+    async deletePost(person: Person, id: number) {
+      await requireInScope(person, id);
+      const result = await deleteFanslyPublication(appContext, { id, userId: person.user.id });
+      const publication = result.publication;
+      if (publication !== null) {
+        const page = await pageByLabel(publication.pageLabel);
+        await recordAudit({ db }, {
+          ...auditCtx(person),
+          eventType: PUBLICATION_DELETE_POST_AUDIT_EVENT,
+          platformAccountId: page.id,
+          metadata: { pageLabel: page.label, publicationId: result.id, postRef: publication.platformPostRef, outcome: result.outcome, reason: result.reason },
+        });
+      }
+      return { results: [result] };
+    },
+
+    async replace(person: Person, id: number) {
+      await requireInScope(person, id);
+      return replaceWithdrawnPublication(db, { id, userId: person.user.id });
+    },
+
+    async resolve(person: Person, id: number, answer: Parameters<typeof resolveUnknownPublication>[1]["answer"]) {
+      await requireInScope(person, id);
+      return resolveUnknownPublication(db, { id, userId: person.user.id, answer });
+    },
+  };
+
+  // The console's routes: the owner's cookie session (their declarations are owner-session).
+  server.get("/api/v1/admin/publications", { schema: routeSchemas.adminPublicationList }, async (request) =>
+    screen.list(await requirePrincipal(request), request.query));
+
+  server.post("/api/v1/admin/publications", { schema: routeSchemas.adminPublicationCreate }, async (request) => {
     const principal = await requirePrincipal(request);
-    const page = await pageByLabel(request.body.pageLabel);
-    // Fansly: through the page's engine, the result as each post's status (plan PR 9).
-    const results = page.platform === "fansly"
-      ? await withdrawAllFanslyPublications(appContext, { pageId: page.id, userId: principal.user.id })
-      : await withdrawAllOnlyfansPublications(appContext, { pageId: page.id, userId: principal.user.id });
-    await auditWithdraw({ audit: auditCtx(principal), refreshUserId: principal.user.id }, page, results);
-    return { results };
+    const { pageLabel, ...body } = request.body;
+    const page = await pageByLabel(pageLabel);
+    return createPublicationDraft(db, {
+      pageId: page.id, body, author: { kind: "human", userId: principal.user.id }, idempotencyKey: null, vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext),
+    });
   });
 
-  server.post("/api/v1/admin/publications/approve", { schema: routeSchemas.adminPublicationApprove }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return { results: await approvePublications(db, { items: request.body.items, userId: principal.user.id, vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) }) };
-  });
+  // Static paths before `:id`, so "settings" and "approve" are never ids.
+  server.get("/api/v1/admin/publications/settings", { schema: routeSchemas.adminPublicationSettingsList }, async (request) =>
+    screen.settingsList(await requirePrincipal(request)));
 
-  server.get("/api/v1/admin/publications/:id", { schema: routeSchemas.adminPublicationGet }, async (request) => {
-    await requirePrincipal(request);
-    const [detail] = await withOnlyfansAlbumRuns(appContext, [await getPublicationDetail(db, request.params.id, { vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) })]);
-    return detail!;
-  });
+  server.put("/api/v1/admin/publications/settings/:pageLabel", { schema: routeSchemas.adminPublicationSettingsUpdate }, async (request) =>
+    screen.settingsUpdate(await requirePrincipal(request), request.params.pageLabel, request.body));
+
+  // The platforms' own schedules (OnlyFans plan PR 5b, Fansly PR 9) and
+  // withdrawal. Static paths before `:id`.
+  server.get("/api/v1/admin/publications/queue", { schema: routeSchemas.adminPublicationQueueList }, async (request) =>
+    screen.queueList(await requirePrincipal(request)));
+
+  server.post("/api/v1/admin/publications/queue/refresh", { schema: routeSchemas.adminPublicationQueueRefresh }, async (request) =>
+    screen.queueRefresh(await requirePrincipal(request), request.body.pageLabel));
+
+  server.post("/api/v1/admin/publications/withdraw-page", { schema: routeSchemas.adminPublicationWithdrawPage }, async (request) =>
+    screen.withdrawPage(await requirePrincipal(request), request.body.pageLabel));
+
+  server.post("/api/v1/admin/publications/approve", { schema: routeSchemas.adminPublicationApprove }, async (request) =>
+    screen.approve(await requirePrincipal(request), request.body.items));
+
+  server.get("/api/v1/admin/publications/:id", { schema: routeSchemas.adminPublicationGet }, async (request) =>
+    screen.get(await requirePrincipal(request), request.params.id));
 
   server.put("/api/v1/admin/publications/:id", { schema: routeSchemas.adminPublicationUpdate }, async (request) => {
     const principal = await requirePrincipal(request);
@@ -209,50 +320,86 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     });
   });
 
-  server.post("/api/v1/admin/publications/:id/cancel", { schema: routeSchemas.adminPublicationCancel }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return cancelPublication(db, { id: request.params.id, userId: principal.user.id });
-  });
+  server.post("/api/v1/admin/publications/:id/cancel", { schema: routeSchemas.adminPublicationCancel }, async (request) =>
+    screen.cancel(await requirePrincipal(request), request.params.id));
 
-  server.post("/api/v1/admin/publications/:id/withdraw", { schema: routeSchemas.adminPublicationWithdraw }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const target = await getPublication(db, request.params.id);
-    const results = target?.platform === "fansly"
-      ? await withdrawFanslyPublications(appContext, { ids: [request.params.id], userId: principal.user.id })
-      : await withdrawOnlyfansPublications(appContext, { ids: [request.params.id], userId: principal.user.id });
-    const publication = results[0]?.publication;
-    if (publication) {
-      await auditWithdraw({ audit: auditCtx(principal), refreshUserId: principal.user.id }, await pageByLabel(publication.pageLabel), results);
+  server.post("/api/v1/admin/publications/:id/withdraw", { schema: routeSchemas.adminPublicationWithdraw }, async (request) =>
+    screen.withdraw(await requirePrincipal(request), request.params.id));
+
+  server.post("/api/v1/admin/publications/:id/delete-post", { schema: routeSchemas.adminPublicationDeletePost }, async (request) =>
+    screen.deletePost(await requirePrincipal(request), request.params.id));
+
+  server.post("/api/v1/admin/publications/:id/replace", { schema: routeSchemas.adminPublicationReplace }, async (request) =>
+    screen.replace(await requirePrincipal(request), request.params.id));
+
+  server.post("/api/v1/admin/publications/:id/resolve", { schema: routeSchemas.adminPublicationResolve }, async (request) =>
+    screen.resolve(await requirePrincipal(request), request.params.id, request.body));
+
+  // The person's door: ContentOps' key + the person's grant, the same functions (services/person-door.ts).
+  const as = async (request: { body: { client: string; grant: string } } & Parameters<typeof requireAgentKeyPrincipal>[0], operation: PersonDoorOperation) =>
+    doorPerson(appContext, await requireAgentKeyPrincipal(request), request.body, operation);
+
+  server.post("/api/v1/person/publications/list", { schema: routeSchemas.personPublicationList }, async (request) => {
+    const { client: _client, grant: _grant, ...query } = request.body;
+    return screen.list(await as(request, "personPublicationList"), query);
+  });
+  server.post("/api/v1/person/publications/get", { schema: routeSchemas.personPublicationGet }, async (request) =>
+    screen.get(await as(request, "personPublicationGet"), request.body.id));
+  server.post("/api/v1/person/publications/approve", { schema: routeSchemas.personPublicationApprove }, async (request) =>
+    screen.approve(await as(request, "personPublicationApprove"), request.body.items));
+  server.post("/api/v1/person/publications/cancel", { schema: routeSchemas.personPublicationCancel }, async (request) =>
+    screen.cancel(await as(request, "personPublicationCancel"), request.body.id));
+  server.post("/api/v1/person/publications/withdraw", { schema: routeSchemas.personPublicationWithdraw }, async (request) =>
+    screen.withdraw(await as(request, "personPublicationWithdraw"), request.body.id));
+  server.post("/api/v1/person/publications/replace", { schema: routeSchemas.personPublicationReplace }, async (request) =>
+    screen.replace(await as(request, "personPublicationReplace"), request.body.id));
+  server.post("/api/v1/person/publications/resolve", { schema: routeSchemas.personPublicationResolve }, async (request) =>
+    screen.resolve(await as(request, "personPublicationResolve"), request.body.id, request.body.answer));
+  server.post("/api/v1/person/publications/queue", { schema: routeSchemas.personPublicationQueueList }, async (request) =>
+    screen.queueList(await as(request, "personPublicationQueueList")));
+  server.post("/api/v1/person/publications/queue/refresh", { schema: routeSchemas.personPublicationQueueRefresh }, async (request) =>
+    screen.queueRefresh(await as(request, "personPublicationQueueRefresh"), request.body.pageLabel));
+  server.post("/api/v1/person/publications/settings", { schema: routeSchemas.personPublicationSettingsList }, async (request) =>
+    screen.settingsList(await as(request, "personPublicationSettingsList")));
+  server.post("/api/v1/person/publications/settings/update", { schema: routeSchemas.personPublicationSettingsUpdate }, async (request) =>
+    screen.settingsUpdate(await as(request, "personPublicationSettingsUpdate"), request.body.pageLabel, request.body.settings));
+  server.post("/api/v1/person/publications/delete-post", { schema: routeSchemas.personPublicationDeletePost }, async (request) =>
+    screen.deletePost(await as(request, "personPublicationDeletePost"), request.body.id));
+  server.post("/api/v1/person/publications/withdraw-page", { schema: routeSchemas.personPublicationWithdrawPage }, async (request) =>
+    screen.withdrawPage(await as(request, "personPublicationWithdrawPage"), request.body.pageLabel));
+
+  // The switches and limits of publishing (PUBLICATION_SWITCH_KEYS): read by the owner and a content manager, set by the
+  // owner, through the config's one write path (services/live-config.ts). Nothing else of the config passes the door.
+  const switchKeys: ReadonlySet<string> = new Set(PUBLICATION_SWITCH_KEYS);
+  server.post("/api/v1/person/publications/switches", { schema: routeSchemas.personPublicationSwitches }, async (request) => {
+    await as(request, "personPublicationSwitches");
+    const view = await buildConfigView(db, (appContext.rawConfig ?? appContext.config) as unknown as Record<string, unknown>);
+    return {
+      generatedAt: view.generatedAt,
+      roleStatuses: [],
+      instances: [],
+      subsystems: view.subsystems
+        .map((subsystem) => ({ ...subsystem, items: subsystem.items.filter((item) => switchKeys.has(item.key)) }))
+        .filter((subsystem) => subsystem.items.length > 0),
+    };
+  });
+  server.post("/api/v1/person/publications/switches/set", { schema: routeSchemas.personPublicationSwitchSet }, async (request) => {
+    const person = await as(request, "personPublicationSwitchSet");
+    const { patches, note } = request.body;
+    const outside = patches.find((patch) => !switchKeys.has(patch.key) || patch.key === "ofapiApiKey");
+    if (outside) throw new ForbiddenError(`Not a switch of publishing: ${outside.key}`);
+    try {
+      return { results: await applyLiveConfigPatches(appContext, { patches, note, actor: { userId: person.user.id, audit: auditCtx(person) } }) };
+    } catch (error) {
+      if (error instanceof ConfigOverrideVersionConflictError) throw new ConflictError(error.message);
+      if (error instanceof ConfigOverrideTransitionError) throw new BadRequestError(error.message);
+      throw error;
     }
-    return { results };
   });
-
-  // «Удалить с площадки» (owner, 2026-10-24): a published Fansly post off the
-  // wall, through the page's engine; the outcome comes as the status.
-  server.post("/api/v1/admin/publications/:id/delete-post", { schema: routeSchemas.adminPublicationDeletePost }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const result = await deleteFanslyPublication(appContext, { id: request.params.id, userId: principal.user.id });
-    const publication = result.publication;
-    if (publication !== null) {
-      const page = await pageByLabel(publication.pageLabel);
-      await recordAudit({ db }, {
-        ...auditCtx(principal),
-        eventType: PUBLICATION_DELETE_POST_AUDIT_EVENT,
-        platformAccountId: page.id,
-        metadata: { pageLabel: page.label, publicationId: result.id, postRef: publication.platformPostRef, outcome: result.outcome, reason: result.reason },
-      });
-    }
-    return { results: [result] };
-  });
-
-  server.post("/api/v1/admin/publications/:id/replace", { schema: routeSchemas.adminPublicationReplace }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return replaceWithdrawnPublication(db, { id: request.params.id, userId: principal.user.id });
-  });
-
-  server.post("/api/v1/admin/publications/:id/resolve", { schema: routeSchemas.adminPublicationResolve }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return resolveUnknownPublication(db, { id: request.params.id, userId: principal.user.id, answer: request.body });
+  // «Нужен вход в Fansly» beside a page: the owner's, by the matters' rule.
+  server.post("/api/v1/person/fansly/login-pages", { schema: routeSchemas.personFanslyLoginPages }, async (request) => {
+    await as(request, "personFanslyLoginPages");
+    return { pages: await fanslyLoginPageLabels(appContext) };
   });
 
   // --- Agent keys ----------------------------------------------------------

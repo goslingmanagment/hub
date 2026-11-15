@@ -63,7 +63,8 @@ import {
 
 import { canAccessPage, requireOwner } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
-import { BadRequestError, ForbiddenError } from "../../services/errors.ts";
+import { BadRequestError, ForbiddenError, NotFoundError } from "../../services/errors.ts";
+import { doorPerson, type PersonDoorOperation } from "../../services/person-door.ts";
 import { getPageSummary } from "../../services/reporting.ts";
 import {
   engineOwnerRunning,
@@ -308,7 +309,7 @@ function parseDateWindow(from: string, to: string): { from: string; to: string }
 
 export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
-  const { requirePrincipal } = ctx.auth;
+  const { requirePrincipal, requireAgentKeyPrincipal } = ctx.auth;
 
   /**
    * Owner + page access, resolved the same way on every route here.
@@ -338,10 +339,8 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
   }
 
   // Fansly's 2026-10 statistics (0293): the media of the "Статистика" page.
-  server.get("/api/v1/pages/:pageLabel/stats/creator/content", {
-    schema: routeSchemas.creatorStatsContent,
-  }, async (request): Promise<CreatorStatsContentResponse> => {
-    const page = await resolveOwnerPage(request);
+  /** Shared by the console's route and the person's door (products package C2). */
+  async function readContentStats(page: Awaited<ReturnType<typeof getPageSummary>>, request: { query: { days: number; to?: string | undefined } }): Promise<CreatorStatsContentResponse> {
     const window = creatorStatsWindow(request.query);
     const media = await readCreatorStatsContent(appContext.db, { pageId: page.id, fromDay: window.fromDay, toDay: window.toDay, limit: 200 });
     const walk = await readCreatorStatsMediaWalk(appContext.db, page.id);
@@ -370,18 +369,24 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
       })),
       topSalesTotal: sold.total,
     };
-  });
+  }
 
-  server.get("/api/v1/pages/:pageLabel/stats/creator/media/:mediaOfferId", {
-    schema: routeSchemas.creatorStatsMedia,
-  }, async (request): Promise<CreatorStatsMediaResponse> => {
-    const page = await resolveOwnerPage(request);
+  server.get("/api/v1/pages/:pageLabel/stats/creator/content", {
+    schema: routeSchemas.creatorStatsContent,
+  }, async (request): Promise<CreatorStatsContentResponse> => readContentStats(await resolveOwnerPage(request), request));
+
+  /** Shared by the console's route and the person's door (products package C2). */
+  async function readMediaStats(page: Awaited<ReturnType<typeof getPageSummary>>, request: { query: { days: number; to?: string | undefined }; params: { mediaOfferId: string } }): Promise<CreatorStatsMediaResponse> {
     const window = creatorStatsWindow(request.query);
     const detail = await readCreatorStatsMediaDetail(appContext.db, {
       pageId: page.id, mediaOfferId: request.params.mediaOfferId, fromDay: window.fromDay, toDay: window.toDay,
     });
     return { mediaOfferId: request.params.mediaOfferId, window, ...detail };
-  });
+  }
+
+  server.get("/api/v1/pages/:pageLabel/stats/creator/media/:mediaOfferId", {
+    schema: routeSchemas.creatorStatsMedia,
+  }, async (request): Promise<CreatorStatsMediaResponse> => readMediaStats(await resolveOwnerPage(request), request));
 
   // Fansly's 2026-10 statistics (0294): the audience of the "Статистика" page.
   server.get("/api/v1/pages/:pageLabel/stats/creator/audience", {
@@ -394,6 +399,21 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     });
     return { page: { label: page.label, platform: page.platform }, window, ...audience };
   });
+
+  // «Статистика» in ContentOps as the signed-in person (products package C2, services/person-door.ts): the same reads,
+  // on a page of the person's scope (the owner's realm, a content manager's models).
+  async function personPage(request: Parameters<typeof requireAgentKeyPrincipal>[0] & { body: { client: string; grant: string; pageLabel: string } }, operation: PersonDoorOperation) {
+    const person = await doorPerson(appContext, await requireAgentKeyPrincipal(request), request.body, operation);
+    const page = await getPageSummary(appContext, request.body.pageLabel);
+    if (!canAccessPage(person, page.id)) throw new NotFoundError(`Page "${request.body.pageLabel}" was not found`);
+    return page;
+  }
+  server.post("/api/v1/person/stats/content", { schema: routeSchemas.personCreatorStatsContent }, async (request) =>
+    readContentStats(await personPage(request, "personCreatorStatsContent"), { query: request.body }));
+  server.post("/api/v1/person/stats/media", { schema: routeSchemas.personCreatorStatsMedia }, async (request) =>
+    readMediaStats(await personPage(request, "personCreatorStatsMedia"), { query: request.body, params: { mediaOfferId: request.body.mediaOfferId } }));
+  server.post("/api/v1/person/stats/comments", { schema: routeSchemas.personContentComments }, async (request) =>
+    readContentComments(await personPage(request, "personContentComments"), { query: request.body }));
 
   // The page's own Fansly profile (0337): the dashboard's «Профиль» tab.
   server.get("/api/v1/pages/:pageLabel/profile", {
@@ -744,10 +764,8 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     };
   });
 
-  server.get("/api/v1/pages/:pageLabel/content/comments", {
-    schema: routeSchemas.contentComments,
-  }, async (request): Promise<ContentCommentsResponse> => {
-    const page = await resolveOwnerPage(request);
+  /** Shared by the console's route and the person's door (products package C2). */
+  async function readContentComments(page: Awaited<ReturnType<typeof getPageSummary>>, request: { query: { from: string; to: string; postRef?: string | undefined; limit: number; cursor?: string | undefined } }): Promise<ContentCommentsResponse> {
     const window = parseWindow(request.query.from, request.query.to);
     const after = request.query.cursor === undefined
       ? undefined
@@ -841,7 +859,11 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
         ? null
         : encodeCursor([iso(last.occurredAt), last.commentRef]),
     };
-  });
+  }
+
+  server.get("/api/v1/pages/:pageLabel/content/comments", {
+    schema: routeSchemas.contentComments,
+  }, async (request): Promise<ContentCommentsResponse> => readContentComments(await resolveOwnerPage(request), request));
 
   server.get("/api/v1/pages/:pageLabel/money/revenue-mix", {
     schema: routeSchemas.moneyRevenueMix,
