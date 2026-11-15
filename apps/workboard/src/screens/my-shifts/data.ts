@@ -103,3 +103,20 @@ export function useShiftNow(enabled: boolean) {
     refetchInterval: 60_000,
   });
 }
+
+/**
+ * The person's own shift numbers and the team's average beside them (`accountShiftNumbers`, package N): the reply
+ * median, the fans left without an answer, «ИИ без правки», per shift and for the period. Read apart from the shifts:
+ * the numbers take longer, and the journal never waits for them.
+ */
+export function useMyNumbers(window: MyShiftsWindow, current: boolean) {
+  const from = new Date(window.startsAt).toISOString();
+  const to = new Date(window.endsAt).toISOString();
+  return useQuery({
+    queryKey: ["my-shifts", "numbers", from, to],
+    queryFn: () => kernel.accountShiftNumbers({ query: { from, to } }),
+    placeholderData: keepPreviousData,
+    staleTime: 5 * 60_000,
+    refetchInterval: current ? 5 * 60_000 : false,
+  });
+}

@@ -23,6 +23,7 @@ import {
 } from "./client-send-custody-archive.ts";
 import { ensureSaleHomesQueue, ensureSaleHomesSchedule } from "./sale-homes.ts";
 import { ensureShiftRowsQueue, ensureShiftRowsSchedule } from "./shift-rows.ts";
+import { ensureShiftNumbersQueue, ensureShiftNumbersSchedule } from "./shift-numbers.ts";
 import { ensureSystemStateQueue, ensureSystemStateSchedule } from "./system-state-tick.ts";
 import { ensurePeopleStartQueue, ensurePeopleStartSchedule } from "./people/start-tick.ts";
 import { ensurePeopleMessagesQueue, ensurePeopleMessagesSchedule } from "./people-messages/index.ts";
@@ -126,6 +127,7 @@ export async function ensureAllQueues(
   await ensureMattersMirrorQueue(boss, createdQueues);
   await ensureCustomChecksQueue(boss, createdQueues);
   await ensureShiftRowsQueue(boss, createdQueues);
+  await ensureShiftNumbersQueue(boss, createdQueues);
   await ensureSaleHomesQueue(boss, createdQueues);
   await ensureSystemStateQueue(boss, createdQueues);
   await ensurePeopleStartQueue(boss, createdQueues);
@@ -192,6 +194,7 @@ export async function registerAllSchedules(
     ensureMattersMirrorSchedule(boss),
     ensureCustomChecksSchedule(boss),
     ensureShiftRowsSchedule(boss),
+    ensureShiftNumbersSchedule(boss),
     ensureSaleHomesSchedule(boss),
     ensureSystemStateSchedule(boss),
     ensurePeopleStartSchedule(boss),

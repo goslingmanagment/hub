@@ -42,6 +42,7 @@ import {
   joinShifts,
   myShiftsWindow,
   previousReportedMills,
+  useMyNumbers,
   useMyShiftNotes,
   useMyShifts,
   usePreviousReports,
@@ -51,6 +52,7 @@ import {
   type StatsShift,
 } from "./data";
 import { useMyMoneyParts } from "./MyMoney";
+import { PeriodQualityLine, ShiftQualityLine, numbersOfRow } from "./MyQuality";
 import "./my-shifts.css";
 
 /**
@@ -334,6 +336,7 @@ export function MyShiftsScreen() {
   const window = useMemo(() => myShiftsWindow(period), [period]);
   const read = useMyShifts(window, period.current);
   const previous = usePreviousReports(window);
+  const numbers = useMyNumbers(window, period.current);
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const journal = useRef<HTMLDivElement>(null);
   useReportEdge(journal, COLUMNS.findIndex((column) => column.key === "total"));
@@ -390,7 +393,12 @@ export function MyShiftsScreen() {
   if (facts && facts.shifts === 0) {
     meta = <span />;
   } else if (facts) {
-    meta = <FactsLine facts={facts} previous={previousMills} versus={versus} unavailable={unavailable} onRetry={() => void read.refetch()} retrying={read.isFetching} />;
+    meta = (
+      <div className="mys-meta">
+        <FactsLine facts={facts} previous={previousMills} versus={versus} unavailable={unavailable} onRetry={() => void read.refetch()} retrying={read.isFetching} />
+        {numbers.data && <PeriodQualityLine answer={numbers.data} />}
+      </div>
+    );
   } else if (read.isPending) {
     meta = <FactsSkeleton />;
   } else {
@@ -418,7 +426,18 @@ export function MyShiftsScreen() {
           rowKey={(row) => row.key}
           rowHref={(row) => (row.hub === null ? undefined : `/report/${row.hub.shiftId}`)}
           rowState={backHere}
-          rowDetail={(row) => (row.hub === null && row.report ? <ReportBody report={row.report} /> : null)}
+          rowDetail={(row) => {
+            // The shift's own numbers (package N), then its report when it opens here.
+            const own = numbersOfRow(numbers.data, row.shift);
+            const report = row.hub === null && row.report ? <ReportBody report={row.report} /> : null;
+            if (!own && !report) return null;
+            return (
+              <>
+                {own && <ShiftQualityLine quality={own.quality} />}
+                {report}
+              </>
+            );
+          }}
           openKeys={open}
           onOpenChange={toggle}
           loading={!rows}
