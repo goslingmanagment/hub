@@ -152,6 +152,16 @@ export function loginPageLabels(blocks: readonly SyncBlocksPage[], engine: SyncP
     .map((page) => page.pageLabel);
 }
 
+/** The Fansly pages that need a login now, read from their sources (the matters' rule; ContentOps' «Публикации» asks it
+ *  through the person's door for the owner). */
+export async function fanslyLoginPageLabels(app: AppContext, now = new Date()): Promise<string[]> {
+  const [overview, statuses] = await Promise.all([
+    getSyncBlocksOverview(app, { now }),
+    readSyncPageStatuses(app.db, app.config, await listSyncPages(app.db)),
+  ]);
+  return loginPageLabels(overview.pages, statuses.map(toSyncPageStatusWire));
+}
+
 export function loginItems(labels: readonly string[]): MirrorItem[] {
   return labels.map((label) => ({
     key: `page.login_needed:${label}`,
@@ -527,11 +537,7 @@ export async function runMattersMirror(
   const loginDue = due("page.login_needed") || due("incident.open");
   if (loginDue) {
     try {
-      const [overview, statuses] = await Promise.all([
-        getSyncBlocksOverview(app, { now }),
-        readSyncPageStatuses(app.db, app.config, await listSyncPages(app.db)),
-      ]);
-      const labels = loginPageLabels(overview.pages, statuses.map(toSyncPageStatusWire));
+      const labels = await fanslyLoginPageLabels(app, now);
       loginPages = new Set(labels);
       if (due("page.login_needed")) await apply({ kind: "page.login_needed", items: loginItems(labels) });
     } catch (error) {

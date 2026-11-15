@@ -17,6 +17,7 @@ import { randomToken, sha256Hex, type UserRole } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  authenticateSessionById,
   createWebSessionTx,
   findLiveSession,
   recordAudit,
@@ -561,6 +562,20 @@ export async function checkServerGrant(app: AppContext, input: {
   return status && (!status.test || input.client === SANDBOX_HANDOFF_CLIENT)
     ? { active: true, user: status.user, owner: status.user.role === "owner" && !status.test, expiresAt: status.expiresAt.toISOString() }
     : { active: false };
+}
+
+/**
+ * The person behind a server grant, as Hub's principal (products package C2: ContentOps acts as the signed-in person):
+ * null when the grant is unknown, another client's, its session over, or a test person's to any client but ContentOps.
+ * The principal is the session's own (authenticateSessionById): every read is cut and every change is recorded as that
+ * person's, never as the service's key.
+ */
+export async function principalOfServerGrant(app: AppContext, input: { client: string; grant: string }) {
+  const grant = await findHandoffGrant(app.db, sha256Hex(input.grant));
+  if (!grant || grant.target !== input.client) return null;
+  const status = await sessionStatus(app.db, grant.sessionId, grant.userId);
+  if (!status || (status.test && input.client !== SANDBOX_HANDOFF_CLIENT)) return null;
+  return authenticateSessionById(app, grant.sessionId, grant.userId);
 }
 
 /** A full session by id, while it signs in, and its person while active. */

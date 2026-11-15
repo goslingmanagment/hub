@@ -122,6 +122,8 @@ the owner's machine (outside this repository); a change that moves a home or add
 - **Sign-in**: `services/signin-handoff.ts`. Cookies are host-only; a session crosses names by a one-time code; a
   cookie-authenticated change is taken only from the console's and the team's names (`api/origin-check.ts`). Other
   services redeem a code with their own key (`signin:<service>`), they never get the session.
+  ContentOps acts AS the signed-in person (its key + the person's grant) only through `services/person-door.ts`: one
+  table of operations, each running the console's own service with that person as the principal.
 - **Whose an agent key is**: the agent person it is linked to (`person_agent_keys`, one writer: `insertPersonAgentKey`
   in `packages/db/src/repositories/people.ts`). An agent holds ONE live key at a time: the services (ledger, TaskIndex,
   ContentOps) learn only the agent from Hub (`agentKeyIntrospect`) and give a key that agent's rights, so a second

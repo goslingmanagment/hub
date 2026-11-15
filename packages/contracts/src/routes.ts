@@ -10,6 +10,22 @@ import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import { ofLinksRouteSchemas } from "./routes-of-links.ts";
 import { pageBrowserRouteSchemas } from "./routes-page-browser.ts";
 import { publicationRouteSchemas } from "./routes-publications.ts";
+import {
+  publicationApproveBodySchema,
+  publicationApproveResponseSchema,
+  publicationDetailSchema,
+  publicationListQuerySchema,
+  publicationListResponseSchema,
+  publicationQueueListResponseSchema,
+  publicationQueueRefreshResponseSchema,
+  publicationResolveBodySchema,
+  publicationResolveResponseSchema,
+  publicationSchema,
+  publicationSettingsListResponseSchema,
+  publicationSettingsSchema,
+  publicationSettingsUpdateBodySchema,
+  publicationWithdrawResponseSchema,
+} from "./publications.ts";
 import { mediaLookRouteSchemas } from "./routes-media-looks.ts";
 import { agentDoorRouteSchemas } from "./agent-doors.ts";
 import { agentTeamRouteSchemas } from "./agent-team.ts";
@@ -6002,6 +6018,147 @@ export const moneyPayoutsResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 
+// --- ContentOps acting as the signed-in person (products plan §2.4, package C2) ---
+// «Публикации» and «Статистика» are ContentOps' own screens; Hub stays the engine. ContentOps' server calls these with
+// its own key (`signin:contentops`) and the person's live sign-in grant; Hub runs the console's services with THAT person
+// as the principal (services/person-door.ts: the one table of what the door does and who may). POST everywhere: the
+// grant never travels in an address. 401 — the grant is over; 403 — not the person's to do; 404 — not in their pages.
+const personDoorBodySchema = z.object({ client: z.literal("contentops"), grant: z.string().min(1).max(128) });
+const personDoorErrors = {
+  400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema, 409: errorResponseSchema, 429: errorResponseSchema,
+} as const;
+const personDoor = { kind: "agentKey" } as const;
+const personIdBodySchema = personDoorBodySchema.extend({ id: z.coerce.number().int().positive() });
+const personPageBodySchema = personDoorBodySchema.extend({ pageLabel: z.string().min(1).max(100) });
+/** The keys of «Настройки публикации»'s switches and limits: the only config the door reads and (the owner) sets. */
+export const PUBLICATION_SWITCH_KEYS = [
+  "publishingEnabled",
+  "publishingOnlyfansEnabled",
+  "publishingOnlyfansVaultEnabled",
+  "onlyfansVaultDailyCredits",
+  "publishingOnlyfansDailyCredits",
+  "publicationFileMaxMb",
+  "publicationFilesMaxTotalGb",
+  "ofapiApiKey",
+] as const;
+
+export const personDoorRouteSchemas = {
+  personPublicationList: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: publications of their pages (or one page, or one model) by publish time",
+    body: personDoorBodySchema.extend(publicationListQuerySchema.shape),
+    response: { 200: publicationListResponseSchema, ...personDoorErrors },
+  },
+  personPublicationGet: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: one publication with its findings, journal and approval",
+    body: personIdBodySchema,
+    response: { 200: publicationDetailSchema, ...personDoorErrors },
+  },
+  personPublicationApprove: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: approve drafts of their pages in order, each checked again",
+    body: personDoorBodySchema.extend(publicationApproveBodySchema.shape),
+    response: { 200: publicationApproveResponseSchema, ...personDoorErrors },
+  },
+  personPublicationCancel: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: cancel a publication of their pages before Hub sends it",
+    body: personIdBodySchema,
+    response: { 200: publicationSchema, ...personDoorErrors },
+  },
+  personPublicationWithdraw: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: take a Hub post of their pages off the platform's schedule (sent once)",
+    body: personIdBodySchema,
+    response: { 200: publicationWithdrawResponseSchema, ...personDoorErrors },
+  },
+  personPublicationReplace: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: draft a replacement of a withdrawn publication of their pages",
+    body: personIdBodySchema,
+    response: { 200: publicationSchema, ...personDoorErrors },
+  },
+  personPublicationResolve: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: answer an unknown outcome of a publication of their pages",
+    body: personIdBodySchema.extend({ answer: publicationResolveBodySchema }),
+    response: { 200: publicationResolveResponseSchema, ...personDoorErrors },
+  },
+  personPublicationQueueList: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: the platforms' schedules of their pages",
+    body: personDoorBodySchema,
+    response: { 200: publicationQueueListResponseSchema, ...personDoorErrors },
+  },
+  personPublicationQueueRefresh: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: read a page's schedule again (OnlyFans: spends API credits)",
+    body: personPageBodySchema,
+    response: { 200: publicationQueueRefreshResponseSchema, ...personDoorErrors },
+  },
+  personPublicationSettingsList: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: the global switch and their pages' publishing settings",
+    body: personDoorBodySchema,
+    response: { 200: publicationSettingsListResponseSchema, ...personDoorErrors },
+  },
+  personPublicationSwitches: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: the switches and limits of publishing (PUBLICATION_SWITCH_KEYS), read",
+    body: personDoorBodySchema,
+    response: { 200: configViewResponseSchema, ...personDoorErrors },
+  },
+  personPublicationSettingsUpdate: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the owner: set one page's publishing (on/off, paid price range, repeat threshold, daily limit)",
+    body: personPageBodySchema.extend({ settings: publicationSettingsUpdateBodySchema }),
+    response: { 200: publicationSettingsSchema, ...personDoorErrors },
+  },
+  personPublicationDeletePost: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the owner: delete a published Fansly post Hub made from the wall (sent once)",
+    body: personIdBodySchema,
+    response: { 200: publicationWithdrawResponseSchema, ...personDoorErrors },
+  },
+  personPublicationWithdrawPage: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the owner: take every post Hub put in a page's schedule off it",
+    body: personPageBodySchema,
+    response: { 200: publicationWithdrawResponseSchema, ...personDoorErrors },
+  },
+  personPublicationSwitchSet: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the owner: set switches and limits of publishing (PUBLICATION_SWITCH_KEYS only)",
+    body: personDoorBodySchema.extend(configUpdateBodySchema.shape),
+    response: { 200: configUpdateResponseSchema, ...personDoorErrors },
+  },
+  personFanslyLoginPages: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the owner: the Fansly pages that need a login («Нужен вход в Fansly»), by the matters' rule",
+    body: personDoorBodySchema,
+    response: { 200: z.object({ pages: z.array(z.string()) }), ...personDoorErrors },
+  },
+  personCreatorStatsContent: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: Fansly's media statistics of one of their pages",
+    body: personPageBodySchema.extend(creatorStatsOverviewQuerySchema.shape),
+    response: { 200: creatorStatsContentResponseSchema, ...personDoorErrors },
+  },
+  personCreatorStatsMedia: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: Fansly's statistics of one media offer of their pages",
+    body: personPageBodySchema.extend({ mediaOfferId: creatorStatsMediaParamsSchema.shape.mediaOfferId }).extend(creatorStatsOverviewQuerySchema.shape),
+    response: { 200: creatorStatsMediaResponseSchema, ...personDoorErrors },
+  },
+  personContentComments: {
+    auth: personDoor, tags: ["person-door"],
+    summary: "As the signed-in person: post comments of one of their pages",
+    body: personPageBodySchema.extend(contentCommentsQuerySchema.shape),
+    response: { 200: contentCommentsResponseSchema, ...personDoorErrors },
+  },
+} as const;
+
 const baseRouteSchemas = {
   ...ofapiMarketingRouteSchemas,
   ...ofapiBannedWordRouteSchemas,
@@ -8403,7 +8560,8 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof shiftReportNoteRouteSchemas
   & typeof erasureRouteSchemas
   & typeof saleDecisionRouteSchemas
-  & typeof workboardTodayRouteSchemas;
+  & typeof workboardTodayRouteSchemas
+  & typeof personDoorRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
@@ -8432,6 +8590,7 @@ export const routeSchemas: RouteSchemas = {
   ...erasureRouteSchemas,
   ...saleDecisionRouteSchemas,
   ...workboardTodayRouteSchemas,
+  ...personDoorRouteSchemas,
 };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;
