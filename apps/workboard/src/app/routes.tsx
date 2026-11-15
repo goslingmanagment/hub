@@ -44,12 +44,6 @@ function HomeRedirect() {
  * redirects to Работа).
  */
 const teamScreens: RouteObject[] = [
-  { path: "shifts", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },
-  {
-    path: "shifts/:userId/:shiftStart",
-    handle: { screenKey: (params) => `${params.userId ?? ""}/${params.shiftStart ?? ""}` } satisfies ScreenHandle,
-    lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })),
-  },
   { path: "people", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PeopleScreen })) },
   {
     path: "people/:ref/:tab?",
@@ -100,6 +94,14 @@ function OldAddress() {
  * team lead and a chatter the orders of their pages (Hub decides).
  */
 const everyoneScreens: RouteObject[] = [
+  // «Смены» and «Разбор смены» (products package T): the team's, a chatter's too — Hub cuts every read to the viewer's
+  // teams (services/teams.ts); a chatter reaches them from «Смены» → «Команда».
+  { path: "shifts", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },
+  {
+    path: "shifts/:userId/:shiftStart",
+    handle: { screenKey: (params) => `${params.userId ?? ""}/${params.shiftStart ?? ""}` } satisfies ScreenHandle,
+    lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })),
+  },
   { path: "customs", lazy: () => import("../screens/customs/index.js").then((m) => ({ Component: m.CustomsBoardScreen })) },
   // «Аккаунт и устройства» (the console's /account until 12.11): everyone's own, from the name menu; a narrow session
   // gets the way to the password there instead of the devices and the password.

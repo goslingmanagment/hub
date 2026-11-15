@@ -85,6 +85,7 @@ import { createInvite } from "../account-links.ts";
 import { assignPageToUserTx, recordAudit, withAuditTransaction, type AuditContext, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import { realmOf, requireSameRealm } from "../sandbox/realm.ts";
+import { pagesOfModels, personOfLogin, readModelsOf, teamFactsFor, teamsOfPerson } from "../teams.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.ts";
 import { readStartForOwner } from "./start.ts";
 
@@ -278,13 +279,42 @@ function proposalView(row: PersonProposalRow): PersonProposal {
   };
 }
 
-/** The team's list (owner and team lead): no money anywhere in it. */
+/** A person as their team reads them: nothing of how to reach them, how they sign in, or what the owner noted. */
+function teamPersonView(person: Person): Person {
+  return {
+    ...person,
+    telegram: { userId: null, handle: null, reportTag: null },
+    logins: person.logins.map((login) => ({ ...login, lastSeenAt: null })),
+    agentKeys: [],
+    note: null,
+    importNotes: [],
+    openProposals: 0,
+  };
+}
+
+/** The team's list (owner: everyone; anyone else: their teams, `teamPersonView`): no money anywhere in it. */
 export async function readTeamPeople(app: Pick<AppContext, "db">, principal: HumanAuthPrincipal, now = new Date()): Promise<TeamPeopleResponse> {
   // The registry of the principal's realm (sandbox/realm.ts): a test owner sees the test team, everyone else the agency.
   const realm = realmOf(principal);
   const rows = await listPersonRows(app.db, realm);
   const parts = await loadParts(app.db);
-  const unlinked = principal.user.role === "owner" ? await listUnlinkedLoginRows(app.db, realm) : [];
+  const owner = principal.user.role === "owner" && principal.narrowDeviceTokenId === undefined;
+  const unlinked = owner ? await listUnlinkedLoginRows(app.db, realm) : [];
+  if (!owner) {
+    // Anyone else (a team lead by records, a chatter): the people of the viewer's teams (services/teams.ts) — who they
+    // are, their role, pages and schedule, their logins' names (the shifts are by login) — never Telegram, keys, when a
+    // login was last used, notes or proposals.
+    const facts = await teamFactsFor(app, principal);
+    const teams = teamsOfPerson(facts, personOfLogin(facts, principal.user.id));
+    const pages = new Set(pagesOfModels(facts, readModelsOf(facts, teams, realm === "test")));
+    const members = new Set(facts.working.filter((row) => pages.has(row.pageId)).map((row) => row.personId));
+    if (teams.personId !== null) members.add(teams.personId);
+    return {
+      people: rows.filter((row) => members.has(row.id)).map((row) => teamPersonView(personView(row, parts, now))),
+      unlinkedLogins: [],
+      serverNow: now.toISOString(),
+    };
+  }
   return {
     people: rows.map((row) => personView(row, parts, now)),
     unlinkedLogins: unlinked.map(loginView),

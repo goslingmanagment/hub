@@ -8,8 +8,9 @@ import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_
 import { usePeopleIndex } from "@/shared/people";
 import { SHIFT_SALES_KEY } from "@/shared/reads";
 import { placeNotes } from "@/shared/reportNotes";
-import { liveLogins, personOfLogin, useTeamPeople } from "@/screens/people/registry";
+import { liveLogins, personOfLogin, useTeamPeople } from "@/screens/people/teamPeople";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { ShiftsTabs } from "@/shared/ShiftsTabs";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
@@ -180,6 +181,7 @@ export function ShiftsScreen() {
         refreshing={sales.isFetching}
       />
       <div className="wb-content shifts">
+        <ShiftsTabs />
         {mine && (
           <p className="shifts-mine">
             Только ваши смены.{" "}

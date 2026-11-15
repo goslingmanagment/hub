@@ -10,6 +10,7 @@ import { useMe } from "@/shared/useMe";
 import { AccessTab } from "./AccessTab.js";
 import { IntakeCard } from "./Intake.js";
 import { usePeopleNow, usePersonCard } from "./data.js";
+import { TeamRolesCard } from "./TeamRoles.js";
 import { lastSeenOf, liveLogins, unsettledNotes, useOwnerCard, useTeamPeople, type RegistryLogin, type RegistryPerson } from "./registry.js";
 import { SalesTab } from "./SalesTab.js";
 import { ScheduleTab, slotSummary } from "./ScheduleTab.js";
@@ -113,6 +114,7 @@ export function PersonCard({ code }: { code: string }) {
           : current === "access" ? <AccessTab person={person} onChanged={refresh} />
             : current === "schedule" ? <ScheduleTab person={person} card={owner.data} cardFailed={owner.isError} onRetry={() => void owner.refetch()} isOwner={isOwner} />
               : <Work person={person} tab={current} />}
+        {person && current === "schedule" && <TeamRolesCard person={person} />}
       </div>
     </>
   );

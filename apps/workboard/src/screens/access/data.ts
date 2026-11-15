@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import type { AdminCreateInviteBody, KernelOperationResponse } from "@agency_hub_core/contracts";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { kernel } from "@/shared/hub";
-import { usersQuery } from "@/shared/reads";
+import { usersQuery } from "@/shared/usersQuery";
 
 /**
  * Доступ — the data layer (spec §4.8, and the «Доступ» tab of Человек §4.4 through

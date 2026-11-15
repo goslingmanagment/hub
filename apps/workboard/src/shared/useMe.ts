@@ -36,7 +36,12 @@ export function useMe() {
     /** The person's own role, for what the menu says about them. */
     accountRole: (user?.role ?? null) as Role | null,
     narrow,
-    /** The owner: Доступ, disputes and the shift review are theirs only (Hub checks it too). */
+    /** The owner: Доступ and the money are theirs only (Hub checks it too). */
     isOwner: !narrow && user?.role === "owner",
+    /** The agency's owner, not the test team's: accounts, AI spend and agents' proposals are read by him alone (Hub
+     *  refuses the test owner them, so the screens leave those blocks out, as for a team lead). */
+    fullOwner: !narrow && user?.role === "owner" && query.data?.test !== true,
+    /** The person's teams by model id (products package T): in, given «видит», leading; null — the owner, or not read. */
+    teams: query.data?.teams ?? null,
   };
 }

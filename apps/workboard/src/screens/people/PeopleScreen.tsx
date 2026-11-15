@@ -40,11 +40,11 @@ import "./registry.css";
 export function PeopleScreen() {
   const { period, setPeriod } = usePeriod();
   const { page } = usePageFilter();
-  const { isOwner } = useMe();
+  const { isOwner, fullOwner } = useMe();
   const numbers = usePeopleList(period, page);
   const registry = useTeamPeople();
   const visible = usePages();
-  const proposals = useOpenProposals(isOwner);
+  const proposals = useOpenProposals(fullOwner);
   const create = useCreatePerson();
   const [inviting, setInviting] = useState(false);
   const [revealed, setRevealed] = useState<RevealedLink | null>(null);
@@ -76,7 +76,7 @@ export function PeopleScreen() {
   const agents = isOwner ? shown.filter((person) => person.kind === "agent") : [];
   const services = isOwner ? shown.filter((person) => person.kind === "service") : [];
   const unlinked = isOwner ? (registry.data?.unlinkedLogins ?? []).filter((login) => login.state !== "deleted") : [];
-  const proposed = isOwner ? (proposals.data?.proposals ?? []).filter((one) => one.kind === "create") : [];
+  const proposed = fullOwner ? (proposals.data?.proposals ?? []).filter((one) => one.kind === "create") : [];
 
   const columns = useColumns(numbers, isOwner, page);
   const sorted = useMemo(() => sortedRows(rows, columns, sort), [rows, columns, sort]);
@@ -95,7 +95,7 @@ export function PeopleScreen() {
         onRefresh={() => {
           numbers.refresh();
           void registry.refetch();
-          if (isOwner) void proposals.refetch();
+          if (fullOwner) void proposals.refetch();
         }}
         refreshing={numbers.refreshing || registry.isFetching}
       />

@@ -28,7 +28,8 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
+import { type AuthPrincipal } from "./auth.ts";
+import { requireTeamReader } from "./teams.ts";
 import { middleOfWork, readPeopleWork } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
 import {
@@ -257,7 +258,8 @@ export async function readTeamChatterNumbers(
   principal: AuthPrincipal,
   input: { from?: string | undefined; to?: string | undefined; userId?: number | undefined; pageScope: readonly number[] | undefined },
 ): Promise<TeamChatterNumbersResponse> {
-  requireDashboardUser(principal);
+  // A cookie session of any role, cut to the viewer's teams by the caller (`teamPagesFor`, services/teams.ts).
+  requireTeamReader(principal);
   const now = new Date();
   const to = input.to === undefined ? now : new Date(input.to);
   const from = input.from === undefined ? new Date(to.getTime() - 7 * DAY_MS) : new Date(input.from);

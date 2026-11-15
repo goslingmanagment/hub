@@ -77,6 +77,14 @@ describe("people registry: pay terms reach the owner only", () => {
       logins: { add: [await fixtureUserId(app, "chat")] },
     });
     expect(created.statusCode, created.body).toBe(200);
+    // The team lead leads Mia's team by the team records (0415): the team's list is cut to the teams one reads.
+    const lead = await asSession("boss", "POST", "/api/v1/admin/people", {
+      code: "lead", displayName: "Тимлид", role: "team_lead", state: "working", logins: { add: [await fixtureUserId(app, "lead")] },
+    });
+    expect(lead.statusCode, lead.body).toBe(200);
+    await testDb.pool.query(
+      "insert into team_roles (person_id, model_id, kind) select p.id, m.id, 'lead' from people p, models m where p.code = 'lead' and m.slug = 'mia'",
+    );
     const set = await asSession("boss", "PUT", "/api/v1/admin/people/chat/pay-terms", {
       modelSlug: "mia", validFrom: "2026-11-01", shareBasisPoints: SHARE, fixPerShiftMills: FIX,
     });
@@ -116,8 +124,11 @@ describe("people registry: pay terms reach the owner only", () => {
     const list = await asSession("lead", "GET", "/api/v1/team/people");
     expect(list.statusCode, list.body).toBe(200);
     for (const word of MONEY_WORDS) expect(list.body).not.toContain(word);
-    expect(list.json().people.map((person: { code: string }) => person.code)).toEqual(["chat"]);
-    expect((await asSession("chat", "GET", "/api/v1/team/people")).statusCode).toBe(403);
+    expect(list.json().people.map((person: { code: string }) => person.code).sort()).toEqual(["chat", "lead"]);
+    // A chatter reads the people of their team too (products package T), without money either.
+    const own = await asSession("chat", "GET", "/api/v1/team/people");
+    expect(own.statusCode, own.body).toBe(200);
+    for (const word of MONEY_WORDS) expect(own.body).not.toContain(word);
     // Nothing changed the owner's term.
     const card = adminPersonResponseSchema.parse((await asSession("boss", "GET", "/api/v1/admin/people/chat")).json());
     expect(card.payTerms.map((term) => term.shareBasisPoints)).toEqual([SHARE]);
@@ -132,7 +143,7 @@ describe("people registry: pay terms reach the owner only", () => {
 
     const withTerms = agentPeopleResponseSchema.parse((await asKey("terms", "GET", "/api/v1/agent/people")).json());
     expect(withTerms.payTermsIncluded).toBe(true);
-    expect(withTerms.people[0]!.payTerms).toEqual([expect.objectContaining({ shareBasisPoints: SHARE, fixPerShiftMills: FIX })]);
+    expect(withTerms.people.find((person) => person.code === "chat")!.payTerms).toEqual([expect.objectContaining({ shareBasisPoints: SHARE, fixPerShiftMills: FIX })]);
 
     expect((await asKey("none", "GET", "/api/v1/agent/people")).statusCode).toBe(403);
     // Neither key reaches the owner's card, nor proposes without propose:people.
@@ -163,7 +174,7 @@ describe("people registry: pay terms reach the owner only", () => {
     const list = await asSession("lead", "GET", "/api/v1/team/people");
     expect(list.statusCode, list.body).toBe(200);
     for (const word of MONEY_WORDS) expect(list.body).not.toContain(word);
-    expect(list.json().people.map((person: { code: string }) => person.code).sort()).toEqual(["chat", "newbie"]);
+    expect(list.json().people.map((person: { code: string }) => person.code).sort()).toEqual(["chat", "lead", "newbie"]);
   });
 
   it("never lets an agent's proposal carry pay terms, even once the owner accepts it", async (context) => {

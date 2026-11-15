@@ -10,6 +10,8 @@ import {
   closeMatter,
   createFanslyPage,
   createModel,
+  insertPersonLogin,
+  insertPersonRow,
   insertAgentKey,
   listMatterChecks,
   listObjectEvents,
@@ -85,6 +87,13 @@ describe("matters", () => {
     for (const label of ["lora-1", "lora-2"]) pages[label] = (await createFanslyPage(app.db, { modelId: model!.id, label }))!.id;
     await assignPageToUser(app, { userId: users.lead!, pageLabel: "lora-1" }, AUDIT);
     await assignPageToUser(app, { userId: users.alice!, pageLabel: "lora-1" }, AUDIT);
+    // The lead leads Lora's team by the team records (0415): authority comes from the record, not the login's role.
+    const leadPerson = await insertPersonRow(app.db, {
+      code: "lead", displayName: "Lead", kind: "human", role: "team_lead", state: "working", leftOn: null, telegramUserId: null,
+      telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
+    });
+    await insertPersonLogin(app.db, { personId: leadPerson.id, userId: users.lead!, linkedByUserId: null });
+    await testDb.pool.query("insert into team_roles (person_id, model_id, kind) values ($1, $2, 'lead')", [leadPerson.id, model!.id]);
     for (const [token, capabilities] of [[AGENT, ["write:matters"]], [READER, ["read:messages"]]] as const) {
       await insertAgentKey(app.db, {
         name: token === AGENT ? "gengar" : "reader",
@@ -153,7 +162,8 @@ describe("matters", () => {
     };
     expect(await keys("alice")).toEqual(["rights.test:alice"]);
     expect(await keys("bob")).toEqual(["rights.test:bob"]);
-    expect(await keys("lead")).toEqual(["rights.test:lead-1"]);
+    // A team lead's role matter is read by the lead of its model: both of Lora's pages.
+    expect(await keys("lead")).toEqual(["rights.test:lead-1", "rights.test:lead-2"]);
     expect(await keys("boss")).toHaveLength(8);
 
     // The extension's narrow door: the person's own, never money, never evidence.
@@ -169,7 +179,10 @@ describe("matters", () => {
     expect(ownerOwn.matters.some((one) => one.title.includes("money"))).toBe(false);
 
     // «Ждут вас» is the dashboard's: a chatter's session is refused.
-    expect((await asSession("alice", "/api/v1/matters/waiting")).statusCode).toBe(403);
+    // «Ждут вас» of the team is everyone's read since the teams (package T): a chatter who leads nothing waits for nothing there.
+    const aliceWaiting = await asSession("alice", "/api/v1/matters/waiting");
+    expect(aliceWaiting.statusCode).toBe(200);
+    expect(mattersWaitingResponseSchema.parse(aliceWaiting.json())).toMatchObject({ groups: [], total: 0 });
   });
 
   it("an agent key writes its own kinds by key, on its pages, for living people; the server's kinds stay the server's", async (context) => {
@@ -236,8 +249,8 @@ describe("matters", () => {
     // A team lead's «Ждут вас»: their own and their role's on their pages, by the list's groups — the role's matter on
     // lora-1 of the rights test in «Другие дела»; held sends answered and are empty, no custom order waits; nothing failed.
     const lead = await waiting("lead");
-    expect(lead.groups.map((group) => [group.id, group.count])).toEqual([["other", 1]]);
-    expect(lead).toMatchObject({ total: 1, failed: [] });
+    expect(lead.groups.map((group) => [group.id, group.count])).toEqual([["other", 2]]);
+    expect(lead).toMatchObject({ total: 2, failed: [] });
 
     const checks = new Map((await listMatterChecks(app.db)).map((check) => [check.kind, check]));
     expect(checks.get("incident.open")).toMatchObject({ legacyCount: 1, matterCount: 1, mismatchSince: null, error: null });

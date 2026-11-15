@@ -26,7 +26,7 @@ import {
   replyCells,
   rng,
   teamWorld,
-  viewerPages,
+  teamViewerPages,
   windowDays,
   windowStart,
   workedPages,
@@ -381,7 +381,7 @@ const BUSINESS_DATE = /^\d{4}-\d{2}-\d{2}$/;
 export const teamHandlers: DemoHandlers = {
   teamShiftReview,
   teamShifts: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const pageLabel = queryString(request, "pageLabel");
     if (pageLabel !== undefined) {
@@ -421,7 +421,7 @@ export const teamHandlers: DemoHandlers = {
   },
 
   teamShiftSales: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const pageLabel = queryString(request, "pageLabel");
     if (pageLabel !== undefined) {
@@ -436,7 +436,7 @@ export const teamHandlers: DemoHandlers = {
   },
 
   teamAuthorship: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const days = daysParam(request, 7, 7);
     if (days === null) return badDays(7);
@@ -444,7 +444,7 @@ export const teamHandlers: DemoHandlers = {
   },
 
   teamEmptyHours: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const days = daysParam(request, 7, 31);
     if (days === null) return badDays(31);
@@ -452,7 +452,7 @@ export const teamHandlers: DemoHandlers = {
   },
 
   teamGreetings: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const days = daysParam(request, 7, 31);
     if (days === null) return badDays(31);
@@ -460,7 +460,7 @@ export const teamHandlers: DemoHandlers = {
   },
 
   teamSalesPpv: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const days = daysParam(request, 30, 31);
     if (days === null) return badDays(31);
@@ -468,7 +468,7 @@ export const teamHandlers: DemoHandlers = {
   },
 
   teamSalesReplies: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const days = daysParam(request, 30, 31);
     if (days === null) return badDays(31);
@@ -476,7 +476,7 @@ export const teamHandlers: DemoHandlers = {
   },
 
   teamChatterNumbers: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const toParsed = parseInstant(queryString(request, "to"));
     const fromParsed = parseInstant(queryString(request, "from"));
@@ -516,7 +516,7 @@ export const teamHandlers: DemoHandlers = {
   },
 
   teamChatterStats: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const days = daysParam(request, 7, 31);
     if (days === null) return badDays(31);
@@ -533,7 +533,7 @@ export const teamHandlers: DemoHandlers = {
   },
 
   teamWinBackResults: (request) => {
-    const scope = viewerPages(request);
+    const scope = teamViewerPages(request);
     if (!scope) return FORBIDDEN();
     const days = daysParam(request, 30, 90);
     if (days === null) return badDays(90);

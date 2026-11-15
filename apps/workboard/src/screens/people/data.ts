@@ -49,7 +49,8 @@ import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { median } from "@agency_hub_core/ui/shiftReview";
 import { CHATTER_SHIFTS_MAX_WINDOW_DAYS } from "@agency_hub_core/contracts";
 import { kernel } from "@/shared/hub";
-import { shiftSalesQuery, usersQuery } from "@/shared/reads";
+import { shiftSalesQuery } from "@/shared/reads";
+import { usersQuery } from "@/shared/usersQuery";
 import { MAX_DAYS, MIN_SAMPLE, priceView, readWindow, speedView, useSalesPpv, useSalesReplies, type ReadWindow } from "@/screens/sales/data";
 import { averageQuality, perHourMills, qualityOfChatterNumbers, type PeriodQuality as AveragedQuality, type ShiftQuality } from "@/shared/metrics";
 import { useMe } from "@/shared/useMe";
@@ -437,12 +438,12 @@ function sumWork(parts: readonly PeriodWork[]): PeriodWork {
 }
 
 export function usePeopleList(period: ResolvedPeriod, page: string | null): PeopleList {
-  const { isOwner } = useMe();
+  const { fullOwner } = useMe();
   const sales = useShiftSales(period, page);
   const numbers = useNumbers(period);
   const now = useNow();
-  const accounts = useAccounts(isOwner);
-  const spend = useAiSpend(period, isOwner);
+  const accounts = useAccounts(fullOwner);
+  const spend = useAiSpend(period, fullOwner);
 
   const users = accounts.data ?? [];
   const byId = new Map(users.map((user) => [user.id, user]));
@@ -450,7 +451,7 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
   const reach = reachOf(period, page);
   const numbersById = new Map((numbers.data?.chatters ?? []).map((chatter) => [chatter.userId, chatter]));
   const qualityState = stateOfRead(numbers, numbersWindow(period) !== null);
-  const spendState = stateOfRead(spend, isOwner);
+  const spendState = stateOfRead(spend, fullOwner);
 
   const rows: PersonSummary[] = [];
   const disabled: PersonRef[] = [];
@@ -514,7 +515,7 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
       void sales.refetch();
       void numbers.refetch();
       void now.refetch();
-      if (isOwner) {
+      if (fullOwner) {
         void accounts.refetch();
         void spend.refetch();
       }
@@ -592,12 +593,12 @@ export function usePersonStats(userId: number, period: ResolvedPeriod, today: st
 }
 
 export function usePersonCard(userId: number, period: ResolvedPeriod, page: string | null, today: string): PersonCard {
-  const { isOwner } = useMe();
+  const { fullOwner } = useMe();
   const sales = useShiftSales(period, page);
   const numbers = useNumbers(period, userId);
   const now = useNow();
-  const accounts = useAccounts(isOwner);
-  const spend = useAiSpend(period, isOwner);
+  const accounts = useAccounts(fullOwner);
+  const spend = useAiSpend(period, fullOwner);
   const statsRead = usePersonStats(userId, period, today);
   const { stats } = statsRead;
 
@@ -607,11 +608,11 @@ export function usePersonCard(userId: number, period: ResolvedPeriod, page: stri
   const reach = reachOf(period, page);
   const counted = numbers.data?.chatters.find((one) => one.userId === userId);
   const qualityState = stateOfRead(numbers, numbersWindow(period) !== null);
-  const spendState = stateOfRead(spend, isOwner);
+  const spendState = stateOfRead(spend, fullOwner);
 
   const username = user?.username ?? chatter?.username ?? stats?.user.username ?? null;
   const known = username !== null;
-  const settled = sales.data !== undefined && (!isOwner || accounts.data !== undefined) && (statsRead.days === null || !statsRead.query.isPending);
+  const settled = sales.data !== undefined && (!fullOwner || accounts.data !== undefined) && (statsRead.days === null || !statsRead.query.isPending);
   const missing = settled && !known;
 
   const person: PersonSummary | null = username === null ? null : {
@@ -683,7 +684,7 @@ export function usePersonCard(userId: number, period: ResolvedPeriod, page: stri
       void numbers.refetch();
       void now.refetch();
       void statsRead.query.refetch();
-      if (isOwner) {
+      if (fullOwner) {
         void accounts.refetch();
         void spend.refetch();
       }

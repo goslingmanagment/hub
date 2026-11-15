@@ -71,6 +71,21 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   // «Начало» (package J): a newcomer's way, read. Of where payouts go it carries only whether it is written and when:
   // Hub leaves the text out for a narrow session (`ownPayoutDetailsSchema`), and nothing is written from here.
   "accountStart",
+  // «Команда» (products package T): the team reads a chatter may, cut to their teams on the server (services/teams.ts).
+  // Reads only: granting team records and a lead's notes and decisions need the password.
+  "teamPeople",
+  "teamShifts",
+  "teamShiftSales",
+  "teamChatterStats",
+  "teamChatterNumbers",
+  "teamAuthorship",
+  "teamSalesPpv",
+  "teamSalesReplies",
+  "teamEmptyHours",
+  "teamGreetings",
+  "teamWinBackResults",
+  "teamShiftReview",
+  "reviewNotes",
 ] as const satisfies readonly KernelOperationKey[];
 
 /**
@@ -89,6 +104,8 @@ export const NARROW_WEB_SESSION_PASSWORD_ONLY = [
   "authRevokeAllDevices",
   "authChangePassword",
   "authMyUsage",
+  // «Разбор смены»: a lead's note to the chatter (products package T).
+  "reviewNoteAdd",
 ] as const satisfies readonly KernelOperationKey[];
 
 /** Whether a narrow web session may call the route with this key. */

@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 84 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (522)
+## Routes (526)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -397,7 +397,7 @@ A full device token is not affected.
 | GET | `/api/v1/health/sync` | `healthSync` | `monitoring` | — | — | no |
 | POST | `/api/v1/ingest/observations` | `ingestObservations` | `apiKey` | — | — | yes |
 | GET | `/api/v1/matters` | `mattersList` | `any-session` | — | — | no |
-| GET | `/api/v1/matters/waiting` | `mattersWaiting` | `session` | — | — | no |
+| GET | `/api/v1/matters/waiting` | `mattersWaiting` | `any-session` | — | — | no |
 | POST | `/api/v1/model-applications` | `modelApplicationSubmit` | `public` | — | — | — |
 | POST | `/api/v1/model-applications/progress` | `modelApplicationProgress` | `public` | — | — | — |
 | GET | `/api/v1/models` | `models` | `session` | — | — | no |
@@ -486,9 +486,9 @@ A full device token is not affected.
 | POST | `/api/v1/sale-claims/:claimId/answer` | `saleClaimAnswer` | `any` | — | — | yes |
 | POST | `/api/v1/sale-decisions/:decisionId/link` | `saleDecisionLink` | `owner-session` | — | — | no |
 | GET | `/api/v1/sale-decisions/unlinked` | `saleDecisionsUnlinked` | `owner-session` | — | — | no |
-| GET | `/api/v1/sale-disputes/:transactionId` | `saleDispute` | `owner-session` | — | — | no |
-| GET | `/api/v1/sale-disputes/claim/:claimId` | `saleDisputeOfClaim` | `owner-session` | — | — | no |
-| POST | `/api/v1/sale-disputes/decide` | `saleDisputeDecide` | `owner-session` | — | — | no |
+| GET | `/api/v1/sale-disputes/:transactionId` | `saleDispute` | `any-session` | — | — | no |
+| GET | `/api/v1/sale-disputes/claim/:claimId` | `saleDisputeOfClaim` | `any-session` | — | — | no |
+| POST | `/api/v1/sale-disputes/decide` | `saleDisputeDecide` | `any-session` | — | — | no |
 | GET | `/api/v1/sale-nobody` | `saleNobody` | `owner-session` | — | — | no |
 | POST | `/api/v1/sale-nobody/keep` | `saleNobodyKeep` | `owner-session` | — | — | no |
 | GET | `/api/v1/sales/chain` | `saleChain` | `any` | — | — | no |
@@ -526,26 +526,30 @@ A full device token is not affected.
 | POST | `/api/v1/system/people-messages/press` | `peopleMessagePress` | `owner-session` | — | — | no |
 | GET | `/api/v1/system/people-messages/recipient` | `peopleMessageRecipient` | `owner-session` | — | — | no |
 | GET | `/api/v1/system/state` | `systemState` | `owner-session` | — | — | no |
-| GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
-| GET | `/api/v1/team/chatter-numbers` | `teamChatterNumbers` | `session` | — | — | no |
-| GET | `/api/v1/team/chatter-stats` | `teamChatterStats` | `session` | — | — | no |
-| GET | `/api/v1/team/empty-hours` | `teamEmptyHours` | `session` | — | — | no |
-| GET | `/api/v1/team/greetings` | `teamGreetings` | `session` | — | — | no |
+| GET | `/api/v1/team/authorship` | `teamAuthorship` | `any-session` | — | — | no |
+| GET | `/api/v1/team/chatter-numbers` | `teamChatterNumbers` | `any-session` | — | — | no |
+| GET | `/api/v1/team/chatter-stats` | `teamChatterStats` | `any-session` | — | — | no |
+| GET | `/api/v1/team/empty-hours` | `teamEmptyHours` | `any-session` | — | — | no |
+| GET | `/api/v1/team/greetings` | `teamGreetings` | `any-session` | — | — | no |
 | GET | `/api/v1/team/ledger-month` | `teamLedgerMonth` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts` | `teamLedgerPayouts` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts/person` | `teamLedgerPayoutPerson` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-payouts/prepare` | `teamLedgerPayoutPrepare` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-questions` | `teamLedgerQuestions` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/ledger-reports` | `teamLedgerReports` | `owner-session` | — | — | no |
-| GET | `/api/v1/team/people` | `teamPeople` | `session` | — | — | no |
-| GET | `/api/v1/team/sales/ppv` | `teamSalesPpv` | `session` | — | — | no |
-| GET | `/api/v1/team/sales/replies` | `teamSalesReplies` | `session` | — | — | no |
-| GET | `/api/v1/team/shift-review` | `teamShiftReview` | `owner-session` | — | — | no |
-| GET | `/api/v1/team/shift-sales` | `teamShiftSales` | `session` | — | — | no |
-| GET | `/api/v1/team/shifts` | `teamShifts` | `session` | — | — | no |
+| GET | `/api/v1/team/people` | `teamPeople` | `any-session` | — | — | no |
+| GET | `/api/v1/team/review-notes` | `reviewNotes` | `any-session` | — | — | no |
+| POST | `/api/v1/team/review-notes` | `reviewNoteAdd` | `any-session` | — | — | no |
+| GET | `/api/v1/team/roles` | `teamRoles` | `any-session` | — | — | no |
+| POST | `/api/v1/team/roles` | `teamRoleSet` | `any-session` | — | — | no |
+| GET | `/api/v1/team/sales/ppv` | `teamSalesPpv` | `any-session` | — | — | no |
+| GET | `/api/v1/team/sales/replies` | `teamSalesReplies` | `any-session` | — | — | no |
+| GET | `/api/v1/team/shift-review` | `teamShiftReview` | `any-session` | — | — | no |
+| GET | `/api/v1/team/shift-sales` | `teamShiftSales` | `any-session` | — | — | no |
+| GET | `/api/v1/team/shifts` | `teamShifts` | `any-session` | — | — | no |
 | GET | `/api/v1/team/win-back/approaches` | `teamWinBackApproaches` | `owner-session` | — | — | no |
 | POST | `/api/v1/team/win-back/approaches` | `teamWinBackApproachSave` | `owner-session` | — | — | no |
-| GET | `/api/v1/team/win-back/results` | `teamWinBackResults` | `session` | — | — | no |
+| GET | `/api/v1/team/win-back/results` | `teamWinBackResults` | `any-session` | — | — | no |
 | GET | `/api/v1/transactions` | `crossPageTransactions` | `session` | — | — | no |
 | GET | `/api/v2/fans/search` | `fansSearch` | `any` | — | — | no |
 | GET | `/api/v2/spenders` | `spenders` | `any` | — | — | yes |

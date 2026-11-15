@@ -23,7 +23,8 @@ import {
 import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireDashboardUser, requireSessionUser, type AuthPrincipal } from "./auth.ts";
+import { requireSessionUser, type AuthPrincipal } from "./auth.ts";
+import { requireTeamReader } from "./teams.ts";
 import {
   SALE_LAST_WRITER_HOURS,
   dayOfShift,
@@ -585,7 +586,8 @@ export async function readTeamChatterStats(
   principal: AuthPrincipal,
   input: { query: TeamChatterStatsQuery; pageScope: readonly number[] | undefined },
 ): Promise<TeamChatterStatsResponse> {
-  requireDashboardUser(principal);
+  // A cookie session of any role, cut to the viewer's teams by the caller (`teamPagesFor`, services/teams.ts).
+  requireTeamReader(principal);
   const now = new Date();
   const scope = input.pageScope;
   const people = await listActivePeople(app.db, { pages: scope ?? "all", from: new Date(now.getTime() - CHATTER_STATS_MAX_DAYS * DAY_MS), to: now });

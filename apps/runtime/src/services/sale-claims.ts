@@ -53,9 +53,11 @@ import {
   type HandinVersionLine,
   type HandinVersionMadeFor,
   type MatterActor,
+  type MatterOwner,
   type SaleClaimRow,
   type SaleDecisionInsert,
   type SaleDecisionRow,
+  type TeamFacts,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -80,6 +82,8 @@ import {
   type ReportView,
 } from "./sale-claim-rules.ts";
 import { SALE_RULE, SALE_HOME_REASON_TEXT, type SaleHomeReason } from "./sale-rule.ts";
+import { realmOf, testUserIds } from "./sandbox/realm.ts";
+import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, teamFactsFor, type Decider } from "./teams.ts";
 import { dayWords } from "./shift-handin-rules.ts";
 import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, saleLineFacts, type HandinActor } from "./shift-handins.ts";
 
@@ -271,6 +275,7 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
     .map((sale) => [sale.transactionId, sale]));
   const names = await listHandinNames(db, claims.flatMap((claim) => [claim.claimantUserId, claim.sideUserId].filter((id): id is number => id !== null)));
   const pages = await listMatterPageLabels(db);
+  const teams = await teamFactsFor(app);
   let touched = 0;
   const wantSide = new Set<string>();
   const wantOwner = new Map<string, SaleClaimRow[]>();
@@ -331,8 +336,10 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
           : questionTitle({ list, pageLabel: label, ref: first.ledgerRef ?? {}, sale, names: who.length > 0 ? who : first.whoText === null ? [] : [first.whoText] }),
       object: first.transactionId === null ? { type: "sale_claim", id: String(first.id) } : { type: "transaction", id: String(first.transactionId) },
       pageIds: label === null ? [] : [pages.idOf.get(label)].filter((id): id is number => id !== undefined),
-      owner: { role: "owner" },
-      money: true,
+      // Who decides is `deciderOf` (services/teams.ts): the lead of the sale's model, the owner when the team has none,
+      // when the lead is a side, and for the pot's and the ledger's questions. A lead's dispute carries no money of
+      // people (the sale's amount is the team's, as on «Смены»); the owner's stays his alone as before.
+      ...disputeOwnerOf(teams, list, label === null ? null : pages.idOf.get(label) ?? null),
       evidence: {
         transactionId: first.transactionId, claimIds: list.map((claim) => claim.id), netMills: sale?.netMills ?? null,
         why: [...new Set(list.map((claim) => claim.escalatedWhy))], saidAt: list.map((claim) => claim.claimedAt.toISOString()).sort()[0],
@@ -776,6 +783,32 @@ function requireOwnerSession(principal: HumanAuthPrincipal) {
   if (principal.user.role !== "owner" || principal.narrowDeviceTokenId !== undefined) throw new ForbiddenError("Only the owner decides");
 }
 
+/**
+ * Who decides a dispute (products package T): `deciderOf` over the dispute's model and sides. Two chatters' «чья
+ * продажа» — the lead of the model's team (not a side); a sale with no colleague to ask (the pot's, nobody's) and a
+ * question carried over from the ledger — the owner.
+ */
+export function disputeDeciderOf(facts: TeamFacts, claims: readonly SaleClaimRow[], pageId: number | null): Decider {
+  const kind = claims.some((claim) => claim.sideUserId === null || claim.kind === "imported" || claim.kind === "question") ? "pot" : "dispute";
+  const sides = personsOfLogins(facts, claims.flatMap((claim) => [claim.claimantUserId, claim.sideUserId]));
+  return deciderOf(facts, modelOfPageId(facts, pageId ?? claims.find((claim) => claim.pageId !== null)?.pageId ?? null), kind, sides);
+}
+
+function disputeOwnerOf(facts: TeamFacts, claims: readonly SaleClaimRow[], pageId: number | null): { owner: MatterOwner; money: boolean } {
+  const decider = disputeDeciderOf(facts, claims, pageId);
+  return decider.kind === "team_lead" ? { owner: { userId: decider.userId }, money: false } : { owner: { role: "owner" }, money: true };
+}
+
+/** The owner, or the lead who decides this dispute by `disputeDeciderOf`; anyone else is refused. */
+async function requireDisputeDecider(app: ClaimsApp, principal: HumanAuthPrincipal, claims: readonly SaleClaimRow[]) {
+  if (principal.user.role === "owner" && principal.narrowDeviceTokenId === undefined) return;
+  if (principal.narrowDeviceTokenId !== undefined) throw new ForbiddenError("Only the owner decides");
+  const facts = await teamFactsFor(app);
+  const decider = disputeDeciderOf(facts, claims, null);
+  const me = personOfLogin(facts, principal.user.id);
+  if (decider.kind !== "team_lead" || me === null || decider.personId !== me) throw new ForbiddenError("Only the owner decides");
+}
+
 /** The two people of a sale's dispute: the first claim's claimant, its side (null — none). */
 function partiesOf(claims: readonly SaleClaimRow[]): { first: number | null; second: number | null } {
   const lead = claims.find((claim) => claim.state === "owner") ?? claims[0];
@@ -789,12 +822,13 @@ export async function decideSaleDispute(
   input: { transactionId?: number | undefined; claimId?: number | undefined; outcome: OwnerOutcome | "dismiss"; note: string | null },
   now: Date = new Date(),
 ) {
-  requireOwnerSession(principal);
   const { db } = app;
   const claims = input.transactionId !== undefined
     ? await listSaleClaims(db, { transactionIds: [input.transactionId] })
     : await listSaleClaims(db, { ids: [input.claimId!] });
   const open = claims.filter((claim) => claim.state === "owner" || claim.state === "asked" || claim.state === "agreed");
+  if (principal.user.role !== "owner" && open.length === 0) throw new ForbiddenError("Only the owner decides");
+  await requireDisputeDecider(app, principal, open);
   if (open.length === 0) throw new NotFoundError("No dispute of this sale waits for a decision");
   const transactionId = input.transactionId ?? open[0]!.transactionId;
   const { first, second } = partiesOf(open);
@@ -1012,7 +1046,11 @@ export async function cancelSaleDecisionApplied(
 /** `offPlatformPending`: the reports with «мимо площадки» waiting for the owner. */
 export async function readOffPlatformPending(app: ClaimsApp, principal: HumanAuthPrincipal, query: { shiftId?: number | undefined }, now: Date = new Date()): Promise<OffPlatformPendingResponse> {
   requireOwnerSession(principal);
-  const pending = (await listPendingOffPlatform(app.db)).filter((line) => query.shiftId === undefined || line.shiftId === query.shiftId);
+  // The wall (sandbox/realm.ts): an owner reads the lines of his realm's people only.
+  const test = await testUserIds(app);
+  const realm = realmOf(principal) === "test";
+  const pending = (await listPendingOffPlatform(app.db))
+    .filter((line) => (query.shiftId === undefined || line.shiftId === query.shiftId) && test.has(line.userId) === realm);
   const names = await listHandinNames(app.db, pending.map((line) => line.userId));
   const versions = await listCurrentHandinVersions(app.db, [...new Set(pending.map((line) => line.handinId))]);
   const byReport = new Map<number, typeof pending>();
@@ -1370,16 +1408,18 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
 
 /** `saleDispute`: the owner's dispute of a sale. */
 export async function readSaleDispute(app: ClaimsApp, principal: HumanAuthPrincipal, transactionId: number, now: Date = new Date()): Promise<SaleDisputeResponse> {
-  requireOwnerSession(principal);
   const claims = (await listSaleClaims(app.db, { transactionIds: [transactionId] })).filter((claim) => claim.state !== "withdrawn");
+  if (principal.user.role !== "owner" && claims.length === 0) throw new ForbiddenError("Only the owner decides");
+  await requireDisputeDecider(app, principal, claims);
   if (claims.length === 0) throw new NotFoundError("No dispute of this sale");
   return disputeOf(app, claims.sort((a, b) => Number(b.state === "owner") - Number(a.state === "owner") || a.id - b.id), now);
 }
 
 /** `saleDisputeOfClaim`: a question carried over from the ledger that names no sale. */
 export async function readSaleDisputeOfClaim(app: ClaimsApp, principal: HumanAuthPrincipal, claimId: number, now: Date = new Date()): Promise<SaleDisputeResponse> {
-  requireOwnerSession(principal);
   const claim = await findSaleClaim(app.db, claimId);
+  if (claim === null && principal.user.role !== "owner") throw new ForbiddenError("Only the owner decides");
+  await requireDisputeDecider(app, principal, claim === null ? [] : [claim]);
   if (claim === null) throw new NotFoundError("No such claim");
   return claim.transactionId === null ? disputeOf(app, [claim], now) : readSaleDispute(app, principal, claim.transactionId, now);
 }

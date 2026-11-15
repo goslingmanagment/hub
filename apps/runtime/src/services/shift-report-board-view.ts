@@ -6,6 +6,7 @@ import {
   type ShiftReportPhase,
   type ShiftReportRow,
 } from "@agency_hub_core/contracts";
+import { deciderOf, personsOfLogins, teamFactsFor } from "./teams.ts";
 import {
   findPreviousShiftComment,
   hasShiftReportReviewer,
@@ -23,6 +24,7 @@ import {
   listTransactionPlatformRefs,
   type CandidateRow,
   type Database,
+  type TeamFacts,
   type HandinRow,
   type HandinVersionLine,
   type HandinVersionRow,
@@ -49,8 +51,25 @@ const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 const moscowDayStart = (at: number) => Date.parse(`${new Date(at + 3 * HOUR_MS).toISOString().slice(0, 10)}T00:00:00+03:00`);
 
-/** Who decides a dispute of a page's model, and how the texts name them. Today the owner (the team-lead package changes this one function). */
-export function disputeDecider(input: { modelSlug: string | null; testOwner?: { userId: number; name: string } | null }): ShiftReportBoard["decider"] {
+/**
+ * Who decides a dispute of a page's model, and how the texts name them: `deciderOf` (services/teams.ts) — the lead of
+ * the model's team («Спор решит Марта»), the owner when it has none or the lead is a side of the shift («Спор решит
+ * владелец»). Without the facts (a check with no model): the owner.
+ */
+export function disputeDecider(input: {
+  modelSlug: string | null;
+  testOwner?: { userId: number; name: string } | null;
+  facts?: TeamFacts;
+  /** The people of the shift: a lead who is one of them does not decide its disputes. */
+  sidePersonIds?: readonly number[];
+}): ShiftReportBoard["decider"] {
+  if (input.facts !== undefined && input.modelSlug !== null) {
+    const model = input.facts.models.find((one) => one.slug === input.modelSlug);
+    const decider = deciderOf(input.facts, model?.modelId ?? null, "dispute", input.sidePersonIds ?? []);
+    if (decider.kind === "team_lead") {
+      return { kind: "team_lead", user: { userId: decider.userId, name: decider.name, forms: personNameForms(decider.name) }, words: decider.name };
+    }
+  }
   // A test shift's dispute is decided by the test team's owner BY NAME, never the live owner (sandbox/realm.ts).
   if (input.testOwner) {
     return { kind: "owner", user: { userId: input.testOwner.userId, name: input.testOwner.name, forms: personNameForms(input.testOwner.name) }, words: input.testOwner.name };
@@ -229,7 +248,11 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     },
   };
   const testShift = await isTestUser(db, subject.shift.userId);
-  const decider = disputeDecider({ modelSlug: catalog.info.get(labels[0] ?? "")?.modelSlug ?? null, testOwner: testShift ? await findTestOwnerLogin(db) : null });
+  const teamFacts = await teamFactsFor({ db });
+  const decider = disputeDecider({
+    modelSlug: catalog.info.get(labels[0] ?? "")?.modelSlug ?? null, testOwner: testShift ? await findTestOwnerLogin(db) : null,
+    facts: teamFacts, sidePersonIds: personsOfLogins(teamFacts, [subject.shift.userId]),
+  });
   const editable = own && mayAct(actor, "edit", phase);
   const canNote = own && mayAct(actor, "note", phase);
   const counted = phase === "counted";

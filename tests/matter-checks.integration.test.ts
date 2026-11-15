@@ -136,6 +136,8 @@ describe("matter checks (package K)", () => {
     await person("bob", { role: "chatter", logins: [users.bob!] });
     await person("gone", { role: "chatter", state: "left", logins: [users.gone!] });
     await person("svc", { role: "service", kind: "service", logins: [users.svc!] });
+    // The lead leads Lora's team by the team records (0415): authority comes from the record, not the login's role.
+    await testDb.pool.query("insert into team_roles (person_id, model_id, kind) values ($1, $2, 'lead')", [lead, model!.id]);
     for (const id of [alice, lead]) {
       await testDb.pool.query(
         "insert into person_pay_terms (person_id, model_id, valid_from, share_basis_points, fix_per_shift_mills) values ($1, $2, '2026-11-01', $3, $4)",
@@ -233,7 +235,8 @@ describe("matter checks (package K)", () => {
       return mattersListResponseSchema.parse(response.json()).matters.map((one) => one.key).sort();
     };
     expect(await keys("alice")).toEqual(["k.rights:alice"]);
-    expect(await keys("lead")).toEqual(["k.rights:lead-1"]);
+    // A team lead's role matter is read by the lead of its model: both pages of Lora, never the one of no page (owner's).
+    expect(await keys("lead")).toEqual(["k.rights:lead-1", "k.rights:lead-2"]);
     const all = await keys("boss");
     expect(all).toEqual(expect.arrayContaining(["k.rights:alice-money", "k.rights:lead-money", "people.no_pay_terms:bob", "ledger.check:copies"]));
 
@@ -253,11 +256,11 @@ describe("matter checks (package K)", () => {
     // (Held sends are «не проверено» here: the mirror of package D never ran in this test. «Кастомы» is read from the
     // custom orders themselves, and none waits: no group.)
     const lead = mattersWaitingResponseSchema.parse((await asSession("lead", "/api/v1/matters/waiting")).json());
-    expect(lead.groups.map((group) => [group.id, group.count, group.checked])).toEqual([["held", 0, false], ["other", 1, true]]);
-    expect(lead).toMatchObject({ total: 1, failed: ["held"] });
+    expect(lead.groups.map((group) => [group.id, group.count, group.checked])).toEqual([["held", 0, false], ["other", 2, true]]);
+    expect(lead).toMatchObject({ total: 2, failed: ["held"] });
     // A narrow session (from the extension) reads as a chatter whatever the person's role.
     const narrowOwner = { authMethod: "session", user: { id: users.boss!, role: "owner" }, assignedPageIds: [], narrowDeviceTokenId: 1 } as unknown as HumanAuthPrincipal;
-    expect(matterViewerOf(narrowOwner).role).toBe("chatter");
+    expect((await matterViewerOf(app, narrowOwner)).role).toBe("chatter");
 
     // The server's checks are never an agent's to write.
     const refused = await server!.inject({

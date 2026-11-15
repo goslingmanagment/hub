@@ -44,7 +44,6 @@ import {
   listVisibleMatters,
   MatterWriterConflictError,
   openMatter,
-  teamLeadRoleHeld,
   listTestPageIds,
   type MatterCheckRow,
   type MatterOwner,
@@ -57,6 +56,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { awaitingGivingOf, customsLeadOwner } from "./custom-orders/readers.ts";
 import { AppError, ConflictError, NotFoundError } from "./errors.ts";
+import { ledPagesFor, teamFactsFor } from "./teams.ts";
 
 /**
  * Дела (ecosystem plan §2, §6, package D): the reads of matters by every door
@@ -175,26 +175,49 @@ type MattersApp = Pick<AppContext, "db">;
  * (opened from the extension), which reads as a chatter whatever the role: the
  * person's own matters, never one with money.
  */
-export function matterViewerOf(principal: HumanAuthPrincipal): MatterViewer {
+export async function matterViewerOf(app: Pick<AppContext, "db">, principal: HumanAuthPrincipal): Promise<MatterViewer> {
   const role = principal.narrowDeviceTokenId === undefined ? principal.user.role as MatterOwnerRole : "chatter";
+  // The pages of the teams the person leads by the records (services/teams.ts); a narrow session leads nothing.
+  const leadPageIds = role === "owner" ? [] : await ledPagesFor(app, principal);
   // A test person's login reads the test realm's matters only (sandbox/realm.ts).
-  return { userId: principal.user.id, role, pageIds: principal.assignedPageIds, ...(principal.sandbox?.test === true ? { realm: "test" as const } : {}) };
+  return {
+    userId: principal.user.id, role, pageIds: principal.assignedPageIds, leadPageIds,
+    ...(principal.sandbox?.test === true ? { realm: "test" as const } : {}),
+  };
 }
 
 /**
- * The roles whose matters wait for the viewer themself (besides their user's): the owner's own, and the team
- * lead's while nobody holds that role (he is the acting team lead: the registry and the logins say so, not a
- * constant); a team lead's; a chatter none.
+ * The roles whose matters wait for the viewer themself (besides their user's): the owner's own, and a team lead's role
+ * matters of the models that have no lead (he is the acting lead there); a person who leads a team by the records,
+ * the team lead's role matters of that model (`matterHeldBy` cuts them by the model, 0415); anyone else none.
  */
-export async function heldRolesOf(app: Pick<AppContext, "db">, viewer: MatterViewer): Promise<MatterOwnerRole[]> {
-  if (viewer.role === "owner") return (await teamLeadRoleHeld(app.db, viewer.realm ?? "live")) ? ["owner"] : ["owner", "team_lead"];
-  if (viewer.role === "team_lead") return ["team_lead"];
-  return [];
+export async function heldRolesOf(_app: Pick<AppContext, "db">, viewer: MatterViewer): Promise<MatterOwnerRole[]> {
+  if (viewer.role === "owner") return ["owner", "team_lead"];
+  return (viewer.leadPageIds ?? []).length > 0 ? ["team_lead"] : [];
 }
 
 /** Whether a matter waits for the viewer themself. */
-export function matterIsMine(matter: Pick<MatterRow, "owner">, viewer: MatterViewer, heldRoles: readonly MatterOwnerRole[]): boolean {
-  return "userId" in matter.owner ? matter.owner.userId === viewer.userId : heldRoles.includes(matter.owner.role);
+export function matterIsMine(
+  matter: Pick<MatterRow, "owner" | "pageIds">,
+  viewer: MatterViewer,
+  heldRoles: readonly MatterOwnerRole[],
+  /** The pages whose model has a lead (0415): a team lead's role matter there is the lead's, not the owner's. */
+  ledPages: ReadonlySet<number> = new Set(),
+): boolean {
+  if ("userId" in matter.owner) return matter.owner.userId === viewer.userId;
+  if (!heldRoles.includes(matter.owner.role)) return false;
+  if (matter.owner.role !== "team_lead") return true;
+  // As `matterHeldBy`: the owner holds it while no model of its pages has a lead; a lead, on the pages they lead.
+  if (viewer.role === "owner") return !matter.pageIds.some((pageId) => ledPages.has(pageId));
+  const mine = new Set(viewer.leadPageIds ?? []);
+  return matter.pageIds.some((pageId) => mine.has(pageId));
+}
+
+/** The pages whose model's team has a lead. */
+async function ledPagesOfAll(app: Pick<AppContext, "db">): Promise<Set<number>> {
+  const facts = await teamFactsFor(app);
+  const led = new Set(facts.roles.filter((role) => role.kind === "lead").map((role) => role.modelId));
+  return new Set(facts.pages.filter((page) => led.has(page.modelId)).map((page) => page.pageId));
 }
 
 /**
@@ -237,22 +260,24 @@ async function pageIdOf(app: MattersApp, pageLabel: string | undefined, idOf: Ma
  * table), so the number, the chips and the list are one count: a team lead's number is what their list shows.
  */
 export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPrincipal, now: Date = new Date()): Promise<MattersWaitingResponse> {
-  const viewer = matterViewerOf(principal);
+  const viewer = await matterViewerOf(app, principal);
   const heldRoles = await heldRolesOf(app, viewer);
+  // A chatter who leads no team waits for nothing here (their own matters are «Мои смены»'s strip).
+  const plain = viewer.role === "chatter" && heldRoles.length === 0;
   const [matters, checks] = await Promise.all([
     // What waits for the viewer themself.
-    viewer.role === "chatter" ? Promise.resolve([]) : listVisibleMatters(app.db, { viewer, state: "open", heldRoles, limit: 5000 }),
+    plain ? Promise.resolve([]) : listVisibleMatters(app.db, { viewer, state: "open", heldRoles, limit: 5000 }),
     listMatterChecks(app.db),
   ]);
   const kindState = kindStates(checks, now);
   const orders = heldRoles.includes("team_lead") ? await customOrdersCount(app, viewer) : undefined;
   // The kinds the viewer's own sources keep — the mirrored ones of the roles they hold, the owner's checks — so a
   // group whose source failed shows even with nothing open in it.
-  const trackedKinds = viewer.role === "chatter" ? [] : [
+  const trackedKinds = plain ? [] : [
     ...mirroredKindsOf(heldRoles),
     ...(viewer.role === "owner" ? MATTER_CHECK_KINDS.filter((kind) => !isMatterInfoKind(kind)) : []),
   ];
-  const groups = viewer.role === "chatter" ? [] : buildWaitingGroups({
+  const groups = plain ? [] : buildWaitingGroups({
     matters: matters.filter((matter) => !isMatterInfoKind(matter.kind)), kindState, trackedKinds,
     ...(orders === undefined ? {} : { customOrders: orders }),
   });
@@ -294,7 +319,7 @@ function matterWire(row: MatterRow, labelOf: Map<number, string>, usernameOf: Ma
 
 /** `mattersList`: the session's matters, the owner's by kind, with whether each mirrored kind is known. */
 export async function readMattersList(app: MattersApp, principal: HumanAuthPrincipal, query: MattersListQuery, now: Date = new Date()): Promise<MattersListResponse> {
-  const viewer = matterViewerOf(principal);
+  const viewer = await matterViewerOf(app, principal);
   const heldRoles = await heldRolesOf(app, viewer);
   const pages = await listMatterPageLabels(app.db);
   const pageId = await pageIdOf(app, query.pageLabel, pages.idOf);
@@ -306,11 +331,12 @@ export async function readMattersList(app: MattersApp, principal: HumanAuthPrinc
     listMatterChecks(app.db),
   ]);
   const usernameOf = await listMatterUsernames(app.db, rows.flatMap((row) => ("userId" in row.owner ? [row.owner.userId] : [])));
+  const ledPages = viewer.role === "owner" ? await ledPagesOfAll(app) : new Set<number>();
   // The person's name where the login is a person's (the name «Люди» and «Кастомы» show): one read for all.
   const checkOf = new Map(checks.map((check) => [check.kind, check]));
   // The kinds the server keeps for this viewer: the mirrored ones they read (the owner every one, a team lead their
   // role's), and the owner's checks (package K).
-  const readRoles: MatterOwnerRole[] = viewer.role === "owner" ? ["owner", "team_lead"] : viewer.role === "team_lead" ? ["team_lead"] : [];
+  const readRoles: MatterOwnerRole[] = viewer.role === "owner" ? ["owner", "team_lead"] : heldRoles;
   const mirrored = new Set<string>([...mirroredKindsOf(readRoles), ...(viewer.role === "owner" ? MATTER_CHECK_KINDS : [])]);
   const kinds = [...new Set([...mirrored, ...counts.keys()])].sort().map((kind) => {
     const isMirrored = mirrored.has(kind);
@@ -323,7 +349,7 @@ export async function readMattersList(app: MattersApp, principal: HumanAuthPrinc
     };
   });
   return {
-    matters: rows.map((row) => matterWire(row, pages.labelOf, usernameOf, matterIsMine(row, viewer, heldRoles))),
+    matters: rows.map((row) => matterWire(row, pages.labelOf, usernameOf, matterIsMine(row, viewer, heldRoles, ledPages))),
     kinds,
     serverNow: now.toISOString(),
   };
@@ -333,14 +359,14 @@ const CLIENT_MATTERS_LIMIT = 50;
 
 /** The extension's number: what waits for the person themself, never one with money, never one that only informs. */
 export async function countClientMatters(app: Pick<AppContext, "db">, principal: HumanAuthPrincipal): Promise<number> {
-  const viewer = matterViewerOf(principal);
+  const viewer = await matterViewerOf(app, principal);
   const counts = await countVisibleOpenMatters(app.db, { viewer, withoutMoney: true, heldRoles: await heldRolesOf(app, viewer) });
   return [...counts].reduce((sum, [kind, value]) => sum + (isMatterInfoKind(kind) ? 0 : value), 0);
 }
 
 /** `clientMatters`: the extension's count and the longest waiting of the person's matters; never evidence, never money. */
 export async function readClientMatters(app: MattersApp, principal: HumanAuthPrincipal, now: Date = new Date()): Promise<ClientMattersResponse> {
-  const viewer = matterViewerOf(principal);
+  const viewer = await matterViewerOf(app, principal);
   const heldRoles = await heldRolesOf(app, viewer);
   const [rows, count, pages] = await Promise.all([
     listVisibleMatters(app.db, { viewer, state: "open", withoutMoney: true, heldRoles, limit: CLIENT_MATTERS_LIMIT + MATTER_INFO_KINDS.length }),

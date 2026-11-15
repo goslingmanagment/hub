@@ -6,7 +6,7 @@
  * chatter agree with each other — and with the pages' revenue in world.ts.
  */
 import { between, hashString, intBetween, pick, rng, type DemoRequest } from "../core.ts";
-import { DEMO_USERS, demoDailyNet, demoFans, demoPage, demoUserByRole, type DemoFan, type DemoUser } from "../world.ts";
+import { DEMO_PAGES, DEMO_USERS, demoDailyNet, demoFans, demoPage, demoUserByRole, type DemoFan, type DemoUser } from "../world.ts";
 
 export const MIN = 60_000;
 export const HOUR = 60 * MIN;
@@ -61,6 +61,16 @@ export function numericRef(seed: string): string {
 export function viewerPages(request: DemoRequest): readonly string[] | null {
   if (request.role === "chatter") return null;
   return demoUserByRole(request.role).pages;
+}
+
+/**
+ * The pages a team read answers (products package T, Hub's services/teams.ts): the owner's and a team lead's as
+ * `viewerPages`; a chatter's — every page of the models of their own pages (a team is a model).
+ */
+export function teamViewerPages(request: DemoRequest): readonly string[] | null {
+  if (request.role !== "chatter") return viewerPages(request);
+  const models = new Set(demoUserByRole("chatter").pages.map((label) => demoPage(label)?.modelSlug));
+  return DEMO_PAGES.filter((page) => models.has(page.modelSlug)).map((page) => page.label);
 }
 
 // --- The schedules ---

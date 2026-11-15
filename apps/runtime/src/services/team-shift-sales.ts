@@ -3,7 +3,8 @@ import { listFirstChatterActivities, listSaleLastWriters, listShiftSales, type D
 import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
+import { type AuthPrincipal } from "./auth.ts";
+import { requireTeamReader } from "./teams.ts";
 import {
   SALE_LAST_WRITER_HOURS,
   dayOfShift,
@@ -545,7 +546,8 @@ export async function readTeamShiftSales(
   principal: AuthPrincipal,
   input: { query: TeamShiftSalesQuery; pageScope: readonly number[] | undefined },
 ): Promise<TeamShiftSalesResponse> {
-  requireDashboardUser(principal);
+  // A cookie session of any role, cut to the viewer's teams by the caller (`teamPagesFor`, services/teams.ts).
+  requireTeamReader(principal);
   const now = new Date();
   const { days, until } = input.query;
   const pages = await teamReadPages(app, principal, { pageLabel: input.query.pageLabel, pageScope: input.pageScope });

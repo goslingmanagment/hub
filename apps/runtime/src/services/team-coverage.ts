@@ -10,7 +10,8 @@ import { listBroadcasts, listEmptyHours, listGreetings } from "@agency_hub_core/
 import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
+import { type AuthPrincipal } from "./auth.ts";
+import { requireTeamReader } from "./teams.ts";
 
 /**
  * Chat Memory week 6, «Покрытие» (docs/plans/2026-10-24-chat-memory/week-6.md
@@ -29,7 +30,8 @@ export async function readTeamEmptyHours(
   input: { query: TeamCoverageQuery; pageScope: readonly number[] | undefined },
 ): Promise<TeamEmptyHoursResponse> {
   // A cookie session of the owner or a team lead; a chatter and every device token are refused.
-  requireDashboardUser(principal);
+  // A cookie session of any role, cut to the viewer's teams by the caller (`teamPagesFor`, services/teams.ts).
+  requireTeamReader(principal);
   const now = new Date();
   const { from, to } = windowOf(input.query.days, now);
   const rows = await listEmptyHours(app.db, {
@@ -59,7 +61,8 @@ export async function readTeamGreetings(
   principal: AuthPrincipal,
   input: { query: TeamCoverageQuery; pageScope: readonly number[] | undefined },
 ): Promise<TeamGreetingsResponse> {
-  requireDashboardUser(principal);
+  // A cookie session of any role, cut to the viewer's teams by the caller (`teamPagesFor`, services/teams.ts).
+  requireTeamReader(principal);
   const now = new Date();
   const { from, to } = windowOf(input.query.days, now);
   const pages = input.pageScope ?? "all";

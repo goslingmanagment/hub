@@ -18,6 +18,12 @@ export const MATTER_CHECK_KIND_PERIODS = {
   "people.no_working_page": 10,
   /** A person works a page none of their living logins may open. */
   "people.page_without_access": 10,
+  /**
+   * The registry's gaps of the teams (products package T): who worked a model's page in the last 14 days and is not in
+   * its team (no working page of that model), and models whose pages are worked with nobody in the team. ONE matter
+   * listing them all; it proposes fixing the working pages through the people proposals. Nobody is blocked by it.
+   */
+  "people.off_team": 60,
   /** Access to pages a person neither works nor touched for 30 days: information, one line, read once a week. */
   "people.access_idle": 7 * 24 * 60,
   /** An agent key that expires within 7 days (or expired and nobody revoked it). */

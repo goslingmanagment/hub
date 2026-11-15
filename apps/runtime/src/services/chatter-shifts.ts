@@ -31,7 +31,8 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { canAccessPage, requireApiKeyUser, requireDashboardUser, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
+import { canAccessPage, requireApiKeyUser, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
+import { requireTeamReader } from "./teams.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 
 /**
@@ -545,7 +546,10 @@ export async function teamReadPages(
   if (input.pageLabel === undefined) return input.pageScope ?? "all";
   const page = await findPageSummaryByLabel(app.db, input.pageLabel);
   if (!page) throw new NotFoundError(`Page "${input.pageLabel}" was not found`);
-  if (!canAccessPage(principal, page.id)) throw new ForbiddenError("Page access denied");
+  // A team read names a page of the viewer's cut (`teamPagesFor`: their teams' pages and their own); the owner's cut is
+  // «every page», decided as before.
+  const allowed = input.pageScope === undefined ? canAccessPage(principal, page.id) : input.pageScope.includes(page.id);
+  if (!allowed) throw new ForbiddenError("Page access denied");
   return [page.id];
 }
 
@@ -555,7 +559,8 @@ export async function listTeamShifts(
   input: { query: TeamShiftsQuery; pageScope: readonly number[] | undefined },
 ): Promise<TeamShiftsResponse> {
   // A cookie session of the owner or a team lead; a chatter and every device token are refused.
-  requireDashboardUser(principal);
+  // A cookie session of any role, cut to the viewer's teams by the caller (`teamPagesFor`, services/teams.ts).
+  requireTeamReader(principal);
   const now = new Date();
   const { from, to } = teamShiftsWindow(input.query, now);
 

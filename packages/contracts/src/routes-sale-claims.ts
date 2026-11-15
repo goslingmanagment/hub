@@ -257,23 +257,23 @@ export const saleClaimRouteSchemas = {
     response: { 200: saleClaimAnswerResponseSchema, ...personErrors },
   },
   saleDispute: {
-    auth: { kind: "owner-session" }, tags: ["admin"],
-    summary: "The owner's dispute of a sale: both statements, the facts, and what each of the four answers gives",
-    description: "Owner only. Database only.",
+    auth: { kind: "any-session" }, tags: ["admin"],
+    summary: "A dispute of a sale for its decider: both statements, the facts, and what each of the four answers gives",
+    description: "The decider (services/teams.ts `deciderOf`): the lead of the sale's team when the team has one and the lead is not a side; the owner otherwise, and always for the pot's and the ledger's questions. Database only.",
     params: saleDisputeParamsSchema,
     response: { 200: saleDisputeResponseSchema, ...personErrors },
   },
   saleDisputeOfClaim: {
-    auth: { kind: "owner-session" }, tags: ["admin"],
+    auth: { kind: "any-session" }, tags: ["admin"],
     summary: "The owner's dispute of a question carried over from the ledger that names no sale",
     description: "Owner only. Database only.",
     params: saleDisputeByClaimParamsSchema,
     response: { 200: saleDisputeResponseSchema, ...personErrors },
   },
   saleDisputeDecide: {
-    auth: { kind: "owner-session" }, tags: ["admin"],
+    auth: { kind: "any-session" }, tags: ["admin"],
     summary: "The owner decides a dispute: to the first, to the second, in halves, to nobody; who, when and why are kept",
-    description: "Owner only. The decision comes before the rule from now on; every report that counts the sale gets a new version "
+    description: "The decider (the lead of the sale's team, else the owner; see saleDispute); the decision keeps who made it and the owner sees it. The decision comes before the rule from now on; every report that counts the sale gets a new version "
       + "with what the decision gives (made by the system, the reason kept). Database only.",
     body: saleDisputeDecideBodySchema,
     response: { 200: saleDisputeDecideResponseSchema, ...personErrors },

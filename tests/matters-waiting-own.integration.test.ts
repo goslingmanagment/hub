@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { clientMattersResponseSchema, isMatterInfoKind, mattersListResponseSchema, mattersWaitingResponseSchema } from "@agency_hub_core/contracts";
-import { createFanslyPage, createModel, openMatter, type MatterOpenInput } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, insertPersonLogin, insertPersonRow, openMatter, type MatterOpenInput } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -140,12 +140,19 @@ describe("«Ждут вас»: what waits for the viewer themself", () => {
     expect((await waiting()).groups.find((group) => group.id === "customs")).toMatchObject({ count: 1 });
   });
 
-  it("once someone holds the team lead's role, its matters leave the owner's count; a team lead's and a chatter's counts are what they read", async (context) => {
+  it("once someone leads the model's team, its team lead matters leave the owner's count; a team lead's and a chatter's counts are what they read", async (context) => {
     if (!testDb) return context.skip();
     const aliceBefore = await clientCount("alice");
     await createUserAccount(app, { username: "lead", role: "team_lead", password: PASSWORDS.lead }, AUDIT);
     users.lead = await fixtureUserId(app, "lead");
     await assignPageToUser(app, { userId: users.lead, pageLabel: "lora-1" }, AUDIT);
+    // Holding the role is a record (0415): the lead leads Lora's team, so Lora's team lead matters are theirs.
+    const leadPerson = await insertPersonRow(app.db, {
+      code: "lead", displayName: "Lead", kind: "human", role: "team_lead", state: "working", leftOn: null, telegramUserId: null,
+      telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
+    });
+    await insertPersonLogin(app.db, { personId: leadPerson.id, userId: users.lead, linkedByUserId: null });
+    await testDb.pool.query("insert into team_roles (person_id, model_id, kind) select $1, id, 'lead' from models where slug = 'lora'", [leadPerson.id]);
     cookies.lead = await loginCookie("lead");
 
     expect(await otherCount("boss")).toBe(2);

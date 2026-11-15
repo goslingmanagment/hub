@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { mirrorCustomsLeadRight } from "./team-roles.ts";
 
 // The people registry (0384–0386; ecosystem plan 2026-11-12, package A): one
 // record per person of the agency, with the logins and agent keys that are
@@ -613,8 +614,13 @@ export async function findOwnPayPerson(db: Database, userId: number): Promise<{ 
 
 /** The person's rights become exactly `rights`; a right kept keeps its grant time. */
 export async function replacePersonRights(db: Database, personId: number, rights: readonly string[], grantedByUserId: number | null) {
+  const had = (await db.execute<Row>(sql`
+    select 1 from person_rights where person_id = ${personId} and "right" = 'customs_lead'`)).rows.length > 0;
   await db.execute(sql`
     delete from person_rights where person_id = ${personId} and not ("right" = any(${sql.param([...rights])}::text[]))`);
+  // «Ведёт кастомы» is mirrored into the team records of every model (0415): this function is the right's one writer.
+  // Only a change of the right moves the records: a customs record a lead granted on one model stays.
+  if (had !== rights.includes("customs_lead")) await mirrorCustomsLeadRight(db, personId, !had, grantedByUserId);
   if (rights.length === 0) return;
   await db.execute(sql`
     insert into person_rights (person_id, "right", granted_by_user_id)

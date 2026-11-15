@@ -85,6 +85,7 @@ import { registerTeamLedgerRoutes } from "../modules/team-ledger/index.ts";
 import { registerPeopleRoutes } from "../modules/people/index.ts";
 import { registerShiftHandinRoutes } from "../modules/shift-handins/index.ts";
 import { registerSaleClaimRoutes } from "../modules/sale-claims/index.ts";
+import { registerTeamRoutes } from "../modules/teams/index.ts";
 import { registerSaleChainRoutes } from "../modules/sale-chain/index.ts";
 import { registerErasureRoutes } from "../modules/erasures/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
@@ -758,6 +759,7 @@ export async function buildApiServer(appContext: AppContext) {
   // Отчёт смены: the shift and its report — the person's session and device token, an agent «со слов», the ledger's feed.
   registerShiftHandinRoutes(server, moduleContext);
   registerSaleClaimRoutes(server, moduleContext);
+  registerTeamRoutes(server, moduleContext);
   registerSaleChainRoutes(server, moduleContext);
   registerErasureRoutes(server, moduleContext);
   // «Рассылки» kept by Hub: the page's outreaches, shared by its team, and each fan's send claimed once.

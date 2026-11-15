@@ -64,6 +64,7 @@ const SOURCE: Record<MatterCheckKind, MatterSource> = {
   "people.no_pay_terms": "server",
   "people.no_working_page": "server",
   "people.page_without_access": "server",
+  "people.off_team": "server",
   "people.access_idle": "server",
   "people.agent_key_expiring": "server",
   "people.proposal_open": "server",
@@ -103,6 +104,66 @@ function personLink(code: string, tab = ""): string {
   return `/workboard/people/${encodeURIComponent(code)}${tab}`;
 }
 
+/** How far back «worked on a model» is read for the teams' gaps. */
+const OFF_TEAM_DAYS = 14;
+
+/**
+ * The teams' gaps in the registry (products package T): who acted on a page of a model in the last 14 days with no
+ * working page of that model, and models with worked pages and nobody in their team. One matter for the owner listing
+ * them all; the fix is the working pages, proposed through the existing people proposals («Предложения»). Teams only
+ * ADD visibility (services/teams.ts), so nobody waits on it.
+ */
+export function offTeamItem(snapshot: PeopleCheckSnapshot, now: Date): MirrorItem | null {
+  const since = now.getTime() - OFF_TEAM_DAYS * DAY;
+  const pageOf = new Map(snapshot.pages.map((page) => [page.id, page]));
+  const personOfUser = new Map(snapshot.logins.filter((login) => login.personId !== null).map((login) => [login.userId, login.personId!]));
+  const personById = new Map(snapshot.people.map((person) => [person.id, person]));
+  const teamModelsOf = (personId: number) => new Set((snapshot.workingPages.get(personId) ?? []).map((pageId) => pageOf.get(pageId)?.modelId));
+  const members = new Map<number, number>();
+  for (const person of snapshot.people) {
+    if (person.kind !== "human" || person.state !== "working") continue;
+    for (const model of teamModelsOf(person.id)) if (model !== undefined) members.set(model, (members.get(model) ?? 0) + 1);
+  }
+  const outside = new Map<string, { person: string; name: string; model: string; pages: Set<string> }>();
+  const worked = new Map<number, { model: string; pages: Set<string> }>();
+  for (const [key, at] of snapshot.lastInput) {
+    if (at.getTime() < since) continue;
+    const [userId, pageId] = key.split(":").map(Number) as [number, number];
+    const page = pageOf.get(pageId);
+    if (page?.modelId === undefined) continue;
+    const model = worked.get(page.modelId) ?? { model: page.modelName ?? page.label, pages: new Set<string>() };
+    model.pages.add(page.label);
+    worked.set(page.modelId, model);
+    const personId = personOfUser.get(userId);
+    const person = personId === undefined ? undefined : personById.get(personId);
+    if (person === undefined || person.kind !== "human" || person.role === "owner" || person.state !== "working") continue;
+    if (teamModelsOf(person.id).has(page.modelId)) continue;
+    const one = outside.get(`${person.code}:${page.modelId}`) ?? { person: person.code, name: person.displayName, model: page.modelName ?? page.label, pages: new Set<string>() };
+    one.pages.add(page.label);
+    outside.set(`${person.code}:${page.modelId}`, one);
+  }
+  const emptyTeams = [...worked].filter(([modelId]) => (members.get(modelId) ?? 0) === 0)
+    .map(([, model]) => ({ model: model.model, pages: [...model.pages].sort() }));
+  const people = [...outside.values()].map((one) => ({ person: one.person, name: one.name, model: one.model, pages: [...one.pages].sort() }));
+  if (people.length === 0 && emptyTeams.length === 0) return null;
+  const parts = [
+    ...emptyTeams.map((team) => `у ${team.model} в команде никого`),
+    ...people.map((one) => `${one.name} работал на ${one.model}, не в команде`),
+  ];
+  return {
+    key: "people.off_team",
+    title: `Команды по реестру: ${parts.slice(0, 3).join("; ")}${parts.length > 3 ? ` и ещё ${parts.length - 3}` : ""}`,
+    object: null,
+    pageLabels: [...new Set([...emptyTeams.flatMap((team) => team.pages), ...people.flatMap((one) => one.pages)])].sort(),
+    money: false,
+    evidence: {
+      days: OFF_TEAM_DAYS, emptyTeams, people,
+      proposal: "Поправить рабочие страницы в реестре: предложением агента (people proposals) или в карточке человека.",
+    },
+    link: "/workboard/people",
+  };
+}
+
 /**
  * The people checks on one snapshot: every kind's findings. Pure; the rules
  * of package K item 1. `now` decides the keys' expiry and the idle window.
@@ -114,6 +175,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
     "people.no_pay_terms": [],
     "people.no_working_page": [],
     "people.page_without_access": [],
+    "people.off_team": [],
     "people.access_idle": [],
     "people.agent_key_expiring": [],
     "people.proposal_open": [],
@@ -192,6 +254,9 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
       });
     }
   }
+
+  const offTeam = offTeamItem(snapshot, now);
+  if (offTeam !== null) out["people.off_team"].push(offTeam);
 
   // A living login no person holds. A person whose code is its name is only a hint: a link is never guessed.
   for (const login of snapshot.logins) {
