@@ -1,12 +1,12 @@
-import { UserPlus } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { ExternalLink } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
 import { Link, useLocation, useSearchParams } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES } from "@agency_hub_core/contracts";
-import { Badge, Button, Card, Delta, Disclosure, Duration, EmptyState, ErrorState, Mark, Money, Notice, PageLabels, Person, Skeleton, Table, Tooltip, readDelta, toast, type Column, type PersonStatus, type SortState } from "@agency_hub_core/ui";
+import { Button, Card, Delta, Disclosure, Duration, EmptyState, ErrorState, Mark, Money, Notice, PageLabels, Person, Skeleton, Table, Tooltip, readDelta, type Column, type PersonStatus, type SortState } from "@agency_hub_core/ui";
 import { formatDay, formatDuration } from "@agency_hub_core/ui/format";
-import { LinkReveal, type RevealedLink } from "@/screens/access/LinkReveal";
-import { whenWords } from "@/screens/access/when";
-import { personCodePath, personPath, useBackState, useRowBackState } from "@/shared/links";
+import { whenWords } from "@agency_hub_core/ui/people/when";
+import { capitalized, periodWords, PERSON_ROLE_WORD, statusOf, versusTitle } from "@agency_hub_core/ui/people/words";
+import { hubHref, personCodePath, useBackState, useRowBackState } from "@/shared/links";
 import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, PER_SHIFT_HINT } from "@/shared/metrics";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
@@ -14,69 +14,52 @@ import { usePages } from "@/shared/usePages";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
 import { Head } from "./Head.js";
-import { InvitePerson } from "./InvitePerson.js";
-import { ProposalRow, slotSummary } from "./ScheduleTab.js";
 import { SlowFailed } from "./SlowFailed.js";
 import { usePeopleList, type PeopleList, type PersonNumbers } from "./data.js";
-import { lastSeenOf, liveLogins, onPagesOf, unsettledNotes, useCreatePerson, useOpenProposals, useTeamPeople, type RegistryLogin, type RegistryPerson } from "./registry.js";
-import { capitalized, periodWords, PERSON_ROLE_WORD, ROLE_WORD, statusOf, versusTitle } from "./words.js";
+import { lastSeenOf, liveLogins, onPagesOf, slotSummary, useTeamPeople, type RegistryPerson } from "./registry.js";
 import "./people.css";
-import "./registry.css";
 
 /**
- * Люди: one row per person of the registry (registry.ts), whatever logins
- * they hold — name and code, role, the pages they work, the slot, the state,
- * the last time any of their logins was seen, and the period's numbers of
- * today's list (spec §4.3) summed over the person's logins: money and its
- * change, per hour, how fast they answer, who was left waiting at the end of a
- * shift, how much the AI wrote unedited, what the AI cost. Working people
- * first (without a shift in the period, the last rows); the pending
- * invitations one line under them; «Ушли» folded with a count. The owner also
- * sees what waits (the import's disagreements, the agents' proposals), the
- * agents with their keys, the service records and the logins no person holds,
- * and invites a person here in one call. A team lead sees the people of their
- * pages, and nothing about money but the sales.
+ * «Команда» (products plan §2.3): the team at work, one row per person of the registry (registry.ts) whatever logins
+ * they hold — name, the pages they work, the slot — and the period's numbers of today's list (spec §4.3) summed over
+ * the person's logins: money and its change, per hour, how fast they answer, who was left waiting at the end of a
+ * shift, how much the AI wrote unedited, what the AI cost (the owner's). Working people first (without a shift in the
+ * period, the last rows); the rest of the team and «Ушли» folded with a count. The owner sees every team, a team lead
+ * (or anyone who leads a team by its records) their teams (Hub cuts the reads, products package T), and nothing about
+ * money but the sales. Who a person is and what they may — logins, page access, rights, the invite, agents' proposals —
+ * is Hub «Люди»: the owner's link at the top leads there.
  */
-export function PeopleScreen() {
+export function TeamScreen() {
   const { period, setPeriod } = usePeriod();
   const { page } = usePageFilter();
-  const { isOwner, fullOwner } = useMe();
+  const { isOwner } = useMe();
   const numbers = usePeopleList(period, page);
   const registry = useTeamPeople();
   const visible = usePages();
-  const proposals = useOpenProposals(fullOwner);
-  const create = useCreatePerson();
-  const [inviting, setInviting] = useState(false);
-  const [revealed, setRevealed] = useState<RevealedLink | null>(null);
   const location = useLocation();
   const [sort, setSort] = useListSort();
-  const rowState = useRowBackState("Люди");
+  const rowState = useRowBackState("Команда");
 
   const people = registry.data?.people ?? [];
   // A team lead's list is their pages' people (Hub gives a lead only their pages); the owner's, everyone.
   const leadPages = isOwner ? null : new Set((visible.data ?? []).map((one) => one.label));
   const shown = people.filter((person) => {
+    if (person.kind !== "human") return false;
     const own = numbers.combine(liveLogins(person).map((login) => login.userId));
     const worked = own.work !== null && own.work.shifts + (own.work.previous?.shifts ?? 0) > 0;
     if (!onPagesOf(person, leadPages, worked)) return false;
     // Under a page filter: who works that page, or worked on it in the period.
     return page === null || worked || person.workingPages.some((one) => one.pageLabel === page);
   });
-  const humans = shown.filter((person) => person.kind === "human");
   // The table is for who works shifts: every chatter (a week without a shift is information too) and anyone else
   // who had a shift in the period. The rest of the team (the owner, team leads, content managers, contractors) folds below.
-  const team: Row[] = humans
+  const team: Row[] = shown
     .filter((person) => person.state === "working" || person.state === "set_up")
     .map((person) => ({ person, numbers: numbers.combine(liveLogins(person).map((login) => login.userId)) }));
   const rows = team.filter((row) => row.person.role === "chatter" || (row.numbers.work?.shifts ?? 0) > 0);
   const others = team.filter((row) => !rows.includes(row)).map((row) => row.person)
     .sort((a, b) => (OTHERS_ORDER[a.role] ?? 9) - (OTHERS_ORDER[b.role] ?? 9) || a.displayName.localeCompare(b.displayName, "ru"));
-  const invited = humans.filter((person) => person.state === "invited");
-  const left = humans.filter((person) => person.state === "left").sort((a, b) => (b.leftOn ?? "").localeCompare(a.leftOn ?? ""));
-  const agents = isOwner ? shown.filter((person) => person.kind === "agent") : [];
-  const services = isOwner ? shown.filter((person) => person.kind === "service") : [];
-  const unlinked = isOwner ? (registry.data?.unlinkedLogins ?? []).filter((login) => login.state !== "deleted") : [];
-  const proposed = fullOwner ? (proposals.data?.proposals ?? []).filter((one) => one.kind === "create") : [];
+  const left = shown.filter((person) => person.state === "left").sort((a, b) => (b.leftOn ?? "").localeCompare(a.leftOn ?? ""));
 
   const columns = useColumns(numbers, isOwner, page);
   const sorted = useMemo(() => sortedRows(rows, columns, sort), [rows, columns, sort]);
@@ -86,7 +69,7 @@ export function PeopleScreen() {
   return (
     <>
       <ScreenHeader
-        title="Люди"
+        title="Команда"
         period
         pageFilter
         meta={numbers.comparable ? undefined : <NothingToCompare knownSince={numbers.knownSince} />}
@@ -95,7 +78,6 @@ export function PeopleScreen() {
         onRefresh={() => {
           numbers.refresh();
           void registry.refetch();
-          if (fullOwner) void proposals.refetch();
         }}
         refreshing={numbers.refreshing || registry.isFetching}
       />
@@ -104,11 +86,6 @@ export function PeopleScreen() {
           <Card><ErrorState onRetry={() => void registry.refetch()} retrying={registry.isFetching} /></Card>
         ) : (
           <>
-            {proposed.length > 0 && (
-              <Card title="Агенты предлагают новых людей" description="Принятое предложение заводит человека в реестр; приглашение и вход вы делаете сами.">
-                <ul className="access-list registry-items">{proposed.map((proposal) => <ProposalRow key={proposal.id} proposal={proposal} code={proposal.personCode} />)}</ul>
-              </Card>
-            )}
             {numbers.tooLong && (
               <Notice tone="warning" action={<Button size="sm" onClick={() => setPeriod({ kind: "days", days: 30 })}>Показать 30 дней</Button>}>
                 Hub считает смены не больше чем за 31 день: числа периода не показаны.
@@ -120,12 +97,16 @@ export function PeopleScreen() {
             {numbers.quality === "failed" && <SlowFailed onRetry={numbers.retryQuality} />}
             <div className="registry-toolbar">
               <span className="registry-toolbar__counts">
-                {registry.data ? <TeamCounts working={team.length} invited={invited.length} left={left.length} /> : <Skeleton width={260} />}
+                {registry.data ? <TeamCounts working={team.length} left={left.length} /> : <Skeleton width={200} />}
               </span>
-              {isOwner && <Button variant="primary" icon={UserPlus} onClick={() => setInviting(true)}>Пригласить</Button>}
+              {isOwner && (
+                <a className="access-link" href={hubHref("/people")}>
+                  Люди и доступ в Hub <ExternalLink size={14} strokeWidth={1.75} aria-hidden />
+                </a>
+              )}
             </div>
             <Table
-              label="Люди за период"
+              label="Команда за период"
               className="people-table registry-table"
               columns={columns}
               rows={sorted}
@@ -144,21 +125,13 @@ export function PeopleScreen() {
               skeletonRows={8}
               skeletonLines={2}
               empty={(
-                <EmptyState
-                  title={page ? `На ${page} никто не работает` : "В команде пока никого"}
-                  action={isOwner && !page ? <Button variant="primary" icon={UserPlus} onClick={() => setInviting(true)}>Пригласить</Button> : undefined}
-                >
-                  {page ? "Ни у кого это не рабочая страница, и смен на ней за период не было." : "Пригласите первого человека: он получит ссылку и сам придумает пароль."}
+                <EmptyState title={page ? `На ${page} никто не работает` : "В команде пока никого"}>
+                  {page ? "Ни у кого это не рабочая страница, и смен на ней за период не было."
+                    : isOwner ? "Людей приглашают в Hub, в «Людях»: человек получит ссылку и сам придумает пароль." : "Здесь будут люди ваших команд."}
                 </EmptyState>
               )}
             />
             {noShifts && <p className="people-note">{capitalized(periodWords(period))} смен не было.</p>}
-            {invited.length > 0 && (
-              <div className="people-idle">
-                <span className="people-idle__label">Ждут регистрации:</span>
-                {invited.map((person) => <CodeLink key={person.code} person={person} hint={inviteHint(person)} status="invited" />)}
-              </div>
-            )}
             {others.length > 0 && (
               <Disclosure summary="Остальные" hint={String(others.length)} size="md">
                 <p className="access-text">Кто в команде, но без смен за период: владелец, тимлиды, контент-менеджеры, подрядчики.</p>
@@ -174,35 +147,6 @@ export function PeopleScreen() {
                 </div>
               </Disclosure>
             )}
-            {agents.length > 0 && (
-              <Disclosure summary="Агенты" hint={String(agents.length)} size="md">
-                <div className="people-folded">
-                  {agents.map((person) => (
-                    <CodeLink
-                      key={person.code}
-                      person={person}
-                      hint={person.agentKeys.length === 0 ? "ключей нет" : person.agentKeys.map((key) => `${key.name}${key.state === "active" ? "" : ` (${key.state === "revoked" ? "отозван" : "истёк"})`}`).join(", ")}
-                    />
-                  ))}
-                </div>
-              </Disclosure>
-            )}
-            {services.length > 0 && (
-              <Disclosure summary="Служебные" hint={String(services.length)} size="md">
-                <p className="access-text">Записи для служебных и пробных входов: проверки людей их не трогают.</p>
-                <div className="people-folded">
-                  {services.map((person) => <CodeLink key={person.code} person={person} hint={liveLogins(person).map((login) => login.username).join(", ") || "без входов"} />)}
-                </div>
-              </Disclosure>
-            )}
-            {unlinked.length > 0 && (
-              <Disclosure summary="Входы без человека" hint={String(unlinked.length)} size="md">
-                <p className="access-text">Входы Hub, которых нет ни у кого в реестре. Карточка входа открывает его смены и доступ.</p>
-                <div className="people-folded">
-                  {unlinked.map((login) => <LoginLink key={login.userId} login={login} />)}
-                </div>
-              </Disclosure>
-            )}
             {page && (
               <p className="people-note">
                 Фильтр {page} сужает смены и продажи. Ответ, без ответа к концу, ИИ без правки и траты на ИИ считаются по всем страницам: Hub
@@ -213,32 +157,6 @@ export function PeopleScreen() {
         )}
         <HowItCounts versus={versusTitle(period)} />
       </div>
-      {inviting && (
-        <InvitePerson
-          people={people}
-          create={create}
-          onClose={() => setInviting(false)}
-          onCreated={(link) => {
-            setInviting(false);
-            setRevealed(link);
-          }}
-          onAdded={(created) => {
-            setInviting(false);
-            create.reset();
-            toast.success(`${created.person.displayName} в команде`);
-          }}
-        />
-      )}
-      {revealed && (
-        <LinkReveal
-          link={revealed}
-          onClose={() => {
-            // The secret leaves memory with the window.
-            create.reset();
-            setRevealed(null);
-          }}
-        />
-      )}
     </>
   );
 }
@@ -253,11 +171,10 @@ function NothingToCompare({ knownSince }: { knownSince: string | null }) {
   return <span>Сравнить не с чем{knownSince ? `: Hub записывает смены с ${formatDay(knownSince)}` : ": у Hub нет прошлого периода"}</span>;
 }
 
-/** «12 в команде · 1 ждёт регистрации · 3 ушли», of the people on screen. */
-function TeamCounts({ working, invited, left }: { working: number; invited: number; left: number }) {
+/** «12 в команде · 3 ушли», of the people on screen. */
+function TeamCounts({ working, left }: { working: number; left: number }) {
   const parts = [
     `${working} в команде`,
-    invited > 0 ? `${invited} ${invited === 1 ? "ждёт" : "ждут"} регистрации` : null,
     left > 0 ? `${left} ${left === 1 ? "ушёл" : "ушли"}` : null,
   ].filter(Boolean);
   return <>{parts.join(" · ")}</>;
@@ -273,34 +190,13 @@ function otherHint(person: RegistryPerson): string {
   return `${PERSON_ROLE_WORD[person.role] ?? person.role} · ${where}`;
 }
 
-/** «nika.t · чаттер»: the login waiting for its password. */
-function inviteHint(person: RegistryPerson): string {
-  const waiting = person.logins.find((login) => login.state === "invited");
-  return [waiting?.username ?? (person.logins.length === 0 ? "без входа" : null), PERSON_ROLE_WORD[person.role]?.toLowerCase()].filter(Boolean).join(" · ");
-}
-
 /** A person's name that opens their card; «←» of the card comes back here. */
 function CodeLink({ person, hint, status = "away" }: { person: RegistryPerson; hint: string; status?: PersonStatus }) {
   const location = useLocation();
-  const state = useBackState("Люди");
+  const state = useBackState("Команда");
   return (
     <Link to={personCodePath(person.code, location.search)} state={state} className="ui-quiet-link">
       <Person name={person.displayName} status={status} hint={hint} />
-    </Link>
-  );
-}
-
-/** A login no person holds: its own card (`/people/<userId>`). */
-function LoginLink({ login }: { login: RegistryLogin }) {
-  const location = useLocation();
-  const state = useBackState("Люди");
-  const words = [
-    ROLE_WORD[login.role],
-    login.state === "invited" ? "ждёт регистрации" : login.state === "disabled" ? "доступ отключён" : login.lastSeenAt ? `в сети ${whenWords(login.lastSeenAt)}` : "входов не было",
-  ].join(" · ");
-  return (
-    <Link to={personPath(login.userId, location.search)} state={state} className="ui-quiet-link">
-      <Person name={login.username} status={login.state === "disabled" ? "disabled" : login.state === "invited" ? "invited" : "away"} hint={words} />
     </Link>
   );
 }
@@ -409,8 +305,6 @@ function useColumns(list: PeopleList, isOwner: boolean, page: string | null): Co
         sortValue: (row) => row.person.displayName,
         cell: (row) => {
           const { person, numbers } = row;
-          const notes = isOwner ? unsettledNotes(person) : 0;
-          const proposals = isOwner ? person.openProposals : 0;
           const slot = slotSummary(person);
           const going = numbers.now.onShiftSince ? statusOf({ state: "active", disabledAt: null, now: numbers.now }).words : null;
           // Line 2, one line: the shift going on now (green) and the working pages, then the slot. The rest is the card's.
@@ -419,17 +313,10 @@ function useColumns(list: PeopleList, isOwner: boolean, page: string | null): Co
             going ? <span key="live" className="registry-who__live">{going}</span> : null,
             person.workingPages.length > 0 ? <PageLabels key="pages" labels={person.workingPages.map((one) => one.pageLabel)} max={3} className="registry-who__pages" /> : null,
           ].filter((part) => part !== null);
-          const marks = notes > 0 || proposals > 0 ? (
-            <>
-              {notes > 0 && <Badge tone="warning" className="registry-mark">расхождения: {notes}</Badge>}
-              {proposals > 0 && <Badge tone="info" className="registry-mark">{proposals === 1 ? "предложение агента" : `предложения агентов: ${proposals}`}</Badge>}
-            </>
-          ) : undefined;
           return (
             <Person
               name={person.displayName}
               status={going ? "working" : "away"}
-              nameEnd={marks}
               hint={head.length === 0 && !slot.main ? undefined : (
                 <span className="registry-who__line">
                   {head.length > 0 && (
@@ -560,7 +447,7 @@ function HowItCounts({ versus }: { versus: string }) {
     <Disclosure summary="Как это считается" className="people-help">
       <p>
         Строка: человек из реестра людей, со всеми его входами в Hub; числа его входов складываются. График, рабочие страницы и
-        условия меняют в карточке человека, во вкладке «График и условия».
+        условия меняют в карточке человека, во вкладке «График и условия». Входы, доступ к страницам и права меняют в Hub, в «Людях».
       </p>
       <p>
         Смена: работа в расширении под своим входом, от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений,

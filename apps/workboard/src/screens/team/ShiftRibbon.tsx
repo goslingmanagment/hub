@@ -9,7 +9,7 @@ import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, UNANSWE
 import type { PersonShift, PersonVisit, ReadState } from "./data.js";
 import { beadSize, ribbonClock, ribbonDays, ribbonRowLabel, ribbonRowOf, ribbonRowStart, ribbonView, RIBBON_STEP_HOURS, type RibbonSale } from "./ribbon.js";
 import { pagesInOrder } from "./ShiftTable.js";
-import { KIND_OF, KINDS } from "./words.js";
+import { KIND_OF, KINDS } from "@agency_hub_core/ui/people/words";
 
 /**
  * The person's shifts by the hour (kept from the console's «Статистика» — the

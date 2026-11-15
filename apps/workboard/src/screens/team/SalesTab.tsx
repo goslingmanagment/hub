@@ -4,7 +4,7 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { personSalesOf, usePersonRates, usePersonStats, type PersonSales, type RateRow, type ReadState } from "./data.js";
-import { capitalized, DELAY_WORDS, KIND_OF, periodWords, PRICE_WORDS, shareOf, shareText } from "./words.js";
+import { capitalized, DELAY_WORDS, KIND_OF, periodWords, PRICE_WORDS, shareOf, shareText } from "@agency_hub_core/ui/people/words";
 
 /**
  * «Продажи» (spec §4.4): what the person's money is made of, the fans who

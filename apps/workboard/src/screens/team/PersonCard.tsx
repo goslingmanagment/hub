@@ -1,43 +1,43 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ExternalLink } from "lucide-react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
-import { Badge, Card, EmptyState, ErrorState, LinkButton, Notice, Segmented, Skeleton, StatusDot, Tabs } from "@agency_hub_core/ui";
-import { whenWords } from "@/screens/access/when";
-import { carryParams, personCodePath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";
+import { Card, EmptyState, ErrorState, LinkButton, Segmented, Skeleton, StatusDot, Tabs, toast } from "@agency_hub_core/ui";
+import { PersonMeta as PersonMetaLine } from "@agency_hub_core/ui/people/PersonMeta";
+import { hubPersonPath } from "@agency_hub_core/ui/people/paths";
+import { TeamRolesCard, type TeamRoleChange } from "@agency_hub_core/ui/people/TeamRoles";
+import { capitalized, statusOf } from "@agency_hub_core/ui/people/words";
+import { carryParams, hubHref, personCodePath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";
+import { kernel } from "@/shared/hub";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
-import { AccessTab } from "./AccessTab.js";
 import { IntakeCard } from "./Intake.js";
 import { usePeopleNow, usePersonCard } from "./data.js";
-import { TeamRolesCard } from "./TeamRoles.js";
-import { lastSeenOf, liveLogins, unsettledNotes, useOwnerCard, useTeamPeople, type RegistryLogin, type RegistryPerson } from "./registry.js";
+import { liveLogins, useOwnerCard, useTeamPeople, type RegistryLogin, type RegistryPerson } from "./registry.js";
 import { SalesTab } from "./SalesTab.js";
-import { ScheduleTab, slotSummary } from "./ScheduleTab.js";
+import { ScheduleTab } from "./ScheduleTab.js";
 import { WorkTab } from "./WorkTab.js";
-import { capitalized, PERSON_ROLE_WORD, PERSON_STATE_WORD, statusOf } from "./words.js";
 import "./people.css";
-import "./registry.css";
 
-type CardTab = Exclude<PersonTab, "shifts">;
-
-/** The card's tabs: Работа and Продажи as before, «Доступ и входы» (the owner's), «График и условия». */
-const TABS: readonly { tab: CardTab; label: string }[] = [
+/** The card's tabs: Работа, Продажи, «График и условия» (the schedule, working pages and, for the owner, the pay terms). */
+const TABS: readonly { tab: PersonTab; label: string }[] = [
   { tab: "work", label: "Работа" },
   { tab: "sales", label: "Продажи" },
-  { tab: "access", label: "Доступ и входы" },
   { tab: "schedule", label: "График и условия" },
 ];
 
 /**
- * A person of the registry, `/people/<code>`: one card whatever logins the
+ * A person of the team at work, `/team/<code>`: one card whatever logins the
  * person holds (the owner holds two). Работа and Продажи are one login's
  * numbers — the one the person works under, or the one picked above them
- * (`?login=`); «Доступ и входы» is every login with every control «Доступ»
- * had; «График и условия» is the registry itself: pages, slots, rights, and
- * for the owner the pay terms, the import's disagreements and the agents'
- * proposals. A team lead reads the same card without «Доступ и входы» and
- * without anything about money.
+ * (`?login=`); «График и условия» is how the person works: pages, slots, and
+ * for the owner the pay terms; a team lead also gives «ведёт кастомы» and
+ * «видит команду» on their models there. Who the person is and what they may
+ * (logins, page access, rights, the agents' proposals) is Hub «Люди»: the
+ * owner's link «Доступ и входы в Hub» opens it. A team lead reads the same
+ * card without anything about money.
  */
 export function PersonCard({ code }: { code: string }) {
   const { tab } = useParams();
@@ -46,14 +46,13 @@ export function PersonCard({ code }: { code: string }) {
   const list = useTeamPeople();
   const owner = useOwnerCard(code, isOwner);
   const fallbackSearch = carryParams(location.search).toString();
-  const back = useBackTarget({ to: `/people${fallbackSearch ? `?${fallbackSearch}` : ""}`, label: "Люди" });
+  const back = useBackTarget({ to: `/team${fallbackSearch ? `?${fallbackSearch}` : ""}`, label: "Команда" });
   const fromList = list.data?.people.find((one) => one.code === code) ?? null;
   const person = owner.data?.person ?? fromList;
-  // A team lead's card is a human's: agents and service records are the owner's to see.
-  const hidden = person !== null && !isOwner && person.kind !== "human";
-  const tabs = TABS.filter((item) => item.tab !== "access" || isOwner);
-  const current: CardTab = tabs.find((item) => item.tab === tab)?.tab ?? "work";
-  useOpenFirst(hidden ? null : person, tab === undefined, isOwner);
+  // «Команда» is the team at work: agents and service records are Hub's (the registry), never here.
+  const hidden = person !== null && person.kind !== "human";
+  const current: PersonTab = TABS.find((item) => item.tab === tab)?.tab ?? "work";
+  useOpenFirst(hidden ? null : person, tab === undefined);
 
   const missing = !person && list.data !== undefined && (!isOwner || owner.isError || owner.data !== undefined);
   if (missing || hidden) {
@@ -62,8 +61,8 @@ export function PersonCard({ code }: { code: string }) {
         <ScreenHeader title="Человек" back={back} />
         <div className="wb-content">
           <Card>
-            <EmptyState title="Нет такого человека" action={<LinkButton to={back.to}>К людям</LinkButton>}>
-              В реестре людей нет записи с кодом «{code}».
+            <EmptyState title="Нет такого человека" action={<LinkButton to={back.to}>К команде</LinkButton>}>
+              В команде нет человека с кодом «{code}».
             </EmptyState>
           </Card>
         </div>
@@ -93,13 +92,18 @@ export function PersonCard({ code }: { code: string }) {
         period
         pageFilter
         meta={person ? <PersonMeta person={person} /> : <Skeleton width={320} />}
+        actions={isOwner ? (
+          <a className="access-link" href={hubHref(hubPersonPath(code, "logins"))}>
+            Доступ и входы в Hub <ExternalLink size={14} strokeWidth={1.75} aria-hidden />
+          </a>
+        ) : undefined}
         updatedAt={isOwner ? owner.dataUpdatedAt || list.dataUpdatedAt : list.dataUpdatedAt}
         onRefresh={refresh}
         refreshing={list.isFetching || owner.isFetching}
         tabs={(
           <Tabs
             label="Разделы карточки"
-            items={tabs.map((item) => ({
+            items={TABS.map((item) => ({
               to: item.tab === "work" ? workPath(code, location.search, tab === undefined) : personCodePath(code, location.search, item.tab),
               label: item.label,
               end: true,
@@ -108,13 +112,11 @@ export function PersonCard({ code }: { code: string }) {
         )}
       />
       <div className="wb-content">
-        {person && isOwner && current !== "schedule" && <WaitingNotice person={person} />}
         {isOwner && owner.data && <IntakeCard card={owner.data} />}
         {!person ? <Card><Skeleton height={240} /></Card>
-          : current === "access" ? <AccessTab person={person} onChanged={refresh} />
-            : current === "schedule" ? <ScheduleTab person={person} card={owner.data} cardFailed={owner.isError} onRetry={() => void owner.refetch()} isOwner={isOwner} />
-              : <Work person={person} tab={current} />}
-        {person && current === "schedule" && <TeamRolesCard person={person} />}
+          : current === "schedule" ? <ScheduleTab person={person} card={owner.data} cardFailed={owner.isError} onRetry={() => void owner.refetch()} isOwner={isOwner} />
+            : <Work person={person} tab={current} />}
+        {person && current === "schedule" && !isOwner && <LeadTeamRoles person={person} />}
       </div>
     </>
   );
@@ -129,12 +131,11 @@ function workPath(code: string, search: string, bare: boolean): string {
 }
 
 /**
- * Р8 of the card: someone with nothing in Работа opens where their things are —
- * no login (a content manager, a contractor): «График и условия»; an agent or
- * a service record: their keys; an invite not accepted, or nobody of the chats
- * (no chatter login): «Доступ и входы». Once per person, only on the bare address.
+ * Р8 of the card: someone with nothing in Работа — no login (a content manager, a contractor), an invite not
+ * accepted, nobody of the chats (no chatter login) — opens on «График и условия». Once per person, only on the bare
+ * address.
  */
-function useOpenFirst(person: RegistryPerson | null, bare: boolean, isOwner: boolean) {
+function useOpenFirst(person: RegistryPerson | null, bare: boolean) {
   const navigate = useNavigate();
   const location = useLocation();
   const decided = useRef<string | null>(null);
@@ -143,29 +144,38 @@ function useOpenFirst(person: RegistryPerson | null, bare: boolean, isOwner: boo
     decided.current = person.code;
     if (!bare) return;
     const logins = liveLogins(person);
-    const first: CardTab = logins.length === 0 ? (isOwner && person.kind !== "human" ? "access" : "schedule")
-      : person.state === "invited" || !logins.some((login) => login.role === "chatter") ? (isOwner ? "access" : "schedule")
-        : "work";
-    if (first !== "work") navigate(personCodePath(person.code, location.search, first), { replace: true, state: location.state });
-  }, [person, bare, isOwner, navigate, location.search, location.state]);
+    const quiet = logins.length === 0 || person.state === "invited" || !logins.some((login) => login.role === "chatter");
+    if (quiet) navigate(personCodePath(person.code, location.search, "schedule"), { replace: true, state: location.state });
+  }, [person, bare, navigate, location.search, location.state]);
 }
 
-/** The owner's: what waits on this person, one line with the way to it. */
-function WaitingNotice({ person }: { person: RegistryPerson }) {
-  const location = useLocation();
-  const notes = unsettledNotes(person);
-  const proposals = person.openProposals;
-  if (notes === 0 && proposals === 0) return null;
-  const parts = [
-    notes > 0 ? `расхождения импорта: ${notes}` : null,
-    proposals > 0 ? `предложения агентов: ${proposals}` : null,
-  ].filter(Boolean).join(", ");
+/**
+ * «Команды и права» for a team lead (products package T): «ведёт кастомы» and «видит команду» on the lead's models, by
+ * the shared card (packages/ui people/TeamRoles.tsx). The owner gives every record in Hub «Люди».
+ */
+function LeadTeamRoles({ person }: { person: RegistryPerson }) {
+  const queryClient = useQueryClient();
+  const read = useQuery({ queryKey: TEAM_ROLES_KEY, queryFn: () => kernel.teamRoles() });
+  const set = useMutation({
+    mutationFn: (change: TeamRoleChange) => kernel.teamRoleSet({ body: { personCode: person.code, ...change } }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: TEAM_ROLES_KEY }),
+    onError: () => toast.error("Не сохранилось. Попробуйте ещё раз."),
+  });
   return (
-    <Notice tone="info" action={<LinkButton size="sm" to={personCodePath(person.code, location.search, "schedule")}>Разобрать</LinkButton>}>
-      Ждут вас: {parts}.
-    </Notice>
+    <TeamRolesCard
+      person={person}
+      roles={read.data}
+      failed={read.isError}
+      retrying={read.isFetching}
+      onRetry={() => void read.refetch()}
+      saving={set.isPending ? set.variables : null}
+      onSet={(change) => set.mutate(change)}
+      kinds={["customs", "view"]}
+    />
   );
 }
+
+const TEAM_ROLES_KEY = ["team", "roles"] as const;
 
 /** The login whose numbers Работа and Продажи show by default: a working one, a chatter's first. */
 function defaultLogin(logins: readonly RegistryLogin[]): RegistryLogin | null {
@@ -225,54 +235,28 @@ function LoginWork({ userId, name, tab }: { userId: number; name: string; tab: "
 }
 
 /**
- * Who it is now, one line on every tab: the shift going on (it opens its
- * review) or the registry's state, the role, the code, the working pages, the
- * slot and the last time any of the logins was seen.
+ * Who it is now, one line on every tab (packages/ui people/PersonMeta.tsx): the shift going on (it opens its review
+ * for the owner) or the registry's state, then the role, the code, the pages, the slot, when any login was seen.
  */
 function PersonMeta({ person }: { person: RegistryPerson }) {
   const { isOwner } = useMe();
   const logins = liveLogins(person);
   const { now, known } = usePeopleNow(logins.map((login) => login.userId));
-  const parts: ReactNode[] = [];
   const shiftLogin = now.onShiftSince ? logins.find((login) => login.role === "chatter") ?? logins[0] : undefined;
+  let status;
   if (now.onShiftSince && shiftLogin && isOwner) {
     const { words } = statusOf({ state: "active", disabledAt: null, now });
-    parts.push(
+    status = (
       <ShiftLink key="status" userId={shiftLogin.userId} startedAt={now.onShiftSince} backLabel={person.displayName} className="people-meta__live" title="Открыть разбор идущей смены">
         <StatusDot tone="success" />
         {capitalized(words)}
-      </ShiftLink>,
+      </ShiftLink>
     );
   } else if (now.onShiftSince) {
     const { words } = statusOf({ state: "active", disabledAt: null, now });
-    parts.push(<span key="status" className="people-meta__live"><StatusDot tone="success" />{capitalized(words)}</span>);
+    status = <span key="status" className="people-meta__live"><StatusDot tone="success" />{capitalized(words)}</span>;
   } else if (!known && logins.length > 0) {
-    parts.push(<Skeleton key="status" width={110} />);
-  } else {
-    parts.push(
-      <Badge key="status" tone={person.state === "left" ? "off" : person.state === "invited" ? "info" : "neutral"} bare>
-        {capitalized(PERSON_STATE_WORD[person.state] ?? person.state)}
-      </Badge>,
-    );
+    status = <Skeleton key="status" width={110} />;
   }
-  parts.push(<span key="role">{PERSON_ROLE_WORD[person.role] ?? person.role}</span>);
-  parts.push(<code key="code" className="registry-code">{person.code}</code>);
-  if (person.workingPages.length > 0) {
-    const labels = person.workingPages.map((page) => page.pageLabel);
-    parts.push(<span key="pages" className="ui-page">{labels.length <= 3 ? labels.join(", ") : `${labels.slice(0, 2).join(", ")} и ещё ${labels.length - 2}`}</span>);
-  }
-  const slot = slotSummary(person);
-  if (slot.hours) parts.push(<span key="slot">{slot.hours} по Москве{slot.days ? `, ${slot.days}` : ""}</span>);
-  const seen = lastSeenOf(person);
-  if (logins.length > 0) parts.push(<span key="seen">{seen ? `в сети ${whenWords(seen)}` : "входов не было"}</span>);
-  return (
-    <div className="people-meta">
-      {parts.map((part, index) => (
-        <span key={index} className="people-meta__part">
-          {index > 0 && <span className="people-meta__sep" aria-hidden>·</span>}
-          {part}
-        </span>
-      ))}
-    </div>
-  );
+  return <PersonMetaLine person={person} {...(status ? { status } : {})} />;
 }

@@ -5,7 +5,8 @@ import { Button, Card, Delta, Disclosure, Duration, EmptyState, LinkButton, Mone
 import { formatDuration, formatMills, formatPercent } from "@agency_hub_core/ui/format";
 import { addDays } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { personPath } from "@/shared/links";
+import { hubHref, personPath } from "@/shared/links";
+import { hubPersonPath } from "@agency_hub_core/ui/people/paths";
 import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, PER_SHIFT_HINT } from "@/shared/metrics";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
@@ -15,7 +16,7 @@ import { ShiftRibbon } from "./ShiftRibbon.js";
 import { ShiftTable } from "./ShiftTable.js";
 import { Tiles, TilesSkeleton, type Tile } from "@/shared/Tiles";
 import { SlowFailed } from "./SlowFailed.js";
-import { capitalized, dayWords, periodWords, versusTitle } from "./words.js";
+import { capitalized, dayWords, periodWords, versusTitle } from "@agency_hub_core/ui/people/words";
 
 /**
  * «Работа» (spec §4.4, D2): the period's verdict in one line — money and its
@@ -198,7 +199,7 @@ function NoShifts({ card }: { card: PersonCard }) {
   const location = useLocation();
   const person = card.person!;
   const before = person.work?.previous ?? null;
-  const toAccess = isOwner ? <LinkButton to={personPath(person.userId, location.search, "access")}>Доступ</LinkButton> : undefined;
+  const toAccess = isOwner ? <Button onClick={() => window.location.assign(hubHref(hubPersonPath(person.userId, "logins")))}>Доступ в Hub</Button> : undefined;
   const longer = period.spec.kind !== "days" || period.days < 30
     ? <Button onClick={() => setPeriod({ kind: "days", days: 30 })}>Показать 30 дней</Button>
     : undefined;

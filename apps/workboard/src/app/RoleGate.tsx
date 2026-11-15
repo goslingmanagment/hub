@@ -17,6 +17,17 @@ export function RoleGate({ roles }: { roles: readonly Role[] }) {
   return role === "chatter" ? <NotForChatter /> : <ForChatterOnly />;
 }
 
+/**
+ * «Команда» (products plan §2.3): the owner, a team lead, and a chatter who leads a team by its records (products
+ * package T) — the gate follows the records, not the login's role alone (useMe `leadsTeam`). A plain chatter gets the
+ * calm sentence of the team's screens; Hub cuts every read to the viewer's teams anyway.
+ */
+export function TeamGate() {
+  const { role, leadsTeam } = useMe();
+  if (role !== null && leadsTeam) return <Outlet />;
+  return role === "chatter" ? <NotForChatter /> : <ForChatterOnly />;
+}
+
 function useWorkboardTitle() {
   useEffect(() => {
     document.title = productName("workboard");

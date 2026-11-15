@@ -1,9 +1,9 @@
-import { Check } from "lucide-react";
-import { useLocation } from "react-router";
+import { Check, ExternalLink } from "lucide-react";
 import type { PersonStartStepId } from "@agency_hub_core/contracts";
-import { Card, LinkButton, cx } from "@agency_hub_core/ui";
+import { Button, Card, cx } from "@agency_hub_core/ui";
+import { hubPersonPath } from "@agency_hub_core/ui/people/paths";
 import { formatDay } from "@agency_hub_core/ui/format";
-import { personCodePath } from "@/shared/links";
+import { hubHref } from "@/shared/links";
 import { deviceWords } from "@/screens/start/words";
 import type { OwnerCard } from "./registry.js";
 
@@ -58,7 +58,7 @@ function sentence(text: string): string {
 
 function lead(card: OwnerCard): string {
   const start = card.start!;
-  if (start.current === null) return "Все шаги пройдены. Статус «работает» ставите вы: «График и условия», блок «Человек».";
+  if (start.current === null) return "Все шаги пройдены. Статус «работает» ставите вы: в Hub, в «Людях», вкладка «Человек».";
   const since = start.since ? formatDay(start.since) : null;
   if (!start.signedUp) return sentence(`Приглашение ещё не открыто${since ? `: создано ${since}` : ""}${start.stuck ? ", больше двух суток назад" : ""}`);
   if (start.stuck) return sentence(`Больше двух суток на шаге «${PLACE[start.current]}»${since ? `: с ${since}` : ""}`);
@@ -66,7 +66,6 @@ function lead(card: OwnerCard): string {
 }
 
 export function IntakeCard({ card }: { card: OwnerCard }) {
-  const location = useLocation();
   const start = card.start;
   if (!start?.newcomer) return null;
   const pagesOpen = start.steps.some((step) => step.step === "pages" && !step.done);
@@ -74,7 +73,7 @@ export function IntakeCard({ card }: { card: OwnerCard }) {
     <Card
       title={`Ввод: ${start.done} из ${start.total}`}
       description={<span className={cx(start.stuck && "intake-late")}>{lead(card)}</span>}
-      actions={pagesOpen ? <LinkButton size="sm" variant="primary" to={personCodePath(card.person.code, location.search, "access")}>Назначить страницу</LinkButton> : undefined}
+      actions={pagesOpen ? <Button size="sm" variant="primary" icon={ExternalLink} onClick={() => window.location.assign(hubHref(hubPersonPath(card.person.code, "pages")))}>Назначить страницу в Hub</Button> : undefined}
     >
       <ol className="intake-steps">
         {start.steps.map((step) => {

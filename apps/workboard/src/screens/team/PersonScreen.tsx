@@ -1,35 +1,34 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { useLocation, useNavigate, useParams } from "react-router";
+import { type ReactNode } from "react";
+import { ExternalLink } from "lucide-react";
+import { useLocation, useParams } from "react-router";
 import { Badge, Card, EmptyState, ErrorState, LinkButton, Money, Skeleton, StatusDot, Tabs, Tooltip } from "@agency_hub_core/ui";
+import { hubPersonPath } from "@agency_hub_core/ui/people/paths";
+import { capitalized, periodShort, ROLE_WORD, statusOf } from "@agency_hub_core/ui/people/words";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { carryParams, personPath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";
-import { PersonAccess } from "@/screens/access/PersonAccess";
+import { carryParams, hubHref, personPath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
-import { usePersonCard, type PersonCard, type PersonSummary } from "./data.js";
+import { usePersonCard, type PersonSummary } from "./data.js";
 import { SalesTab } from "./SalesTab.js";
 import { pagesInOrder } from "./ShiftTable.js";
 import { WorkTab } from "./WorkTab.js";
-import { capitalized, periodShort, ROLE_WORD, statusOf } from "./words.js";
 import "./people.css";
 
-/** The card's tabs (D2): the shift table lives in Работа; `/people/:id/shifts` redirects there (app/routes.tsx). */
-const TABS: readonly { tab: Exclude<PersonTab, "shifts">; label: string }[] = [
+/** The card's tabs (D2): the shift table lives in Работа. The login's access is Hub's («Люди»). */
+const TABS: readonly { tab: Exclude<PersonTab, "schedule">; label: string }[] = [
   { tab: "work", label: "Работа" },
   { tab: "sales", label: "Продажи" },
-  { tab: "access", label: "Доступ" },
 ];
 
 /**
- * The card of a LOGIN no person of the registry holds (`/people/:userId`, see
- * PersonRoute.tsx): a test or service login, or one not linked yet — the card
- * Человек was before the registry (spec §4.4), so its numbers and every access
- * control stay in reach. The header says who it is now — status, role, pages,
+ * The card of a LOGIN no person of the registry holds (`/team/:userId`, see
+ * PersonRoute.tsx): a test or service login, or one not linked yet, so its
+ * numbers stay in reach. The header says who it is now — status, role, pages,
  * AI spend of the period — and stays the same on every tab; the tabs: Работа,
- * Продажи, Доступ (the owner's only).
+ * Продажи. Its access is Hub «Люди» (the owner's link «Доступ и входы в Hub»).
  */
 export function LoginCard({ userId: id }: { userId: number }) {
   const { tab } = useParams();
@@ -38,12 +37,11 @@ export function LoginCard({ userId: id }: { userId: number }) {
   const { period, today } = usePeriod();
   const { page } = usePageFilter();
   const valid = Number.isInteger(id) && id > 0;
-  const current = TABS.find((item) => item.tab === tab && (item.tab !== "access" || isOwner))?.tab ?? "work";
+  const current = TABS.find((item) => item.tab === tab)?.tab ?? "work";
   const fallbackSearch = carryParams(location.search).toString();
-  const back = useBackTarget({ to: `/people${fallbackSearch ? `?${fallbackSearch}` : ""}`, label: "Люди" });
+  const back = useBackTarget({ to: `/team${fallbackSearch ? `?${fallbackSearch}` : ""}`, label: "Команда" });
   const card = usePersonCard(valid ? id : 0, period, page, today);
   const person = card.person;
-  useOpenAccessFirst(card, id, tab === undefined && isOwner);
 
   if (!valid || (card.missing && !person)) {
     return (
@@ -51,7 +49,7 @@ export function LoginCard({ userId: id }: { userId: number }) {
         <ScreenHeader title="Человек" back={back} />
         <div className="wb-content">
           <Card>
-            <EmptyState title="Нет такого человека" action={<LinkButton to={back.to}>К людям</LinkButton>}>
+            <EmptyState title="Нет такого человека" action={<LinkButton to={back.to}>К команде</LinkButton>}>
               Этот аккаунт удалён или не работал на ваших страницах.
             </EmptyState>
           </Card>
@@ -69,6 +67,11 @@ export function LoginCard({ userId: id }: { userId: number }) {
         period
         pageFilter
         meta={person ? <PersonMeta person={person} periodLabel={periodShort(period)} statusKnown={card.nowKnown} /> : <Skeleton width={320} />}
+        actions={isOwner ? (
+          <a className="access-link" href={hubHref(hubPersonPath(id, "logins"))}>
+            Доступ и входы в Hub <ExternalLink size={14} strokeWidth={1.75} aria-hidden />
+          </a>
+        ) : undefined}
         updatedAt={card.updatedAt}
         stale={card.stale}
         onRefresh={card.refresh}
@@ -76,7 +79,7 @@ export function LoginCard({ userId: id }: { userId: number }) {
         tabs={(
           <Tabs
             label="Разделы карточки"
-            items={TABS.filter((item) => item.tab !== "access" || isOwner).map((item) => ({
+            items={TABS.map((item) => ({
               to: item.tab === "work" ? workPath(id, location.search, tab === undefined) : personPath(id, location.search, item.tab),
               label: item.label,
               end: true,
@@ -85,9 +88,7 @@ export function LoginCard({ userId: id }: { userId: number }) {
         )}
       />
       <div className="wb-content">
-        {current === "access" ? (
-          <PersonAccess userId={id} variant="page" onChanged={card.refresh} />
-        ) : card.tooLong ? (
+        {card.tooLong ? (
           <Card>
             <EmptyState title="Период длиннее 31 дня">Hub считает смены не больше чем за 31 день. Выберите период короче.</EmptyState>
           </Card>
@@ -103,37 +104,12 @@ export function LoginCard({ userId: id }: { userId: number }) {
   );
 }
 
-/**
- * «Работа» from another tab is the explicit `/people/:id/work`: the bare address
- * may open Доступ first (below), the explicit one never does — so «Работа»
- * pressed, «←» back to it and the browser's «Назад» all stay on it. On the bare
- * address itself the tab links there, so it is the current one.
- */
+/** «Работа» from another tab is the explicit `/team/:id/work`; on the bare address the tab links there, so it is the current one. */
 function workPath(userId: number, search: string, bare: boolean): string {
   const path = personPath(userId, search);
   if (bare) return path;
   const [pathname, query] = path.split("?");
   return `${pathname}/work${query ? `?${query}` : ""}`;
-}
-
-/**
- * Р8: someone whose card has nothing in Работа — an invite not accepted, an
- * owner or a team lead without a shift in the period or before it — opens on
- * Доступ, where their actions are. Once per person: «Работа» pressed later stays.
- */
-function useOpenAccessFirst(card: PersonCard, userId: number, bare: boolean) {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const decided = useRef<number | null>(null);
-  const person = card.person;
-  const known = person !== null && person.state !== null && person.work !== null;
-  const accessFirst = known && (person.state === "invited"
-    || (person.role !== "chatter" && person.role !== null && person.work!.shifts === 0 && !(person.work!.previous?.shifts)));
-  useEffect(() => {
-    if (!known || decided.current === userId) return;
-    decided.current = userId;
-    if (bare && accessFirst) navigate(personPath(userId, location.search, "access"), { replace: true, state: location.state });
-  }, [known, accessFirst, bare, userId, navigate, location.search, location.state]);
 }
 
 /**

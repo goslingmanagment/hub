@@ -79,7 +79,7 @@ function WorkboardFrame({ children }: { children: ReactNode }) {
   const [searchOpen, setSearchOpen] = useState(false);
   // «Начало» is listed while a newcomer has a step open (the address still opens it).
   const start = useAccountStart();
-  const menu: { upper: MenuItem[]; lower: MenuItem[] } = role === null ? { upper: [], lower: [] } : productMenu("workboard", role, { newcomer: startOpen(start.data) });
+  const menu: { upper: MenuItem[]; lower: MenuItem[] } = role === null ? { upper: [], lower: [] } : productMenu("workboard", role, { newcomer: startOpen(start.data), leads: me.leadsTeam });
   const waiting = useWaitingCount(menu.upper.some((item) => item.count === "waiting"), role === "owner");
   const ownName = useOwnName();
   const own = carryParams(location.search).toString();

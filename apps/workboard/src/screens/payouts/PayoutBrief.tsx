@@ -4,7 +4,7 @@ import type { TeamLedgerPayoutPersonResponse, TeamLedgerPayoutPrepareResponse } 
 import { millsToDollarsNumber } from "@agency_hub_core/shared";
 import { Button, Money, Notice, Skeleton, Table, Tooltip, type Column } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
-import { useOwnerCard } from "@/screens/people/registry";
+import { useOwnerCard } from "@/screens/team/registry";
 import { PeopleMessageSend } from "@/shared/peopleMessages";
 import { copyText } from "./copy";
 import { usePayoutPrepare } from "./ledger";

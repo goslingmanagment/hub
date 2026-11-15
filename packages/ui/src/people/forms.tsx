@@ -1,7 +1,9 @@
 import { ArrowUp, X } from "lucide-react";
-import { Checkbox, IconButton, TextInput, platformWord } from "@agency_hub_core/ui";
-import { ruPlural } from "@agency_hub_core/ui/plural";
-import { pagesByModel, type AdminPage } from "@/screens/access/data";
+import { IconButton } from "../components/Button.js";
+import { Checkbox, TextInput } from "../components/Field.js";
+import { platformWord } from "../components/PageLabel.js";
+import { ruPlural } from "../plural.js";
+import { pagesByModel, type AdminPage } from "./registry.js";
 import { WEEKDAY_ORDER, WEEKDAY_WORD, type Weekday } from "./words.js";
 
 /**

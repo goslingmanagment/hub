@@ -54,6 +54,7 @@ import { usersQuery } from "@/shared/usersQuery";
 import { MAX_DAYS, MIN_SAMPLE, priceView, readWindow, speedView, useSalesPpv, useSalesReplies, type ReadWindow } from "@/screens/sales/data";
 import { averageQuality, perHourMills, qualityOfChatterNumbers, type PeriodQuality as AveragedQuality, type ShiftQuality } from "@/shared/metrics";
 import { useMe } from "@/shared/useMe";
+import type { PersonNow, PersonRole, PersonState, SaleKind } from "@agency_hub_core/ui/people/words";
 
 const MINUTE = 60_000;
 /** The longest window of every team read Hub has today. */
@@ -65,22 +66,9 @@ type ChatterStatsAnswer = KernelOperationResponse<"teamChatterStats">;
 type AdminUser = KernelOperationResponse<"adminListUsers">[number];
 type NumbersBlock = ChatterNumbersAnswer["chatters"][number]["shifts"][number]["numbers"];
 export type Stats = NonNullable<ChatterStatsAnswer["stats"]>;
-export type SaleKind = Stats["shifts"][number]["sales"][number]["kind"];
+export type { PersonNow, PersonRole, PersonState, SaleKind };
 
 // ─────────────────────────────────────────────── The future contract's shapes
-
-export type PersonRole = "owner" | "team_lead" | "chatter";
-export type PersonState = "active" | "invited" | "disabled";
-
-/** Now, whatever the period: from the shifts only. */
-export interface PersonNow {
-  /** The start of the shift going on now; null — not on a shift. */
-  onShiftSince: string | null;
-  /** The end of the person's last shift Hub was asked about; null — none in `quietDays`. */
-  lastShiftEnd: string | null;
-  /** How many days back «no shift» is known (the reads' reach); 0 — not known. */
-  quietDays: number;
-}
 
 export interface WorkTotals {
   shifts: number;

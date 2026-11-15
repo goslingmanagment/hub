@@ -14,13 +14,14 @@
  */
 import { addDays, isMoscowDay, moscowToday, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import { decodedPath } from "@agency_hub_core/ui/path";
+import { hubPersonPath, type HubPersonTab } from "@agency_hub_core/ui/people/paths";
 import { WORKBOARD_PATH } from "@agency_hub_core/ui/screens";
 import { ALL_PAGES_PARAM } from "./pageParam.js";
 
 /** Workboard's address on its name: its Vite `base` (apps/workboard/src/base.ts). */
 export const WORKBOARD_HREF = WORKBOARD_PATH;
 
-/** A Workboard address: `workboardHref("people/7", search)` → `/workboard/people/7?…`. */
+/** A Workboard address: `workboardHref("team/7", search)` → `/workboard/team/7?…`. */
 export function workboardHref(path = "", search: URLSearchParams | string = "", hash = ""): string {
   const query = search.toString();
   const anchor = hash && !hash.startsWith("#") ? `#${hash}` : hash;
@@ -32,9 +33,24 @@ export function isWorkboardHref(to: string): boolean {
   return to === WORKBOARD_HREF.slice(0, -1) || to.startsWith(WORKBOARD_HREF);
 }
 
-/** One person's card: Работа for whoever has shifts, Доступ for anyone else. */
-export function workboardPersonHref(userId: number, works = true): string {
-  return workboardHref(`people/${userId}${works ? "" : "/access"}`);
+/**
+ * One person by a login: their work in Workboard «Команда» for whoever has shifts (`works`), else their card in Hub
+ * «Люди» on `tab` (the logins, by default).
+ */
+export function personHref(userId: number, works = true, tab: HubPersonTab = "logins"): string {
+  return works ? workboardHref(`team/${userId}`) : hubPersonPath(userId, tab);
+}
+
+/**
+ * The console's old «Команда → Люди» (`/team/people`, `/team/people/12`): the registry, Hub «Люди» now — the list, or
+ * the login's person on «Входы и устройства». Null for any other address.
+ */
+export function teamPeopleInHub(url: string): string | null {
+  const parsed = new URL(url, "https://hub.invalid");
+  const pathname = decodedPath(parsed.pathname).replace(/\/+$/, "");
+  if (pathname === "/team/people") return "/people";
+  const user = /^\/team\/people\/(\d+)$/.exec(pathname)?.[1];
+  return user === undefined ? null : hubPersonPath(user, "logins");
 }
 
 /**
@@ -153,7 +169,7 @@ export function teamToWorkboard(url: string, today: MoscowDay = moscowToday()): 
       }
       // The choice of a shift: one person's shifts are in their card, everyone's in the journal.
       const who = positiveId(old.get("who")) ?? user;
-      return who === null ? workboardHref("shifts") : workboardHref(`people/${who}`);
+      return who === null ? workboardHref("shifts") : workboardHref(`team/${who}`);
     }
     case "coverage":
       carryPeriod(old.get("period"));
@@ -169,13 +185,13 @@ export function teamToWorkboard(url: string, today: MoscowDay = moscowToday()): 
     case "numbers": {
       carryPeriod(old.get("period"));
       const user = screen === "chatters" ? positiveId(rest) : null;
-      return workboardHref(user === null ? "people" : `people/${user}`, query);
+      return workboardHref(user === null ? "team" : `team/${user}`, query);
     }
     case "chatter-stats": {
       const days = old.get("days");
       carryPeriod(days === null ? null : `${days}d`);
       const user = positiveId(old.get("user"));
-      return workboardHref(user === null ? "people" : `people/${user}`, query);
+      return workboardHref(user === null ? "team" : `team/${user}`, query);
     }
     case "payouts":
     case "shift-reports": {
@@ -198,10 +214,9 @@ export function teamToWorkboard(url: string, today: MoscowDay = moscowToday()): 
       carryPeriod(days !== null ? `${days}d` : old.get("period") ?? "30d");
       return workboardHref("sales/win-back", query);
     }
-    case "people": {
-      const user = positiveId(rest);
-      return user === null ? workboardHref("access") : workboardPersonHref(user, false);
-    }
+    case "people":
+      // The registry is Hub's (`teamPeopleInHub`): App.tsx answers these before this table; Workboard's own «Команда» else.
+      return workboardHref("team");
     default:
       return workboardHref("shifts");
   }

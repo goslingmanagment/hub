@@ -1,14 +1,32 @@
 /**
- * The words of «Люди» and «Человек»: statuses, shares, the comparison's words,
- * the kinds of a sale. Pure; no React. The three quality numbers of a shift
- * have their words in `@/shared/metrics` (D1), not here.
+ * The words of the people both products draw (Hub «Люди», Workboard «Команда»): statuses, roles and states, shares, the
+ * comparison's words, the kinds of a sale, the days of a slot. Pure; no React. The three quality numbers of a shift have
+ * their words in Workboard's `@/shared/metrics` (D1), not here.
  */
-import { formatDay, formatPercent, formatTimeOfDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
-import type { PersonStatus } from "@agency_hub_core/ui";
-import { addDays, moscowDayOf } from "@agency_hub_core/ui/moscow";
-import { ruPlural } from "@agency_hub_core/ui/plural";
-import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
-import type { PersonNow, PersonRole, PersonState, SaleKind } from "./data.js";
+import type { KernelOperationResponse } from "@agency_hub_core/contracts";
+import type { PersonStatus } from "../components/Person.js";
+import { formatDay, formatPercent, formatTimeOfDay, formatWeekdayDay } from "../format.js";
+import { addDays, moscowDayOf } from "../moscow.js";
+import { ruPlural } from "../plural.js";
+import type { ResolvedPeriod } from "../period.js";
+
+/** The kind of a sale in a shift (`teamChatterStats`). */
+export type SaleKind = NonNullable<KernelOperationResponse<"teamChatterStats">["stats"]>["shifts"][number]["sales"][number]["kind"];
+
+/** A login's role. */
+export type PersonRole = "owner" | "team_lead" | "chatter";
+/** A login's state. */
+export type PersonState = "active" | "invited" | "disabled";
+
+/** Now, whatever the period: from the shifts only. */
+export interface PersonNow {
+  /** The start of the shift going on now; null — not on a shift. */
+  onShiftSince: string | null;
+  /** The end of the person's last shift Hub was asked about; null — none in `quietDays`. */
+  lastShiftEnd: string | null;
+  /** How many days back «no shift» is known (the reads' reach); 0 — not known. */
+  quietDays: number;
+}
 
 export const ROLE_WORD: Readonly<Record<PersonRole, string>> = {
   owner: "Владелец",

@@ -1,9 +1,9 @@
-import { formatAgo, formatDay } from "@agency_hub_core/ui/format";
+import { formatAgo, formatDay } from "../format.js";
 
 const DAY_MS = 86_400_000;
 
 /**
- * One rule for the moments of Доступ (Д8): what happened within a day — «24 мин
+ * One rule for the moments of a person's logins and access (Д8): what happened within a day — «24 мин
  * назад», «5 ч назад»; anything older, or still to come — the date, «26 окт.».
  */
 export function whenWords(iso: string, now: number = Date.now()): string {

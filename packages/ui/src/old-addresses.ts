@@ -31,23 +31,41 @@ export function workboardOldAddress(at: RouterAddress): RouterAddress | null {
   if (path === "/my/reports") return { pathname: "/my/shifts", search: at.search, hash: "" };
   // «Что продаёт» opens its first tab.
   if (path === "/sales") return { pathname: "/sales/price", search: at.search, hash: "" };
-  // A person's old «Смены» tab is Работа (the shift table lives there).
-  const personShifts = /^\/people\/([^/]+)\/shifts$/.exec(path);
-  if (personShifts) return { ...at, pathname: `/people/${personShifts[1]}` };
-  // «Доступ» is inside «Люди»: `?person=<login>` is that login's person on «Доступ и входы».
+  // «Люди» is «Команда» (products plan §4.3): the team at work. A person's old «Смены» and «Работа» are Работа, the
+  // other work tabs keep their names; «Доступ и входы» (`access`) is the registry's, Hub's — `registryTabLanding` below.
+  if (path === "/people") return { ...at, pathname: "/team" };
+  const person = /^\/people\/([^/]+)(?:\/([^/]+))?$/.exec(path);
+  if (person) {
+    const tab = person[2] === "sales" || person[2] === "schedule" || person[2] === "access" ? person[2] : undefined;
+    return { ...at, pathname: `/team/${person[1]}${tab ? `/${tab}` : ""}` };
+  }
+  // «Доступ» was inside «Люди»: `?person=<login>` is that login's person on «Доступ и входы» (Hub's now).
   if (path === "/access") {
     const search = new URLSearchParams(at.search);
-    const person = search.get("person");
+    const login = search.get("person");
     search.delete("person");
     const query = search.toString();
-    return { pathname: person && /^\d+$/.test(person) ? `/people/${person}/access` : "/people", search: query ? `?${query}` : "", hash: "" };
+    return { pathname: login && /^\d+$/.test(login) ? `/team/${login}/access` : "/team", search: query ? `?${query}` : "", hash: "" };
   }
   return null;
 }
 
+/**
+ * A tab of a person's card that was Workboard's and is the registry's now (`/team/:ref/access`, «Доступ и входы», where
+ * every old address of a person's access lands): the owner opens the person's logins in Hub «Люди» (a Hub path, through
+ * the sign-in hand-off), anyone else — a team lead with an old link — the person's «Команда» card. Null for any other
+ * address. Applied by Workboard's card of a person (apps/workboard/src/screens/team/PersonRoute.tsx).
+ */
+export function registryTabLanding(at: RouterAddress, owner: boolean): { hub: string } | { workboard: RouterAddress } | null {
+  const path = at.pathname.replace(/\/+$/, "");
+  const tab = /^\/team\/([^/]+)\/access$/.exec(path);
+  if (!tab) return null;
+  return owner ? { hub: `/people/${tab[1]}/logins` } : { workboard: { pathname: `/team/${tab[1]}`, search: at.search, hash: "" } };
+}
+
 /** Workboard's router paths of its old addresses (routes.tsx registers `OldAddress` on each). */
 export const WORKBOARD_OLD_PATHS: readonly string[] = [
-  "decisions", "my/shifts/:shiftId", "shifts/report/:shiftId", "my/reports", "sales", "people/:ref/shifts", "access",
+  "decisions", "my/shifts/:shiftId", "shifts/report/:shiftId", "my/reports", "sales", "people", "people/:ref", "people/:ref/:tab", "access",
 ];
 
 /** One address opened today and where it lands: both absolute, as a browser shows them. */
@@ -61,7 +79,7 @@ export interface OldAddressRow {
 const HUB = "https://hub.gosling-agency.ru";
 const TEAM = "https://chatgoose.gosling-agency.ru";
 
-/** Every address opened today that must keep working, and where it lands now. */
+/** Every address opened today that must keep working, and where it lands now (an address of a person's access: the owner's landing). */
 export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   // The released extension 3.29.1: «Мои смены» by its one-time link, Workboard's plain address, the shift to hand in.
   { who: "extension 3.29.1", from: `${TEAM}/workboard/my/shifts`, to: `${TEAM}/workboard/my/shifts` },
@@ -74,7 +92,9 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "agents' skills", from: `${HUB}/team/applications/2`, to: `${HUB}/team/applications/2` },
   // The owner's bookmarks on the console's name: the same screen on the team's name, signed in.
   { who: "owner's bookmark", from: `${HUB}/workboard/shifts?days=30`, to: `${TEAM}/workboard/shifts?days=30` },
-  { who: "owner's bookmark", from: `${HUB}/workboard/people`, to: `${TEAM}/workboard/people` },
+  { who: "owner's bookmark", from: `${HUB}/workboard/people`, to: `${TEAM}/workboard/team` },
+  { who: "owner's bookmark", from: `${HUB}/workboard/people/alex/schedule?days=7`, to: `${TEAM}/workboard/team/alex/schedule?days=7` },
+  { who: "owner's bookmark", from: `${HUB}/workboard/people/7/access`, to: `${HUB}/people/7/logins` },
   { who: "owner's bookmark", from: `${HUB}/workboard/payouts?view=reports`, to: `${TEAM}/workboard/payouts?view=reports` },
   // «Решения» on the console's name is the owner's whole «Ждут вас» in Hub (a window's parameter: Workboard's).
   { who: "owner's bookmark", from: `${HUB}/workboard/decisions`, to: `${HUB}/waiting` },
@@ -85,7 +105,7 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "console's old «Команда»", from: `${HUB}/team/shifts?period=30d`, to: `${TEAM}/workboard/shifts?days=30` },
   { who: "console's old «Команда»", from: `${HUB}/team/payouts#disputes`, to: `${TEAM}/workboard/waiting#reports` },
   { who: "console's old «Команда»", from: `${HUB}/held-sends`, to: `${TEAM}/workboard/waiting#held` },
-  { who: "console's old «Команда»", from: `${HUB}/team/people/12`, to: `${TEAM}/workboard/people/12/access` },
+  { who: "console's old «Команда»", from: `${HUB}/team/people/12`, to: `${HUB}/people/12/logins` },
   // «Фаны» and «Рассылки» moved from the console to Workboard (products package M, `movedToWorkboard`).
   { who: "owner's bookmark", from: `${HUB}/fans?page=mia-1&period=30d`, to: `${TEAM}/workboard/fans?page=mia-1&period=30d` },
   { who: "owner's bookmark, «Операции»", from: `${HUB}/fans/mia-1/fansly/7409?period=all`, to: `${TEAM}/workboard/fans/mia-1/fansly/7409?period=all` },
@@ -95,11 +115,14 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "matter before the rename", from: `${TEAM}/workboard/decisions?dispute=5#questions`, to: `${TEAM}/workboard/waiting?dispute=5#questions` },
   { who: "matter on Hub's Главная", from: `${HUB}/workboard/waiting#customs`, to: `${TEAM}/workboard/waiting#customs` },
   { who: "matter, sale's chain", from: `${TEAM}/workboard/shifts/report/77?sale=9`, to: `${TEAM}/workboard/report/77?sale=9` },
-  { who: "matter", from: `${TEAM}/workboard/people/7/access`, to: `${TEAM}/workboard/people/7/access` },
+  { who: "matter", from: `${TEAM}/workboard/people/7/access`, to: `${HUB}/people/7/logins` },
+  { who: "matter", from: `${TEAM}/workboard/people/alex`, to: `${TEAM}/workboard/team/alex` },
+  { who: "matter", from: `${TEAM}/workboard/people`, to: `${TEAM}/workboard/team` },
   { who: "people's message", from: `${TEAM}/workboard/customs/K-14`, to: `${TEAM}/workboard/customs/K-14` },
   // Workboard's own older addresses.
   { who: "Workboard, old", from: `${TEAM}/workboard/my/reports?days=14`, to: `${TEAM}/workboard/my/shifts?days=14` },
-  { who: "Workboard, old", from: `${TEAM}/workboard/access?person=7`, to: `${TEAM}/workboard/people/7/access` },
+  { who: "Workboard, old", from: `${TEAM}/workboard/access?person=7`, to: `${HUB}/people/7/logins` },
   { who: "Workboard, old", from: `${TEAM}/workboard/sales`, to: `${TEAM}/workboard/sales/price` },
-  { who: "Workboard, old", from: `${TEAM}/workboard/people/7/shifts`, to: `${TEAM}/workboard/people/7` },
+  { who: "Workboard, old", from: `${TEAM}/workboard/people/7/shifts`, to: `${TEAM}/workboard/team/7` },
+  { who: "Workboard, old", from: `${TEAM}/workboard/people/7/sales?days=14`, to: `${TEAM}/workboard/team/7/sales?days=14` },
 ];

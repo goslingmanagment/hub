@@ -4,7 +4,7 @@ import { START_PATH, startOpen, useAccountStart } from "@/shared/start";
 import { CHATTER, TEAM, homePath, useMe } from "@/shared/useMe";
 import { AuthGate } from "./AuthGate.js";
 import { NotFoundScreen } from "./NotFound.js";
-import { RoleGate } from "./RoleGate.js";
+import { RoleGate, TeamGate } from "./RoleGate.js";
 import { Shell } from "./Shell.js";
 
 /** The router's basename: Vite's `base` without its last slash (src/base.ts is the one constant). */
@@ -39,21 +39,27 @@ function HomeRedirect() {
 /**
  * The team's screens, the owner's and team leads' (spec §3–4), one folder per
  * group under src/screens/, each loaded on first visit. Deep pages: Разбор
- * смены `/shifts/:userId/:shiftStart`, Человек `/people/:ref[/sales|access|schedule]`
- * — a person's code, or a login's number that lands on its person (`/shifts`
- * redirects to Работа).
+ * смены `/shifts/:userId/:shiftStart`.
  */
 const teamScreens: RouteObject[] = [
-  { path: "people", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PeopleScreen })) },
-  {
-    path: "people/:ref/:tab?",
-    handle: { screenKey: (params) => params.ref ?? "" } satisfies ScreenHandle,
-    lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PersonScreen })),
-  },
   { path: "sales/:tab", lazy: () => import("../screens/sales/index.js").then((m) => ({ Component: m.SalesScreen })) },
   // «Ждут вас» (it was Решения at `/decisions`, which leads here): the list read from matters.
   { path: "waiting", lazy: () => import("../screens/waiting/index.js").then((m) => ({ Component: m.WaitingScreen })) },
   { path: "payouts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
+];
+
+/**
+ * «Команда» (products plan §2.3, it was «Люди» at `/people`): the team at work, for whoever leads a team (TeamGate) —
+ * the owner, a team lead, a chatter who leads by the records. The person's card `/team/:ref[/sales|schedule]`: a
+ * person's code, or a login's number that lands on its person.
+ */
+const leadScreens: RouteObject[] = [
+  { path: "team", lazy: () => import("../screens/team/index.js").then((m) => ({ Component: m.TeamScreen })) },
+  {
+    path: "team/:ref/:tab?",
+    handle: { screenKey: (params) => params.ref ?? "" } satisfies ScreenHandle,
+    lazy: () => import("../screens/team/index.js").then((m) => ({ Component: m.PersonScreen })),
+  },
 ];
 
 /**
@@ -135,6 +141,7 @@ const everyoneScreens: RouteObject[] = [
 const screens: RouteObject[] = [
   { index: true, element: <HomeRedirect /> },
   { element: <RoleGate roles={TEAM} />, children: teamScreens },
+  { element: <TeamGate />, children: leadScreens },
   { element: <RoleGate roles={CHATTER} />, children: chatterScreens },
   { element: <RoleGate roles={[...TEAM, ...CHATTER]} />, children: everyoneScreens },
   // The specimen of packages/ui: the demo and dev servers only, never a production build.
