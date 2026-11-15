@@ -73,7 +73,7 @@ export type Write =
   | { op: "reopen" }
   | { op: "reopenCancel" }
   | { op: "resend"; transactionIds: number[] }
-  | { op: "proposal"; proposalId: number; answer: "decline" | "restore" | "accept" }
+  | { op: "proposal"; proposalId: number; answer: "decline" | "restore" | "accept"; note?: string | null }
   | { op: "sighting"; sightingId: number }
   | { op: "claim"; claimId: number; answer: "agree" | "disagree" }
   | { op: "offPlatformAdd"; body: ShiftReportOffPlatformBody }
@@ -93,7 +93,7 @@ function send(kernel: KernelClient, shiftId: number, write: Write): Promise<unkn
     case "reopen": return kernel.shiftReportReopen({ params });
     case "reopenCancel": return kernel.shiftReportReopenCancel({ params });
     case "resend": return kernel.shiftReportResend({ params, body: { transactionIds: write.transactionIds } });
-    case "proposal": return kernel.shiftReportProposalAnswer({ params: { shiftId, proposalId: write.proposalId }, body: { answer: write.answer } });
+    case "proposal": return kernel.shiftReportProposalAnswer({ params: { shiftId, proposalId: write.proposalId }, body: { answer: write.answer, note: write.note ?? null } });
     case "sighting": return kernel.shiftReportSightingAdd({ params: { shiftId, sightingId: write.sightingId } });
     case "claim": return kernel.saleClaimAnswer({ params: { claimId: write.claimId }, body: { answer: write.answer, note: null } });
     case "offPlatformAdd": return kernel.shiftReportOffPlatformAdd({ params, body: write.body });

@@ -169,6 +169,9 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
     const handin = await handinFor(db, subject);
+    // Under the report's lock: only from a draft or «Правка» — a hand-in that lost the race to another answers 409.
+    const was = phaseOf(handin);
+    if (was !== "draft" && was !== "fixing") throw new PhaseConflictError(subject.shift.id, was);
     const marks = await listHandinMarks(db, handin.id);
     const facts = await draftFacts(db, subject, handin, catalog, now, marks);
     const lines = draftLines(facts, marks);
@@ -182,7 +185,7 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
       hubCheck, at: now,
     });
     const next = checkLetsConfirm({ handedInAt: now, now, hubPending: hubWaits, gengarPending: reviewed }) ? "confirm" : "checking";
-    await setHandinPhase(db, { handinId: handin.id, phase: next, at: now });
+    if (!(await setHandinPhase(db, { handinId: handin.id, phase: next, at: now, from: [handin.phase] }))) throw new PhaseConflictError(subject.shift.id, was);
     await insertHandinEvent(db, {
       handinId: handin.id, event: "shift_report.handed_in", door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
       onBehalfOfUserId: actor.kind === "agent" ? subject.shift.userId : null,
@@ -405,6 +408,8 @@ export async function resendShiftReport(
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
     const locked = (await findHandinByShift(db, subject.shift.id, { lock: true }))!;
+    // Under the report's lock: «Досдать» only to a counted report — one «Исправить» took meanwhile answers 409.
+    if (phaseOf(locked) !== "counted") throw new PhaseConflictError(subject.shift.id, phaseOf(locked));
     const latest = (await listHandinVersions(db, locked.id)).at(-1);
     if (latest === undefined) throw new NotFoundError("Nothing counted yet");
     const marks = await listHandinMarks(db, locked.id);
@@ -430,7 +435,7 @@ export async function resendShiftReport(
       totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform: latest.offPlatform, comment: latest.comment, dayPaid, ruleVersion: SALE_RULE.version,
       reportDate: subject.shift.reportDate, at: now,
     });
-    await setHandinPhase(db, { handinId: locked.id, phase: "counted", at: now });
+    if (!(await setHandinPhase(db, { handinId: locked.id, phase: "counted", at: now, from: [locked.phase] }))) throw new PhaseConflictError(subject.shift.id, phaseOf(locked));
     return { version, pages: sums.pages.map((page) => page.pageLabel) };
   });
   await afterPersonVersion(app, { subject, catalog, version: made.version, pages: made.pages, paidDay, dayPaid }, now);
@@ -541,6 +546,9 @@ export async function answerShiftReportProposal(
     if (proposal === null || proposal.handinId !== handin.id) throw new NotFoundError("No such card");
     if (input.answer === "accept") {
       if (proposal.state !== "late") throw new ConflictError("Only a card that came after the report was counted is accepted", { reason: "not_late" });
+      // Under the report's lock: «Принять» only on a counted report — one moved meanwhile answers 409.
+      const locked = (await findHandinByShift(db, subject.shift.id, { lock: true }))!;
+      if (phaseOf(locked) !== "counted") throw new PhaseConflictError(subject.shift.id, phaseOf(locked));
       const latest = (await listHandinVersions(db, handin.id)).at(-1);
       const line = latest?.lines.find((one) => one.transactionId === proposal.transactionId);
       // Decided or agreed since: the settlement outranks the card, there is nothing to take.
@@ -551,7 +559,7 @@ export async function answerShiftReportProposal(
         await writeAcceptedWords(db, { handinId: handin.id, lines: [applied], proposals: [proposal], oldWay, claimantUserId: subject.shift.userId, byUserId: actor.userId, at: now });
       }
       await setHandinProposalState(db, { id: proposal.id, state: "accepted", byUserId: actor.userId, at: now });
-      await setHandinPhase(db, { handinId: handin.id, phase: "fixing", at: now });
+      if (!(await setHandinPhase(db, { handinId: handin.id, phase: "fixing", at: now, from: [locked.phase] }))) throw new PhaseConflictError(subject.shift.id, phaseOf(locked));
       return;
     }
     if (input.answer === "decline") {
@@ -570,7 +578,7 @@ export async function answerShiftReportProposal(
     await setHandinProposalState(db, { id: proposal.id, state: "proposed", byUserId: null, at: now });
     // «Вернуть правку»: the card stands again, the question it raised is taken back.
     for (const claim of await listSaleClaims(db, { transactionIds: [proposal.transactionId], states: ["asked", "owner"] })) {
-      if (claim.claimantHandinId === handin.id && claim.origin === "draft" && claim.statement === "mine") {
+      if (claim.claimantHandinId === handin.id && claim.origin === "draft" && claim.escalatedWhy === "disagree") {
         await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state });
         disputed = true;
       }
@@ -592,10 +600,14 @@ async function disputeCard(
 ): Promise<void> {
   const { proposal, handin, subject, catalog, note, at } = input;
   const sale = (await listHandinSalesByIds(db, [proposal.transactionId]))[0];
-  const side = proposal.toWord === "give" || proposal.toWord === "share" ? proposal.toUserId : null;
+  // The person's word is the opposite of the card's: a card that would give them more («это ваше», «пополам» of a
+  // colleague's sale) refused — «не моё» (no statement: the sale stays as the rule has it, nothing waits); a card that
+  // would take the sale from them refused — «моё», and it waits for the decider.
+  const refusesGain = proposal.deltaMills > 0;
+  const side = refusesGain ? null : proposal.toWord === "give" || proposal.toWord === "share" ? proposal.toUserId : null;
   const fields = {
     pageId: sale?.pageId ?? catalog.idOf.get(subject.shift.pages[0]?.pageLabel ?? "") ?? null, kind: "claim" as const, claimantVersion: null,
-    statement: "mine" as const, shareWithUserId: null, claimantNote: note, claimedAt: at, sideShiftId: null,
+    statement: refusesGain ? null : "mine" as const, shareWithUserId: null, claimantNote: note, claimedAt: at, sideShiftId: null,
     state: "owner" as const, escalatedAt: at, escalatedWhy: "disagree" as const,
   };
   const existing = (await listSaleClaims(db, { transactionIds: [proposal.transactionId] }))

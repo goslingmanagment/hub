@@ -95,6 +95,8 @@ export function ReportBoard({ report, host, transport, light }: {
   const [menu, setMenu] = useState<string | null>(null);
   const [ask, setAsk] = useState<{ key: string; choice: Choice; text: string } | null>(null);
   const [edit, setEdit] = useState<{ key: string; draft: string } | null>(null);
+  /** «Не согласен» with a card of Gengar: the one line of why, sent with it to whoever decides the sale. */
+  const [refuse, setRefuse] = useState<{ key: string; proposalId: number; text: string } | null>(null);
   /** The frame is hidden by the extension (after «Свернуть» or a sale's number) until it says `show`. */
   const hidden = useRef(false);
   const missToast = useRef<string | null>(null);
@@ -574,12 +576,12 @@ export function ReportBoard({ report, host, transport, light }: {
               {card.state === "late" ? (
                 <>
                   {own && <button type="button" className="btn btn--line btn--xs" disabled={write.isPending} onClick={() => void run({ op: "proposal", proposalId, answer: "accept" }, "Правка принята: проверьте и сдайте заново")}>Принять</button>}
-                  {own && <button type="button" className="btn btn--line btn--xs" disabled={write.isPending} onClick={() => void run({ op: "proposal", proposalId, answer: "decline" })}>Не согласен</button>}
+                  {own && <button type="button" className="btn btn--line btn--xs" disabled={write.isPending} onClick={() => setRefuse({ key: row.key, proposalId, text: "" })}>Не согласен</button>}
                   <span>Пришла после подтверждения: само ничего не меняется</span>
                 </>
               ) : (
                 <>
-                  {own && <button type="button" className="btn btn--line btn--xs" disabled={write.isPending} onClick={() => void run({ op: "proposal", proposalId, answer: "decline" })}>Не согласен</button>}
+                  {own && <button type="button" className="btn btn--line btn--xs" disabled={write.isPending} onClick={() => setRefuse({ key: row.key, proposalId, text: "" })}>Не согласен</button>}
                   <span>Если согласны, ничего не нажимайте</span>
                 </>
               )}
@@ -597,6 +599,26 @@ export function ReportBoard({ report, host, transport, light }: {
           </div>,
         );
       }
+    }
+    if (refuse !== null && refuse.key === row.key) {
+      const send = async () => {
+        const text = refuse.text.trim();
+        if (text === "") return;
+        if (await run({ op: "proposal", proposalId: refuse.proposalId, answer: "decline", note: text }, `Спор решит ${(row.decider ?? board.decider).words}`)) setRefuse(null);
+      };
+      parts.push(
+        <div className="frm" key="refuse">
+          <label className="frm-l" htmlFor={`refuse-${row.key}`}>Почему вы не согласны?</label>
+          <div className="frm-r">
+            <input className="fld" id={`refuse-${row.key}`} ref={focusField} value={refuse.text} placeholder="Одной строкой" autoComplete="off" maxLength={300}
+              onChange={(event) => setRefuse({ ...refuse, text: event.target.value })}
+              onKeyDown={(event) => onField(event, () => void send(), () => setRefuse(null))} />
+            <button type="button" className="btn btn--line btn--sm" disabled={refuse.text.trim() === "" || write.isPending} onClick={() => void send()}>Не согласен</button>
+            <button type="button" className="btn btn--quiet btn--sm" onClick={() => setRefuse(null)}>Отмена</button>
+          </div>
+          <div className="frm-h">Решит {(row.decider ?? board.decider).words}: Генгар предложил, вы объясните.</div>
+        </div>,
+      );
     }
     if (edit?.key === row.key) {
       const save = () => void commitNote();
