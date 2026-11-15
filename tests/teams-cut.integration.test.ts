@@ -177,7 +177,7 @@ async function work(db: Database, userId: number, pageId: number, fanRef: string
   // Messages make the minutes a shift (without them it is a look-in).
   for (let index = 0; index < 40; index += 1) {
     await db.execute(sql`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, conversation_ref, user_id,
-      source, priced, with_media, observed_at) values ('fansly', ${pageId}, ${`${suffix}-${index}`}, ${fanRef}, ${fanRef}, ${userId},
+      source, priced, with_media, observed_at) values ('fansly', ${pageId}, ${String(500_000 + suffix.charCodeAt(0) * 1000 + index)}, ${fanRef}, ${fanRef}, ${userId},
       'fansly-extension', false, false, ${new Date(shiftStart + (index + 1) * 3 * 60_000).toISOString()}::timestamptz)`);
   }
   const [sale] = (await db.execute<{ id: string }>(sql`insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type,
