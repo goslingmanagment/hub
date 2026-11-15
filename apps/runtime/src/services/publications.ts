@@ -956,7 +956,7 @@ export async function cancelPublication(db: Database, input: { id: number } & Pu
     if (actor.kind === "agent" && HANDED_TO_PLATFORM.has(record.status)) {
       return new PublicationConflictError(
         `Hub has handed this publication to the platform (${record.status}): a cancel no longer applies; a key with`
-          + " withdraw:publications takes it off the schedule (withdraw), or the owner in Hub",
+          + " withdraw:publications takes it off the schedule (withdraw), or a person in ContentOps «Публикации»",
         "publication_handed_to_platform",
       );
     }

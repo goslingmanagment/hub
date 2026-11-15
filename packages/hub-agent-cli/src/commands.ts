@@ -1748,7 +1748,7 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
           + " Hub may not know yet, and it would get a twin."
         : ` Its files go into the page's album ${publication.vaultAlbumRef}, the one with this title.`)
       + (blocking.length > 0 ? ` It cannot be approved as it is (${[...new Set(blocking)].join(", ")}).` : "")
-      + " A person approves it: the owner in Hub, or hub publication-approve --id"
+      + " A person approves it in ContentOps «Публикации», or hub publication-approve --id"
       + ` ${publication.id} --version ${publication.version} only on the owner's «да» in the chat for this album.`
       + ` Approve soon: Hub has until 12 hours after ${publication.publishAt} to send all of it, later it ends missed.`
       + ` Follow it with hub publication-get --id ${publication.id} or hub publication-changes.`,
@@ -3927,7 +3927,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
       + " titles, the files over the link limit (byHand: never uploaded nor drafted, added by hand), the files already on"
       + " the page, the order when it is not the folder's, whether sending is on; the real run needs --max-credits and"
       + " stops before any byte when the price is above it, or when only a similar title exists (--album-ref or"
-      + " --new-album). A person approves the draft: the owner in Hub, or publication-approve only on the owner's «да» in"
+      + " --new-album). A person approves the draft in ContentOps «Публикации», or publication-approve only on the owner's «да» in"
       + " the chat. Needs write:publication_drafts.",
     arguments: { name: "<folder>", describe: "The pack's folder", min: 1, max: 1 },
     options: {
