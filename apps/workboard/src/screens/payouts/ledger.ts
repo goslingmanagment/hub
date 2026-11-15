@@ -132,7 +132,8 @@ export function ledgerWindowProblem(period: ResolvedPeriod): string | null {
 }
 
 export function useLedgerPayouts(period: ResolvedPeriod) {
-  const { isOwner } = useMe();
+  // The agency's owner only: the test team's owner is refused people's money by design, so nothing is asked.
+  const { fullOwner: isOwner } = useMe();
   const problem = ledgerWindowProblem(period);
   const window = { from: period.from, to: period.to };
   const query = useQuery({
@@ -190,7 +191,7 @@ export function usePayoutPerson(slug: string, period: ResolvedPeriod) {
  * day opens to. Asked only while something shows it (`enabled`).
  */
 export function useLedgerReports(period: ResolvedPeriod, enabled = true) {
-  const { isOwner } = useMe();
+  const { fullOwner: isOwner } = useMe();
   const problem = ledgerWindowProblem(period);
   const window = { from: period.from, to: period.to };
   const asked = isOwner && problem === null && enabled;

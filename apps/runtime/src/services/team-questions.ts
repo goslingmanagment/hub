@@ -27,6 +27,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import type { AuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
+import { pageIsTest, requireSameRealm } from "./sandbox/realm.ts";
 import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, requireTeamReader, teamFactsFor, teamPagesFor } from "./teams.ts";
 
 /**
@@ -40,6 +41,8 @@ import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, requireTeamRe
  * - Answering: the decider (any login of their person) or the owner, a full session — the narrow one is refused by the
  *   operations' list (web-session-scopes.ts, password-only).
  * - Reading: the asker, the decider and the owner; anyone else is told it does not exist.
+ * - The test realm (sandbox/realm.ts): a question lives in its page's realm; a principal of the other realm — the live
+ *   owner and a test question, the test owner and a live one — is told it does not exist, by id as in the list.
  * Database only; no money of anyone.
  */
 
@@ -103,6 +106,11 @@ function reads(facts: TeamFacts, principal: HumanAuthPrincipal, row: TeamQuestio
   return own.includes(row.askerUserId) || (row.deciderUserId !== null && own.includes(row.deciderUserId));
 }
 
+/** A question of the principal's realm (its page's), else «not found»: no question crosses the wall, by id or by list. */
+async function requireQuestionOfRealm(app: QuestionsApp, principal: AuthPrincipal, row: TeamQuestionRow): Promise<void> {
+  requireSameRealm(principal, await pageIsTest(app, row.pageId), notFound);
+}
+
 /** The link of both matters: Workboard's «Ждут вас» with the question open. */
 const linkOf = (id: number) => `/workboard/waiting?question=${id}#asks`;
 
@@ -128,6 +136,7 @@ export async function readTeamQuestions(app: QuestionsApp, principal: AuthPrinci
   if (query.id !== undefined) {
     const row = await findTeamQuestion(app.db, query.id);
     if (row === null || !reads(facts, principal, row)) throw notFound();
+    await requireQuestionOfRealm(app, principal, row);
     return { questions: await wireOf(app, facts, principal, [row]), serverNow: now.toISOString() };
   }
   const own = loginsOf(facts, principal.user.id);
@@ -147,6 +156,7 @@ export async function askTeamQuestion(app: QuestionsApp, principal: AuthPrincipa
   if (!page) throw new NotFoundError(`Page "${body.pageLabel}" was not found`);
   const scope = await teamPagesFor(app, principal);
   if (scope !== undefined && !scope.includes(page.id)) throw new ForbiddenError("Page access denied");
+  requireSameRealm(principal, await pageIsTest(app, page.id), () => new NotFoundError(`Page "${body.pageLabel}" was not found`));
   const facts = await teamFactsFor(app, principal);
   const modelId = modelOfPageId(facts, page.id);
   const decider = deciderOf(facts, modelId, "work", personsOfLogins(facts, [principal.user.id]));
@@ -167,6 +177,7 @@ export async function answerQuestion(
   const facts = await teamFactsFor(app, principal);
   const row = await findTeamQuestion(app.db, id);
   if (row === null || !reads(facts, principal, row)) throw notFound();
+  await requireQuestionOfRealm(app, principal, row);
   const decides = isOwnerSession(principal) || (row.deciderUserId !== null && principal.narrowDeviceTokenId === undefined && loginsOf(facts, principal.user.id).includes(row.deciderUserId));
   if (!decides) throw new ForbiddenError("Only whoever decides answers it");
   const text = body.text === undefined || body.text === "" ? null : body.text;
@@ -198,6 +209,7 @@ export async function closeQuestion(
   const facts = await teamFactsFor(app, principal);
   const row = await findTeamQuestion(app.db, id);
   if (row === null || !reads(facts, principal, row)) throw notFound();
+  await requireQuestionOfRealm(app, principal, row);
   if (!loginsOf(facts, principal.user.id).includes(row.askerUserId)) throw new ForbiddenError("Only the asker closes it");
   if (body.how === "withdraw") {
     if (!(await withdrawTeamQuestion(app.db, { id, at: now }))) throw new ConflictError("The question is not open any more");

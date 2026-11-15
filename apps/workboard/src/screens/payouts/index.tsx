@@ -32,13 +32,15 @@ const VIEWS: ReadonlyArray<{ value: View; label: string }> = [
 ];
 
 export function PayoutsScreen() {
-  const { isOwner } = useMe();
+  const { isOwner, fullOwner } = useMe();
   const { period, setPeriod } = usePeriod();
   const { page } = usePageFilter();
   const [search, setSearch] = useSearchParams();
   const location = useLocation();
   const view: View = location.pathname.replace(/\/+$/, "").endsWith("/reports") ? "reports" : "debts";
   const questionsOnly = search.get("questions") === "1";
+  // The test team's owner: Hub refuses him people's money by design (the ledger is never asked about the test team).
+  const testOwner = isOwner && !fullOwner;
   const ledger = useLedgerPayouts(period);
   const reports = useLedgerReports(period, view === "reports");
 
@@ -54,6 +56,19 @@ export function PayoutsScreen() {
   // The tabs carry the period and the page, not the person (the panel belongs to «Долги») nor the questions' filter.
   const carried = carryParams(location.search).toString();
   const tabs = <Tabs label="Разделы" items={VIEWS.map((option) => ({ to: { pathname: `/money/${option.value}`, search: carried ? `?${carried}` : "" }, label: option.label }))} />;
+
+  if (testOwner) {
+    return (
+      <>
+        <ScreenHeader title="Деньги" />
+        <div className="wb-content">
+          <EmptyState title="В тестовой команде денег нет" className="payouts-empty">
+            Начисления и выплаты считает ledger агентства, а тестовую команду он не знает.
+          </EmptyState>
+        </div>
+      </>
+    );
+  }
 
   if (!isOwner) {
     return (

@@ -25,7 +25,8 @@ import type { AuthPrincipal } from "./auth.ts";
 import { teamReadPages } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
-import { homeLinkOf, hubReportLinkOf, postReportLinkOf, type ChainSums } from "./sale-chain.ts";
+import { TEST_REALM_NO_MONEY, homeLinkOf, hubReportLinkOf, postReportLinkOf, type ChainSums } from "./sale-chain.ts";
+import { realmOf } from "./sandbox/realm.ts";
 import { requireTeamReader } from "./teams.ts";
 
 /**
@@ -67,11 +68,13 @@ export function reportOfShare(input: {
   handedIn: Parameters<typeof hubReportLinkOf>[0]["report"] | null;
   person: { code: string } | null;
   reportDate: string;
-  ledger: TeamLedgerReportsResponse | Error | null;
+  /** The ledger's reports of the days; `test` — the test realm's: the ledger is never asked about it. */
+  ledger: TeamLedgerReportsResponse | Error | "test" | null;
   sums: ChainSums;
   postLink: string | null;
 }): SaleChainLink {
   if (input.handedIn !== null) return hubReportLinkOf({ report: input.handedIn, transactionId: input.sale.transactionId, own: false, sums: input.sums });
+  if (input.ledger === "test") return TEST_REALM_NO_MONEY;
   if (input.person === null) return { state: "unknown", words: "неизвестно: вход не связан с человеком в реестре", link: null, amountMills: null };
   if (input.ledger === null || input.ledger instanceof Error) {
     return { state: "unknown", words: "неизвестно: ledger не ответил", link: input.postLink, amountMills: null };
@@ -149,8 +152,9 @@ export async function readTeamSalesList(
     const share = reportPersonOf(sale);
     return share === null || handedInOf(sale, share.userId) !== null ? [] : [reportDateOf(sale, share)];
   }).sort();
-  let ledger: TeamLedgerReportsResponse | Error | null = null;
-  if (ledgerDays.length > 0) {
+  // The test realm's sales (its principal reads no other): the ledger is never asked about the test team.
+  let ledger: TeamLedgerReportsResponse | Error | "test" | null = realmOf(principal) === "test" ? "test" : null;
+  if (ledger === null && ledgerDays.length > 0) {
     try {
       ledger = await readTeamLedgerReports(app, { from: ledgerDays[0]!, to: ledgerDays.at(-1)! }, { ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}), now });
     } catch (error) {

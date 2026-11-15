@@ -29,7 +29,8 @@ export function registerSaleChainRoutes(server: ApiServer, ctx: ApiModuleContext
       : role === "team_lead"
         ? { kind: "team_lead", pageIds }
         : { kind: "chatter", userId: principal.user.id, pageIds };
-    return readSaleChain(appContext, viewer, request.query);
+    // The sale must be of the principal's realm; a test realm's chain asks the ledger nothing.
+    return readSaleChain(appContext, viewer, request.query, { realmOf: principal });
   });
 
   // «Продажи → Список продаж» (products plan §2.3): every sale of the viewer's teams, whose and why, the report it is in.
