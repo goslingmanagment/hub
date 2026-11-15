@@ -5,6 +5,7 @@ import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createInvite } from "../apps/runtime/src/services/account-links.ts";
+import { publicationItems } from "../apps/runtime/src/services/matters-mirror.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   AGENT_KEY_TOKEN_PREFIX, LOGIN_BACKOFF_FREE_FAILURES, SESSION_COOKIE_NAME, authenticateSessionToken, createUserAccount, setUserPassword,
@@ -289,14 +290,21 @@ describe("ContentOps' own entrance (package C4)", () => {
     });
     const token = created.json<{ invite: { userId: number; link: { token: string } } }>().invite.link.token;
     const mira = created.json<{ invite: { userId: number } }>().invite.userId;
-    const managers = await listContentManagerLoginsByPage(app.db);
-    expect(managers.get("mia-2")).toBe(mira);
-    expect(managers.has("zoe-1")).toBe(false);
+    // Invited, never signed in: not the page's content manager yet — a post of mia-2 stays the owner's.
+    expect((await listContentManagerLoginsByPage(app.db)).has("mia-2")).toBe(false);
+    expect(publicationItems("publication.draft", [{ id: 1, pageLabel: "mia-2", kind: "wall_post", publishAt: new Date().toISOString(), version: 1 }],
+      await listContentManagerLoginsByPage(app.db))[0]?.owner).toBeUndefined();
     await openMatter(app.db, {
       key: "custom.checked_not_at_model:K-7", kind: "custom.checked_not_at_model", source: "server", title: "Кастом K-7 проверен и сутки не у модели",
       object: { type: "custom_order", id: "7" }, pageIds: [pages["mia-2"]!], owner: { userId: mira }, money: false, evidence: {}, link: "/workboard/customs/K-7",
     }, { door: "system" });
     const grant = (await door("link", { token, password: "a-strong-password-for-mira" })).json<{ grant: string }>().grant;
+    // She set her password: the mirror's next pass addresses her page's posts to her.
+    const managers = await listContentManagerLoginsByPage(app.db);
+    expect(managers.get("mia-2")).toBe(mira);
+    expect(managers.has("zoe-1")).toBe(false);
+    expect(publicationItems("publication.draft", [{ id: 1, pageLabel: "mia-2", kind: "wall_post", publishAt: new Date().toISOString(), version: 1 }],
+      managers)[0]?.owner).toEqual({ userId: mira });
     const waiting = await door("waiting", { grant });
     expect(waiting.json<{ matters: Array<{ kind: string; object: unknown }> }>().matters)
       .toContainEqual(expect.objectContaining({ kind: "custom.checked_not_at_model", object: { type: "custom_order", id: "7" } }));
