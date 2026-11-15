@@ -94,6 +94,8 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   // Questions to whoever decides (products plan §4.6): the extension's fan panel asks and reads through these two.
   "teamQuestions",
   "teamQuestionAsk",
+  // «График»'s swaps (products package W): a chatter reads the team's; taking one back is a decision (password).
+  "teamSwaps",
   "teamQuestionClose",
   // «Обучение» (products plan §2.3): the approved pages, read.
   "learnPages",
@@ -145,6 +147,8 @@ export const NARROW_WEB_SESSION_PASSWORD_ONLY = [
   "authMyUsage",
   // «Разбор смены»: a lead's note to the chatter (products package T).
   "reviewNoteAdd",
+  // «Подмена»: taking an approved swap back is the decider's decision (products package W).
+  "teamSwapRevoke",
   // «Фаны» (products package M): a note on a fan's card.
   "createFanNote",
   // A question's answer is a decision (products plan §4.6).

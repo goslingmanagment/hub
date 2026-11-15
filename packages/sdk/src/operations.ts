@@ -536,6 +536,8 @@ export const kernelOperations = {
   teamShiftReview: { method: "GET", path: "/api/v1/team/shift-review" },
   teamShiftSales: { method: "GET", path: "/api/v1/team/shift-sales" },
   teamShifts: { method: "GET", path: "/api/v1/team/shifts" },
+  teamSwapRevoke: { method: "POST", path: "/api/v1/team/questions/:id/swap/revoke" },
+  teamSwaps: { method: "GET", path: "/api/v1/team/swaps" },
   teamWinBackApproachSave: { method: "POST", path: "/api/v1/team/win-back/approaches" },
   teamWinBackApproaches: { method: "GET", path: "/api/v1/team/win-back/approaches" },
   teamWinBackResults: { method: "GET", path: "/api/v1/team/win-back/results" },

@@ -34,8 +34,8 @@ export interface TeamFacts {
   roles: TeamRoleRow[];
   /** Which person each login is (living logins only), and the login's role (a content manager's: `content_manager`). */
   logins: Array<{ userId: number; personId: number; role?: string }>;
-  /** The people (not left): name and realm. */
-  people: Array<{ personId: number; name: string; test: boolean }>;
+  /** The people (not left): name, realm and the registry's role (a content manager works pages and is not the chat team). */
+  people: Array<{ personId: number; name: string; test: boolean; role: string }>;
 }
 
 function roleOf(row: Row): TeamRoleRow {
@@ -63,7 +63,7 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
     db.execute<Row>(sql`
       select l.user_id, l.person_id, u.role from person_logins l join users u on u.id = l.user_id
        where u.disabled_at is null and u.deleted_at is null`),
-    db.execute<Row>(sql`select id, display_name, is_test from people where state <> 'left'`),
+    db.execute<Row>(sql`select id, display_name, is_test, role from people where state <> 'left'`),
   ]);
   return {
     pages: pages.rows.map((row) => ({ pageId: Number(row.id), modelId: Number(row.model_id), test: row.is_test === true })),
@@ -71,7 +71,7 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
     working: working.rows.map((row) => ({ personId: Number(row.person_id), pageId: Number(row.page_id) })),
     roles: roles.rows.map(roleOf),
     logins: logins.rows.map((row) => ({ userId: Number(row.user_id), personId: Number(row.person_id), role: String(row.role) })),
-    people: people.rows.map((row) => ({ personId: Number(row.id), name: String(row.display_name ?? ""), test: row.is_test === true })),
+    people: people.rows.map((row) => ({ personId: Number(row.id), name: String(row.display_name ?? ""), test: row.is_test === true, role: String(row.role ?? "") })),
   };
 }
 

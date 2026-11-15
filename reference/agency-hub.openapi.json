@@ -376128,7 +376128,8 @@
                               "custom_price",
                               "whale_terms",
                               "swap",
-                              "late"
+                              "late",
+                              "schedule"
                             ]
                           },
                           "text": {
@@ -376262,6 +376263,86 @@
                           },
                           "mine": {
                             "type": "boolean"
+                          },
+                          "swap": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "date": {
+                                    "type": "string"
+                                  },
+                                  "pages": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "start": {
+                                    "type": "string"
+                                  },
+                                  "end": {
+                                    "type": "string"
+                                  },
+                                  "absent": {
+                                    "type": "object",
+                                    "properties": {
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "code",
+                                      "name"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "cover": {
+                                    "type": "object",
+                                    "properties": {
+                                      "code": {
+                                        "type": "string"
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "code",
+                                      "name"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "approved": {
+                                    "type": "boolean"
+                                  },
+                                  "revoked": {
+                                    "type": "boolean"
+                                  },
+                                  "canRevoke": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "date",
+                                  "pages",
+                                  "start",
+                                  "end",
+                                  "absent",
+                                  "cover",
+                                  "approved",
+                                  "revoked",
+                                  "canRevoke"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -376281,7 +376362,8 @@
                           "answeredAt",
                           "seen",
                           "canAnswer",
-                          "mine"
+                          "mine",
+                          "swap"
                         ],
                         "additionalProperties": false
                       }
@@ -376502,7 +376584,8 @@
                       "custom_price",
                       "whale_terms",
                       "swap",
-                      "late"
+                      "late",
+                      "schedule"
                     ]
                   },
                   "text": {
@@ -376526,6 +376609,50 @@
                     "enum": [
                       "workboard",
                       "extension"
+                    ]
+                  },
+                  "swap": {
+                    "type": "object",
+                    "properties": {
+                      "date": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                      },
+                      "pageLabels": {
+                        "minItems": 1,
+                        "maxItems": 10,
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        }
+                      },
+                      "start": {
+                        "type": "string",
+                        "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$|^24:00$"
+                      },
+                      "end": {
+                        "type": "string",
+                        "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$|^24:00$"
+                      },
+                      "coverPersonCode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      },
+                      "absentPersonCode": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80
+                      }
+                    },
+                    "required": [
+                      "date",
+                      "pageLabels",
+                      "start",
+                      "end",
+                      "coverPersonCode"
                     ]
                   }
                 },
@@ -376567,7 +376694,8 @@
                             "custom_price",
                             "whale_terms",
                             "swap",
-                            "late"
+                            "late",
+                            "schedule"
                           ]
                         },
                         "text": {
@@ -376701,6 +376829,86 @@
                         },
                         "mine": {
                           "type": "boolean"
+                        },
+                        "swap": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "date": {
+                                  "type": "string"
+                                },
+                                "pages": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "start": {
+                                  "type": "string"
+                                },
+                                "end": {
+                                  "type": "string"
+                                },
+                                "absent": {
+                                  "type": "object",
+                                  "properties": {
+                                    "code": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "code",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "cover": {
+                                  "type": "object",
+                                  "properties": {
+                                    "code": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "code",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "approved": {
+                                  "type": "boolean"
+                                },
+                                "revoked": {
+                                  "type": "boolean"
+                                },
+                                "canRevoke": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "date",
+                                "pages",
+                                "start",
+                                "end",
+                                "absent",
+                                "cover",
+                                "approved",
+                                "revoked",
+                                "canRevoke"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -376720,7 +376928,8 @@
                         "answeredAt",
                         "seen",
                         "canAnswer",
-                        "mine"
+                        "mine",
+                        "swap"
                       ],
                       "additionalProperties": false
                     },
@@ -376989,7 +377198,8 @@
                             "custom_price",
                             "whale_terms",
                             "swap",
-                            "late"
+                            "late",
+                            "schedule"
                           ]
                         },
                         "text": {
@@ -377123,6 +377333,86 @@
                         },
                         "mine": {
                           "type": "boolean"
+                        },
+                        "swap": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "date": {
+                                  "type": "string"
+                                },
+                                "pages": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "start": {
+                                  "type": "string"
+                                },
+                                "end": {
+                                  "type": "string"
+                                },
+                                "absent": {
+                                  "type": "object",
+                                  "properties": {
+                                    "code": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "code",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "cover": {
+                                  "type": "object",
+                                  "properties": {
+                                    "code": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "code",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "approved": {
+                                  "type": "boolean"
+                                },
+                                "revoked": {
+                                  "type": "boolean"
+                                },
+                                "canRevoke": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "date",
+                                "pages",
+                                "start",
+                                "end",
+                                "absent",
+                                "cover",
+                                "approved",
+                                "revoked",
+                                "canRevoke"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -377142,7 +377432,8 @@
                         "answeredAt",
                         "seen",
                         "canAnswer",
-                        "mine"
+                        "mine",
+                        "swap"
                       ],
                       "additionalProperties": false
                     },
@@ -377407,7 +377698,8 @@
                             "custom_price",
                             "whale_terms",
                             "swap",
-                            "late"
+                            "late",
+                            "schedule"
                           ]
                         },
                         "text": {
@@ -377541,6 +377833,86 @@
                         },
                         "mine": {
                           "type": "boolean"
+                        },
+                        "swap": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "date": {
+                                  "type": "string"
+                                },
+                                "pages": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "start": {
+                                  "type": "string"
+                                },
+                                "end": {
+                                  "type": "string"
+                                },
+                                "absent": {
+                                  "type": "object",
+                                  "properties": {
+                                    "code": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "code",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "cover": {
+                                  "type": "object",
+                                  "properties": {
+                                    "code": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "code",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "approved": {
+                                  "type": "boolean"
+                                },
+                                "revoked": {
+                                  "type": "boolean"
+                                },
+                                "canRevoke": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "date",
+                                "pages",
+                                "start",
+                                "end",
+                                "absent",
+                                "cover",
+                                "approved",
+                                "revoked",
+                                "canRevoke"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -377560,7 +377932,486 @@
                         "answeredAt",
                         "seen",
                         "canAnswer",
-                        "mine"
+                        "mine",
+                        "swap"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "savedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "question",
+                    "savedAt"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/team/questions/{id}/swap/revoke": {
+      "post": {
+        "summary": "Take an approved swap back before its day: its one-day lines are marked taken back, nothing is deleted",
+        "tags": [
+          "client"
+        ],
+        "description": "The swap's decider or the owner, a full session. The asker's answer matter says it.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "id",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "discount_over_50",
+                            "free_paid",
+                            "custom_price",
+                            "whale_terms",
+                            "swap",
+                            "late",
+                            "schedule"
+                          ]
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "pageLabel": {
+                          "type": "string"
+                        },
+                        "fan": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "fanRef": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "name": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "fanRef",
+                                "name"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "asker": {
+                          "type": "object",
+                          "properties": {
+                            "userId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "userId",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "decider": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "owner",
+                                "team_lead"
+                              ]
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "door": {
+                          "type": "string",
+                          "enum": [
+                            "workboard",
+                            "extension"
+                          ]
+                        },
+                        "askedAt": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "answered",
+                            "withdrawn"
+                          ]
+                        },
+                        "answer": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "yes",
+                                "no"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "answerText": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "answeredBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "answeredAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "seen": {
+                          "type": "boolean"
+                        },
+                        "canAnswer": {
+                          "type": "boolean"
+                        },
+                        "mine": {
+                          "type": "boolean"
+                        },
+                        "swap": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "date": {
+                                  "type": "string"
+                                },
+                                "pages": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "start": {
+                                  "type": "string"
+                                },
+                                "end": {
+                                  "type": "string"
+                                },
+                                "absent": {
+                                  "type": "object",
+                                  "properties": {
+                                    "code": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "code",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "cover": {
+                                  "type": "object",
+                                  "properties": {
+                                    "code": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "code",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "approved": {
+                                  "type": "boolean"
+                                },
+                                "revoked": {
+                                  "type": "boolean"
+                                },
+                                "canRevoke": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "date",
+                                "pages",
+                                "start",
+                                "end",
+                                "absent",
+                                "cover",
+                                "approved",
+                                "revoked",
+                                "canRevoke"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "text",
+                        "pageLabel",
+                        "fan",
+                        "asker",
+                        "decider",
+                        "door",
+                        "askedAt",
+                        "state",
+                        "answer",
+                        "answerText",
+                        "answeredBy",
+                        "answeredAt",
+                        "seen",
+                        "canAnswer",
+                        "mine",
+                        "swap"
                       ],
                       "additionalProperties": false
                     },
@@ -382435,6 +383286,299 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/team/swaps": {
+      "get": {
+        "summary": "«График»: the approved swaps of the next 14 days on the viewer's teams' pages",
+        "tags": [
+          "client"
+        ],
+        "description": "Any session (the extension's narrow one too: a chatter reads the team's «График»). Cut to the viewer's teams (services/teams.ts). Database only; no money.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "swaps": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string"
+                          },
+                          "pages": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "start": {
+                            "type": "string"
+                          },
+                          "end": {
+                            "type": "string"
+                          },
+                          "absent": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "name"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "cover": {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "name"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "approved": {
+                            "type": "boolean"
+                          },
+                          "revoked": {
+                            "type": "boolean"
+                          },
+                          "canRevoke": {
+                            "type": "boolean"
+                          },
+                          "questionId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "pages",
+                          "start",
+                          "end",
+                          "absent",
+                          "cover",
+                          "approved",
+                          "revoked",
+                          "canRevoke",
+                          "questionId"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "swaps",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
             "description": "Default Response",
             "content": {
               "application/json": {

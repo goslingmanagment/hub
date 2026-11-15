@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { Link, useLocation, useSearchParams } from "react-router";
-import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, isChatTeamRole } from "@agency_hub_core/contracts";
 import { Button, Card, Delta, Disclosure, Duration, EmptyState, ErrorState, Mark, Money, Notice, PageLabels, Person, Skeleton, Table, Tooltip, readDelta, type Column, type PersonStatus, type SortState } from "@agency_hub_core/ui";
 import { formatDay, formatDuration } from "@agency_hub_core/ui/format";
 import { whenWords } from "@agency_hub_core/ui/people/when";
@@ -49,11 +49,14 @@ export function TeamScreen() {
     const own = numbers.combine(liveLogins(person).map((login) => login.userId));
     const worked = own.work !== null && own.work.shifts + (own.work.previous?.shifts ?? 0) > 0;
     if (!onPagesOf(person, leadPages, worked)) return false;
+    // The chat team (contracts chat-team.ts): chatters and team leads, and whoever had shifts; a content manager with
+    // working pages is not on it.
+    if (!isChatTeamRole(person.role) && !worked) return false;
     // Under a page filter: who works that page, or worked on it in the period.
     return page === null || worked || person.workingPages.some((one) => one.pageLabel === page);
   });
   // The table is for who works shifts: every chatter (a week without a shift is information too) and anyone else
-  // who had a shift in the period. The rest of the team (the owner, team leads, content managers, contractors) folds below.
+  // who had a shift in the period. The rest of the chat team (team leads without shifts) folds below.
   const team: Row[] = shown
     .filter((person) => person.state === "working" || person.state === "set_up")
     .map((person) => ({ person, numbers: numbers.combine(liveLogins(person).map((login) => login.userId)) }));

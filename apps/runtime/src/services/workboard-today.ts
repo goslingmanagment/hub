@@ -1,5 +1,6 @@
 import {
   listGoingShifts,
+  listPersonDayLineRows,
   listHandoverComments,
   listMatterPageLabels,
   listPersonLoginRows,
@@ -9,7 +10,7 @@ import {
   type TeamFacts,
   type TodayShiftRow,
 } from "@agency_hub_core/db";
-import { customOrderCode, type WorkboardTodayResponse } from "@agency_hub_core/contracts";
+import { customOrderCode, isChatTeamRole, type WorkboardTodayResponse } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireSessionUser, type HumanAuthPrincipal } from "./auth.ts";
@@ -124,12 +125,16 @@ export function scheduleGaps(input: { members: readonly TodayTeamMember[]; slots
   return gaps;
 }
 
-/** The members of a team: the people (not left) working a page of the model, with their logins. */
-function membersOf(facts: TeamFacts, modelId: number): TodayTeamMember[] {
+/**
+ * The members of a team: the chat team (`isChatTeamRole`: chatters and team leads, not left) working a page of the model,
+ * with their logins. A content manager with working pages is not on the chat team's schedule. Pure.
+ */
+export function membersOf(facts: TeamFacts, modelId: number): TodayTeamMember[] {
   const pages = new Set(pagesOfModels(facts, [modelId]));
+  const chatTeam = new Set(facts.people.filter((person) => isChatTeamRole(person.role)).map((person) => person.personId));
   const byPerson = new Map<number, Set<number>>();
   for (const row of facts.working) {
-    if (!pages.has(row.pageId)) continue;
+    if (!pages.has(row.pageId) || !chatTeam.has(row.personId)) continue;
     byPerson.set(row.personId, (byPerson.get(row.personId) ?? new Set()).add(row.pageId));
   }
   return [...byPerson.entries()].map(([personId, pageIds]) => ({
@@ -203,13 +208,17 @@ async function teamPart(
   const firstDay = !owner && (records.length === 0 || records.every((role) => input.now - role.grantedAt.getTime() < FIRST_DAY_MS));
 
   const yesterday = moscowDayOf(input.now - DAY_MS);
-  const [going, unnoted, slotRows, logins] = await Promise.all([
+  // Who is scheduled on a day is the standing lines and the approved swaps' one-day lines of those days (0422); «Графика
+  // нет» is about the standing lines alone.
+  const [going, unnoted, slotRows, dayRows, logins] = await Promise.all([
     listGoingShifts(app.db),
     listUnnotedShiftsOf(app.db, yesterday),
     listPersonScheduleSlotRows(app.db),
+    listPersonDayLineRows(app.db, { from: yesterday, to: moscowDayOf(input.now + 4 * DAY_MS) }),
     listPersonLoginRows(app.db),
   ]);
-  const slots = ruleSlotsOf({ slots: slotRows, logins, from: new Date(input.now - DAY_MS), to: new Date(input.now + 4 * DAY_MS) });
+  const scheduled = [...slotRows, ...dayRows];
+  const slots = ruleSlotsOf({ slots: scheduled, logins, from: new Date(input.now - DAY_MS), to: new Date(input.now + 4 * DAY_MS) });
   const goingLogins = new Set(going.map((row) => row.userId));
 
   const models = facts.models.filter((model) => led.includes(model.modelId)).sort((a, b) => a.name.localeCompare(b.name, "ru"));
@@ -229,7 +238,7 @@ async function teamPart(
         startedAt: row.startedAt.toISOString(),
         pages: row.pageLabels.filter((label) => pageLabels.has(label)),
       })),
-      absent: absentNow({ members, slots, rows: slotRows, going: goingLogins, now: input.now }).map(({ member, start, end }) => ({
+      absent: absentNow({ members, slots, rows: scheduled, going: goingLogins, now: input.now }).map(({ member, start, end }) => ({
         userId: member.userIds[0] ?? 0,
         name: member.name,
         start,

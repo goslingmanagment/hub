@@ -99,6 +99,7 @@ export * from "./routes-people.ts";
 export * from "./routes-teams.ts";
 export * from "./routes-workboard-today.ts";
 export * from "./own-shift-rows.ts";
+export * from "./chat-team.ts";
 export * from "./routes-team-questions.ts";
 export * from "./routes-learn.ts";
 export * from "./routes-fans.ts";

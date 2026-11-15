@@ -179,6 +179,11 @@ export interface RuleSlot {
   /** YYYY-MM-DD (Moscow) or null. */
   validFrom: string | null;
   validTo: string | null;
+  /**
+   * A swap's one-day line (0422; absent — a standing line): `cover` runs on top of the person's own lines of that page
+   * that day; `off` — none of the person's lines runs on that page that day.
+   */
+  day?: "cover" | "off";
 }
 
 /** A person's shift or look-in, as Hub computes it (chatter-shifts.ts). */
@@ -318,11 +323,18 @@ export function slotRuns(slots: readonly RuleSlot[], input: { personId: number; 
   });
 }
 
-/** A person's lines on a page for a Moscow day: the page's own valid that day, else the every-page ones valid that day. */
+/**
+ * A person's lines on a page for a Moscow day: the page's own standing lines valid that day, else the every-page ones
+ * valid that day — none at all when a swap took the person off the page that day (`off`), and a swap's `cover` line of
+ * the page that day on top.
+ */
 function linesOn(own: readonly RuleSlot[], pageId: number | null, on: string): RuleSlot[] {
   const valid = own.filter((slot) => (slot.validFrom === null || slot.validFrom <= on) && (slot.validTo === null || on <= slot.validTo));
-  const ofPage = pageId === null ? [] : valid.filter((slot) => slot.pageId === pageId);
-  return ofPage.length > 0 ? ofPage : valid.filter((slot) => slot.pageId === null);
+  const swaps = valid.filter((slot) => slot.day !== undefined && slot.pageId === pageId);
+  if (swaps.some((slot) => slot.day === "off")) return [];
+  const standing = valid.filter((slot) => slot.day === undefined);
+  const ofPage = pageId === null ? [] : standing.filter((slot) => slot.pageId === pageId);
+  return [...(ofPage.length > 0 ? ofPage : standing.filter((slot) => slot.pageId === null)), ...swaps];
 }
 
 const homeOf = (

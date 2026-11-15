@@ -41,6 +41,8 @@ export function useMe() {
     /** The agency's owner, not the test team's: accounts, AI spend and agents' proposals are read by him alone (Hub
      *  refuses the test owner them, so the screens leave those blocks out, as for a team lead). */
     fullOwner: !narrow && user?.role === "owner" && query.data?.test !== true,
+    /** A person of the test team: the ledger is never asked about it, so its reports and money are none, not «away». */
+    test: query.data?.test === true,
     /** The person's teams by model id (products package T): in, given «видит», leading; null — the owner, or not read. */
     teams: query.data?.teams ?? null,
     /**

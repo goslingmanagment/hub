@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { TEAM_QUESTION_KINDS, TEAM_QUESTION_KIND_WORDS, type TeamQuestion, type TeamQuestionKind } from "@agency_hub_core/contracts";
+import { TEAM_QUESTION_KINDS, TEAM_QUESTION_KIND_WORDS, type TeamQuestion, type TeamQuestionKind, type TeamQuestionSwap } from "@agency_hub_core/contracts";
 import { Button, ErrorState, Field, Modal, PageLabel, Select, Skeleton, TextInput, toast } from "@agency_hub_core/ui";
-import { formatDateTime } from "@agency_hub_core/ui/format";
+import { formatDateTime, formatWeekdayDay } from "@agency_hub_core/ui/format";
+import { addDays, moscowToday } from "@agency_hub_core/ui/moscow";
 import { kernel } from "@/shared/hub";
 import { PasswordWayIn } from "@/shared/PasswordWayIn";
 import { useMe } from "@/shared/useMe";
 import { usePages } from "@/shared/usePages";
+import { useTeamPeople } from "../team/teamPeople";
 
 /**
  * Вопросы тому, кто решает (products plan §4.6), Workboard's door: «Спросить» in «Ждут вас» asks the decider of the
@@ -40,64 +42,171 @@ function useRefresh() {
 
 const kindWord = (kind: TeamQuestionKind) => TEAM_QUESTION_KIND_WORDS[kind];
 
-/** «Спросить»: a page, what about, the fan when there is one, one line. */
-export function AskModal({ onClose }: { onClose: () => void }) {
+/** What «Спросить» opens with: from «График», a swap of a person's slot of a day, or «Предложить сетку». */
+export interface AskStart {
+  kind: TeamQuestionKind;
+  pageLabel?: string;
+  /** «Подмена»: the slot's hours and pages; the absent person's code when a lead asks for them. */
+  swap?: { pageLabels: string[]; start: string; end: string; absentPersonCode?: string; absentName?: string };
+}
+
+const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/;
+
+/** A day's words: «пт, 21 нояб.». */
+const dayWords = (day: string) => formatWeekdayDay(`${day}T12:00:00+03:00`);
+
+/** «Подмена пт, 21 нояб. 16:00–00:00, mia-1: выйдет Алекс». */
+function swapLine(input: { date: string; start: string; end: string; pages: readonly string[]; cover: string; absent?: string | undefined }): string {
+  return `Подмена ${dayWords(input.date)} ${input.start}–${input.end}, ${input.pages.join(", ")}: ${input.absent ? `не выйдет ${input.absent}, ` : ""}выйдет ${input.cover}`;
+}
+
+/**
+ * «Спросить»: a page, what about, the fan when there is one, one line. «Подмена» asks the day, the hours and who covers
+ * (a person of the same team); «График» (a lead's proposal of the standing schedule) goes to the owner.
+ */
+export function AskModal({ onClose, start }: { onClose: () => void; start?: AskStart }) {
   const pages = usePages();
+  const people = useTeamPeople();
+  const { leadsTeam, isOwner, user } = useMe();
   const refresh = useRefresh();
-  const [pageLabel, setPageLabel] = useState("");
-  const [kind, setKind] = useState<TeamQuestionKind>("discount_over_50");
+  const [pageLabel, setPageLabel] = useState(start?.pageLabel ?? "");
+  const [kind, setKind] = useState<TeamQuestionKind>(start?.kind ?? "discount_over_50");
   const [fanName, setFanName] = useState("");
   const [text, setText] = useState("");
+  const [date, setDate] = useState(addDays(moscowToday(), 1));
+  const [from, setFrom] = useState(start?.swap?.start ?? "");
+  const [to, setTo] = useState(start?.swap?.end ?? "");
+  const [cover, setCover] = useState("");
   const list = (pages.data ?? []).filter((page) => page.platform !== "telegram");
   const page = pageLabel || list[0]?.label || "";
+  const swapPages = start?.swap?.pageLabels ?? (page ? [page] : []);
+  // Who may cover: a person of the same team (working a page of the same model), not the absent one.
+  const modelOf = (label: string) => list.find((one) => one.label === label)?.modelSlug ?? null;
+  const model = modelOf(swapPages[0] ?? page);
+  const own = (people.data?.people ?? []).find((person) => person.logins.some((login) => login.userId === user?.id))?.code ?? null;
+  const absentCode = start?.swap?.absentPersonCode ?? own;
+  const covers = useMemo(() => (people.data?.people ?? [])
+    .filter((person) => person.kind === "human" && person.state === "working" && person.code !== absentCode
+      && person.workingPages.some((one) => one.modelSlug === model))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, "ru")), [people.data, absentCode, model]);
+  const coverName = covers.find((person) => person.code === cover)?.displayName ?? "";
+  // «График» is a lead's word to the owner; the owner decides, he does not ask.
+  const kinds = TEAM_QUESTION_KINDS.filter((one) => one !== "schedule" || (leadsTeam && !isOwner));
+  const swap = kind === "swap";
+  const swapReady = date > moscowToday() && TIME.test(from) && TIME.test(to) && cover !== "" && swapPages.length > 0;
+  const words = text.trim() || (swap && swapReady ? swapLine({ date, start: from, end: to, pages: swapPages, cover: coverName, absent: start?.swap?.absentName }) : "");
   const ask = useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: () => kernel.teamQuestionAsk({
-      body: { pageLabel: page, kind, text: text.trim(), ...(fanName.trim() ? { fanName: fanName.trim() } : {}), door: "workboard" },
+      body: {
+        pageLabel: swap ? swapPages[0]! : page, kind, text: words, ...(fanName.trim() && !swap ? { fanName: fanName.trim() } : {}), door: "workboard",
+        ...(swap ? { swap: { date, pageLabels: swapPages, start: from, end: to, coverPersonCode: cover, ...(start?.swap?.absentPersonCode ? { absentPersonCode: start.swap.absentPersonCode } : {}) } } : {}),
+      },
     }),
     onSuccess: (answer) => {
       toast.success(answer.question.decider.kind === "owner" ? "Вопрос ушёл владельцу" : `Вопрос ушёл: ${answer.question.decider.name}`);
       refresh();
       onClose();
     },
-    onError: () => toast.error("Вопрос не ушёл. Попробуйте ещё раз"),
+    onError: () => toast.error(swap ? "Подмена не ушла: проверьте день, часы и кто выйдет" : "Вопрос не ушёл. Попробуйте ещё раз"),
   });
-  const ready = page !== "" && text.trim() !== "" && !ask.isPending;
+  const ready = page !== "" && words !== "" && (!swap || swapReady) && !ask.isPending;
   return (
     <Modal
-      title="Спросить"
+      title={kind === "schedule" ? "Предложить сетку" : swap ? "Попросить подмену" : "Спросить"}
       onClose={onClose}
       actions={(
         <>
           <Button variant="ghost" onClick={onClose}>Отмена</Button>
-          <Button variant="primary" disabled={!ready} loading={ask.isPending} onClick={() => ask.mutate()}>Спросить</Button>
+          <Button variant="primary" disabled={!ready} loading={ask.isPending} onClick={() => ask.mutate()}>{kind === "schedule" ? "Предложить" : "Спросить"}</Button>
         </>
       )}
     >
       <div className="wt-ask">
-        <p className="wt-ask__lead">Ответит тот, кто решает по этой модели: тимлид команды, а если его нет, владелец.</p>
-        <Field label="Страница">
+        <p className="wt-ask__lead">
+          {kind === "schedule" ? "Предложение уйдёт владельцу. Он ответит и сам поменяет график в карточке человека."
+            : swap ? "Ответит тимлид команды, а если его нет, владелец. «Можно» сразу ставит подмену в график на этот день."
+              : "Ответит тот, кто решает по этой модели: тимлид команды, а если его нет, владелец."}
+        </p>
+        {start?.swap === undefined && (
+          <Field label="Страница">
+            {(control) => (
+              <Select {...control} value={page} onChange={(event) => setPageLabel(event.target.value)}>
+                {list.map((one) => <option key={one.label} value={one.label}>{one.label}</option>)}
+              </Select>
+            )}
+          </Field>
+        )}
+        {start === undefined && (
+          <Field label="О чём">
+            {(control) => (
+              <Select {...control} value={kind} onChange={(event) => setKind(event.target.value as TeamQuestionKind)}>
+                {kinds.map((one) => <option key={one} value={one}>{kindWord(one)}</option>)}
+              </Select>
+            )}
+          </Field>
+        )}
+        {swap && (
+          <>
+            {start?.swap && (
+              <p className="wt-ask__lead">
+                {start.swap.absentName ? `Не выйдет ${start.swap.absentName}. ` : ""}{start.swap.pageLabels.join(", ")}
+              </p>
+            )}
+            <Field label="День" hint="Подмену просят заранее, на завтра или позже">
+              {(control) => <TextInput {...control} type="date" value={date} min={addDays(moscowToday(), 1)} onChange={(event) => setDate(event.target.value)} />}
+            </Field>
+            <div className="wt-ask__row">
+              <Field label="С">
+                {(control) => <TextInput {...control} value={from} onChange={(event) => setFrom(event.target.value)} placeholder="18:00" maxLength={5} />}
+              </Field>
+              <Field label="До">
+                {(control) => <TextInput {...control} value={to} onChange={(event) => setTo(event.target.value)} placeholder="02:00" maxLength={5} />}
+              </Field>
+            </div>
+            <Field label="Кто выйдет" hint="Человек той же команды">
+              {(control) => (
+                <Select {...control} value={cover} onChange={(event) => setCover(event.target.value)}>
+                  <option value="">Выберите</option>
+                  {covers.map((person) => <option key={person.code} value={person.code}>{person.displayName}</option>)}
+                </Select>
+              )}
+            </Field>
+          </>
+        )}
+        {!swap && kind !== "schedule" && (
+          <Field label="Фан" hint="Если вопрос про фана">
+            {(control) => <TextInput {...control} value={fanName} onChange={(event) => setFanName(event.target.value)} maxLength={200} placeholder="Имя фана" />}
+          </Field>
+        )}
+        <Field label={kind === "schedule" ? "Предложение" : swap ? "Пояснение" : "Вопрос"} hint={swap ? "По желанию: без него уйдёт день, часы и кто выйдет" : undefined}>
           {(control) => (
-            <Select {...control} value={page} onChange={(event) => setPageLabel(event.target.value)}>
-              {list.map((one) => <option key={one.label} value={one.label}>{one.label}</option>)}
-            </Select>
+            <TextInput
+              {...control}
+              data-autofocus
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              maxLength={500}
+              placeholder={kind === "schedule" ? "Кто, какие дни и часы, с какого дня" : swap ? "Почему не выйду" : "Одной строкой: что хотите сделать"}
+            />
           )}
-        </Field>
-        <Field label="О чём">
-          {(control) => (
-            <Select {...control} value={kind} onChange={(event) => setKind(event.target.value as TeamQuestionKind)}>
-              {TEAM_QUESTION_KINDS.map((one) => <option key={one} value={one}>{kindWord(one)}</option>)}
-            </Select>
-          )}
-        </Field>
-        <Field label="Фан" hint="Если вопрос про фана">
-          {(control) => <TextInput {...control} value={fanName} onChange={(event) => setFanName(event.target.value)} maxLength={200} placeholder="Имя фана" />}
-        </Field>
-        <Field label="Вопрос">
-          {(control) => <TextInput {...control} data-autofocus value={text} onChange={(event) => setText(event.target.value)} maxLength={500} placeholder="Одной строкой: что хотите сделать" />}
         </Field>
       </div>
     </Modal>
+  );
+}
+
+/** A swap's facts in words. */
+function SwapFacts({ swap }: { swap: TeamQuestionSwap }) {
+  return (
+    <>
+      <dt>Подмена</dt>
+      <dd>
+        {dayWords(swap.date)}, {swap.start}–{swap.end}, {swap.pages.join(", ")}: не выйдет {swap.absent.name}, выйдет {swap.cover.name}
+        {swap.approved && <span className="wt-question__yes"> · стоит в графике</span>}
+        {swap.revoked && <span className="wt-question__no"> · отменена</span>}
+      </dd>
+    </>
   );
 }
 
@@ -111,6 +220,7 @@ function QuestionFacts({ question }: { question: TeamQuestion }) {
       {question.fan?.name && (<><dt>Фан</dt><dd>{question.fan.name}</dd></>)}
       <dt>Спросил</dt>
       <dd>{question.asker.name}, {formatDateTime(question.askedAt)}{question.door === "extension" ? ", из расширения" : ""}</dd>
+      {question.swap && <SwapFacts swap={question.swap} />}
       <dt>Вопрос</dt>
       <dd className="wt-question__text">{question.text}</dd>
       <dt>Решает</dt>
@@ -133,6 +243,7 @@ function QuestionFacts({ question }: { question: TeamQuestion }) {
 export function QuestionModal({ id, onClose }: { id: number; onClose: () => void }) {
   const { narrow } = useMe();
   const refresh = useRefresh();
+  const queryClient = useQueryClient();
   const [line, setLine] = useState("");
   const read = useQuery({
     queryKey: [...QUESTIONS_KEY, "one", id],
@@ -152,6 +263,15 @@ export function QuestionModal({ id, onClose }: { id: number; onClose: () => void
     onSuccess: (_data, value) => done(value === "yes" ? "Ответ «Можно» ушёл" : "Ответ «Нельзя» ушёл"),
     onError: () => toast.error("Ответ не записан: вопрос могли уже закрыть"),
   });
+  const revoke = useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: () => kernel.teamSwapRevoke({ params: { id } }),
+    onSuccess: () => {
+      done("Подмена отменена: график этого дня как был");
+      void queryClient.invalidateQueries({ queryKey: ["team-swaps"] });
+    },
+    onError: () => toast.error("Не отменилось: день мог уже наступить"),
+  });
   const close = useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (how: "withdraw" | "seen") => kernel.teamQuestionClose({ params: { id }, body: { how } }),
@@ -165,6 +285,13 @@ export function QuestionModal({ id, onClose }: { id: number; onClose: () => void
       <>
         <Button variant="secondary" loading={answer.isPending && answer.variables === "no"} disabled={answer.isPending} onClick={() => answer.mutate("no")}>Нельзя</Button>
         <Button variant="primary" loading={answer.isPending && answer.variables === "yes"} disabled={answer.isPending} onClick={() => answer.mutate("yes")}>Можно</Button>
+      </>
+    );
+  } else if (question?.swap?.canRevoke) {
+    actions = (
+      <>
+        <Button variant="ghost" onClick={onClose}>Закрыть</Button>
+        <Button variant="secondary" loading={revoke.isPending} onClick={() => revoke.mutate()}>Отменить подмену</Button>
       </>
     );
   } else if (question?.mine && question.state === "answered" && !question.seen) {
@@ -193,6 +320,7 @@ export function QuestionModal({ id, onClose }: { id: number; onClose: () => void
               </Field>
             ))}
           {question.mine && question.state === "open" && <p className="wt-ask__lead">Ждёт ответа. Ответ придёт сюда, в «Ждут вас».</p>}
+          {question.swap?.canRevoke && narrow && <PasswordWayIn text="Чтобы отменить подмену, войдите на сайте с паролем." />}
         </div>
       )}
     </Modal>

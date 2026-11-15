@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { PersonScheduleSlotRow } from "@agency_hub_core/db";
 import { ruleSlotsOf } from "../apps/runtime/src/services/sale-homes.ts";
-import { absentNow, scheduleGaps, type TodayTeamMember } from "../apps/runtime/src/services/workboard-today.ts";
+import { absentNow, membersOf, scheduleGaps, type TodayTeamMember } from "../apps/runtime/src/services/workboard-today.ts";
+import { teamsOf } from "../apps/workboard/src/screens/shifts/scheduleTeams.ts";
 
 // Workboard «Сегодня» of a team lead: whom the schedule names now and who is not on a shift, and the hours of the
 // next three days no slot covers. The slots are read as the «whose sale» rule reads them (`slotRuns`).
@@ -10,7 +11,7 @@ import { absentNow, scheduleGaps, type TodayTeamMember } from "../apps/runtime/s
 const msk = (day: string, time: string) => Date.parse(`${day}T${time}:00+03:00`);
 
 function slot(id: number, personId: number, start: number, end: number, pageId: number | null = null): PersonScheduleSlotRow {
-  return { id, personId, pageId, pageLabel: null, startMinute: start * 60, endMinute: end * 60, weekdays: null, validFrom: "2026-11-01", validTo: null };
+  return { id, personId, pageId, pageLabel: null, startMinute: start * 60, endMinute: end * 60, weekdays: null, validFrom: "2026-11-01", validTo: null, kind: null, questionId: null };
 }
 
 const members: TodayTeamMember[] = [
@@ -45,5 +46,35 @@ describe("scheduleGaps", () => {
     const gaps = scheduleGaps({ members, slots: [], now: msk("2026-11-15", "23:10") });
     expect(gaps[0]).toEqual({ day: "2026-11-15", start: "23:30", end: "24:00" });
     expect(gaps[1]).toEqual({ day: "2026-11-16", start: "00:00", end: "24:00" });
+  });
+});
+
+describe("the chat team: a content manager with working pages is not on it", () => {
+  const facts = {
+    pages: [{ pageId: 100, modelId: 1, test: false }],
+    models: [{ modelId: 1, slug: "alfa", name: "Alfa", test: false }],
+    working: [{ personId: 1, pageId: 100 }, { personId: 2, pageId: 100 }, { personId: 3, pageId: 100 }],
+    roles: [],
+    logins: [{ userId: 11, personId: 1, role: "chatter" }, { userId: 12, personId: 2, role: "team_lead" }, { userId: 13, personId: 3, role: "chatter" }],
+    people: [
+      { personId: 1, name: "Аня", test: false, role: "chatter" },
+      { personId: 2, name: "Лена", test: false, role: "team_lead" },
+      { personId: 3, name: "КМ", test: false, role: "content_manager" },
+    ],
+  };
+
+  it("«Сегодня»'s schedule (who is due, the gaps) reads the chat team alone", () => {
+    expect(membersOf(facts as never, 1).map((member) => member.name).sort()).toEqual(["Аня", "Лена"]);
+  });
+
+  it("«График» lists the chat team alone", () => {
+    const person = (code: string, role: string) => ({
+      id: code.length, code, displayName: code, kind: "human", role, state: "working", leftOn: null,
+      telegram: { userId: null, handle: null, reportTag: null }, logins: [], agentKeys: [],
+      workingPages: [{ pageLabel: "alfa-1", platform: "fansly", modelSlug: "alfa", modelName: "Alfa" }],
+      schedule: null, pageSchedules: [], rights: [], onboarding: [], note: null, importNotes: [], origin: "owner", openProposals: 0,
+    });
+    const teams = teamsOf([person("anya", "chatter"), person("lena", "team_lead"), person("km", "content_manager")] as never);
+    expect(teams.flatMap((team) => team.people.map((one) => one.person.code)).sort()).toEqual(["anya", "lena"]);
   });
 });

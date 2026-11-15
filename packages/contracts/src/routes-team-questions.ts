@@ -15,8 +15,11 @@ import { z } from "zod";
 
 import { errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
 
-/** The kinds, in the form's order: скидка больше 50 %, бесплатно платное, цена кастома, условия киту, подмена, опоздание. */
-export const TEAM_QUESTION_KINDS = ["discount_over_50", "free_paid", "custom_price", "whale_terms", "swap", "late"] as const;
+/**
+ * The kinds, in the form's order: скидка больше 50 %, бесплатно платное, цена кастома, условия киту, подмена, опоздание;
+ * and «График» (products package W): a lead's proposal of the standing schedule, always the owner's to answer.
+ */
+export const TEAM_QUESTION_KINDS = ["discount_over_50", "free_paid", "custom_price", "whale_terms", "swap", "late", "schedule"] as const;
 export type TeamQuestionKind = (typeof TEAM_QUESTION_KINDS)[number];
 
 /** The kinds' words, the same in every door. */
@@ -27,7 +30,42 @@ export const TEAM_QUESTION_KIND_WORDS: Readonly<Record<TeamQuestionKind, string>
   whale_terms: "Условия киту",
   swap: "Подмена",
   late: "Опоздание",
+  schedule: "График",
 };
+
+/** A slot's edge by Moscow time, `HH:MM` (an end may be `24:00`). */
+const swapTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/, "a time is HH:MM by Moscow time");
+
+/**
+ * «Подмена» (products package W, 0422): the day, the pages, the hours of the slot, who covers (a person of the same team)
+ * and who cannot come (the asker's person when absent; a lead may ask for a person of their team). Its «Можно» writes the
+ * registry's one-day lines of that day: the covering person's on top of their own, the absent person's «off» there.
+ */
+export const teamQuestionSwapBodySchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  pageLabels: z.array(z.string().trim().min(1).max(200)).min(1).max(10),
+  start: swapTime,
+  end: swapTime,
+  coverPersonCode: z.string().trim().min(1).max(80),
+  absentPersonCode: z.string().trim().min(1).max(80).optional(),
+});
+export type TeamQuestionSwapBody = z.infer<typeof teamQuestionSwapBodySchema>;
+
+export const teamQuestionSwapSchema = z.object({
+  date: z.string(),
+  pages: z.array(z.string()),
+  start: z.string(),
+  end: z.string(),
+  absent: z.object({ code: z.string(), name: z.string() }),
+  cover: z.object({ code: z.string(), name: z.string() }),
+  /** «Можно» wrote its day lines and they stand (not taken back). */
+  approved: z.boolean(),
+  /** Taken back by the decider before the day. */
+  revoked: z.boolean(),
+  /** The viewer may take the approved swap back: its decider or the owner, before the day. */
+  canRevoke: z.boolean(),
+});
+export type TeamQuestionSwap = z.infer<typeof teamQuestionSwapSchema>;
 
 /**
  * The matters of a question, the question service their one writer (an agent key opens or closes none): the decider's
@@ -66,6 +104,8 @@ export const teamQuestionSchema = z.object({
   canAnswer: z.boolean(),
   /** The viewer asked it: they may withdraw it while open, mark the answer read. */
   mine: z.boolean(),
+  /** «Подмена»'s details; null — any other kind (and a swap asked without them). */
+  swap: teamQuestionSwapSchema.nullable(),
 });
 export type TeamQuestion = z.infer<typeof teamQuestionSchema>;
 
@@ -89,6 +129,8 @@ export const teamQuestionAskBodySchema = z.object({
   fanRef: z.string().trim().min(1).max(200).optional(),
   fanName: z.string().trim().min(1).max(200).optional(),
   door: z.enum(["workboard", "extension"]).default("workboard"),
+  /** «Подмена»'s details (kind `swap` only); its «Можно» writes the day's lines of the schedule. */
+  swap: teamQuestionSwapBodySchema.optional(),
 });
 export type TeamQuestionAskBody = z.infer<typeof teamQuestionAskBodySchema>;
 
@@ -108,6 +150,13 @@ export const teamQuestionParamsSchema = z.object({ id: z.coerce.number().int().p
 
 export const teamQuestionWriteResponseSchema = z.object({ question: teamQuestionSchema, savedAt: isoTimestamp });
 export type TeamQuestionWriteResponse = z.infer<typeof teamQuestionWriteResponseSchema>;
+
+/** «График»'s swaps of the days ahead (products package W): the approved ones whose lines stand, on the viewer's teams' pages. */
+export const teamSwapsResponseSchema = z.object({
+  swaps: z.array(teamQuestionSwapSchema.extend({ questionId: intId })),
+  serverNow: isoTimestamp,
+});
+export type TeamSwapsResponse = z.infer<typeof teamSwapsResponseSchema>;
 
 const errors = { 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema, 409: errorResponseSchema } as const;
 
@@ -143,6 +192,20 @@ export const teamQuestionRouteSchemas = {
     description: "The asker only; the narrow session too. Closes the matter it opened.",
     params: teamQuestionParamsSchema,
     body: teamQuestionCloseBodySchema,
+    response: { 200: teamQuestionWriteResponseSchema, ...errors },
+  },
+  teamSwaps: {
+    auth: { kind: "any-session" }, tags: ["client"],
+    summary: "«График»: the approved swaps of the next 14 days on the viewer's teams' pages",
+    description: "Any session (the extension's narrow one too: a chatter reads the team's «График»). Cut to the viewer's "
+      + "teams (services/teams.ts). Database only; no money.",
+    response: { 200: teamSwapsResponseSchema, ...errors },
+  },
+  teamSwapRevoke: {
+    auth: { kind: "any-session" }, tags: ["client"],
+    summary: "Take an approved swap back before its day: its one-day lines are marked taken back, nothing is deleted",
+    description: "The swap's decider or the owner, a full session. The asker's answer matter says it.",
+    params: teamQuestionParamsSchema,
     response: { 200: teamQuestionWriteResponseSchema, ...errors },
   },
 } as const;

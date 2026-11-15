@@ -604,6 +604,21 @@
     opacity: 0.75;
   }
 
+  .sched-row__ask {
+    align-self: flex-start;
+    margin-top: 2px;
+    font-size: var(--ui-fs-13);
+  }
+
+  .sched-swaps {
+    margin: 0;
+    padding: 10px 20px;
+    border-top: 1px solid var(--ui-line-soft);
+    list-style: none;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
   .sched-gaps {
     margin: 0;
     padding: 10px 20px 14px;
@@ -624,8 +639,10 @@
       padding: 10px 16px;
     }
 
-    .sched-gaps {
+    .sched-gaps,
+    .sched-swaps {
       padding: 10px 16px 14px;
     }
+
   }
 }
