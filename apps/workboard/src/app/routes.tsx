@@ -1,4 +1,4 @@
-import { Navigate, createBrowserRouter, useLocation, useParams, type Params, type RouteObject } from "react-router";
+import { Navigate, Outlet, createBrowserRouter, useLocation, useParams, type Params, type RouteObject } from "react-router";
 import { START_PATH, startOpen, useAccountStart } from "@/shared/start";
 import { CHATTER, TEAM, homePath, useMe } from "@/shared/useMe";
 import { AuthGate } from "./AuthGate.js";
@@ -91,12 +91,6 @@ const teamScreens: RouteObject[] = [
     handle: { screenKey: (params) => `${params.userId ?? ""}/${params.shiftStart ?? ""}` } satisfies ScreenHandle,
     lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })),
   },
-  // A shift's report, read (never changed) by the team: from the review and the person's shifts.
-  {
-    path: "shifts/report/:shiftId",
-    handle: { screenKey: (params) => params.shiftId ?? "" } satisfies ScreenHandle,
-    lazy: () => import("../screens/shift/index.js").then((m) => ({ Component: m.ShiftScreen })),
-  },
   { path: "people", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PeopleScreen })) },
   { path: "people/:ref/shifts", element: <PersonShiftsRedirect /> },
   {
@@ -120,13 +114,31 @@ const chatterScreens: RouteObject[] = [
   { path: "start", lazy: () => import("../screens/start/index.js").then((m) => ({ Component: m.StartScreen })) },
   { path: "my/shifts", lazy: () => import("../screens/my-shifts/index.js").then((m) => ({ Component: m.MyShiftsScreen })) },
   { path: "my/reports", element: <MyReportsRedirect /> },
-  // A shift and its report (ecosystem package F): the person's own to hand in, a colleague's to read.
+];
+
+/**
+ * The «Отчёт» board (package R): a shift's report, the person's own to hand in, someone else's to read (the owner, a
+ * team lead, a colleague; Hub decides). The whole window, without Workboard's frame. `/report` — the person's own
+ * shift that needs them most. Its frame for the extension (`/frame/report`) is outside the sign-in gate (`router`).
+ */
+const boardScreens: RouteObject[] = [
+  { path: "report", lazy: () => import("../screens/report/index.js").then((m) => ({ Component: m.ReportScreen })) },
   {
-    path: "my/shifts/:shiftId",
+    path: "report/:shiftId",
     handle: { screenKey: (params) => params.shiftId ?? "" } satisfies ScreenHandle,
-    lazy: () => import("../screens/shift/index.js").then((m) => ({ Component: m.ShiftScreen })),
+    lazy: () => import("../screens/report/index.js").then((m) => ({ Component: m.ReportScreen })),
   },
 ];
+
+/**
+ * The old screen «Смена» is the board now: its addresses (a chatter's `/my/shifts/:shiftId`, the team's
+ * `/shifts/report/:shiftId`; matters, messages and the sale's chain link them) open the board, `?sale=` lights the row.
+ */
+function ToBoard() {
+  const location = useLocation();
+  const { shiftId } = useParams();
+  return <Navigate to={{ pathname: `/report/${shiftId ?? ""}`, search: location.search, hash: location.hash }} replace />;
+}
 
 /**
  * Кастомы (package I): everyone's — the lead and the owner see every order, a
@@ -164,6 +176,25 @@ const screens: RouteObject[] = [
 
 export const router = createBrowserRouter(
   [
+    // The extension's frame: no sign-in gate, never `me`; its requests go over the extension's port.
+    { path: "frame/report", lazy: () => import("../screens/report/index.js").then((m) => ({ Component: m.FrameReportScreen })) },
+    { path: "my/shifts/:shiftId", element: <ToBoard /> },
+    { path: "shifts/report/:shiftId", element: <ToBoard /> },
+    // The board's demo pages (scenarios, the extension's part): the demo and dev servers only, never a production build.
+    ...(import.meta.env.DEV
+      ? [
+        { path: "__report", lazy: () => import("../screens/report/demo.js").then((m) => ({ Component: m.ReportDemoIndex })) },
+        { path: "__report/frame", lazy: () => import("../screens/report/demo.js").then((m) => ({ Component: m.ReportDemoFrame })) },
+      ]
+      : []),
+    {
+      element: (
+        <AuthGate>
+          <Outlet />
+        </AuthGate>
+      ),
+      children: [{ element: <RoleGate roles={[...TEAM, ...CHATTER]} />, children: boardScreens }],
+    },
     {
       element: (
         <AuthGate>

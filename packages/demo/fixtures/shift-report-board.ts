@@ -2,6 +2,7 @@ import {
   SHIFT_REPORT_PHASE_CHIPS, personNameForms,
   type KernelOperationResponse, type ShiftReportBoard, type ShiftReportOwner, type ShiftReportPhase, type ShiftReportRow,
 } from "@agency_hub_core/contracts";
+import { millsFromDollars } from "@agency_hub_core/shared";
 
 import { demoError, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 
@@ -11,9 +12,12 @@ import { demoError, type DemoHandlers, type DemoReply, type DemoRequest } from "
  * Mia, pages Mia-2, Mia-3, Mia-4, Mia Free, Mia VIP, Mia Promo; the chatter Lev, his shift of 12 Nov 18:00–02:00;
  * colleagues Oleg (the shift before) and Seva; the same sales, times, sums and reasons as its `baseRows()`.
  *
- * Each scenario has a stable shift id (`DEMO_BOARD_SHIFTS`): `/workboard/report/<id>`. A write on a scenario's board
- * answers the board of the scenario it leads to (Сдать смену → Проверка, Подтверждаю → Учтён, Исправить → Правка…);
- * nothing is kept. Invented data only.
+ * Each scenario has a stable shift id (`DEMO_BOARD_SHIFTS`): `/workboard/report/<id>`. The board is clickable through
+ * the whole flow like the prototype: every write changes the scenario's board in memory (a tick, a word, a comment, a
+ * question, «Сдать смену», «Подтверждаю», «Исправить», «Досдать»…), and Hub's and Gengar's answers to a hand-in play
+ * after a pause, as in the prototype (Hub a second, Gengar four). The cookie `hub-demo-board` names a fresh copy of
+ * every scenario (the demo's index page `/workboard/__report` sets a new one on each link; a screenshot tool passes
+ * its own). Invented data only.
  */
 
 type Report = KernelOperationResponse<"shiftReport">;
@@ -35,13 +39,25 @@ export const DEMO_BOARD_SHIFTS = {
   fivePages: 9_120_014,
   emptyPage: 9_120_015,
 } as const;
-type Scenario = keyof typeof DEMO_BOARD_SHIFTS;
+export type DemoBoardScenario = keyof typeof DEMO_BOARD_SHIFTS;
+type Scenario = DemoBoardScenario;
 const SCENARIO_OF = new Map<number, Scenario>(Object.entries(DEMO_BOARD_SHIFTS).map(([key, id]) => [id, key as Scenario]));
+
+/** The board's own claim ids (an incoming claim, the questions asked from the draft): `saleClaimAnswer` comes here. */
+const INCOMING_CLAIM_ID = 8_002;
+const ASK_CLAIM_BASE = 8_100;
+
+/** Pauses of the played check, as the prototype's: Hub's answer, Gengar's answer, Gengar's late reading after «по проверке Hub». */
+const HUB_PAUSE_MS = 1_000;
+const GENGAR_PAUSE_MS = 4_000;
+const GENGAR_LATE_MS = 9_000;
 
 const LEV = { userId: 7_101, name: "Лев" };
 const OLEG = { userId: 7_102, name: "Олег" };
 const SEVA = { userId: 7_103, name: "Сева" };
 const WHO = { oleg: OLEG, seva: SEVA } as const;
+type Who = keyof typeof WHO;
+const whoOf = (userId: number | null | undefined): Who | null => (userId === OLEG.userId ? "oleg" : userId === SEVA.userId ? "seva" : null);
 const person = (one: { userId: number; name: string }) => ({ ...one, forms: personNameForms(one.name) });
 
 const PAGES = [
@@ -54,12 +70,12 @@ const PAGES = [
 ] as const;
 type PageId = (typeof PAGES)[number]["id"];
 
-type Own = "me" | "pot" | "oleg" | "seva" | "none" | "half:seva" | "";
+type Own = "me" | "pot" | "oleg" | "seva" | "none" | "half:seva" | "half:oleg" | "";
 interface Base {
-  id: number; page: PageId; day: 12 | 13; t: string; kind: "media" | "sub" | "tip"; name: string; handle: string;
+  id: number; page: PageId; day: 11 | 12 | 13; t: string; kind: "media" | "sub" | "tip"; name: string; handle: string;
   net: number; gross: number; tx: string; rule: Own; why: string; late?: boolean; lost?: boolean; before?: boolean;
 }
-const mk = (id: number, page: PageId, day: 12 | 13, t: string, kind: Base["kind"], name: string, handle: string, net: number, gross: number, tx: string, rule: Own, why: string, extra: Partial<Base> = {}): Base =>
+const mk = (id: number, page: PageId, day: 11 | 12 | 13, t: string, kind: Base["kind"], name: string, handle: string, net: number, gross: number, tx: string, rule: Own, why: string, extra: Partial<Base> = {}): Base =>
   ({ id, page, day, t, kind, name, handle, net, gross, tx, rule, why, ...extra });
 
 /** The prototype's `baseRows()`, one to one. */
@@ -98,6 +114,11 @@ const BASE: Base[] = [
   mk(40, "vip", 12, "20:20", "sub", "Bram", "bram_h", 16, 20, "", "me", "подписался после вашего сообщения"),
   mk(41, "vip", 12, "14:45", "tip", "Soren", "soren_w", 8, 10, "", "", "", { before: true }),
 ];
+/** «Найти продажу»: sales of the days before on the shift's pages that no report of Lev's holds. */
+const CLAIMABLE: Base[] = [
+  mk(60, "m2", 11, "23:14", "tip", "Rowan/Canada", "rowan_k", 15, 0, "981329101442210831", "none", "фану никто не писал"),
+  mk(61, "m3", 11, "21:40", "media", "Teo", "teo_r", 22, 0, "981328815503317702", "oleg", "ппв Олега"),
+];
 const MY_NOTES: Record<number, string> = { 7: "голосовое, просил ещё", 22: "тир Gold, обещан кастом 5 минут, сдать до пятницы" };
 const G_EDITS = [
   { id: 3, from: "me" as Own, to: "half:seva" as Own, why: "О покупке договорился Сева 11 нояб.: фан написал «возьму завтра вечером». Вы отправили ппв и закрыли продажу." },
@@ -114,11 +135,12 @@ const pageOf = (id: PageId) => PAGES.find((page) => page.id === id)!;
 const at = (day: number, time: string) => new Date(Date.UTC(2026, 10, day, Number(time.slice(0, 2)) - 3, Number(time.slice(3)))).toISOString();
 const SHIFT_START = at(12, "18:00");
 const SHIFT_END = at(13, "02:00");
-const HANDED_IN = at(13, "02:04");
-const COUNTED = at(13, "02:09");
-const m = (usd: number) => Math.round(usd * 1000);
+/** The prototype's clocks: handed in 02:04 (again 02:21), counted 02:09 (by Hub's check alone 02:16). */
+const HANDED_IN = [at(13, "02:04"), at(13, "02:21")] as const;
+const COUNTED = { found: at(13, "02:09"), silent: at(13, "02:16") } as const;
+const m = (usd: number) => Number(millsFromDollars(usd));
 
-const half = (own: Own) => (own.startsWith("half:") ? own.slice(5) as "seva" : null);
+const half = (own: Own): Who | null => (own.startsWith("half:") ? own.slice(5) as Who : null);
 const cut = (own: Own, net: number) => (own === "me" ? net : half(own) ? net / 2 : 0);
 function ownerOf(own: Own): ShiftReportOwner {
   if (own === "me") return { kind: "me", userId: LEV.userId, name: LEV.name, words: "моя" };
@@ -130,82 +152,130 @@ function ownerOf(own: Own): ShiftReportOwner {
 }
 const ruleWord = (own: Own) => (own === "me" ? "ваша" : ownerOf(own).words);
 const plainUsd = (v: number) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;
+/** Who answers a question about a sale the rule gives `rule`: the colleague, or the owner for the pot. */
+const askedOf = (rule: Own): Who | "owner" | null => (rule === "oleg" || rule === "seva" ? rule : half(rule) ?? (rule === "pot" ? "owner" : null));
+
+interface Ask { to: Who | "owner"; want: Own; note: string; state: "asked" | "disputed" }
+interface Proposal { id: number; from: Own; to: Own; why: string; state: "proposed" | "declined" | "accepted" }
+interface OffPlatform { id: number; amountMills: number; fromWhom: string; whatFor: string; state: "pending" | "confirmed" | "rejected"; pageLabel: string | null }
 
 interface State {
   phase: ShiftReportPhase;
   own: Map<number, Own>;
   ok: Map<number, string>;
   notes: Map<number, { text: string; by: "person" | "agent" }>;
-  ask: { id: number; to: "oleg" | "owner"; note: string } | null;
-  incoming: { id: number; from: "seva"; note: string } | null;
-  proposals: Map<number, { id: number; from: Own; to: Own; why: string; state: "proposed" | "accepted" }>;
+  asks: Map<number, Ask>;
+  incoming: { id: number; from: Who; note: string; state: "asked" | "disputed" } | null;
+  proposals: Map<number, Proposal>;
   gNote: { id: number; text: string; state: "proposed" | "accepted" } | null;
   lost: boolean;
+  lostAdded: boolean;
   late: boolean;
+  lateAdded: boolean;
+  /** Sales added by hand («Найти продажу»). */
+  extra: Base[];
   pages: PageId[];
+  /** How Gengar answers the next check: found (proposals), clean, silent. */
+  mode: "found" | "clean" | "silent";
   gengar: "reading" | "found" | "clean" | "silent" | null;
+  /** When the check began and what it was handed in with: the played answers count from here. */
+  submittedAtMs: number | null;
+  submittedMills: number;
+  submittedCount: number;
+  candidates: number;
   wasMills: number | null;
   counted: boolean;
+  countedAt: string | null;
+  countedMills: number;
+  /** Counted by Hub's check while Gengar was silent: his reading comes later. */
+  countedAtMs: number | null;
+  gWait: boolean;
+  /** «Исправить»: the counted board as it was, for «Отмена». */
+  snapshot: State | null;
   comment: string;
+  offPlatform: OffPlatform[];
 }
 
 function fresh(): State {
   return {
     phase: "draft", own: new Map(), ok: new Map(), notes: new Map(Object.entries(MY_NOTES).map(([id, text]) => [Number(id), { text, by: "person" as const }])),
-    ask: null, incoming: null, proposals: new Map(), gNote: null, lost: false, late: false, pages: ["m2", "m3", "fr", "vip"],
-    gengar: null, wasMills: null, counted: false, comment: "",
+    asks: new Map(), incoming: null, proposals: new Map(), gNote: null, lost: false, lostAdded: false, late: false, lateAdded: false, extra: [],
+    pages: ["m2", "m3", "fr", "vip"], mode: "found", gengar: null, submittedAtMs: null, submittedMills: 0, submittedCount: 0, candidates: 0,
+    wasMills: null, counted: false, countedAt: null, countedMills: 0, countedAtMs: null, gWait: false, snapshot: null, comment: "", offPlatform: [],
+  };
+}
+
+function clone(state: State): State {
+  return {
+    ...state,
+    own: new Map(state.own), ok: new Map(state.ok), notes: new Map(state.notes), asks: new Map(state.asks),
+    incoming: state.incoming && { ...state.incoming }, proposals: new Map([...state.proposals].map(([id, one]) => [id, { ...one }])),
+    gNote: state.gNote && { ...state.gNote }, extra: [...state.extra], pages: [...state.pages], offPlatform: state.offPlatform.map((one) => ({ ...one })),
+    snapshot: null,
   };
 }
 
 function rowsOf(state: State) {
-  return BASE.filter((row) => state.pages.includes(row.page) && (!row.lost || state.lost) && (!row.late || state.late));
+  return [...BASE, ...state.extra].filter((row) => state.pages.includes(row.page) && (!row.lost || state.lost) && (!row.late || state.late));
 }
+const lostOpen = (state: State, row: Base) => !!row.lost && !state.lostAdded;
+const lateOpen = (state: State, row: Base) => !!row.late && !state.lateAdded;
 const ownNow = (state: State, row: Base): Own => state.own.get(row.id) ?? (row.lost ? "me" : row.rule);
-const lateOpen = (state: State, row: Base) => !!row.late && state.own.get(row.id) === undefined;
 function shareOf(state: State, row: Base): number {
-  if (row.before || (row.lost && state.own.get(row.id) === undefined) || lateOpen(state, row)) return 0;
-  if (state.ask?.id === row.id || state.incoming?.id === row.id) return 0;
+  if (row.before || lostOpen(state, row) || lateOpen(state, row)) return 0;
+  if (state.asks.has(row.id) || state.incoming?.id === row.id) return 0;
   return cut(ownNow(state, row), row.net);
 }
+function setOwn(state: State, row: Base, own: Own) {
+  if (own === (row.lost ? "me" : row.rule)) state.own.delete(row.id);
+  else state.own.set(row.id, own);
+}
+const totalOf = (state: State) => rowsOf(state).reduce((sum, row) => sum + m(shareOf(state, row)), 0);
+const countOf = (state: State) => rowsOf(state).filter((row) => shareOf(state, row) > 0).length;
 
-function rowOf(state: State, row: Base): ShiftReportRow {
+function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
   const page = pageOf(row.page);
   const fansly = page.platform === "fansly";
-  const own = ownNow(state, row);
+  const word = ownNow(state, row);
   const share = shareOf(state, row);
   const editing = state.phase === "draft" || state.phase === "fixing";
-  const lostOpen = !!row.lost && state.own.get(row.id) === undefined;
-  const plain = !row.before && !lostOpen && !lateOpen(state, row);
+  const sighting = !!row.lost;
+  const plain = !row.before && !lostOpen(state, row) && !lateOpen(state, row) && !sighting;
   const proposal = state.proposals.get(row.id) ?? null;
+  const ask = state.asks.get(row.id) ?? null;
+  const incoming = state.incoming?.id === row.id ? state.incoming : null;
   const note = state.notes.get(row.id) ?? (state.gNote?.id === row.id ? { text: state.gNote.text, by: "agent" as const } : null);
-  let owner = ownerOf(own);
+  let owner = ownerOf(word);
   let reasonWords = "";
-  if (lostOpen) {
+  if (lostOpen(state, row)) {
     owner = { kind: "me", userId: LEV.userId, name: LEV.name, words: "нет в Hub" };
     reasonWords = "Hub не поймал";
   } else if (lateOpen(state, row)) {
     owner = { kind: "me", userId: LEV.userId, name: LEV.name, words: "после сдачи" };
     reasonWords = row.why;
-  } else if (state.ask?.id === row.id) {
-    reasonWords = state.ask.to === "owner" ? "ждём владельца" : "ждём ответа Олега";
-  } else if (state.incoming?.id === row.id) {
-    reasonWords = "Сева оспаривает";
+  } else if (ask?.state === "asked") {
+    reasonWords = ask.to === "owner" ? "ждём владельца" : `ждём ответа ${personNameForms(WHO[ask.to].name).gen}`;
+  } else if (ask?.state === "disputed" && ask.to !== "owner") {
+    reasonWords = `${WHO[ask.to].name} не согласен, решит владелец`;
+  } else if (incoming) {
+    reasonWords = `${WHO[incoming.from].name} оспаривает`;
   } else if (proposal && (proposal.state === "proposed" || proposal.state === "accepted")) {
     reasonWords = "поменял Генгар";
   } else if (state.ok.has(row.id)) {
     reasonWords = state.ok.get(row.id)!;
-  } else if (own !== row.rule && !row.lost) {
+  } else if (word !== row.rule && !row.lost) {
     reasonWords = `по правилу ${ruleWord(row.rule)}`;
   } else if (share <= 0) {
     reasonWords = row.why;
   }
   // The prototype's `ownerInfo`: on a half that counts, line 2 says the person's half; the reason moves to the title.
-  if (half(own) && share > 0 && !lostOpen && !lateOpen(state, row)) reasonWords = `вам ${plainUsd(share)}`;
-  const attention = lostOpen || lateOpen(state, row) || state.incoming?.id === row.id
+  if (half(word) && share > 0 && !lostOpen(state, row) && !lateOpen(state, row)) reasonWords = `вам ${plainUsd(share)}`;
+  const attention = lostOpen(state, row) || lateOpen(state, row) || incoming?.state === "asked"
     || (state.phase === "confirm" && (proposal?.state === "proposed" || (state.gNote?.id === row.id && note?.by === "agent")));
+  const askTo = ask === null ? null : ask.to;
   return {
-    key: lostOpen ? `s${row.id}` : `t${row.id}`,
-    transactionId: lostOpen ? null : row.id,
+    key: sighting ? `s${row.id}` : `t${row.id}`,
+    transactionId: sighting ? null : row.id,
     pageLabel: page.label,
     platform: page.platform,
     platformRef: fansly ? row.tx : null,
@@ -218,25 +288,26 @@ function rowOf(state: State, row: Base): ShiftReportRow {
     grossMills: fansly ? null : m(row.gross),
     rule: { owner: row.before ? ownerOf("oleg") : ownerOf(row.lost ? "me" : row.rule), reason: row.before ? "holder" : "demo", words: row.why },
     owner: row.before ? ownerOf("oleg") : owner,
-    statement: own === row.rule || row.before ? null : own === "none" ? "not_mine" : own === "me" ? "mine" : half(own) ? "share" : own === "pot" ? "pot" : "give",
+    statement: word === row.rule || row.before || row.lost ? null : word === "none" ? "not_mine" : word === "me" ? "mine" : half(word) ? "share" : word === "pot" ? "pot" : "give",
     reasonWords: row.before ? "смена Олега" : reasonWords,
     ticked: share > 0,
     amountMills: m(share),
     before: row.before ? { user: person(OLEG) } : null,
     late: !!row.late,
-    ask: state.ask?.id === row.id ? {
-      claimId: 8_001,
-      to: state.ask.to === "owner" ? "owner" : "colleague",
-      toUser: state.ask.to === "owner" ? null : person(OLEG),
-      want: ownerOf("me"),
-      note: state.ask.note,
-      state: "asked",
+    ask: ask === null || askTo === null ? null : {
+      claimId: ASK_CLAIM_BASE + row.id,
+      to: askTo === "owner" ? "owner" : "colleague",
+      toUser: askTo === "owner" ? null : person(WHO[askTo]),
+      want: ownerOf(ask.want),
+      note: ask.note,
+      state: ask.state,
       answerNote: null,
-      answerBy: state.ask.to === "owner" ? null : at(13, "19:40"),
+      answerBy: askTo === "owner" ? null : at(13, "19:40"),
       decision: null,
-    } : null,
-    incoming: state.incoming?.id === row.id ? {
-      claimId: 8_002, from: person(SEVA), statement: "mine", note: state.incoming.note, state: "asked", canAnswer: true, answer: null, answerBy: at(14, "02:10"),
+    },
+    incoming: incoming ? {
+      claimId: INCOMING_CLAIM_ID, from: person(WHO[incoming.from]), statement: "mine", note: incoming.note, state: incoming.state,
+      canAnswer: own && incoming.state === "asked", answer: incoming.state === "disputed" ? "disagree" : null, answerBy: at(14, "02:10"),
     } : null,
     proposal: proposal ? {
       id: proposal.id, kind: "owner_change", from: ownerOf(proposal.from), to: ownerOf(proposal.to),
@@ -245,20 +316,22 @@ function rowOf(state: State, row: Base): ShiftReportRow {
       id: 5_103, kind: "note", from: null, to: null, note: state.gNote.text, deltaMills: 0, why: "Из переписки: фан просил вторую часть офиса.", state: state.gNote.state, afterCounted: false, by: "Генгар",
     } : null,
     note: note ? { text: note.text, by: note.by, byName: note.by === "agent" ? "Генгар" : LEV.name } : null,
-    sighting: row.lost ? { id: row.id, seenAt: at(12, "21:31"), added: !lostOpen } : null,
-    editable: editing && plain,
-    canNote: (editing || state.phase === "confirm") && plain,
+    sighting: sighting ? { id: row.id, seenAt: at(12, "21:31"), added: state.lostAdded } : null,
+    editable: own && editing && plain,
+    canNote: own && (editing || state.phase === "confirm") && plain,
     attention,
   };
 }
 
-function boardOf(state: State): ShiftReportBoard {
+const minuteOf = (row: Base) => row.day * 1440 + Number(row.t.slice(0, 2)) * 60 + Number(row.t.slice(3));
+
+function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
   const rows = rowsOf(state);
   const columns = state.pages.map((id) => {
     const page = pageOf(id);
-    const all = rows.filter((row) => row.page === id).sort((a, b) => b.day * 1440 + Number(b.t.slice(0, 2)) * 60 + Number(b.t.slice(3)) - (a.day * 1440 + Number(a.t.slice(0, 2)) * 60 + Number(a.t.slice(3))));
-    const shift = all.filter((row) => !row.before).map((row) => rowOf(state, row));
-    const before = all.filter((row) => row.before).map((row) => rowOf(state, row));
+    const all = rows.filter((row) => row.page === id).sort((a, b) => minuteOf(b) - minuteOf(a));
+    const shift = all.filter((row) => !row.before).map((row) => rowOf(state, row, own));
+    const before = all.filter((row) => row.before).map((row) => rowOf(state, row, own));
     return {
       pageLabel: page.label, platform: page.platform, pageHandle: page.handle, modelName: "Mia",
       rows: shift,
@@ -272,28 +345,31 @@ function boardOf(state: State): ShiftReportBoard {
   const flat = columns.flatMap((column) => column.rows);
   const nowMills = flat.reduce((sum, row) => sum + row.amountMills, 0);
   const count = flat.filter((row) => row.ticked).length;
-  const handed = state.phase !== "draft";
+  const handed = state.candidates > 0;
+  const hubDone = state.submittedAtMs === null || nowMs - state.submittedAtMs >= HUB_PAUSE_MS || state.phase !== "checking";
   const proposals = [...state.proposals.values()].length;
-  const gengarState = state.gengar ?? (state.counted ? "found" : "idle");
-  const waiting = flat.filter((row) => row.ask || row.incoming || (row.sighting && !row.sighting.added) || (row.late && !row.ticked)).map((row) => ({
+  const gengarState = state.gengar ?? "idle";
+  const waiting = flat.filter((row) => row.ask?.state === "asked" || row.ask?.state === "disputed" || (row.incoming && row.incoming.state !== "settled")
+    || (row.sighting && !row.sighting.added) || (row.late && !row.ticked)).map((row) => ({
     key: row.key, transactionId: row.transactionId, pageLabel: row.pageLabel, fanName: row.fan.name, netMills: row.netMills,
     why: row.ask ? "ask" as const : row.incoming ? "incoming" as const : row.sighting ? "sighting" as const : "late" as const,
   }));
+  const again = state.candidates > 1;
   return {
     phase: state.phase,
     chip: SHIFT_REPORT_PHASE_CHIPS[state.phase],
     offShift: [{ pageLabel: "Mia-1", platform: "fansly" }],
     columns,
     candidate: handed ? {
-      id: 6_001, number: 1, madeAt: HANDED_IN, by: LEV.name, door: "workboard", cutoffAt: HANDED_IN,
-      count: 17, totalMills: m(477.4),
+      id: 6_000 + state.candidates, number: state.candidates, madeAt: HANDED_IN[again ? 1 : 0], by: LEV.name, door: "workboard", cutoffAt: HANDED_IN[again ? 1 : 0],
+      count: state.submittedCount, totalMills: state.submittedMills,
       hub: {
-        state: "matched",
-        pages: columns.map((column) => ({ pageLabel: column.pageLabel, state: "matched" as const, foundCount: 0, foundMills: 0, at: at(13, "02:05") })),
+        state: hubDone ? "matched" : "running",
+        pages: columns.map((column) => ({ pageLabel: column.pageLabel, state: hubDone ? "matched" as const : "running" as const, foundCount: 0, foundMills: 0, at: hubDone ? at(13, "02:05") : null })),
         foundCount: 0, foundMills: 0,
       },
       gengar: {
-        state: gengarState, since: HANDED_IN,
+        state: gengarState, since: HANDED_IN[again ? 1 : 0],
         answeredAt: gengarState === "found" || gengarState === "clean" ? at(13, "02:07") : null,
         proposals, notes: state.gNote ? 1 : 0,
       },
@@ -303,10 +379,10 @@ function boardOf(state: State): ShiftReportBoard {
     waiting,
     colleagues: [person(OLEG), person(SEVA)],
     decider: { kind: "owner", user: null, words: "владелец" },
-    canConfirm: state.phase === "confirm",
-    needsMe: state.phase === "confirm" || waiting.some((one) => one.why === "incoming" || one.why === "late"),
-    handedInAt: handed ? HANDED_IN : null,
-    countedAt: state.counted ? COUNTED : null,
+    canConfirm: own && state.phase === "confirm",
+    needsMe: own && (state.phase === "confirm" || waiting.some((one) => one.why === "incoming" || one.why === "late")),
+    handedInAt: handed ? HANDED_IN[again ? 1 : 0] : null,
+    countedAt: state.counted ? state.countedAt : null,
   };
 }
 
@@ -320,35 +396,101 @@ function postOf(state: State, board: ShiftReportBoard): string {
   const lines = [...fans.values()].map((rows) => `${rows[0]!.platform === "fansly" ? "https://fansly.com/" : "https://onlyfans.com/"}${rows[0]!.fan.username} - ${rows[0]!.fan.name}, `
     + rows.map((row) => `${word(row)} ${money(row.amountMills)}${row.owner.kind === "share" ? ` (${row.owner.words})` : ""}${row.note ? ` (${row.note.text})` : ""}`).join(", "));
   const acc = (platform: "fansly" | "onlyfans") => board.columns.filter((column) => column.platform === platform).map((column) => `• ${column.pageLabel} - ${money(column.sumMills)}`).join("\n");
-  return `🗓 Дата: 12.11.2026\n👤 Чаттер: #lev\n\n📌 Аккаунты:\nFansly\n• Mia-1 - не в смене\n${acc("fansly")}\nOF\n${acc("onlyfans")}\n\n💰 Общий доход: ${money(board.totals.nowMills)}\n\n📈 Основные продажи:\n${lines.join("\n")}\n\n📝 Комментарий:\n${state.comment.trim() || "-"}\n\nОтчёт № 1`;
+  return `🗓 Дата: 12.11.2026\n👤 Чаттер: #lev\n\n📌 Аккаунты:\nFansly\n• Mia-1 - не в смене\n${acc("fansly")}\nOF\n${acc("onlyfans")}\n\n💰 Общий доход: ${money(board.totals.nowMills)}\n\n📈 Основные продажи:\n${lines.join("\n")}\n\n📝 Комментарий:\n${state.comment.trim() || "-"}\n\nОтчёт № 2318`;
+}
+
+/** Gengar reads the candidate (the prototype's `gengarRun`): his proposals stand applied, a card under each. */
+function gengarAnswers(state: State) {
+  if (state.mode === "silent") {
+    state.gengar = "silent";
+    return;
+  }
+  if (state.mode === "clean") {
+    state.gengar = "clean";
+    return;
+  }
+  const rows = rowsOf(state);
+  G_EDITS.forEach((edit, index) => {
+    const row = rows.find((one) => one.id === edit.id);
+    if (!row || state.asks.has(row.id) || ownNow(state, row) !== edit.from) return;
+    state.proposals.set(edit.id, { id: 5_101 + index, from: edit.from, to: edit.to, why: edit.why, state: "proposed" });
+    setOwn(state, row, edit.to);
+  });
+  const noted = rows.find((one) => one.id === 8);
+  if (noted && !state.notes.has(8) && shareOf(state, noted) > 0) state.gNote = { id: 8, text: G_NOTES[8]!, state: "proposed" };
+  state.gengar = state.proposals.size > 0 || state.gNote ? "found" : "clean";
+}
+
+/** «Сдать смену» (and «Сдать заново»): a candidate, the check begins. */
+function handIn(state: State, nowMs: number) {
+  const again = state.phase === "fixing";
+  // «Сдать заново»: «Было» is the report before the correction.
+  state.wasMills = again ? state.wasMills : null;
+  state.submittedMills = totalOf(state);
+  state.submittedCount = countOf(state);
+  state.candidates += 1;
+  state.phase = "checking";
+  state.gengar = "reading";
+  state.submittedAtMs = nowMs;
+  state.snapshot = null;
+  // A second hand-in is checked again and comes back clean, as in the prototype.
+  if (again) state.mode = "clean";
+  // Gengar's edits taken earlier stay the row's reason (the prototype's `settleGengar`).
+  for (const [id, proposal] of state.proposals) if (proposal.state === "accepted") state.ok.set(id, "поменял Генгар");
+  state.proposals.clear();
+  state.gNote = null;
+}
+
+/** The played answers: Hub after a second, Gengar after four; Gengar's late reading after «по проверке Hub». */
+function advance(state: State, nowMs: number) {
+  if (state.phase === "checking" && state.submittedAtMs !== null && nowMs - state.submittedAtMs >= GENGAR_PAUSE_MS) {
+    gengarAnswers(state);
+    if (state.wasMills === null) state.wasMills = state.submittedMills;
+    state.phase = "confirm";
+  }
+  if (state.phase === "counted" && state.gWait && state.countedAtMs !== null && nowMs - state.countedAtMs >= GENGAR_LATE_MS) {
+    state.gWait = false;
+    state.gengar = "clean";
+  }
+}
+
+/** «Подтверждаю» (the prototype's `confirmNow` with `settleGengar`). */
+function confirm(state: State, nowMs: number) {
+  for (const [id, proposal] of state.proposals) {
+    if (proposal.state === "proposed") proposal.state = "accepted";
+    else if (proposal.state === "declined") {
+      state.proposals.delete(id);
+      state.ok.set(id, "Генгар предлагал иначе, решит владелец");
+    }
+  }
+  if (state.gNote) {
+    state.notes.set(state.gNote.id, { text: state.gNote.text, by: "agent" });
+    state.gNote = null;
+  }
+  state.phase = "counted";
+  state.counted = true;
+  state.countedAt = state.gengar === "silent" ? COUNTED.silent : COUNTED.found;
+  state.countedAtMs = nowMs;
+  state.gWait = state.gengar === "silent";
+  state.countedMills = totalOf(state);
+  state.wasMills = null;
 }
 
 /** Hand in and check: the prototype's `confirmScn`. */
 function confirmState(mode: "found" | "clean" | "silent"): State {
   const state = fresh();
-  state.phase = "confirm";
-  state.gengar = mode;
-  if (mode === "found") {
-    state.wasMills = m(477.4);
-    G_EDITS.forEach((edit, at) => {
-      state.proposals.set(edit.id, { id: 5_101 + at, from: edit.from, to: edit.to, why: edit.why, state: "proposed" });
-      state.own.set(edit.id, edit.to);
-    });
-    state.gNote = { id: 8, text: G_NOTES[8]!, state: "proposed" };
-  }
+  state.mode = mode;
+  handIn(state, 0);
+  advance(state, GENGAR_PAUSE_MS);
   return state;
 }
 function countedState(): State {
   const state = confirmState("found");
-  state.phase = "counted";
-  state.counted = true;
-  state.wasMills = null;
-  state.proposals.forEach((one) => { one.state = "accepted"; });
-  if (state.gNote) state.gNote.state = "accepted";
+  confirm(state, 0);
   return state;
 }
 
-const SCENARIOS: Record<Scenario, () => State> = {
+const SCENARIOS: Record<Scenario, (nowMs: number) => State> = {
   draft: fresh,
   note: () => {
     const state = fresh();
@@ -356,34 +498,64 @@ const SCENARIOS: Record<Scenario, () => State> = {
     state.comment = "Dario ждёт кастом к пятнице, Viggo торгуется";
     return state;
   },
-  askColleague: () => ({ ...fresh(), ask: { id: 6, to: "oleg", note: "Felix ответил на мою рассылку в 19:36" } }),
-  askOwner: () => ({ ...fresh(), ask: { id: 2, to: "owner", note: "тип под постом, но фан написал, что это мне за вечер" } }),
+  askColleague: () => {
+    const state = fresh();
+    state.asks.set(6, { to: "oleg", want: "me", note: "Felix ответил на мою рассылку в 19:36", state: "asked" });
+    return state;
+  },
+  askOwner: () => {
+    const state = fresh();
+    state.asks.set(2, { to: "owner", want: "me", note: "тип под постом, но фан написал, что это мне за вечер", state: "asked" });
+    return state;
+  },
   notInHub: () => ({ ...fresh(), lost: true }),
-  checking: () => ({ ...fresh(), phase: "checking", gengar: "reading" }),
+  checking: (nowMs) => {
+    const state = fresh();
+    handIn(state, nowMs);
+    return state;
+  },
   gengarFound: () => confirmState("found"),
   gengarClean: () => confirmState("clean"),
   gengarSilent: () => confirmState("silent"),
-  dispute: () => ({ ...countedState(), incoming: { id: 23, from: "seva", note: "этот ппв Ash я отправлял 10-го, Лев только напомнил" } }),
+  dispute: () => ({ ...countedState(), incoming: { id: 23, from: "seva", note: "этот ппв Ash я отправлял 10-го, Лев только напомнил", state: "asked" } }),
   late: () => ({ ...countedState(), late: true }),
   counted: countedState,
   fixing: () => {
-    const state = countedState();
+    const counted = countedState();
+    const state = clone(counted);
+    state.snapshot = counted;
     state.phase = "fixing";
-    state.wasMills = m(461.4);
-    state.own.set(7, "none");
+    state.wasMills = counted.countedMills;
+    setOwn(state, BASE.find((row) => row.id === 7)!, "none");
     return state;
   },
   fivePages: () => ({ ...fresh(), pages: ["m2", "m3", "m4", "fr", "vip"] }),
   emptyPage: () => ({ ...fresh(), pages: ["m2", "m3", "fr", "vip", "pr"] }),
 };
 
+/** Every scenario's board as it stands, per fresh copy (`hub-demo-board`): kept until the demo server restarts. */
+const BOARDS = new Map<string, State>();
+const BOARD_COOKIE = "hub-demo-board";
+
+function stateOf(request: DemoRequest, scenario: Scenario): State {
+  const key = `${request.cookie?.(BOARD_COOKIE) ?? "0"}:${scenario}`;
+  let state = BOARDS.get(key);
+  if (state === undefined) {
+    if (BOARDS.size > 400) BOARDS.clear();
+    state = SCENARIOS[scenario](request.now.getTime());
+    BOARDS.set(key, state);
+  }
+  advance(state, request.now.getTime());
+  return state;
+}
+
 function reportOf(request: DemoRequest, scenario: Scenario): Report {
-  const state = SCENARIOS[scenario]();
-  const board = boardOf(state);
+  const state = stateOf(request, scenario);
   const own = request.role === "chatter";
+  const board = boardOf(state, own, request.now.getTime());
   const shiftId = DEMO_BOARD_SHIFTS[scenario];
   const version = state.counted ? {
-    version: 1, submittedAt: COUNTED, door: "workboard" as const, by: LEV.name, totalMills: m(461.4), madeFor: null,
+    version: 1, submittedAt: state.countedAt ?? COUNTED.found, door: "workboard" as const, by: LEV.name, totalMills: state.countedMills, madeFor: null,
   } : null;
   const late = board.columns.flatMap((column) => column.rows).filter((row) => row.late && !row.ticked);
   return {
@@ -397,64 +569,251 @@ function reportOf(request: DemoRequest, scenario: Scenario): Report {
     state: version ? "submitted" : "open",
     latest: version,
     versions: version ? [version] : [],
-    view: null,
+    // The board's comment and «мимо площадки» ride on the draft's body until the board carries them itself.
+    view: {
+      source: "draft", version: null, submittedAt: null, door: null, lines: [], offPlatform: state.offPlatform, comment: state.comment,
+      pages: board.columns.map((column) => ({ pageLabel: column.pageLabel, platform: column.platform, amountMills: column.sumMills })),
+      totalMills: board.totals.nowMills, cut: !own, computedAt: request.now.toISOString(),
+    },
     afterSubmission: own && late.length ? { count: late.length, mills: late.reduce((sum, row) => sum + row.netMills, 0) } : null,
     posts: own && state.counted ? [{ modelName: "Mia", text: postOf(state, board) }] : [],
     colleagues: [OLEG, SEVA],
     claims: [],
-    board: own ? board : { ...board, canConfirm: false, needsMe: false },
+    board,
     serverNow: request.now.toISOString(),
   };
 }
-
-/** Where a write on a scenario's board leads. */
-const NEXT: Partial<Record<"submit" | "confirm" | "reopen" | "cancel" | "resend", Partial<Record<Scenario, Scenario>>>> = {
-  submit: { draft: "checking", note: "checking", askColleague: "checking", askOwner: "checking", notInHub: "checking", fixing: "gengarClean", fivePages: "checking", emptyPage: "checking" },
-  confirm: { gengarFound: "counted", gengarClean: "counted", gengarSilent: "counted" },
-  reopen: { counted: "fixing", late: "fixing", dispute: "fixing", gengarFound: "fixing", gengarClean: "fixing", gengarSilent: "fixing" },
-  cancel: { fixing: "counted" },
-  resend: { late: "counted" },
-};
 
 export function isDemoBoardShift(shiftId: number): boolean {
   return SCENARIO_OF.has(shiftId);
 }
 
 /** The scenario board of a shift id, or null — not a scenario shift. */
-export function demoBoardReport(request: DemoRequest, shiftId: number, write?: keyof typeof NEXT): Report | null {
+export function demoBoardReport(request: DemoRequest, shiftId: number): Report | null {
   const scenario = SCENARIO_OF.get(shiftId);
-  if (scenario === undefined) return null;
-  const next = write === undefined ? scenario : NEXT[write]?.[scenario] ?? scenario;
-  return reportOf(request, next);
+  return scenario === undefined ? null : reportOf(request, scenario);
 }
 
 const noBoard = (): DemoReply => demoError(404, "Not Found", "No such shift");
-const same = (request: DemoRequest): Report | DemoReply => demoBoardReport(request, Number(request.params.shiftId)) ?? noBoard();
-const guard = (request: DemoRequest) => isDemoBoardShift(Number(request.params.shiftId));
+const notYours = (): DemoReply => demoError(403, "Forbidden", "Only the person hands their shift in");
+const refused = (why: string): DemoReply => demoError(400, "Bad Request", why);
 
-export const shiftReportBoardHandlers: DemoHandlers = {
-  shiftReportCurrent: (request) => ({ report: reportOf(request, "draft"), phase: "draft", serverNow: request.now.toISOString() }),
-  shiftReportConfirm: (request) => {
-    if (!guard(request)) return noBoard();
-    const scenario = SCENARIO_OF.get(Number(request.params.shiftId))!;
-    const confirmed = NEXT.confirm?.[scenario] !== undefined;
-    return { confirmed, refused: confirmed ? null : "not_ready", report: demoBoardReport(request, DEMO_BOARD_SHIFTS[scenario], "confirm")! };
-  },
-  shiftReportReopen: (request) => demoBoardReport(request, Number(request.params.shiftId), "reopen") ?? same(request),
-  shiftReportReopenCancel: (request) => demoBoardReport(request, Number(request.params.shiftId), "cancel") ?? same(request),
-  shiftReportResend: (request) => demoBoardReport(request, Number(request.params.shiftId), "resend") ?? same(request),
-  shiftReportAsk: (request) => same(request),
-  shiftReportAskWithdraw: (request) => same(request),
-  shiftReportProposalAnswer: (request) => same(request),
-  shiftReportSightingAdd: (request) => same(request),
+type Write = (state: State, request: DemoRequest) => DemoReply | null;
+
+/** A write on a scenario's board: the person's own (the demo chatter), on the scenario's state. Null — not a board shift. */
+function write(request: DemoRequest, shiftId: number, change: Write): Report | DemoReply | null {
+  const scenario = SCENARIO_OF.get(shiftId);
+  if (scenario === undefined) return null;
+  if (request.role !== "chatter") return notYours();
+  const state = stateOf(request, scenario);
+  const failed = change(state, request);
+  return failed ?? reportOf(request, scenario);
+}
+const shiftOf = (request: DemoRequest) => Number(request.params.shiftId);
+const rowById = (state: State, id: number) => rowsOf(state).find((row) => row.id === id) ?? null;
+const editing = (state: State) => state.phase === "draft" || state.phase === "fixing";
+
+const fromWord = (body: { statement: string | null; shareWithUserId?: number | null; toUserId?: number | null }, row: Base): Own | null => {
+  switch (body.statement) {
+    case null: return row.rule;
+    case "not_mine": return "none";
+    case "mine": return "me";
+    case "pot": return "pot";
+    case "share": { const who = whoOf(body.shareWithUserId); return who ? `half:${who}` : null; }
+    case "give": return whoOf(body.toUserId);
+    default: return null;
+  }
 };
 
-/** «Сдать смену» on a scenario's board. */
-export function demoBoardSubmit(request: DemoRequest, shiftId: number): Report | null {
-  return demoBoardReport(request, shiftId, "submit");
+/** The writes of the old operations (shift-reports.ts asks here first for a board shift). */
+export function demoBoardWrite(request: DemoRequest, operation: "lineSet" | "comment" | "offPlatformAdd" | "offPlatformWithdraw" | "submit" | "claimable"): unknown {
+  const shiftId = shiftOf(request);
+  if (!isDemoBoardShift(shiftId)) return null;
+  if (operation === "claimable") {
+    if (request.role !== "chatter") return notYours();
+    const state = stateOf(request, SCENARIO_OF.get(shiftId)!);
+    return {
+      sales: CLAIMABLE.filter((sale) => !state.extra.some((one) => one.id === sale.id) && state.pages.includes(sale.page)).map((sale) => ({
+        transactionId: sale.id, pageLabel: pageOf(sale.page).label, platform: pageOf(sale.page).platform, kind: KIND[sale.kind], occurredAt: at(sale.day, sale.t),
+        netMills: m(sale.net), fan: { fanRef: sale.handle, name: sale.name, username: sale.handle }, home: sale.rule === "none" ? "nobody" : "shift", words: sale.why,
+      })),
+      serverNow: request.now.toISOString(),
+    };
+  }
+  let saved = false;
+  const answer = write(request, shiftId, (state) => {
+    if (operation === "comment") {
+      state.comment = String((request.body as { comment: string }).comment);
+      saved = true;
+      return null;
+    }
+    if (operation === "offPlatformAdd") {
+      const body = request.body as { amountMills: number; fromWhom: string; whatFor: string };
+      state.offPlatform.push({ id: 950 + state.offPlatform.length, amountMills: body.amountMills, fromWhom: body.fromWhom, whatFor: body.whatFor, state: "pending", pageLabel: null });
+      saved = true;
+      return null;
+    }
+    if (operation === "offPlatformWithdraw") {
+      state.offPlatform = state.offPlatform.filter((one) => one.id !== Number(request.params.offPlatformId));
+      saved = true;
+      return null;
+    }
+    if (operation === "submit") {
+      if (!editing(state)) return refused("Not a draft");
+      handIn(state, request.now.getTime());
+      return null;
+    }
+    // lineSet
+    const id = Number(request.params.transactionId);
+    const body = request.body as { statement: string | null; shareWithUserId?: number | null; toUserId?: number | null; note?: string | null };
+    let row = rowById(state, id);
+    if (row === null) {
+      const claimable = CLAIMABLE.find((sale) => sale.id === id);
+      if (claimable === undefined || body.statement !== "mine") return demoError(404, "Not Found", "No such sale");
+      row = { ...claimable };
+      state.extra.push(row);
+      state.ok.set(id, "добавили вы");
+    }
+    if (!(editing(state) || (state.phase === "confirm" && body.note !== undefined))) return refused("The report is not open for changes");
+    if (editing(state)) {
+      const own = fromWord(body, row);
+      if (own === null) return refused("A word the line does not take");
+      if (own !== ownNow(state, row)) {
+        setOwn(state, row, own);
+        if (!state.ok.has(id) || state.ok.get(id) !== "добавили вы") state.ok.delete(id);
+      }
+    }
+    if (body.note !== undefined) {
+      const text = body.note?.trim() ?? "";
+      if (text === "") state.notes.delete(id);
+      else state.notes.set(id, { text, by: "person" });
+    }
+    saved = true;
+    return null;
+  });
+  if (answer === null) return null;
+  if (saved && !("demoReply" in (answer as object))) {
+    return operation === "offPlatformAdd"
+      ? { line: (stateOf(request, SCENARIO_OF.get(shiftId)!)).offPlatform.at(-1)!, savedAt: request.now.toISOString() }
+      : { savedAt: request.now.toISOString() };
+  }
+  return answer;
 }
+
+/** «Согласен» / «Не согласен» on the board's incoming claim (sale-claims.ts asks here first). */
+export function demoBoardClaimAnswer(request: DemoRequest): unknown {
+  const claimId = Number(request.params.claimId);
+  if (claimId !== INCOMING_CLAIM_ID) return null;
+  if (request.role !== "chatter") return notYours();
+  const scenario: Scenario = "dispute";
+  const state = stateOf(request, scenario);
+  const incoming = state.incoming;
+  if (incoming === null || incoming.state !== "asked") return refused("Nothing to answer");
+  const body = request.body as { answer: "agree" | "disagree" };
+  const row = rowById(state, incoming.id)!;
+  if (body.answer === "agree") {
+    setOwn(state, row, incoming.from);
+    state.ok.set(row.id, `вы согласились с ${personNameForms(WHO[incoming.from].name).ins}`);
+    state.incoming = null;
+  } else {
+    incoming.state = "disputed";
+  }
+  const now = request.now.toISOString();
+  return {
+    claim: {
+      id: claimId, kind: "claim", transactionId: row.id, pageLabel: pageOf(row.page).label,
+      claimant: { userId: SEVA.userId, name: SEVA.name }, statement: "mine", note: incoming.note, claimedAt: at(13, "02:30"),
+      side: { userId: LEV.userId, name: LEV.name }, sideShiftId: DEMO_BOARD_SHIFTS.dispute,
+      state: body.answer === "agree" ? "agreed" : "owner", answer: body.answer, answerNote: null, answeredAt: now,
+      escalatedWhy: body.answer === "agree" ? null : "disagree", decision: null, answerBy: null, question: null,
+    },
+    savedAt: now,
+  };
+}
+
+export const shiftReportBoardHandlers: DemoHandlers = {
+  shiftReportCurrent: (request) => ({ report: reportOf(request, "draft"), phase: stateOf(request, "draft").phase, serverNow: request.now.toISOString() }),
+  shiftReportConfirm: (request) => {
+    const shiftId = shiftOf(request);
+    const scenario = SCENARIO_OF.get(shiftId);
+    if (scenario === undefined) return noBoard();
+    if (request.role !== "chatter") return notYours();
+    const state = stateOf(request, scenario);
+    if (state.phase !== "confirm") return { confirmed: false, refused: "not_ready", report: reportOf(request, scenario) };
+    confirm(state, request.now.getTime());
+    return { confirmed: true, refused: null, report: reportOf(request, scenario) };
+  },
+  shiftReportReopen: (request) => write(request, shiftOf(request), (state) => {
+    if (state.phase !== "counted" && state.phase !== "confirm") return refused("Nothing to correct");
+    // «Исправить» (the prototype's `fix`): Gengar's cards are settled as they stand, then the board as it is now is kept
+    // for «Отмена», and the draft opens again with «Было» this total.
+    for (const [id, proposal] of state.proposals) {
+      if (proposal.state === "declined") {
+        state.proposals.delete(id);
+        state.ok.set(id, "Генгар предлагал иначе, решит владелец");
+      } else proposal.state = "accepted";
+    }
+    if (state.gNote) {
+      state.notes.set(state.gNote.id, { text: state.gNote.text, by: "agent" });
+      state.gNote = null;
+    }
+    state.snapshot = clone(state);
+    state.wasMills = totalOf(state);
+    state.phase = "fixing";
+    return null;
+  }) ?? noBoard(),
+  shiftReportReopenCancel: (request) => write(request, shiftOf(request), (state) => {
+    if (state.phase !== "fixing" || state.snapshot === null) return refused("Not correcting");
+    Object.assign(state, clone(state.snapshot), { snapshot: null });
+    return null;
+  }) ?? noBoard(),
+  shiftReportResend: (request) => write(request, shiftOf(request), (state) => {
+    if (state.phase !== "counted" || !state.late) return refused("Nothing came after the hand-in");
+    state.lateAdded = true;
+    state.ok.set(12, "досдано после сдачи");
+    state.countedMills = totalOf(state);
+    return null;
+  }) ?? noBoard(),
+  shiftReportAsk: (request) => write(request, shiftOf(request), (state) => {
+    if (!editing(state)) return refused("Not a draft");
+    const body = request.body as { transactionId: number; statement: "mine" | "share"; shareWithUserId?: number | null; note: string };
+    const row = rowById(state, body.transactionId);
+    if (row === null) return demoError(404, "Not Found", "No such sale");
+    const to = askedOf(row.rule);
+    if (to === null) return refused("Nobody to ask: the sale is nobody's");
+    const share = whoOf(body.shareWithUserId);
+    const want: Own = body.statement === "mine" ? "me" : share ? `half:${share}` : "me";
+    state.asks.set(row.id, { to, want, note: body.note.trim(), state: "asked" });
+    return null;
+  }) ?? noBoard(),
+  shiftReportAskWithdraw: (request) => write(request, shiftOf(request), (state) => {
+    state.asks.delete(Number(request.params.transactionId));
+    return null;
+  }) ?? noBoard(),
+  shiftReportProposalAnswer: (request) => write(request, shiftOf(request), (state) => {
+    const proposal = [...state.proposals.values()].find((one) => one.id === Number(request.params.proposalId));
+    if (proposal === undefined || state.phase !== "confirm") return refused("No such card");
+    const answer = (request.body as { answer: "decline" | "restore" | "accept" }).answer;
+    const id = [...state.proposals].find(([, one]) => one === proposal)![0];
+    const row = rowById(state, id)!;
+    if (answer === "decline") {
+      proposal.state = "declined";
+      setOwn(state, row, proposal.from);
+    } else {
+      proposal.state = "proposed";
+      setOwn(state, row, proposal.to);
+    }
+    return null;
+  }) ?? noBoard(),
+  shiftReportSightingAdd: (request) => write(request, shiftOf(request), (state) => {
+    if (!state.lost || !editing(state)) return refused("Nothing to add");
+    state.lostAdded = true;
+    state.ok.set(4, "добавили вы, Hub сверит");
+    return null;
+  }) ?? noBoard(),
+};
 
 /** For the demo's own checks: a scenario's board as the person sees it. */
 export function demoBoardOf(scenario: Scenario): ShiftReportBoard {
-  return boardOf(SCENARIOS[scenario]());
+  return boardOf(SCENARIOS[scenario](0), true, GENGAR_PAUSE_MS);
 }

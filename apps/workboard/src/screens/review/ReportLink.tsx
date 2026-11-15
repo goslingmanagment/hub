@@ -32,7 +32,7 @@ export function ReportLink({ userId, start, end, label }: { userId: number; star
   const state = row.state === "submitted" && row.submittedAt !== null ? `сдан в ${formatTimeOfDay(row.submittedAt)}` : row.ongoing ? "смена идёт" : "не сдан";
   return (
     <Tooltip content={`Отчёт смены: ${state}`}>
-      <LinkButton to={`/shifts/report/${row.shiftId}`} state={back} size="md" variant="secondary" icon={FileText}>
+      <LinkButton to={`/report/${row.shiftId}`} state={back} size="md" variant="secondary" icon={FileText}>
         Отчёт: {state}
       </LinkButton>
     </Tooltip>

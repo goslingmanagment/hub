@@ -4,7 +4,7 @@ import { millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/
 import { demoError, intBetween, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_USERS, demoPage, demoUserByRole, type DemoUser } from "../world.ts";
 import { DAY_MS, MINUTE_MS, chatterWorld, mskDay, type DemoSale, type DemoShift } from "./account-model.ts";
-import { demoBoardReport, demoBoardSubmit } from "./shift-report-board.ts";
+import { demoBoardReport, demoBoardWrite } from "./shift-report-board.ts";
 import { demoClaimedLines, demoLineId, demoLineOutcome, demoOffPlatformOf, demoOwnShare, demoReportClaims, demoShiftId, onDemoSettle } from "./sale-claims.ts";
 
 /**
@@ -395,6 +395,8 @@ export const shiftReportHandlers: DemoHandlers = {
     };
   },
   shiftReportClaimable: (request) => {
+    const board = demoBoardWrite(request, "claimable");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const words = keptOf(found.id).words;
@@ -408,6 +410,8 @@ export const shiftReportHandlers: DemoHandlers = {
     return found === null ? demoError(404, "Not Found", "No such shift") : reportOf(request, found);
   },
   shiftReportLineSet: (request) => {
+    const board = demoBoardWrite(request, "lineSet");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const body = request.body as { statement: Word["statement"]; shareWithUserId?: number | null; note?: string | null };
@@ -418,12 +422,16 @@ export const shiftReportHandlers: DemoHandlers = {
     return { savedAt: request.now.toISOString() };
   },
   shiftReportCommentSet: (request) => {
+    const board = demoBoardWrite(request, "comment");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     keptOf(found.id).comment = String((request.body as { comment: string }).comment);
     return { savedAt: request.now.toISOString() };
   },
   shiftReportOffPlatformAdd: (request) => {
+    const board = demoBoardWrite(request, "offPlatformAdd");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const body = request.body as { amountMills: number; fromWhom: string; whatFor: string };
@@ -432,6 +440,8 @@ export const shiftReportHandlers: DemoHandlers = {
     return { line: row, savedAt: request.now.toISOString() };
   },
   shiftReportOffPlatformWithdraw: (request) => {
+    const board = demoBoardWrite(request, "offPlatformWithdraw");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const one = keptOf(found.id);
@@ -439,8 +449,8 @@ export const shiftReportHandlers: DemoHandlers = {
     return { savedAt: request.now.toISOString() };
   },
   shiftReportSubmit: (request) => {
-    const board = demoBoardSubmit(request, idOf(request));
-    if (board !== null) return board;
+    const board = demoBoardWrite(request, "submit");
+    if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
     const one = keptOf(found.id);

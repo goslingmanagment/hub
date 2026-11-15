@@ -38,8 +38,9 @@ function NotForChatter() {
 
 /**
  * The owner or a team lead on a chatter's address: «Мои смены» is Смены of
- * their own shifts (`/shifts?mine=1`, one screen, not a second one); a shift's
- * report, the team's reading of it. Anything else of a chatter's: one sentence.
+ * their own shifts (`/shifts?mine=1`, one screen, not a second one). Anything
+ * else of a chatter's: one sentence. (A shift's report is the board, everyone's
+ * address: `/report/:shiftId`.)
  */
 function ForChatterOnly() {
   const location = useLocation();
@@ -49,8 +50,6 @@ function ForChatterOnly() {
     search.set("mine", "1");
     return <Navigate to={{ pathname: "/shifts", search: `?${search.toString()}` }} replace />;
   }
-  const report = /^\/my\/shifts\/([^/]+)$/.exec(path);
-  if (report) return <Navigate to={{ pathname: `/shifts/report/${report[1]}`, search: location.search }} replace />;
   return <NotYours />;
 }
 
