@@ -16,6 +16,7 @@ import {
   type RegistryPerson,
   type Slot,
 } from "./registry.js";
+import { useMe } from "@/shared/useMe";
 
 /**
  * «График и условия» of a person's card in «Команда»: how the person works —
@@ -36,7 +37,9 @@ export function ScheduleTab({ person, card, cardFailed, onRetry, isOwner }: {
   isOwner: boolean;
 }) {
   const [editing, setEditing] = useState<"pages" | "schedule" | "terms" | null>(null);
-  const termsHubFrom = useTermsHubFrom(isOwner && person.kind === "human");
+  // The test team's owner has no money to read (the ledger never knows the test team): no request, the words of «Деньги».
+  const { fullOwner } = useMe();
+  const termsHubFrom = useTermsHubFrom(fullOwner && person.kind === "human");
   return (
     <div className="registry-tab">
       {isOwner && cardFailed && !card && (
@@ -47,7 +50,12 @@ export function ScheduleTab({ person, card, cardFailed, onRetry, isOwner }: {
       <div className="people-grid">
         <PagesBlock person={person} onEdit={isOwner ? () => setEditing("pages") : undefined} />
         <ScheduleBlock person={person} slots={card?.scheduleSlots ?? null} onEdit={isOwner && person.kind === "human" ? () => setEditing("schedule") : undefined} />
-        {isOwner && person.kind === "human" && (
+        {isOwner && !fullOwner && person.kind === "human" && (
+          <div className="people-grid__wide">
+            <Card title="Условия оплаты"><p className="access-text">В тестовой команде денег нет: условия и выплаты считает ledger агентства, а тестовую команду он не знает.</p></Card>
+          </div>
+        )}
+        {fullOwner && person.kind === "human" && (
           <div className="people-grid__wide">
             {card ? <TermsBlock terms={card.payTerms} payout={card.payoutDetails} termsHubFrom={termsHubFrom} onAdd={() => setEditing("terms")} /> : cardFailed ? null : <Card title="Условия оплаты"><SkeletonText lines={3} /></Card>}
           </div>
