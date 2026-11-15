@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { ofapiConfigQuery, ofapiStatusOf } from "@agency_hub_core/ui/console/ofapiStatus";
 import type { SyncBlocksPage } from "@agency_hub_core/contracts";
 
 import type { OfapiStatus } from "@/lib/statusWords";
@@ -19,22 +20,12 @@ const MINUTE = 60_000;
  * the console refreshes it): a screen reads it when it opens, not on a timer.
  */
 export function useOfapiStatusQuery(role: string): { status: OfapiStatus; isLoading: boolean; refetch: () => void } {
-  const config = useQuery({
-    queryKey: ["admin", "config"],
-    queryFn: () => kernel.adminConfig(),
-    enabled: role === "owner",
-    meta: { suppressGlobalError: true },
-  });
+  const config = useQuery(ofapiConfigQuery(kernel, role));
   const { refetch } = config;
   const retry = useCallback(() => {
     void refetch();
   }, [refetch]);
-  // The secret's own state, not `runningState`: that is always `unknown` for a secret.
-  const states = config.data?.subsystems.flatMap((subsystem) => subsystem.items).find((item) => item.key === "ofapiApiKey")?.running.map((entry) => entry.state) ?? [];
-  const status: OfapiStatus = states.length === 0 || states.some((state) => state !== "set" && state !== "unset")
-    ? "unknown"
-    : states.every((state) => state === "unset") ? "off" : "on";
-  return { status, isLoading: config.isLoading, refetch: retry };
+  return { status: ofapiStatusOf(config.data), isLoading: config.isLoading, refetch: retry };
 }
 
 /** The one answer every screen asks: `on`, `off`, or `unknown` when it cannot be said. */

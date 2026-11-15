@@ -49,3 +49,23 @@ export const SPENDER_AUTO_LIST_BUCKETS = [
     maxAmountMillsExclusive: null,
   },
 ] as const satisfies readonly SpenderAutoListBucket[];
+
+/**
+ * A fan's tier on a page: ONE scale for the extension and Hub's screens (products package M) — the chatters' names for
+ * the buckets above (the extension's Spenders, `chat-extension packages/ui/src/spenders/rows.ts`), by what the fan PAID
+ * there over all time (gross, before the platform's cut). Lower bounds in mills.
+ */
+export const SPENDER_TIERS = [
+  { name: "Whale", fromMills: 600_000 },
+  { name: "Top", fromMills: 350_000 },
+  { name: "Prime", fromMills: 150_000 },
+  { name: "Base", fromMills: 50_000 },
+  { name: "Low", fromMills: 25_000 },
+  { name: "Micro", fromMills: 1 },
+] as const;
+export type SpenderTierName = (typeof SPENDER_TIERS)[number]["name"];
+
+/** The tier of a lifetime gross spend in mills; null — nothing paid. */
+export function spenderTierOf(lifetimeGrossMills: number): SpenderTierName | null {
+  return SPENDER_TIERS.find((tier) => lifetimeGrossMills >= tier.fromMills)?.name ?? null;
+}

@@ -5,7 +5,7 @@ import { formatCount, formatDateTime, formatTimeOfDay } from "@agency_hub_core/u
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { SHIFT_REVIEW_WAIT_HORIZON_HOURS } from "@agency_hub_core/contracts";
 import { REPLY_NORM_SECONDS, deletedAfterSeconds, fanReturnOf, seen, waitText } from "@agency_hub_core/ui/shiftReview";
-import { consoleFanHref } from "@/shared/links";
+import { fanCardHref } from "@/shared/links";
 import type { ReviewChatRow, ReviewMessage, ReviewShift, ReviewTranscript, ReviewWait } from "./data.js";
 import { fanTitle } from "./ChatList.js";
 import { authorOf, edgeOf, momentText, plainText } from "./words.js";
@@ -211,7 +211,7 @@ export function Transcript({ shift, transcript, row, colliding, position, onStep
   }, [openMessage]);
 
   const rows: ReactNode[] = [];
-  const fanHref = chat.fanRef ? consoleFanHref(chat.pageLabel, chat.platform, chat.fanRef) : null;
+  const fanHref = chat.fanRef ? fanCardHref(chat.pageLabel, chat.platform, chat.fanRef) : null;
   // The context before the shift: its last message open, the rest a click away — unless the reason, the open
   // evidence or the search stands among them.
   const before = chat.messages.filter((message) => !message.inShift && Date.parse(message.at) < start);

@@ -24,6 +24,7 @@ import { normalizeDmMessageText, platformHasLiveOverlay, type Platform } from "@
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
+import { requireTeamReader } from "./teams.ts";
 import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { buildConversationHistorySyncUx } from "./sync-ux.ts";
 import { getSyncStatusSnapshot, mapDomainBlockToSyncUx } from "./sync-status.ts";
@@ -168,7 +169,8 @@ export async function getPageConversationPreviewReport(
   params: PageConversationPreviewParams,
   query: PageConversationPreviewQuery,
 ): Promise<PageConversationPreviewResponse> {
-  requireDashboardUser(principal);
+  // Any role of the team (the fans screens, products package M), on a page of their teams (fan-reads.ts).
+  requireTeamReader(principal);
   const page = await resolveAccessiblePage(app, principal, params.pageLabel);
   const liveOverlay = platformHasLiveOverlay(page.platform);
   // The store the page's readers read (step 4, S4-08): message_archive on a

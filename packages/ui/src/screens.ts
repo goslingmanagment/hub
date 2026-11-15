@@ -142,6 +142,8 @@ export interface Screen {
   crumbs?: (params: Readonly<Record<string, string | undefined>>) => Crumb[];
   /** Not offered by the search on its own (a parameter is in its path). */
   notSearched?: boolean;
+  /** A Workboard screen reached through the tabs of the screen with this id: the menu lists that one, and lights it here. */
+  tabOf?: string;
   /** The address's filters can make the period not the screen's to choose. */
   forcedPeriod?: (search: URLSearchParams) => ForcedPeriod | null;
   /** The screen is one page of sections (ScreenPart), each opened by its anchor. */
@@ -163,8 +165,8 @@ const pageCrumbs = (page?: string): Crumb[] => [
 ];
 
 const fansCrumbs = (page?: string): Crumb[] => [
-  { label: "Фаны", to: "/fans" },
-  ...(page ? [{ label: page, to: `/fans?page=${encodeURIComponent(page)}` }] : []),
+  { label: "Фаны", to: "/workboard/fans" },
+  ...(page ? [{ label: page, to: `/workboard/fans?page=${encodeURIComponent(page)}` }] : []),
 ];
 
 /** Who stopped buying can only be seen over the whole history: a short window of
@@ -240,70 +242,6 @@ export const SCREENS: readonly Screen[] = [
     keywords: "кредиты расходы ofapi",
   },
 
-  // ── Фаны ───────────────────────────────────────────────────────────────
-  {
-    id: "fans", path: "/fans", label: "Платящие", title: "Платящие", section: "fans", product: "hub",
-    why: "Кто приносит деньги, кто реже покупает, кого вернуть.",
-    pageFilter: "any", platforms: REPORTED,
-    platformsNote: "Hub не собирает данные Telegram.",
-    period: { class: "shared", options: SPENDER_PERIODS },
-    forcedPeriod: fansForcedPeriod,
-    keywords: "топ фанов спендеры",
-  },
-  {
-    id: "fans-subscribers", path: "/fans/subscribers", label: "Подписчики", title: "Подписчики", section: "fans", product: "hub",
-    why: "Кто подписан сейчас, у кого кончается, кто без автопродления.",
-    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
-    platformsNote: "Hub не собирает данные Telegram.",
-    keywords: "подписки",
-  },
-  {
-    id: "fans-followers", path: "/fans/followers", label: "Фолловеры", title: "Фолловеры", section: "fans", product: "hub",
-    why: "Кто фолловит страницу Fansly.",
-    pageFilter: "one", onePageWay: "picker", platforms: FANSLY,
-    platformsNote: "У страниц OnlyFans нет фолловеров.", platformsShort: "нет фолловеров",
-    keywords: "фоллоу",
-  },
-  {
-    id: "fans-gone", path: "/fans/gone", label: "Ушли", title: "Ушли", section: "fans", product: "hub",
-    why: "Кто удалил аккаунт или перестал быть виден.",
-    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
-    platformsNote: "Hub не собирает данные Telegram.",
-    keywords: "удалённые фаны",
-  },
-  {
-    id: "fans-by-spend", path: "/fans/by-spend", label: "По сумме трат", title: "По сумме трат", section: "fans", product: "hub",
-    why: "Списки фанов по сумме трат: имена для списков на площадке.",
-    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
-    platformsNote: "Hub не собирает данные Telegram.",
-    period: { class: "own", options: SPENDER_PERIODS, default: "all" },
-    keywords: "спендеры автосписки",
-  },
-  {
-    id: "fans-by-spend-list", path: "/fans/by-spend/:bucketKey", label: "Список по сумме трат", title: "Список по сумме трат", section: "fans", product: "hub",
-    why: "Фаны одной корзины.",
-    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
-    platformsNote: "Hub не собирает данные Telegram.",
-    period: { class: "own", options: SPENDER_PERIODS, default: "all" },
-    deep: true, notSearched: true,
-    crumbs: () => [...fansCrumbs(), { label: "По сумме трат", to: "/fans/by-spend" }],
-  },
-  {
-    id: "fan", path: "/fans/:pageLabel/:platform/:platformUserId", label: "Карточка фана", title: "Карточка фана", section: "fans", product: "hub",
-    why: "Кто этот фан для этой страницы и на других страницах.",
-    pageFilter: "none",
-    period: { class: "shared", options: SPENDER_PERIODS },
-    deep: true, notSearched: true,
-    crumbs: (params) => fansCrumbs(params.pageLabel),
-  },
-  {
-    id: "fan-any-page", path: "/fans/:platform/:platformUserId", label: "Карточка фана", title: "Карточка фана", section: "fans", product: "hub",
-    why: "Открывает страницу, на которой этот фан потратил больше всего.",
-    pageFilter: "none",
-    deep: true, notSearched: true,
-    crumbs: () => fansCrumbs(),
-  },
-
   // ── Статистика ─────────────────────────────────────────────────────────
   {
     id: "stats", path: "/stats", label: "Главное", title: "Статистика Fansly", section: "stats", product: "hub", ownerOnly: true,
@@ -350,7 +288,7 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     // A page's mass messages (a tab of the page's card until 12.11).
-    id: "content-mass-messages", path: "/content/mass-messages", label: "Рассылки", title: "Рассылки", section: "content", product: "hub", ownerOnly: true,
+    id: "content-mass-messages", tabOf: "sales", path: "/workboard/sales/mass", label: "Рассылки", title: "Рассылки", section: "team", product: "workboard", ownerOnly: true,
     why: "Массовые рассылки страницы: что ушло, кому и сколько принесло.",
     pageFilter: "one", onePageWay: "picker", platforms: FANSLY,
     platformsNote: "Рассылки Hub собирает только у страниц Fansly.", platformsShort: "только Fansly",
@@ -403,6 +341,72 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "any",
     keywords: "чаттеры сотрудники кабинет чаттера числа доступ приглашение пользователи устройства логины страницы",
   },
+  // ── Фаны ───────────────────────────────────────────────────────────────
+  // Workboard's since products package M: everyone's, Hub answers by the viewer's teams (services/fan-reads.ts). The
+  // console's old /fans… addresses lead here (apps/dashboard/src/lib/workboard.ts `movedToWorkboard`).
+  {
+    id: "fans", path: "/workboard/fans", label: "Фаны", title: "Платящие", icon: "Heart", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Кто приносит деньги, кто реже покупает, кого вернуть.",
+    pageFilter: "any", platforms: REPORTED,
+    platformsNote: "Hub не собирает данные Telegram.",
+    period: { class: "shared", options: SPENDER_PERIODS },
+    forcedPeriod: fansForcedPeriod,
+    keywords: "топ фанов спендеры",
+  },
+  {
+    id: "fans-subscribers", tabOf: "fans", path: "/workboard/fans/subscribers", label: "Подписчики", title: "Подписчики", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Кто подписан сейчас, у кого кончается, кто без автопродления.",
+    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
+    platformsNote: "Hub не собирает данные Telegram.",
+    keywords: "подписки",
+  },
+  {
+    id: "fans-followers", tabOf: "fans", path: "/workboard/fans/followers", label: "Фолловеры", title: "Фолловеры", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Кто фолловит страницу Fansly.",
+    pageFilter: "one", onePageWay: "picker", platforms: FANSLY,
+    platformsNote: "У страниц OnlyFans нет фолловеров.", platformsShort: "нет фолловеров",
+    keywords: "фоллоу",
+  },
+  {
+    id: "fans-gone", tabOf: "fans", path: "/workboard/fans/gone", label: "Ушли", title: "Ушли", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Кто удалил аккаунт или перестал быть виден.",
+    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
+    platformsNote: "Hub не собирает данные Telegram.",
+    keywords: "удалённые фаны",
+  },
+  {
+    id: "fans-by-spend", tabOf: "fans", path: "/workboard/fans/by-spend", label: "По сумме трат", title: "По сумме трат", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Списки фанов по сумме трат: имена для списков на площадке.",
+    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
+    platformsNote: "Hub не собирает данные Telegram.",
+    period: { class: "own", options: SPENDER_PERIODS, default: "all" },
+    keywords: "спендеры автосписки",
+  },
+  {
+    id: "fans-by-spend-list", tabOf: "fans", path: "/workboard/fans/by-spend/:bucketKey", label: "Список по сумме трат", title: "Список по сумме трат", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Фаны одной корзины.",
+    pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
+    platformsNote: "Hub не собирает данные Telegram.",
+    period: { class: "own", options: SPENDER_PERIODS, default: "all" },
+    deep: true, notSearched: true,
+    crumbs: () => [...fansCrumbs(), { label: "По сумме трат", to: "/workboard/fans/by-spend" }],
+  },
+  {
+    id: "fan", tabOf: "fans", path: "/workboard/fans/:pageLabel/:platform/:platformUserId", label: "Карточка фана", title: "Карточка фана", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Кто этот фан для этой страницы и на других страницах.",
+    pageFilter: "none",
+    period: { class: "shared", options: SPENDER_PERIODS },
+    deep: true, notSearched: true,
+    crumbs: (params) => fansCrumbs(params.pageLabel),
+  },
+  {
+    id: "fan-any-page", tabOf: "fans", path: "/workboard/fans/:platform/:platformUserId", label: "Карточка фана", title: "Карточка фана", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Открывает страницу, на которой этот фан потратил больше всего.",
+    pageFilter: "none",
+    deep: true, notSearched: true,
+    crumbs: () => fansCrumbs(),
+  },
+
   {
     // Заказы кастомов (package I): the owner and the person who leads customs see every order, a team lead and a
     // chatter the orders of their pages (Hub decides).
@@ -776,16 +780,7 @@ export const SECTIONS: readonly Section[] = [
       { label: "Отчёты смен", to: "/workboard/payouts?view=reports", title: "Отчёты смен в Workboard, Выплаты", ownerOnly: true },
     ] },
   },
-  {
-    id: "fans", label: "Фаны", title: "Фаны", icon: "Heart", product: "hub", nav: "tabs",
-    tabs: [
-      tab("fans", "Платящие", "fans", "fan", "fan-any-page"),
-      tab("by-spend", "По сумме трат", "fans-by-spend", "fans-by-spend-list"),
-      moreTab("subscribers", "Подписчики", "fans-subscribers"),
-      moreTab("followers", "Фолловеры", "fans-followers"),
-      moreTab("gone", "Ушли", "fans-gone"),
-    ],
-  },
+
   {
     // The pages' Fansly statistics (it was «Статистика»; its screens and addresses are the same).
     id: "stats", label: "Страницы", title: "Страницы", icon: "ChartColumn", product: "hub", ownerOnly: true, nav: "tabs",
@@ -801,7 +796,7 @@ export const SECTIONS: readonly Section[] = [
   {
     // «Публикации» until 12.11: the content, the hub's part and ContentOps' (the model of the chosen page).
     id: "content", label: "Контент", title: "Контент", icon: "Newspaper", product: "hub", ownerOnly: true, nav: "tabs",
-    tabs: [tab("publications", "Публикации", "publications"), tab("mass-messages", "Рассылки", "content-mass-messages")],
+    tabs: [tab("publications", "Публикации", "publications")],
     outside: { site: "contentops", label: "ContentOps", links: [
       { label: "План", path: "plan" },
       { label: "Приехало", path: "inbox" },
@@ -915,7 +910,7 @@ export function productMenu(product: ScreenProduct, role: Role, holds: Partial<R
   const lower: MenuItem[] = [];
   if (product === "workboard") {
     for (const screen of SCREENS) {
-      if (screen.product !== "workboard" || screen.deep || !screenVisible(screen, role) || !listed(screen, holds)) continue;
+      if (screen.product !== "workboard" || screen.deep || screen.tabOf || !screenVisible(screen, role) || !listed(screen, holds)) continue;
       const section = sectionById(screen.section);
       upper.push({
         id: screen.id, label: screen.label, icon: screen.icon ?? section?.icon ?? "Inbox", to: screen.path, app: "workboard",
@@ -951,7 +946,7 @@ export function menuItemAt(pathname: string): string | null {
     screen = branch === null ? null : SCREENS.find((candidate) => candidate.product === "workboard" && workboardBranch(candidate.path) === branch) ?? null;
   }
   if (!screen) return null;
-  if (screen.product === "workboard") return screen.id;
+  if (screen.product === "workboard") return screen.tabOf ?? screen.id;
   return sectionById(screen.section)?.id ?? null;
 }
 
@@ -970,7 +965,7 @@ export function pagePlaces(page: { label: string; platform: string }, role: Role
   for (const [id, to] of [
     ["settings-page-account", `/settings/pages/${label}/account`],
     ["traffic-promo", `/traffic/promo?${query}`],
-    ["content-mass-messages", `/content/mass-messages?${query}`],
+    ["content-mass-messages", `/workboard/sales/mass?${query}`],
   ] as const) {
     const screen = screenById(id);
     if (!screenVisible(screen, role)) continue;

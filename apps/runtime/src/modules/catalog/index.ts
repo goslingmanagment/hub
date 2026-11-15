@@ -46,6 +46,8 @@ import { requestPageSync } from "../../services/sync-control.ts";
 import { isLegacyExecutorPlatform } from "../../sync/onlyfans/boundary.ts";
 import { verifyPageOnEngine } from "../../services/sync-engine-account.ts";
 import { loadVoiceLane } from "../../services/voice-lane.ts";
+import { asFanReader } from "../../services/fan-reads.ts";
+import { requireTeamReader } from "../../services/teams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Catalog module (target §6.1): models, pages, credentials, proxies,
@@ -206,6 +208,15 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     // `platform` as a closed enum (closed-platform-responses.ts).
     const pages = pagesForPrincipalResponse(principal, await listPageSummaries(appContext, pageScopeFor(principal)));
     return attachVoiceNoteCapabilities(appContext, pages);
+  });
+
+  // «Фаны» in Workboard (products package M): the pages whose fans the viewer reads, by the team cut.
+  server.get("/api/v1/fans/pages", {
+    schema: routeSchemas.fanPages,
+  }, async (request) => {
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
+    requireTeamReader(principal);
+    return attachVoiceNoteCapabilities(appContext, pagesForPrincipalResponse(principal, await listPageSummaries(appContext, pageScopeFor(principal))));
   });
 
   server.get("/api/v1/models", {

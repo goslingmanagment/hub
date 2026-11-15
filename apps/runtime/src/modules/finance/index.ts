@@ -59,6 +59,8 @@ import {
 } from "../../services/spenders.ts";
 import { getSyncStatusSummarySnapshot } from "../../services/sync-summary.ts";
 import { buildOverallSyncUx } from "../../services/sync-ux.ts";
+import { asFanReader } from "../../services/fan-reads.ts";
+import { requireTeamReader } from "../../services/teams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Finance module (target §6.1): the canonical money module — transactions,
@@ -172,7 +174,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/pages/:pageLabel/spender-autolists", {
     schema: routeSchemas.pageSpenderAutoLists,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     await requirePageAccess(principal, request.params.pageLabel);
     return getPageSpenderAutoLists(appContext, request.params.pageLabel, request.query);
   });
@@ -180,7 +182,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/pages/:pageLabel/spender-autolists/:bucketKey", {
     schema: routeSchemas.pageSpenderAutoListDetail,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     await requirePageAccess(principal, request.params.pageLabel);
     return getPageSpenderAutoListDetail(
       appContext,
@@ -193,28 +195,28 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v2/spenders", {
     schema: routeSchemas.spenders,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     return getSpenderList(appContext, principal, request.query);
   });
 
   server.get("/api/v2/spenders/:platform/:platformUserId", {
     schema: routeSchemas.spenderDetail,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     return getSpenderDetail(appContext, principal, request.params, request.query);
   });
 
   server.get("/api/v2/spenders/:platform/:platformUserId/series", {
     schema: routeSchemas.spenderSeries,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     return getSpenderSeries(appContext, principal, request.params, request.query);
   });
 
   server.post("/api/v2/spenders:batch", {
     schema: routeSchemas.spenderBatch,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     return getSpenderBatch(appContext, principal, request.body);
   });
 
@@ -573,9 +575,10 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/transactions", {
     schema: routeSchemas.pageFanTransactions,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     const page = await requirePageAccess(principal, request.params.pageLabel);
-    enforceRevenueRouteRoleScope(principal);
+    // Any role of the team reads a fan's spend (products package M); a device token and an agent key are refused.
+    requireTeamReader(principal);
     const fan = await findPlatformFan(appContext.db, page.platform, request.params.platformUserId);
     if (!fan) {
       throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
@@ -600,7 +603,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/fans/:platform/:platformUserId/transactions", {
     schema: routeSchemas.crossPageFanTransactions,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     const fan = await findPlatformFan(appContext.db, request.params.platform, request.params.platformUserId);
     if (!fan) {
       throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);

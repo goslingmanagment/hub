@@ -30,5 +30,5 @@ Hub's look as data, without React or the DOM: one source for every product of th
 ## Changing a value
 
 Edit `src/tokens.ts`, then `node --import tsx/esm packages/look/generate.ts` and commit both CSS copies
-(`packages/ui/src/styles/tokens.css`, `apps/dashboard/src/styles/tokens.css`). CI regenerates them and fails on
+(`packages/ui/src/styles/tokens.css`, `packages/ui/src/styles/console-tokens.css`). CI regenerates them and fails on
 any difference. A client sees the change after its next vendoring.

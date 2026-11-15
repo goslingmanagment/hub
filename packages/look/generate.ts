@@ -14,7 +14,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 export const GENERATED_COPIES = {
   "packages/ui/src/styles/tokens.css": renderUiTokensCss,
-  "apps/dashboard/src/styles/tokens.css": renderConsoleTokensCss,
+  "packages/ui/src/styles/console-tokens.css": renderConsoleTokensCss,
 } as const;
 
 for (const [path, render] of Object.entries(GENERATED_COPIES)) {

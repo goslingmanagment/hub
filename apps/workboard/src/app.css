@@ -10,6 +10,8 @@
 @import "tailwindcss/preflight.css" layer(base);
 @import "tailwindcss/utilities.css" layer(utilities);
 @import "../../../packages/ui/src/styles.css";
+/* The console's tokens: «Фаны» and «Рассылки» moved from the console draw with them (products package M). */
+@import "../../../packages/ui/src/styles/console-tokens.css";
 
 @theme {
   --spacing: 4px;

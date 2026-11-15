@@ -1,11 +1,2 @@
-export const SOURCE_LABELS: Record<string, string> = {
-  subscription: "Подписки",
-  tip: "Чаевые",
-  message_purchase: "Платные сообщения",
-  post_purchase: "Платные посты",
-  stream_tip: "Чаевые в эфире",
-  refund: "Возвраты",
-  chargeback: "Чарджбэки",
-  other: "Прочее",
-  payout_reversal: "Отмена выплаты",
-};
+// Moved to the shared design system (products package M): Workboard's «Фаны» draw with it too.
+export * from "@agency_hub_core/ui/console/revenueDisplay";

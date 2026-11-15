@@ -128,3 +128,70 @@ export async function listPageAuthors(
     messages: Number(row.messages),
   }));
 }
+
+/** One login's authored messages to one fan on one page, in one shift of theirs (`shiftId` null: outside any). */
+export interface FanAuthorshipShiftRow {
+  userId: number;
+  username: string;
+  shiftId: number | null;
+  /** The shift's bounds; outside a shift, the first and the last message. */
+  startedAt: Date;
+  endedAt: Date;
+  firstAt: Date;
+  lastAt: Date;
+  messages: number;
+  priced: number;
+}
+
+/**
+ * «Кто с ним работал» (products package M): the authored outgoing messages to a fan on a page, by login and by the
+ * login's shift they fell in. One range of `client_send_attributions_fan` (page_id, fan_ref) and, per message, one
+ * probe of `shifts_user_start`; a fan's whole history is a few hundred rows (production 2026-11-15: at most ~1 200
+ * messages to one fan on a page, 42 000 in all).
+ */
+export async function listFanAuthorshipShifts(
+  db: Database,
+  input: { pageId: number; fanRef: string },
+): Promise<FanAuthorshipShiftRow[]> {
+  const result = await db.execute<{
+    user_id: string | number; username: string; shift_id: string | number | null; started_at: Date | string; ended_at: Date | string;
+    first_at: Date | string; last_at: Date | string; messages: string | number; priced: string | number;
+  }>(sql`
+    with sent as (
+      select a.user_id, a.observed_at, a.priced
+      from client_send_attributions a
+      where a.page_id = ${input.pageId} and a.fan_ref = ${input.fanRef}
+    ),
+    placed as (
+      select s.user_id, s.observed_at, s.priced, x.id as shift_id, x.started_at, x.ended_at
+      from sent s
+      left join lateral (
+        select h.id, h.started_at, h.ended_at
+        from shifts h
+        where h.user_id = s.user_id and h.state in ('going', 'closed')
+          and h.started_at <= s.observed_at and h.ended_at >= s.observed_at
+        order by h.started_at desc
+        limit 1
+      ) x on true
+    )
+    select p.user_id, u.username, p.shift_id,
+      coalesce(min(p.started_at), min(p.observed_at)) as started_at,
+      coalesce(max(p.ended_at), max(p.observed_at)) as ended_at,
+      min(p.observed_at) as first_at, max(p.observed_at) as last_at,
+      count(*) as messages, count(*) filter (where p.priced) as priced
+    from placed p
+    join users u on u.id = p.user_id
+    group by p.user_id, u.username, p.shift_id
+    order by max(p.observed_at) desc`);
+  return result.rows.map((row) => ({
+    userId: Number(row.user_id),
+    username: row.username,
+    shiftId: row.shift_id === null ? null : Number(row.shift_id),
+    startedAt: new Date(row.started_at),
+    endedAt: new Date(row.ended_at),
+    firstAt: new Date(row.first_at),
+    lastAt: new Date(row.last_at),
+    messages: Number(row.messages),
+    priced: Number(row.priced),
+  }));
+}

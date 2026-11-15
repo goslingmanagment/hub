@@ -98,6 +98,9 @@ export const shellHandlers: DemoHandlers = {
     }));
   },
 
+  // «Фаны» (products package M): the pages whose fans the viewer reads; in the demo, the pages the role reaches.
+  fanPages: (request) => shellHandlers.pages!(request),
+
   adminConnections: (request) => DEMO_PAGES.map((page) => ({
     ...pageRef(page),
     username: page.username,
