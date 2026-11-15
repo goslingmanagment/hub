@@ -89,6 +89,7 @@ export const POST_FLAG_WORDS: Readonly<Record<string, string>> = {
   unknown_page: "страница не узнана",
   tag_mismatch: "тег другого человека",
   duplicate: "повтор: учтён последний пост",
+  second_report: "в сообщении два отчёта",
 };
 
 /** Why a flag matters, said in full (a hint): what the ledger did with the post and what fixes it. */
@@ -100,6 +101,7 @@ export const POST_FLAG_HINTS: Readonly<Record<string, string>> = {
   unknown_page: "Имя страницы в посте ledger не знает: эта строка не входит в оплату, остальные входят.",
   tag_mismatch: "#тег поста указывает на другого человека; ledger считает автором отправителя.",
   duplicate: "Та же страница того же дня есть в другом посте; считается последний.",
+  second_report: "В одном сообщении два отчёта (две модели): ledger прочитал только первый, он входит в оплату. Второй нужно отправить отдельным сообщением, иначе его суммы никому не начислятся.",
 };
 
 export function postFlagWord(flag: string): string {
