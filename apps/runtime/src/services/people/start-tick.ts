@@ -13,16 +13,17 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
+import { teamFactsFor } from "../teams.ts";
 import { isNewcomerRow, loadStartFacts, personStart } from "./start.ts";
 
 /**
  * «Начало», the owner's side (package J), every ten minutes: the matters of
  * the newcomers' way, one writer for both kinds — a newcomer with no page
- * opened to their login (`person.no_pages:<code>`), and one who stands on the
- * same place 48 hours (`person.onboarding_stuck:<code>`; the invitation not
- * opened counts, a missing page does not: that is the first kind). Each closes
- * itself when its cause goes, the person working or gone included. Nothing is
- * sent anywhere; the matters wait on the person's card and in the owner's list.
+ * opened to their login (`person.no_pages:<code>`, the owner's: pages are given in Hub «Люди»), and one who stands on
+ * the same place 48 hours (`person.onboarding_stuck:<code>`; the invitation not opened counts, a missing page does
+ * not: that is the first kind). A stuck newcomer is the team lead's (products package W): a team lead's role matter
+ * on the newcomer's working pages, so it waits for the lead of their team, and for the owner while the team has none.
+ * Each closes itself when its cause goes, the person working or gone included. Nothing is sent anywhere.
  */
 
 export const PEOPLE_START_QUEUE = "people.start";
@@ -41,6 +42,8 @@ const PLACE_WORD: Readonly<Record<PersonStartStepId, string>> = {
 interface Finding {
   key: string;
   kind: MatterPersonStartKind;
+  owner: MatterOpenInput["owner"];
+  pageIds: number[];
   title: string;
   evidence: Record<string, unknown>;
   link: string;
@@ -48,15 +51,15 @@ interface Finding {
 }
 
 /** What should be open now for the newcomers, by key. Pure. */
-export function startFindings(people: ReadonlyArray<{ row: Pick<PersonRow, "code" | "displayName">; start: PersonStart | null }>): Finding[] {
+export function startFindings(people: ReadonlyArray<{ row: Pick<PersonRow, "code" | "displayName">; start: PersonStart | null; workingPageIds?: readonly number[] }>): Finding[] {
   const want: Finding[] = [];
-  for (const { row, start } of people) {
+  for (const { row, start, workingPageIds = [] } of people) {
     if (!start?.newcomer) continue;
     // A page is given in Hub «Люди» («Доступ к страницам»); the newcomer's way is watched on their «Команда» card.
     const card = teamPersonHref(row.code);
     if (!start.steps.some((step) => step.step === "pages" && step.done)) {
       want.push({
-        key: `person.no_pages:${row.code}`, kind: "person.no_pages", code: row.code,
+        key: `person.no_pages:${row.code}`, kind: "person.no_pages", code: row.code, owner: { role: "owner" }, pageIds: [],
         title: `Назначьте страницу новичку: ${row.displayName}`,
         evidence: { code: row.code }, link: hubPersonPath(row.code, "pages"),
       });
@@ -64,6 +67,7 @@ export function startFindings(people: ReadonlyArray<{ row: Pick<PersonRow, "code
     if (start.stuck && start.current !== null) {
       want.push({
         key: `person.onboarding_stuck:${row.code}`, kind: "person.onboarding_stuck", code: row.code,
+        owner: { role: "team_lead" }, pageIds: [...workingPageIds].sort((a, b) => a - b),
         title: start.signedUp
           ? `${row.displayName}: больше двух суток на шаге «${PLACE_WORD[start.current]}»`
           : `${row.displayName}: больше двух суток не открывает приглашение`,
@@ -84,9 +88,11 @@ export interface PeopleStartTally {
 export async function runPeopleStartTick(app: Pick<AppContext, "db" | "logger">, now = new Date()): Promise<PeopleStartTally> {
   const rows = (await listPersonRows(app.db)).filter(isNewcomerRow);
   const facts = await loadStartFacts(app.db, rows);
+  const team = await teamFactsFor(app);
   const want = startFindings(rows.flatMap((row) => {
     const mine = facts.get(row.id);
-    return mine ? [{ row, start: personStart(row, mine, now) }] : [];
+    const workingPageIds = team.working.filter((one) => one.personId === row.id).map((one) => one.pageId);
+    return mine ? [{ row, start: personStart(row, mine, now), workingPageIds }] : [];
   }));
   const open = new Map((await listOpenMattersOfKinds(app.db, [...MATTER_PERSON_START_KINDS])).map((matter) => [matter.key, matter]));
   const seen = new Set<string>();
@@ -97,7 +103,7 @@ export async function runPeopleStartTick(app: Pick<AppContext, "db" | "logger">,
     seen.add(finding.key);
     const input: MatterOpenInput = {
       key: finding.key, kind: finding.kind, source: "server", title: finding.title.slice(0, 300),
-      object: { type: "person", id: finding.code }, pageIds: [], owner: { role: "owner" }, money: false,
+      object: { type: "person", id: finding.code }, pageIds: finding.pageIds, owner: finding.owner, money: false,
       evidence: finding.evidence, link: finding.link,
     };
     const existing = open.get(finding.key);

@@ -10,6 +10,7 @@ import { useMe } from "@/shared/useMe";
 import { COLUMNS, useCustomBoard } from "../customs/data";
 import { goLink } from "../waiting/links";
 import { MyMatters } from "../waiting/MyMatters";
+import { useNewcomers } from "../team/Newcomers";
 import { useToday } from "./data";
 
 /**
@@ -180,6 +181,36 @@ function Customs() {
   );
 }
 
+/** «Новички»: who is in their first week, and who stands on one step of «Начало» two days (the lead's matter). */
+function Newcomers() {
+  const read = useNewcomers();
+  const people = read.data?.newcomers ?? [];
+  return (
+    <section className="today-card" aria-labelledby="today-newcomers">
+      <h2 className="today-card__title" id="today-newcomers">
+        Новички
+        {people.length > 0 && <Link className="wt-link today-card__more" to="/team/newcomers">все {people.length}</Link>}
+      </h2>
+      {read.isPending ? <Skeleton height={48} radius={8} /> : read.isError && !read.data ? <p className="ui-muted">Новички не пришли.</p> : people.length === 0 ? (
+        <p className="ui-muted">Новичков нет.</p>
+      ) : (
+        <ul className="today-list">
+          {people.slice(0, 4).map((person) => (
+            <li key={person.code} className="today-list__row">
+              <Link className="today-list__who wt-link" to="/team/newcomers">{person.name}</Link>
+              <span className={person.start?.stuck ? "today-list__what today-list__what--bad" : "today-list__what"}>
+                {person.start?.stuck ? "стоит на шаге больше двух суток"
+                  : person.state === "working" ? `первая неделя, смен ${person.shifts.length}`
+                    : person.start ? `«Начало»: ${person.start.done} из ${person.start.total}` : "приглашение не открыто"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function TeamToday() {
   const today = useToday();
   const { isOwner } = useMe();
@@ -199,6 +230,7 @@ export function TeamToday() {
       <div className="today-card"><MyMatters title="Решить" workboardOnly={isOwner} /></div>
       <Reports />
       <Reviews reviews={team.reviews} />
+      <Newcomers />
       <Customs />
     </div>
   );

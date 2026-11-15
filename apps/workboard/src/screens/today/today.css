@@ -138,6 +138,10 @@
     overflow-wrap: anywhere;
   }
 
+  .today-list__what--bad {
+    color: var(--ui-bad, var(--ui-text));
+  }
+
   .today-list__note {
     color: var(--ui-text);
     white-space: pre-line;

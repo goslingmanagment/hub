@@ -9,6 +9,7 @@ import { capitalized, periodWords, PERSON_ROLE_WORD, statusOf, versusTitle } fro
 import { hubHref, personCodePath, useBackState, useRowBackState } from "@/shared/links";
 import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, PER_SHIFT_HINT } from "@/shared/metrics";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { TeamTabs } from "./TeamTabs";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
 import { usePeriod } from "@/shared/usePeriod";
@@ -70,6 +71,7 @@ export function TeamScreen() {
     <>
       <ScreenHeader
         title="Команда"
+        tabs={<TeamTabs />}
         period
         pageFilter
         meta={numbers.comparable ? undefined : <NothingToCompare knownSince={numbers.knownSince} />}

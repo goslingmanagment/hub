@@ -78,3 +78,12 @@ export async function listHandoverComments(db: Database, input: { since: Date; e
     limit ${input.limit}`);
   return result.rows.map((row) => ({ shift: shiftOf(row), comment: String(row.comment) }));
 }
+
+/** The starts of the logins' shifts with a note on their review (a lead's or the owner's): «Новички». */
+export async function listNotedShiftStarts(db: Database, userIds: readonly number[]): Promise<Array<{ userId: number; startedAt: Date }>> {
+  if (userIds.length === 0) return [];
+  const result = await db.execute<Row>(sql`select distinct s.user_id, s.started_at
+    from review_notes n join shifts s on s.id = n.shift_id
+    where s.user_id = any(${ids(userIds)})`);
+  return result.rows.map((row) => ({ userId: Number(row.user_id), startedAt: date(row.started_at) }));
+}

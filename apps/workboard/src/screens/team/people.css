@@ -711,3 +711,106 @@
     gap: 16px;
   }
 }
+
+/* «Команда → Новички»: a card a newcomer. */
+@layer components {
+  .nc {
+    gap: var(--ui-space-4);
+  }
+
+  .nc-head {
+    margin: var(--ui-space-3) 0 var(--ui-space-2);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-weight: 600;
+  }
+
+  .nc-head:first-child {
+    margin-top: 0;
+  }
+
+  .nc-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ui-space-2) var(--ui-space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .nc-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ui-text-3);
+  }
+
+  .nc-step--done {
+    color: var(--ui-text);
+  }
+
+  .nc-step--now {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .nc-step__dot {
+    width: 8px;
+    height: 8px;
+    margin: 0 3px;
+    border: 1.5px solid currentColor;
+    border-radius: 50%;
+  }
+
+  .nc-shifts {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .nc-shifts th {
+    padding: 0 12px 6px 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    font-weight: 400;
+    text-align: left;
+  }
+
+  .nc-shifts td {
+    padding: 6px 12px 6px 0;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .nc-shifts__norm td {
+    color: var(--ui-text-2);
+  }
+
+  @media (max-width: 640px) {
+    .nc-shifts thead {
+      display: none;
+    }
+
+    .nc-shifts tr {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px 12px;
+      padding: 6px 0;
+      border-top: 1px solid var(--ui-line-soft);
+    }
+
+    .nc-shifts td {
+      padding: 0;
+      border: 0;
+    }
+
+    .nc-shifts td:first-child {
+      width: 100%;
+      font-weight: 500;
+    }
+  }
+}
