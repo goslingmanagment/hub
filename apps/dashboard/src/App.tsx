@@ -8,7 +8,6 @@ import { ErrorBoundary } from "./components/shared/ErrorBoundary.js";
 import { LEGACY_ROUTES, SETTINGS_INDEX_RULE } from "./lib/redirects.js";
 import { Legacy } from "./routes/legacy.js";
 import { LiveLegacy, PageCardLegacy } from "./routes/LiveLegacy.js";
-import { fansRoutes } from "./routes/screens/fans-page.js";
 import { homeMoneyRoutes, MoneyIndex } from "./routes/screens/home-money.js";
 import { publicationsRoutes } from "./routes/screens/publications.js";
 import { settingsRoutes } from "./routes/screens/settings.js";
@@ -18,6 +17,7 @@ import { trafficRoutes } from "./routes/screens/traffic.js";
 import { waitingRoutes } from "./routes/screens/waiting.js";
 import { applicationsRoutes } from "./routes/screens/applications.js";
 import { ToWorkboard } from "./routes/ToWorkboard.js";
+import { pageScreensRoutes } from "./routes/screens/fans-page.js";
 
 const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
 const JoinPage = lazy(() => import("./pages/account/JoinPage.js").then((m) => ({ default: m.JoinPage })));
@@ -39,6 +39,9 @@ export function App() {
               (lib/workboard.ts), before any frame of the console loads. «Анкеты» stay below. */}
           <Route path="/team/*" element={<ToWorkboard />} />
           <Route path="/held-sends" element={<ToWorkboard />} />
+          {/* «Фаны» and «Рассылки» moved to Workboard (products package M). */}
+          <Route path="/fans/*" element={<ToWorkboard />} />
+          <Route path="/content/mass-messages" element={<ToWorkboard />} />
           {/* «Аккаунт и устройства» is Workboard's screen: the old address leads there (or a chatter's old tab to «Мои смены»). */}
           <Route path="/account" element={<ChatterLayout />} />
           <Route element={<ProtectedLayout />}>
@@ -47,7 +50,7 @@ export function App() {
                 {/* Each group's routes live in its own file: routes/screens/<group>.tsx. */}
                 {homeMoneyRoutes()}
                 {waitingRoutes()}
-                {fansRoutes()}
+                {pageScreensRoutes()}
                 {statsRoutes()}
                 {publicationsRoutes()}
                 {trafficRoutes()}

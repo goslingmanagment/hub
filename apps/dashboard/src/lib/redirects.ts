@@ -92,15 +92,15 @@ export const LEGACY_ROUTES: ReadonlyArray<LegacyRule & { path: string }> = [
   { path: "pages/:pageLabel/account", to: "/settings/pages/:pageLabel/account" },
   { path: "pages/:pageLabel/browser-login", to: "/settings/pages/:pageLabel/login" },
   { path: "pages/:pageLabel/promo", to: "/traffic/promo", pageFromPath: true },
-  { path: "pages/:pageLabel/mass-messages", to: "/content/mass-messages", pageFromPath: true },
-  { path: "pages/:pageLabel/subscribers", to: "/fans/subscribers", pageFromPath: true }, // 5
-  { path: "pages/:pageLabel/followers", to: "/fans/followers", pageFromPath: true }, // 6
-  { path: "pages/:pageLabel/top-supporters", to: "/fans", pageFromPath: true }, // 7
-  { path: "pages/:pageLabel/deleted-fans", to: "/fans/gone", pageFromPath: true }, // 8
+  { path: "pages/:pageLabel/mass-messages", to: "/workboard/sales/mass", pageFromPath: true },
+  { path: "pages/:pageLabel/subscribers", to: "/workboard/fans/subscribers", pageFromPath: true }, // 5
+  { path: "pages/:pageLabel/followers", to: "/workboard/fans/followers", pageFromPath: true }, // 6
+  { path: "pages/:pageLabel/top-supporters", to: "/workboard/fans", pageFromPath: true }, // 7
+  { path: "pages/:pageLabel/deleted-fans", to: "/workboard/fans/gone", pageFromPath: true }, // 8
   { path: "pages/:pageLabel/profile", to: "/settings/pages/:pageLabel/account" }, // 9
   { path: "pages/:pageLabel/settings", to: "/settings/pages/:pageLabel/account", hash: "#fansly-settings" }, // 10
-  { path: "pages/:pageLabel/spender-autolists/:bucketKey", to: "/fans/by-spend/:bucketKey", pageFromPath: true }, // 11
-  { path: "pages/:pageLabel/fans/:platform/:platformUserId", to: "/fans/:pageLabel/:platform/:platformUserId" }, // 12
+  { path: "pages/:pageLabel/spender-autolists/:bucketKey", to: "/workboard/fans/by-spend/:bucketKey", pageFromPath: true }, // 11
+  { path: "pages/:pageLabel/fans/:platform/:platformUserId", to: "/workboard/fans/:pageLabel/:platform/:platformUserId" }, // 12
   { path: "browser-profiles/new", to: "/settings/pages/connect", rename: { page: "forPage" } }, // 13
   { path: "browser-profiles/:profileId", to: "/settings/pages/connect/:profileId" }, // 14
   {

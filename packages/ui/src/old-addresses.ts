@@ -86,6 +86,11 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "console's old «Команда»", from: `${HUB}/team/payouts#disputes`, to: `${TEAM}/workboard/waiting#reports` },
   { who: "console's old «Команда»", from: `${HUB}/held-sends`, to: `${TEAM}/workboard/waiting#held` },
   { who: "console's old «Команда»", from: `${HUB}/team/people/12`, to: `${TEAM}/workboard/people/12/access` },
+  // «Фаны» and «Рассылки» moved from the console to Workboard (products package M, `movedToWorkboard`).
+  { who: "owner's bookmark", from: `${HUB}/fans?page=mia-1&period=30d`, to: `${TEAM}/workboard/fans?page=mia-1&period=30d` },
+  { who: "owner's bookmark, «Операции»", from: `${HUB}/fans/mia-1/fansly/7409?period=all`, to: `${TEAM}/workboard/fans/mia-1/fansly/7409?period=all` },
+  { who: "owner's bookmark", from: `${HUB}/fans/by-spend/600-plus?page=mia-1#copy`, to: `${TEAM}/workboard/fans/by-spend/600-plus?page=mia-1#copy` },
+  { who: "console's «Контент»", from: `${HUB}/content/mass-messages?page=mia-1`, to: `${TEAM}/workboard/sales/mass?page=mia-1` },
   // Links Hub's server wrote (matters: a path on whichever name shows it; people's messages: the team's name).
   { who: "matter before the rename", from: `${TEAM}/workboard/decisions?dispute=5#questions`, to: `${TEAM}/workboard/waiting?dispute=5#questions` },
   { who: "matter on Hub's Главная", from: `${HUB}/workboard/waiting#customs`, to: `${TEAM}/workboard/waiting#customs` },

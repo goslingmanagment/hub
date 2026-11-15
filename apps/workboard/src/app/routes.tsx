@@ -102,6 +102,19 @@ const everyoneScreens: RouteObject[] = [
     handle: { screenKey: (params) => `${params.userId ?? ""}/${params.shiftStart ?? ""}` } satisfies ScreenHandle,
     lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })),
   },
+  // «Фаны» (products package M): moved from the console; Hub answers by the viewer's teams.
+  { path: "fans", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansScreen })) },
+  { path: "fans/subscribers", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansSubscribersScreen })) },
+  { path: "fans/followers", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansFollowersScreen })) },
+  { path: "fans/gone", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansGoneScreen })) },
+  { path: "fans/by-spend", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansBySpendScreen })) },
+  { path: "fans/by-spend/:bucketKey", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansBySpendListScreen })) },
+  {
+    path: "fans/:pageLabel/:platform/:platformUserId",
+    handle: { screenKey: (params) => `${params.pageLabel ?? ""}/${params.platform ?? ""}/${params.platformUserId ?? ""}` } satisfies ScreenHandle,
+    lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FanScreen })),
+  },
+  { path: "fans/:platform/:platformUserId", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FanAnyPage })) },
   { path: "customs", lazy: () => import("../screens/customs/index.js").then((m) => ({ Component: m.CustomsBoardScreen })) },
   // «Аккаунт и устройства» (the console's /account until 12.11): everyone's own, from the name menu; a narrow session
   // gets the way to the password there instead of the devices and the password.

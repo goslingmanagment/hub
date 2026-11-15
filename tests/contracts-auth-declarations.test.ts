@@ -161,6 +161,8 @@ describe("route auth declarations", () => {
       "pageFanProfileVersion",
       "pageFanProfileVersions",
       "pageFanTransactions",
+      // «Кто с ним работал» on the fan's card (products package M).
+      "pageFanWorkedWith",
       "pageFans",
       "pageFollowers",
       "pageFollowersDaily",

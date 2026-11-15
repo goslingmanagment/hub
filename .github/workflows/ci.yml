@@ -230,7 +230,7 @@ jobs:
         if: matrix.part == 'typecheck'
         run: |
           node --import tsx/esm packages/look/generate.ts
-          generated=(packages/ui/src/styles/tokens.css apps/dashboard/src/styles/tokens.css)
+          generated=(packages/ui/src/styles/tokens.css packages/ui/src/styles/console-tokens.css)
           drift="$(git status --porcelain --untracked-files=all -- "${generated[@]}")"
           if [ -n "$drift" ]; then
             printf '%s\n' "$drift"

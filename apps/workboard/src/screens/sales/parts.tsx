@@ -1,3 +1,4 @@
+import { useMe } from "@/shared/useMe";
 import { ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
 import { useLocation, useParams, useSearchParams } from "react-router";
@@ -26,6 +27,8 @@ export const TABS = [
   { tab: "speed", label: "Скорость ответа", sleeping: false },
   { tab: "win-back", label: "Возврат фанов", sleeping: true },
   { tab: "greetings", label: "Приветствия и охват", sleeping: true },
+  // «Рассылки» of one Fansly page (products package M: moved from the console's «Контент»), the owner's.
+  { tab: "mass", label: "Рассылки", sleeping: false, ownerOnly: true },
 ] as const;
 
 export type SalesTab = (typeof TABS)[number]["tab"];
@@ -59,8 +62,11 @@ export function useSalesParams() {
  * nothing when the numbers cover the period on screen (X6), the words of an
  * other window when they do not («Ответы до 7 нояб. 01:20: последние сутки…»).
  */
-export function SalesHeader({ meta, updatedAt, onRefresh, refreshing, stale = false }: {
+export function SalesHeader({ meta, updatedAt, onRefresh, refreshing, stale = false, period = true, pageFilter = true }: {
   meta?: ReactNode;
+  /** «Рассылки» has no period of Workboard's and a filter of its own (one Fansly page). */
+  period?: boolean;
+  pageFilter?: boolean | ReactNode;
   updatedAt: number | undefined;
   onRefresh: () => void;
   refreshing: boolean;
@@ -73,11 +79,12 @@ export function SalesHeader({ meta, updatedAt, onRefresh, refreshing, stale = fa
   const by = new URLSearchParams(location.search).get("by");
   if (by === "chatters") carried.set("by", by);
   const search = carried.toString();
+  const { isOwner } = useMe();
   return (
     <ScreenHeader
       title="Что продаёт"
-      period
-      pageFilter
+      period={period}
+      pageFilter={pageFilter}
       // Not null: the header would fill an empty line with «Сравнение с …», and nothing here is compared. A no-break
       // space keeps the line's height while «Обновлено …» is not there yet: the tabs do not jump when the numbers come.
       meta={meta ?? "\u00a0"}
@@ -85,7 +92,7 @@ export function SalesHeader({ meta, updatedAt, onRefresh, refreshing, stale = fa
       onRefresh={onRefresh}
       refreshing={refreshing}
       stale={stale}
-      tabs={<Tabs label="Разделы" items={TABS.filter((item) => !item.sleeping || item.tab === current).map((item) => ({ to: { pathname: `/sales/${item.tab}`, search: search ? `?${search}` : "" }, label: item.label }))} />}
+      tabs={<Tabs label="Разделы" items={TABS.filter((item) => (!item.sleeping || item.tab === current) && (!("ownerOnly" in item) || isOwner)).map((item) => ({ to: { pathname: `/sales/${item.tab}`, search: search ? `?${search}` : "" }, label: item.label }))} />}
     />
   );
 }

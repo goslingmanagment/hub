@@ -7,7 +7,7 @@
  * Two copies exist in Hub and both are GENERATED from here (`node --import tsx/esm
  * packages/look/generate.ts`; CI checks they are fresh):
  *   - packages/ui/src/styles/tokens.css   `--ui-*`, Workboard and the shared components;
- *   - apps/dashboard/src/styles/tokens.css `--color-*` and the type scale under
+ *   - packages/ui/src/styles/console-tokens.css `--color-*` and the type scale under
  *     Tailwind's `@theme static`, the console.
  * Other repositories take the values through `scripts/vendor-look.mjs` (the
  * extension keeps its own dock palette; ContentOps and TaskIndex keep their

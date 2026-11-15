@@ -97,9 +97,9 @@ describe("the narrow web session and the chatter's screens", () => {
     expect([...passwordOnly].filter((operation) => narrow.has(operation))).toEqual([]);
   });
 
-  it("knows the chatter's menu and name menu: «Начало», «Мои смены», «Смены», «Кастомы», «Аккаунт и устройства»", () => {
+  it("knows the chatter's menu and name menu: «Начало», «Мои смены», «Смены», «Фаны», «Кастомы», «Аккаунт и устройства»", () => {
     expect(chatterScreens().map((screen) => screen.path).sort()).toEqual([
-      "/workboard/account", "/workboard/customs", "/workboard/my/shifts", "/workboard/shifts", "/workboard/start",
+      "/workboard/account", "/workboard/customs", "/workboard/fans", "/workboard/my/shifts", "/workboard/shifts", "/workboard/start",
     ]);
   });
 

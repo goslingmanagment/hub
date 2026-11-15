@@ -15,8 +15,8 @@ export interface ScreenHeaderProps {
   back?: BackTarget;
   /** Show the period control (most screens). */
   period?: boolean;
-  /** Show the page filter. */
-  pageFilter?: boolean;
+  /** Show the page filter (or the screen's own one, Фаны's). */
+  pageFilter?: boolean | ReactNode;
   /**
    * The screen's one main action (or a menu). Without a page filter it stands at
    * the right end, in the filter's place (D15) — keep it short (a verb and an
@@ -85,7 +85,7 @@ export function ScreenHeader({ title, documentTitle, back, period = false, pageF
             {(pageFilter || period || actions !== undefined) && (
               <span className="wb-header__slot">
                 <PageFilterSlot />
-                {pageFilter ? <PageFilter /> : actions}
+                {pageFilter === true ? <PageFilter /> : pageFilter ? pageFilter : actions}
               </span>
             )}
           </div>

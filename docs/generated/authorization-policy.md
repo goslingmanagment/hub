@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 84 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (527)
+## Routes (529)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -391,9 +391,10 @@ A full device token is not affected.
 | GET | `/api/v1/custom-orders/:code` | `customOrder` | `any-session` | — | — | no |
 | POST | `/api/v1/custom-orders/:code` | `customOrderAct` | `any-session` | — | — | no |
 | POST | `/api/v1/custom-orders/sales/:transactionRef/dismiss` | `customSaleDismiss` | `any-session` | — | — | no |
-| GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `session` | — | — | no |
+| GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `any-session` | — | — | no |
 | PATCH | `/api/v1/fans/:platform/:platformUserId/flags` | `setFanFlags` | `owner-session` | — | — | no |
-| GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `session` | — | — | no |
+| GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `any-session` | — | — | no |
+| GET | `/api/v1/fans/pages` | `fanPages` | `any-session` | — | — | no |
 | GET | `/api/v1/health` | `health` | `public` | — | — | — |
 | GET | `/api/v1/health/sync` | `healthSync` | `monitoring` | — | — | no |
 | POST | `/api/v1/ingest/observations` | `ingestObservations` | `apiKey` | — | — | yes |
@@ -442,16 +443,17 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/messages` | `pageConversationMessages` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/profile` | `pageConversationProfile` | `any` | — | page | yes |
-| GET | `/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview` | `pageConversationPreview` | `session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview` | `pageConversationPreview` | `any-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/deleted-fans` | `pageDeletedFans` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans` | `pageFans` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId` | `pageFanDetail` | `any` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/card` | `pageFanCard` | `session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/card` | `pageFanCard` | `any-session` | — | page | no |
 | POST | `/api/v1/pages/:pageLabel/fans/:platformUserId/notes` | `createFanNote` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `pageFanProfile` | `any` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions` | `pageFanProfileVersions` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile/versions/:version` | `pageFanProfileVersion` | `any` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/transactions` | `pageFanTransactions` | `session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/transactions` | `pageFanTransactions` | `any-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/worked-with` | `pageFanWorkedWith` | `any-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/followers` | `pageFollowers` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/followers/daily` | `pageFollowersDaily` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/mass-messages` | `pageMassMessages` | `owner-session` | — | page | no |
@@ -556,4 +558,4 @@ A full device token is not affected.
 | GET | `/api/v2/spenders` | `spenders` | `any` | — | — | yes |
 | POST | `/api/v2/spenders:batch` | `spenderBatch` | `any` | — | — | yes |
 | GET | `/api/v2/spenders/:platform/:platformUserId` | `spenderDetail` | `any` | — | — | yes |
-| GET | `/api/v2/spenders/:platform/:platformUserId/series` | `spenderSeries` | `session` | — | — | no |
+| GET | `/api/v2/spenders/:platform/:platformUserId/series` | `spenderSeries` | `any-session` | — | — | no |

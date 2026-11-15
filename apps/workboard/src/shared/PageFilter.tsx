@@ -1,7 +1,7 @@
 import { ChevronDown, X } from "lucide-react";
 import { Menu, platformWord, type MenuEntry } from "@agency_hub_core/ui";
 import { usePageFilter } from "./usePageFilter.js";
-import { groupPagesByModel, usePages } from "./usePages.js";
+import { groupPagesByModel, usePages, type HubPage } from "./usePages.js";
 
 /**
  * The header's page filter: «Все страницы» or one page. A chosen page is an ink
@@ -9,13 +9,18 @@ import { groupPagesByModel, usePages } from "./usePages.js";
  * page under its model, the platform in quiet words. It narrows what is shown
  * and nothing else (usePageFilter).
  */
-export function PageFilter() {
+export function PageFilter({ pages: own, everyPage = true }: {
+  /** The screen's own list (Фаны: the pages of the viewer's teams); absent: the pages the viewer reaches. */
+  pages?: readonly HubPage[] | undefined;
+  /** «Все страницы» is a choice (a screen of one page has none). */
+  everyPage?: boolean;
+} = {}) {
   const { page, setPage } = usePageFilter();
   const pages = usePages();
-  const groups = groupPagesByModel(pages.data ?? []);
+  const groups = groupPagesByModel(own ?? pages.data ?? []);
 
   const items: MenuEntry[] = [
-    { label: "Все страницы", checked: page === null, onSelect: () => setPage(null) },
+    ...(everyPage ? [{ label: "Все страницы", checked: page === null, onSelect: () => setPage(null) }] : []),
     ...groups.flatMap((group): MenuEntry[] => [
       { separator: true },
       { group: group.modelName },
@@ -35,7 +40,7 @@ export function PageFilter() {
       align="end"
       renderTrigger={({ ref, ...trigger }) => page === null ? (
         <button ref={ref} type="button" className="ui-chip ui-chip--md" {...trigger}>
-          <span className="ui-chip__text">Все страницы</span>
+          <span className="ui-chip__text">{everyPage ? "Все страницы" : "Выберите страницу"}</span>
           <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
         </button>
       ) : (

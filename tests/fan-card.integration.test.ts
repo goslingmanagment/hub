@@ -299,13 +299,16 @@ describe("the fan's card across pages", () => {
       }
     }, INTEGRATION_TEST_TIMEOUT_MS);
 
-    it("refuses a page the lead does not reach, a chatter's session and a device token", async (context) => {
+    it("refuses a page the lead does not reach, a chatter's page outside their teams and a device token", async (context) => {
       if (!testDb || !server) return context.skip();
       expect((await card("lora-1", "7000000011", lead)).statusCode).toBe(403);
       expect((await card("nosuchpage", "7000000011", owner)).statusCode).toBe(404);
       // A reference that is not the platform's fan number names no fan: a 404, never a card that fails its own schema.
       expect((await card("ari-1", "some_username", owner)).statusCode).toBe(404);
-      expect((await card("ari-1", "7000000011", await login("vanya", "vanya-secret"))).statusCode).toBe(403);
+      // «Фаны» is Workboard's, every role's (products package M): a chatter reads the card on a page of theirs, not elsewhere.
+      const chatter = await login("vanya", "vanya-secret");
+      expect((await card("ari-1", "7000000011", chatter)).statusCode).toBe(200);
+      expect((await card("lora-1", "7000000011", chatter)).statusCode).toBe(403);
       const device = await server.inject({
         method: "GET",
         url: "/api/v1/pages/ari-1/fans/7000000011/card",

@@ -7,7 +7,6 @@ import { Fragment, lazy, type ComponentType, type ReactNode } from "react";
 import { Outlet } from "react-router";
 import { OwnerRoute } from "@/components/layout/OwnerRoute";
 import { useRoutePageLabel } from "@/components/layout/usePageFilter";
-import { Notice } from "@/components/ui/Notice";
 
 /** A lazily loaded named export of a screen's module. */
 export const named = <T extends string>(load: () => Promise<Record<T, ComponentType>>, name: T) =>
@@ -27,11 +26,4 @@ export function OnePage({ children }: { children: ReactNode }) {
   return <Fragment key={pageLabel}>{children}</Fragment>;
 }
 
-/** The sentence over what the switched-off OnlyFans API left behind. */
-export function OfapiOffNotice({ children }: { children?: ReactNode }) {
-  return (
-    <Notice tone="off">
-      <b>OnlyFans API выключен с 1 ноября.</b> {children}
-    </Notice>
-  );
-}
+export { OfapiOffNotice } from "@agency_hub_core/ui/console/OfapiOffNotice";

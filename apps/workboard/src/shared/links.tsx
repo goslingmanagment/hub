@@ -213,7 +213,7 @@ export function consoleHref(path: string): string {
   return path.startsWith("/") ? path : `/${path}`;
 }
 
-/** The console's card of a fan. */
-export function consoleFanHref(pageLabel: string, platform: string, fanRef: string): string {
-  return consoleHref(`/fans/${encodeURIComponent(pageLabel)}/${encodeURIComponent(platform)}/${encodeURIComponent(fanRef)}`);
+/** A fan's card: Workboard's «Фаны» since products package M (a plain href, as the shared `Fan` takes it). */
+export function fanCardHref(pageLabel: string, platform: string, fanRef: string): string {
+  return `${import.meta.env.BASE_URL}fans/${encodeURIComponent(pageLabel)}/${encodeURIComponent(platform)}/${encodeURIComponent(fanRef)}`;
 }

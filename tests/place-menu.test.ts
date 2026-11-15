@@ -22,9 +22,9 @@ describe("each screen's product", () => {
 });
 
 describe("Hub's menu", () => {
-  it("is the owner's: Главная · Ждут вас · Деньги · Фаны · Страницы · Контент · Трафик · Анкеты, then Настройки · Система", () => {
+  it("is the owner's: Главная · Ждут вас · Деньги · Страницы · Контент · Трафик · Анкеты, then Настройки · Система", () => {
     const menu = productMenu("hub", "owner");
-    expect(menu.upper.map((item) => item.label)).toEqual(["Главная", "Ждут вас", "Деньги", "Фаны", "Страницы", "Контент", "Трафик", "Анкеты"]);
+    expect(menu.upper.map((item) => item.label)).toEqual(["Главная", "Ждут вас", "Деньги", "Страницы", "Контент", "Трафик", "Анкеты"]);
     expect(menu.lower.map((item) => item.label)).toEqual(["Настройки", "Система"]);
   });
 
@@ -46,14 +46,14 @@ describe("Hub's menu", () => {
 });
 
 describe("Workboard's menu", () => {
-  it("is the owner's and a team lead's own: Ждут вас · Смены · Люди · Кастомы · Что продаёт, the owner also Выплаты", () => {
-    expect(items("workboard", "owner").map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Люди", "Кастомы", "Что продаёт", "Выплаты"]);
-    expect(items("workboard", "team_lead").map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Люди", "Кастомы", "Что продаёт"]);
+  it("is the owner's and a team lead's own: Ждут вас · Смены · Люди · Фаны · Кастомы · Что продаёт, the owner also Выплаты", () => {
+    expect(items("workboard", "owner").map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Люди", "Фаны", "Кастомы", "Что продаёт", "Выплаты"]);
+    expect(items("workboard", "team_lead").map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Люди", "Фаны", "Кастомы", "Что продаёт"]);
   });
 
-  it("gives a chatter «Мои смены» and «Кастомы», «Начало» first only while a step is open", () => {
-    expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["my-shifts", "shifts", "customs"]);
-    expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "my-shifts", "shifts", "customs"]);
+  it("gives a chatter «Мои смены», «Смены», «Фаны» and «Кастомы», «Начало» first only while a step is open", () => {
+    expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["my-shifts", "shifts", "fans", "customs"]);
+    expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "my-shifts", "shifts", "fans", "customs"]);
   });
 
   it("leads every role only to Workboard screens it may open", () => {
@@ -75,6 +75,9 @@ describe("Workboard's menu", () => {
     expect(menuItemAt("/workboard/sales/price")).toBe("sales");
     expect(menuItemAt("/workboard/waiting")).toBe("waiting");
     expect(menuItemAt("/workboard/customs/C-12")).toBe("customs");
+    // «Фаны»'s lists and a fan's card light «Фаны».
+    expect(menuItemAt("/workboard/fans/subscribers")).toBe("fans");
+    expect(menuItemAt("/workboard/fans/mia-1/fansly/7")).toBe("fans");
     expect(menuItemAt("/pages/mia-1")).toBeNull();
     expect(menuItemAt("/no-such-screen")).toBeNull();
     expect(menuItemAt("/workboard/no-such-screen")).toBeNull();

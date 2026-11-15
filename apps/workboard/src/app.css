@@ -85,6 +85,10 @@
   --color-current: currentColor;
 }
 
+/* The console's tokens, after Workboard's own (which reset the namespaces): «Фаны» and «Рассылки» moved from the
+   console draw with them (products package M). */
+@import "../../../packages/ui/src/styles/console-tokens.css";
+
 /* --------------------------------------------------------------- The frame */
 
 @layer components {

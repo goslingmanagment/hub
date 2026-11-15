@@ -24,7 +24,9 @@ import {
   getPageSummary,
 } from "../../services/reporting.ts";
 import { readPageFanCard } from "../../services/fan-card.ts";
+import { readPageFanWorkedWith } from "../../services/fan-worked-with.ts";
 import { searchVisibleFans } from "../../services/spenders.ts";
+import { asFanReader } from "../../services/fan-reads.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Audience module (target §6.1): fans, subscriptions, follows, growth, fan
@@ -50,7 +52,7 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/pages/:pageLabel/subscribers", {
     schema: routeSchemas.pageSubscribers,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     const page = await getPageSummary(appContext, request.params.pageLabel);
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
@@ -76,7 +78,7 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/pages/:pageLabel/followers", {
     schema: routeSchemas.pageFollowers,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     const page = await getPageSummary(appContext, request.params.pageLabel);
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
@@ -114,7 +116,7 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/pages/:pageLabel/deleted-fans", {
     schema: routeSchemas.pageDeletedFans,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     const page = await getPageSummary(appContext, request.params.pageLabel);
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
@@ -125,14 +127,22 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/card", {
     schema: routeSchemas.pageFanCard,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     return readPageFanCard(appContext, principal, { pageLabel: request.params.pageLabel, platformUserId: request.params.platformUserId });
+  });
+
+  // «Кто с ним работал» on the fan's card (products package M).
+  server.get("/api/v1/pages/:pageLabel/fans/:platformUserId/worked-with", {
+    schema: routeSchemas.pageFanWorkedWith,
+  }, async (request) => {
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
+    return readPageFanWorkedWith(appContext, principal, { pageLabel: request.params.pageLabel, platformUserId: request.params.platformUserId });
   });
 
   server.get("/api/v1/pages/:pageLabel/fans/:platformUserId", {
     schema: routeSchemas.pageFanDetail,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     const page = await getPageSummary(appContext, request.params.pageLabel);
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
@@ -151,7 +161,7 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/fans/:platform/:platformUserId", {
     schema: routeSchemas.crossPageFanDetail,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
+    const principal = await asFanReader(appContext, await requirePrincipal(request));
     const pageIds = pageScopeFor(principal);
     return getCrossPageFanDetailReport(appContext, {
       platform: request.params.platform,
