@@ -3,8 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { kernel } from "./sdk.js";
 
 // The people list, as the console still reads it. Inviting, links, revoking,
-// disabling, deleting, device sign-ins and pages per person are Workboard's
-// «Доступ» now (apps/workboard/src/screens/access).
+// disabling, deleting, device sign-ins and pages per person are in
+// Hub «Люди» now (apps/dashboard/src/pages/people/data.ts).
 
 const USERS_KEY = ["admin", "users"] as const;
 

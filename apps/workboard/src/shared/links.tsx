@@ -28,7 +28,7 @@ function withSearch(path: string, params: URLSearchParams): string {
 
 /**
  * The tabs of a person's card in «Команда» (products plan §4.3): Работа · Продажи · График и условия. Who the person is
- * and what they may (logins, page access, rights) is Hub «Люди» (`hubHref`, packages/ui/src/people/paths.ts).
+ * and what they may (logins, page access, rights) is Hub «Люди» (`hubHref`, contracts people-paths.ts).
  */
 export type PersonTab = TeamPersonTab;
 
