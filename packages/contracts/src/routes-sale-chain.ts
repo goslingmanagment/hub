@@ -91,6 +91,65 @@ export const agentSaleChainQuerySchema = z.object({
   transactionRef: z.string().trim().min(1).max(200).optional(),
 }).refine((query) => (query.saleRef !== undefined) !== (query.pageLabel !== undefined && query.transactionRef !== undefined), "name the sale: saleRef, or pageLabel and transactionRef");
 
+/**
+ * «Продажи → Список продаж» (products plan §2.3): every sale of the viewer's teams in a window — whose it is and why
+ * (the chain's own words of «Чья»), the report it is in, and whether the viewer may open its chain. Cut by the viewer's
+ * teams on the server (services/teams.ts); no pay of anyone: a report's sums and accruals stay in the chain.
+ */
+export const TEAM_SALES_LIST_MAX_DAYS = 62;
+export const TEAM_SALES_LIST_PAGE = 50;
+export const TEAM_SALE_HOME_FILTERS = ["all", "mine", "people", "owner", "pot", "waiting", "nobody", "none"] as const;
+export type TeamSaleHomeFilterWire = (typeof TEAM_SALE_HOME_FILTERS)[number];
+
+export const teamSalesListQuerySchema = z.object({
+  /** The window's first and last Moscow day, both included. */
+  from: businessDate,
+  to: businessDate,
+  pageLabel: z.string().trim().min(1).max(200).optional(),
+  /** Which sales: all, the viewer's own, people's, the owner's to decide, the pot's, waiting, nobody's, no home yet. */
+  home: z.enum(TEAM_SALE_HOME_FILTERS).default("all"),
+  offset: z.coerce.number().int().min(0).max(100_000).default(0),
+});
+
+export const teamSalesListResponseSchema = z.object({
+  from: businessDate,
+  to: businessDate,
+  sales: z.array(z.object({
+    transactionId: intId,
+    pageLabel: z.string(),
+    platform: z.string(),
+    /** Hub's canonical type: message_purchase, post_purchase, tip, stream_tip, subscription. */
+    kind: z.string(),
+    occurredAt: isoTimestamp,
+    netMills: mills,
+    fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable() }),
+    /** «Чья» as the chain says it (no link: the chain has it). */
+    home: z.object({
+      state: z.enum(SALE_CHAIN_STATES),
+      words: z.string(),
+      kind: z.string().nullable(),
+      reason: z.string().nullable(),
+      above: z.string().nullable(),
+      dispute: z.string().nullable(),
+    }),
+    /** The people the home gives a share, by name; the viewer's own marked. */
+    people: z.array(z.object({ userId: intId, name: z.string(), mine: z.boolean() })),
+    /** The report it is in: the handed-in version holding it, else the person's report of the day in the ledger. */
+    report: saleChainLinkSchema,
+    /** The viewer may open its chain (a chatter: a sale of theirs). */
+    chain: z.boolean(),
+  })),
+  /** How many sales each filter holds in the whole window. */
+  counts: z.object(Object.fromEntries(TEAM_SALE_HOME_FILTERS.map((filter) => [filter, z.number().int().nonnegative()])) as Record<TeamSaleHomeFilterWire, z.ZodNumber>),
+  /** The rows after these: the next page's offset; null — none. */
+  nextOffset: z.number().int().nonnegative().nullable(),
+  serverNow: isoTimestamp,
+});
+
+export type TeamSalesListQuery = z.infer<typeof teamSalesListQuerySchema>;
+export type TeamSalesListResponse = z.infer<typeof teamSalesListResponseSchema>;
+export type TeamSalesListSale = TeamSalesListResponse["sales"][number];
+
 export type SaleChainQuery = z.infer<typeof saleChainQuerySchema>;
 export type SaleChainLink = z.infer<typeof saleChainLinkSchema>;
 export type SaleChainResponse = z.infer<typeof saleChainResponseSchema>;
@@ -110,6 +169,15 @@ export const saleChainRouteSchemas = {
       + "the ledger's reads the payout panel and «Выплаты → Отчёты» already make; a source that does not answer is «неизвестно».",
     querystring: saleChainQuerySchema,
     response: { 200: saleChainResponseSchema, ...errors },
+  },
+  teamSalesList: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "Every sale of the viewer's teams in a window: whose it is and why, the report it is in",
+    description: "A cookie session of any role (the narrow one too), cut to the viewer's teams (services/teams.ts). "
+      + "«Чья» in the chain's words from `sale_homes`; the report from Hub's handed-in versions, else the ledger's report "
+      + "of that person's day as a state (its sums only for the owner and the person). No pay of anyone.",
+    querystring: teamSalesListQuerySchema,
+    response: { 200: teamSalesListResponseSchema, ...errors },
   },
   agentSaleChain: {
     auth: { kind: "agentKey" }, tags: ["agent"],

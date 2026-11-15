@@ -420,11 +420,19 @@ export const SCREENS: readonly Screen[] = [
     keywords: "кастомы заказы кастомов съёмка видео фото ведущий кастомы отдать оплачен",
   },
   {
-    id: "sales", path: "/workboard/sales", label: "Что продаёт", title: "Что продаёт", section: "team", product: "workboard", icon: "TrendingUp",
-    why: "Что и по какой цене покупают, как быстро отвечают.",
+    // «Продажи» (it was «Что продаёт»; products plan §2.3): every role's, Hub cuts each read to the viewer's teams.
+    id: "sales", path: "/workboard/sales", label: "Продажи", title: "Продажи", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"], icon: "TrendingUp",
+    why: "Что и по какой цене покупают, как быстро отвечают, чья каждая продажа.",
     pageFilter: "any",
     // «Возврат фанов» and «Приветствия и охват» left its tabs on 12.11 (0 opened in 14 days): their addresses still open.
-    keywords: "продажи цена скорость ответа ppv платные",
+    keywords: "что продаёт продажи цена скорость ответа ppv платные",
+  },
+  {
+    // Every sale of the viewer's teams: whose it is and why, the report it is in; the amount opens the sale's chain.
+    id: "sales-list", tabOf: "sales", path: "/workboard/sales/list", label: "Список продаж", title: "Список продаж", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Каждая продажа: чья она и почему, в каком отчёте.",
+    pageFilter: "any",
+    keywords: "список продаж чья продажа правило отчёт цепочка",
   },
   {
     // People's pay is the owner's alone (the ledger's answer reaches no other session).

@@ -46,18 +46,18 @@ describe("Hub's menu", () => {
 });
 
 describe("Workboard's menu", () => {
-  it("is the owner's and a team lead's own: Ждут вас · Смены · Команда · Фаны · Кастомы · Что продаёт, the owner also Выплаты", () => {
-    expect(items("workboard", "owner", { leads: true }).map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Что продаёт", "Выплаты"]);
-    expect(items("workboard", "team_lead", { leads: true }).map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Что продаёт"]);
+  it("is the owner's and a team lead's own: Ждут вас · Смены · Команда · Фаны · Кастомы · Продажи, the owner also Выплаты", () => {
+    expect(items("workboard", "owner", { leads: true }).map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Продажи", "Выплаты"]);
+    expect(items("workboard", "team_lead", { leads: true }).map((item) => item.label)).toEqual(["Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Продажи"]);
   });
 
-  it("gives a chatter «Мои смены», «Смены», «Фаны» and «Кастомы», «Начало» first only while a step is open", () => {
-    expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["my-shifts", "shifts", "fans", "customs"]);
-    expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "my-shifts", "shifts", "fans", "customs"]);
+  it("gives a chatter «Мои смены», «Смены», «Фаны», «Кастомы» and «Продажи», «Начало» first only while a step is open", () => {
+    expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["my-shifts", "shifts", "fans", "customs", "sales"]);
+    expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "my-shifts", "shifts", "fans", "customs", "sales"]);
   });
 
   it("gives «Команда» to a chatter who leads a team by its records, and never to a plain chatter", () => {
-    expect(items("workboard", "chatter", { leads: true }).map((item) => item.id)).toEqual(["my-shifts", "shifts", "team", "fans", "customs"]);
+    expect(items("workboard", "chatter", { leads: true }).map((item) => item.id)).toEqual(["my-shifts", "shifts", "team", "fans", "customs", "sales"]);
     expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).not.toContain("team");
   });
 

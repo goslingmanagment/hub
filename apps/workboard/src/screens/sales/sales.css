@@ -393,4 +393,46 @@
     border-radius: var(--ui-radius);
     background: var(--ui-line-soft);
   }
+
+  /* Список продаж: whose a sale is and its report, in the chain's words. */
+  .sales-list__when {
+    white-space: nowrap;
+  }
+
+  /* The filter row scrolls inside itself on a phone, never the page. */
+  .sales-list__filters {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .sales-list__home {
+    display: grid;
+    gap: 2px;
+    min-width: 220px;
+  }
+
+  .sales-list__report {
+    display: inline-block;
+    min-width: 200px;
+  }
+
+  .sales-list__words--open {
+    color: var(--ui-warn-text);
+  }
+
+  .sales-list__words--quiet {
+    color: var(--ui-text-3);
+  }
+
+  .sales-list__link {
+    color: inherit;
+    text-decoration: underline;
+    text-decoration-color: var(--ui-line);
+    text-underline-offset: 3px;
+  }
+
+  .sales-list__link:hover {
+    text-decoration-color: currentColor;
+  }
 }

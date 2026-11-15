@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import { testUserSql } from "./realm.ts";
+import { livePageSql, testUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // The shift report as an object of Hub (0400; ecosystem plan 2026-11-12,
@@ -954,6 +954,68 @@ export async function listHandinSalesOnPages(db: Database, input: { pageIds: rea
     order by t.occurred_at desc, t.id desc
     limit ${input.limit}`);
   return result.rows.map(saleOf);
+}
+
+/**
+ * «Продажи → Список продаж»: which of a team's sales a list shows, by their home as `sale_homes` keeps it (the wire's
+ * names are the contract's, routes-sale-chain.ts). `mine` — a share is one of `userIds`'; `people` — a shift's or a
+ * look-in's; `owner` — the owner decides; `pot`, `waiting`, `nobody` — the home of that name; `none` — no home yet, or
+ * a sale before the rule.
+ */
+export const TEAM_SALE_HOME_FILTERS = ["all", "mine", "people", "owner", "pot", "waiting", "nobody", "none"] as const;
+export type TeamSaleHomeFilter = (typeof TEAM_SALE_HOME_FILTERS)[number];
+
+function teamSaleHomeSql(filter: Exclude<TeamSaleHomeFilter, "all">, userIds: readonly number[]) {
+  switch (filter) {
+    case "mine":
+      return sql`exists (select 1 from jsonb_array_elements(h.shares) as share where (share ->> 'userId')::bigint = any(${ids(userIds)}))`;
+    case "people":
+      return sql`h.home in ('shift', 'visit')`;
+    case "owner":
+      return sql`h.home = 'decide'`;
+    case "none":
+      return sql`(h.home is null or h.home in ('before_rule', 'unknown'))`;
+    default:
+      return sql`h.home = ${filter}`;
+  }
+}
+
+/**
+ * The sales of the pages (every page: "all", the live agency's) in [from, to) with their homes, the newest first, a
+ * page of them; and how many each filter holds over the whole window. Money a fan paid only.
+ */
+export async function listTeamSalesWithHomes(
+  db: Database,
+  input: { pageIds: "all" | readonly number[]; from: Date; to: Date; filter: TeamSaleHomeFilter; userIds: readonly number[]; limit: number; offset: number },
+): Promise<{ sales: HandinSaleRow[]; counts: Record<TeamSaleHomeFilter, number> }> {
+  const counts = Object.fromEntries(TEAM_SALE_HOME_FILTERS.map((filter) => [filter, 0])) as Record<TeamSaleHomeFilter, number>;
+  if (input.pageIds !== "all" && input.pageIds.length === 0) return { sales: [], counts };
+  const pages = input.pageIds === "all" ? livePageSql(sql`t.platform_account_id`) : sql`t.platform_account_id = any(${ids(input.pageIds)})`;
+  const where = sql`where ${pages} and t.is_active and t.gross_amount_mills > 0
+      and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
+      and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz`;
+  const only = input.filter === "all" ? sql`` : sql`and ${teamSaleHomeSql(input.filter, input.userIds)}`;
+  const result = await db.execute<Row>(sql`${SALE_SELECT}
+    ${where} ${only}
+    order by t.occurred_at desc, t.id desc
+    limit ${input.limit} offset ${input.offset}`);
+  const counted = await db.execute<Row>(sql`
+    select count(*) as all_count,
+      count(*) filter (where ${teamSaleHomeSql("mine", input.userIds)}) as mine,
+      count(*) filter (where ${teamSaleHomeSql("people", input.userIds)}) as people,
+      count(*) filter (where ${teamSaleHomeSql("owner", input.userIds)}) as owner,
+      count(*) filter (where ${teamSaleHomeSql("pot", input.userIds)}) as pot,
+      count(*) filter (where ${teamSaleHomeSql("waiting", input.userIds)}) as waiting,
+      count(*) filter (where ${teamSaleHomeSql("nobody", input.userIds)}) as nobody,
+      count(*) filter (where ${teamSaleHomeSql("none", input.userIds)}) as none
+    from transactions t
+    left join sale_homes h on h.transaction_id = t.id
+    ${where}`);
+  const row = counted.rows[0];
+  if (row !== undefined) {
+    for (const filter of TEAM_SALE_HOME_FILTERS) counts[filter] = num(filter === "all" ? row.all_count : row[filter]);
+  }
+  return { sales: result.rows.map(saleOf), counts };
 }
 
 /** The pages any of the logins may open (`user_page_assignments`). */

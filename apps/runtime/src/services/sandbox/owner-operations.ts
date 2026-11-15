@@ -35,6 +35,7 @@ export const SANDBOX_OWNER_OPERATIONS: ReadonlySet<string> = new Set([
   "teamShiftSales",
   "teamSalesPpv",
   "teamSalesReplies",
+  "teamSalesList",
   "teamAuthorship",
   "teamEmptyHours",
   "teamGreetings",

@@ -42,7 +42,9 @@ function HomeRedirect() {
  * смены `/shifts/:userId/:shiftStart`.
  */
 const teamScreens: RouteObject[] = [
-  { path: "sales/:tab", lazy: () => import("../screens/sales/index.js").then((m) => ({ Component: m.SalesScreen })) },
+  // The team's tabs of «Продажи» (a chatter's session never reaches their operations): «Возврат фанов», «Рассылки».
+  { path: "sales/win-back", lazy: () => import("../screens/sales/team.js").then((m) => ({ Component: m.WinBackScreen })) },
+  { path: "sales/mass", lazy: () => import("../screens/sales/team.js").then((m) => ({ Component: m.MassScreen })) },
   // «Ждут вас» (it was Решения at `/decisions`, which leads here): the list read from matters.
   { path: "waiting", lazy: () => import("../screens/waiting/index.js").then((m) => ({ Component: m.WaitingScreen })) },
   { path: "payouts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
@@ -108,6 +110,9 @@ const everyoneScreens: RouteObject[] = [
     handle: { screenKey: (params) => `${params.userId ?? ""}/${params.shiftStart ?? ""}` } satisfies ScreenHandle,
     lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })),
   },
+  // «Продажи» (products plan §2.3): every role's; Hub cuts each read to the viewer's teams (a tab of the owner's alone
+  // says so itself: «Рассылки»).
+  { path: "sales/:tab", lazy: () => import("../screens/sales/index.js").then((m) => ({ Component: m.SalesScreen })) },
   // «Фаны» (products package M): moved from the console; Hub answers by the viewer's teams.
   { path: "fans", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansScreen })) },
   { path: "fans/subscribers", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansSubscribersScreen })) },

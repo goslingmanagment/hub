@@ -328,6 +328,24 @@ export interface DemoChainShift {
   pages: ShiftReportBody["pages"];
 }
 
+/** «Продажи → Список продаж»: the sales the active chatters' shifts carry in [from, to), each once, the newest first. */
+export function demoShiftSalesIn(now: Date, from: number, to: number): Array<{ transactionId: number; at: number; pageLabel: string }> {
+  const seen = new Map<number, { transactionId: number; at: number; pageLabel: string }>();
+  const today = Date.parse(`${mskDay(now.getTime())}T00:00:00Z`);
+  for (const owner of DEMO_USERS.filter((user) => user.role === "chatter" && user.active)) {
+    for (const shift of shiftsOf(owner, now)) {
+      if (shift.end < from || shift.start >= to) continue;
+      const back = Math.round((today - Date.parse(`${mskDay(shift.start)}T00:00:00Z`)) / DAY_MS);
+      for (const sale of salesOf(shift, back, owner)) {
+        if (sale.at < from || sale.at >= to) continue;
+        const transactionId = lineIdOf(sale);
+        if (!seen.has(transactionId)) seen.set(transactionId, { transactionId, at: sale.at, pageLabel: sale.pageLabel });
+      }
+    }
+  }
+  return [...seen.values()].sort((a, b) => b.at - a.at || b.transactionId - a.transactionId);
+}
+
 /**
  * Цепочка продажи (sale-chain.ts): every active chatter's shift with a line of the sale, or every shift that held a
  * page at a moment (a console row's sale, which no line names).

@@ -23,8 +23,8 @@
  *
  * Query keys start with "sales".
  */
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { KernelOperationResponse, TeamWinBackApproachSaveBody } from "@agency_hub_core/contracts";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { millsFromInteger, millsToNumber, sumMills } from "@agency_hub_core/shared";
 import { addDays, daysInRange, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
@@ -617,33 +617,6 @@ type WinBackResponse = KernelOperationResponse<"teamWinBackResults">;
 
 export function useWinBackResults(window: ReadWindow, enabled = true) {
   return useWindowRead("win-back", window, (days) => kernel.teamWinBackResults({ query: { days } }), winBackMinusAfter, enabled);
-}
-
-const APPROACHES_KEY = ["sales", "win-back-approaches"] as const;
-
-/** The owner's list, retired ones included; the owner only (Hub checks it too). */
-export function useWinBackApproaches(enabled: boolean) {
-  return useQuery({
-    queryKey: APPROACHES_KEY,
-    queryFn: () => kernel.teamWinBackApproaches(),
-    enabled,
-  });
-}
-
-/**
- * The one write of the group, as the console's (api/team.ts:89-98): the same
- * operation and body; the answer is the list itself; the results re-read.
- */
-export function useSaveWinBackApproach() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    meta: { suppressGlobalError: true },
-    mutationFn: (body: TeamWinBackApproachSaveBody) => kernel.teamWinBackApproachSave({ body }),
-    onSuccess: (data) => {
-      queryClient.setQueryData(APPROACHES_KEY, data);
-      void queryClient.invalidateQueries({ queryKey: ["sales", "win-back"] });
-    },
-  });
 }
 
 // --------------------------------------------------- Greetings and coverage

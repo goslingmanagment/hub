@@ -83,6 +83,8 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "teamAuthorship",
   "teamSalesPpv",
   "teamSalesReplies",
+  // «Продажи → Список продаж»: the team's sales, whose and why; the chain decides itself what it shows.
+  "teamSalesList",
   "teamEmptyHours",
   "teamGreetings",
   "teamWinBackResults",
