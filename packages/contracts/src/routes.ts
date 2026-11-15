@@ -32,6 +32,7 @@ import { peopleRouteSchemas } from "./routes-people.ts";
 import { teamRouteSchemas } from "./routes-teams.ts";
 import { workboardTodayRouteSchemas } from "./routes-workboard-today.ts";
 import { teamQuestionRouteSchemas } from "./routes-team-questions.ts";
+import { learnRouteSchemas } from "./routes-learn.ts";
 import { fanRouteSchemas } from "./routes-fans.ts";
 import { shiftHandinRouteSchemas } from "./routes-shift-handins.ts";
 import { saleClaimRouteSchemas } from "./routes-sale-claims.ts";
@@ -8390,6 +8391,7 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof peopleRouteSchemas
   & typeof teamRouteSchemas
   & typeof teamQuestionRouteSchemas
+  & typeof learnRouteSchemas
   & typeof fanRouteSchemas
   & typeof signinRouteSchemas
   & typeof systemStateRouteSchemas
@@ -8417,6 +8419,7 @@ export const routeSchemas: RouteSchemas = {
   ...peopleRouteSchemas,
   ...teamRouteSchemas,
   ...teamQuestionRouteSchemas,
+  ...learnRouteSchemas,
   ...fanRouteSchemas,
   ...signinRouteSchemas,
   ...systemStateRouteSchemas,

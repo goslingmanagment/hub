@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 import {
   Banknote,
+  BookOpen,
   CalendarClock,
   ChartColumn,
   ChevronsUpDown,
@@ -64,6 +65,7 @@ const ICONS: Readonly<Record<MenuIcon, LucideIcon>> = {
   Flag,
   Settings,
   Wrench,
+  BookOpen,
 };
 
 const THEME_ICON: Readonly<Record<ThemePreference, LucideIcon>> = { system: Monitor, light: Sun, dark: Moon };

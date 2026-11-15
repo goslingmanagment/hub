@@ -1,0 +1,56 @@
+/* «Обучение»: the list of pages and one page. Tokens only. */
+@layer components {
+  .learn-lead {
+    margin: 0 0 var(--ui-space-3);
+    color: var(--ui-text-2);
+  }
+
+  .learn-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .learn-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px var(--ui-space-4);
+    align-items: center;
+    padding: var(--ui-space-3) var(--ui-space-4);
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+    background: var(--ui-surface);
+  }
+
+  .learn-row__title {
+    grid-column: 1;
+    color: var(--ui-text);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  .learn-row__title:hover {
+    text-decoration: underline;
+  }
+
+  .learn-row__meta {
+    grid-column: 1;
+    margin: 0;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+  }
+
+  .learn-row__switch {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+
+  .learn-page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-3);
+  }
+}

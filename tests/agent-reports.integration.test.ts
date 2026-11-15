@@ -6,6 +6,8 @@ import {
   AGENT_REPORT_BODY_MAX_BYTES,
   agentReportListResponseSchema,
   agentReportPutResponseSchema,
+  learnPageResponseSchema,
+  learnPagesResponseSchema,
   reportGetResponseSchema,
   reportsListResponseSchema,
 } from "@agency_hub_core/contracts";
@@ -165,5 +167,39 @@ describe("agent reports", () => {
       expect([401, 403]).toContain((await server!.inject({ method: "GET", url, headers: { authorization: `Bearer ${aliceToken}` } })).statusCode);
       expect([401, 403]).toContain((await server!.inject({ method: "GET", url, headers: { authorization: `Bearer ${WRITER}` } })).statusCode);
     }
+  });
+
+  // «Обучение» (products plan §2.3): a page of the section `learn` is the owner's until he approves it; then every role
+  // reads it, and the approval holds when the agent publishes it again. Only the owner approves.
+  it("shows a learn page to the team only once the owner approved it", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const LEARN = { title: "Инструкция чаттера", section: "learn", body: "## Смена\n\nСдайте смену в конце.\n" };
+    expect((await put("chatter-job", LEARN)).statusCode).toBe(200);
+    const pages = async (who: string) => learnPagesResponseSchema.parse((await asSession(who, "/api/v1/learn")).json());
+    const approve = (who: string, approved: boolean) => server!.inject({
+      method: "POST", url: "/api/v1/learn/chatter-job/approval", payload: { approved }, headers: { cookie: cookies[who]! },
+    });
+
+    expect(await pages("boss")).toMatchObject({ canApprove: true, pages: [{ slug: "chatter-job", approved: false }] });
+    for (const who of ["lead", "alice"]) {
+      expect((await pages(who)).pages, who).toEqual([]);
+      expect((await asSession(who, "/api/v1/learn/chatter-job")).statusCode, who).toBe(404);
+      expect((await approve(who, true)).statusCode, who).toBe(403);
+    }
+    // Another section's report is no page of «Обучение».
+    expect((await asSession("boss", "/api/v1/learn/traffic")).statusCode).toBe(404);
+
+    expect((await approve("boss", true)).statusCode).toBe(200);
+    for (const who of ["lead", "alice"]) {
+      expect((await pages(who)).pages.map((page) => page.slug), who).toEqual(["chatter-job"]);
+      const page = learnPageResponseSchema.parse((await asSession(who, "/api/v1/learn/chatter-job")).json());
+      expect(page).toMatchObject({ canApprove: false, page: { approved: true, body: LEARN.body } });
+    }
+    // The agent publishes it again: still approved.
+    expect((await put("chatter-job", { ...LEARN, body: `${LEARN.body}\nЕщё.\n` })).statusCode).toBe(200);
+    expect((await pages("alice")).pages.map((page) => page.version)).toEqual([2]);
+    // Taken back: the team reads it no more.
+    expect((await approve("boss", false)).statusCode).toBe(200);
+    expect((await pages("alice")).pages).toEqual([]);
   });
 });

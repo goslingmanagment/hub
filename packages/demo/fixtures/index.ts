@@ -2,6 +2,7 @@ import type { DemoHandlers } from "../core.ts";
 import { accountHandlers } from "./account.ts";
 import { costsAttentionHandlers } from "./costs-attention.ts";
 import { askHandlers } from "./asks.ts";
+import { learnHandlers } from "./learn.ts";
 import { mattersHandlers } from "./matters.ts";
 import { moneyHandlers } from "./money.ts";
 import { pageHandlers } from "./page.ts";
@@ -46,6 +47,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   matters: mattersHandlers,
   // Вопросы тому, кто решает (products plan §4.6).
   asks: askHandlers,
+  // «Обучение» (products plan §2.3): the agent's pages and the owner's approval.
+  learn: learnHandlers,
   // Workboard «Кастомы»: the board, an order and its steps, kept in memory (wb-customs.ts).
   customs: wbCustomsHandlers,
   // Отчёт смены: the demo chatter's shift rows, drafts and versions, kept in memory with every write (shift-reports.ts).

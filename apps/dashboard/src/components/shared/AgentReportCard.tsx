@@ -19,6 +19,7 @@ export const AGENT_REPORT_SECTION_WORD: Readonly<Record<AgentReportSection, stri
   team: "Команда",
   content: "Контент",
   system: "Система",
+  learn: "Обучение",
 };
 
 /** «в 09:40 по Москве» today, «11 нояб., 09:40 по Москве» before. */

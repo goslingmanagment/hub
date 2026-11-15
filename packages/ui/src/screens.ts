@@ -35,7 +35,7 @@ export const WORKBOARD_PATH = "/workboard/";
 /** The icons of the menu (lucide-react names; components/Place.tsx draws them). */
 export type MenuIcon =
   | "House" | "Inbox" | "Wallet" | "Heart" | "ChartColumn" | "Newspaper" | "Megaphone" | "ClipboardList"
-  | "CalendarClock" | "Users" | "TrendingUp" | "Banknote" | "Package" | "Flag" | "Settings" | "Wrench";
+  | "CalendarClock" | "Users" | "TrendingUp" | "Banknote" | "Package" | "Flag" | "Settings" | "Wrench" | "BookOpen";
 
 /** Where a menu item's number comes from: one read for both apps (place.ts). */
 export type MenuCount = "waiting";
@@ -45,9 +45,10 @@ export type MenuCount = "waiting";
  * that draws the menu answers it (absent: listed whenever the role may open it):
  * - `newcomer` — a newcomer with a step of «Начало» still open (Workboard's `accountStart`);
  * - `leads` — the owner, a team lead, or anyone who leads a team by its records (products package T, `me.teams.lead`);
- * - `money` — the owner, or a person whose right «видит свои деньги» is on (Workboard's `accountPay` says `enabled`).
+ * - `money` — the owner, or a person whose right «видит свои деньги» is on (Workboard's `accountPay` says `enabled`);
+ * - `learn` — a page of «Обучение» the viewer reads: the owner, one published; anyone else, one the owner approved.
  */
-export type MenuWhen = "newcomer" | "leads" | "money";
+export type MenuWhen = "newcomer" | "leads" | "money" | "learn";
 
 /**
  * What the page filter does on a screen:
@@ -472,6 +473,22 @@ export const SCREENS: readonly Screen[] = [
     why: "Сколько вам начислено, к выплате и выплачено.",
     pageFilter: "any",
     keywords: "мои деньги начислено к выплате выплачено",
+  },
+
+  {
+    // «Обучение» (products plan §2.3): the pages an agent publishes from /OS (a chatter's job description, the SOPs),
+    // listed only while the viewer has one to read — the owner, a published one to approve; anyone else, an approved one.
+    id: "learn", path: "/workboard/learn", label: "Обучение", title: "Обучение", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"], icon: "BookOpen", when: "learn",
+    why: "Инструкции и правила работы в чатах.",
+    pageFilter: "any",
+    keywords: "обучение инструкция правила соп ди чаттера как работать",
+  },
+  {
+    id: "learn-page", tabOf: "learn", path: "/workboard/learn/:slug", label: "Страница обучения", title: "Обучение", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Одна страница обучения.",
+    pageFilter: "any",
+    deep: true, notSearched: true,
+    crumbs: () => [{ label: "Обучение", to: "/workboard/learn" }],
   },
 
   // ── Анкеты ─────────────────────────────────────────────────────────

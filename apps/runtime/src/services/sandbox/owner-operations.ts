@@ -38,6 +38,9 @@ export const SANDBOX_OWNER_OPERATIONS: ReadonlySet<string> = new Set([
   "teamSalesList",
   // A sale's chain, opened from «Список продаж»: a sale of the test realm only (else 404), the ledger never asked.
   "saleChain",
+  // «Обучение»: the pages are the live agency's, so a test principal reads none (learn-pages.ts); approving is not here.
+  "learnPages",
+  "learnPage",
   "teamQuestions",
   "teamQuestionAsk",
   "teamQuestionAnswer",

@@ -127,6 +127,13 @@ const everyoneScreens: RouteObject[] = [
   // «Деньги»: the address opens the role's tab; «Мои деньги» is the person's own, behind their right «видит свои деньги».
   { path: "money", lazy: () => import("../screens/money/index.js").then((m) => ({ Component: m.MoneyHome })) },
   { path: "money/mine", lazy: () => import("../screens/money/index.js").then((m) => ({ Component: m.MineScreen })) },
+  // «Обучение» (products plan §2.3): the agent's pages the owner approved (the owner: every page, to approve).
+  { path: "learn", lazy: () => import("../screens/learn/index.js").then((m) => ({ Component: m.LearnScreen })) },
+  {
+    path: "learn/:slug",
+    handle: { screenKey: (params) => params.slug ?? "" } satisfies ScreenHandle,
+    lazy: () => import("../screens/learn/index.js").then((m) => ({ Component: m.LearnPageScreen })),
+  },
   // «Фаны» (products package M): moved from the console; Hub answers by the viewer's teams.
   { path: "fans", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansScreen })) },
   { path: "fans/subscribers", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FansSubscribersScreen })) },
