@@ -1,7 +1,6 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import { requireHumanPrincipal, type AgentAuthPrincipal } from "../../services/auth.ts";
-import { AppError } from "../../services/errors.ts";
 import {
   addShiftReportOffPlatform,
   handinActorOf,
@@ -16,6 +15,20 @@ import {
   submitShiftReport,
   withdrawShiftReportOffPlatform,
 } from "../../services/shift-handins.ts";
+import {
+  addShiftReportSighting,
+  answerShiftReportCheck,
+  answerShiftReportProposal,
+  askShiftReport,
+  cancelShiftReportFix,
+  confirmShiftReport,
+  readCurrentShiftReport,
+  readShiftReportChecks,
+  recordSaleSightings,
+  reopenShiftReport,
+  resendShiftReport,
+  withdrawShiftReportAsk,
+} from "../../services/shift-report-board.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -78,60 +91,52 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     return submitShiftReport(appContext, await person(request), { shiftId: request.params.shiftId });
   });
 
-  // --- The «Отчёт» board (package R) -----------------------------------------
-
-  const notYet = () => {
-    throw new AppError("The «Отчёт» board is not built yet", 501, "not_implemented");
-  };
+  // --- The «Отчёт» board (package R): shift-report-board.ts --------------------
 
   server.get("/api/v1/shift-reports/current", { schema: routeSchemas.shiftReportCurrent }, async (request) => {
-    await person(request);
-    return notYet();
+    const principal = await requirePrincipal(request);
+    requireHumanPrincipal(principal);
+    return readCurrentShiftReport(appContext, principal);
   });
 
   server.post("/api/v1/shift-reports/:shiftId/confirm", { schema: routeSchemas.shiftReportConfirm }, async (request) => {
-    await person(request);
-    return notYet();
+    return confirmShiftReport(appContext, await person(request), { shiftId: request.params.shiftId, candidateId: request.body.candidateId });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/reopen", { schema: routeSchemas.shiftReportReopen }, async (request) => {
-    await person(request);
-    return notYet();
+    return reopenShiftReport(appContext, await person(request), { shiftId: request.params.shiftId });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/reopen/cancel", { schema: routeSchemas.shiftReportReopenCancel }, async (request) => {
-    await person(request);
-    return notYet();
+    return cancelShiftReportFix(appContext, await person(request), { shiftId: request.params.shiftId });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/resend", { schema: routeSchemas.shiftReportResend }, async (request) => {
-    await person(request);
-    return notYet();
+    return resendShiftReport(appContext, await person(request), { shiftId: request.params.shiftId, transactionIds: request.body.transactionIds });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/asks", { schema: routeSchemas.shiftReportAsk }, async (request) => {
-    await person(request);
-    return notYet();
+    return askShiftReport(appContext, await person(request), { shiftId: request.params.shiftId, body: request.body });
   });
 
   server.delete("/api/v1/shift-reports/:shiftId/asks/:transactionId", { schema: routeSchemas.shiftReportAskWithdraw }, async (request) => {
-    await person(request);
-    return notYet();
+    return withdrawShiftReportAsk(appContext, await person(request), { shiftId: request.params.shiftId, transactionId: request.params.transactionId });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/proposals/:proposalId/answer", { schema: routeSchemas.shiftReportProposalAnswer }, async (request) => {
-    await person(request);
-    return notYet();
+    return answerShiftReportProposal(appContext, await person(request), {
+      shiftId: request.params.shiftId, proposalId: request.params.proposalId, answer: request.body.answer,
+    });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/sightings/:sightingId/add", { schema: routeSchemas.shiftReportSightingAdd }, async (request) => {
-    await person(request);
-    return notYet();
+    return addShiftReportSighting(appContext, await person(request), { shiftId: request.params.shiftId, sightingId: request.params.sightingId });
   });
 
   server.post("/api/v1/client/sale-sightings", { schema: routeSchemas.clientSaleSightings }, async (request) => {
-    await person(request);
-    return notYet();
+    const principal = await requirePrincipal(request);
+    requireHumanPrincipal(principal);
+    return recordSaleSightings(appContext, principal, request.body);
   });
 
   // --- The agent's door: «со слов» (write:shift_reports) ---------------------
@@ -221,13 +226,31 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
   // --- Gengar's check after the hand-in (review:shift_reports) ---------------
 
   server.get("/api/v1/agent/shift-reports/checks", { schema: routeSchemas.agentShiftReportChecks }, async (request) => {
-    const { scope } = await agentScope(request, "agentShiftReportChecks", ["review:shift_reports"]);
-    return settled(scope, async () => notYet());
+    const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportChecks", ["review:shift_reports"]);
+    let delivered = 0;
+    try {
+      const checks = await readShiftReportChecks(appContext, { pageIds, limit: request.query.limit });
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId, operation: "agentShiftReportChecks", pageIds, verbatimText: false,
+        requestSummary: { returned: checks.checks.length },
+      });
+      delivered = checks.checks.length;
+      return checks;
+    } finally {
+      await scope.finish(delivered);
+    }
   });
 
   server.post("/api/v1/agent/shift-reports/checks/:candidateId", { schema: routeSchemas.agentShiftReportCheckAnswer }, async (request) => {
-    const { scope } = await agentScope(request, "agentShiftReportCheckAnswer", ["review:shift_reports"]);
-    return settled(scope, async () => notYet());
+    const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportCheckAnswer", ["review:shift_reports"]);
+    return settled(scope, async () => {
+      const answer = await answerShiftReportCheck(appContext, principal, { candidateId: request.params.candidateId, pageIds, body: request.body });
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId, operation: "agentShiftReportCheckAnswer", pageIds: [], verbatimText: false,
+        requestSummary: { candidateId: answer.candidateId, returned: answer.recorded, outcome: answer.superseded ? "superseded" : answer.late ? "late" : answer.recorded === 0 ? "clean" : "proposals" },
+      });
+      return answer;
+    });
   });
 
   // --- The ledger's feed (read:team and read:money) --------------------------

@@ -21,7 +21,6 @@ import {
   findHandinShift,
   findLatestHandinShift,
   insertHandinEvent,
-  insertHandinVersion,
   insertOffPlatform,
   listActiveSaleDecisions,
   listCurrentHandinVersions,
@@ -54,7 +53,6 @@ import {
   listSaleFacts,
   listSaleHomes,
   listVisiblePages,
-  lockSaleSettlements,
   openMatter,
   setHandinComment,
   setHandinMark,
@@ -79,6 +77,8 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import { readLedgerPayouts } from "./ledger-payouts.ts";
 import { pagesWithLines, reportSums, settledShareOf } from "./sale-claim-rules.ts";
 import { claimsOfReport, runSaleClaims } from "./sale-claims.ts";
+import { handInShiftReport } from "./shift-report-board.ts";
+import { readBoard } from "./shift-report-board-view.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { computeSaleHomes, registrySlots, ruleWorksOf } from "./sale-homes.ts";
 import {
@@ -93,7 +93,13 @@ import {
   type ClassifiedSale,
   type DraftSale,
   type DraftShare,
+  type Statement,
 } from "./shift-handin-rules.ts";
+
+/** A word of the board as the ledger's three (the feed and the old line keep their format): given away or to the pot is «не моё». */
+export function ledgerStatementOf(statement: Statement | null): ShiftReportStatement | null {
+  return statement === "give" || statement === "pot" ? "not_mine" : statement;
+}
 
 /**
  * Отчёт смены (ecosystem plan 2026-11-12, package F): the one service behind
@@ -160,7 +166,7 @@ export function handinAgentActorOf(principal: AgentAuthPrincipal, pageIds: reado
 /** The plane's one 404 for an agent: missing and out of grant are the same bytes. */
 const notFound = () => new NotFoundError("Not found");
 
-interface Subject {
+export interface Subject {
   shift: HandinShift;
   person: HandinPerson | null;
   /** Every login of the person (the shift's own at least). */
@@ -168,7 +174,7 @@ interface Subject {
   enabled: boolean;
 }
 
-async function subjectOf(db: Database, shiftId: number): Promise<Subject> {
+export async function subjectOf(db: Database, shiftId: number): Promise<Subject> {
   const shift = await findHandinShift(db, shiftId);
   if (shift === null || shift.state === "dropped") throw new NotFoundError("No such shift");
   const person = await findHandinPersonOfUser(db, shift.userId);
@@ -176,14 +182,14 @@ async function subjectOf(db: Database, shiftId: number): Promise<Subject> {
   return { shift, person, userIds, enabled: person?.submitsShiftSince != null };
 }
 
-interface PageCatalog {
+export interface PageCatalog {
   idOf: Map<string, number>;
   labelOf: Map<number, string>;
   /** Active pages: platform and model. */
   info: Map<string, { platform: string; modelSlug: string; modelName: string }>;
 }
 
-async function pageCatalog(db: Database): Promise<PageCatalog> {
+export async function pageCatalog(db: Database): Promise<PageCatalog> {
   const labels = await listMatterPageLabels(db);
   const visible = await listVisiblePages(db);
   return {
@@ -196,7 +202,7 @@ async function pageCatalog(db: Database): Promise<PageCatalog> {
 const shiftPageLabels = (shift: HandinShift) => shift.pages.map((page) => page.pageLabel);
 
 /** How the reader may see the subject: own, the owner's, a reader on shared pages (cut to them), or not at all. */
-function accessOf(actor: HandinActor, subject: Subject, catalog: PageCatalog): { access: "own" | "read"; cutTo: Set<string> | null; draftPreview: boolean } {
+export function accessOf(actor: HandinActor, subject: Subject, catalog: PageCatalog): { access: "own" | "read"; cutTo: Set<string> | null; draftPreview: boolean } {
   if (actor.kind === "agent") {
     // An agent writes for the person: every page of the shift must be of its grant.
     const granted = new Set(actor.pageIds);
@@ -212,7 +218,7 @@ function accessOf(actor: HandinActor, subject: Subject, catalog: PageCatalog): {
 }
 
 /** The writer must be the person, switched on; an agent's sender must be the person's Telegram id. */
-function requireWriter(actor: HandinActor, subject: Subject): void {
+export function requireWriter(actor: HandinActor, subject: Subject): void {
   if (!subject.enabled) throw new ForbiddenError("The shift report is not switched on for this person");
   if (actor.kind === "person") {
     if (!subject.userIds.includes(actor.userId)) throw new ForbiddenError("Only the person hands their shift in");
@@ -226,7 +232,7 @@ function requireWriter(actor: HandinActor, subject: Subject): void {
 // ── The draft ────────────────────────────────────────────────────────────────
 
 /** The draft's facts: every classified sale of the shift, read before the person's words are applied. */
-interface DraftFacts {
+export interface DraftFacts {
   computedAt: Date;
   classified: ClassifiedSale[];
   /** The shift's pages that hold sales, in the shift's order. */
@@ -282,7 +288,7 @@ async function reportWindowOf(db: Database, subject: Subject, slots: readonly Ru
   };
 }
 
-async function draftFacts(
+export async function draftFacts(
   db: Database,
   subject: Subject,
   handin: HandinRow | null,
@@ -545,7 +551,7 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & P
   return facts.classified.map((one) => {
     const mark = markOf.get(one.sale.transactionId);
     // A word the line no longer takes (the rule moved the sale) is set aside, not applied.
-    const takes = (word: ShiftReportStatement) => (one.claimed === true ? word === "mine" : statementAllowed(one.group, word));
+    const takes = (word: Statement) => (one.claimed === true ? word === "mine" : statementAllowed(one.group, word));
     const statement = mark?.statement != null && takes(mark.statement) ? mark.statement : null;
     const plain = lineAmount({
       group: one.group, netMills: one.sale.netMills, shareMills: one.shareMills, homeKind: one.sale.home.kind, statement, alreadyIn: one.alreadyIn !== null,
@@ -573,6 +579,7 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & P
       },
       statement,
       shareWithUserId: statement === "share" ? mark?.shareWithUserId ?? null : null,
+      ...(statement === "give" ? { toUserId: mark?.toUserId ?? null } : {}),
       note: mark?.note ?? null,
       amountMills,
       added: one.added,
@@ -598,7 +605,7 @@ export function linesPageSums(
 }
 
 /** A report's «мимо площадки» lines as a version keeps them: a confirmed one with the label of its page. */
-function offPlatformOfRows(rows: readonly OffPlatformRow[], labelOf: ReadonlyMap<number, string>): HandinVersionOffPlatform[] {
+export function offPlatformOfRows(rows: readonly OffPlatformRow[], labelOf: ReadonlyMap<number, string>): HandinVersionOffPlatform[] {
   return rows.map((row) => ({
     id: row.id, amountMills: row.amountMills, fromWhom: row.fromWhom, whatFor: row.whatFor, state: row.state,
     pageLabel: row.state === "confirmed" && row.pageId !== null ? labelOf.get(row.pageId) ?? null : null,
@@ -615,11 +622,26 @@ interface ViewContext {
   fans: Map<number, { fanRef: string | null; name: string | null; username: string | null }>;
 }
 
+/** Whose a line is by the rule, in plain words from the person's side («PPV отправил Максим», «общак: чаевые под постом»). */
+export function ruleWordsOfLine(line: HandinVersionLine, names: ReadonlyMap<number, string>): string {
+  const toName = line.rule.toUserId === null ? null : names.get(line.rule.toUserId) ?? null;
+  // The person's own line the rule gives them nothing of — their «не моё» keeps it theirs: the words say whose the sale is.
+  const givenAway = line.group === "mine" && line.statement === "not_mine" && line.rule.shareMills === 0;
+  return reasonWords({
+    group: givenAway ? "near" : line.group,
+    added: line.added,
+    claimed: line.group === "mine" && line.added && line.statement === "mine",
+    reason: line.rule.reason as SaleHomeReason,
+    homeKind: line.rule.home as SaleHomeKind,
+    toName,
+    senderName: line.rule.senderUserId === null ? null : names.get(line.rule.senderUserId) ?? null,
+    alreadyIn: line.alreadyIn,
+  });
+}
+
 function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLine | null {
   if (line.transactionId === null || line.pageLabel === null) return null;
   const toName = line.rule.toUserId === null ? null : context.names.get(line.rule.toUserId) ?? null;
-  // The person's own line the rule gives them nothing of — their «не моё» keeps it theirs: the words say whose the sale is.
-  const givenAway = line.group === "mine" && line.statement === "not_mine" && line.rule.shareMills === 0;
   return {
     transactionId: line.transactionId,
     group: line.group,
@@ -632,21 +654,12 @@ function wireLine(line: HandinVersionLine, context: ViewContext): ShiftReportLin
     rule: {
       home: line.rule.home,
       reason: line.rule.reason,
-      words: reasonWords({
-        group: givenAway ? "near" : line.group,
-        added: line.added,
-        claimed: line.group === "mine" && line.added && line.statement === "mine",
-        reason: line.rule.reason as SaleHomeReason,
-        homeKind: line.rule.home as SaleHomeKind,
-        toName,
-        senderName: line.rule.senderUserId === null ? null : context.names.get(line.rule.senderUserId) ?? null,
-        alreadyIn: line.alreadyIn,
-      }),
+      words: ruleWordsOfLine(line, context.names),
       toUserId: line.rule.toUserId,
       toName,
       shareMills: line.rule.shareMills,
     },
-    statement: line.statement,
+    statement: ledgerStatementOf(line.statement),
     shareWithUserId: line.shareWithUserId,
     shareWithName: line.shareWithUserId === null ? null : context.names.get(line.shareWithUserId) ?? null,
     note: line.note,
@@ -771,7 +784,7 @@ export function versionReportDate(version: Pick<HandinVersionRow, "reportDate">,
 }
 
 /** The version's posts, one per model, with the model's slug (the copy to «Отчётность» goes by it). */
-function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "shift" | "person">, handin: Pick<HandinRow, "reportDate">, context: Pick<ViewContext, "catalog" | "names" | "fans">) {
+export function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "shift" | "person">, handin: Pick<HandinRow, "reportDate">, context: Pick<ViewContext, "catalog" | "names" | "fans">) {
   const tag = subject.person?.reportTag ?? `#${subject.person?.code ?? context.names.get(subject.shift.userId) ?? "чаттер"}`;
   // The post lists the accounts it always did: the shift's own pages and those where something is counted. A page the
   // version names only for a line of «Рядом» that counts nothing (`reportSums`) is not an account of the person's post.
@@ -795,6 +808,9 @@ function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "shift" 
     }])),
     comment: version.comment,
     offPlatform: version.offPlatform.filter((line) => line.state === "pending" || line.state === "confirmed"),
+    // The model's pages the shift did not work («• Mia-1 - не в смене») and «Отчёт № N» last, as the board's post has them.
+    offShift: [...context.catalog.info.entries()].map(([pageLabel, info]) => ({ pageLabel, platform: info.platform, modelSlug: info.modelSlug })),
+    number: version.version,
   });
 }
 
@@ -824,7 +840,7 @@ export async function readHandinVersionPosts(
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
-async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject, now: Date): Promise<ShiftReportResponse> {
+export async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject, now: Date): Promise<ShiftReportResponse> {
   const { db } = app;
   const catalog = await pageCatalog(db);
   const access = accessOf(actor, subject, catalog);
@@ -914,7 +930,10 @@ async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject,
     posts: own && latest !== null && handin !== null ? postsOf(latest, subject, handin, context) : [],
     colleagues,
     claims,
-    board: null,
+    board: await readBoard({
+      db, subject, catalog, cutTo: access.cutTo, draftPreview: access.draftPreview, handin, versions, draft, now,
+      actor: { access: access.access, kind: actor.kind, enabled: subject.enabled },
+    }),
     serverNow: now.toISOString(),
   };
 }
@@ -1039,13 +1058,13 @@ export async function listShiftReports(
 
 // ── Writes ───────────────────────────────────────────────────────────────────
 
-function writer(actor: HandinActor): { byUserId: number | null; byAgentKeyId: number | null; door: HandinDoor } {
+export function writer(actor: HandinActor): { byUserId: number | null; byAgentKeyId: number | null; door: HandinDoor } {
   return actor.kind === "person"
     ? { byUserId: actor.userId, byAgentKeyId: null, door: actor.door }
     : { byUserId: null, byAgentKeyId: actor.agentKeyId, door: "telegram" };
 }
 
-async function writableSubject(app: HandinApp, actor: HandinActor, shiftId: number): Promise<{ subject: Subject; catalog: PageCatalog }> {
+export async function writableSubject(app: HandinApp, actor: HandinActor, shiftId: number): Promise<{ subject: Subject; catalog: PageCatalog }> {
   const subject = await subjectOf(app.db, shiftId);
   const catalog = await pageCatalog(app.db);
   const access = accessOf(actor, subject, catalog);
@@ -1054,7 +1073,7 @@ async function writableSubject(app: HandinApp, actor: HandinActor, shiftId: numb
   return { subject, catalog };
 }
 
-async function handinFor(db: Database, subject: Subject): Promise<HandinRow> {
+export async function handinFor(db: Database, subject: Subject): Promise<HandinRow> {
   return ensureHandin(db, { shiftId: subject.shift.id, userId: subject.shift.userId, personId: subject.person?.personId ?? null, reportDate: subject.shift.reportDate });
 }
 
@@ -1066,9 +1085,10 @@ export async function setShiftReportLine(
   now: Date = new Date(),
 ): Promise<{ savedAt: string }> {
   const { subject, catalog } = await writableSubject(app, actor, input.shiftId);
-  // `give` and `pot` (the board's words, package R) are written by step 2 of the board; until then they are refused.
-  if (input.body.statement === "give" || input.body.statement === "pot") throw new BadRequestError("This word is not taken yet", { reason: "word_not_ready" });
-  const statement: ShiftReportStatement | null = input.body.statement;
+  const statement: Statement | null = input.body.statement;
+  // «Олега» on one's own sale (the board, package R): given to a colleague of the sale's page, settled at once in theirs.
+  const giveTo = statement === "give" ? input.body.toUserId ?? null : null;
+  if (statement === "give" && giveTo === null) throw new BadRequestError("«Отдать» names the colleague", { reason: "give_to_missing" });
   const note = input.body.note === undefined || input.body.note === null || input.body.note.trim() === "" ? null : input.body.note.trim();
   const shareWith = statement === "share" ? input.body.shareWithUserId ?? null : null;
   if (statement === "share" && shareWith === null) throw new BadRequestError("«делим с…» names the colleague", { reason: "share_with_missing" });
@@ -1090,12 +1110,13 @@ export async function setShiftReportLine(
       throw new BadRequestError("This line does not take that word", { reason: "statement_not_allowed" });
     }
     if (statement === "mine" && note === null) throw new BadRequestError("«Это моё» needs one line of why", { reason: "note_required" });
-    if (shareWith !== null && line !== undefined) {
+    if ((shareWith !== null || giveTo !== null) && line !== undefined) {
       const colleagues = await listHandinColleagues(app.db, {
         pageIds: [line.sale.pageLabel].map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined),
         exceptUserIds: subject.userIds,
       });
-      if (!colleagues.some((one) => one.userId === shareWith)) throw new BadRequestError("Share with a colleague of the page", { reason: "share_with_unknown" });
+      if (shareWith !== null && !colleagues.some((one) => one.userId === shareWith)) throw new BadRequestError("Share with a colleague of the page", { reason: "share_with_unknown" });
+      if (giveTo !== null && !colleagues.some((one) => one.userId === giveTo)) throw new BadRequestError("Give to a colleague of the page", { reason: "give_to_unknown" });
     }
   } else if (statement === "mine" && note === null) {
     throw new BadRequestError("«Это моё» needs one line of why", { reason: "note_required" });
@@ -1106,7 +1127,7 @@ export async function setShiftReportLine(
     const db = tx as unknown as Database;
     const handin = await handinFor(db, subject);
     await setHandinMark(db, {
-      handinId: handin.id, transactionId: input.transactionId, statement, shareWithUserId: shareWith, note,
+      handinId: handin.id, transactionId: input.transactionId, statement, shareWithUserId: shareWith, toUserId: giveTo, note,
       byUserId: who.byUserId, byAgentKeyId: who.byAgentKeyId, at: now,
     });
   });
@@ -1234,100 +1255,53 @@ export const SHIFT_REPORTS_MISSING_KIND = "shift.reports.missing";
 export const SHIFT_REPORT_AFTER_PAID_KIND = "shift.report.after_paid";
 
 /**
- * `shiftReportSubmit`: «Сдать смену». The draft is computed and the person's words read in the write's transaction,
- * and the next version written; the matter «Сдайте смену» closes. A version after the ledger paid the day is kept
- * and raises a matter for the owner.
- *
- * The ledger is asked first, before any lock (up to 20 s): whether the day is paid needs only the shift and the report
- * as they stand. Then the version is written in one transaction, in the turn of the sales' settlements
- * (`lockSaleSettlements`) and under the report's lock, and the facts it is written from are read there and nowhere
- * else. The turn serialises hand-ins and settlements, so whatever happened during the wait — a decision, an agreement,
- * a cancel, another report of the person taking a «долёт» — is what the version counts, and nothing changes between
- * that read and the commit. Nothing read before the lock is written; the lock is never held across the ledger's call.
+ * `shiftReportSubmit` (and the agent's «со слов»): «Сдать смену» on the «Отчёт» board records a candidate and makes no
+ * version (shift-report-board.ts `handInShiftReport`); «Подтверждаю» makes the version. One service behind every door.
  */
 export async function submitShiftReport(
   app: HandinApp,
   actor: HandinActor,
   input: { shiftId: number },
-  options: { now?: Date; dayPaid?: (input: { personCode: string | null; reportDate: string }) => Promise<boolean | null> } = {},
+  // `dayPaid`: asked at «Подтверждаю», when a version is made; a hand-in asks the ledger nothing.
+  options: { now?: Date; dayPaid?: unknown } = {},
 ): Promise<ShiftReportResponse> {
-  const now = options.now ?? new Date();
-  const { subject, catalog } = await writableSubject(app, actor, input.shiftId);
-  if (actor.kind === "agent" && actor.sourceRef === null) throw new BadRequestError("A report is handed in «со слов» only with the message", { reason: "source_ref_required" });
-  const existing = await findHandinByShift(app.db, subject.shift.id);
-  // Whether the report's day is paid: the day every reader takes the report on (`reportDateOf`) — the day it was handed in
-  // on before, the shift's day for a first hand-in.
-  const paidDay = reportDateOf(subject.shift, existing);
-  const dayPaid = await (options.dayPaid ?? ((one) => ledgerDayPaid(app, one)))({ personCode: subject.person?.code ?? null, reportDate: paidDay });
-  const who = writer(actor);
+  return handInShiftReport(app, actor, input, options.now ?? new Date());
+}
 
-  const { version, pages } = await app.db.transaction(async (tx) => {
-    const db = tx as unknown as Database;
-    await lockSaleSettlements(db);
-    const handin = await handinFor(db, subject);
-    const marks = await listHandinMarks(db, handin.id);
-    // The facts the version is written from, read here, in the turn: the decisions and agreements of its sales and the
-    // person's other reports as they stay until this commits.
-    const facts = await draftFacts(db, subject, handin, catalog, now, marks);
-    const lines = draftLines(facts, marks);
-    const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
-    const sums = linesPageSums(lines, facts.pages, offPlatform);
-    const made = await insertHandinVersion(db, {
-      handin,
-      door: who.door,
-      actorUserId: who.byUserId,
-      agentKeyId: who.byAgentKeyId,
-      telegramMessageRef: actor.kind === "agent" ? actor.sourceRef : null,
-      telegramSenderId: actor.kind === "agent" ? actor.telegramUserId : null,
-      totalMills: sums.totalMills,
-      pages: sums.pages,
-      lines,
-      offPlatform,
-      comment: handin.comment,
-      dayPaid,
-      ruleVersion: SALE_RULE.version,
-      // The shift's date now, not the date of the report's first word: a night shift moves into the day it ended in.
-      reportDate: subject.shift.reportDate,
-      at: now,
-    });
-    await insertHandinEvent(db, {
-      handinId: handin.id, event: "shift_report.submitted", door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
-      onBehalfOfUserId: actor.kind === "agent" ? subject.shift.userId : null,
-      changes: {
-        version: made.version, lines: lines.length,
-        ...(actor.kind === "agent" ? { sourceRef: actor.sourceRef, telegramUserId: actor.telegramUserId } : {}),
-      },
-      at: now,
-    });
-    return { version: made, pages: facts.pages };
-  });
-
+/**
+ * After a version the person made («Подтверждаю», «Досдать»): «Сдайте смену» closes, a version after the ledger paid the
+ * day raises the owner's matter, and a statement that touches another person reaches them now.
+ */
+export async function afterPersonVersion(
+  app: HandinApp,
+  input: { subject: Subject; catalog: PageCatalog; version: { id: number; version: number; totalMills: number }; pages: readonly string[]; paidDay: string; dayPaid: boolean | null },
+  now: Date,
+): Promise<void> {
+  const { subject, catalog, version } = input;
   const system = { door: "system" as const };
   await closeMatter(app.db, { key: `${SHIFT_REPORT_MISSING_KIND}:${subject.shift.id}`, how: "resolved", writer: "server" }, system, now).catch((error: unknown) => {
     app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the matter «Сдайте смену» did not close");
   });
-  if (dayPaid === true) {
-    const pageIds = pages.map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined);
+  if (input.dayPaid === true) {
+    const pageIds = input.pages.map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined);
     await openMatter(app.db, {
       key: `${SHIFT_REPORT_AFTER_PAID_KIND}:${version.id}`,
       kind: SHIFT_REPORT_AFTER_PAID_KIND,
       source: "server",
-      title: `Отчёт смены после выплаты: ${subject.person?.displayName ?? "чаттер"}, ${paidDay}, версия ${version.version}`,
+      title: `Отчёт смены после выплаты: ${subject.person?.displayName ?? "чаттер"}, ${input.paidDay}, версия ${version.version}`,
       object: { type: "shift", id: String(subject.shift.id) },
       pageIds,
       owner: { role: "owner" },
       money: true,
-      evidence: { shiftId: subject.shift.id, reportDate: paidDay, version: version.version, totalMills: version.totalMills },
-      link: `/workboard/shifts/report/${subject.shift.id}`,
+      evidence: { shiftId: subject.shift.id, reportDate: input.paidDay, version: version.version, totalMills: version.totalMills },
+      link: `/workboard/report/${subject.shift.id}`,
     }, system, now).catch((error: unknown) => {
       app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the owner's matter «после выплаты» did not open");
     });
   }
-  // A statement that touches another person reaches them now, not at the next pass (package G).
   await runSaleClaims(app, now).catch((error: unknown) => {
-    app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the claims pass after a hand-in failed; the next one will");
+    app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: the claims pass after a version failed; the next one will");
   });
-  return readSubject(app, actor, subject, now);
 }
 
 /**
@@ -1415,7 +1389,8 @@ export async function readShiftReportsFeed(
         ruleShareMills: line.rule.shareMills,
         ruleHome: line.rule.home,
         ruleReason: line.rule.reason,
-        statement: line.statement,
+        // The feed's format does not change (R-board §8): the board's «отдал» and «в общак» read as «не моё».
+        statement: ledgerStatementOf(line.statement),
         shareWithUserId: line.shareWithUserId,
         note: line.note,
         amountMills: line.amountMills,

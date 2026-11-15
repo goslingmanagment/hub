@@ -14,6 +14,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { listenOnLoopback } from "./helpers/network.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { handInAndConfirm } from "./helpers/shift-report-hand-in.ts";
 
 // Review of the shift report (R2-a, R2-c). Money: after the owner decides a dispute (or the other side agrees), the
 // claimant's later hand-ins count exactly their share by it — settled, never disputed — whatever their old «моё» says;
@@ -70,8 +71,7 @@ async function sale(pageId: number, net: number, minutesAgo: number, home: "bell
 }
 
 async function submit(shiftId: number) {
-  const submitted = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftId}/submit`);
-  expect(submitted.statusCode, submitted.body).toBe(200);
+  await handInAndConfirm(asSession, "anna", shiftId);
 }
 
 /** The newest version of a shift's report, and its line of a sale. */

@@ -62,6 +62,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { moscowWeekStart, refreshSaleHomes } from "./sale-homes.ts";
+import { silenceSettles } from "./shift-report-phases.ts";
 import {
   claimStands,
   claimTitle,
@@ -193,8 +194,9 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     }
     const sale = sales.get(claim.transactionId);
     const side = claim.sideUserId === null ? null : people.get(claim.sideUserId) ?? null;
-    // The side answers on their shift report: a person who hands shifts in in Hub. Anyone else — the owner decides.
-    const askable = claim.kind === "claim" && side !== null && side.submitsShiftSince !== null && side.state !== "left";
+    // The side answers on their own board or in «Ждут вас» (R-board §4), whether or not they hand shifts in in Hub; only
+    // with nobody to ask (none, or gone from the team) does it go to the decider at once.
+    const askable = claim.kind === "claim" && side !== null && side.state !== "left";
     const why = claim.kind === "double" ? "double" as const : askable ? null : "no_side" as const;
     const asked = { state: why === null ? "asked" as const : "owner" as const, escalatedAt: why === null ? null : now, escalatedWhy: why };
     const said = {
@@ -230,12 +232,17 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
   const open = await listSaleClaims(db, { states: [...OPEN_STATES], kinds: ["claim", "double"] });
   const holding = (await listCurrentReportsOfSales(db, [...new Set(open.flatMap((claim) => (claim.transactionId === null ? [] : [claim.transactionId])))])).map(viewOf);
   for (const claim of open) {
-    if (!claimStands(claim, holding)) {
+    // A question asked from the draft (the board, 0412) stands while the person's draft says it: until «Отменить» or a
+    // version of their report that no longer counts the sale.
+    const draftAsk = claim.origin === "draft" && !holding.some((report) => report.handinId === claim.claimantHandinId);
+    if (!draftAsk && !claimStands(claim, holding)) {
       if (await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state })) tally.withdrawn += 1;
       continue;
     }
-    if (claim.state === "asked" && now.getTime() - claim.createdAt.getTime() >= CLAIM_SILENCE_MS) {
-      if (await updateSaleClaim(db, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "silence" }, now, { ifState: "asked" })) tally.escalated += 1;
+    // A day of silence settles it for the one who asked (R-board §4): the sale stays with them; the side may still
+    // dispute. A question with nobody to ask is the decider's and never settles by silence.
+    if (silenceSettles(claim, now)) {
+      if (await settleBySilence(app, claim, now)) tally.escalated += 1;
     }
   }
 
@@ -633,11 +640,56 @@ async function refreshHomeOf(app: ClaimsApp, occurredAt: Date | null, now: Date)
   });
 }
 
+/**
+ * A day of silence: the claim is settled for the one who asked, as an agreement is (the claimant all or the half, the
+ * side none or the other half), in the settlements' turn; every counted report holding the sale gets its version made
+ * by the system. False — the claim was answered or moved meanwhile.
+ */
+async function settleBySilence(app: Pick<AppContext, "db" | "logger">, claim: SaleClaimRow, now: Date): Promise<boolean> {
+  const { db } = app;
+  if (claim.transactionId === null || claim.claimantUserId === null || claim.sideUserId === null) return false;
+  const side = await findHandinPersonOfUser(db, claim.sideUserId);
+  const sideIds = side?.userIds ?? [claim.sideUserId];
+  const paid = await paidDaysOf(app as ClaimsApp, await listCurrentReportsOfSales(db, [claim.transactionId])).catch(() => new Map<number, boolean | null>());
+  const made: MadeVersion[] = [];
+  const done = await db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockSaleSettlements(txDb);
+    const locked = await findSaleClaim(txDb, claim.id, { lock: true });
+    if (locked === null || locked.state !== "asked" || locked.answer !== null) return false;
+    await updateSaleClaim(txDb, locked.id, { state: "agreed", closedAt: now, silenceAt: now }, now, { ifState: "asked" });
+    const reports = await listCurrentReportsOfSales(txDb, [claim.transactionId!]);
+    const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === claim.transactionId)?.netMills ?? 0;
+    const by: SettleBy = { door: "workboard", actorUserId: claim.claimantUserId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null };
+    for (const report of reports) {
+      const mine = report.userId === claim.claimantUserId;
+      const theirs = sideIds.includes(report.userId);
+      if (!mine && !theirs) continue;
+      const amount = shareAfter({
+        netMills: net, userId: mine ? claim.claimantUserId! : claim.sideUserId!, outcome: "agreed",
+        first: claim.claimantUserId!, second: claim.sideUserId, statement: claim.statement,
+      });
+      const one = await settleReport(txDb, {
+        shiftId: report.shiftId, transactionId: claim.transactionId!, to: { amountMills: amount, settled: "agreed" },
+        madeFor: { kind: "claim", claimId: claim.id, transactionId: claim.transactionId!, outcome: "agreed" }, by, at: now,
+        dayPaid: paid.get(report.shiftId) ?? null,
+      });
+      if (one !== null) made.push(one);
+    }
+    return true;
+  });
+  if (done) await afterPaid(app as ClaimsApp, made, now);
+  return done;
+}
+
 // ── The other side's answer ──────────────────────────────────────────────────
 
-/** Whether the side may answer now: asked, or gone to the owner by silence and not decided. */
-const answerable = (claim: SaleClaimRow) => claim.kind === "claim"
-  && (claim.state === "asked" || (claim.state === "owner" && claim.escalatedWhy === "silence" && claim.answer === null));
+/**
+ * Whether the side may answer now: asked; gone to the owner by silence (before the board) and not decided; or settled
+ * by a day's silence for the one who asked — the one who lost may still dispute.
+ */
+const answerable = (claim: SaleClaimRow) => claim.kind === "claim" && claim.answer === null
+  && (claim.state === "asked" || (claim.state === "owner" && claim.escalatedWhy === "silence") || (claim.state === "agreed" && claim.silenceAt !== null));
 
 /** `saleClaimAnswer`, `agentSaleClaimAnswer`: «Согласен» settles it; «Не согласен» with a line of why takes it to the owner. */
 export async function answerSaleClaim(
@@ -660,7 +712,6 @@ export async function answerSaleClaim(
       throw new ConflictError("The message's sender is not this person", { reason: "sender_not_person" });
     }
   }
-  if (side !== null && side.submitsShiftSince === null) throw new ForbiddenError("The shift report is not switched on for this person");
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
   if (input.answer === "disagree" && note === null) throw new BadRequestError("«Не согласен» needs one line of why", { reason: "note_required" });
   if (!answerable(found)) throw new ConflictError("This claim is already answered or decided", { reason: "claim_closed" });

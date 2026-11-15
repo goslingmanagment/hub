@@ -12,6 +12,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { handInAndConfirm } from "./helpers/shift-report-hand-in.ts";
 
 // Заявки и договорённости (package G): who answers a claim, who decides a dispute, who sees what, and what the
 // settlement writes. The other side alone answers; a colleague, the claimant, a team lead, a chatter of another page
@@ -79,8 +80,7 @@ async function bellasSale(ref: string, net: number): Promise<number> {
 async function annaClaims(sale: number, why: string): Promise<number> {
   const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${sale}`, { statement: "mine", note: why });
   expect(said.statusCode, said.body).toBe(200);
-  const submitted = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`);
-  expect(submitted.statusCode, submitted.body).toBe(200);
+  await handInAndConfirm(asSession, "anna", shiftA);
   await runSaleClaims(app);
   const claim = await testDb!.pool.query("select id, state, side_user_id from sale_claims where transaction_id = $1", [sale]);
   expect(claim.rows).toHaveLength(1);
@@ -280,7 +280,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     if (!testDb) return context.skip();
     const added = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/off-platform`, { amountMills: 50_000, fromWhom: "фан", whatFor: "кастом" });
     expect(added.statusCode, added.body).toBe(200);
-    expect((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`)).statusCode).toBe(200);
+    await handInAndConfirm(asSession, "anna", shiftA);
     const id = added.json().line.id as number;
     for (const who of ["anna", "bella", "lead"]) {
       expect((await asSession(who, "POST", `/api/v1/off-platform/${id}/decide`, { decision: "confirm" })).statusCode).toBe(403);
@@ -324,8 +324,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     const say = async (body: Record<string, unknown>) => {
       const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${sale}`, body);
       expect(said.statusCode, said.body).toBe(200);
-      const submitted = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`);
-      expect(submitted.statusCode, submitted.body).toBe(200);
+      await handInAndConfirm(asSession, "anna", shiftA);
       await runSaleClaims(app);
     };
     // bella does not agree: the claim is the owner's, with her answer.

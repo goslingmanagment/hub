@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { shiftReportResponseSchema } from "@agency_hub_core/contracts";
+import { agentShiftReportChecksResponseSchema, agentShiftReportsFeedResponseSchema, shiftReportConfirmResponseSchema, shiftReportResponseSchema } from "@agency_hub_core/contracts";
 import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -25,6 +25,9 @@ const SENDER = 700_000_111;
 const KEYS = {
   none: `${AGENT_KEY_TOKEN_PREFIX}shift-no-capability`,
   writer: `${AGENT_KEY_TOKEN_PREFIX}shift-writer-key`,
+  // Issued in the last test only: a key that reviews makes every later hand-in wait for its check.
+  reviewer: `${AGENT_KEY_TOKEN_PREFIX}shift-reviewer-key`,
+  ledger: `${AGENT_KEY_TOKEN_PREFIX}shift-ledger-key`,
 } as const;
 
 let testDb: StartedTestDatabase | null = null;
@@ -67,8 +70,8 @@ describe("the shift report: who reads, who writes", () => {
       await assignUserToPage(app.db, await fixtureUserId(app, name), page);
     }
     const owner = await fixtureUserId(app, "boss");
-    const grants: Record<keyof typeof KEYS, string[]> = { none: ["read:team"], writer: ["write:shift_reports"] };
-    for (const [name, token] of Object.entries(KEYS) as [keyof typeof KEYS, string][]) {
+    const grants: Record<"none" | "writer" | "ledger", string[]> = { none: ["read:team"], writer: ["write:shift_reports"], ledger: ["read:team", "read:money"] };
+    for (const [name, token] of Object.entries(KEYS).filter(([key]) => key !== "reviewer") as ["none" | "writer" | "ledger", string][]) {
       await insertAgentKey(testDb.db, {
         name: `shift-${name}`,
         keyPrefix: token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
@@ -112,23 +115,41 @@ describe("the shift report: who reads, who writes", () => {
     await testDb?.stop();
   });
 
-  it("lets the person write and hand in their own shift, each hand-in a new version", async (context) => {
+  it("lets the person hand in a candidate and confirm it into a version, each confirmation a new version", async (context) => {
     if (!testDb) return context.skip();
     const own = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shiftA}`)).json());
     expect(own).toMatchObject({ access: "own", enabled: true, canEdit: true, state: "open", latest: null });
+    expect(own.board).toMatchObject({ phase: "draft", chip: "Черновик", candidate: null, canConfirm: false });
     expect((await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/comment`, { comment: "фан ждёт ответа" })).statusCode).toBe(200);
     const off = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/off-platform`, { amountMills: 50_000, fromWhom: "фан", whatFor: "кастом" });
     expect(off.statusCode, off.body).toBe(200);
-    const first = shiftReportResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`)).json());
-    expect(first.state).toBe("submitted");
-    expect(first.latest).toMatchObject({ version: 1, door: "workboard" });
+    // «Сдать смену» records a candidate and makes no version; nothing checks this shift, so it waits for «Подтверждаю».
+    const handed = shiftReportResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`)).json());
+    expect(handed).toMatchObject({ state: "open", latest: null });
+    expect(handed.board).toMatchObject({ phase: "confirm", canConfirm: true, candidate: { number: 1, door: "workboard", superseded: false } });
+    expect((await testDb.pool.query("select count(*)::int as n from shift_handin_versions")).rows[0].n).toBe(0);
+    // A candidate is never changed.
+    await expect(testDb.pool.query("update shift_handin_candidates set total_mills = 1")).rejects.toThrow(/immutable/);
+    const first = shiftReportConfirmResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId: handed.board!.candidate!.id })).json());
+    expect(first).toMatchObject({ confirmed: true, refused: null });
+    expect(first.report.state).toBe("submitted");
+    expect(first.report.latest).toMatchObject({ version: 1, door: "workboard" });
+    expect(first.report.board?.phase).toBe("counted");
     // «Мимо площадки» is shown, never summed.
-    expect(first.view?.offPlatform).toEqual([expect.objectContaining({ amountMills: 50_000, state: "pending" })]);
-    expect(first.view?.totalMills).toBe(0);
-    // The extension's narrow token is the same person through the other door.
-    const second = await server!.inject({ method: "POST", url: `/api/v1/shift-reports/${shiftA}/submit`, headers: { authorization: `Bearer ${extensionToken}` } });
-    expect(second.statusCode, second.body).toBe(200);
-    expect(shiftReportResponseSchema.parse(second.json()).latest).toMatchObject({ version: 2, door: "extension" });
+    expect(first.report.view?.offPlatform).toEqual([expect.objectContaining({ amountMills: 50_000, state: "pending" })]);
+    expect(first.report.view?.totalMills).toBe(0);
+    // The extension's narrow token is the same person through the other door: «Исправить», «Сдать заново», «Подтверждаю».
+    const ext = (method: "POST", url: string, payload?: Record<string, unknown>) =>
+      server!.inject({ method, url, headers: { authorization: `Bearer ${extensionToken}` }, ...(payload ? { payload } : {}) });
+    expect((await ext("POST", `/api/v1/shift-reports/${shiftA}/reopen`)).statusCode).toBe(200);
+    const again = shiftReportResponseSchema.parse((await ext("POST", `/api/v1/shift-reports/${shiftA}/submit`)).json());
+    expect(again.board?.candidate?.number).toBe(2);
+    // The first candidate is superseded: signing it is refused with the fresh board, and nothing is made.
+    const stale = shiftReportConfirmResponseSchema.parse((await ext("POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId: handed.board!.candidate!.id })).json());
+    expect(stale).toMatchObject({ confirmed: false, refused: "superseded" });
+    expect(stale.report.board?.candidate?.number).toBe(2);
+    const second = shiftReportConfirmResponseSchema.parse((await ext("POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId: again.board!.candidate!.id })).json());
+    expect(second.report.latest).toMatchObject({ version: 2, door: "extension" });
     const versions = await testDb.pool.query("select version from shift_handin_versions order by version");
     expect(versions.rows.map((row: { version: number }) => Number(row.version))).toEqual([1, 2]);
     // A version is never changed.
@@ -148,6 +169,10 @@ describe("the shift report: who reads, who writes", () => {
       expect((await asSession(who, "PUT", `/api/v1/shift-reports/${shiftA}/comment`, { comment: "x" })).statusCode).toBe(403);
       expect((await asSession(who, "POST", `/api/v1/shift-reports/${shiftA}/submit`)).statusCode).toBe(403);
       expect((await asSession(who, "POST", `/api/v1/shift-reports/${shiftA}/off-platform`, { amountMills: 1_000, fromWhom: "x", whatFor: "y" })).statusCode).toBe(403);
+      // Nor confirm it, reopen it or answer a card on it: only the person.
+      expect((await asSession(who, "POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId: 1 })).statusCode).toBe(403);
+      expect((await asSession(who, "POST", `/api/v1/shift-reports/${shiftA}/reopen`)).statusCode).toBe(403);
+      expect(report.board?.canConfirm ?? false).toBe(false);
     }
     const owner = shiftReportResponseSchema.parse((await asSession("boss", "GET", `/api/v1/shift-reports/${shiftA}`)).json());
     expect(owner.access).toBe("read");
@@ -187,12 +212,22 @@ describe("the shift report: who reads, who writes", () => {
     expect(stranger.statusCode).toBe(409);
     expect(stranger.json().reason).toBe("sender_not_person");
     expect((await asKey("writer", "POST", "/api/v1/agent/shift-reports/comment", { shiftId: shiftA, comment: "x", telegramUserId: SENDER + 1 })).statusCode).toBe(409);
+    // Counted: the agent cannot hand it in again until the person reopens it («Исправить» is the person's).
+    expect((await asKey("writer", "POST", "/api/v1/agent/shift-reports/submit", { shiftId: shiftA, telegramUserId: SENDER, sourceRef: "chat:3" })).statusCode).toBe(409);
+    expect((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/reopen`)).statusCode).toBe(200);
+    const versionsBefore = (await testDb.pool.query("select count(*)::int as n from shift_handin_versions")).rows[0].n as number;
     const done = await asKey("writer", "POST", "/api/v1/agent/shift-reports/submit", { shiftId: shiftA, telegramUserId: SENDER, sourceRef: "chat:3" });
     expect(done.statusCode, done.body).toBe(200);
-    expect(shiftReportResponseSchema.parse(done.json()).latest).toMatchObject({ door: "telegram" });
-    const stored = await testDb.pool.query("select door, telegram_message_ref, telegram_sender_id from shift_handin_versions order by version desc limit 1");
+    // «Со слов» records a candidate: no version, the person still confirms on the board.
+    expect(shiftReportResponseSchema.parse(done.json()).board).toMatchObject({ phase: "confirm", candidate: { door: "telegram" } });
+    expect((await testDb.pool.query("select count(*)::int as n from shift_handin_versions")).rows[0].n).toBe(versionsBefore);
+    const stored = await testDb.pool.query("select id, door, telegram_message_ref, telegram_sender_id from shift_handin_candidates order by id desc limit 1");
     expect(stored.rows[0]).toMatchObject({ door: "telegram", telegram_message_ref: "chat:3" });
     expect(Number(stored.rows[0].telegram_sender_id)).toBe(SENDER);
+    // No agent door confirms.
+    expect((await asKey("writer", "POST", "/api/v1/agent/shift-reports/confirm", { shiftId: shiftA, candidateId: Number(stored.rows[0].id) })).statusCode).toBe(404);
+    const confirmed = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId: Number(stored.rows[0].id) });
+    expect(shiftReportConfirmResponseSchema.parse(confirmed.json()).confirmed).toBe(true);
     // The ledger's feed needs read:team and read:money.
     expect((await asKey("writer", "GET", "/api/v1/agent/shift-reports")).statusCode).toBe(403);
   });
@@ -233,5 +268,56 @@ describe("the shift report: who reads, who writes", () => {
     expect(report.view?.lines.some((line) => line.transactionId === closed)).toBe(false);
     // A colleague of the page cannot take it for the person, nor list it.
     expect((await asSession("bella", "GET", `/api/v1/shift-reports/${shiftA}/claimable`)).statusCode).toBe(403);
+  });
+
+  it("lets Gengar check a candidate and propose, never confirm; the ledger's feed never sees a candidate or a card", async (context) => {
+    if (!testDb) return context.skip();
+    const [one] = (await testDb.pool.query("select id from pages where label = 'mia-1'")).rows.map((row: { id: string }) => Number(row.id));
+    await insertAgentKey(testDb.db, {
+      name: "shift-reviewer", keyPrefix: KEYS.reviewer.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(KEYS.reviewer),
+      capabilities: ["review:shift_reports"] as never, pageIds: [one!], expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      createdBy: await fixtureUserId(app, "boss"),
+    });
+    const feed = async () => agentShiftReportsFeedResponseSchema.parse((await asKey("ledger", "GET", "/api/v1/agent/shift-reports")).json());
+    const fedBefore = (await feed()).reports.filter((report) => report.shiftId === shiftA);
+    expect((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/reopen`)).statusCode).toBe(200);
+    const handed = shiftReportResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`)).json());
+    // A key reviews the shift's page: the report waits for its check.
+    expect(handed.board).toMatchObject({ phase: "checking", chip: "Проверка", canConfirm: false, candidate: { gengar: { state: "reading" } } });
+    const candidateId = handed.board!.candidate!.id;
+    expect(shiftReportConfirmResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId })).json()))
+      .toMatchObject({ confirmed: false, refused: "not_ready" });
+    // The reviewer reads the candidates waiting for it; the writer key does not.
+    expect((await asKey("writer", "GET", "/api/v1/agent/shift-reports/checks")).statusCode).toBe(403);
+    const checks = agentShiftReportChecksResponseSchema.parse((await asKey("reviewer", "GET", "/api/v1/agent/shift-reports/checks")).json());
+    const check = checks.checks.find((one) => one.candidateId === candidateId);
+    expect(check).toBeDefined();
+    // A proposal names a sale of the candidate and a legal word.
+    const outside = await asKey("reviewer", "POST", `/api/v1/agent/shift-reports/checks/${candidateId}`, {
+      proposals: [{ transactionId: 987_654_321, kind: "note", note: "x", why: "y" }],
+    });
+    expect(outside.statusCode).toBe(400);
+    expect(outside.json().reason).toBe("not_in_candidate");
+    const sale = check!.lines[0]?.transactionId;
+    const answer = await asKey("reviewer", "POST", `/api/v1/agent/shift-reports/checks/${candidateId}`, {
+      proposals: sale === undefined ? [] : [{ transactionId: sale, kind: "note", note: "голосовое", why: "Фан просил голосовое в 19:10." }],
+    });
+    expect(answer.statusCode, answer.body).toBe(200);
+    // Both checks are in: the person confirms now. The reviewer has no confirm.
+    const board = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shiftA}`)).json()).board!;
+    expect(board).toMatchObject({ phase: "confirm", canConfirm: true });
+    expect((await asKey("reviewer", "POST", "/api/v1/agent/shift-reports/confirm", { shiftId: shiftA, candidateId })).statusCode).toBe(404);
+    // Neither the candidate nor the card reached the ledger's feed.
+    const fedChecked = (await feed()).reports.filter((report) => report.shiftId === shiftA);
+    expect(fedChecked.map((report) => report.id)).toEqual(fedBefore.map((report) => report.id));
+    expect(JSON.stringify(await feed())).not.toContain("Фан просил голосовое");
+    const confirmed = shiftReportConfirmResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId })).json());
+    expect(confirmed.confirmed).toBe(true);
+    // The version reached it, and only the version: one more report, a version's id.
+    const fedAfter = (await feed()).reports.filter((report) => report.shiftId === shiftA);
+    expect(fedAfter).toHaveLength(fedBefore.length + 1);
+    const versionIds = (await testDb.pool.query("select v.id from shift_handin_versions v join shift_handins h on h.id = v.handin_id where h.shift_id = $1", [shiftA]))
+      .rows.map((row: { id: string }) => Number(row.id));
+    expect(fedAfter.map((report) => report.id).sort()).toEqual(versionIds.sort());
   });
 });

@@ -90,7 +90,8 @@ export async function runShiftReportMatters(app: Pick<AppContext, "db" | "logger
     if (!Number.isSafeInteger(shiftId) || missing.has(shiftId)) continue;
     const handin = await findHandinByShift(db, shiftId);
     const endedAt = typeof matter.evidence.endedAt === "string" ? Date.parse(matter.evidence.endedAt) : Number.NaN;
-    const submitted = handin?.state === "submitted";
+    // Handed in: a version, or a candidate that waits for its check or its confirmation (the board, 0412).
+    const submitted = handin?.state === "submitted" || (handin !== null && handin.phase !== "draft");
     if (!submitted && Number.isFinite(endedAt) && endedAt < windowFrom.getTime()) continue;
     const closed = await closeMatter(db, { key: matter.key, how: submitted ? "resolved" : "cause_gone", writer: "server" }, SYSTEM, now);
     if (closed.transition === "closed") tally.closed += 1;

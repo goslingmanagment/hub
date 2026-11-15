@@ -1,6 +1,6 @@
 import { registerOfapiVendorRoutes } from "../modules/ofapi-vendor/index.ts";
 import { registerModelApplicationRoutes } from "../modules/model-applications/index.ts";
-import { pageHeaders } from "./page-headers.ts";
+import { boardFrameDevOrigins, boardFrameHeaders, isBoardFramePath, pageHeaders } from "./page-headers.ts";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -260,8 +260,10 @@ export async function buildApiServer(appContext: AppContext) {
   // Never framed by another site; HTTPS only in production (api/page-headers.ts). First, so a
   // route may make them stricter.
   const headersOfPages = pageHeaders(appContext.config.isProduction);
-  server.addHook("onRequest", async (_request, reply) => {
-    reply.headers(headersOfPages);
+  // The «Отчёт» board's frame (package R): framed by the extension's two sites only, never by anything else.
+  const headersOfBoardFrame = boardFrameHeaders(appContext.config.isProduction, boardFrameDevOrigins(process.env.HUB_BOARD_FRAME_DEV_ORIGINS));
+  server.addHook("onRequest", async (request, reply) => {
+    reply.headers(isBoardFramePath(request.url) ? headersOfBoardFrame : headersOfPages);
   });
 
   server.addHook("onRequest", async (request) => {

@@ -14,6 +14,7 @@ import { readShiftReportsFeed } from "../apps/runtime/src/services/shift-handins
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { handInAndConfirm } from "./helpers/shift-report-hand-in.ts";
 
 // Review round 2b of the shift report. (1) A report's date is the shift's date when it is handed in, not the date of
 // its first mark: a night shift that crossed into the next day after the first mark is reported — and fed to the
@@ -74,9 +75,7 @@ async function sale(net: number, minutesAgo: number, home: "bella" | "nobody"): 
 }
 
 async function submit(shiftId: number) {
-  const submitted = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftId}/submit`);
-  expect(submitted.statusCode, submitted.body).toBe(200);
-  return shiftReportResponseSchema.parse(submitted.json());
+  return handInAndConfirm(asSession, "anna", shiftId);
 }
 
 /** The newest version the ledger's feed serves of a shift's report. */
