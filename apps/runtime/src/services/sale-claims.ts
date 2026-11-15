@@ -716,8 +716,10 @@ export async function answerSaleClaim(
     }
   }
   if (side !== null && side.submitsShiftSince === null) throw new ForbiddenError("The shift report is not switched on for this person");
-  // «Не согласен» is one press on the board: a line of why may come with it, never required.
+  // «Не согласен» is one press on the board: a line of why may come with it, never required. «Со слов» the person's
+  // words are the answer: an agent's «Не согласен» carries them.
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
+  if (actor.kind === "agent" && input.answer === "disagree" && note === null) throw new BadRequestError("«Не согласен» со слов needs the person's line of why", { reason: "note_required" });
   if (!answerable(found)) throw new ConflictError("This claim is already answered or decided", { reason: "claim_closed" });
 
   const door: HandinDoor = actor.kind === "agent" ? "telegram" : actor.door;

@@ -197,8 +197,10 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
       const refused = await asSession(who, "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" });
       expect(refused.statusCode, `${who}: ${refused.body}`).toBe(403);
     }
-    // «Не согласен» needs a line of why.
-    expect((await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree" })).statusCode).toBe(400);
+    // «Не согласен» «со слов» needs the person's line of why (the board's own «Не согласен» is one press: the next test).
+    const wordless = await asKey("writer", "POST", "/api/v1/agent/sale-claims/answer", { claimId, answer: "disagree", telegramUserId: SENDER_B, sourceRef: "chat:0" });
+    expect(wordless.statusCode, wordless.body).toBe(400);
+    expect(wordless.json().reason).toBe("note_required");
 
     // An agent: only with write:shift_reports, the message, and bella as its sender.
     expect((await asKey("none", "POST", "/api/v1/agent/sale-claims/answer", { claimId, answer: "agree", telegramUserId: SENDER_B, sourceRef: "chat:1" })).statusCode).toBe(403);
@@ -219,9 +221,10 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     if (!testDb) return context.skip();
     const sale = String((await testDb.pool.query("select id from transactions where transaction_id = 'tx-claim-one'")).rows[0].id);
     const claimId = String((await testDb.pool.query("select id from sale_claims where transaction_id = $1", [sale])).rows[0].id);
-    const answered = await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree", note: "фан мой, писала ему последней" });
+    // The board's «Не согласен» is one press, as the prototype: no line of why needed; the decider reads the claimant's reason.
+    const answered = await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree" });
     expect(answered.statusCode, answered.body).toBe(200);
-    expect(saleClaimAnswerResponseSchema.parse(answered.json()).claim).toMatchObject({ state: "owner", answer: "disagree" });
+    expect(saleClaimAnswerResponseSchema.parse(answered.json()).claim).toMatchObject({ state: "owner", answer: "disagree", answerNote: null });
     // Answered once: not again.
     expect((await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" })).statusCode).toBe(409);
     // ONE matter for the owner; the side's matter closed.
