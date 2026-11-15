@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createFanslyPage, createModel, insertAgentKey, openMatter } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, insertAgentKey, listContentManagerLoginsByPage, openMatter } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -258,5 +258,47 @@ describe("ContentOps' own entrance (package C4)", () => {
       .toEqual({ result: "refused", reason: "not_here" });
     const link = await testDb!.pool.query<{ used: boolean }>("select used_at is not null as used from account_links where user_id = $1", [invite.user.id]);
     expect(link.rows[0]?.used).toBe(false);
+  });
+  it("journals the owner's login and a right password without ContentOps; limits by the person's address", async (context) => {
+    if (!server) return context.skip();
+    const before = Number((await testDb!.pool.query<{ n: string }>("select count(*) as n from audit_events where event_type = 'auth.login_refused'")).rows[0]?.n);
+    await signIn("boss", "anything");
+    await signIn("chatty", "chatty-password-for-tests");
+    const rows = await testDb!.pool.query<{ metadata: { reason: string; via: string } }>(
+      "select metadata from audit_events where event_type = 'auth.login_refused' order by id");
+    expect(rows.rows.length - before).toBe(2);
+    expect(rows.rows.slice(-2).map((row) => row.metadata.reason)).toEqual(["owner", "no_access"]);
+    // Twenty tries a minute from one address; another address is not held back by it.
+    let last = 0;
+    for (let i = 0; i < 21; i += 1) {
+      last = (await door("password", { username: `nobody-${i}`, password: "x", ip: "198.51.100.1" })).statusCode;
+    }
+    expect(last).toBe(429);
+    expect((await door("password", { username: "nobody", password: "x", ip: "198.51.100.2" })).statusCode).toBe(200);
+  });
+
+  it("names the content manager of each page, and gives her the shooting's matter with what it is about", async (context) => {
+    if (!server) return context.skip();
+    const created = await request("POST", `${HUB}/api/v1/admin/people`, {
+      session: ownerCookie,
+      headers: { origin: HUB },
+      payload: {
+        code: "mira", displayName: "Мира", role: "content_manager", state: "invited", workingPageLabels: ["mia-2"],
+        invite: { username: "mira", role: "content_manager", pageLabels: ["mia-2"] },
+      },
+    });
+    const token = created.json<{ invite: { userId: number; link: { token: string } } }>().invite.link.token;
+    const mira = created.json<{ invite: { userId: number } }>().invite.userId;
+    const managers = await listContentManagerLoginsByPage(app.db);
+    expect(managers.get("mia-2")).toBe(mira);
+    expect(managers.has("zoe-1")).toBe(false);
+    await openMatter(app.db, {
+      key: "custom.checked_not_at_model:K-7", kind: "custom.checked_not_at_model", source: "server", title: "Кастом K-7 проверен и сутки не у модели",
+      object: { type: "custom_order", id: "7" }, pageIds: [pages["mia-2"]!], owner: { userId: mira }, money: false, evidence: {}, link: "/workboard/customs/K-7",
+    }, { door: "system" });
+    const grant = (await door("link", { token, password: "a-strong-password-for-mira" })).json<{ grant: string }>().grant;
+    const waiting = await door("waiting", { grant });
+    expect(waiting.json<{ matters: Array<{ kind: string; object: unknown }> }>().matters)
+      .toContainEqual(expect.objectContaining({ kind: "custom.checked_not_at_model", object: { type: "custom_order", id: "7" } }));
   });
 });

@@ -12,20 +12,20 @@ import { pageBrowserRouteSchemas } from "./routes-page-browser.ts";
 import { publicationRouteSchemas } from "./routes-publications.ts";
 import {
   agentPublicationTargetsResponseSchema,
+  personPublicationApproveResponseSchema,
   personPublicationDetailSchema,
+  personPublicationListResponseSchema,
+  personPublicationSettingsListResponseSchema,
+  personPublicationWithdrawResponseSchema,
   publicationApproveBodySchema,
-  publicationApproveResponseSchema,
   publicationListQuerySchema,
-  publicationListResponseSchema,
   publicationQueueListResponseSchema,
   publicationQueueRefreshResponseSchema,
   publicationResolveBodySchema,
   publicationResolveResponseSchema,
   publicationSchema,
-  publicationSettingsListResponseSchema,
   publicationSettingsSchema,
   publicationSettingsUpdateBodySchema,
-  publicationWithdrawResponseSchema,
 } from "./publications.ts";
 import { mediaLookRouteSchemas } from "./routes-media-looks.ts";
 import { agentDoorRouteSchemas } from "./agent-doors.ts";
@@ -6051,7 +6051,7 @@ export const personDoorRouteSchemas = {
     auth: personDoor, tags: ["person-door"],
     summary: "As the signed-in person: publications of their pages (or one page, or one model) by publish time",
     body: personDoorBodySchema.extend(publicationListQuerySchema.shape),
-    response: { 200: publicationListResponseSchema, ...personDoorErrors },
+    response: { 200: personPublicationListResponseSchema, ...personDoorErrors },
   },
   personPublicationGet: {
     auth: personDoor, tags: ["person-door"],
@@ -6069,7 +6069,7 @@ export const personDoorRouteSchemas = {
     auth: personDoor, tags: ["person-door"],
     summary: "As the signed-in person: approve drafts of their pages in order, each checked again",
     body: personDoorBodySchema.extend(publicationApproveBodySchema.shape),
-    response: { 200: publicationApproveResponseSchema, ...personDoorErrors },
+    response: { 200: personPublicationApproveResponseSchema, ...personDoorErrors },
   },
   personPublicationCancel: {
     auth: personDoor, tags: ["person-door"],
@@ -6081,7 +6081,7 @@ export const personDoorRouteSchemas = {
     auth: personDoor, tags: ["person-door"],
     summary: "As the signed-in person: take a Hub post of their pages off the platform's schedule (sent once)",
     body: personIdBodySchema,
-    response: { 200: publicationWithdrawResponseSchema, ...personDoorErrors },
+    response: { 200: personPublicationWithdrawResponseSchema, ...personDoorErrors },
   },
   personPublicationReplace: {
     auth: personDoor, tags: ["person-door"],
@@ -6111,7 +6111,7 @@ export const personDoorRouteSchemas = {
     auth: personDoor, tags: ["person-door"],
     summary: "As the signed-in person: the global switch and their pages' publishing settings",
     body: personModelBodySchema,
-    response: { 200: publicationSettingsListResponseSchema, ...personDoorErrors },
+    response: { 200: personPublicationSettingsListResponseSchema, ...personDoorErrors },
   },
   personPublicationSwitches: {
     auth: personDoor, tags: ["person-door"],
@@ -6129,13 +6129,13 @@ export const personDoorRouteSchemas = {
     auth: personDoor, tags: ["person-door"],
     summary: "As the owner: delete a published Fansly post Hub made from the wall (sent once)",
     body: personIdBodySchema,
-    response: { 200: publicationWithdrawResponseSchema, ...personDoorErrors },
+    response: { 200: personPublicationWithdrawResponseSchema, ...personDoorErrors },
   },
   personPublicationWithdrawPage: {
     auth: personDoor, tags: ["person-door"],
     summary: "As the owner: take every post Hub put in a page's schedule off it",
     body: personPageBodySchema,
-    response: { 200: publicationWithdrawResponseSchema, ...personDoorErrors },
+    response: { 200: personPublicationWithdrawResponseSchema, ...personDoorErrors },
   },
   personPublicationSwitchSet: {
     auth: personDoor, tags: ["person-door"],

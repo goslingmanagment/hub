@@ -217860,6 +217860,29 @@
                                   "type": "string"
                                 }
                               },
+                              "object": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string"
+                                      },
+                                      "id": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "type",
+                                      "id"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
                               "openedAt": {
                                 "type": "string"
                               }
@@ -287680,6 +287703,12 @@
                               "null"
                             ]
                           },
+                          "words": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "publication": {
                             "anyOf": [
                               {
@@ -288412,6 +288441,7 @@
                           "id",
                           "outcome",
                           "reason",
+                          "words",
                           "publication"
                         ],
                         "additionalProperties": false
@@ -290429,13 +290459,17 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "words": {
+                            "type": "string"
                           }
                         },
                         "required": [
                           "id",
                           "outcome",
                           "reason",
-                          "publication"
+                          "publication",
+                          "words"
                         ],
                         "additionalProperties": false
                       }
@@ -291581,6 +291615,144 @@
                         "agentKeys"
                       ],
                       "additionalProperties": false
+                    },
+                    "words": {
+                      "type": "object",
+                      "properties": {
+                        "statusReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "statusReasonParts": {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "text": {
+                                    "type": "string"
+                                  },
+                                  "names": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "text",
+                                  "names"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "findings": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "album": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "landed": {
+                                  "type": "string"
+                                },
+                                "current": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "missing": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "stop": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "price": {
+                                  "type": "string"
+                                },
+                                "ceiling": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "files": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "size": {
+                                        "type": "string"
+                                      },
+                                      "state": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "size",
+                                      "state"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "landed",
+                                "current",
+                                "missing",
+                                "stop",
+                                "price",
+                                "ceiling",
+                                "files"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "statusReason",
+                        "statusReasonParts",
+                        "findings",
+                        "events",
+                        "album"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -291617,7 +291789,8 @@
                     "statusChangedAt",
                     "events",
                     "revision",
-                    "names"
+                    "names",
+                    "words"
                   ],
                   "additionalProperties": false
                 }
@@ -292610,6 +292783,58 @@
                           },
                           "statusChangedAt": {
                             "type": "string"
+                          },
+                          "words": {
+                            "type": "object",
+                            "properties": {
+                              "statusReason": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "statusReasonParts": {
+                                "anyOf": [
+                                  {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "text": {
+                                          "type": "string"
+                                        },
+                                        "names": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        }
+                                      },
+                                      "required": [
+                                        "text",
+                                        "names"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "findings": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "statusReason",
+                              "statusReasonParts",
+                              "findings"
+                            ],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -292643,7 +292868,8 @@
                           "deletion",
                           "createdAt",
                           "updatedAt",
-                          "statusChangedAt"
+                          "statusChangedAt",
+                          "words"
                         ],
                         "additionalProperties": false
                       }
@@ -296456,6 +296682,12 @@
                               "string",
                               "null"
                             ]
+                          },
+                          "autostopReasonWords": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -296468,7 +296700,8 @@
                           "paidPriceMaxMills",
                           "repostThresholdDays",
                           "dailyLimit",
-                          "updatedAt"
+                          "updatedAt",
+                          "autostopReasonWords"
                         ],
                         "additionalProperties": false
                       }
@@ -299179,13 +299412,17 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "words": {
+                            "type": "string"
                           }
                         },
                         "required": [
                           "id",
                           "outcome",
                           "reason",
-                          "publication"
+                          "publication",
+                          "words"
                         ],
                         "additionalProperties": false
                       }
@@ -300217,13 +300454,17 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "words": {
+                            "type": "string"
                           }
                         },
                         "required": [
                           "id",
                           "outcome",
                           "reason",
-                          "publication"
+                          "publication",
+                          "words"
                         ],
                         "additionalProperties": false
                       }

@@ -165,3 +165,15 @@ describe("the shooting goes by the order's page", () => {
     expect(boardLeads(TWO, [72], false)).toEqual([{ model: "M7", check: "P79", shoot: "P72" }]);
   });
 });
+
+describe("the chat side's writes go by the pages the person works, not the team's read cut", () => {
+  it("a viewer who reads model 2 by «видит команду» takes no «оплата» or «отдан» there; on her own page she does", () => {
+    const viewer: CustomViewer = { userId: 104, role: "chatter", pageIds: [11, 21], workPageIds: [11], lead: false, leads: ledPhasesOf(FACTS, 104, false) };
+    const order = (pageId: number, acceptedByUserId: number | null = null) => ({ pageId, state: "shot" as const, acceptedByUserId });
+    expect(mayTakeStep(viewer, order(21), "given")).toBe(false);
+    expect(mayTakeStep(viewer, order(21), "payment")).toBe(false);
+    expect(mayTakeStep(viewer, order(11), "given")).toBe(true);
+    // The chatter who took the order gives it wherever it is.
+    expect(mayTakeStep(viewer, order(21, 104), "given")).toBe(true);
+  });
+});

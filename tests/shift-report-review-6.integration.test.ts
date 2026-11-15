@@ -260,7 +260,7 @@ describe("the board «Отчёт», the final review's third reader", () => {
     const declined = await rawSession("anna", "POST", `/api/v1/shift-reports/${shift}/proposals/${proposal}/answer`, { answer: "decline", note: "это мой фан, писал в личку" });
     expect(declined.statusCode, declined.body).toBe(200);
     // The pot is the owner's: his matter opens with the card and anna's reason.
-    const matters = (await q("select kind, owner_role, evidence from matters where state = 'open' and evidence::text like $1", [`%${own}%`])).rows as
+    const matters = (await q("select kind, owner_role, evidence from matters where state = 'open' and (evidence ->> 'transactionId')::bigint = $1", [own])).rows as
       Array<{ kind: string; owner_role: string | null; evidence: Record<string, unknown> }>;
     expect(matters.map((one) => ({ kind: one.kind, owner_role: one.owner_role }))).toContainEqual({ kind: "sale.dispute", owner_role: "owner" });
     expect(JSON.stringify(matters)).toContain("это мой фан, писал в личку");

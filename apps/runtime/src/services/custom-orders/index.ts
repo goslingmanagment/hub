@@ -82,6 +82,7 @@ import {
   stepsFor,
   wantedParts,
   whatOf,
+  worksOnPage,
   type CustomPart,
   type CustomViewer,
 } from "./rules.ts";
@@ -143,6 +144,8 @@ export async function customViewerOf(app: CustomApp, principal: HumanAuthPrincip
   const team = role === "owner" ? undefined : await teamPagesFor(app, principal);
   return {
     userId: principal.user.id, role, pageIds: team ?? principal.assignedPageIds, lead: leads.some((lead) => lead.userId === principal.user.id),
+    // What the login works: the writes of the chat's side go by it, never by the team's read cut.
+    workPageIds: principal.assignedPageIds,
     // Who leads which step, by the one rule (leaders.ts): a narrow session from the extension leads nothing.
     leads: narrow ? { check: [], shoot: [] } : ledPhasesOf(facts, principal.user.id, test),
     // The test realm (sandbox/realm.ts): the lead and the owner see every order of THEIR realm only.
@@ -863,7 +866,7 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
       return { action: "deadline", deadlineOn: body.deadlineOn };
     case "fan": {
       const found = await resolveFanOnPage(app.db, { pageLabel: body.pageLabel, fan: body.fan });
-      if (found === null || !seesOrder(viewer, { pageId: found.pageId })) {
+      if (found === null || !seesOrder(viewer, { pageId: found.pageId }) || !worksOnPage(viewer, found.pageId)) {
         throw new ConflictError("No such fan on the page", { reason: "fan_unknown" });
       }
       return { action: "fan", pageId: found.pageId, fanId: found.fanId, conversationRef: found.platform === "onlyfans" ? found.fanRef : null };
@@ -995,7 +998,8 @@ export async function createCustomOrderOnBoard(
   let payment: number | null = null;
   if (body.transactionRef !== undefined) {
     const sale = await findCustomSale(app.db, Number(body.transactionRef));
-    if (sale === null || !seesOrder(viewer, { pageId: sale.pageId })) throw new NotFoundError("The sale was not found");
+    // «Записать кастом»: on a page the person works (never one their team cut only reads).
+    if (sale === null || !seesOrder(viewer, { pageId: sale.pageId }) || !worksOnPage(viewer, sale.pageId)) throw new NotFoundError("The sale was not found");
     pageId = sale.pageId;
     fanId = sale.fanId;
     // A sale of the fan no order took, of the last month — or, whatever its day, one a matter «похоже на кастом без
@@ -1007,7 +1011,7 @@ export async function createCustomOrderOnBoard(
     payment = sale.transactionId;
   } else {
     const page = await findPageSummaryByLabel(app.db, body.pageLabel!);
-    if (!page || !seesOrder(viewer, { pageId: page.id })) throw new NotFoundError(`Page "${body.pageLabel}" was not found`);
+    if (!page || !seesOrder(viewer, { pageId: page.id }) || !worksOnPage(viewer, page.id)) throw new NotFoundError(`Page "${body.pageLabel}" was not found`);
     pageId = page.id;
     if (body.fan !== undefined) {
       const found = await resolveFanOnPage(app.db, { pageLabel: page.label, fan: body.fan });
@@ -1031,7 +1035,8 @@ export async function dismissCustomLookalike(app: CustomApp, principal: AuthPrin
   const viewer = await customViewerOf(app, principal);
   const transactionId = Number(transactionRef);
   const rows = await listCustomLookalikeSales(app.db, { from: new Date(now.getTime() - 60 * DAY_MS), to: now, limit: 1000, alsoIds: await waitingCustomSaleIds(app.db) });
-  const row = lookalikesFor(viewer, rows).find((one) => one.transactionId === transactionId);
+  // «Не кастом» is a write: by the pages the person works, not the team's read cut.
+  const row = lookalikesFor({ ...viewer, pageIds: viewer.workPageIds ?? viewer.pageIds }, rows).find((one) => one.transactionId === transactionId);
   if (row === undefined) throw new NotFoundError("The sale was not found");
   return { dismissed: await dismissCustomSale(app.db, { transactionId, userId: principal.user.id }) };
 }

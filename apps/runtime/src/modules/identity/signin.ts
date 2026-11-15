@@ -326,7 +326,19 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.post("/api/v1/auth/sso/password", {
     schema: routeSchemas.authSsoPassword,
-    config: { rateLimit: SERVER_RATE_LIMIT },
+    // Not one bucket for ContentOps' server: the person's forwarded address is the key (after the body is read);
+    // the per-login lockout is the sign-in service's own.
+    config: {
+      rateLimit: {
+        max: 20,
+        timeWindow: 60_000,
+        hook: "preHandler",
+        keyGenerator: (request: FastifyRequest) => {
+          const body = request.body as { ip?: unknown } | undefined;
+          return `contentops-form:${typeof body?.ip === "string" && body.ip !== "" ? body.ip : request.ip}`;
+        },
+      },
+    },
   }, async (request) => {
     const principal = await contentopsDoor(request);
     const { username, password, ip, userAgent } = request.body;

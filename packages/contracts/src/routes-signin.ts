@@ -154,6 +154,11 @@ export const signinWaitingMatterSchema = z.object({
   pageLabels: z.array(z.string()),
   /** The models of those pages (Hub's lower-case slugs); none — a matter of no page, every model's. */
   models: z.array(z.string()).optional(),
+  /**
+   * What the matter is about (`publication`, `custom_order`, …): ContentOps opens its own screen for it (a post's card
+   * in «Публикации», an order in «Съёмка»); null — nothing of ContentOps'.
+   */
+  object: z.object({ type: z.string(), id: z.string() }).nullable().optional(),
   openedAt: isoTimestamp,
 });
 

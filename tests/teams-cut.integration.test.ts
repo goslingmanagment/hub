@@ -7,6 +7,7 @@ import { createFanslyPage, createModel, insertPersonLogin, insertPersonRow, type
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { assignPageToUser, createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
 import { syncShiftRowsSince } from "../apps/runtime/src/services/shift-rows.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -372,6 +373,40 @@ describe("teams: who sees whom (package T)", () => {
     expect(await notes(ids.chatterA, "anna")).not.toBeNull();
     expect(await notes(ids.chatterA, "lena")).not.toBeNull();
     expect(await notes(ids.chatterB, "olga")).not.toBeNull();
+  });
+
+  it("«видит команду» of another model opens its custom orders to read, never to write", async (context) => {
+    if (!server || !testDb) return context.skip();
+    // Anna works team A and is given «видит команду» of team B: she reads B's board, she works none of it.
+    const anna = (await testDb.pool.query<{ id: string }>("select id from people where code = 'anna-a'")).rows[0]!.id;
+    await testDb.pool.query("insert into team_roles (person_id, model_id, kind) values ($1, $2, 'view')", [anna, ids.modelB]);
+    const id = await recordCustomOrder(createTestAppContext(testDb), {
+      pageId: ids.pageB, fanId: null, buyer: "buyer_b", conversationRef: null, card: { task: "Заказ команды B" }, deadlineOn: null,
+      acceptedByUserId: ids.chatterB, origin: "workboard", state: "shot", actor: { door: "system" },
+    });
+    const code = `K-${id}`;
+    const send = (method: "GET" | "POST", url: string, payload?: object) =>
+      server!.inject({ method, url, headers: { cookie: cookies.anna!, ...(payload ? { "content-type": "application/json" } : {}) }, ...(payload ? { payload } : {}) });
+    try {
+      const board = await send("GET", "/api/v1/custom-orders");
+      expect(board.statusCode, board.body).toBe(200);
+      expect((board.json() as { orders: Array<{ code: string }> }).orders.map((one) => one.code)).toContain(code);
+      const detail = await send("GET", `/api/v1/custom-orders/${code}`);
+      expect(detail.statusCode, detail.body).toBe(200);
+      expect((detail.json() as { actions: string[] }).actions).toEqual([]);
+      for (const body of [{ action: "given" }, { action: "payment", transactionRef: String(ids.transactionB || 1) }]) {
+        const refused = await send("POST", `/api/v1/custom-orders/${code}`, body);
+        expect(refused.statusCode, `${body.action}: ${refused.body}`).toBe(409);
+        expect(refused.json()).toMatchObject({ reason: "not_allowed" });
+      }
+      const recorded = await send("POST", "/api/v1/custom-orders", { pageLabel: "bravo-1", card: { task: "чужая страница" } });
+      expect([403, 404], recorded.body).toContain(recorded.statusCode);
+      // Her own team's page: she records there as before.
+      const own = await send("POST", "/api/v1/custom-orders", { pageLabel: "alfa-1", card: { task: "своя страница" } });
+      expect(own.statusCode, own.body).toBe(200);
+    } finally {
+      await testDb.pool.query("update team_roles set revoked_at = now() where person_id = $1 and model_id = $2 and kind = 'view'", [anna, ids.modelB]);
+    }
   });
 });
 

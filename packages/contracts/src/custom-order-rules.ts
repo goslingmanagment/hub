@@ -98,8 +98,14 @@ export const CUSTOM_STATE_WORDS: Readonly<Record<CustomOrderState, string>> = {
 export interface CustomViewer {
   userId: number;
   role: "owner" | "team_lead" | "chatter";
-  /** The pages the person reaches (user_page_assignments). */
+  /** The pages whose orders the viewer READS: the team's cut (services/teams.ts) and the login's own pages. */
   pageIds: readonly number[];
+  /**
+   * The pages the viewer WORKS: the login's own pages (user_page_assignments). A write of the chat's side — «оплата»,
+   * «отдан», «Записать кастом» — goes by these (and the step's leader, the owner), never by the team's read cut:
+   * «видит команду» of another model reads its orders and changes none. Absent — `pageIds`, as before the cut.
+   */
+  workPageIds?: readonly number[];
   /** «Ведёт кастомы» (the person right): the steps of an order of no known page. */
   lead: boolean;
   /**
@@ -167,6 +173,17 @@ export function leadsPhase(viewer: CustomViewer, order: { pageId: number | null 
   return viewer.leads[phase].includes(order.pageId);
 }
 
+/**
+ * Whether the viewer works a page: the owner every page; else the login's own pages (`workPageIds`), or a page whose
+ * order's step they lead. An order of no known page: the lead's steps' holders.
+ */
+export function worksOnPage(viewer: CustomViewer, pageId: number | null): boolean {
+  if (viewer.role === "owner") return true;
+  if (pageId === null) return leadsSteps(viewer);
+  if ((viewer.workPageIds ?? viewer.pageIds).includes(pageId)) return true;
+  return viewer.leads !== undefined && (viewer.leads.check.includes(pageId) || viewer.leads.shoot.includes(pageId));
+}
+
 /** A chatter's steps: a payment, «отдали»; on their own order also its card, its fan and «отменить». */
 const CHATTER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["payment", "given"]);
 const OWN_ORDER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["edit", "fan", "unpay", "cancel"]);
@@ -186,7 +203,8 @@ export function mayTakeStep(viewer: CustomViewer, order: { pageId: number | null
   } else if (leadsSteps(viewer)) {
     return true;
   }
-  if (CHATTER_STEPS.has(step)) return true;
+  // «Оплата» and «отдан»: the chatter who took the order, or whoever works its page — never a reader of the team.
+  if (CHATTER_STEPS.has(step)) return order.acceptedByUserId === viewer.userId || worksOnPage(viewer, order.pageId);
   return OWN_ORDER_STEPS.has(step) && order.acceptedByUserId === viewer.userId;
 }
 

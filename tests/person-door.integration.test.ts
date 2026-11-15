@@ -391,6 +391,77 @@ describe("the person's door", () => {
     expect(answered.json()).toMatchObject({ publication: { id: post!.id, status: "scheduled", platformPostRef: "851203394123456789" }, replacement: null });
   });
 
+  it("keeps two content managers of one model each to her own page (plan §11 item 13)", async (context) => {
+    if (!server) return context.skip();
+    // Mia's posts: kira works on mia-1, mira on mia-2.
+    const created = await inject("POST", "/api/v1/admin/publications", {
+      session: ownerSession,
+      payload: { pageLabel: "mia-2", kind: "fyp_post", text: "post on mia-2", media: [{ source: "vault", mediaRef: "mia-2-m1" }], publishAt: new Date(Date.now() + 2 * DAY_MS).toISOString() },
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    const onMia2 = created.json<{ id: number; version: number }>();
+    const onMia1 = drafts.A[drafts.A.length - 1]!;
+    const door = (who: string, path: string, body: object) =>
+      inject("POST", `/api/v1/person/${path}`, { bearer: KEY, payload: { client: "contentops", grant: grants[who], ...body } });
+    for (const [who, mine, theirs, theirPage, myPost, theirPost] of [
+      ["kmA", "mia-1", "mia-2", "mia-2", onMia1, onMia2],
+      ["kmA2", "mia-2", "mia-1", "mia-1", onMia2, onMia1],
+    ] as const) {
+      const list = await door(who, "publications/list", { modelSlug: "mia" });
+      expect(list.statusCode, list.body).toBe(200);
+      expect(list.body, who).toContain(`"${mine}"`);
+      expect(leaks(list.body, [theirs]), who).toEqual([]);
+      const settings = await door(who, "publications/settings", { modelSlug: "mia" });
+      expect(settings.json<{ pages: Array<{ pageLabel: string }> }>().pages.map((page) => page.pageLabel), who).toEqual([mine]);
+      expect((await door(who, "publications/get", { id: myPost.id })).statusCode, who).toBe(200);
+      for (const [path, body] of [
+        ["publications/get", { id: theirPost.id }],
+        ["publications/approve", { items: [{ id: theirPost.id, version: theirPost.version }] }],
+        ["publications/cancel", { id: theirPost.id }],
+        ["publications/withdraw", { id: theirPost.id }],
+        ["publications/targets", { pageLabel: theirPage }],
+        ["stats/content", { pageLabel: theirPage, days: 7 }],
+      ] as const) {
+        const answer = await door(who, path, body);
+        // Not hers: as one that is not there (an approve answers per post, refused).
+        if (path === "publications/approve") {
+          expect(answer.statusCode === 404 || answer.json<{ results: Array<{ outcome: string }> }>().results[0]?.outcome === "refused", `${who} ${path}: ${answer.body}`).toBe(true);
+        } else {
+          expect([403, 404], `${who} ${path}: ${answer.body}`).toContain(answer.statusCode);
+        }
+      }
+    }
+    // «Съёмка» keeps its own rule: a page of her model no content manager works on is still hers to shoot.
+  });
+
+  it("carries Hub's words of the codes: reasons, checks, refusals, a page's stop", async (context) => {
+    if (!server) return context.skip();
+    const door = (path: string, body: object) =>
+      inject("POST", `/api/v1/person/${path}`, { bearer: KEY, payload: { client: "contentops", grant: grants.testKm, ...body } });
+    const list = await door("publications/list", {});
+    expect(list.statusCode, list.body).toBe(200);
+    const publications = list.json<{ publications: Array<{ id: number; status: string; statusReason: string | null; findings: unknown[]; words: { statusReason: string | null; findings: string[] } }> }>().publications;
+    expect(publications.length).toBeGreaterThan(0);
+    for (const one of publications) {
+      expect(one.words.findings).toHaveLength(one.findings.length);
+      if (one.statusReason !== null) expect(one.words.statusReason, one.statusReason).toMatch(/[а-яё]/i);
+    }
+    // The draft with a file the vault does not hold: its check in words.
+    const flagged = publications.find((one) => one.findings.length > 0)!;
+    expect(flagged.words.findings.join(" "), JSON.stringify(flagged.findings)).toMatch(/нет среди файлов этой страницы/);
+    const card = await door("publications/get", { id: flagged.id });
+    const detail = card.json<{ events: unknown[]; words: { events: Array<string | null>; album: unknown } }>();
+    expect(detail.words.events).toHaveLength(detail.events.length);
+    expect(detail.words.album).toBeNull();
+    // A test page's post is never sent anywhere: the refusal in words.
+    const scheduled = publications.find((one) => one.status === "approved")!;
+    const withdrawn = await door("publications/withdraw", { id: scheduled.id });
+    expect(withdrawn.statusCode, withdrawn.body).toBe(200);
+    expect(withdrawn.json<{ results: Array<{ words: string }> }>().results[0]?.words).toMatch(/^Не убран: тестовая страница/);
+    const settings = await door("publications/settings", { modelSlug: "test" });
+    expect(settings.json<{ pages: Array<{ autostopReasonWords: string | null }> }>().pages.every((page) => "autostopReasonWords" in page)).toBe(true);
+  });
+
   it("records a change as the person's, never as ContentOps' key", async (context) => {
     if (!server) return context.skip();
     await draftOn("mia-1", "A", ownerSession);

@@ -87,7 +87,11 @@ export function waitingGroupOf(kind: string): WaitingGroupId {
  * groups in the table above (content, publications), and a custom order's shooting late at the model — the customs
  * group is Workboard's (the chat's side of an order), its shooting is ContentOps'.
  */
-const CONTENTOPS_CUSTOM_KINDS: ReadonlySet<string> = new Set(["custom.overdue", "custom.overdue_owner"]);
+const CONTENTOPS_CUSTOM_KINDS: ReadonlySet<string> = new Set([
+  "custom.overdue", "custom.overdue_owner",
+  // «Проверен и сутки не у модели», the model's refusal: the shooting's leader (the content manager) decides (C4).
+  "custom.checked_not_at_model",
+]);
 
 export function waitsInContentops(kind: string): boolean {
   return waitingProductOf(kind) === "contentops" || CONTENTOPS_CUSTOM_KINDS.has(kind);
