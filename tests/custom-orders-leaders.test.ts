@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { mayTakeStep, type CustomViewer } from "@agency_hub_core/contracts";
 import type { TeamFacts } from "@agency_hub_core/db";
 
-import { boardLeads, customStepLeader, ledPhasesOf, phaseLeader, type CustomLeader } from "../apps/runtime/src/services/custom-orders/leaders.ts";
+import { boardLeads, customStepLeader, ledPhasesOf, phaseLeader, shootLeaders, type CustomLeader } from "../apps/runtime/src/services/custom-orders/leaders.ts";
 
 /**
  * Who leads each step of a custom order (products plan §4.5, package C3): the check — the team lead, else the customs
@@ -119,5 +119,49 @@ describe("the rights of each step follow its leader", () => {
     expect(mayTakeStep(viewer(104), order("shot"), "given")).toBe(true);
     expect(mayTakeStep(viewer(1, "owner"), order("at_model", 31), "shot")).toBe(true);
     expect(mayTakeStep(viewer(102), order("at_model", 31), "shot")).toBe(false);
+  });
+});
+
+// Two content managers of one model, each on her page (plan §11 item 13: a content manager for Lora's OnlyFans beside
+// the one for her Fansly): model 7, pages 71 (person 71's), 72 (person 72's) and 73 (nobody's); a customs lead too.
+const TWO: TeamFacts = {
+  pages: [71, 72, 73].map((pageId) => ({ pageId, modelId: 7, test: false, label: `m7-${pageId}` })),
+  models: [{ modelId: 7, slug: "m7", name: "M7", test: false }],
+  working: [{ personId: 71, pageId: 71 }, { personId: 72, pageId: 72 }],
+  roles: [{ id: 9, personId: 79, modelId: 7, kind: "customs", grantedByUserId: null, grantedAt: new Date(0) }],
+  logins: [
+    { userId: 171, personId: 71, role: "content_manager" },
+    { userId: 172, personId: 72, role: "content_manager" },
+    { userId: 179, personId: 79, role: "chatter" },
+  ],
+  people: [71, 72, 79].map((personId) => ({ personId, name: `P${personId}`, test: false })),
+};
+
+describe("the shooting goes by the order's page", () => {
+  const ids = (leaders: CustomLeader[]) => leaders.map(who);
+
+  it("each content manager leads the shooting of her own page; a page of nobody — the model's content managers", () => {
+    expect(ids(shootLeaders(TWO, 71, null))).toEqual([171]);
+    expect(ids(shootLeaders(TWO, 72, null))).toEqual([172]);
+    // Nobody works page 73: either content manager of the model takes it; «у кого сейчас» names the first.
+    expect(ids(shootLeaders(TWO, 73, null))).toEqual([171, 172]);
+    expect(who(phaseLeader(TWO, 73, "shoot", null))).toBe(171);
+    // The customs lead shoots no page while the model has a content manager.
+    expect(ids(shootLeaders({ ...TWO, working: [] }, 71, null))).toEqual([179]);
+  });
+
+  it("the second content manager takes the step of her page and is refused the other's", () => {
+    const viewer = (userId: number): CustomViewer => ({ userId, role: "chatter", pageIds: [71, 72, 73], lead: false, leads: ledPhasesOf(TWO, userId, false) });
+    const order = (pageId: number) => ({ pageId, state: "at_model" as const, acceptedByUserId: null });
+    expect(mayTakeStep(viewer(172), order(72), "shot")).toBe(true);
+    expect(mayTakeStep(viewer(172), order(71), "shot")).toBe(false);
+    expect(mayTakeStep(viewer(171), order(72), "shot")).toBe(false);
+    expect(mayTakeStep(viewer(172), order(73), "shot")).toBe(true);
+    expect(mayTakeStep(viewer(171), order(73), "shot")).toBe(true);
+  });
+
+  it("the board's header names the shooting by page when the pages differ", () => {
+    expect(boardLeads(TWO, "all", false)).toEqual([{ model: "M7", check: "P79", shoot: "P71 (m7-71, m7-73), P72 (m7-72)" }]);
+    expect(boardLeads(TWO, [72], false)).toEqual([{ model: "M7", check: "P79", shoot: "P72" }]);
   });
 });

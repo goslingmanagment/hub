@@ -9,8 +9,11 @@ import { loginOfPerson, modelOfPageId, pagesOfModels } from "../teams.ts";
  * «у кого сейчас» and the rights of each step read it from here:
  *
  *   check  (recorded, paid → «Проверен»)                    the model's team lead; else its customs lead; else the owner
- *   shoot  (Проверен → at the model, delivered, revision,  the model's content manager; else its customs lead; else
- *           refusal, shot)                                   the owner
+ *   shoot  (Проверен → at the model, delivered, revision,  BY THE ORDER'S PAGE: the content managers working on that
+ *           refusal, shot)                                   page; none — the model's other content managers; none —
+ *                                                            its customs lead; else the owner. Any of the first tier
+ *                                                            takes the step; the one named «у кого сейчас» is the
+ *                                                            first of them (the lowest person id: stable)
  *   give   (shot → «Отдан»)                                  the chatter who took the order; else the check's leader
  *
  * An order of no known page: the person right «ведёт кастомы» (`fallback`), else the owner. A record of a person with
@@ -51,12 +54,42 @@ export function contentManagersOf(facts: TeamFacts, modelId: number): CustomLead
   return out;
 }
 
-/** The leader of a phase of a page's order. `fallback` — the person right's holder, for an order of no known page. */
+/** The content managers working on one page (a content manager is assigned to working pages: plan §11 item 13). */
+export function contentManagersOfPage(facts: TeamFacts, pageId: number): CustomLeader[] {
+  const people = new Set(facts.working.filter((row) => row.pageId === pageId).map((row) => row.personId));
+  const modelId = modelOfPageId(facts, pageId);
+  return modelId === null ? [] : contentManagersOf(facts, modelId).filter((leader) => leader.kind === "person" && leader.personId !== null && people.has(leader.personId));
+}
+
+/**
+ * Everyone who leads the shooting of a page's order — the first tier that has anyone: the page's content managers, the
+ * model's other content managers, its customs lead, the owner. Any of them takes the step.
+ */
+export function shootLeaders(facts: TeamFacts, pageId: number | null, fallback: CustomLeader | null): CustomLeader[] {
+  const modelId = modelOfPageId(facts, pageId);
+  if (modelId === null || pageId === null) return [fallback ?? OWNER];
+  const onPage = contentManagersOfPage(facts, pageId);
+  if (onPage.length > 0) return onPage;
+  const ofModel = contentManagersOf(facts, modelId);
+  if (ofModel.length > 0) return ofModel;
+  return [holder(facts, modelId, "customs") ?? OWNER];
+}
+
+/**
+ * The leader of a phase of a page's order — for the shooting the first of `shootLeaders` (the one «у кого сейчас»
+ * names). `fallback` — the person right's holder, for an order of no known page.
+ */
 export function phaseLeader(facts: TeamFacts, pageId: number | null, phase: "check" | "shoot", fallback: CustomLeader | null): CustomLeader {
+  if (phase === "shoot") return shootLeaders(facts, pageId, fallback)[0]!;
   const modelId = modelOfPageId(facts, pageId);
   if (modelId === null) return fallback ?? OWNER;
-  if (phase === "check") return holder(facts, modelId, "lead") ?? holder(facts, modelId, "customs") ?? OWNER;
-  return contentManagersOf(facts, modelId)[0] ?? holder(facts, modelId, "customs") ?? OWNER;
+  return holder(facts, modelId, "lead") ?? holder(facts, modelId, "customs") ?? OWNER;
+}
+
+/** Whether a login leads a phase of a page's order: for the shooting, any of `shootLeaders`. */
+export function leadsPhaseOf(facts: TeamFacts, pageId: number | null, phase: "check" | "shoot", userId: number, fallback: CustomLeader | null): boolean {
+  const leaders = phase === "shoot" ? shootLeaders(facts, pageId, fallback) : [phaseLeader(facts, pageId, phase, fallback)];
+  return leaders.some((leader) => leader.kind === "person" && leader.userId === userId);
 }
 
 export interface CustomLeaderOrder {
@@ -93,22 +126,19 @@ export function leaderOwner(leader: CustomLeader): MatterOwner {
 }
 
 /**
- * The pages whose orders' check and shooting a login leads, for the viewer's rights (`CustomViewer.leads`): every page
- * of the realm's models where the phase's leader is this login.
+ * The pages whose orders' check and shooting a login leads, for the viewer's rights (`CustomViewer.leads`) and the
+ * shooting's list: every page of the realm where the login is among the phase's leaders — the check per model, the
+ * shooting per page.
  */
 export function ledPhasesOf(facts: TeamFacts, userId: number, test: boolean): { check: number[]; shoot: number[] } {
   const check: number[] = [];
   const shoot: number[] = [];
-  for (const model of facts.models) {
-    if (model.test !== test) continue;
-    const pages = pagesOfModels(facts, [model.modelId]);
-    const first = pages[0];
-    if (first === undefined) continue;
-    const mine = (leader: CustomLeader) => leader.kind === "person" && leader.userId === userId;
-    if (mine(phaseLeader(facts, first, "check", null))) check.push(...pages);
-    if (mine(phaseLeader(facts, first, "shoot", null))) shoot.push(...pages);
+  for (const page of facts.pages) {
+    if (page.test !== test) continue;
+    if (leadsPhaseOf(facts, page.pageId, "check", userId, null)) check.push(page.pageId);
+    if (leadsPhaseOf(facts, page.pageId, "shoot", userId, null)) shoot.push(page.pageId);
   }
-  return { check, shoot };
+  return { check: check.sort((a, b) => a - b), shoot: shoot.sort((a, b) => a - b) };
 }
 
 /**
@@ -126,10 +156,29 @@ export function boardLeads(
   return facts.models
     .filter((model) => model.test === test)
     .flatMap((model) => {
-      const own = pagesOfModels(facts, [model.modelId]);
-      const first = own.find((pageId) => wanted === null || wanted.has(pageId));
+      const own = pagesOfModels(facts, [model.modelId]).filter((pageId) => wanted === null || wanted.has(pageId));
+      const first = own[0];
       if (first === undefined) return [];
-      return [{ model: model.name, check: name(phaseLeader(facts, first, "check", null)), shoot: name(phaseLeader(facts, first, "shoot", null)) }];
+      return [{ model: model.name, check: name(phaseLeader(facts, first, "check", null)), shoot: shootByPage(facts, own) }];
     })
     .sort((left, right) => left.model.localeCompare(right.model));
+}
+
+/**
+ * The shooting's leaders of a model's pages in one line: one name when every page has the same; else by page —
+ * «Аня (lora-1), Вера (lora-2)». Null — the owner of every page.
+ */
+function shootByPage(facts: TeamFacts, pageIds: readonly number[]): string | null {
+  const byName = new Map<string, number[]>();
+  for (const pageId of pageIds) {
+    const leader = phaseLeader(facts, pageId, "shoot", null);
+    const key = leader.kind === "owner" ? "" : leader.name;
+    byName.set(key, [...(byName.get(key) ?? []), pageId]);
+  }
+  if (byName.size === 1) {
+    const [only] = [...byName.keys()];
+    return only === "" || only === undefined ? null : only;
+  }
+  const label = (pageId: number) => facts.pages.find((page) => page.pageId === pageId)?.label ?? String(pageId);
+  return [...byName].map(([leader, ids]) => `${leader === "" ? "владелец" : leader} (${ids.map(label).join(", ")})`).join(", ");
 }

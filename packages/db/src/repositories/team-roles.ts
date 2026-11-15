@@ -25,7 +25,7 @@ export interface TeamRoleRow {
 
 export interface TeamFacts {
   /** Every page: its model and realm. */
-  pages: Array<{ pageId: number; modelId: number; test: boolean }>;
+  pages: Array<{ pageId: number; modelId: number; test: boolean; label?: string }>;
   /** Every model: its realm. */
   models: Array<{ modelId: number; slug: string; name: string; test: boolean }>;
   /** A person's working pages (not access): the teams they are in. Only people who have not left. */
@@ -51,7 +51,7 @@ function roleOf(row: Row): TeamRoleRow {
 
 export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
   const [pages, models, working, roles, logins, people] = await Promise.all([
-    db.execute<Row>(sql`select p.id, p.model_id, m.is_test from pages p join models m on m.id = p.model_id`),
+    db.execute<Row>(sql`select p.id, p.model_id, p.label, m.is_test from pages p join models m on m.id = p.model_id`),
     db.execute<Row>(sql`select id, slug, name, is_test from models`),
     db.execute<Row>(sql`
       select w.person_id, w.page_id from person_working_pages w join people p on p.id = w.person_id where p.state <> 'left'`),
@@ -66,7 +66,7 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
     db.execute<Row>(sql`select id, display_name, is_test, role from people where state <> 'left'`),
   ]);
   return {
-    pages: pages.rows.map((row) => ({ pageId: Number(row.id), modelId: Number(row.model_id), test: row.is_test === true })),
+    pages: pages.rows.map((row) => ({ pageId: Number(row.id), modelId: Number(row.model_id), test: row.is_test === true, label: String(row.label) })),
     models: models.rows.map((row) => ({ modelId: Number(row.id), slug: String(row.slug), name: String(row.name ?? row.slug), test: row.is_test === true })),
     working: working.rows.map((row) => ({ personId: Number(row.person_id), pageId: Number(row.page_id) })),
     roles: roles.rows.map(roleOf),
