@@ -177,7 +177,9 @@ export function PersonBlock({ person, onEdit }: { person: RegistryPerson; onEdit
 
 /** The narrow rights, each a switch of its own; a change keeps the other rights as they are. */
 const RIGHT_SWITCHES: ReadonlyArray<{ right: RegistryPerson["rights"][number]["right"]; label: string; hint: string; on: string; off: string; held: string }> = [
-  { right: "customs_lead", label: "Ведёт кастомы", hint: "Записывает кастомы, следит за сроками и сдачей.", on: "ведёт кастомы", off: "больше не ведёт кастомы", held: "Ведёт кастомы." },
+  // The person right: still read for an order whose page is not known (custom-orders leaders `fallback`); the team's
+  // own customs lead is the team record «Ведёт кастомы команды» (TeamRoles.tsx).
+  { right: "customs_lead", label: "Кастомы без страницы", hint: "Ведёт заказы кастомов, у которых не известна страница: проверка и отдача в съёмку.", on: "ведёт кастомы без страницы", off: "больше не ведёт кастомы без страницы", held: "Ведёт кастомы без страницы." },
   {
     right: "records_customs", label: "Записывает кастомы в системе", hint: "Получает дела по кастомам: «отдайте фану», продажа похожа на кастом без заказа.",
     on: "записывает кастомы в системе", off: "больше не получает дела по кастомам", held: "Записывает кастомы в системе.",
@@ -188,7 +190,7 @@ const RIGHT_SWITCHES: ReadonlyArray<{ right: RegistryPerson["rights"][number]["r
     on: "сдаёт смену доской", off: "больше не сдаёт смену доской", held: "Сдаёт смену доской.",
   },
   {
-    right: "sees_own_pay", label: "Видит свои деньги", hint: "На «Моих сменах»: начислено за период, к выплате, выплачено и начисление каждой смены. Только суммы, без ставок.",
+    right: "sees_own_pay", label: "Видит свои деньги", hint: "В «Деньги → Мои деньги»: начислено за период, к выплате, выплачено и начисление каждой смены. Только суммы, без ставок.",
     on: "видит свои деньги", off: "больше не видит свои деньги", held: "Видит свои деньги.",
   },
 ];

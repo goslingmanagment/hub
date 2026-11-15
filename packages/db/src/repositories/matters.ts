@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { isTestUser, listTestPageIds, liveUserSql, testUserSql } from "./realm.ts";
+import { personLeadsSql } from "./team-roles.ts";
 import type { Database } from "../client.ts";
 
 // Дела (0382, ecosystem plan package D): what waits for a person, one row per
@@ -406,7 +407,8 @@ function ledRoleMatter(viewer: MatterViewer): SQL {
 /** A team lead's role matter whose pages' models have no lead: the owner's, as the acting lead. */
 const unledRoleMatter = sql`(m.owner_role = 'team_lead' and not exists (
   select 1 from team_roles tr join pages pg on pg.model_id = tr.model_id join people pp on pp.id = tr.person_id
-   where tr.kind = 'lead' and tr.revoked_at is null and pp.state <> 'left' and pg.id = any(m.page_ids)))`;
+   where tr.kind = 'lead' and tr.revoked_at is null and pp.state <> 'left' and pg.id = any(m.page_ids)
+     and ${personLeadsSql(sql`tr.person_id`)}))`;
 
 /**
  * The matters that wait for the viewer THEMSELF, within what they may read: their

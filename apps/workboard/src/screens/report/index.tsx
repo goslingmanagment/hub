@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useParams, useSearchParams } from "react-router";
+import { Navigate, useParams, useSearchParams } from "react-router";
 import { createClient } from "@kernel/sdk";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { kernel as sessionKernel } from "@/shared/hub";
@@ -77,6 +77,8 @@ function CurrentBoard({ host, light, transport }: { host: Host; light: number | 
   if (read.isPending) return <Gate waiting>Открываем отчёт…</Gate>;
   if (read.isError) return <Failed error={read.error} host={host} retry={() => void read.refetch()} />;
   const report = read.data.report;
+  // In a tab, no shift to report: Workboard's own «Смены → Мои», in its frame, says so (no dark screen without a way out).
+  if (report === null && host === "tab") return <Navigate to={{ pathname: "/shifts/mine", search: "?noreport=1" }} replace />;
   if (report === null) return <Gate><b>Смены для отчёта нет</b>Отчёт откроется здесь, когда начнётся смена.</Gate>;
   return <ShiftBoard shiftId={report.shift.id} host={host} light={light} transport={transport} seed={report} />;
 }

@@ -332,7 +332,7 @@ export function reportPostFixItems(
       pageLabels: [...new Set(post.pages.map((line) => line.pageLabel).filter((label): label is string => label !== null))],
       money: false,
       evidence: { postId: post.id, reportDate: post.reportDate, day, postedAt: post.postedAt, flags, telegram: post.link },
-      link: `/workboard/my/shifts?week=${day}&report=${day}`,
+      link: `/workboard/shifts/mine?week=${day}&report=${day}`,
       owner: { userId },
     });
   }

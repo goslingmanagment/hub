@@ -47,6 +47,7 @@ import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
 import { SHIFT_NUMBERS_CHECK_QUEUE, SHIFT_NUMBERS_QUEUE, runShiftNumbersCheck, runShiftNumbersTick } from "./services/shift-numbers.ts";
 import { SYSTEM_STATE_QUEUE, runSystemStateTick } from "./services/system-state-tick.ts";
 import { PEOPLE_START_QUEUE, runPeopleStartTick } from "./services/people/start-tick.ts";
+import { TEAM_QUESTIONS_QUEUE, runTeamQuestionsTick } from "./services/team-questions-tick.ts";
 import { PEOPLE_MESSAGES_QUEUE, runPeopleMessages } from "./services/people-messages/index.ts";
 import { telegramPeopleTransport } from "./services/people-messages/transport.ts";
 import {
@@ -489,6 +490,11 @@ export async function startWorkerServices(
   await boss.work(PEOPLE_START_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const tally = await runPeopleStartTick(app);
     if (tally.opened + tally.closed > 0) app.logger.info(tally, "People start pass complete");
+  });
+  // «Подмена»: the covering persons' «Вы выходите вместо …» of a swap whose day has passed, closed.
+  await boss.work(TEAM_QUESTIONS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    const tally = await runTeamQuestionsTick(app);
+    if (tally.closed > 0) app.logger.info(tally, "Team questions pass complete");
   });
   // Сообщения людям: every kind's new events written once; held unless the bot token is set and the kind is on.
   await boss.work(PEOPLE_MESSAGES_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {

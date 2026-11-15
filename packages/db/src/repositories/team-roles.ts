@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
@@ -32,7 +32,7 @@ export interface TeamFacts {
   working: Array<{ personId: number; pageId: number }>;
   /** Live team records of people who have not left. */
   roles: TeamRoleRow[];
-  /** Which person each login is (living logins only), and the login's role (a content manager's: `content_manager`). */
+  /** Which person each login is (logins that lead: signed in, not disabled or deleted — `signedInLoginSql`), and the login's role (a content manager's: `content_manager`). */
   logins: Array<{ userId: number; personId: number; role?: string }>;
   /** The people (not left): name, realm and the registry's role (a content manager works pages and is not the chat team). */
   people: Array<{ personId: number; name: string; test: boolean; role: string }>;
@@ -49,6 +49,22 @@ function roleOf(row: Row): TeamRoleRow {
   };
 }
 
+/**
+ * A login that LEADS: it has signed in (its password is set: the invitation was opened) and still may (not disabled or
+ * deleted). THE rule of «who may lead a model, decide, take a step», for the facts below and for the matters' SQL
+ * (`personLeadsSql`): a person invited and not signed in yet leads nothing — their matters and steps stay with whoever
+ * had them (the owner; the customs lead for the shooting) until they can answer.
+ */
+export function signedInLoginSql(user: SQL = sql`u`): SQL {
+  return sql`(${user}.password_hash is not null and ${user}.disabled_at is null and ${user}.deleted_at is null)`;
+}
+
+/** True for a person who has a login that leads (`signedInLoginSql`). */
+export function personLeadsSql(personId: SQL): SQL {
+  return sql`exists (select 1 from person_logins lead_pl join users lead_u on lead_u.id = lead_pl.user_id
+    where lead_pl.person_id = ${personId} and ${signedInLoginSql(sql`lead_u`)})`;
+}
+
 export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
   const [pages, models, working, roles, logins, people] = await Promise.all([
     db.execute<Row>(sql`select p.id, p.model_id, p.label, m.is_test from pages p join models m on m.id = p.model_id`),
@@ -62,7 +78,7 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
        order by t.granted_at, t.id`),
     db.execute<Row>(sql`
       select l.user_id, l.person_id, u.role from person_logins l join users u on u.id = l.user_id
-       where u.disabled_at is null and u.deleted_at is null`),
+       where ${signedInLoginSql()}`),
     db.execute<Row>(sql`select id, display_name, is_test, role from people where state <> 'left'`),
   ]);
   return {
