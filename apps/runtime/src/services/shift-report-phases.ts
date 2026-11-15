@@ -194,3 +194,31 @@ export function withSettlementsNow(lines: readonly HandinVersionLine[], draft: r
     return [next];
   });
 }
+
+/**
+ * What «Подтверждаю» would sign now, line by line — the one computation the board's «Подтвердите» shows and the
+ * confirmation writes: the candidate's sales and words, what was settled since the hand-in (`withSettlementsNow`), the
+ * person's comment of each sale as it is now (a comment written in «Подтвердите» is signed, never dropped), the cards of
+ * Gengar not declined, and «отдать» a colleague without the board as the person's «не моё» (`oldWay`: the decider's).
+ * Pure.
+ */
+export function signedLines(input: {
+  candidate: readonly HandinVersionLine[];
+  draft: readonly HandinVersionLine[];
+  proposals: ReadonlyArray<Pick<ProposalRow, "transactionId" | "kind" | "toWord" | "toUserId" | "note" | "state">>;
+  /** The person's comment of each sale now, by transaction (their marks); a sale with no mark keeps the candidate's. */
+  notes: ReadonlyMap<number, string | null>;
+  oldWay: ReadonlyMap<number, number>;
+}): HandinVersionLine[] {
+  const settled = withSettlementsNow(input.candidate, input.draft).map((line) => {
+    if (line.transactionId === null || !input.notes.has(line.transactionId)) return line;
+    const note = input.notes.get(line.transactionId) ?? null;
+    if (note === line.note) return line;
+    const next: HandinVersionLine = { ...line, note };
+    delete next.noteByAgent;
+    return next;
+  });
+  return confirmedLines(settled, input.proposals)
+    .map((line) => (line.transactionId !== null && input.oldWay.has(line.transactionId) ? lineWithWord(line, { statement: "not_mine" }) : line));
+}
+

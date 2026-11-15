@@ -9,6 +9,7 @@ import {
   lineWithWord,
   mayAct,
   phaseAfter,
+  signedLines,
   silenceSettles,
   withSettlementsNow,
   type BoardAction,
@@ -169,6 +170,51 @@ describe("what changed since the hand-in, read at «Подтверждаю»", (
     const [cancelled] = withSettlementsNow([decided!], [disputed]);
     expect(cancelled).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 16_000 });
     expect(cancelled).not.toHaveProperty("settled");
+  });
+});
+
+describe("what «Подтверждаю» signs is what «Подтвердите» shows (`signedLines`)", () => {
+  const none = new Map<number, number>();
+  const noteCard = (transactionId: number, note: string) => ({ transactionId, kind: "note" as const, toWord: null, toUserId: null, note, state: "proposed" as const });
+
+  it("signs the comment the person wrote in «Подтвердите», keeps the candidate's where they wrote none", () => {
+    const written = line(40, { note: "старый" });
+    const untouched = line(41, { note: "как сдал" });
+    const lines = signedLines({ candidate: [written, untouched], draft: [written, untouched], proposals: [], notes: new Map([[40, "фан сам написал в чат"]]), oldWay: none });
+    expect(lines.map((one) => one.note)).toEqual(["фан сам написал в чат", "как сдал"]);
+  });
+
+  it("a person's comment wins over Gengar's card of a comment; with none, the card's is signed", () => {
+    const sale = line(42);
+    const [mine] = signedLines({ candidate: [sale], draft: [sale], proposals: [noteCard(42, "Генгар: PPV из рассылки")], notes: new Map([[42, "мой PPV"]]), oldWay: none });
+    expect(mine).toMatchObject({ note: "мой PPV" });
+    expect(mine).not.toHaveProperty("noteByAgent");
+    const [gengar] = signedLines({ candidate: [sale], draft: [sale], proposals: [noteCard(42, "Генгар: PPV из рассылки")], notes: new Map(), oldWay: none });
+    expect(gengar).toMatchObject({ note: "Генгар: PPV из рассылки", noteByAgent: true });
+  });
+
+  it("signs a colleague's agreement given in «Подтвердите»: taken at 0, agreed — 10", () => {
+    const taken = line(43, { netMills: 10_000, shareMills: 0, home: "shift", toUserId: 5, statement: "mine", amountMills: 0, disputed: true, claimedMills: 10_000 });
+    const { claimedMills: _claimed, ...plain } = taken;
+    const [signed] = signedLines({ candidate: [taken], draft: [{ ...plain, amountMills: 10_000, disputed: false, settled: "agreed" }], proposals: [], notes: new Map(), oldWay: none });
+    expect(signed).toMatchObject({ amountMills: 10_000, disputed: false });
+    expect(linesPageSums([signed!], ["mia-2"]).totalMills).toBe(10_000);
+  });
+
+  it("the total signed counts «мимо площадки» the owner confirmed, on its page", () => {
+    const sale = line(44, { netMills: 20_000 });
+    const lines = signedLines({ candidate: [sale], draft: [sale], proposals: [], notes: new Map(), oldWay: none });
+    const sums = linesPageSums(lines, ["mia-2"], [{ amountMills: 5_000, state: "confirmed", pageLabel: "mia-2" }, { amountMills: 7_000, state: "pending", pageLabel: null }]);
+    expect(sums.totalMills).toBe(25_000);
+  });
+
+  it("«отдать» a colleague without the board is signed as the person's «не моё»", () => {
+    const sale = line(45, { netMills: 10_000 });
+    const [given] = signedLines({
+      candidate: [sale], draft: [sale], notes: new Map(), oldWay: new Map([[45, 7]]),
+      proposals: [{ transactionId: 45, kind: "owner_change", toWord: "give", toUserId: 7, note: null, state: "proposed" }],
+    });
+    expect(given).toMatchObject({ statement: "not_mine" });
   });
 });
 

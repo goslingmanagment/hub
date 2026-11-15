@@ -68,7 +68,7 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import { runSaleClaims } from "./sale-claims.ts";
 import { SALE_RULE } from "./sale-rule.ts";
 import { matchSightings, runHubChecks, settleGoneShifts, startHubCheck, syncCheckMatters, syncLateMarks } from "./shift-handin-check.ts";
-import { boardOn, hubPending, phaseOf } from "./shift-report-board-view.ts";
+import { boardOn, hubPending, oldWayGives, phaseOf, signableOf } from "./shift-report-board-view.ts";
 import {
   accessOf,
   afterPersonVersion,
@@ -93,7 +93,7 @@ import {
   type PageCatalog,
   type Subject,
 } from "./shift-handins.ts";
-import { checkLetsConfirm, confirmedLines, lineWithProposal, lineWithWord, mayAct, proposalDelta, withSettlementsNow, type BoardAction } from "./shift-report-phases.ts";
+import { checkLetsConfirm, lineWithProposal, lineWithWord, mayAct, proposalDelta, type BoardAction } from "./shift-report-phases.ts";
 import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
 
 /**
@@ -231,21 +231,11 @@ export async function confirmShiftReport(
     if (locked === null || candidate === null || candidate.handinId !== locked.id) throw new NotFoundError("No such candidate of this report");
     if (candidate.supersededAt !== null || candidate.confirmedAt !== null) return { done: "superseded" as const };
     if (phaseOf(locked) !== "confirm") return { done: "not_ready" as const };
-    const proposals = (await listHandinProposals(db, locked.id)).filter((one) => one.candidateId === candidate.id);
-    const applied = proposals.filter((one) => one.state === "proposed");
-    // What was settled since the hand-in (a decision, an agreement, a cancel), read here in the turn: the words stay the candidate's.
-    const marks = await listHandinMarks(db, locked.id);
-    const draft = draftLines(await draftFacts(db, subject, locked, catalog, candidate.cutoffAt, marks), marks);
-    // «Отдать» a colleague without the board, by a card: no settlement at once — the person's share goes, the colleague's
-    // waits for the decider (as the person's own «отдать» does, shift-handins.ts `setShiftReportLine`).
-    const oldWay = await oldWayGives(db, applied);
-    const lines = confirmedLines(withSettlementsNow(candidate.lines, draft), proposals)
-      .map((line) => (line.transactionId !== null && oldWay.has(line.transactionId) ? lineWithWord(line, { statement: "not_mine" }) : line));
-    const offPlatform = offPlatformOfRows(await listOffPlatform(db, locked.id), catalog.labelOf);
-    const sums = linesPageSums(lines, candidate.pages.map((page) => page.pageLabel), offPlatform);
+    // What is signed is what the board shows in «Подтвердите» (`signableOf`, the one computation of both), read here in
+    // the turn: settlements since the hand-in, the person's comments now, the cards kept, «мимо площадки» confirmed.
+    const { lines, offPlatform, sums, count, proposals, applied, oldWay } = await signableOf(db, { subject, catalog, handin: locked, candidate });
     // «Подтверждаю» signs what the person saw: a colleague's answer or a decision since the board was drawn changes it,
     // and then nothing is made — the fresh board says «Было …, стало …» and the person presses again.
-    const count = lines.filter((line) => line.amountMills > 0).length;
     if ((input.seenTotalMills !== undefined && input.seenTotalMills !== sums.totalMills) || (input.seenCount !== undefined && input.seenCount !== count)) {
       return { done: "changed" as const };
     }
@@ -277,20 +267,6 @@ export async function confirmShiftReport(
   }
   const report = await readSubject(app, actor, subject, now);
   return { confirmed: outcome.done === "confirmed", refused: outcome.done === "confirmed" ? null : outcome.done, report };
-}
-
-/**
- * The cards of «отдать» whose colleague hands shifts in the old way (no board): by transaction, the colleague. Such a gift
- * is the decider's (a Telegram post knows decisions, not agreements): it is never settled in the colleague's favour.
- */
-async function oldWayGives(db: Database, proposals: ReadonlyArray<Pick<ProposalRow, "kind" | "toWord" | "toUserId" | "transactionId">>): Promise<Map<number, number>> {
-  const out = new Map<number, number>();
-  for (const proposal of proposals) {
-    if (proposal.kind !== "owner_change" || proposal.toWord !== "give" || proposal.toUserId === null) continue;
-    const colleague = await findHandinPersonOfUser(db, proposal.toUserId);
-    if (colleague?.submitsShiftSince == null) out.set(proposal.transactionId, proposal.toUserId);
-  }
-  return out;
 }
 
 /**
