@@ -321,7 +321,7 @@ function Problem({ back, kind, retry, retrying, userId, at }: {
       {`В ${when} у ${name ?? "этого человека"} не было смены в расширении.`}
     </EmptyState>
   ) : kind === "owner-only" ? (
-    <EmptyState title="Разбор смены — только для владельца">В нём тексты ИИ и черновики чаттеров: Hub показывает их только владельцу.</EmptyState>
+    <EmptyState title="Этот разбор вам не открыт">Разбор смены видят владелец и команда модели, на страницах которой шла смена.</EmptyState>
   ) : (
     <ErrorState onRetry={retry} retrying={retrying} />
   );
@@ -356,11 +356,10 @@ export function ReviewScreen() {
 
 function Review({ userId, at, back }: { userId: number; at: string; back: BackTarget }) {
   const me = useMe();
-  // The review is the owner's (Hub answers 403 to anyone else): a team lead is not sent to ask.
-  const owner = me.isOwner;
-  const { query, model } = useShiftReview(userId, at, owner);
+  // The review is read by everyone who reads the team (products package T: the owner, the model's team and its lead);
+  // Hub answers 403 to anyone else, and the screen says so.
+  const { query, model } = useShiftReview(userId, at, me.role !== null);
   const [params, update] = useReviewParams();
-  if (me.role !== null && !owner) return <Problem back={back} kind="owner-only" retry={() => undefined} retrying={false} userId={userId} at={at} />;
   if (!model) {
     if (query.isError) {
       const status = hubErrorStatus(query.error);
