@@ -27,8 +27,6 @@ import {
   applyCustomStep, cardTextOf, customLeaderContext, messageWire, orderMessagesOf, orderWire, recordCustomOrder,
   type CustomActor, type CustomEventResult, type CustomLeaderContext, type CustomMessageInput, type CustomStep,
 } from "./index.ts";
-import { takeShootingStep } from "./person.ts";
-import { personOfLogin } from "../teams.ts";
 import { reportUnmatchedCards } from "./checks.ts";
 import { dottedDay, fanInputOf, moscowDay, parseCardText, STEP_FROM } from "./rules.ts";
 
@@ -161,40 +159,10 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
   return { order: await agentOrderOf(app, (await findCustomOrder(app.db, id))!, now), outcome: "created" as const, event: null };
 }
 
-/**
- * A person's step carried by another product's key, by a login (ContentOps «Съёмка» before the person's door): kept
- * only while a released ContentOps still calls it; ContentOps now goes through the door (person.ts,
- * services/person-door.ts) and this action goes away after it is released. Same rule, same realm wall.
- */
-async function personStep(
-  app: AgentApp, scope: AgentCustomScope, order: CustomOrderRow,
-  body: Extract<AgentCustomOrderUpdateBody, { action: "person_step" }>, now: Date,
-) {
-  const person = await findMatterPerson(app.db, body.onBehalfOf);
-  if (person === null) throw new ConflictError(`No living person "${body.onBehalfOf}"`, { reason: "person_unknown" });
-  const context = await customLeaderContext(app);
-  const personId = personOfLogin(context.facts, person.userId);
-  const personTest = personId !== null && context.facts.people.some((one) => one.personId === personId && one.test);
-  const orderTest = order.pageId !== null && context.facts.pages.some((page) => page.pageId === order.pageId && page.test);
-  // The test realm's wall (sandbox/realm.ts): a test order is moved by test people only, a live one by live people.
-  if (personTest !== orderTest) throw notFound();
-  const actor: CustomActor = { door: "api", agentKeyId: scope.principal.agentKeyId, onBehalfOfUserId: person.userId };
-  const changed = await takeShootingStep(
-    app, order, { userId: person.userId, owner: person.role === "owner" },
-    { step: body.step, deadlineOn: body.deadlineOn, note: body.note, part: body.part }, actor, now,
-  );
-  return {
-    order: await agentOrderOf(app, (await findCustomOrder(app.db, order.id))!, now),
-    outcome: changed ? "changed" as const : "unchanged" as const,
-    event: null,
-  };
-}
-
 export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomScope, code: string, body: AgentCustomOrderUpdateBody, now: Date = new Date()) {
   const id = parseCustomOrderCode(code);
   const order = id === null ? null : await findCustomOrder(app.db, id);
   if (order === null || !inGrant(scope, order)) throw notFound();
-  if (body.action === "person_step") return personStep(app, scope, order, body, now);
   const ref = (text: string) => parseTelegramRef(text)!;
   type MessageBody = { telegramRef?: string | undefined; at?: string | undefined; author?: string | undefined; excerpt?: string | undefined };
   const message = (input: MessageBody | undefined, eventRef: string | undefined): CustomMessageInput => ({

@@ -534,18 +534,6 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   }).strict(),
   /** Attach a Telegram card (a copy in another chat) to the order. */
   z.object({ action: z.literal("card"), telegramRef: telegramRefInputSchema, onBehalfOf: login.optional() }).strict(),
-  /**
-   * A step a PERSON takes in another product (ContentOps «Съёмка», package C3): the key only carries it, the person
-   * (`onBehalfOf`, required) must lead that step of the order by the one rule (services/custom-orders/leaders.ts),
-   * else 409 `not_allowed`. Written as theirs: the history names the key and the person. «Передать модели» may set
-   * the deadline with it; «Правка» names its part or the whole order.
-   */
-  z.object({
-    action: z.literal("person_step"), step: z.enum(["at_model", "partly", "shot", "revision", "refused"]), onBehalfOf: login,
-    deadlineOn: day.optional(), note: note.optional(), part: z.enum(["video", "photos"]).optional(),
-  }).strict().superRefine((body, context) => {
-    if (body.step === "refused" && body.note === undefined) context.addIssue({ code: "custom", path: ["note"], message: "a refusal names its reason" });
-  }),
 ]).superRefine((body, context) => {
   // A message step is known by its Telegram link, or by the sender's own eventRef; a repost is a card, so a link.
   if ((body.action === "delivery" || body.action === "revision" || body.action === "message") && body.message.telegramRef === undefined
