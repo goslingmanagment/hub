@@ -44,6 +44,7 @@ import { runShiftReportMatters } from "./services/shift-handin-matters.ts";
 import { runSaleClaims } from "./services/sale-claims.ts";
 import { runShiftReportBoardPass } from "./services/shift-report-board.ts";
 import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
+import { SHIFT_NUMBERS_CHECK_QUEUE, SHIFT_NUMBERS_QUEUE, runShiftNumbersCheck, runShiftNumbersTick } from "./services/shift-numbers.ts";
 import { SYSTEM_STATE_QUEUE, runSystemStateTick } from "./services/system-state-tick.ts";
 import { PEOPLE_START_QUEUE, runPeopleStartTick } from "./services/people/start-tick.ts";
 import { PEOPLE_MESSAGES_QUEUE, runPeopleMessages } from "./services/people-messages/index.ts";
@@ -455,6 +456,10 @@ export async function startWorkerServices(
     const tally = await runCustomOrderChecks(app);
     if (tally.opened + tally.closed + tally.autoClosed > 0) app.logger.info(tally, "Custom order checks pass complete");
   });
+  // A closed shift's numbers, stored by the same function the team reads count with (package N); the check compares
+  // them with the live count. The returned `detail` is each routine's line in «Система → Состояние».
+  await boss.work(SHIFT_NUMBERS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => runShiftNumbersTick(app));
+  await boss.work(SHIFT_NUMBERS_CHECK_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => runShiftNumbersCheck(app));
   // Shifts as rows with a stable id, and whose each sale is by the one rule: in shadow, no screen reads them yet.
   await boss.work(SHIFT_ROWS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runShiftRowsTick(app);

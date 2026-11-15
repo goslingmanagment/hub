@@ -573,19 +573,9 @@ export const aiUnedited = shiftReviewAiUnedited;
 
 // ── The three numbers of a shift's quality (spec §3 r2: one definition per metric) ──
 
-/**
- * A shift's quality as every screen shows it: the journal, the person's card
- * and the review itself, so one shift never shows two sets of numbers. The
- * words are Workboard's (apps/workboard/src/shared/metrics.ts).
- */
-export interface ShiftQuality {
-  /** «Ответ, медиана»: the median of the chatter's replies in the shift, whole seconds; null — no reply. */
-  replyMedianSeconds: number | null;
-  /** «Без ответа к концу»: the chatter's fans who wrote in the shift (or began waiting in it) and got no answer before its end — now, for a shift going on. */
-  unansweredAtEnd: number;
-  /** «ИИ без правки»: the share (0…1) of the chatter's texts that are the AI's sent as it was; null — no texts. */
-  aiUneditedShare: number | null;
-}
+/** A shift's quality as every screen shows it (shift-review-rules.ts). */
+export type { ShiftQuality } from "@agency_hub_core/contracts";
+import type { ShiftQuality } from "@agency_hub_core/contracts";
 
 /** The quality of a reviewed shift, from its totals (`totalsOf`). */
 export function shiftQuality(totals: Pick<ShiftTotals, "replyMedianSeconds" | "unanswered" | "aiUnedited" | "textMessages">): ShiftQuality {
@@ -596,48 +586,12 @@ export function shiftQuality(totals: Pick<ShiftTotals, "replyMedianSeconds" | "u
   };
 }
 
-/** The fields of a shift's numbers in `teamChatterNumbers` its quality reads. */
-export interface ChatterNumbersLike {
-  replies: number;
-  replyMedianSeconds: number | null;
-  waitingAtEnd: number;
-  textMessages: number;
-  aiUnedited: number;
-}
-
 /**
- * A shift's quality from `teamChatterNumbers`. Hub counts all three by the
- * review's rules (shift-review-rules.ts): the reply median, «без ответа к
- * концу» and «ИИ без правки» agree with the shift's «Разбор смены» to the one.
+ * A shift's quality from `teamChatterNumbers`, and a period's «в среднем за смену»: the rules are the contracts'
+ * (shift-review-rules.ts), where Hub's own reads take them too (the chatter's numbers and the team's average).
  */
-export function qualityOfChatterNumbers(numbers: ChatterNumbersLike): ShiftQuality {
-  return {
-    replyMedianSeconds: numbers.replies === 0 ? null : numbers.replyMedianSeconds,
-    unansweredAtEnd: numbers.waitingAtEnd,
-    aiUneditedShare: numbers.textMessages === 0 ? null : numbers.aiUnedited / numbers.textMessages,
-  };
-}
-
-/** A period's quality: each number the plain average over its shifts that have one («…, в среднем за смену»). */
-export interface PeriodQuality {
-  /** The shifts averaged. */
-  shifts: number;
-  replyMedianSeconds: number | null;
-  /** Not rounded: «1,4 в среднем за смену». */
-  unansweredAtEnd: number | null;
-  aiUneditedShare: number | null;
-}
-
-export function averageQuality(shifts: readonly ShiftQuality[]): PeriodQuality {
-  const mean = (values: readonly number[]) => (values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length);
-  const replies = mean(shifts.flatMap((shift) => (shift.replyMedianSeconds === null ? [] : [shift.replyMedianSeconds])));
-  return {
-    shifts: shifts.length,
-    replyMedianSeconds: replies === null ? null : Math.round(replies),
-    unansweredAtEnd: mean(shifts.map((shift) => shift.unansweredAtEnd)),
-    aiUneditedShare: mean(shifts.flatMap((shift) => (shift.aiUneditedShare === null ? [] : [shift.aiUneditedShare]))),
-  };
-}
+export { averageShiftQuality as averageQuality, shiftQualityOf as qualityOfChatterNumbers } from "@agency_hub_core/contracts";
+export type { ChatterNumbersLike, PeriodQuality } from "@agency_hub_core/contracts";
 
 /**
  * dialog — the fan wrote within the shift, or the chatter answered a fan who

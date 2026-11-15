@@ -449,7 +449,8 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
   const byId = new Map(users.map((user) => [user.id, user]));
   const periodShifts = sales.data?.shifts ?? [];
   const reach = reachOf(period, page);
-  const numbersById = new Map((numbers.data?.chatters ?? []).map((chatter) => [chatter.userId, chatter]));
+  // Hub's lines are people; a login's row here takes its own shifts of its person's line.
+  const numbersOfLogin = (userId: number) => numbers.data?.chatters.find((one) => one.userIds.includes(userId))?.shifts.filter((shift) => shift.userId === userId);
   const qualityState = stateOfRead(numbers, numbersWindow(period) !== null);
   const spendState = stateOfRead(spend, fullOwner);
 
@@ -464,7 +465,7 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
       disabled.push({ userId: chatter.userId, username: chatter.username, state, disabledAt: user!.disabledAt, role: (ROLES.has(user!.role) ? user!.role : "chatter") as PersonRole });
       continue;
     }
-    const counted = numbersById.get(chatter.userId);
+    const counted = numbersOfLogin(chatter.userId);
     rows.push({
       userId: chatter.userId,
       username: chatter.username,
@@ -474,7 +475,7 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
       pages: user?.assignedPages.map((ref) => ref.label) ?? [],
       now: nowOf(chatter.userId, now.data?.shifts, periodShifts, reach),
       work: workOf(chatter),
-      quality: qualityState !== "ready" ? undefined : counted ? qualityOf(counted.shifts) : null,
+      quality: qualityState !== "ready" ? undefined : counted && counted.length > 0 ? qualityOf(counted) : null,
       aiSpendMicroUsd: spendState === "ready" ? (spend.data!.get(String(chatter.userId)) ?? null) : undefined,
     });
   }
@@ -527,7 +528,8 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
         const chatter = chatters.find((one) => one.userId === id);
         return chatter ? [workOf(chatter)] : [];
       });
-      const counted = userIds.flatMap((id) => numbersById.get(id)?.shifts ?? []);
+      // Hub joins a person's logins itself: the line that holds any of them is the person's.
+      const counted = (numbers.data?.chatters ?? []).find((one) => one.userIds.some((id) => userIds.includes(id)))?.shifts ?? [];
       const nows = userIds.map((id) => nowOf(id, now.data?.shifts, periodShifts, reach));
       const going = nows.map((one) => one.onShiftSince).filter((at): at is string => at !== null).sort()[0] ?? null;
       const spent = spendState === "ready" ? userIds.map((id) => spend.data!.get(String(id))).filter((value): value is number => typeof value === "number") : [];
@@ -606,7 +608,7 @@ export function usePersonCard(userId: number, period: ResolvedPeriod, page: stri
   const chatter = sales.data?.chatters.find((one) => one.userId === userId);
   const periodShifts = sales.data?.shifts ?? [];
   const reach = reachOf(period, page);
-  const counted = numbers.data?.chatters.find((one) => one.userId === userId);
+  const counted = numbers.data?.chatters.find((one) => one.userIds.includes(userId));
   const qualityState = stateOfRead(numbers, numbersWindow(period) !== null);
   const spendState = stateOfRead(spend, fullOwner);
 
@@ -630,7 +632,7 @@ export function usePersonCard(userId: number, period: ResolvedPeriod, page: stri
 
   // The sales of each shift, from the statistics (matched by the start; a page filter keeps that page's).
   const statsShifts = new Map((stats?.shifts ?? []).map((shift) => [shift.startedAt, shift]));
-  const numbersByStart = new Map((counted?.shifts ?? []).map((shift) => [shift.startedAt, shift.numbers]));
+  const numbersByStart = new Map((counted?.shifts ?? []).filter((shift) => shift.userId === userId).map((shift) => [shift.startedAt, shift.numbers]));
   const salesRead: ReadState = statsRead.days === null ? "off" : stats ? "ready" : statsRead.query.isError ? "failed" : statsRead.query.isPending ? "loading" : "failed";
 
   const shifts: PersonShift[] = periodShifts

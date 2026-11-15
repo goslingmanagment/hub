@@ -347,6 +347,8 @@ export interface ScheduleRunRow {
   failedAfterSuccess: number;
   /** The newest failure's message, cut to 200 characters. */
   lastError: string | null;
+  /** The newest successful run's own line (`{ detail }` its handler returned); null — none. */
+  lastDetail?: string | null;
 }
 
 /**
@@ -361,7 +363,7 @@ export async function readScheduleRuns(db: Database): Promise<ScheduleRunRow[]> 
   if (present.rows[0]?.present !== true) return [];
   const result = await db.execute<{
     name: string; cron: string; timezone: string | null; last_run_at: Stamp | null; last_success_at: Stamp | null;
-    last_state: "completed" | "failed" | null; failed_after_success: Num | null; last_error: string | null;
+    last_state: "completed" | "failed" | null; failed_after_success: Num | null; last_error: string | null; last_detail: string | null;
   }>(sql`
     with schedules as (
       select distinct on (name) name, cron, timezone from pgboss.schedule order by name
@@ -377,11 +379,13 @@ export async function readScheduleRuns(db: Database): Promise<ScheduleRunRow[]> 
              (array_agg(f.state order by f.completed_on desc))[1] as last_state,
              count(*) filter (where f.state = 'failed' and (s.at is null or f.completed_on > s.at)) as failed_after_success,
              (array_agg(left(coalesce(f.output ->> 'message', f.output::text), 200) order by f.completed_on desc)
-               filter (where f.state = 'failed'))[1] as last_error
+               filter (where f.state = 'failed'))[1] as last_error,
+             (array_agg(left(f.output ->> 'detail', 500) order by f.completed_on desc)
+               filter (where f.state = 'completed'))[1] as last_detail
         from finished f left join success s on s.name = f.name
        group by f.name
     )
-    select sc.name, sc.cron, sc.timezone, su.last_run_at, s.at as last_success_at, su.last_state, su.failed_after_success, su.last_error
+    select sc.name, sc.cron, sc.timezone, su.last_run_at, s.at as last_success_at, su.last_state, su.failed_after_success, su.last_error, su.last_detail
       from schedules sc
       left join summary su on su.name = sc.name
       left join success s on s.name = sc.name
@@ -395,5 +399,6 @@ export async function readScheduleRuns(db: Database): Promise<ScheduleRunRow[]> 
     lastState: row.last_state,
     failedAfterSuccess: Number(row.failed_after_success ?? 0),
     lastError: row.last_error,
+    lastDetail: row.last_detail ?? null,
   }));
 }
