@@ -225,7 +225,7 @@ describe("matters", () => {
       return mattersWaitingResponseSchema.parse(response.json());
     };
     const owner = await waiting("boss");
-    expect(owner.groups.find((group) => group.id === "system")).toMatchObject({ count: 1, checked: true, tone: "bad", to: "/workboard/decisions#system" });
+    expect(owner.groups.find((group) => group.id === "system")).toMatchObject({ count: 1, checked: true, tone: "bad", to: "/workboard/waiting#system" });
     // The ledger is not connected, and the checks of package K never ran here (their pass is runMatterChecks):
     // «не проверено», never a zero.
     expect(owner.groups.filter((group) => !group.checked).map((group) => [group.id, group.count])).toEqual([

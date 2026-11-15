@@ -1,4 +1,4 @@
-import { routeSchemas } from "@agency_hub_core/contracts";
+import { productsOf, routeSchemas } from "@agency_hub_core/contracts";
 import type { FastifyReply } from "fastify";
 
 import { auditCtx } from "../../api/request-auth.ts";
@@ -64,6 +64,9 @@ function clearCookie(reply: {
   });
 }
 
+/** The origin a request came to (the sign-in's own rule), for the server's Workboard redirect (server.ts). */
+export { requestOriginOf } from "./signin.ts";
+
 export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
@@ -118,6 +121,8 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       user: principal.authMethod === "device_token" ? userForClosedEnum(principal.user) : principal.user,
       // A narrow web session says so: Workboard opens the team's place alone for it.
       ...(principal.narrowDeviceTokenId === undefined ? {} : { narrow: true as const }),
+      // The products this person crosses between with the frame's switcher (a narrow session: Workboard alone).
+      products: productsOf(principal.user.role, principal.narrowDeviceTokenId !== undefined),
     };
   });
 

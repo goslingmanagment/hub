@@ -1,4 +1,5 @@
-import { Navigate, Outlet, createBrowserRouter, useLocation, useParams, type Params, type RouteObject } from "react-router";
+import { Navigate, Outlet, createBrowserRouter, useLocation, type Params, type RouteObject } from "react-router";
+import { WORKBOARD_OLD_PATHS, workboardOldAddress } from "@agency_hub_core/ui/old-addresses";
 import { START_PATH, startOpen, useAccountStart } from "@/shared/start";
 import { CHATTER, TEAM, homePath, useMe } from "@/shared/useMe";
 import { AuthGate } from "./AuthGate.js";
@@ -36,48 +37,6 @@ function HomeRedirect() {
 }
 
 /**
- * `/people/:ref/shifts` is Работа now (D2: the shift table lives there): the
- * same person, period and page, and the same «←».
- */
-function PersonShiftsRedirect() {
-  const location = useLocation();
-  const { ref } = useParams();
-  return <Navigate to={{ pathname: `/people/${ref ?? ""}`, search: location.search, hash: location.hash }} state={location.state as unknown} replace />;
-}
-
-/**
- * «Доступ» is inside «Люди» now: a person's logins, pages, devices and links
- * are the card's «Доступ и входы», the invitation is «Люди → Пригласить».
- * `/access` opens the list; `/access?person=<login>` that login's person on
- * «Доступ и входы»; the period and the page go along.
- */
-function AccessRedirect() {
-  const location = useLocation();
-  const search = new URLSearchParams(location.search);
-  const person = search.get("person");
-  search.delete("person");
-  const query = search.toString();
-  const pathname = person && /^\d+$/.test(person) ? `/people/${person}/access` : "/people";
-  return <Navigate to={{ pathname, search: query ? `?${query}` : "" }} replace />;
-}
-
-/**
- * `/my/reports` (the first chatter screen, «Мои отчёты») is «Мои смены» now: a
- * shift and its report are one row there. Its `?days=14|30` is the app's period.
- */
-function MyReportsRedirect() {
-  const location = useLocation();
-  return <Navigate to={{ pathname: "/my/shifts", search: location.search }} replace />;
-}
-
-
-/** `/sales` opens its first tab. */
-function SalesRedirect() {
-  const location = useLocation();
-  return <Navigate to={{ pathname: "/sales/price", search: location.search }} replace />;
-}
-
-/**
  * The team's screens, the owner's and team leads' (spec §3–4), one folder per
  * group under src/screens/, each loaded on first visit. Deep pages: Разбор
  * смены `/shifts/:userId/:shiftStart`, Человек `/people/:ref[/sales|access|schedule]`
@@ -92,18 +51,15 @@ const teamScreens: RouteObject[] = [
     lazy: () => import("../screens/review/index.js").then((m) => ({ Component: m.ReviewScreen })),
   },
   { path: "people", lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PeopleScreen })) },
-  { path: "people/:ref/shifts", element: <PersonShiftsRedirect /> },
   {
     path: "people/:ref/:tab?",
     handle: { screenKey: (params) => params.ref ?? "" } satisfies ScreenHandle,
     lazy: () => import("../screens/people/index.js").then((m) => ({ Component: m.PersonScreen })),
   },
-  { path: "sales", element: <SalesRedirect /> },
   { path: "sales/:tab", lazy: () => import("../screens/sales/index.js").then((m) => ({ Component: m.SalesScreen })) },
-  // «Ждут вас» (it was Решения, the address stays): the list read from matters.
-  { path: "decisions", lazy: () => import("../screens/waiting/index.js").then((m) => ({ Component: m.WaitingScreen })) },
+  // «Ждут вас» (it was Решения at `/decisions`, which leads here): the list read from matters.
+  { path: "waiting", lazy: () => import("../screens/waiting/index.js").then((m) => ({ Component: m.WaitingScreen })) },
   { path: "payouts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
-  { path: "access", element: <AccessRedirect /> },
 ];
 
 /**
@@ -113,7 +69,6 @@ const teamScreens: RouteObject[] = [
 const chatterScreens: RouteObject[] = [
   { path: "start", lazy: () => import("../screens/start/index.js").then((m) => ({ Component: m.StartScreen })) },
   { path: "my/shifts", lazy: () => import("../screens/my-shifts/index.js").then((m) => ({ Component: m.MyShiftsScreen })) },
-  { path: "my/reports", element: <MyReportsRedirect /> },
 ];
 
 /**
@@ -131,13 +86,13 @@ const boardScreens: RouteObject[] = [
 ];
 
 /**
- * The old screen «Смена» is the board now: its addresses (a chatter's `/my/shifts/:shiftId`, the team's
- * `/shifts/report/:shiftId`; matters, messages and the sale's chain link them) open the board, `?sale=` lights the row.
+ * An old address of Workboard: where it leads now, with what it carried (packages/ui/src/old-addresses.ts). The
+ * screen it lands on checks the role, as for anyone who opened it there.
  */
-function ToBoard() {
+function OldAddress() {
   const location = useLocation();
-  const { shiftId } = useParams();
-  return <Navigate to={{ pathname: `/report/${shiftId ?? ""}`, search: location.search, hash: location.hash }} replace />;
+  const to = workboardOldAddress(location) ?? { pathname: "/", search: location.search, hash: "" };
+  return <Navigate to={to} state={location.state as unknown} replace />;
 }
 
 /**
@@ -178,8 +133,8 @@ export const router = createBrowserRouter(
   [
     // The extension's frame: no sign-in gate, never `me`; its requests go over the extension's port.
     { path: "frame/report", lazy: () => import("../screens/report/index.js").then((m) => ({ Component: m.FrameReportScreen })) },
-    { path: "my/shifts/:shiftId", element: <ToBoard /> },
-    { path: "shifts/report/:shiftId", element: <ToBoard /> },
+    // Old addresses lead to new ones, whoever opens them (packages/ui/src/old-addresses.ts, one table).
+    ...WORKBOARD_OLD_PATHS.map((path) => ({ path, element: <OldAddress /> })),
     // The board's demo pages (scenarios, the extension's part): the demo and dev servers only, never a production build.
     ...(import.meta.env.DEV
       ? [

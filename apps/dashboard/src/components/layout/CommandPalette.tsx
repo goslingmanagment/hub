@@ -4,13 +4,14 @@ import { useQuery } from "@tanstack/react-query";
 import { CommandPalette as Palette } from "@agency_hub_core/ui/components/Palette";
 import { addressApp } from "@agency_hub_core/ui/screens";
 import { useFansSearch } from "@/api/fansSearch";
+import { workboardHere } from "@/lib/navigation";
 import { kernel } from "@/api/sdk";
 import { buildCommands, fanCommands, groupCommands, searchCommands, type Command, type CommandSetting } from "@/lib/commands";
 import { useThemeStore } from "@/lib/theme";
 import { CONFIG_COPY_RU } from "@/pages/settings/configCopyRu";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
-/** One field to reach anything: a screen of the console or Workboard, a page
+/** One field to reach anything of Hub: a screen (its «Ждут вас» opens Workboard's list), a page
  *  or one of its views, a fan, a setting. Opens with Ctrl/⌘K or the search
  *  field of the frame; ↑↓ pick, Enter opens. It only navigates and changes the
  *  theme. The window is packages/ui's, the same as Workboard's. */
@@ -41,8 +42,8 @@ export function CommandPalette({ role, onClose }: { role: string; onClose: () =>
   function open(command: Command) {
     onClose();
     if (command.theme) setTheme(command.theme);
-    // Workboard is another app on this host: the browser goes there, the console's router cannot.
-    else if (addressApp(command.to) === "workboard") window.location.assign(command.to);
+    // Workboard is another product, on the team's name: the browser goes there, the console's router cannot.
+    else if (addressApp(command.to) === "workboard") window.location.assign(workboardHere(command.to));
     else navigate(command.to, command.state ? { state: command.state } : undefined);
   }
 

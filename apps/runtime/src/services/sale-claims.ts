@@ -337,7 +337,7 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
         transactionId: first.transactionId, claimIds: list.map((claim) => claim.id), netMills: sale?.netMills ?? null,
         why: [...new Set(list.map((claim) => claim.escalatedWhy))], saidAt: list.map((claim) => claim.claimedAt.toISOString()).sort()[0],
       },
-      link: first.transactionId === null ? `/workboard/decisions?claim=${first.id}#questions` : `/workboard/decisions?dispute=${first.transactionId}#questions`,
+      link: first.transactionId === null ? `/workboard/waiting?claim=${first.id}#questions` : `/workboard/waiting?dispute=${first.transactionId}#questions`,
     }, SYSTEM, now);
     if (opened.transition !== "unchanged") touched += 1;
   }
@@ -412,7 +412,7 @@ async function syncOffPlatformMatters(app: Pick<AppContext, "db">, now: Date): P
         shiftId: first.shiftId, reportDate: first.reportDate, totalMills: mills, saidAt: first.createdAt.toISOString(),
         lines: lines.map((line) => ({ id: line.id, amountMills: line.amountMills, fromWhom: line.fromWhom, whatFor: line.whatFor })),
       },
-      link: `/workboard/decisions?offPlatform=${first.shiftId}#reports`,
+      link: `/workboard/waiting?offPlatform=${first.shiftId}#reports`,
     }, SYSTEM, now);
     if (opened.transition !== "unchanged") touched += 1;
   }
@@ -463,7 +463,7 @@ async function syncNobodyWeek(app: Pick<AppContext, "db">, now: Date): Promise<n
       owner: { role: "owner" },
       money: true,
       evidence: { week: week.from, count: week.sales.length, totalMills: mills, days: week.days, transactionIds: week.sales.slice(0, 200).map((sale) => sale.transactionId) },
-      link: `/workboard/decisions?nobody=${week.from}#questions`,
+      link: `/workboard/waiting?nobody=${week.from}#questions`,
     }, SYSTEM, now);
     if (opened.transition !== "unchanged") touched += 1;
   }
@@ -493,7 +493,7 @@ async function syncUnlinkedDecisions(app: Pick<AppContext, "db">, now: Date): Pr
     owner: { role: "owner" },
     money: true,
     evidence: { decisionIds: unlinked.map((one) => one.id), count: unlinked.length },
-    link: "/workboard/decisions?unlinked=1#questions",
+    link: "/workboard/waiting?unlinked=1#questions",
   }, SYSTEM, now);
   return opened.transition === "unchanged" ? 0 : 1;
 }

@@ -1,21 +1,23 @@
 /**
- * Workboard (apps/workboard): the team's control, served by Hub on this host at
- * /workboard/ with the same sign-in. It replaced the console's «Команда»
- * (owner, 2026-11-10): its screens are listed under «Команда» in the one menu
- * of the owner's place (packages/ui/src/screens.ts), and every old `/team/*`
- * address lands on its Workboard screen with what it carried — the person, the
- * dates, the page, the tab (8-docs/2026-11-07-workboard/old-new-map.md §5).
- * Only «Анкеты» (`/team/applications`) stay in the console.
+ * Workboard (apps/workboard): the chat team's product, with Hub's sign-in, at
+ * one address for every role, the team's name (`chatgoose.…/workboard/`). It
+ * replaced the console's «Команда» (owner, 2026-11-10) and is a product of its
+ * own (products plan §2.3): every old `/team/*` address lands on its Workboard
+ * screen with what it carried — the person, the dates, the page, the tab
+ * (8-docs/2026-11-07-workboard/old-new-map.md §5). Only «Анкеты»
+ * (`/team/applications`) stay in Hub.
  *
  * Workboard is another app: the console's router cannot open it, a link to it
- * is a plain `<a href>` and an old address leaves with `location.replace`.
+ * is a plain `<a href>` and an old address leaves with `location.replace` — on
+ * the console's name through the hand-off to the team's (navigation.ts
+ * `workboardHere`; Hub's server redirects such an address there too).
  */
 import { addDays, isMoscowDay, moscowToday, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import { decodedPath } from "@agency_hub_core/ui/path";
 import { WORKBOARD_PATH } from "@agency_hub_core/ui/screens";
 import { ALL_PAGES_PARAM } from "./pageParam.js";
 
-/** Workboard's address on this host: its Vite `base` (apps/workboard/src/base.ts). */
+/** Workboard's address on its name: its Vite `base` (apps/workboard/src/base.ts). */
 export const WORKBOARD_HREF = WORKBOARD_PATH;
 
 /** A Workboard address: `workboardHref("people/7", search)` → `/workboard/people/7?…`. */
@@ -144,10 +146,10 @@ export function teamToWorkboard(url: string, today: MoscowDay = moscowToday()): 
       return workboardHref("sales/greetings", query);
     case "held-sends":
       carryPage();
-      return workboardHref("decisions", query, "held");
+      return workboardHref("waiting", query, "held");
     case "customs":
       carryPage();
-      return workboardHref("decisions", query, "customs");
+      return workboardHref("waiting", query, "customs");
     case "chatters":
     case "numbers": {
       carryPeriod(old.get("period"));
@@ -162,8 +164,8 @@ export function teamToWorkboard(url: string, today: MoscowDay = moscowToday()): 
     }
     case "payouts":
     case "shift-reports": {
-      // Hub's sale disputes are gone with its marks: what waits about the reports is Решения' «Отчёты».
-      if (hash === "#disputes") return workboardHref("decisions", "", "reports");
+      // Hub's sale disputes are gone with its marks: what waits about the reports is «Ждут вас», «Отчёты».
+      if (hash === "#disputes") return workboardHref("waiting", "", "reports");
       for (const name of ["from", "to"]) {
         const value = old.get(name);
         if (value) query.set(name, value);

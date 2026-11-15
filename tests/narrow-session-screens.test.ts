@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { NARROW_WEB_SESSION_OPERATIONS, NARROW_WEB_SESSION_PASSWORD_ONLY } from "../packages/contracts/src/web-session-scopes.ts";
-import { NAME_MENU_ACCOUNT, WORKBOARD_PATH, teamMenu } from "../packages/ui/src/screens.ts";
+import { NAME_MENU_ACCOUNT, WORKBOARD_PATH, productMenu } from "../packages/ui/src/screens.ts";
 
 // The narrow web session (opened from the extension, no password) and the chatter's part of Workboard: every screen
 // a chatter can open from Workboard's frame — its menu (the one table, packages/ui/src/screens.ts) and its name menu —
@@ -74,7 +74,7 @@ function chatterRoutes(): Array<{ path: string; module: string | null }> {
 
 /** The chatter's screens of Workboard's frame: its menu (a newcomer's, the longest) and the name menu. */
 function chatterScreens(): Array<{ id: string; path: string }> {
-  const menu = teamMenu("chatter", { newcomer: true }).map((item) => ({ id: item.id, path: item.to }));
+  const menu = productMenu("workboard", "chatter", { newcomer: true }).upper.map((item) => ({ id: item.id, path: item.to }));
   return [...menu, { id: NAME_MENU_ACCOUNT.id, path: NAME_MENU_ACCOUNT.path }];
 }
 

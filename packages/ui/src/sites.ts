@@ -6,17 +6,24 @@
  * Workboard.
  */
 
-/** The admin console, for the owner and team leads (Workboard lives under it, at /workboard/). */
+/** Hub, the owner's place (the console). A Workboard address asked for here leaves for the team's name (one address for Workboard). */
 export const CONSOLE_ORIGIN = "https://hub.gosling-agency.ru";
 
 /** The name the console answered on before it had its own. */
 export const LEGACY_CONSOLE_ORIGIN = "https://gosling-agency.ru";
 
-/** The chatters' site and the team's place (Workboard at /workboard/). Only /account, /join and /login are the console's app there; every other path outside /workboard/ and /api/ is a static page. */
+/** The chatters' site and Workboard's one address (/workboard/), every role's. Only /account, /join and /login are the console's app there; every other path outside /workboard/ and /api/ is a static page. */
 export const CHATTER_SITE_ORIGIN = "https://chatgoose.gosling-agency.ru";
 
 /** ContentOps, the content's own product: a model's plan, inbox and library at `/<model>/<section>` (its sign-in is Hub's). */
 export const CONTENTOPS_ORIGIN = "https://contentops.gosling-agency.ru";
+
+/** ContentOps' own entry through Hub's sign-in (its `/auth/hub/start`: one step, no second password). */
+export const CONTENTOPS_SIGNIN_HREF = `${CONTENTOPS_ORIGIN}/auth/hub/start`;
+
+/** The owner's outside tools (TaskIndex, the server monitor): each signs in through Hub on its own page. */
+export const TASKS_ORIGIN = "https://tasks.gosling-agency.ru";
+export const MONITOR_ORIGIN = "https://monitor.gosling-agency.ru";
 
 /**
  * A model's place in ContentOps. Its models are Hub's model slugs in lower
@@ -113,4 +120,23 @@ export const NO_SILENT_SIGNIN = { param: "sso", value: "none" } as const;
  */
 export function silentSignInHref(other: string, next: string): string {
   return `/api/v1/auth/sso/begin?${new URLSearchParams({ from: other, next, silent: "1" }).toString()}`;
+}
+
+/**
+ * A Workboard address (`/workboard/shifts?days=30`) as a page on `origin` opens it. Workboard has one address, the
+ * team's name: from the console's name the browser goes there through the one-time hand-off, signed in on the way;
+ * anywhere else (the team's name, a local build on one name) the address is this name's own.
+ */
+export function workboardEntryHref(origin: string, path: string): string {
+  const team = siteOf(origin) === "console" ? peerOriginOf(origin) : null;
+  return team === null ? path : signInHopHref(team, `${team}${path}`);
+}
+
+/**
+ * A Hub address (`/money/month`) as a page on `origin` opens it: from the team's name, on the console's name through
+ * the one-time hand-off; anywhere else the address is this name's own.
+ */
+export function hubEntryHref(origin: string, path: string): string {
+  const hub = siteOf(origin) === "team" ? peerOriginOf(origin) : null;
+  return hub === null ? path : signInHopHref(hub, `${hub}${path}`);
 }

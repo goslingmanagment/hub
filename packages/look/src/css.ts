@@ -13,6 +13,7 @@ import {
   FOCUS,
   LAYERS,
   MOTION,
+  PRODUCT_ACCENTS,
   RADIUS,
   READING,
   SHADOW,
@@ -113,9 +114,24 @@ export function renderUiTokensCss(): string {
     "  :root[data-theme=\"dark\"] {",
     "    color-scheme: dark;",
     "  }",
+    ...productAccentBlocks(),
     "}",
     "",
   ].join("\n");
+}
+
+/** A product's own accent over the shared one: `:root[data-product="<product>"]` sets the accent's `--ui-*` names. */
+function productAccentBlocks(): string[] {
+  const blocks: string[] = [];
+  for (const [product, accents] of Object.entries(PRODUCT_ACCENTS)) {
+    blocks.push("", `  :root[data-product="${product}"] {`);
+    for (const [name, value] of Object.entries(accents)) {
+      const ui = (COLORS as Record<string, ColorToken>)[name]?.ui;
+      if (ui) blocks.push(`    --ui-${ui}: ${themeValue(value)};`);
+    }
+    blocks.push("  }");
+  }
+  return blocks;
 }
 
 /**

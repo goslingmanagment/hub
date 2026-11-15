@@ -29,8 +29,8 @@ import "./waiting.css";
  * longest waiting first in each group; what only informs stands apart at the
  * end and counts nowhere. A kind whose source did not answer is said once at
  * the top: «не проверено» is never «всё хорошо». The address is today's
- * `/decisions`: its anchors (`#questions`, `#reports`, `#customs`, `#held`,
- * and the console's `#people`, `#ledger`) open the list of that group alone;
+ * `/waiting` (`/decisions` leads here): its anchors (`#questions`, `#reports`, `#customs`, `#held`,
+ * and Hub's `#people`, `#ledger`) open the list of that group alone;
  * `?send=` opens a held send's resolve, as before.
  */
 

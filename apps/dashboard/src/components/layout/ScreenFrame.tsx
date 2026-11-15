@@ -22,6 +22,7 @@ import {
 } from "@agency_hub_core/ui/screens";
 import { contentopsHref, contentopsModelsOf } from "@agency_hub_core/ui/sites";
 import { useAgentKeys } from "@/api/agentKeys";
+import { workboardHere } from "@/lib/navigation";
 import { useDashboardShell } from "./DashboardShellContext.js";
 import { PageScopeGate } from "./PageScopeGate.js";
 import { PageFilterChip } from "./PageFilterChip.js";
@@ -77,12 +78,12 @@ function OutsideLinks({ outside, role }: { outside: NonNullable<Section["outside
   const { pages, findPageByLabel } = useDashboardShell();
   const keys = useAgentKeys(outside.site === "contentops" && role === "owner");
   if (outside.site === "workboard") {
-    // A Workboard screen on this host: a page load, the same tab.
+    // A Workboard screen: another product, a page load on the team's name, the same tab.
     const links = outside.links.filter((link) => !link.ownerOnly || role === "owner");
     if (links.length === 0) return null;
     return (
       <span className="section-outside">
-        {links.map((link) => <a key={link.to} className="section-tab" href={link.to} title={link.title}>{link.label}</a>)}
+        {links.map((link) => <a key={link.to} className="section-tab" href={workboardHere(link.to)} title={link.title}>{link.label}</a>)}
       </span>
     );
   }

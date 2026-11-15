@@ -89,9 +89,9 @@ export function worstWaitingTone(tones: Iterable<WaitingTone | null>): WaitingTo
   return worst;
 }
 
-/** The list filtered to one group: `/workboard/decisions#<group>`. */
+/** The list filtered to one group: `/workboard/waiting#<group>`. */
 export function waitingGroupLink(id: WaitingGroupId): string {
-  return `/workboard/decisions#${id}`;
+  return `/workboard/waiting#${id}`;
 }
 
 /** The kinds whose finding names when their reason began under a word of its own (the system state's, a shift's report). */

@@ -147,7 +147,7 @@ export function homeLinkOf(input: {
   return {
     state,
     words,
-    link: open !== undefined && input.ownerReads ? `/workboard/decisions?dispute=${sale.transactionId}#questions` : null,
+    link: open !== undefined && input.ownerReads ? `/workboard/waiting?dispute=${sale.transactionId}#questions` : null,
     amountMills: null,
     kind: home?.home ?? null,
     reason,

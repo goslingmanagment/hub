@@ -1,5 +1,6 @@
 import { useLayoutEffect } from "react";
 import { useLocation } from "react-router";
+import { workboardHere } from "@/lib/navigation";
 import { teamToWorkboard, WORKBOARD_HREF } from "@/lib/workboard";
 
 /**
@@ -14,8 +15,8 @@ export function LeaveForWorkboard({ href }: { href: string }) {
   return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Открываем Workboard…</div>;
 }
 
-/** An old address of «Команда» (`/team/*`, `/held-sends`): its Workboard screen (lib/workboard.ts). */
+/** An old address of «Команда» (`/team/*`, `/held-sends`): its Workboard screen (lib/workboard.ts), on the team's name. */
 export function ToWorkboard() {
   const { pathname, search, hash } = useLocation();
-  return <LeaveForWorkboard href={teamToWorkboard(`${pathname}${search}${hash}`) ?? WORKBOARD_HREF} />;
+  return <LeaveForWorkboard href={workboardHere(teamToWorkboard(`${pathname}${search}${hash}`) ?? WORKBOARD_HREF)} />;
 }

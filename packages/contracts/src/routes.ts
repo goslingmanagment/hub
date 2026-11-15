@@ -52,6 +52,7 @@ import {
   userRoles,
 } from "@agency_hub_core/shared";
 import { z } from "zod";
+import { PRODUCTS } from "./products.ts";
 
 // Agent Read Plane operations #1-#10. Declared in their own module (one coherent
 // contract with its own envelope law and principal) and spread into routeSchemas
@@ -326,6 +327,9 @@ export const authStateSchema = z.object({
   /** Present only on a NARROW web session (opened from the extension, web-session-scopes.ts):
    *  it opens the team's place alone, whatever `user.role` says. */
   narrow: z.literal(true).optional(),
+  /** The products this person crosses between with the frame's switcher (products.ts `productsOf`), in its order.
+   *  Optional: the sign-in's answer and older servers leave it out. */
+  products: z.array(z.enum(PRODUCTS)).optional(),
 });
 
 const serviceHealthStatusEnum = z.enum(["ok", "degraded"]);

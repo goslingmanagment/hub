@@ -1,6 +1,8 @@
 // House primitives (mills, platformEnum, the error body, pagination) — extracted
 // from routes.ts so the agent route module shares ONE declaration of each.
 export * from "./primitives.ts";
+// The products a person crosses between (the frames' switcher, `auth/me`).
+export * from "./products.ts";
 export * from "./routes.ts";
 // Agent Read Plane operations #1-#10 (spread into routeSchemas by routes.ts).
 export * from "./routes-agent.ts";

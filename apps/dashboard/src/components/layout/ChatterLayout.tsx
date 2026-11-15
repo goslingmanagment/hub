@@ -1,8 +1,7 @@
 import { Navigate, useLocation } from "react-router";
 import { useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { ACCOUNT_SCREEN, CHATTER_HOME, buildLoginRoute, cabinetRedirect, chatterExit } from "@/lib/navigation";
-import { isConsoleSite } from "@/lib/sites";
+import { ACCOUNT_SCREEN, WORKBOARD_HOME, buildLoginRoute, cabinetRedirect, workboardHere } from "@/lib/navigation";
 import { LeaveForWorkboard } from "@/routes/ToWorkboard";
 
 // `/account`, the old cabinet. «Аккаунт и устройства» is Workboard's screen
@@ -10,10 +9,9 @@ import { LeaveForWorkboard } from "@/routes/ToWorkboard";
 // sends people on, signed in — the cabinet's old tabs to a chatter's «Мои
 // смены», anyone else to the account screen on this host.
 //
-// The console's own production name serves a chatter nothing: their place is
-// on the team's name (chatterExit). A narrow session (opened from the
-// extension) opens the team's place alone: the account's devices and password
-// are not its to change.
+// Workboard has one address, the team's name: from the console's name everyone
+// goes there signed in (workboardHere). A narrow session (opened from the extension) opens the
+// team's place alone: the account's devices and password are not its to change.
 
 export function ChatterLayout() {
   const location = useLocation();
@@ -51,8 +49,7 @@ export function ChatterLayout() {
   }
 
   const chatter = data.user.role === "chatter";
-  if (chatter && isConsoleSite()) return <LeaveForWorkboard href={chatterExit()} />;
-  if (data.narrow) return <LeaveForWorkboard href={CHATTER_HOME} />;
+  if (data.narrow) return <LeaveForWorkboard href={WORKBOARD_HOME} />;
   const left = chatter ? cabinetRedirect(new URLSearchParams(location.search)) : null;
-  return <LeaveForWorkboard href={left ?? ACCOUNT_SCREEN} />;
+  return <LeaveForWorkboard href={workboardHere(left ?? ACCOUNT_SCREEN)} />;
 }

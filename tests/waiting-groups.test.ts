@@ -57,13 +57,13 @@ describe("«Ждут вас»: one table of groups", () => {
     const groups = buildWaitingGroups({ matters, kindState: () => known, trackedKinds: [], customOrders: 4 });
     expect(groups.map((group) => [group.id, group.count])).toEqual([["questions", 2], ["customs", 5], ["system", 2], ["other", 1]]);
     expect(groups.reduce((sum, group) => sum + group.count, 0)).toBe(matters.length + 4);
-    expect(groups.every((group) => group.to === `/workboard/decisions#${group.id}`)).toBe(true);
+    expect(groups.every((group) => group.to === `/workboard/waiting#${group.id}`)).toBe(true);
 
     // A source of a group that did not answer: the group shows, «not checked», even with nothing in it.
     const failed = buildWaitingGroups({
       matters: [], kindState: (kind) => (kind === "incident.open" ? { ...known, checked: false } : known), trackedKinds: ["incident.open", "people.no_pay_terms"],
     });
-    expect(failed).toEqual([{ id: "system", title: "Сбор, сбои и рутины", count: 0, checked: false, tone: "warn", to: "/workboard/decisions#system" }]);
+    expect(failed).toEqual([{ id: "system", title: "Сбор, сбои и рутины", count: 0, checked: false, tone: "warn", to: "/workboard/waiting#system" }]);
   });
 
   it("gives a group the worst tone of its matters: broken over unknown over none; not checked is at least unknown", () => {

@@ -275,7 +275,7 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
           : `${claim.claimant.name} считает своей: ${KIND_ACC[claim.sale.kind] ?? "продажу"}, ${fan}, ${money(claim.sale.netMills)}, ${day}`,
         pages: [claim.pageLabel], owner: { kind: "user", userId: claim.side.id, username: claim.side.username, displayName: claim.side.name }, money: false,
         evidence: { claimId: claim.id, transactionId: claim.transactionId, saidAt: new Date(claim.claimedAt).toISOString(), answerBy: answerByOf(claim) },
-        link: `/workboard/my/shifts/${claim.sideShiftId}?sale=${claim.transactionId}`, agoMs: now.getTime() - claim.createdAt,
+        link: `/workboard/report/${claim.sideShiftId}?sale=${claim.transactionId}`, agoMs: now.getTime() - claim.createdAt,
       });
     }
     if (claim.state === "owner") {
@@ -284,7 +284,7 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
         title: `Спор о продаже: ${claim.claimant.name} и ${claim.side.name}, ${KIND_NOM[claim.sale.kind] ?? "продажа"}, ${money(claim.sale.netMills)}, ${day}`,
         pages: [claim.pageLabel], owner: { kind: "role", role: "owner" }, money: true,
         evidence: { transactionId: claim.transactionId, claimIds: [claim.id], netMills: claim.sale.netMills, why: [claim.escalatedWhy], saidAt: new Date(claim.claimedAt).toISOString() },
-        link: `/workboard/decisions?dispute=${claim.transactionId}#questions`, agoMs: now.getTime() - claim.claimedAt,
+        link: `/workboard/waiting?dispute=${claim.transactionId}#questions`, agoMs: now.getTime() - claim.claimedAt,
       });
     }
   }
@@ -294,7 +294,7 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
       title: `Мимо площадки: ${off.user.name}, ${DAY_MONTH.format(new Date(`${off.reportDate}T12:00:00+03:00`))}, ${money(off.amountMills)}`,
       pages: off.pages, owner: { kind: "role", role: "owner" }, money: true,
       evidence: { shiftId: off.shiftId, reportDate: off.reportDate, totalMills: off.amountMills, saidAt: new Date(off.addedAt).toISOString(), lines: [{ id: off.id, amountMills: off.amountMills, fromWhom: off.fromWhom, whatFor: off.whatFor }] },
-      link: `/workboard/decisions?offPlatform=${off.shiftId}#reports`, agoMs: now.getTime() - off.addedAt,
+      link: `/workboard/waiting?offPlatform=${off.shiftId}#reports`, agoMs: now.getTime() - off.addedAt,
     });
   }
   const week = nobodyWeek(now);
@@ -302,14 +302,14 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
     out.push({
       kind: "sale.nobody_week", key: `sale.nobody_week:${week.from}`,
       title: `Ничьи продажи за неделю с ${DAY_MONTH.format(new Date(`${week.from}T12:00:00+03:00`))} по ${DAY_MONTH.format(new Date(`${week.to}T12:00:00+03:00`))}: ${week.sales.length} на ${money(week.sales.reduce((sum, sale) => sum + sale.netMills, 0))}`,
-      pages: [], owner: { kind: "role", role: "owner" }, money: true, evidence: { week: week.from, count: week.sales.length }, link: `/workboard/decisions?nobody=${week.from}#questions`, agoMs: 26 * HOUR_MS,
+      pages: [], owner: { kind: "role", role: "owner" }, money: true, evidence: { week: week.from, count: week.sales.length }, link: `/workboard/waiting?nobody=${week.from}#questions`, agoMs: 26 * HOUR_MS,
     });
   }
   const unlinked = UNLINKED.filter((one) => !world(now).linked.has(one.id));
   if (unlinked.length > 0) {
     out.push({
       kind: "sale.decisions.unlinked", key: "sale.decisions.unlinked:ledger", title: `Решения «чья продажа» из ledger без продажи: ${unlinked.length}, привяжите`,
-      pages: [], owner: { kind: "role", role: "owner" }, money: true, evidence: { count: unlinked.length }, link: "/workboard/decisions?unlinked=1#questions", agoMs: 3 * DAY_MS,
+      pages: [], owner: { kind: "role", role: "owner" }, money: true, evidence: { count: unlinked.length }, link: "/workboard/waiting?unlinked=1#questions", agoMs: 3 * DAY_MS,
     });
   }
   return out;

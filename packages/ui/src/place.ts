@@ -1,37 +1,64 @@
 /**
- * The owner's place across two apps (ecosystem plan §3.1, package L1): the
- * console and Workboard draw one frame with one menu (screens.ts) for the owner
- * and team leads. What both apps need to agree on lives here, without React:
- * which face a session sees, what a link to the other app carries, the words of
- * the frame, the one read behind the menu's number.
+ * A product's frame (products plan §2.1, §7): Hub (the console) and Workboard
+ * each draw their own frame with their own name, accent and menu from the one
+ * table (screens.ts); the frame is chosen by the product, never by the role or
+ * the host. What both apps need to agree on lives here, without React: the
+ * product's name, the switcher's list, what a link to the other product
+ * carries, the words of the frame, the one read behind the menu's number.
  *
- * Going from a console screen to a Workboard screen is a page load between two
- * bundles; nothing on the frame moves: the same item stays lit, and the page
- * filter and the period both screens have go along in the address.
+ * Going to the other product is a page load to its own name, through the
+ * one-time hand-off when the names differ (sites.ts), signed in on the way.
  */
 import type { KernelClient } from "@kernel/sdk";
-import type { MattersWaitingResponse } from "@agency_hub_core/contracts";
+import type { MattersWaitingResponse, Product } from "@agency_hub_core/contracts";
 import { PLACES } from "@agency_hub_core/look/words";
-import { matchScreen, type MenuItem, type PeriodKey } from "./screens.js";
-import { siteOf } from "./sites.js";
+import { WORKBOARD_PATH, matchScreen, type MenuItem, type PeriodKey, type ScreenProduct } from "./screens.js";
+import { CONTENTOPS_SIGNIN_HREF, MONITOR_ORIGIN, TASKS_ORIGIN, hubEntryHref, workboardEntryHref } from "./sites.js";
 
-/**
- * Which menu a session sees:
- * - `place` — the owner's place: the owner or a team lead on the console's name
- *   (or a local build on one name), in either app. One menu, one frame.
- * - `team` — the team's place: a chatter anywhere, a narrow session from the
- *   extension, anyone on the team's name. Workboard's own short menu, as it was.
- */
-export type PlaceFace = "place" | "team";
-
-export function placeFace(input: { role: string | null; narrow: boolean; origin: string }): PlaceFace {
-  if (input.narrow || (input.role !== "owner" && input.role !== "team_lead")) return "team";
-  return siteOf(input.origin) === "team" ? "team" : "place";
+/** The brand line of a product's frame and the browser tab's last word (look/words.ts). */
+export function productName(product: ScreenProduct): string {
+  return PLACES[product];
 }
 
-/** The brand line of the frame and the browser tab's last word, by face (look/words.ts). */
-export function placeName(face: PlaceFace): string {
-  return face === "place" ? PLACES.hub : PLACES.workboard;
+/** A product's home on its own name: Hub's root, Workboard's base. */
+export function productHome(product: ScreenProduct): string {
+  return product === "hub" ? "/" : WORKBOARD_PATH;
+}
+
+// ── The switcher ─────────────────────────────────────────────────────────
+
+/** One line of the products' switcher. */
+export interface ProductLink {
+  id: Product;
+  label: string;
+  /** Where it leads from this page: another name through the hand-off, ContentOps through its own Hub entry. */
+  href: string;
+  /** The product this frame is. */
+  current: boolean;
+  /** An outside tool, said quieter under the products (Задачи, Монитор). */
+  quiet: boolean;
+}
+
+const QUIET: ReadonlySet<Product> = new Set(["tasks", "monitor"]);
+
+/**
+ * The switcher's lines for the products this person has (`auth/me`'s `products`, the server's list), from a page of
+ * `here` on `origin`. One step and no second sign-in: Hub and Workboard cross names by the one-time hand-off,
+ * ContentOps, Задачи and Монитор sign in through Hub on their own pages. Fewer than two products: no switcher.
+ */
+export function productLinks(products: readonly Product[] | undefined, here: ScreenProduct, origin: string): ProductLink[] {
+  const list = products ?? [];
+  if (list.length < 2) return [];
+  const hrefOf = (id: Product): string => {
+    switch (id) {
+      case "hub": return here === "hub" ? productHome("hub") : hubEntryHref(origin, productHome("hub"));
+      case "workboard": return here === "workboard" ? productHome("workboard") : workboardEntryHref(origin, productHome("workboard"));
+      case "contentops": return CONTENTOPS_SIGNIN_HREF;
+      case "tasks": return `${TASKS_ORIGIN}/`;
+      case "monitor": return `${MONITOR_ORIGIN}/`;
+    }
+  };
+  return list.map((id) => ({ id, label: PLACES[id], href: hrefOf(id), current: id === here, quiet: QUIET.has(id) }));
 }
 
 /** The account's role under its name. */
@@ -69,7 +96,8 @@ export function consoleDays(period: PeriodKey | null): 14 | 30 | null {
  * The address of a menu item of the other app, with the filters the screen it
  * opens shares: Workboard takes `?page=` and `?days=` on every screen; a console
  * screen takes the page where it has the page filter, the period where its own
- * (remembered) period has that value.
+ * (remembered) period has that value. A path of the item's own name: a frame
+ * leads there with `crossHref`.
  */
 export function carriedHref(item: Pick<MenuItem, "to" | "app">, filters: CarriedFilters): string {
   const query = new URLSearchParams();
@@ -86,11 +114,16 @@ export function carriedHref(item: Pick<MenuItem, "to" | "app">, filters: Carried
   return search ? `${item.to}?${search}` : item.to;
 }
 
+/** An address of the other product's app from a page on `origin`: on its own name, through the hand-off when the names differ. */
+export function crossHref(app: MenuItem["app"], path: string, origin: string): string {
+  return app === "workboard" ? workboardEntryHref(origin, path) : hubEntryHref(origin, path);
+}
+
 // ── The menu's number ────────────────────────────────────────────────────
 
 /**
- * «Ждут вас»: one read in both apps, the same answer, so the number does not
- * change when the owner crosses from one app to the other. It is the sum of
+ * «Ждут вас»: one read in both products, the same answer, so the number does not
+ * change when the owner crosses from one product to the other. It is the sum of
  * what waits (`total` of `mattersWaiting`: Hub mirrors its sources into
  * matters every minute, the ledger's every five). The query key is the one
  * the screens of matters read, so they share the answer.

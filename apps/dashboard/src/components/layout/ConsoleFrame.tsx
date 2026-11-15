@@ -2,12 +2,13 @@ import type { ReactNode } from "react";
 import { useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { PlaceFrame } from "@agency_hub_core/ui/components/Place";
-import { carriedHref, consoleDays, placeName, waitingCount, waitingQuery } from "@agency_hub_core/ui/place";
-import { matchScreen, menuItemAt, placeMenu, type MenuItem } from "@agency_hub_core/ui/screens";
+import type { Product } from "@agency_hub_core/contracts";
+import { carriedHref, consoleDays, crossHref, productHome, productLinks, productName, waitingCount, waitingQuery } from "@agency_hub_core/ui/place";
+import { matchScreen, menuItemAt, productMenu, type MenuItem } from "@agency_hub_core/ui/screens";
 import { usePeopleIndex } from "@/api/people";
 import { useLogout } from "@/api/queries";
 import { kernel } from "@/api/sdk";
-import { ACCOUNT_SCREEN, SIGNED_OUT_LOGIN } from "@/lib/navigation";
+import { ACCOUNT_SCREEN, SIGNED_OUT_LOGIN, workboardHere } from "@/lib/navigation";
 import { ALL_PAGES_PARAM, pageFromSearch } from "@/lib/pageParam";
 import { isPeriodKey, periodParam } from "@/lib/period";
 import { clearDashboardSession } from "@/lib/queryClient";
@@ -15,12 +16,16 @@ import { usePageFilterStore } from "@/stores/pageFilterStore";
 import { usePeriodStore } from "@/stores/periodStore";
 
 /**
- * The console inside the frame of the owner's place (packages/ui Place.tsx):
- * the one menu, the same in Workboard. A Workboard item carries the page this
- * console shows and its period when Workboard has it too (30 or 14 days).
+ * Hub's frame (packages/ui Place.tsx): Hub's name, its ink accent and its menu
+ * from the one table; the name opens the switcher of the owner's products. An
+ * item of the other product («Ждут вас», Workboard's list for now) carries the
+ * page this console shows and its period when Workboard has it too (30 or 14
+ * days), and goes to the team's name signed in.
  */
-export function ConsoleFrame({ user, searchOpen, setSearchOpen, children }: {
+export function ConsoleFrame({ user, products, searchOpen, setSearchOpen, children }: {
   user: { id: number; username: string; role: string };
+  /** `me.products`: the switcher's list. */
+  products: readonly Product[] | undefined;
   searchOpen: boolean;
   setSearchOpen: (open: boolean) => void;
   children: ReactNode;
@@ -40,7 +45,8 @@ export function ConsoleFrame({ user, searchOpen, setSearchOpen, children }: {
   const screen = matchScreen(location.pathname)?.screen;
   const raw = periodParam(search);
   const period = screen?.period?.class === "shared" && isPeriodKey(raw) ? raw : storedPeriod;
-  const hrefOf = (item: MenuItem) => (item.app === "console" ? item.to : carriedHref(item, { page, days: consoleDays(period) }));
+  const origin = window.location.origin;
+  const hrefOf = (item: MenuItem) => (item.app === "console" ? item.to : crossHref(item.app, carriedHref(item, { page, days: consoleDays(period) }), origin));
 
   async function signOut() {
     if (logout.isPending) return;
@@ -54,8 +60,10 @@ export function ConsoleFrame({ user, searchOpen, setSearchOpen, children }: {
   return (
     <PlaceFrame
       here={{ app: "console", basename: "" }}
-      brand={placeName("place")}
-      menu={placeMenu(user.role)}
+      brand={productName("hub")}
+      home={productHome("hub")}
+      products={productLinks(products, "hub", origin)}
+      menu={productMenu("hub", user.role)}
       current={menuItemAt(location.pathname)}
       hrefOf={hrefOf}
       counts={{ waiting: waitingCount(waiting) }}
@@ -65,8 +73,8 @@ export function ConsoleFrame({ user, searchOpen, setSearchOpen, children }: {
         signOut: () => void signOut(),
         signingOut: logout.isPending,
         signOutFailed: logout.isError,
-        // Workboard's screen, a page load on this host.
-        onAccount: () => window.location.assign(ACCOUNT_SCREEN),
+        // Workboard's screen: a page load, on the team's name.
+        onAccount: () => window.location.assign(workboardHere(ACCOUNT_SCREEN)),
       }}
       searchOpen={searchOpen}
       setSearchOpen={setSearchOpen}

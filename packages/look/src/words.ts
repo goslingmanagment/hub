@@ -48,6 +48,11 @@ export const PLACES = {
   hub: "Hub",
   /** The team's place. */
   workboard: "Workboard",
+  /** The content's product (a КМ's, the owner's). */
+  contentops: "ContentOps",
+  /** The owner's outside tools, at the foot of the products' switcher. */
+  tasks: "Задачи",
+  monitor: "Монитор",
   /** The extension. */
   chatgoose: "ChatGoose",
   /** The team's agent in Telegram. */

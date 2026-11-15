@@ -33,16 +33,17 @@ import { Kbd } from "./Kbd.js";
 import { Menu, type MenuEntry } from "./Menu.js";
 import { useFocusScope } from "./focus.js";
 import { PALETTE_ARIA_SHORTCUT, PALETTE_SHORTCUT, isPaletteShortcut } from "../paletteShortcut.js";
-import { roleWord, type MenuCountView } from "../place.js";
-import { NAME_MENU_ACCOUNT, addressApp, type MenuCount, type MenuIcon, type MenuItem, type ScreenApp } from "../screens.js";
+import { roleWord, type MenuCountView, type ProductLink } from "../place.js";
+import { NAME_MENU_ACCOUNT, type MenuCount, type MenuIcon, type MenuItem, type ScreenApp } from "../screens.js";
 import { THEME_OPTIONS, useThemeStore, type ThemePreference } from "../theme.js";
 
 /**
- * The frame of the owner's place (ecosystem L1): one sidebar, the same to the
- * pixel in the console and in Workboard — the brand line, the search field,
- * the menu of screens.ts with «Команда» listed in place, the account at the
- * foot. An item of the app drawing it is a router link; the other app's item
- * is a page load to the same host, and nothing on the frame moves.
+ * A product's frame (products plan §2.1): one sidebar for Hub and for Workboard,
+ * the same component with the product's own name, accent (tokens.css,
+ * `[data-product]`) and menu — the brand line that opens the products' switcher
+ * when the person has more than one, the search field, the product's menu of
+ * screens.ts, the account at the foot. An item of the app drawing it is a router
+ * link; an item of the other product is a page load to its own name.
  * Below 768 px the sidebar is a drawer behind ☰ in a strip over the screen.
  */
 
@@ -88,8 +89,14 @@ export interface PlaceAccount {
 
 export interface PlaceSidebarProps {
   here: PlaceHere;
-  /** The brand line: «Hub» (place.ts `placeName`). */
+  /** The brand line: the product's name (place.ts `productName`). */
   brand: string;
+  /** The product's home, an address of this app (place.ts `productHome`). */
+  home: string;
+  /** The products' switcher under the brand line (place.ts `productLinks`); empty: the brand is a link home. */
+  products: readonly ProductLink[];
+  /** The search field and ⌘K (absent: true). A chatter's two items need none. */
+  search?: boolean;
   menu: { upper: readonly MenuItem[]; lower: readonly MenuItem[] };
   /** The item the address lights (screens.ts `menuItemAt`). */
   current: string | null;
@@ -99,9 +106,11 @@ export interface PlaceSidebarProps {
   account: PlaceAccount;
 }
 
-/** A link of the frame: inside the app a router link, to the other app a page load. */
-function PlaceLink({ here, href, className, current, label, children }: {
+/** A link of the frame: to an address of the app drawing it a router link, to the other app a page load. */
+function PlaceLink({ here, app, href, className, current, label, children }: {
   here: PlaceHere;
+  /** The app at `href`. */
+  app: ScreenApp;
   href: string;
   className: string;
   current?: boolean;
@@ -109,24 +118,61 @@ function PlaceLink({ here, href, className, current, label, children }: {
   children: ReactNode;
 }) {
   const aria = { "aria-current": current ? ("page" as const) : undefined, "aria-label": label };
-  if (addressApp(href) === here.app) {
+  if (app === here.app) {
     const to = here.basename && (href === here.basename || href.startsWith(`${here.basename}/`)) ? href.slice(here.basename.length) || "/" : href;
     return <Link to={to} className={className} {...aria}>{children}</Link>;
   }
   return <a href={href} className={className} {...aria}>{children}</a>;
 }
 
-function Brand({ here, brand }: { here: PlaceHere; brand: string }) {
+function Mark() {
   return (
-    <PlaceLink here={here} href="/" className="ui-side__brand" label={`${brand}: на главную`}>
-      <svg className="ui-side__mark" viewBox="0 0 32 32" aria-hidden>
-        <rect width="32" height="32" rx="8" />
-        <rect x="7.5" y="8" width="4.5" height="16" rx="1.5" className="ui-side__bar" />
-        <rect x="13.75" y="8" width="4.5" height="11" rx="1.5" className="ui-side__bar" opacity=".82" />
-        <rect x="20" y="8" width="4.5" height="7" rx="1.5" className="ui-side__bar" opacity=".64" />
-      </svg>
+    <svg className="ui-side__mark" viewBox="0 0 32 32" aria-hidden>
+      <rect width="32" height="32" rx="8" />
+      <rect x="7.5" y="8" width="4.5" height="16" rx="1.5" className="ui-side__bar" />
+      <rect x="13.75" y="8" width="4.5" height="11" rx="1.5" className="ui-side__bar" opacity=".82" />
+      <rect x="20" y="8" width="4.5" height="7" rx="1.5" className="ui-side__bar" opacity=".64" />
+    </svg>
+  );
+}
+
+/** The product's name, a link to its home. */
+function Brand({ here, brand, home }: { here: PlaceHere; brand: string; home: string }) {
+  return (
+    <PlaceLink here={here} app={here.app} href={home} className="ui-side__brand" label={`${brand}: на главную`}>
+      <Mark />
       <span>{brand}</span>
     </PlaceLink>
+  );
+}
+
+/**
+ * The product's name that opens the list of the person's products (one step, no second sign-in): the products, then
+ * quieter the outside tools. The current one is ticked.
+ */
+function Switcher({ brand, products }: { brand: string; products: readonly ProductLink[] }) {
+  const main = products.filter((product) => !product.quiet);
+  const quiet = products.filter((product) => product.quiet);
+  const go = (href: string) => () => window.location.assign(href);
+  const items: MenuEntry[] = [
+    { group: "Продукты" },
+    ...main.map((product) => ({ label: product.label, checked: product.current, onSelect: go(product.href) })),
+    ...(quiet.length > 0 ? [{ separator: true as const }, { group: "Инструменты" }] : []),
+    ...quiet.map((product) => ({ label: product.label, onSelect: go(product.href) })),
+  ];
+  return (
+    <Menu
+      label="Продукты"
+      align="start"
+      items={items}
+      renderTrigger={({ ref, ...trigger }) => (
+        <button ref={ref} type="button" className="ui-side__brand ui-side__brand--switch" aria-label={`${brand}: другие продукты`} {...trigger}>
+          <Mark />
+          <span>{brand}</span>
+          <ChevronsUpDown size={16} strokeWidth={1.75} aria-hidden className="ui-side__chevron" />
+        </button>
+      )}
+    />
   );
 }
 
@@ -147,13 +193,10 @@ function ItemCount({ view, label }: { view: MenuCountView | null | undefined; la
 
 function Items({ items, props }: { items: readonly MenuItem[]; props: PlaceSidebarProps }) {
   const rows: ReactNode[] = [];
-  let group: string | undefined;
   for (const item of items) {
-    if (item.group && item.group !== group) rows.push(<div key={`group:${item.group}`} className="ui-side__group">{item.group}</div>);
-    group = item.group;
     const Icon = ICONS[item.icon];
     rows.push(
-      <PlaceLink key={item.id} here={props.here} href={props.hrefOf(item)} className="ui-side__item" current={props.current === item.id}>
+      <PlaceLink key={item.id} here={props.here} app={item.app} href={props.hrefOf(item)} className="ui-side__item" current={props.current === item.id}>
         <Icon size={18} strokeWidth={1.75} aria-hidden className="ui-side__icon" />
         <span className="ui-side__label">{item.label}</span>
         {item.count && <ItemCount view={props.counts[item.count]} label={item.label} />}
@@ -205,12 +248,14 @@ export function PlaceSidebar(props: PlaceSidebarProps & { onSearch: () => void }
   const { menu } = props;
   return (
     <aside className="ui-side">
-      <Brand here={props.here} brand={props.brand} />
-      <button type="button" className="ui-side__search" onClick={props.onSearch} aria-keyshortcuts={PALETTE_ARIA_SHORTCUT} title={`Найти (${PALETTE_SHORTCUT})`}>
-        <Search size={16} strokeWidth={1.75} aria-hidden />
-        <span>Найти</span>
-        <Kbd>{PALETTE_SHORTCUT}</Kbd>
-      </button>
+      {props.products.length > 1 ? <Switcher brand={props.brand} products={props.products} /> : <Brand here={props.here} brand={props.brand} home={props.home} />}
+      {props.search !== false && (
+        <button type="button" className="ui-side__search" onClick={props.onSearch} aria-keyshortcuts={PALETTE_ARIA_SHORTCUT} title={`Найти (${PALETTE_SHORTCUT})`}>
+          <Search size={16} strokeWidth={1.75} aria-hidden />
+          <span>Найти</span>
+          <Kbd>{PALETTE_SHORTCUT}</Kbd>
+        </button>
+      )}
       <nav aria-label="Разделы" className="ui-side__nav">
         <Items items={menu.upper} props={props} />
         {menu.lower.length > 0 && (
@@ -278,7 +323,9 @@ export function PlaceFrame({ searchOpen, setSearchOpen, children, ...sidebar }: 
   const searchOpenNow = useRef(searchOpen);
   searchOpenNow.current = searchOpen;
   useEffect(() => setDrawer(false), [location.key]);
+  const searchable = sidebar.search !== false;
   useEffect(() => {
+    if (!searchable) return;
     function onKeyDown(event: KeyboardEvent) {
       if (!isPaletteShortcut(event)) return;
       event.preventDefault();
@@ -287,7 +334,7 @@ export function PlaceFrame({ searchOpen, setSearchOpen, children, ...sidebar }: 
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [setSearchOpen]);
+  }, [setSearchOpen, searchable]);
   const openSearch = () => {
     setDrawer(false);
     setSearchOpen(true);
@@ -301,10 +348,12 @@ export function PlaceFrame({ searchOpen, setSearchOpen, children, ...sidebar }: 
           <button type="button" className="ui-strip__button" aria-label="Открыть меню" onClick={() => setDrawer(true)}>
             <Burger size={20} strokeWidth={1.75} aria-hidden />
           </button>
-          <Brand here={sidebar.here} brand={sidebar.brand} />
-          <button type="button" className="ui-strip__button ui-strip__search" aria-label="Найти" onClick={openSearch}>
-            <Search size={18} strokeWidth={1.75} aria-hidden />
-          </button>
+          <Brand here={sidebar.here} brand={sidebar.brand} home={sidebar.home} />
+          {searchable && (
+            <button type="button" className="ui-strip__button ui-strip__search" aria-label="Найти" onClick={openSearch}>
+              <Search size={18} strokeWidth={1.75} aria-hidden />
+            </button>
+          )}
         </div>
         {children}
       </div>

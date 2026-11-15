@@ -211982,6 +211982,19 @@
                       "enum": [
                         true
                       ]
+                    },
+                    "products": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "hub",
+                          "workboard",
+                          "contentops",
+                          "tasks",
+                          "monitor"
+                        ]
+                      }
                     }
                   },
                   "required": [
@@ -212237,6 +212250,19 @@
                       "enum": [
                         true
                       ]
+                    },
+                    "products": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "hub",
+                          "workboard",
+                          "contentops",
+                          "tasks",
+                          "monitor"
+                        ]
+                      }
                     }
                   },
                   "required": [
