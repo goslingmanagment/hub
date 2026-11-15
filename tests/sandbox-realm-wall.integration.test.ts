@@ -408,7 +408,10 @@ describe("the wall of the test realm", () => {
     await seedSandbox(createTestAppContext(testDb), { scenarios: [], env: SANDBOX_PASSWORDS });
     const owner = callers.find((caller) => caller.name === "owner")!;
     const response = await server.inject({ method: "GET", url: "/api/v1/pages/test-1/subscribers", headers: owner.headers });
-    expect(response.statusCode).toBe(403);
+    // As a page that does not exist (sandbox/objects.ts): no «there, but not yours».
+    expect(response.statusCode).toBe(404);
+    const missing = await server.inject({ method: "GET", url: "/api/v1/pages/nowhere-page/subscribers", headers: owner.headers });
+    expect(response.body.replace("test-1", "<page>")).toBe(missing.body.replace("nowhere-page", "<page>"));
   });
 
   it("the test owner is refused every operation off its table, and what it reads names nothing live", async (context) => {
