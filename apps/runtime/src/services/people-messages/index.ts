@@ -240,7 +240,7 @@ async function reminderOf(app: MessagesApp, matter: MatterRow): Promise<Outgoing
       objectId: matter.key,
       about: `заявка: ${who}, ${what}`,
       text: `${claim.statement === "share" ? `${who} предлагает делить продажу ${what} пополам` : `${who} считает продажу ${what} своей`}. `
-        + `Подтвердите договорённость или ответьте в Workboard: ${teamLink(app, matter.link ?? "/workboard/my/shifts")}`,
+        + `Подтвердите договорённость или ответьте в Workboard: ${teamLink(app, matter.link ?? "/workboard/shifts/mine")}`,
       eventAt: matter.openedAt,
     };
   }

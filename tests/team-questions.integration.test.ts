@@ -83,7 +83,8 @@ describe("questions to whoever decides", () => {
     expect(asked.statusCode, asked.body).toBe(200);
     const question = teamQuestionWriteResponseSchema.parse(asked.json()).question;
     expect(question).toMatchObject({ decider: { kind: "team_lead", name: "lena" }, state: "open", mine: true, canAnswer: false });
-    expect(await openMatters("question.asked")).toEqual([{ owner_user_id: String(ids.lena), owner_role: null, reason_key: `question.asked:${question.id}` }]);
+    // A team lead's role matter of the page: it waits for the lead of the model now (the records), not a stored login.
+    expect(await openMatters("question.asked")).toEqual([{ owner_user_id: null, owner_role: "team_lead", reason_key: `question.asked:${question.id}` }]);
 
     // Another team: no asking on Alfa's page, no reading Anna's question, no answering it.
     expect((await as("boris", "POST", "/api/v1/team/questions", { pageLabel: "alfa-1", kind: "late", text: "опоздаю" })).statusCode).toBe(403);

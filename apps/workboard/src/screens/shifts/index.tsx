@@ -181,6 +181,7 @@ export function ShiftsScreen() {
       />
       <div className="wb-content shifts">
         <ShiftsTabs />
+        {search.get("noreport") === "1" && <Notice title="Смены для отчёта нет">Отчёт открывается из строки смены.</Notice>}
         {mine && (
           <p className="shifts-mine">
             Только ваши смены.{" "}

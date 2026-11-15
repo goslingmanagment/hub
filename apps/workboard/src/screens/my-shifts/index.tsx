@@ -478,6 +478,10 @@ export function MyShiftsScreen() {
       />
       <div className="wb-content mys">
         <ShiftsTabs />
+        {/* From «Отчёт» with no shift to report (the board's tab leads here). */}
+        {new URLSearchParams(location.search).get("noreport") === "1" && (
+          <Notice title="Смены для отчёта нет">Отчёт откроется, когда начнётся смена: кнопка «Отчёт» в расширении или строка смены здесь.</Notice>
+        )}
         {window.clipped && (
           <Notice title={`Смены видны не больше чем за ${MY_SHIFTS_MAX_DAYS} день`}>
             Чтобы увидеть {formatDayRange(period.from, addDays(window.from, -1))}, выберите эти дни отдельно. Сейчас показаны {formatDayRange(window.from, window.to)}.

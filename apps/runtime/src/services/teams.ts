@@ -156,9 +156,12 @@ export type Decider =
   | { kind: "owner" }
   | { kind: "team_lead"; personId: number; userId: number; name: string };
 
-/** The login a person is addressed by: their newest living one; null — none. */
+/**
+ * The login a person is addressed by as one who leads, decides or takes a step: their newest login that has signed in
+ * (`signedInLoginSql`, team-roles.ts); null — none: an invited person not signed in yet leads nothing.
+ */
 export function loginOfPerson(facts: TeamFacts, personId: number): number | null {
-  const ids = facts.logins.filter((login) => login.personId === personId).map((login) => login.userId);
+  const ids = facts.logins.filter((login) => login.personId === personId && login.signedIn !== false).map((login) => login.userId);
   return ids.length === 0 ? null : Math.max(...ids);
 }
 

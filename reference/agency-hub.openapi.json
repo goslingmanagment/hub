@@ -291667,6 +291667,12 @@
                             "type": "string"
                           }
                         },
+                        "command": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "events": {
                           "type": "array",
                           "items": {
@@ -291756,6 +291762,7 @@
                         "statusReason",
                         "statusReasonParts",
                         "findings",
+                        "command",
                         "events",
                         "album"
                       ],
@@ -292834,12 +292841,19 @@
                                 "items": {
                                   "type": "string"
                                 }
+                              },
+                              "command": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
                               "statusReason",
                               "statusReasonParts",
-                              "findings"
+                              "findings",
+                              "command"
                             ],
                             "additionalProperties": false
                           }

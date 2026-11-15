@@ -71,7 +71,7 @@ export type TeamQuestionSwap = z.infer<typeof teamQuestionSwapSchema>;
  * The matters of a question, the question service their one writer (an agent key opens or closes none): the decider's
  * «ждёт ответа» (`question.asked`) while it is open, the asker's answer (`question.answered`) until they have read it.
  */
-export const TEAM_QUESTION_MATTER_KINDS = ["question.asked", "question.answered"] as const;
+export const TEAM_QUESTION_MATTER_KINDS = ["question.asked", "question.answered", "question.cover"] as const;
 const QUESTION_KIND_SET: ReadonlySet<string> = new Set(TEAM_QUESTION_MATTER_KINDS);
 export function isTeamQuestionMatterKind(kind: string): boolean {
   return QUESTION_KIND_SET.has(kind);

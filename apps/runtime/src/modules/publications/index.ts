@@ -6,12 +6,12 @@ import {
   albumRunWords,
   approveRefusalWords,
   autostopReasonWords,
+  commandNoteWords,
   deleteResultWords,
   findingWords,
   routeSchemas,
   statusReasonWords,
   withdrawResultWords,
-  type PublicationFinding,
   type PublicationWire,
 } from "@agency_hub_core/contracts";
 import type { PublicationStatus } from "@agency_hub_core/shared";
@@ -379,10 +379,11 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     screen.resolve(await requirePrincipal(request), request.params.id, request.body));
 
   // Hub's words of a publication's codes (publication-words.ts, the one table): the door carries them to ContentOps.
-  const wordsOfPublication = (publication: { statusReason: string | null; kind: string; findings: readonly PublicationFinding[]; media: readonly { role: string; position: number; source: string; mediaRef?: string | null; fileId?: number | null; name?: string | null }[] }) => ({
+  const wordsOfPublication = (publication: PublicationWire) => ({
     statusReason: statusReasonWords(publication.statusReason),
     statusReasonParts: publication.kind === "vault_album" ? albumReasonParts(publication.statusReason) : null,
     findings: publication.findings.map((finding) => findingWords(finding, publication.media)),
+    command: commandNoteWords(publication),
   });
   const withdrawWords = <R extends { outcome: string; reason: string | null }>(answer: { results: R[] }, words: (result: R) => string) => ({
     results: answer.results.map((result) => ({ ...result, words: words(result) })),

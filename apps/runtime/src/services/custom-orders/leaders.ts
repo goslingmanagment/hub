@@ -47,7 +47,8 @@ export function contentManagersOf(facts: TeamFacts, modelId: number): CustomLead
   const people = [...new Set(facts.working.filter((row) => pages.has(row.pageId)).map((row) => row.personId))].sort((a, b) => a - b);
   const out: CustomLeader[] = [];
   for (const personId of people) {
-    const login = facts.logins.filter((one) => one.personId === personId && one.role === "content_manager").map((one) => one.userId);
+    // A content manager who has signed in (an invited one not yet: the step stays with whoever had it).
+    const login = facts.logins.filter((one) => one.personId === personId && one.role === "content_manager" && one.signedIn !== false).map((one) => one.userId);
     if (login.length === 0) continue;
     out.push({ kind: "person", personId, userId: Math.max(...login), name: nameOf(facts, personId) });
   }

@@ -7,7 +7,7 @@ import type { RegistryPerson } from "./registry.js";
 
 const KIND_WORDS: Record<TeamRoleKindWire, { label: string; hint: string }> = {
   lead: { label: "Ведёт команду", hint: "Решает споры о продажах команды, разбирает смены. Даёт владелец." },
-  customs: { label: "Ведёт кастомы", hint: "Проверяет заказы кастомов модели и отдаёт их в съёмку." },
+  customs: { label: "Ведёт кастомы команды", hint: "Проверяет заказы кастомов модели и отдаёт их в съёмку." },
   view: { label: "Видит команду", hint: "Видит смены, продажи и разборы команды, работать на её страницах не может." },
 };
 

@@ -251,6 +251,34 @@ export function deleteResultWords(result: { outcome: string; reason: string | nu
   return `Не удалён: ${DELETE_REASONS[reason] ?? "другая причина"}`;
 }
 
+/**
+ * What happened to the withdrawal or the deletion Hub sent, while the status alone does not say it: a withdrawal of a
+ * post still «В расписании», a deletion of a post still «Вышел». Null — nothing to say.
+ */
+export function commandNoteWords(publication: {
+  status: string;
+  platform: string;
+  withdrawal: { state: string } | null;
+  deletion: { state: string } | null;
+}): string | null {
+  const platform = publication.platform === "fansly" ? "Fansly" : publication.platform === "onlyfans" ? "OnlyFans" : "площадка";
+  const deletion = publication.deletion;
+  if (deletion !== null && publication.status === "published") {
+    if (deletion.state === "prepared") return "удаление не ушло — можно нажать ещё раз";
+    if (deletion.state === "dispatching") return "удаление идёт: Hub отправляет его через браузер страницы";
+    if (deletion.state === "confirmed") return "Fansly принял удаление — Hub проверяет пост";
+    if (deletion.state === "rejected") return "Fansly отказал в удалении: пост на стене, удалите на площадке";
+  }
+  const withdrawal = publication.withdrawal;
+  if (withdrawal !== null && publication.status === "scheduled") {
+    if (withdrawal.state === "prepared") return "команда убрать пост не ушла — можно нажать ещё раз";
+    if (withdrawal.state === "dispatching" && publication.platform === "fansly") return "идёт: Hub читает расписание, потом уберёт пост";
+    if (withdrawal.state === "confirmed" && publication.platform === "fansly") return "Fansly принял команду — Hub проверяет расписание";
+    if (withdrawal.state === "rejected") return `${platform} отказала: пост в расписании, уберите его на площадке`;
+  }
+  return null;
+}
+
 // ── the checks of a draft ───────────────────────────────────────────────────
 
 export interface FindingLike {
