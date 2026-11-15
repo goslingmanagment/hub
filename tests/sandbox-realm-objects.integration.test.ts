@@ -320,10 +320,11 @@ beforeAll(async () => {
   // Agents' proposals about people, one per realm. The live one carries the NUMBER of the test report card: the same
   // name (`proposalId`) names another table on the owner's door, and the live owner must decide it.
   const livePersonProposal = await one(db, sql`insert into person_proposals (id, person_id, change, reason, agent_key_id)
-    values (${testRows.proposal}, ${person.id}, '{}'::jsonb, 'проверка', ${keyId}) returning id`);
+    values (${testRows.proposal}, ${person.id}, ${JSON.stringify({ kind: "update", personCode: "live-chatter", change: { note: "проверка" } })}::jsonb,
+      'проверка', ${keyId}) returning id`);
   const testPerson = await one(db, sql`select id from people where code = 't-chat-1'`);
   const testPersonProposal = await one(db, sql`insert into person_proposals (person_id, change, reason, agent_key_id)
-    values (${testPerson}, '{}'::jsonb, 'проверка', ${keyId}) returning id`);
+    values (${testPerson}, ${JSON.stringify({ kind: "update", personCode: "t-chat-1", change: { note: "проверка" } })}::jsonb, 'проверка', ${keyId}) returning id`);
   live.personProposal = livePersonProposal;
   const pick = async (query: (test: boolean) => ReturnType<typeof sql>) => ({ live: await one(db, query(false)), test: await one(db, query(true)) });
   Object.assign(objects, {
