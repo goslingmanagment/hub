@@ -227,21 +227,38 @@ describe("the person's door", () => {
     for (const who of ["owner", "kmA", "kmB", "testKm"]) expect(grants[who], who).toBeDefined();
   });
 
-  it("opens to a content manager her own model's pages alone, and never shows the other model's", async (context) => {
+  // Every row as every persona, by the row's roles: a persona whose role is on the row gets its own pages and never
+  // another model's; one whose role is not gets 403; nobody 401; another key 403.
+  const PERSONAS = [
+    { who: "kmA", role: "content_manager", own: "A", other: "B", hidden: ["zoe-1", "test-1"] },
+    { who: "kmB", role: "content_manager", own: "B", other: "A", hidden: ["mia-1", "mia-2", "test-1"] },
+    { who: "lead", role: "team_lead", own: "A", other: "B", hidden: ["test-1"] },
+    { who: "chatter", role: "chatter", own: "A", other: "B", hidden: ["test-1"] },
+  ] as const;
+
+  it("serves each persona exactly what its row's roles open, on its own pages alone", async (context) => {
     if (!server) return context.skip();
     for (const key of OPERATIONS) {
-      const row = PERSON_DOOR_OPERATIONS[key];
-      for (const [person, own, other, others] of [["kmA", "A", "B", ["zoe-1", "test-1"]], ["kmB", "B", "A", ["mia-1", "mia-2", "test-1"]]] as const) {
-        const answer = await call(key, aim(own), grants[person]);
-        if (row.who === "owner") {
-          expect(answer.statusCode, `${key} as ${person}`).toBe(403);
+      const roles: readonly string[] = PERSON_DOOR_OPERATIONS[key].roles;
+      for (const persona of PERSONAS) {
+        const grant = grants[persona.who];
+        const answer = await call(key, aim(persona.own), grant);
+        // Hub may not hand someone to ContentOps at all: their call is nobody's.
+        if (grant === undefined) {
+          expect(answer.statusCode, `${key} as ${persona.who} (no grant)`).toBe(401);
           continue;
         }
-        expect([401, 403, 404], `${key} as ${person}: ${answer.body}`).not.toContain(answer.statusCode);
-        expect(leaks(answer.body, others), `${key} as ${person}`).toEqual([]);
-        const refused = await call(key, aim(other), grants[person]);
-        if (CALLS[key](aim(own)).path === CALLS[key](aim(other)).path && JSON.stringify(CALLS[key](aim("A")).body) === JSON.stringify(CALLS[key](aim("B")).body)) continue;
-        expect([403, 404], `${key} as ${person} on the other model: ${refused.body}`).toContain(refused.statusCode);
+        if (!roles.includes(persona.role)) {
+          expect(answer.statusCode, `${key} as ${persona.who}: ${answer.body}`).toBe(403);
+          continue;
+        }
+        expect([401, 403, 404], `${key} as ${persona.who}: ${answer.body}`).not.toContain(answer.statusCode);
+        expect(leaks(answer.body, persona.hidden), `${key} as ${persona.who}`).toEqual([]);
+        const mine = CALLS[key](aim(persona.own));
+        const theirs = CALLS[key](aim(persona.other));
+        if (mine.path === theirs.path && JSON.stringify(CALLS[key](aim("A")).body) === JSON.stringify(CALLS[key](aim("B")).body)) continue;
+        const refused = await call(key, aim(persona.other), grant);
+        expect([403, 404], `${key} as ${persona.who} on the other model: ${refused.body}`).toContain(refused.statusCode);
       }
     }
     for (const [person, others] of [["kmA", ["zoe-1"]], ["kmB", ["mia-1", "mia-2"]]] as const) {
@@ -253,26 +270,22 @@ describe("the person's door", () => {
     }
   });
 
-  it("gives the owner every operation and every page", async (context) => {
+  it("gives the owner every row his role is on, and every page", async (context) => {
     if (!server) return context.skip();
     for (const key of OPERATIONS) {
+      const roles: readonly string[] = PERSON_DOOR_OPERATIONS[key].roles;
       const answer = await call(key, aim("B"), grants.owner);
-      expect([401, 403, 404], `${key} as the owner: ${answer.body}`).not.toContain(answer.statusCode);
+      if (roles.includes("owner")) expect([401, 403, 404], `${key} as the owner: ${answer.body}`).not.toContain(answer.statusCode);
+      else expect(answer.statusCode, `${key} as the owner`).toBe(403);
     }
     const all = await inject("POST", "/api/v1/person/publications/list", { bearer: KEY, payload: { client: "contentops", grant: grants.owner } });
     expect(all.body).toContain('"mia-1"');
     expect(all.body).toContain('"zoe-1"');
   });
 
-  it("gives a team lead and a chatter nothing, nobody nothing, and nothing without ContentOps' sign-in key", async (context) => {
+  it("serves nobody without a live grant, and nobody without ContentOps' sign-in key", async (context) => {
     if (!server) return context.skip();
     for (const key of OPERATIONS) {
-      for (const person of ["lead", "chatter"] as const) {
-        // Hub may not hand them to ContentOps at all: then their call is nobody's.
-        const answer = await call(key, aim("A"), grants[person]);
-        expect([401, 403], `${key} as ${person}: ${answer.body}`).toContain(answer.statusCode);
-        if (grants[person] !== undefined) expect(answer.statusCode, `${key} as ${person}`).toBe(403);
-      }
       expect((await call(key, aim("A"), undefined)).statusCode, `${key} without a grant`).toBe(401);
       expect((await call(key, aim("A"), grants.owner, NARROW_KEY)).statusCode, `${key} with another key`).toBe(403);
     }

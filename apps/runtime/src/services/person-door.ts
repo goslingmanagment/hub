@@ -1,3 +1,5 @@
+import type { UserRole } from "@agency_hub_core/shared";
+
 import type { AuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { AppError, ForbiddenError, UnauthorizedError } from "./errors.ts";
 import type { AppContext } from "../bootstrap.ts";
@@ -13,34 +15,53 @@ import { principalOfServerGrant } from "./signin-handoff.ts";
  * anyone else nothing. Every change is recorded as the person's (`auditCtx` of the person), never as the key's.
  *
  * THIS TABLE is every operation of the door, AND NOTHING ELSE: a route of the door that is not here refuses (deny by
- * default, `doorPerson`). `who`: `content_manager` — the owner and a content manager; `owner` — the owner alone (his
- * standing rules: a page's settings, the global switches, deleting a live post, «Убрать всё», the pages' sign-in state).
- * `console`: the console's operation it does the same as — the test owner's table (sandbox/owner-operations.ts) is asked
- * by it. tests/person-door.integration.test.ts walks every row.
+ * default, `doorPerson`). The mechanism is not publications': another package adds a row here and nothing else of it.
+ *
+ * Adding a row: (1) its contract entry in packages/contracts (key = the row's key, `auth: { kind: "agentKey" }`,
+ * `tags: ["person-door"]`, body extends `{ client: "contentops", grant }`, path under `/api/v1/person/`); (2) its route
+ * calls `doorPerson(app, agentKey, request.body, "<row key>")` and then the console's own service with the returned
+ * person; (3) the row here with its `console` operation and `roles`; (4) its call in `CALLS` of
+ * tests/person-door.integration.test.ts — the test fails until every `person-door` route of the contract is a row and
+ * has a call, and walks it as every persona by `roles`. The owner's standing rules (a page's settings, the global
+ * switches, deleting a live post, «Убрать всё», the pages' sign-in state) are rows of `OWNER`.
  */
+/** Who opens a row: the owner and a content manager (her pages), or the owner alone. A row may name any roles. */
+const SCREEN = ["owner", "content_manager"] as const satisfies readonly UserRole[];
+const OWNER = ["owner"] as const satisfies readonly UserRole[];
+
 export const PERSON_DOOR_OPERATIONS = {
   // «Публикации»: the feed, the card, the platforms' schedules and the settings, and their actions.
-  personPublicationList: { console: "adminPublicationList", who: "content_manager" },
-  personPublicationGet: { console: "adminPublicationGet", who: "content_manager" },
-  personPublicationApprove: { console: "adminPublicationApprove", who: "content_manager" },
-  personPublicationCancel: { console: "adminPublicationCancel", who: "content_manager" },
-  personPublicationWithdraw: { console: "adminPublicationWithdraw", who: "content_manager" },
-  personPublicationReplace: { console: "adminPublicationReplace", who: "content_manager" },
-  personPublicationResolve: { console: "adminPublicationResolve", who: "content_manager" },
-  personPublicationQueueList: { console: "adminPublicationQueueList", who: "content_manager" },
-  personPublicationQueueRefresh: { console: "adminPublicationQueueRefresh", who: "content_manager" },
-  personPublicationSettingsList: { console: "adminPublicationSettingsList", who: "content_manager" },
-  personPublicationSwitches: { console: "adminConfig", who: "content_manager" },
-  personPublicationSettingsUpdate: { console: "adminPublicationSettingsUpdate", who: "owner" },
-  personPublicationDeletePost: { console: "adminPublicationDeletePost", who: "owner" },
-  personPublicationWithdrawPage: { console: "adminPublicationWithdrawPage", who: "owner" },
-  personPublicationSwitchSet: { console: "adminConfigUpdate", who: "owner" },
-  personFanslyLoginPages: { console: "syncPages", who: "owner" },
+  personPublicationList: { console: "adminPublicationList", roles: SCREEN },
+  personPublicationGet: { console: "adminPublicationGet", roles: SCREEN },
+  personPublicationApprove: { console: "adminPublicationApprove", roles: SCREEN },
+  personPublicationCancel: { console: "adminPublicationCancel", roles: SCREEN },
+  personPublicationWithdraw: { console: "adminPublicationWithdraw", roles: SCREEN },
+  personPublicationReplace: { console: "adminPublicationReplace", roles: SCREEN },
+  personPublicationResolve: { console: "adminPublicationResolve", roles: SCREEN },
+  personPublicationQueueList: { console: "adminPublicationQueueList", roles: SCREEN },
+  personPublicationQueueRefresh: { console: "adminPublicationQueueRefresh", roles: SCREEN },
+  personPublicationSettingsList: { console: "adminPublicationSettingsList", roles: SCREEN },
+  personPublicationSwitches: { console: "adminConfig", roles: SCREEN },
+  personPublicationSettingsUpdate: { console: "adminPublicationSettingsUpdate", roles: OWNER },
+  personPublicationDeletePost: { console: "adminPublicationDeletePost", roles: OWNER },
+  personPublicationWithdrawPage: { console: "adminPublicationWithdrawPage", roles: OWNER },
+  personPublicationSwitchSet: { console: "adminConfigUpdate", roles: OWNER },
+  personFanslyLoginPages: { console: "syncPages", roles: OWNER },
   // «Статистика»: what of a page's media is watched, bought and commented.
-  personCreatorStatsContent: { console: "creatorStatsContent", who: "content_manager" },
-  personCreatorStatsMedia: { console: "creatorStatsMedia", who: "content_manager" },
-  personContentComments: { console: "contentComments", who: "content_manager" },
-} as const satisfies Record<string, { console: string; who: "content_manager" | "owner" }>;
+  personCreatorStatsContent: { console: "creatorStatsContent", roles: SCREEN },
+  personCreatorStatsMedia: { console: "creatorStatsMedia", roles: SCREEN },
+  personContentComments: { console: "contentComments", roles: SCREEN },
+} as const satisfies Record<string, PersonDoorRow>;
+
+/**
+ * A row of the door: `console` — the console's operation it does the same as (the test owner's table is asked by it);
+ * `roles` — the Hub roles of the people it serves. What a person reads or changes within it is cut by the operation's
+ * own service by the person's page scope and realm (`pageScopeFor`, `canAccessPage`, the realm's SQL), never here.
+ */
+export interface PersonDoorRow {
+  console: string;
+  roles: readonly UserRole[];
+}
 
 export type PersonDoorOperation = keyof typeof PERSON_DOOR_OPERATIONS;
 
@@ -64,13 +85,11 @@ export async function doorPerson(
   if (key.kind !== "agent" || !key.capabilities.includes(CAPABILITY)) {
     throw new AppError(`agent key lacks the ${CAPABILITY} capability`, 403, "agent_capability_missing");
   }
-  const row = (PERSON_DOOR_OPERATIONS as Readonly<Record<string, { console: string; who: "content_manager" | "owner" }>>)[operation];
+  const row = (PERSON_DOOR_OPERATIONS as Readonly<Record<string, PersonDoorRow>>)[operation];
   if (row === undefined || body.client !== PERSON_DOOR_CLIENT) throw new ForbiddenError("Not an operation of the person's door");
   const person = await principalOfServerGrant(app, { client: body.client, grant: body.grant });
   if (person === null) throw new UnauthorizedError("The person's sign-in is over", { reason: null });
-  const role = person.user.role;
-  const allowed = row.who === "owner" ? role === "owner" : role === "owner" || role === "content_manager";
-  if (!allowed) throw new ForbiddenError("Публикации и статистика контента открыты владельцу и контент-менеджеру");
+  if (!row.roles.includes(person.user.role)) throw new ForbiddenError("Это действие вашей роли не открыто");
   const sandbox = sandboxOwnerRefusal(row.console, person);
   if (sandbox) throw sandbox;
   return person;

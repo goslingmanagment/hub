@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 84 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (543)
+## Routes (562)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -488,6 +488,25 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/allowance` | `voiceNoteAllowance` | `apiKey` | — | page | yes |
+| POST | `/api/v1/person/fansly/login-pages` | `personFanslyLoginPages` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/approve` | `personPublicationApprove` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/cancel` | `personPublicationCancel` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/delete-post` | `personPublicationDeletePost` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/get` | `personPublicationGet` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/list` | `personPublicationList` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/queue` | `personPublicationQueueList` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/queue/refresh` | `personPublicationQueueRefresh` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/replace` | `personPublicationReplace` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/resolve` | `personPublicationResolve` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/settings` | `personPublicationSettingsList` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/settings/update` | `personPublicationSettingsUpdate` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/switches` | `personPublicationSwitches` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/switches/set` | `personPublicationSwitchSet` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/withdraw` | `personPublicationWithdraw` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/publications/withdraw-page` | `personPublicationWithdrawPage` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/stats/comments` | `personContentComments` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/stats/content` | `personCreatorStatsContent` | `agentKey` | — | — | no |
+| POST | `/api/v1/person/stats/media` | `personCreatorStatsMedia` | `agentKey` | — | — | no |
 | GET | `/api/v1/public/vault-upload-files/:token` | `publicVaultUploadFile` | `public` | — | — | — |
 | GET | `/api/v1/reports` | `reportsList` | `session` | — | — | no |
 | GET | `/api/v1/reports/:slug` | `reportGet` | `session` | — | — | no |
