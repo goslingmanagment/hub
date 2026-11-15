@@ -244,7 +244,7 @@ function leaks(body: string, others: readonly string[]): string[] {
 }
 
 const OPERATIONS = Object.keys(PERSON_DOOR_OPERATIONS) as Array<keyof typeof PERSON_DOOR_OPERATIONS>;
-/** «Съёмка»'s rows: a chatter's login is served there only while the person leads customs of a model. */
+/** «Съёмка»'s rows: a chatter's or a team lead's login is served there only while the person leads customs of a model. */
 const SHOOTING_ROWS: ReadonlySet<string> = new Set(["personCustomOrderList", "personCustomOrderStep"]);
 
 describe("the person's door", () => {
@@ -281,7 +281,7 @@ describe("the person's door", () => {
           continue;
         }
         // «Съёмка» serves a chatter only while they lead customs (services/custom-orders/person.ts): this one does not.
-        if (!roles.includes(persona.role) || (SHOOTING_ROWS.has(key) && persona.role === "chatter")) {
+        if (!roles.includes(persona.role) || (SHOOTING_ROWS.has(key) && (persona.role === "chatter" || persona.role === "team_lead"))) {
           expect(answer.statusCode, `${key} as ${persona.who}: ${answer.body}`).toBe(403);
           continue;
         }
@@ -523,5 +523,35 @@ describe("the person's door", () => {
     // Kira's page is not hers to shoot, nor hers Kira's: outside their shooting, the order is not there.
     expect([404, 409]).toContain((await step("kmA2", orders.A)).statusCode);
     expect([404, 409]).toContain((await step("kmA", orders.A2)).statusCode);
+  });
+  it("«Съёмка» lets in a team lead who leads customs: he lists the orders and moves one; a team lead without the record is refused", async (context) => {
+    if (!server || !testDb) return context.skip();
+    await createUserAccount(app, { username: "tl-customs", role: "team_lead", password: "tl-customs-password-for-tests" }, { source: "cli" });
+    const tlUser = await fixtureUserId(app, "tl-customs");
+    const tl = (await testDb.pool.query<{ id: string }>(
+      "insert into people (code, display_name, role, state) values ('tl-customs', 'Tl', 'team_lead', 'working') returning id",
+    )).rows[0]!.id;
+    await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [tlUser, tl]);
+    // A model of his alone: no content manager, he the only one who leads its customs.
+    const una = await createModel(app.db, { slug: "una", name: "Una" });
+    pages["una-1"] = (await createFanslyPage(app.db, { modelId: una!.id, label: "una-1" }))!.id;
+    await testDb.pool.query("insert into team_roles (person_id, model_id, kind) values ($1, $2, 'customs')", [tl, una!.id]);
+    const id = await recordCustomOrder(app, {
+      pageId: pages["una-1"]!, fanId: null, buyer: "buyer_tl", conversationRef: null, card: { task: "Съёмка тимлида" }, deadlineOn: null,
+      acceptedByUserId: null, origin: "workboard", state: "checked", actor: { door: "system" },
+    });
+    const grant = await grantOf(await signIn("tl-customs", "tl-customs-password-for-tests"));
+    expect(grant).not.toBeNull();
+    const listed = await inject("POST", "/api/v1/person/custom-orders/list", { bearer: KEY, payload: { client: "contentops", grant } });
+    expect(listed.statusCode, listed.body).toBe(200);
+    expect(listed.json<{ orders: Array<{ code: string }> }>().orders.map((one) => one.code)).toContain(`K-${id}`);
+    // Una has no content manager: its customs lead — this team lead — leads the shooting.
+    const step = await inject("POST", "/api/v1/person/custom-orders/step", {
+      bearer: KEY, payload: { client: "contentops", grant, code: `K-${id}`, step: "at_model", deadlineOn: "2030-01-14" },
+    });
+    expect(step.statusCode, step.body).toBe(200);
+    // The team lead with no customs record: refused, as the rule says.
+    const plain = await inject("POST", "/api/v1/person/custom-orders/list", { bearer: KEY, payload: { client: "contentops", grant: grants.lead ?? "none" } });
+    expect([401, 403]).toContain(plain.statusCode);
   });
 });

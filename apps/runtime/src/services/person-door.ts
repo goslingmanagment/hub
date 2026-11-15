@@ -31,11 +31,12 @@ import { principalOfServerGrant } from "./signin-handoff.ts";
 const SCREEN = ["owner", "content_manager"] as const satisfies readonly UserRole[];
 const OWNER = ["owner"] as const satisfies readonly UserRole[];
 /**
- * «Съёмка»'s custom orders: the owner, a content manager, and whoever leads customs of a model — a chatter's login
- * (package C3; a team lead's side of an order is the check, in Workboard). Who reads and moves which order is cut by
- * services/custom-orders/person.ts: a chatter who leads no customs reads none.
+ * «Съёмка»'s custom orders: the owner, a content manager, and whoever leads customs of a model — the record «ведёт
+ * кастомы» may be held by a chatter's or a team lead's login, and Hub gives such a person ContentOps whatever the role
+ * (`productsOf`). So every role is let in here; who reads and moves which order is cut by
+ * services/custom-orders/person.ts and the leaders' rule: a chatter or a team lead who leads no customs reads none.
  */
-const SHOOTING = ["owner", "content_manager", "chatter"] as const satisfies readonly UserRole[];
+const SHOOTING = ["owner", "content_manager", "chatter", "team_lead"] as const satisfies readonly UserRole[];
 /**
  * A content manager's publications and statistics are HER WORKING PAGES' (plan §11 item 13: «КМ OF Лоры видит общую
  * библиотеку Лоры, а план и публикации — своих страниц»): Lora's OnlyFans content manager neither reads nor approves

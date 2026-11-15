@@ -57,7 +57,7 @@ export async function shootingScope(app: PersonApp, person: HumanAuthPrincipal):
   const teams = teamsOfPerson(facts, personOfLogin(facts, person.user.id));
   const right = (await listUsersWithPersonRight(app.db, "customs_lead")).some((lead) => lead.userId === person.user.id);
   const pageIds = pagesOfModels(facts, teams.customs).filter((id) => realm.has(id));
-  // A chatter who leads no customs has no shooting: «Съёмка» is not theirs at all.
+  // A chatter or a team lead who leads no customs has no shooting: «Съёмка» is not theirs at all.
   if (pageIds.length === 0 && !(right && !test)) throw new ForbiddenError("«Съёмка» открыта тому, кто ведёт кастомы");
   return { pageIds, unknownPage: right && !test, test };
 }
