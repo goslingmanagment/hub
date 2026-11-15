@@ -94,19 +94,45 @@ export async function setHandinFixingFrom(db: Database, input: { handinId: numbe
   await db.execute(sql`update shift_handins set fixing_from = ${input.from}, updated_at = clock_timestamp() where id = ${input.handinId}`);
 }
 
-/** «Скопировать пост»: when, and which version. */
-export async function setHandinPostCopied(db: Database, input: { handinId: number; version: number; at: Date }): Promise<void> {
+/**
+ * «Скопировать пост» of one model's post (0427), or of each model named: which version, and when. The report's own mark
+ * (the newest copy of any) is kept too, as the readers before 0427 read it.
+ */
+export async function setHandinPostCopied(db: Database, input: { handinId: number; version: number; at: Date; modelSlugs: readonly string[] }): Promise<void> {
   await db.execute(sql`
     update shift_handins set post_copied_at = ${input.at.toISOString()}::timestamptz, post_copied_version = ${input.version}, updated_at = clock_timestamp()
     where id = ${input.handinId}`);
+  for (const modelSlug of new Set(input.modelSlugs)) {
+    await db.execute(sql`
+      insert into shift_handin_post_copies (handin_id, model_slug, version, copied_at)
+      values (${input.handinId}, ${modelSlug}, ${input.version}, ${input.at.toISOString()}::timestamptz)
+      on conflict (handin_id, model_slug) do update set version = excluded.version, copied_at = excluded.copied_at`);
+  }
 }
 
-/** Reports whose post was copied from a version older than the newest. */
-export async function listHandinsPostCopiedBehind(db: Database): Promise<Array<{ handinId: number; shiftId: number; userId: number; copied: number; current: number }>> {
+/** Each model's copy of a report's post: which version, when. */
+export async function listHandinPostCopies(db: Database, handinId: number): Promise<Array<{ modelSlug: string; version: number; copiedAt: Date }>> {
   const result = await db.execute<Row>(sql`
-    select id, shift_id, user_id, post_copied_version, current_version from shift_handins
-    where post_copied_version is not null and current_version is not null and post_copied_version < current_version`);
-  return result.rows.map((row) => ({ handinId: num(row.id), shiftId: num(row.shift_id), userId: num(row.user_id), copied: num(row.post_copied_version), current: num(row.current_version) }));
+    select model_slug, version, copied_at from shift_handin_post_copies where handin_id = ${handinId} order by model_slug`);
+  return result.rows.map((row) => ({ modelSlug: String(row.model_slug), version: num(row.version), copiedAt: date(row.copied_at) }));
+}
+
+/**
+ * Posts copied from a version older than the report's newest: one row per model copied (0427); a report copied before
+ * 0427 (no model's copy kept) — one row for the whole report, `modelSlug` null.
+ */
+export async function listHandinsPostCopiedBehind(db: Database): Promise<Array<{ handinId: number; shiftId: number; userId: number; modelSlug: string | null; copied: number; current: number }>> {
+  const result = await db.execute<Row>(sql`
+    select h.id, h.shift_id, h.user_id, c.model_slug, coalesce(c.version, h.post_copied_version) as copied, h.current_version
+    from shift_handins h
+    left join shift_handin_post_copies c on c.handin_id = h.id
+    where h.post_copied_version is not null and h.current_version is not null
+      and coalesce(c.version, h.post_copied_version) < h.current_version
+      and (c.handin_id is not null or not exists (select 1 from shift_handin_post_copies any_copy where any_copy.handin_id = h.id))`);
+  return result.rows.map((row) => ({
+    handinId: num(row.id), shiftId: num(row.shift_id), userId: num(row.user_id), modelSlug: row.model_slug === null || row.model_slug === undefined ? null : String(row.model_slug),
+    copied: num(row.copied), current: num(row.current_version),
+  }));
 }
 
 /** The comment of the latest shift before this one on any of its pages (a draft's too): who, what, when. */

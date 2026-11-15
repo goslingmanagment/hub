@@ -190943,6 +190943,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -190951,6 +190954,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -194023,13 +194027,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -195824,6 +195860,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -195832,6 +195871,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -198904,13 +198944,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -309004,6 +309076,9 @@
                               "items": {
                                 "type": "object",
                                 "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
                                   "modelName": {
                                     "type": "string"
                                   },
@@ -309012,6 +309087,7 @@
                                   }
                                 },
                                 "required": [
+                                  "modelSlug",
                                   "modelName",
                                   "text"
                                 ],
@@ -312084,13 +312160,45 @@
                                             },
                                             "late": {
                                               "type": "boolean"
+                                            },
+                                            "models": {
+                                              "default": [],
+                                              "type": "array",
+                                              "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "modelSlug": {
+                                                    "type": "string"
+                                                  },
+                                                  "modelName": {
+                                                    "type": "string"
+                                                  },
+                                                  "copiedAt": {
+                                                    "type": [
+                                                      "string",
+                                                      "null"
+                                                    ]
+                                                  },
+                                                  "changedSinceCopy": {
+                                                    "type": "boolean"
+                                                  }
+                                                },
+                                                "required": [
+                                                  "modelSlug",
+                                                  "modelName",
+                                                  "copiedAt",
+                                                  "changedSinceCopy"
+                                                ],
+                                                "additionalProperties": false
+                                              }
                                             }
                                           },
                                           "required": [
                                             "copiedAt",
                                             "seen",
                                             "changedSinceCopy",
-                                            "late"
+                                            "late",
+                                            "models"
                                           ],
                                           "additionalProperties": false
                                         },
@@ -313192,6 +313300,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -313200,6 +313311,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -316272,13 +316384,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -317393,6 +317537,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -317401,6 +317548,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -320473,13 +320621,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -321502,6 +321682,9 @@
                           "items": {
                             "type": "object",
                             "properties": {
+                              "modelSlug": {
+                                "type": "string"
+                              },
                               "modelName": {
                                 "type": "string"
                               },
@@ -321510,6 +321693,7 @@
                               }
                             },
                             "required": [
+                              "modelSlug",
                               "modelName",
                               "text"
                             ],
@@ -324582,13 +324766,45 @@
                                         },
                                         "late": {
                                           "type": "boolean"
+                                        },
+                                        "models": {
+                                          "default": [],
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "modelSlug": {
+                                                "type": "string"
+                                              },
+                                              "modelName": {
+                                                "type": "string"
+                                              },
+                                              "copiedAt": {
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "changedSinceCopy": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "modelSlug",
+                                              "modelName",
+                                              "copiedAt",
+                                              "changedSinceCopy"
+                                            ],
+                                            "additionalProperties": false
+                                          }
                                         }
                                       },
                                       "required": [
                                         "copiedAt",
                                         "seen",
                                         "changedSinceCopy",
-                                        "late"
+                                        "late",
+                                        "models"
                                       ],
                                       "additionalProperties": false
                                     },
@@ -325500,6 +325716,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -325508,6 +325727,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -328580,13 +328800,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -329609,6 +329861,9 @@
                           "items": {
                             "type": "object",
                             "properties": {
+                              "modelSlug": {
+                                "type": "string"
+                              },
                               "modelName": {
                                 "type": "string"
                               },
@@ -329617,6 +329872,7 @@
                               }
                             },
                             "required": [
+                              "modelSlug",
                               "modelName",
                               "text"
                             ],
@@ -332689,13 +332945,45 @@
                                         },
                                         "late": {
                                           "type": "boolean"
+                                        },
+                                        "models": {
+                                          "default": [],
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "modelSlug": {
+                                                "type": "string"
+                                              },
+                                              "modelName": {
+                                                "type": "string"
+                                              },
+                                              "copiedAt": {
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "changedSinceCopy": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "modelSlug",
+                                              "modelName",
+                                              "copiedAt",
+                                              "changedSinceCopy"
+                                            ],
+                                            "additionalProperties": false
+                                          }
                                         }
                                       },
                                       "required": [
                                         "copiedAt",
                                         "seen",
                                         "changedSinceCopy",
-                                        "late"
+                                        "late",
+                                        "models"
                                       ],
                                       "additionalProperties": false
                                     },
@@ -334195,6 +334483,9 @@
                           "items": {
                             "type": "object",
                             "properties": {
+                              "modelSlug": {
+                                "type": "string"
+                              },
                               "modelName": {
                                 "type": "string"
                               },
@@ -334203,6 +334494,7 @@
                               }
                             },
                             "required": [
+                              "modelSlug",
                               "modelName",
                               "text"
                             ],
@@ -337275,13 +337567,45 @@
                                         },
                                         "late": {
                                           "type": "boolean"
+                                        },
+                                        "models": {
+                                          "default": [],
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "modelSlug": {
+                                                "type": "string"
+                                              },
+                                              "modelName": {
+                                                "type": "string"
+                                              },
+                                              "copiedAt": {
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "changedSinceCopy": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "modelSlug",
+                                              "modelName",
+                                              "copiedAt",
+                                              "changedSinceCopy"
+                                            ],
+                                            "additionalProperties": false
+                                          }
                                         }
                                       },
                                       "required": [
                                         "copiedAt",
                                         "seen",
                                         "changedSinceCopy",
-                                        "late"
+                                        "late",
+                                        "models"
                                       ],
                                       "additionalProperties": false
                                     },
@@ -338614,6 +338938,9 @@
                           "items": {
                             "type": "object",
                             "properties": {
+                              "modelSlug": {
+                                "type": "string"
+                              },
                               "modelName": {
                                 "type": "string"
                               },
@@ -338622,6 +338949,7 @@
                               }
                             },
                             "required": [
+                              "modelSlug",
                               "modelName",
                               "text"
                             ],
@@ -341694,13 +342022,45 @@
                                         },
                                         "late": {
                                           "type": "boolean"
+                                        },
+                                        "models": {
+                                          "default": [],
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "modelSlug": {
+                                                "type": "string"
+                                              },
+                                              "modelName": {
+                                                "type": "string"
+                                              },
+                                              "copiedAt": {
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "changedSinceCopy": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "modelSlug",
+                                              "modelName",
+                                              "copiedAt",
+                                              "changedSinceCopy"
+                                            ],
+                                            "additionalProperties": false
+                                          }
                                         }
                                       },
                                       "required": [
                                         "copiedAt",
                                         "seen",
                                         "changedSinceCopy",
-                                        "late"
+                                        "late",
+                                        "models"
                                       ],
                                       "additionalProperties": false
                                     },
@@ -342311,12 +342671,22 @@
     },
     "/api/v1/shift-reports/{shiftId}/post-copied": {
       "post": {
-        "summary": "«Скопировать пост»: remember the copy, so a later version that changes a page sum says «Пост изменился»",
+        "summary": "«Скопировать пост»: remember the copy of one model's post, so a later version that changes its page sums says «Пост изменился»",
         "tags": [
           "client"
         ],
-        "description": "Any session (the narrow one the extension opens included) or the chat extension's device token: the person's own report to write; a reader's to read. Database only. Own counted report.",
+        "description": "Any session (the narrow one the extension opens included) or the chat extension's device token: the person's own report to write; a reader's to read. Database only. Own counted report. `model` — the model whose post was copied (one of the report's posts); absent — every post (a client before the per-model copy).",
         "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "in": "query",
+            "name": "model",
+            "required": false
+          },
           {
             "schema": {
               "type": "integer",
@@ -343140,6 +343510,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -343148,6 +343521,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -346220,13 +346594,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -347328,6 +347734,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -347336,6 +347745,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -350408,13 +350818,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -351483,6 +351925,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -351491,6 +351936,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -354563,13 +355009,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -355638,6 +356116,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -355646,6 +356127,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -358718,13 +359200,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -359818,6 +360332,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -359826,6 +360343,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -362898,13 +363416,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -363983,6 +364533,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -363991,6 +364544,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -367063,13 +367617,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },
@@ -368092,6 +368678,9 @@
                           "items": {
                             "type": "object",
                             "properties": {
+                              "modelSlug": {
+                                "type": "string"
+                              },
                               "modelName": {
                                 "type": "string"
                               },
@@ -368100,6 +368689,7 @@
                               }
                             },
                             "required": [
+                              "modelSlug",
                               "modelName",
                               "text"
                             ],
@@ -371172,13 +371762,45 @@
                                         },
                                         "late": {
                                           "type": "boolean"
+                                        },
+                                        "models": {
+                                          "default": [],
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "modelSlug": {
+                                                "type": "string"
+                                              },
+                                              "modelName": {
+                                                "type": "string"
+                                              },
+                                              "copiedAt": {
+                                                "type": [
+                                                  "string",
+                                                  "null"
+                                                ]
+                                              },
+                                              "changedSinceCopy": {
+                                                "type": "boolean"
+                                              }
+                                            },
+                                            "required": [
+                                              "modelSlug",
+                                              "modelName",
+                                              "copiedAt",
+                                              "changedSinceCopy"
+                                            ],
+                                            "additionalProperties": false
+                                          }
                                         }
                                       },
                                       "required": [
                                         "copiedAt",
                                         "seen",
                                         "changedSinceCopy",
-                                        "late"
+                                        "late",
+                                        "models"
                                       ],
                                       "additionalProperties": false
                                     },
@@ -372080,6 +372702,9 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "modelName": {
                             "type": "string"
                           },
@@ -372088,6 +372713,7 @@
                           }
                         },
                         "required": [
+                          "modelSlug",
                           "modelName",
                           "text"
                         ],
@@ -375160,13 +375786,45 @@
                                     },
                                     "late": {
                                       "type": "boolean"
+                                    },
+                                    "models": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "copiedAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          },
+                                          "changedSinceCopy": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "copiedAt",
+                                          "changedSinceCopy"
+                                        ],
+                                        "additionalProperties": false
+                                      }
                                     }
                                   },
                                   "required": [
                                     "copiedAt",
                                     "seen",
                                     "changedSinceCopy",
-                                    "late"
+                                    "late",
+                                    "models"
                                   ],
                                   "additionalProperties": false
                                 },

@@ -167,6 +167,9 @@ export interface BoardRead {
   now: Date;
   /** Whether the ledger has seen the post of this report's day (own, counted; null — not known or not asked). */
   postSeen?: boolean | null;
+  /** The report's posts, one per model (own, counted), and each model's copy (0427). */
+  posts?: ReadonlyArray<{ modelSlug: string; modelName: string }>;
+  postCopies?: ReadonlyArray<{ modelSlug: string; version: number; copiedAt: Date }>;
 }
 
 /** The board of a shift as the reader may see it; null — no board for this shift (the right is off, or was granted after it began). */
@@ -618,6 +621,16 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       copiedAt: handin?.postCopiedAt?.toISOString() ?? null,
       seen: input.postSeen ?? null,
       changedSinceCopy: copied !== null && copied.version !== latest.version && postPagesDiffer(copied.pages, latest.pages),
+      // Each model's post by its own button: copied or not, and changed since on that model's pages.
+      models: (input.posts ?? []).map((post) => {
+        const copy = (input.postCopies ?? []).find((one) => one.modelSlug === post.modelSlug) ?? null;
+        const from = copy === null ? null : input.versions.find((version) => version.version === copy.version) ?? null;
+        const ofModel = (pages: ReadonlyArray<{ pageLabel: string; amountMills: number }>) => pages.filter((page) => catalog.info.get(page.pageLabel)?.modelSlug === post.modelSlug);
+        return {
+          modelSlug: post.modelSlug, modelName: post.modelName, copiedAt: copy?.copiedAt.toISOString() ?? null,
+          changedSinceCopy: from !== null && from.version !== latest.version && postPagesDiffer(ofModel(from.pages), ofModel(latest.pages)),
+        };
+      }),
       // The ledger's post reader refuses a post whose date is more than a day behind (`date_mismatch`): warn before copying.
       late: Date.parse(`${moscowToday}T00:00:00Z`) - Date.parse(`${reportDay}T00:00:00Z`) > DAY_MS,
     },

@@ -63,7 +63,8 @@ export interface BoardActions {
   show: (key: string) => void;
   commitNote: () => Promise<void>;
   openNote: (key: string, draft?: string) => void;
-  copyPost: () => void;
+  /** «Скопировать пост» of one model: only that model's text, never the posts joined («Отчётность» reads one model a post). */
+  copyPost: (modelSlug: string) => void;
   collapse: () => void;
   confirm: (candidateId: number) => Promise<void>;
 }
@@ -254,16 +255,17 @@ export function ReportBoard({ report, host, transport, light }: {
     setEdit({ key, draft: draft ?? (row.note?.text ?? agentNote(row) ?? "") });
   }, [board]);
 
-  const copyPost = useCallback(() => {
-    const text = report.posts.map((post) => post.text).join("\n\n");
-    if (text === "") {
+  const copyPost = useCallback((modelSlug: string) => {
+    const post = report.posts.find((one) => one.modelSlug === modelSlug) ?? null;
+    const text = post?.text ?? "";
+    if (post === null || text === "") {
       toast("Поста пока нет: он появится, когда отчёт учтён");
       return;
     }
     const ok = () => {
-      toast("Пост скопирован, вставьте его в «Отчётность»");
-      // Hub remembers the copy; its failure changes nothing the person sees.
-      write.mutateAsync({ op: "postCopied" }).catch(() => {});
+      toast(report.posts.length > 1 ? `Пост ${post.modelName} скопирован, вставьте его в «Отчётность»` : "Пост скопирован, вставьте его в «Отчётность»");
+      // Hub remembers the copy of this model's post; its failure changes nothing the person sees.
+      write.mutateAsync({ op: "postCopied", model: modelSlug }).catch(() => {});
     };
     if (transport) {
       void transport.copy(text).then((done) => (done ? ok() : copyHere(text).then((here) => (here ? ok() : toast("Не получилось скопировать: браузер не дал доступ к буферу")))));

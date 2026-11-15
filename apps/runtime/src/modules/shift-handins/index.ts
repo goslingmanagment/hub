@@ -128,7 +128,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
   });
 
   server.post("/api/v1/shift-reports/:shiftId/post-copied", { schema: routeSchemas.shiftReportPostCopied }, async (request) => {
-    return markShiftReportPostCopied(appContext, await person(request), { shiftId: request.params.shiftId });
+    return markShiftReportPostCopied(appContext, await person(request), { shiftId: request.params.shiftId, model: request.query.model ?? null });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/reopen", { schema: routeSchemas.shiftReportReopen }, async (request) => {
