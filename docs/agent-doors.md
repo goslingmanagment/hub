@@ -31,7 +31,7 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | Fans and messages | `hub resolve`, `person`, `timeline`, `threads`, `transcript`, `search` | `read:messages` and others | The read plane: `agent-read-skill.md` |
 | Money | `hub dataset` (`transactions`, `fan_spend_*`, …) | `read:datasets` + `read:money` | Typed dataset queries per page |
 | Matters | `POST /api/v1/agent/matters`, `…/close`, `…/comment` | `write:matters` | Open, close, comment a matter by its reason key, for a person (by login) or a role. The agent's own kinds only |
-| Agent reports | `PUT /api/v1/agent/reports/:slug` (`hub report put`), `GET /api/v1/agent/reports` | `write:reports` | A markdown page people read in the app (`traffic` is Трафик → Сводка) |
+| Agent reports | `PUT /api/v1/agent/reports/:slug` (`hub report put`), `GET /api/v1/agent/reports` | `write:reports` | A markdown page people read in the app (`traffic` is Трафик → Сводка). Section `learn` is Workboard «Обучение»: the owner reads it at once, the team only after he switches «Показывать команде» on for that page (it stays on when the page is republished) |
 | System state | `PUT /api/v1/agent/system/routines`, `PUT …/system/copies` | `write:system_state` | A reporter's whole list of routines and copies, for Система → «Состояние» |
 | Content | `hub publication-*`, `post-*`, `media-look`, `vault-album-draft` | `write:publication_drafts`, `approve:*`, `withdraw:publications`, `delete:posts`, `look:media`, `read:content` | `agent-read-skill.md`, «Drafting wall posts» and after |
 | Fan queues | `hub queue-*` | `write:fan_queues` | Queues for chatters, on the word of the person who asked |
@@ -47,6 +47,10 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 
 A page outside the key's grant is the plane's static 404, the same as one that does not exist. A session never
 gets through any of these doors; an agent key never gets through a session's.
+
+**Not an agent door: the person door.** `/api/v1/person/*` (`services/person-door.ts`) is ContentOps' server acting
+AS the person signed in there (its key `signin:contentops` plus that person's live sign-in grant), for publications
+and content statistics; the rights are the person's, every change is recorded as the person's. No agent calls it.
 
 **The test realm.** The test team on production (the model «Тест», pages `test-1` and `test-of`, people `t-*`) is
 behind a wall (`services/sandbox/realm.ts`): a live key never reads its people, shifts, sales, reports, questions or

@@ -16,8 +16,11 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
   Hub = the console (`apps/dashboard`, the owner's alone, `hub.`), Workboard = `apps/workboard` (every role, ONE address:
   `chatgoose.…/workboard/`; Hub's server sends `hub.…/workboard/*` there through the sign-in hand-off). The product's
   name opens the switcher (`auth/me` `products`). Old addresses: one table, `packages/ui/src/old-addresses.ts`.
-  ContentOps (the content managers' product) is its own repository, `~/code/4-content/contentops`; a `content_manager`
-  login holds a session that opens ContentOps alone (`services/content-manager-operations.ts`).
+  ContentOps (the content managers' product) is its own repository, `~/code/4-content/contentops`, with its own
+  entrance: a content manager signs in on ContentOps' form, its server asks Hub (`services/contentops-signin.ts`,
+  `sso/password|link|password-change|logout`, key `signin:contentops`; an owner's login is refused there), and her
+  invitation and reset links lead to `contentops.…/join#…`. In Hub such a login opens ContentOps alone
+  (`services/content-manager-operations.ts`).
   `pnpm dev:workboard:demo` → http://localhost:5190/workboard/ on the same demo data (`/workboard/__specimen` — every
   component). Against a local API: `pnpm dev:workboard` (proxies `/api` to :3000). The console's dev servers proxy
   `/workboard` to Workboard's (5190 for `dev:demo`, 5191 for `dev:dashboard`), run it beside. To see both names and the
