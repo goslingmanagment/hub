@@ -208,7 +208,7 @@ async function teamPart(
   const firstDay = !owner && (records.length === 0 || records.every((role) => input.now - role.grantedAt.getTime() < FIRST_DAY_MS));
 
   const yesterday = moscowDayOf(input.now - DAY_MS);
-  // Who is scheduled on a day is the standing lines and the approved swaps' one-day lines of those days (0420); «Графика
+  // Who is scheduled on a day is the standing lines and the approved swaps' one-day lines of those days (0422); «Графика
   // нет» is about the standing lines alone.
   const [going, unnoted, slotRows, dayRows, logins] = await Promise.all([
     listGoingShifts(app.db),

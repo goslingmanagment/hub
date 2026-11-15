@@ -99,7 +99,7 @@ export function ruleSlotsOf(input: {
 
 /**
  * The people registry's schedule slots, read through `db` in turn: the standing lines and the swaps' one-day lines of the
- * window (0420) — who is scheduled on a day is both.
+ * window (0422) — who is scheduled on a day is both.
  */
 export function registrySlots(db: Database): SaleSlotProvider {
   return {

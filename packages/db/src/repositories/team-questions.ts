@@ -34,11 +34,11 @@ export interface TeamQuestionRow {
   answeredAt: Date | null;
   seenAt: Date | null;
   withdrawnAt: Date | null;
-  /** A swap's details (0420); null — any other kind. */
+  /** A swap's details (0422); null — any other kind. */
   swap: TeamQuestionSwap | null;
 }
 
-/** A swap's details as the question keeps them (0420): the day, the pages, the hours (Moscow minutes), who and who for. */
+/** A swap's details as the question keeps them (0422): the day, the pages, the hours (Moscow minutes), who and who for. */
 export interface TeamQuestionSwap {
   date: string;
   pageIds: number[];

@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — nullable columns, a widened kind list and an index; at deploy time no row uses them.
--- 0420_schedule_swaps.sql
+-- 0422_schedule_swaps.sql
 --
 -- «Подмена» and «Предложить сетку» (products plan 2026-11-13 §2.3, package W) are QUESTIONS (0418 `team_questions`), never a
 -- second ask/decide mechanism and never a second schedule:
@@ -51,4 +51,4 @@ alter table team_questions add constraint team_questions_kind_check
   check (kind in ('discount_over_50', 'free_paid', 'custom_price', 'whale_terms', 'swap', 'late', 'schedule'));
 
 comment on column person_schedule_slots.kind is
-  'null — a standing line; cover / off — a one-day line of an approved swap (0420, its question in question_id).';
+  'null — a standing line; cover / off — a one-day line of an approved swap (0422, its question in question_id).';

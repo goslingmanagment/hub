@@ -180,7 +180,7 @@ export interface RuleSlot {
   validFrom: string | null;
   validTo: string | null;
   /**
-   * A swap's one-day line (0420; absent — a standing line): `cover` runs on top of the person's own lines of that page
+   * A swap's one-day line (0422; absent — a standing line): `cover` runs on top of the person's own lines of that page
    * that day; `off` — none of the person's lines runs on that page that day.
    */
   day?: "cover" | "off";

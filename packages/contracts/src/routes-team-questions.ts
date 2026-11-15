@@ -37,7 +37,7 @@ export const TEAM_QUESTION_KIND_WORDS: Readonly<Record<TeamQuestionKind, string>
 const swapTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$/, "a time is HH:MM by Moscow time");
 
 /**
- * «Подмена» (products package W, 0420): the day, the pages, the hours of the slot, who covers (a person of the same team)
+ * «Подмена» (products package W, 0422): the day, the pages, the hours of the slot, who covers (a person of the same team)
  * and who cannot come (the asker's person when absent; a lead may ask for a person of their team). Its «Можно» writes the
  * registry's one-day lines of that day: the covering person's on top of their own, the absent person's «off» there.
  */

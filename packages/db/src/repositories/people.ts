@@ -553,7 +553,7 @@ export interface PersonScheduleSlotRow {
   validFrom: string | null;
   validTo: string | null;
   /**
-   * null — a standing line. `cover` / `off` — a one-day line of an approved swap (0420, a question's «Можно»): the
+   * null — a standing line. `cover` / `off` — a one-day line of an approved swap (0422, a question's «Можно»): the
    * covering person's line on top of their own, and the absent person's «none of my lines runs on this page that day».
    * Only `listPersonDayLineRows` returns them; every standing read leaves them out.
    */
@@ -584,7 +584,7 @@ const SLOT_COLUMNS = sql`
 
 /**
  * The STANDING schedule: by person, then the line (every page first, then by page), oldest first: a slot with no known
- * start comes first. A swap's one-day lines (0420 `kind`) are not here, on purpose: the person's card, the standing grid,
+ * start comes first. A swap's one-day lines (0422 `kind`) are not here, on purpose: the person's card, the standing grid,
  * the agents' people door and a schedule change read the standing lines alone, and a swap is never a change of them.
  * Who is scheduled on a day reads `listPersonDayLineRows` beside this (the sale rule's slots, «Сегодня»).
  */
@@ -598,7 +598,7 @@ export async function listPersonScheduleSlotRows(db: Database, personIds?: reado
   return result.rows.map(slotOf);
 }
 
-/** The swaps' one-day lines (0420) of the Moscow days `from`..`to` not taken back: who covers and who is off, by day. */
+/** The swaps' one-day lines (0422) of the Moscow days `from`..`to` not taken back: who covers and who is off, by day. */
 export async function listPersonDayLineRows(db: Database, input: { from: string; to: string }): Promise<PersonScheduleSlotRow[]> {
   const result = await db.execute<Row>(sql`
     select ${SLOT_COLUMNS}
@@ -609,7 +609,7 @@ export async function listPersonDayLineRows(db: Database, input: { from: string;
 }
 
 /**
- * The ONE writer of a swap's lines (0420), beside the standing writer below: one line a page of a day, of its question.
+ * The ONE writer of a swap's lines (0422), beside the standing writer below: one line a page of a day, of its question.
  * `cover` — the covering person's slot on top of their own; `off` — none of the absent person's lines runs on the page.
  */
 export async function insertPersonDayLine(db: Database, input: {

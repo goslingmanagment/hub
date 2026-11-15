@@ -11,7 +11,7 @@ import { slotRuns } from "../apps/runtime/src/services/sale-rule.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
-// «Подмена» (products package W, 0420): a swap is a question; its «Можно» writes, in the answer's transaction, the
+// «Подмена» (products package W, 0422): a swap is a question; its «Можно» writes, in the answer's transaction, the
 // registry's one-day lines (the covering person's on top of their own, the absent person's «off»), which the sale rule's
 // slots read; the decider takes it back before the day (the lines are marked, never deleted). The standing schedule (the
 // person's card, the agents' people door) never shows a swap. A covering person of another team is refused, and so is

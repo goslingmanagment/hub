@@ -286,7 +286,7 @@ export async function closeQuestion(
   return { question: question!, savedAt: now.toISOString() };
 }
 
-// ── «Подмена» (products package W, 0420) ────────────────────────────────────
+// ── «Подмена» (products package W, 0422) ────────────────────────────────────
 
 /** The swap of an ask, checked: a day ahead, pages of one team, a covering person of that team, the absent person's pages. */
 async function swapOfBody(

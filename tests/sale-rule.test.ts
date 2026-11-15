@@ -353,7 +353,7 @@ describe("the owner's answers newer than ledger's Go", () => {
   });
 
   it("reads an approved swap's day: the covering person's slot counts, the absent one's does not, other days and a revoked swap untouched", () => {
-    // 2026-11-12: the night chatter (102) cannot come on page-a; 103 covers 00:00–08:00 there (0420 day lines).
+    // 2026-11-12: the night chatter (102) cannot come on page-a; 103 covers 00:00–08:00 there (0422 day lines).
     const day = { validFrom: "2026-11-12", validTo: "2026-11-12" };
     const swap = [
       slot(102, "00:00", "08:00", { pageId: PAGE_A, ...day, day: "off" }),
