@@ -386,12 +386,12 @@ describe("the shift report: who reads, who writes", () => {
       return proposal;
     };
     const markOf = async () => (await testDb!.pool.query(
-      `select m.statement, m.to_user_id, m.by_proposal_id from shift_handin_marks m join shift_handins h on h.id = m.handin_id
-       where h.shift_id = $1 and m.transaction_id = $2`, [shiftA, sale])).rows[0];
+      `select m.statement, m.to_user_id::int as to_user_id, m.by_proposal_id::int as by_proposal_id from shift_handin_marks m
+       join shift_handins h on h.id = m.handin_id where h.shift_id = $1 and m.transaction_id = $2`, [shiftA, sale])).rows[0];
 
     // «В общак»: the person's word now (the mark, «по правке Генгара»), the owner's matter opens, the ledger reads «не моё».
     const pot = await keepCard({ word: "pot" });
-    expect(await markOf()).toMatchObject({ statement: "pot", by_proposal_id: String(pot) });
+    expect(await markOf()).toMatchObject({ statement: "pot", by_proposal_id: pot });
     await runShiftReportBoardPass(app);
     expect((await testDb.pool.query("select state, owner_role from matters where kind = 'sale.pot_offer'")).rows).toEqual([{ state: "open", owner_role: "owner" }]);
     const feed = agentShiftReportsFeedResponseSchema.parse((await asKey("ledger", "GET", "/api/v1/agent/shift-reports")).json());
@@ -401,7 +401,7 @@ describe("the shift report: who reads, who writes", () => {
     // «Отдать» dina, who hands shifts in the old way: the person's «не моё» and a question to the decider, never a gift settled.
     const dina = await fixtureUserId(app, "dina");
     const give = await keepCard({ word: "give", userId: dina });
-    expect(await markOf()).toMatchObject({ statement: "not_mine", to_user_id: null, by_proposal_id: String(give) });
+    expect(await markOf()).toMatchObject({ statement: "not_mine", to_user_id: null, by_proposal_id: give });
     const claims = await testDb.pool.query("select state, escalated_why, origin from sale_claims where transaction_id = $1 and side_user_id = $2", [sale, dina]);
     expect(claims.rows).toEqual([{ state: "owner", escalated_why: "no_side", origin: "draft" }]);
     // No longer in the pot: the owner's matter closes.
