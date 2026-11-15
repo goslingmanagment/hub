@@ -34,6 +34,7 @@ import {
   listCurrentReportsSince,
   listDaysHandedIn,
   listHandinNames,
+  listHandinProposals,
   listHandinPeopleOfUsers,
   listHandinSalesByIds,
   listMatterPageLabels,
@@ -275,6 +276,18 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
   return tally;
 }
 
+/** The cards of Gengar the claimants said «Не согласен» to on the sale: what the card wanted and why. */
+async function declinedCardsOf(db: Database, claims: readonly SaleClaimRow[]): Promise<Array<{ proposalId: number; to: string; toUserId: number | null; why: string }>> {
+  const out: Array<{ proposalId: number; to: string; toUserId: number | null; why: string }> = [];
+  for (const handinId of new Set(claims.flatMap((claim) => (claim.claimantHandinId === null ? [] : [claim.claimantHandinId])))) {
+    for (const card of await listHandinProposals(db, handinId)) {
+      if (card.kind !== "owner_change" || card.state !== "declined" || !claims.some((claim) => claim.transactionId === card.transactionId)) continue;
+      out.push({ proposalId: card.id, to: card.toWord ?? "", toUserId: card.toUserId, why: card.why });
+    }
+  }
+  return out;
+}
+
 /** «/workboard/report/<id>?sale=<id>»: the side's board at the row. */
 const sideLink = (claim: Pick<SaleClaimRow, "sideShiftId" | "transactionId">) =>
   (claim.sideShiftId === null ? null : `/workboard/report/${claim.sideShiftId}${claim.transactionId === null ? "" : `?sale=${claim.transactionId}`}`);
@@ -357,6 +370,9 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
       evidence: {
         transactionId: first.transactionId, claimIds: list.map((claim) => claim.id), netMills: sale?.netMills ?? null,
         why: [...new Set(list.map((claim) => claim.escalatedWhy))], saidAt: list.map((claim) => claim.claimedAt.toISOString()).sort()[0],
+        // The people's own lines of why, and a card of Gengar one of them said «Не согласен» to.
+        notes: list.flatMap((claim) => (claim.claimantNote === null ? [] : [claim.claimantNote])),
+        cards: await declinedCardsOf(db, list),
       },
       link: first.transactionId === null ? `/workboard/waiting?claim=${first.id}#questions` : `/workboard/waiting?dispute=${first.transactionId}#questions`,
     }, SYSTEM, now);

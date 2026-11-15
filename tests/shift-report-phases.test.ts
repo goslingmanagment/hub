@@ -1,4 +1,4 @@
-import { SHIFT_REPORT_PHASES } from "@agency_hub_core/contracts";
+import { SHIFT_REPORT_PHASES, saleSiteWords } from "@agency_hub_core/contracts";
 import type { HandinVersionLine } from "@agency_hub_core/db";
 import { describe, expect, it } from "vitest";
 
@@ -226,6 +226,25 @@ describe("which line of a counted version holds its sale (`holdsSale`)", () => {
     expect(holdsSale(line(52, { shareMills: 0, statement: "not_mine" }))).toBe(true);
     expect(holdsSale(line(53, { shareMills: 0, statement: "mine", disputed: true }))).toBe(true);
     expect(holdsSale(line(54, { shareMills: 0, settled: "owner" }))).toBe(true);
+  });
+});
+
+describe("a line that waits for the decider since the hand-in (third reader, 6)", () => {
+  it("signs it at 0, claiming what it counted: «Не согласен» with a card waits as any disputed row", () => {
+    const own = line(60, { netMills: 12_000 });
+    const [signed] = withSettlementsNow([own], [{ ...own, amountMills: 0, disputed: true, claimedMills: 12_000 }]);
+    expect(signed).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 12_000 });
+  });
+});
+
+describe("the sites' words of a row (third reader, 8)", () => {
+  it("reads the rule's kinds and the stored ones alike, as Wallet activity and the statement do", () => {
+    expect(saleSiteWords("fansly", "ppv")).toBe("Media Sale to");
+    expect(saleSiteWords("fansly", "message_purchase")).toBe("Media Sale to");
+    expect(saleSiteWords("fansly", "post")).toBe("Media Sale to");
+    expect(saleSiteWords("onlyfans", "ppv")).toBe("Payment for message from");
+    expect(saleSiteWords("onlyfans", "stream_tip")).toBe("Tip from");
+    expect(saleSiteWords("fansly", "something")).toBe("Sale to");
   });
 });
 

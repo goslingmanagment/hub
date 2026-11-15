@@ -255,6 +255,11 @@ export interface DraftFacts {
   senders: Map<number, number>;
   /** What a sale the owner decided or the sides agreed on gives the person, by transaction (review R2-a). */
   settled: Map<number, { amountMills: number; settled: "owner" | "agreed" }>;
+  /**
+   * The person's own «моё» still open — asked of a colleague or waiting for the decider (a card of Gengar they said «Не
+   * согласен» to): the sale waits, counting nothing here until answered or decided («спорная строка ждёт отдельно»).
+   */
+  waiting?: Set<number>;
 }
 
 /** The shift's own work among the rule's works: the person's shift that ran with it the longest. */
@@ -437,6 +442,9 @@ export async function draftFacts(
   const saleIds = classified.map((one) => one.sale.transactionId);
   const decisions = await listActiveSaleDecisions(db, saleIds);
   const agreed = await listSaleClaims(db, { transactionIds: saleIds, states: ["agreed"] });
+  const waiting = new Set(handin === null ? [] : (await listSaleClaims(db, { transactionIds: saleIds, states: ["asked", "owner"] }))
+    .filter((claim) => claim.kind === "claim" && claim.claimantHandinId === handin.id && claim.statement === "mine" && claim.transactionId !== null)
+    .map((claim) => claim.transactionId!));
   const settled = new Map<number, { amountMills: number; settled: "owner" | "agreed" }>();
   for (const one of classified) {
     const id = one.sale.transactionId;
@@ -454,6 +462,7 @@ export async function draftFacts(
     works: new Map(works.map((work) => [work.ref, { userId: work.userId, kind: work.kind }])),
     senders,
     settled,
+    waiting,
   };
 }
 
@@ -557,7 +566,7 @@ async function lineDetails(db: Database, subject: Subject, facts: DraftFacts, ca
  * sides agreed on counts what that gives the person (`facts.settled`), settled and not disputed, whatever the word.
  * Pure.
  */
-export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & Partial<Pick<DraftFacts, "settled">>, marks: readonly HandinMarkRow[]): HandinVersionLine[] {
+export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & Partial<Pick<DraftFacts, "settled" | "waiting">>, marks: readonly HandinMarkRow[]): HandinVersionLine[] {
   const markOf = new Map(marks.map((mark) => [mark.transactionId, mark]));
   return facts.classified.map((one) => {
     const mark = markOf.get(one.sale.transactionId);
@@ -572,7 +581,10 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & P
     // person holding it still counts it there, not here.
     const given = facts.settled?.get(one.sale.transactionId) ?? null;
     const settled = given !== null && one.alreadyIn === null && (statement !== null || plain.amountMills > 0 || given.amountMills > 0) ? given : null;
-    const { amountMills, disputed } = settled === null ? plain : { amountMills: settled.amountMills, disputed: false };
+    // The person's own «моё» still open (`facts.waiting`): it waits, counting nothing, and says what it claims.
+    const waits = settled === null && plain.amountMills > 0 && facts.waiting?.has(one.sale.transactionId) === true;
+    if (waits) plain.claimedMills = plain.amountMills;
+    const { amountMills, disputed } = settled !== null ? { amountMills: settled.amountMills, disputed: false } : waits ? { amountMills: 0, disputed: true } : plain;
     return {
       transactionId: one.sale.transactionId,
       offPlatformId: null,

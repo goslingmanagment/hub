@@ -39,6 +39,7 @@ import {
   listMatterPageLabels,
   listOffPlatform,
   listOpenMattersOfKinds,
+  listHandinSalesByIds,
   listSaleClaims,
   lockSaleSettlements,
   openMatter,
@@ -524,10 +525,11 @@ export async function withdrawShiftReportAsk(app: BoardApp, actor: HandinPersonA
 export async function answerShiftReportProposal(
   app: BoardApp,
   actor: HandinPersonActor,
-  input: { shiftId: number; proposalId: number; answer: "decline" | "restore" | "accept" },
+  input: { shiftId: number; proposalId: number; answer: "decline" | "restore" | "accept"; note?: string | null },
   now: Date = new Date(),
 ): Promise<ShiftReportResponse> {
-  const { subject, handin, phase } = await boardFor(app, actor, input.shiftId, "answerProposal");
+  const { subject, catalog, handin, phase } = await boardFor(app, actor, input.shiftId, "answerProposal");
+  let disputed = false;
   if (handin === null) throw new NotFoundError("No such card");
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
@@ -550,13 +552,56 @@ export async function answerShiftReportProposal(
     if (input.answer === "decline") {
       if (proposal.state !== "proposed" && proposal.state !== "late") throw new ConflictError("This card is answered", { reason: "answered" });
       await setHandinProposalState(db, { id: proposal.id, state: "declined", byUserId: actor.userId, at: now });
+      // «Не согласен» with a card of whose the sale is: whoever decides it decides (the board says «решит …»), and the
+      // sale waits meanwhile as any disputed row — the person's «моё» against the card, a question to the decider.
+      if (proposal.kind === "owner_change") {
+        const note = input.note === undefined || input.note === null || input.note.trim() === "" ? null : input.note.trim();
+        await disputeCard(db, { proposal, handin, subject, catalog, note, at: now });
+        disputed = true;
+      }
       return;
     }
     if (proposal.state !== "declined" || proposal.afterCounted || phase !== "confirm") throw new ConflictError("Nothing to bring back", { reason: "not_declined" });
     await setHandinProposalState(db, { id: proposal.id, state: "proposed", byUserId: null, at: now });
+    // «Вернуть правку»: the card stands again, the question it raised is taken back.
+    for (const claim of await listSaleClaims(db, { transactionIds: [proposal.transactionId], states: ["asked", "owner"] })) {
+      if (claim.claimantHandinId === handin.id && claim.origin === "draft" && claim.statement === "mine") {
+        await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state });
+        disputed = true;
+      }
+    }
   });
+  if (disputed) await runSaleClaims(app, now).catch((error: unknown) => warn(app, error, "the claims pass after a card's answer"));
   await syncBoardMatters(app, now).catch((error: unknown) => warn(app, error, "the board's matters after a card"));
   return readSubject(app, actor, subject, now);
+}
+
+/**
+ * A card of Gengar the person said «Не согласен» to: their «моё» against it, the decider's at once (`owner`,
+ * `disagree`) — the colleague the card gives it to answers nothing: Gengar's word is no colleague's. The claim's note is
+ * the person's why; the decider's matter carries the card (sale-claims.ts `syncClaimMatters`). In the caller's turn.
+ */
+async function disputeCard(
+  db: Database,
+  input: { proposal: ProposalRow; handin: HandinRow; subject: Board["subject"]; catalog: PageCatalog; note: string | null; at: Date },
+): Promise<void> {
+  const { proposal, handin, subject, catalog, note, at } = input;
+  const sale = (await listHandinSalesByIds(db, [proposal.transactionId]))[0];
+  const side = proposal.toWord === "give" || proposal.toWord === "share" ? proposal.toUserId : null;
+  const fields = {
+    pageId: sale?.pageId ?? catalog.idOf.get(subject.shift.pages[0]?.pageLabel ?? "") ?? null, kind: "claim" as const, claimantVersion: null,
+    statement: "mine" as const, shareWithUserId: null, claimantNote: note, claimedAt: at, sideShiftId: null,
+    state: "owner" as const, escalatedAt: at, escalatedWhy: "disagree" as const,
+  };
+  const existing = (await listSaleClaims(db, { transactionIds: [proposal.transactionId] }))
+    .find((claim) => claim.claimantHandinId === handin.id && (claim.sideUserId ?? 0) === (side ?? 0));
+  if (existing === undefined) {
+    await insertSaleClaim(db, { ...fields, transactionId: proposal.transactionId, claimantUserId: subject.shift.userId, claimantHandinId: handin.id, sideUserId: side, origin: "draft" }, at);
+  } else if (existing.state === "withdrawn") {
+    await reopenSaleClaim(db, existing.id, fields, at);
+  } else if (existing.state === "asked") {
+    await updateSaleClaim(db, existing.id, { state: "owner", escalatedAt: at, escalatedWhy: "disagree", claimantNote: note ?? existing.claimantNote }, at, { ifState: "asked" });
+  }
 }
 
 // ── «Нет в Hub» ──────────────────────────────────────────────────────────────

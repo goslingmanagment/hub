@@ -192354,6 +192354,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -193433,6 +193508,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -197235,6 +197385,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -198314,6 +198539,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -310392,6 +310692,81 @@
                                                 },
                                                 "foundByHub": {
                                                   "type": "boolean"
+                                                },
+                                                "decider": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "owner",
+                                                        "team_lead"
+                                                      ]
+                                                    },
+                                                    "user": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "userId": {
+                                                              "type": "integer",
+                                                              "exclusiveMinimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            "name": {
+                                                              "type": "string"
+                                                            },
+                                                            "forms": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "nom": {
+                                                                  "type": "string"
+                                                                },
+                                                                "gen": {
+                                                                  "type": "string"
+                                                                },
+                                                                "acc": {
+                                                                  "type": "string"
+                                                                },
+                                                                "ins": {
+                                                                  "type": "string"
+                                                                },
+                                                                "dat": {
+                                                                  "type": "string"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "nom",
+                                                                "gen",
+                                                                "acc",
+                                                                "ins",
+                                                                "dat"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "userId",
+                                                            "name",
+                                                            "forms"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "words": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "user",
+                                                    "words"
+                                                  ],
+                                                  "additionalProperties": false
                                                 }
                                               },
                                               "required": [
@@ -311471,6 +311846,81 @@
                                                     },
                                                     "foundByHub": {
                                                       "type": "boolean"
+                                                    },
+                                                    "decider": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "kind": {
+                                                          "type": "string",
+                                                          "enum": [
+                                                            "owner",
+                                                            "team_lead"
+                                                          ]
+                                                        },
+                                                        "user": {
+                                                          "anyOf": [
+                                                            {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "userId": {
+                                                                  "type": "integer",
+                                                                  "exclusiveMinimum": 0,
+                                                                  "maximum": 9007199254740991
+                                                                },
+                                                                "name": {
+                                                                  "type": "string"
+                                                                },
+                                                                "forms": {
+                                                                  "type": "object",
+                                                                  "properties": {
+                                                                    "nom": {
+                                                                      "type": "string"
+                                                                    },
+                                                                    "gen": {
+                                                                      "type": "string"
+                                                                    },
+                                                                    "acc": {
+                                                                      "type": "string"
+                                                                    },
+                                                                    "ins": {
+                                                                      "type": "string"
+                                                                    },
+                                                                    "dat": {
+                                                                      "type": "string"
+                                                                    }
+                                                                  },
+                                                                  "required": [
+                                                                    "nom",
+                                                                    "gen",
+                                                                    "acc",
+                                                                    "ins",
+                                                                    "dat"
+                                                                  ],
+                                                                  "additionalProperties": false
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "userId",
+                                                                "name",
+                                                                "forms"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            },
+                                                            {
+                                                              "type": "null"
+                                                            }
+                                                          ]
+                                                        },
+                                                        "words": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "kind",
+                                                        "user",
+                                                        "words"
+                                                      ],
+                                                      "additionalProperties": false
                                                     }
                                                   },
                                                   "required": [
@@ -314580,6 +315030,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -315659,6 +316184,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -318781,6 +319381,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -319860,6 +320535,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -322890,6 +323640,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -323969,6 +324794,81 @@
                                                 },
                                                 "foundByHub": {
                                                   "type": "boolean"
+                                                },
+                                                "decider": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "owner",
+                                                        "team_lead"
+                                                      ]
+                                                    },
+                                                    "user": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "userId": {
+                                                              "type": "integer",
+                                                              "exclusiveMinimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            "name": {
+                                                              "type": "string"
+                                                            },
+                                                            "forms": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "nom": {
+                                                                  "type": "string"
+                                                                },
+                                                                "gen": {
+                                                                  "type": "string"
+                                                                },
+                                                                "acc": {
+                                                                  "type": "string"
+                                                                },
+                                                                "ins": {
+                                                                  "type": "string"
+                                                                },
+                                                                "dat": {
+                                                                  "type": "string"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "nom",
+                                                                "gen",
+                                                                "acc",
+                                                                "ins",
+                                                                "dat"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "userId",
+                                                            "name",
+                                                            "forms"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "words": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "user",
+                                                    "words"
+                                                  ],
+                                                  "additionalProperties": false
                                                 }
                                               },
                                               "required": [
@@ -326888,6 +327788,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -327967,6 +328942,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -330997,6 +332047,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -332076,6 +333201,81 @@
                                                 },
                                                 "foundByHub": {
                                                   "type": "boolean"
+                                                },
+                                                "decider": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "owner",
+                                                        "team_lead"
+                                                      ]
+                                                    },
+                                                    "user": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "userId": {
+                                                              "type": "integer",
+                                                              "exclusiveMinimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            "name": {
+                                                              "type": "string"
+                                                            },
+                                                            "forms": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "nom": {
+                                                                  "type": "string"
+                                                                },
+                                                                "gen": {
+                                                                  "type": "string"
+                                                                },
+                                                                "acc": {
+                                                                  "type": "string"
+                                                                },
+                                                                "ins": {
+                                                                  "type": "string"
+                                                                },
+                                                                "dat": {
+                                                                  "type": "string"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "nom",
+                                                                "gen",
+                                                                "acc",
+                                                                "ins",
+                                                                "dat"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "userId",
+                                                            "name",
+                                                            "forms"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "words": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "user",
+                                                    "words"
+                                                  ],
+                                                  "additionalProperties": false
                                                 }
                                               },
                                               "required": [
@@ -335583,6 +336783,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -336662,6 +337937,81 @@
                                                 },
                                                 "foundByHub": {
                                                   "type": "boolean"
+                                                },
+                                                "decider": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "owner",
+                                                        "team_lead"
+                                                      ]
+                                                    },
+                                                    "user": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "userId": {
+                                                              "type": "integer",
+                                                              "exclusiveMinimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            "name": {
+                                                              "type": "string"
+                                                            },
+                                                            "forms": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "nom": {
+                                                                  "type": "string"
+                                                                },
+                                                                "gen": {
+                                                                  "type": "string"
+                                                                },
+                                                                "acc": {
+                                                                  "type": "string"
+                                                                },
+                                                                "ins": {
+                                                                  "type": "string"
+                                                                },
+                                                                "dat": {
+                                                                  "type": "string"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "nom",
+                                                                "gen",
+                                                                "acc",
+                                                                "ins",
+                                                                "dat"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "userId",
+                                                            "name",
+                                                            "forms"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "words": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "user",
+                                                    "words"
+                                                  ],
+                                                  "additionalProperties": false
                                                 }
                                               },
                                               "required": [
@@ -340002,6 +341352,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -341081,6 +342506,81 @@
                                                 },
                                                 "foundByHub": {
                                                   "type": "boolean"
+                                                },
+                                                "decider": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "owner",
+                                                        "team_lead"
+                                                      ]
+                                                    },
+                                                    "user": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "userId": {
+                                                              "type": "integer",
+                                                              "exclusiveMinimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            "name": {
+                                                              "type": "string"
+                                                            },
+                                                            "forms": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "nom": {
+                                                                  "type": "string"
+                                                                },
+                                                                "gen": {
+                                                                  "type": "string"
+                                                                },
+                                                                "acc": {
+                                                                  "type": "string"
+                                                                },
+                                                                "ins": {
+                                                                  "type": "string"
+                                                                },
+                                                                "dat": {
+                                                                  "type": "string"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "nom",
+                                                                "gen",
+                                                                "acc",
+                                                                "ins",
+                                                                "dat"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "userId",
+                                                            "name",
+                                                            "forms"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "words": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "user",
+                                                    "words"
+                                                  ],
+                                                  "additionalProperties": false
                                                 }
                                               },
                                               "required": [
@@ -344528,6 +346028,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -345607,6 +347182,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -346461,6 +348111,17 @@
                       "decline",
                       "restore",
                       "accept"
+                    ]
+                  },
+                  "note": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 300
+                      },
+                      {
+                        "type": "null"
+                      }
                     ]
                   }
                 },
@@ -348716,6 +350377,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -349795,6 +351531,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -352871,6 +354682,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -353950,6 +355836,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -357026,6 +358987,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -358105,6 +360141,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -361206,6 +363317,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -362285,6 +364471,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -365371,6 +367632,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -366450,6 +368786,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -369480,6 +371891,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [
@@ -370559,6 +373045,81 @@
                                                 },
                                                 "foundByHub": {
                                                   "type": "boolean"
+                                                },
+                                                "decider": {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "owner",
+                                                        "team_lead"
+                                                      ]
+                                                    },
+                                                    "user": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "userId": {
+                                                              "type": "integer",
+                                                              "exclusiveMinimum": 0,
+                                                              "maximum": 9007199254740991
+                                                            },
+                                                            "name": {
+                                                              "type": "string"
+                                                            },
+                                                            "forms": {
+                                                              "type": "object",
+                                                              "properties": {
+                                                                "nom": {
+                                                                  "type": "string"
+                                                                },
+                                                                "gen": {
+                                                                  "type": "string"
+                                                                },
+                                                                "acc": {
+                                                                  "type": "string"
+                                                                },
+                                                                "ins": {
+                                                                  "type": "string"
+                                                                },
+                                                                "dat": {
+                                                                  "type": "string"
+                                                                }
+                                                              },
+                                                              "required": [
+                                                                "nom",
+                                                                "gen",
+                                                                "acc",
+                                                                "ins",
+                                                                "dat"
+                                                              ],
+                                                              "additionalProperties": false
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "userId",
+                                                            "name",
+                                                            "forms"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "words": {
+                                                      "type": "string"
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "kind",
+                                                    "user",
+                                                    "words"
+                                                  ],
+                                                  "additionalProperties": false
                                                 }
                                               },
                                               "required": [
@@ -373468,6 +376029,81 @@
                                         },
                                         "foundByHub": {
                                           "type": "boolean"
+                                        },
+                                        "decider": {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": [
+                                                "owner",
+                                                "team_lead"
+                                              ]
+                                            },
+                                            "user": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "userId": {
+                                                      "type": "integer",
+                                                      "exclusiveMinimum": 0,
+                                                      "maximum": 9007199254740991
+                                                    },
+                                                    "name": {
+                                                      "type": "string"
+                                                    },
+                                                    "forms": {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "nom": {
+                                                          "type": "string"
+                                                        },
+                                                        "gen": {
+                                                          "type": "string"
+                                                        },
+                                                        "acc": {
+                                                          "type": "string"
+                                                        },
+                                                        "ins": {
+                                                          "type": "string"
+                                                        },
+                                                        "dat": {
+                                                          "type": "string"
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "nom",
+                                                        "gen",
+                                                        "acc",
+                                                        "ins",
+                                                        "dat"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "userId",
+                                                    "name",
+                                                    "forms"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
+                                            "words": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "kind",
+                                            "user",
+                                            "words"
+                                          ],
+                                          "additionalProperties": false
                                         }
                                       },
                                       "required": [
@@ -374547,6 +377183,81 @@
                                             },
                                             "foundByHub": {
                                               "type": "boolean"
+                                            },
+                                            "decider": {
+                                              "type": "object",
+                                              "properties": {
+                                                "kind": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "owner",
+                                                    "team_lead"
+                                                  ]
+                                                },
+                                                "user": {
+                                                  "anyOf": [
+                                                    {
+                                                      "type": "object",
+                                                      "properties": {
+                                                        "userId": {
+                                                          "type": "integer",
+                                                          "exclusiveMinimum": 0,
+                                                          "maximum": 9007199254740991
+                                                        },
+                                                        "name": {
+                                                          "type": "string"
+                                                        },
+                                                        "forms": {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "nom": {
+                                                              "type": "string"
+                                                            },
+                                                            "gen": {
+                                                              "type": "string"
+                                                            },
+                                                            "acc": {
+                                                              "type": "string"
+                                                            },
+                                                            "ins": {
+                                                              "type": "string"
+                                                            },
+                                                            "dat": {
+                                                              "type": "string"
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "nom",
+                                                            "gen",
+                                                            "acc",
+                                                            "ins",
+                                                            "dat"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        }
+                                                      },
+                                                      "required": [
+                                                        "userId",
+                                                        "name",
+                                                        "forms"
+                                                      ],
+                                                      "additionalProperties": false
+                                                    },
+                                                    {
+                                                      "type": "null"
+                                                    }
+                                                  ]
+                                                },
+                                                "words": {
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "kind",
+                                                "user",
+                                                "words"
+                                              ],
+                                              "additionalProperties": false
                                             }
                                           },
                                           "required": [

@@ -347,6 +347,8 @@ export const shiftReportAskBodySchema = z.object({
 /** A card of Gengar: decline it («Не согласен»), restore it («Вернуть правку»), or accept a late one («Принять»). */
 export const shiftReportProposalAnswerBodySchema = z.object({
   answer: z.enum(["decline", "restore", "accept"]),
+  /** With «Не согласен» on a card of whose the sale is: the person's line of why, for whoever decides it. */
+  note: z.string().trim().max(SHIFT_REPORT_NOTE_MAX).nullable().optional(),
 });
 
 export const shiftReportCurrentResponseSchema = z.object({

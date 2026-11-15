@@ -229,6 +229,14 @@ export const shiftReportChoiceSchema = z.object({
   current: z.boolean().optional(),
 });
 
+/** Who decides a dispute, and how the texts name them: «Спор решит владелец», «Спор решит Марта». */
+export const shiftReportDeciderSchema = z.object({
+  kind: z.enum(["owner", "team_lead"]),
+  user: personSchema.nullable(),
+  /** The decider in the texts: «владелец», «Марта». */
+  words: z.string(),
+});
+
 /** One row of a column: two lines, never more; the question, the claim, the card and the comment go under it. */
 export const shiftReportRowSchema = z.object({
   /** Stable within the board: `t<transactionId>`, or `s<sightingId>` for a row Hub does not hold. */
@@ -284,6 +292,11 @@ export const shiftReportRowSchema = z.object({
   choices: z.array(shiftReportChoiceSchema).optional(),
   /** Hub's re-read after the hand-in found it («Hub дочитал кошельки: ещё 2 продажи … Показать» lights it). */
   foundByHub: z.boolean().optional(),
+  /**
+   * Who decides THIS sale's dispute (`deciderOf` of its page's model; the pot's and «стык смен» — the owner); absent —
+   * the board's `decider`.
+   */
+  decider: shiftReportDeciderSchema.optional(),
 });
 export type ShiftReportRow = z.infer<typeof shiftReportRowSchema>;
 
@@ -389,13 +402,8 @@ export const shiftReportBoardSchema = z.object({
   })),
   /** The people a word may name: «пополам с …», «Олега», «Спросить …». */
   colleagues: z.array(personSchema),
-  /** Who decides a dispute of this shift's model, and how the texts name them: «Спор решит владелец». */
-  decider: z.object({
-    kind: z.enum(["owner", "team_lead"]),
-    user: personSchema.nullable(),
-    /** The decider in the texts: «владелец», «Марта». */
-    words: z.string(),
-  }),
+  /** Who decides a dispute of the shift's first model: a text that names no sale. A row names its own (`row.decider`). */
+  decider: shiftReportDeciderSchema,
   /** The reader may press «Подтверждаю» now (own, phase confirm, the candidate not superseded). */
   canConfirm: z.boolean(),
   /** The dot on «Отчёт»: confirm, a question to the person, a row «после сдачи», a late card of Gengar. */
