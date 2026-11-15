@@ -141,6 +141,20 @@ describe("the report's window and sales added by hand", () => {
     expect(slotWindowOf([standing, off], next)).toEqual({ from: Date.parse("2026-11-10T18:00:00+03:00"), to: Date.parse("2026-11-11T02:00:00+03:00"), pageIds: [11] });
   });
 
+  it("cuts a slot of every page by a page's «off» for that page, as the rule does (production's shape: no page on the slot)", () => {
+    const standing = { personId: ME, pageId: null, startMinute: 12 * 60, endMinute: 20 * 60, weekdays: null, validFrom: null, validTo: null };
+    const off = (pageId: number) => ({ ...standing, pageId, validFrom: "2026-11-09", validTo: "2026-11-09", day: "off" as const });
+    const shift = { userIds: new Set([ME]), startedAt: Date.parse("2026-11-09T12:30:00+03:00"), endedAt: Date.parse("2026-11-09T14:00:00+03:00") };
+    // Taken off 12–20 on both pages they work: no window from the slot.
+    expect(slotWindowOf([standing, off(11), off(12)], { ...shift, pagesOfAll: [11, 12] })).toBeNull();
+    // Taken off on page 11 only: the slot still runs on page 12.
+    expect(slotWindowOf([standing, off(11)], { ...shift, pagesOfAll: [11, 12] }))
+      .toEqual({ from: Date.parse("2026-11-09T12:00:00+03:00"), to: Date.parse("2026-11-09T20:00:00+03:00"), pageIds: [12] });
+    // No swap: the slot of every page, as before.
+    expect(slotWindowOf([standing], { ...shift, pagesOfAll: [11, 12] }))
+      .toEqual({ from: Date.parse("2026-11-09T12:00:00+03:00"), to: Date.parse("2026-11-09T20:00:00+03:00"), pageIds: [11, 12] });
+  });
+
   it("shows a sale nobody held in the report's window nearby, «ничья», and «моё» counts it plainly", () => {
     const nobody = sale({
       transactionId: 21, heldByShift: false, inReportWindow: true, netMills: 4_000,

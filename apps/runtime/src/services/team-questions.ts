@@ -23,7 +23,10 @@ import {
   listStandingSwapQuestionIds,
   listMatterPageLabels,
   listOpenMattersOfKinds,
+  listOpenSwapQuestions,
+  lapseTeamQuestion,
   listPersonRows,
+  listPersonScheduleSlotRows,
   revokePersonDayLines,
   findPageSummaryByLabel,
   findTeamQuestion,
@@ -44,6 +47,7 @@ import { recordAudit, type AuthPrincipal, type HumanAuthPrincipal } from "./auth
 import { moscowDayOf } from "./chatter-shifts.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { slotMinute, slotTime } from "./people/index.ts";
+import { weekdayOfDay } from "./sale-rule.ts";
 import { pageIsTest, requireSameRealm } from "./sandbox/realm.ts";
 import {
   deciderOf, leadsModel, loginOfPerson, modelOfPageId, pagesOfModels, personOfLogin, personsOfLogins, requireTeamAsker, requireTeamReader, teamFactsFor,
@@ -353,6 +357,11 @@ export function swapStartsAt(swap: Pick<TeamQuestionSwapRow, "date" | "startMinu
   return Date.parse(`${swap.date}T00:00:00+03:00`) + swap.startMinute * 60_000;
 }
 
+/** The instant a swap's hours end, Moscow time: an end at or before the start is the next day's. Pure. */
+export function swapEndsAt(swap: Pick<TeamQuestionSwapRow, "date" | "startMinute" | "endMinute">): number {
+  return Date.parse(`${swap.date}T00:00:00+03:00`) + (swap.endMinute > swap.startMinute ? swap.endMinute : swap.endMinute + 1440) * 60_000;
+}
+
 /** The swap of an ask, checked: a day ahead, pages of one team, a covering person of that team, the absent person's pages. */
 async function swapOfBody(
   app: QuestionsApp,
@@ -394,6 +403,10 @@ async function swapOfBody(
   const works = (personId: number) => new Set(facts.working.filter((row) => row.personId === personId).map((row) => row.pageId));
   const absentPages = works(absentPersonId);
   if (pageIds.some((id) => !absentPages.has(id))) throw new BadRequestError("The absent person does not work one of these pages");
+  // A swap is the person's slot: every page of the team their standing slot of those hours runs on, whichever page the
+  // window it was asked from chose (a slot of every page stands for all of them; a page's own line replaces it there).
+  const slotPages = await slotPagesOf(app, { personId: absentPersonId, date: body.date, startMinute, endMinute, pages: absentPages, modelPages: new Set(input.modelId === null ? [] : pagesOfModels(facts, [input.modelId])) });
+  for (const id of slotPages) if (!pageIds.includes(id) && (input.scope === undefined || input.scope.includes(id))) pageIds.push(id);
   const cover = await personOf(body.coverPersonCode);
   if (cover.id === absentPersonId) throw new BadRequestError("Someone else covers");
   // The chat team (contracts chat-team.ts) and working already: a content manager or a newcomer not working yet
@@ -436,6 +449,31 @@ async function refuseSwapClash(db: QuestionsApp["db"], facts: TeamFacts, swap: T
     const name = facts.people.find((one) => one.personId === swap.coverPersonId)?.name ?? "Тот, кто выйдет,";
     throw new ConflictError(`${name} сам не выходит в эти часы`, { reason: "swap_cover_off" });
   }
+}
+
+/**
+ * The absent person's pages (of the team) on which their standing slot runs in a swap's hours: on each page, its own
+ * lines valid that day, else the every-page ones (as the rule's `linesOn`), begun that day or the day before.
+ */
+async function slotPagesOf(
+  app: QuestionsApp,
+  input: { personId: number; date: string; startMinute: number; endMinute: number; pages: ReadonlySet<number>; modelPages: ReadonlySet<number> },
+): Promise<number[]> {
+  const standing = await listPersonScheduleSlotRows(app.db, [input.personId]);
+  const swap = { date: input.date, startMinute: input.startMinute, endMinute: input.endMinute };
+  const found: number[] = [];
+  for (const pageId of input.pages) {
+    if (!input.modelPages.has(pageId)) continue;
+    const runs = daysAround(input.date).slice(0, 2).some((day) => {
+      const valid = standing.filter((line) => (line.validFrom === null || line.validFrom <= day) && (line.validTo === null || day <= line.validTo)
+        && (line.weekdays === null || line.weekdays.includes(weekdayOfDay(day))));
+      const own = valid.filter((line) => line.pageId === pageId);
+      return (own.length > 0 ? own : valid.filter((line) => line.pageId === null))
+        .some((line) => line.startMinute !== line.endMinute && swapHoursOverlap({ date: day, startMinute: line.startMinute, endMinute: line.endMinute }, swap));
+    });
+    if (runs) found.push(pageId);
+  }
+  return found;
 }
 
 /**
@@ -542,17 +580,52 @@ async function tellCover(app: QuestionsApp, facts: TeamFacts, row: TeamQuestionR
   }, SYSTEM, now);
 }
 
-/** The covering persons' matters of swaps whose day has passed (Moscow): closed, the cause gone. Every ten minutes. */
+/**
+ * The covering persons' matters of swaps whose hours have ENDED (a swap over midnight still runs after it): closed, the
+ * cause gone. Every ten minutes.
+ */
 export async function closePassedCoverMatters(app: QuestionsApp, now: Date = new Date()): Promise<{ closed: number }> {
-  const today = moscowDayOf(now.getTime());
   let closed = 0;
   for (const matter of await listOpenMattersOfKinds(app.db, [COVER])) {
+    const id = Number(matter.evidence.questionId);
+    const swap = Number.isFinite(id) ? (await findTeamQuestion(app.db, id))?.swap ?? null : null;
     const date = typeof matter.evidence.date === "string" ? matter.evidence.date : null;
-    if (date === null || date >= today) continue;
+    // Its end by the question; a matter whose question is gone keeps the day's rule: after the next midnight.
+    const ends = swap !== null ? swapEndsAt(swap) : date !== null ? Date.parse(`${date}T00:00:00+03:00`) + 2 * 86_400_000 : null;
+    if (ends === null || now.getTime() < ends) continue;
     const result = await closeMatter(app.db, { key: matter.key, how: "cause_gone", writer: "server" }, SYSTEM, now);
     if (result.transition === "closed") closed += 1;
   }
   return { closed };
+}
+
+const LAPSED = "Вопрос не решён вовремя: часы подмены прошли, никто не ответил";
+
+/**
+ * A swap question still open when its hours have ended closes itself: «не решён вовремя» — answered «Нельзя» by nobody,
+ * the decider's matter closed, the asker told once (their «ответ» matter, as any answer). No lines are written.
+ */
+export async function closeLapsedSwapQuestions(app: QuestionsApp, now: Date = new Date()): Promise<{ lapsed: number }> {
+  let lapsed = 0;
+  for (const row of await listOpenSwapQuestions(app.db)) {
+    if (row.swap === null || now.getTime() < swapEndsAt(row.swap)) continue;
+    if (!(await lapseTeamQuestion(app.db, { id: row.id, text: LAPSED, at: now }))) continue;
+    await closeMatter(app.db, { key: `${ASKED}:${row.id}`, how: "cause_gone", writer: "server" }, SYSTEM, now);
+    await openMatter(app.db, {
+      key: `${ANSWERED}:${row.id}`,
+      kind: ANSWERED,
+      source: "server",
+      title: "Подмена не решена вовремя",
+      object: { type: "team_question", id: String(row.id) },
+      pageIds: [row.pageId],
+      owner: { userId: row.askerUserId },
+      money: false,
+      evidence: { questionId: row.id, kind: row.kind, answer: "lapsed", askedAt: row.askedAt.toISOString(), answeredAt: now.toISOString() },
+      link: linkOf(row.id),
+    }, SYSTEM, now);
+    lapsed += 1;
+  }
+  return { lapsed };
 }
 
 /**
