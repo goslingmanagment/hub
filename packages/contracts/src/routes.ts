@@ -15,7 +15,6 @@ import {
   personPublicationDetailSchema,
   publicationApproveBodySchema,
   publicationApproveResponseSchema,
-  publicationDetailSchema,
   publicationListQuerySchema,
   publicationListResponseSchema,
   publicationQueueListResponseSchema,
