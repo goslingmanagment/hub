@@ -365,5 +365,48 @@ describe("the shift report: who reads, who writes", () => {
     // Hub holds it now: the site showing it again keeps nothing.
     expect((await ext({ pageLabel: "mia-1", rows: [row] })).json()).toMatchObject({ kept: 0, known: 1 });
   });
+
+  it("writes the cards the person kept as their own words: «в общак» reaches the owner, «отдать» a colleague without the board goes to the decider", async (context) => {
+    if (!testDb) return context.skip();
+    const sale = Number((await testDb.pool.query("select id from transactions where transaction_id = 'tx-claim-open'")).rows[0].id);
+    const { runShiftReportBoardPass } = await import("../apps/runtime/src/services/shift-report-board.ts");
+    // A hand-in, Gengar's one card on the sale, «Подтверждаю» without «Не согласен».
+    const keepCard = async (to: Record<string, unknown>) => {
+      const phase = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shiftA}`)).json()).board?.phase;
+      if (phase === "counted" || phase === "confirm") expect((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/reopen`)).statusCode).toBe(200);
+      const handed = shiftReportResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`)).json());
+      const candidateId = handed.board!.candidate!.id;
+      const card = await asKey("reviewer", "POST", `/api/v1/agent/shift-reports/checks/${candidateId}`, {
+        proposals: [{ transactionId: sale, kind: "owner_change", to, why: "Фан сам написал, что это за пост." }],
+      });
+      expect(card.statusCode, card.body).toBe(200);
+      const proposal = Number((await testDb!.pool.query("select id from shift_handin_proposals where candidate_id = $1", [candidateId])).rows[0].id);
+      const confirmed = shiftReportConfirmResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId })).json());
+      expect(confirmed.confirmed, JSON.stringify(confirmed.refused)).toBe(true);
+      return proposal;
+    };
+    const markOf = async () => (await testDb!.pool.query(
+      `select m.statement, m.to_user_id, m.by_proposal_id from shift_handin_marks m join shift_handins h on h.id = m.handin_id
+       where h.shift_id = $1 and m.transaction_id = $2`, [shiftA, sale])).rows[0];
+
+    // «В общак»: the person's word now (the mark, «по правке Генгара»), the owner's matter opens, the ledger reads «не моё».
+    const pot = await keepCard({ word: "pot" });
+    expect(await markOf()).toMatchObject({ statement: "pot", by_proposal_id: String(pot) });
+    await runShiftReportBoardPass(app);
+    expect((await testDb.pool.query("select state, owner_role from matters where kind = 'sale.pot_offer'")).rows).toEqual([{ state: "open", owner_role: "owner" }]);
+    const feed = agentShiftReportsFeedResponseSchema.parse((await asKey("ledger", "GET", "/api/v1/agent/shift-reports")).json());
+    const fed = feed.reports.filter((one) => one.shiftId === shiftA).sort((a, b) => b.version - a.version)[0]!;
+    expect(fed.lines.find((line) => line.transactionId === sale)?.statement).toBe("not_mine");
+
+    // «Отдать» dina, who hands shifts in the old way: the person's «не моё» and a question to the decider, never a gift settled.
+    const dina = await fixtureUserId(app, "dina");
+    const give = await keepCard({ word: "give", userId: dina });
+    expect(await markOf()).toMatchObject({ statement: "not_mine", to_user_id: null, by_proposal_id: String(give) });
+    const claims = await testDb.pool.query("select state, escalated_why, origin from sale_claims where transaction_id = $1 and side_user_id = $2", [sale, dina]);
+    expect(claims.rows).toEqual([{ state: "owner", escalated_why: "no_side", origin: "draft" }]);
+    // No longer in the pot: the owner's matter closes.
+    await runShiftReportBoardPass(app);
+    expect((await testDb.pool.query("select state from matters where kind = 'sale.pot_offer'")).rows).toEqual([{ state: "closed" }]);
+  });
 });
 

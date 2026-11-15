@@ -243,18 +243,20 @@ export async function setHandinMark(
     byUserId: number | null;
     byAgentKeyId: number | null;
     at: Date;
+    /** The proposal of Gengar the person accepted, the word came from (0416); absent — the person's own choice. */
+    byProposalId?: number | null;
   },
 ): Promise<void> {
   {
     const toUserId = input.statement === "give" ? input.toUserId ?? null : null;
     await db.execute(sql`
-      insert into shift_handin_marks (handin_id, transaction_id, statement, share_with_user_id, to_user_id, note, updated_at, updated_by_user_id, updated_by_agent_key_id)
+      insert into shift_handin_marks (handin_id, transaction_id, statement, share_with_user_id, to_user_id, note, updated_at, updated_by_user_id, updated_by_agent_key_id, by_proposal_id)
       values (${input.handinId}, ${input.transactionId}, ${input.statement}, ${input.shareWithUserId}, ${toUserId}, ${input.note},
-        ${input.at.toISOString()}::timestamptz, ${input.byUserId}, ${input.byAgentKeyId})
+        ${input.at.toISOString()}::timestamptz, ${input.byUserId}, ${input.byAgentKeyId}, ${input.byProposalId ?? null})
       on conflict (handin_id, transaction_id) do update set
         statement = excluded.statement, share_with_user_id = excluded.share_with_user_id, to_user_id = excluded.to_user_id, note = excluded.note,
         updated_at = excluded.updated_at, updated_by_user_id = excluded.updated_by_user_id,
-        updated_by_agent_key_id = excluded.updated_by_agent_key_id`);
+        updated_by_agent_key_id = excluded.updated_by_agent_key_id, by_proposal_id = excluded.by_proposal_id`);
   }
   await touchDraft(db, input.handinId, input.at);
 }
