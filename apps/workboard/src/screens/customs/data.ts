@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CustomOrder, CustomOrderActionBody, CustomOrderCreateBody, CustomOrderDetailResponse, CustomOrderState } from "@agency_hub_core/contracts";
-import { ruPlural } from "@agency_hub_core/ui/plural";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
+import { customDeadlineWords, customLeaderWords } from "@agency_hub_core/look";
 import { kernel } from "@/shared/hub";
 
 /**
@@ -101,27 +101,14 @@ export const STATE_TONE: Partial<Record<CustomOrderState, "success" | "warning" 
   cancelled: "off",
 };
 
-const MSK_OFFSET_MS = 3 * 3_600_000;
-const moscowToday = (now: number) => new Date(now + MSK_OFFSET_MS).toISOString().slice(0, 10);
-const daysWord = (days: number) => `${days} ${ruPlural(days, "день", "дня", "дней")}`;
-const dotted = (day: string) => `${day.slice(8, 10)}.${day.slice(5, 7)}`;
-
-/** «осталось 2 дня», «сегодня последний день», «просрочен на 3 дня», or nothing without a deadline. */
+/** «осталось 2 дня», «сегодня последний день», «просрочен на 3 дня», or nothing without a deadline (Hub's look: one copy). */
 export function deadlineWords(order: Pick<CustomOrder, "deadlineOn" | "overdueDays" | "state">, serverNow: string): { text: string; late: boolean } | null {
-  if (order.deadlineOn === null) return null;
-  if (order.overdueDays !== null) return { text: `просрочен на ${daysWord(order.overdueDays)}`, late: true };
-  if (!["recorded", "paid", "checked", "at_model", "partly", "revision"].includes(order.state)) return { text: `срок был ${dotted(order.deadlineOn)}`, late: false };
-  const today = moscowToday(Date.parse(serverNow));
-  const left = Math.round((Date.parse(`${order.deadlineOn}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
-  if (left <= 0) return { text: "сегодня последний день", late: false };
-  return { text: `осталось ${daysWord(left)}, до ${dotted(order.deadlineOn)}`, late: false };
+  return customDeadlineWords(order, serverNow);
 }
 
-/** «У кого сейчас»: who leads the order's current step, and where («в ContentOps» for the shooting). */
+/** «У кого сейчас»: who leads the order's current step, and where (Hub's look: the extension's fan panel says the same). */
 export function leaderWords(order: Pick<CustomOrder, "leader">): string | null {
-  if (order.leader === null) return null;
-  const who = order.leader.name ?? "владелец";
-  return order.leader.product === "contentops" ? `${who}, в ContentOps` : who;
+  return customLeaderWords(order.leader);
 }
 
 /** The fan as the board names him: his name, or what the card says while he is not confirmed. */

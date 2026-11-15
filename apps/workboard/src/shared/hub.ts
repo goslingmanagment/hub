@@ -1,5 +1,6 @@
 import { MutationCache, QueryClient } from "@tanstack/react-query";
-import { createHubClient, hubErrorStatus } from "@agency_hub_core/ui/hubClient";
+import { createClient } from "@kernel/sdk";
+import { createHubClient, hubErrorStatus, type KernelClient } from "@agency_hub_core/ui/hubClient";
 import { toast } from "@agency_hub_core/ui";
 
 /**
@@ -24,7 +25,24 @@ function goSignIn() {
   window.location.assign(signInHref());
 }
 
-export const kernel = createHubClient({ onSessionExpired: goSignIn });
+let current: KernelClient = createHubClient({ onSessionExpired: goSignIn });
+
+/**
+ * Workboard's one client. In the extension's frame (`setFrameClient`, products package R5: «Записать кастом» and
+ * «Спросить» over the site) every request goes over the extension's port instead — no cookie, never a sign-in — so a
+ * frame screen is the screen itself, never a copy of it.
+ */
+export const kernel: KernelClient = new Proxy({} as KernelClient, {
+  get(_target, key) {
+    const value = (current as unknown as Record<PropertyKey, unknown>)[key];
+    return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(current) : value;
+  },
+});
+
+/** The extension's frame: the client of every screen sends its requests with this `fetch` (the port's). */
+export function setFrameClient(fetchImpl: typeof fetch): void {
+  current = createClient({ baseUrl: "", fetch: fetchImpl });
+}
 
 declare module "@tanstack/react-query" {
   interface Register {

@@ -130,6 +130,19 @@ export function requireTeamReader(principal: AuthPrincipal): asserts principal i
   }
 }
 
+/**
+ * Who may ASK whoever decides (products package R5): a cookie session as for the team reads, or the extension's own
+ * narrow token — the question window in its frame over the site — for a question about a fan only (never «Подмена» or
+ * «График», which change the schedule). Every other device token and agents are refused.
+ */
+export function requireTeamAsker(principal: AuthPrincipal, kind: string): asserts principal is HumanAuthPrincipal {
+  if (principal.kind !== "agent" && principal.authMethod === "device_token" && principal.clientProfile === "chat-extension") {
+    if (kind === "swap" || kind === "schedule") throw new ForbiddenError("A swap or the schedule is asked from Workboard");
+    return;
+  }
+  requireTeamReader(principal);
+}
+
 // ── Who decides ─────────────────────────────────────────────────────────────
 
 /**

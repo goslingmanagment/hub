@@ -49,18 +49,20 @@ export const customOrderRouteSchemas = {
     response: { 200: customOrderDetailResponseSchema, ...sessionErrors },
   },
   customOrderAct: {
-    auth: { kind: "any-session" }, tags: ["admin"],
+    auth: { kind: "any" }, tags: ["admin"],
     summary: "A step of a custom order: edit the card, deadline, fan, Telegram card, payment, at the model, partly, shot, revision, "
       + "refused, given, close, cancel",
     description: "Database only. The lead and the owner take every step; a chatter only theirs (a payment, «отдали», editing and "
-      + "cancelling their own order); a step not from the order's state is 409 `not_allowed`. Answers the order after it.",
+      + "cancelling their own order); a step not from the order's state is 409 `not_allowed`. Answers the order after it. "
+      + "A session or the extension's device token (the fan panel's «Отдан», package R5: it reads as a chatter).",
     params: customOrderParamsSchema,
     body: customOrderActionBodySchema,
     response: { 200: customOrderDetailResponseSchema, ...sessionErrors },
   },
   customOrderCreate: {
-    auth: { kind: "any-session" }, tags: ["admin"],
+    auth: { kind: "any" }, tags: ["admin"],
     summary: "«Записать кастом» on the board: from a sale that looks like a custom, or on a page for a fan",
+    description: "A session, or the extension's device token: the board's own form in the extension's frame (package R5).",
     body: customOrderCreateBodySchema,
     response: { 200: customOrderDetailResponseSchema, ...sessionErrors },
   },

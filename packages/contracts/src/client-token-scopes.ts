@@ -133,6 +133,14 @@ export const CLIENT_TOKEN_PROFILES = {
       "shiftReportSightingAdd",
       "shiftReportPostCopied",
       "clientSaleSightings",
+      // Workboard's screens in the extension's frame (products package R5; the frame host of package R): «Записать кастом»
+      // (the customs record form) and «Спросить» (the question window) run their requests through the background with
+      // this token, as the board does — the order recorded, the question asked (the page and the fan come from the fan
+      // panel: the page list stays off); and the fan panel's «Отдан», the same step as the order's card on the board.
+      // This token reads as a narrow session there: a chatter whatever the role (customViewerOf), never a decider.
+      "customOrderCreate",
+      "customOrderAct",
+      "teamQuestionAsk",
 
       // chatspace-tab-state-v1: the always-on ChatSpace tab's report (the server's own hub user).
       "clientChatspaceTabState",

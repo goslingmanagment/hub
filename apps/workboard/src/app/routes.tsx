@@ -181,6 +181,9 @@ export const router = createBrowserRouter(
   [
     // The extension's frame: no sign-in gate, never `me`; its requests go over the extension's port.
     { path: "frame/report", lazy: () => import("../screens/report/index.js").then((m) => ({ Component: m.FrameReportScreen })) },
+    // Package R5: «Записать кастом» and «Спросить» from the extension's fan panel, in the same frame, the same way.
+    { path: "frame/custom", lazy: () => import("../screens/customs/frame.js").then((m) => ({ Component: m.FrameCustomScreen })) },
+    { path: "frame/ask", lazy: () => import("../screens/waiting/frame.js").then((m) => ({ Component: m.FrameAskScreen })) },
     // Old addresses lead to new ones, whoever opens them (packages/ui/src/old-addresses.ts, one table).
     ...WORKBOARD_OLD_PATHS.map((path) => ({ path, element: <OldAddress /> })),
     // The board's demo pages (scenarios, the extension's part): the demo and dev servers only, never a production build.

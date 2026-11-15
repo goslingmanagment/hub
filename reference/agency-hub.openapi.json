@@ -225757,6 +225757,56 @@
                           },
                           "stepAt": {
                             "type": "string"
+                          },
+                          "orderState": {
+                            "type": "string"
+                          },
+                          "deadlineOn": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "overdueDays": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "leader": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "product": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "product"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "mayGive": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -227818,6 +227868,56 @@
                               },
                               "stepAt": {
                                 "type": "string"
+                              },
+                              "orderState": {
+                                "type": "string"
+                              },
+                              "deadlineOn": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "overdueDays": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "leader": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      },
+                                      "product": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "product"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "mayGive": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -228749,6 +228849,56 @@
                               },
                               "stepAt": {
                                 "type": "string"
+                              },
+                              "orderState": {
+                                "type": "string"
+                              },
+                              "deadlineOn": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "overdueDays": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "leader": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      },
+                                      "product": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "product"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "mayGive": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -230040,6 +230190,56 @@
                               },
                               "stepAt": {
                                 "type": "string"
+                              },
+                              "orderState": {
+                                "type": "string"
+                              },
+                              "deadlineOn": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "overdueDays": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "leader": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      },
+                                      "product": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "product"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "mayGive": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -230902,6 +231102,56 @@
                               },
                               "stepAt": {
                                 "type": "string"
+                              },
+                              "orderState": {
+                                "type": "string"
+                              },
+                              "deadlineOn": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "overdueDays": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "leader": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "name": {
+                                        "type": [
+                                          "string",
+                                          "null"
+                                        ]
+                                      },
+                                      "product": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "name",
+                                      "product"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "mayGive": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
@@ -242362,6 +242612,7 @@
         "tags": [
           "admin"
         ],
+        "description": "A session, or the extension's device token: the board's own form in the extension's frame (package R5).",
         "requestBody": {
           "required": true,
           "content": {
@@ -242488,6 +242739,9 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -244531,7 +244785,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Database only. The lead and the owner take every step; a chatter only theirs (a payment, «отдали», editing and cancelling their own order); a step not from the order's state is 409 `not_allowed`. Answers the order after it.",
+        "description": "Database only. The lead and the owner take every step; a chatter only theirs (a payment, «отдали», editing and cancelling their own order); a step not from the order's state is 409 `not_allowed`. Answers the order after it. A session or the extension's device token (the fan panel's «Отдан», package R5: it reads as a chatter).",
         "requestBody": {
           "required": true,
           "content": {
@@ -244957,6 +245211,9 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -265464,6 +265721,56 @@
                           },
                           "stepAt": {
                             "type": "string"
+                          },
+                          "orderState": {
+                            "type": "string"
+                          },
+                          "deadlineOn": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "overdueDays": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "leader": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "product": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "product"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "mayGive": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -398167,7 +398474,7 @@
         "tags": [
           "client"
         ],
-        "description": "Any session (the extension's narrow one too). A page of the asker's teams or their own; the decider is the lead of the page's model, the owner when the team has none or its lead asks. Opens the decider's matter.",
+        "description": "Any session (the extension's narrow one too) or the extension's device token (the question window in its frame, package R5). A page of the asker's teams or their own; the decider is the lead of the page's model, the owner when the team has none or its lead asks. Opens the decider's matter.",
         "requestBody": {
           "required": true,
           "content": {
@@ -398272,6 +398579,9 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {

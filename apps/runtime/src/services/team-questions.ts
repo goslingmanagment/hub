@@ -44,8 +44,8 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import { slotMinute, slotTime } from "./people/index.ts";
 import { pageIsTest, requireSameRealm } from "./sandbox/realm.ts";
 import {
-  deciderOf, leadsModel, loginOfPerson, modelOfPageId, pagesOfModels, personOfLogin, personsOfLogins, requireTeamReader, teamFactsFor, teamPagesFor,
-  teamsOfPerson, type Decider,
+  deciderOf, leadsModel, loginOfPerson, modelOfPageId, pagesOfModels, personOfLogin, personsOfLogins, requireTeamAsker, requireTeamReader, teamFactsFor,
+  teamPagesFor, teamsOfPerson, type Decider,
 } from "./teams.ts";
 
 /**
@@ -75,8 +75,11 @@ const RECENT_MS = 30 * 86_400_000;
 
 const notFound = () => new NotFoundError("No such question");
 
+/** A narrow door: the web session opened from the extension, or the extension's own narrow token (package R5). */
+const isNarrow = (principal: HumanAuthPrincipal) => principal.narrowDeviceTokenId !== undefined || principal.clientProfile !== undefined;
+
 function isOwnerSession(principal: HumanAuthPrincipal): boolean {
-  return principal.user.role === "owner" && principal.narrowDeviceTokenId === undefined;
+  return principal.user.role === "owner" && !isNarrow(principal);
 }
 
 /** Every living login of a login's person (itself when it is nobody's). Pure. */
@@ -90,7 +93,7 @@ const kindWord = (kind: string) => TEAM_QUESTION_KIND_WORDS[kind as TeamQuestion
 
 /** Whether the viewer decides the question NOW (`deciderNow`), or is the owner; never a narrow session. */
 function decidesIt(facts: TeamFacts, principal: HumanAuthPrincipal, row: TeamQuestionRow): boolean {
-  if (principal.narrowDeviceTokenId !== undefined) return false;
+  if (isNarrow(principal)) return false;
   if (isOwnerSession(principal)) return true;
   const now = deciderNow(facts, row);
   if (now.kind !== "team_lead") return false;
@@ -242,7 +245,7 @@ export async function readTeamQuestions(app: QuestionsApp, principal: AuthPrinci
 }
 
 export async function askTeamQuestion(app: QuestionsApp, principal: AuthPrincipal, body: TeamQuestionAskBody, now: Date = new Date()): Promise<TeamQuestionWriteResponse> {
-  requireTeamReader(principal);
+  requireTeamAsker(principal, body.kind);
   const page = await findPageSummaryByLabel(app.db, body.pageLabel);
   if (!page) throw new NotFoundError(`Page "${body.pageLabel}" was not found`);
   const scope = await teamPagesFor(app, principal);
