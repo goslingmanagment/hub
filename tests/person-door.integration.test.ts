@@ -432,6 +432,8 @@ describe("the person's door", () => {
       }
     }
     // «Съёмка» keeps its own rule: a page of her model no content manager works on is still hers to shoot.
+  });
+
   it("carries Hub's words of the codes: reasons, checks, refusals, a page's stop", async (context) => {
     if (!server) return context.skip();
     const door = (path: string, body: object) =>
