@@ -212030,6 +212030,12 @@
                         "lead"
                       ],
                       "additionalProperties": false
+                    },
+                    "test": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
                     }
                   },
                   "required": [
@@ -212333,6 +212339,12 @@
                         "lead"
                       ],
                       "additionalProperties": false
+                    },
+                    "test": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
                     }
                   },
                   "required": [
