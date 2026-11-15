@@ -139,6 +139,11 @@ export function DisputeModal({ transactionId, claimId, onClose }: { transactionI
               ))}
             </div>
           )}
+          {data.cards.length > 0 && (
+            <Notice tone="warning" title="Генгар предлагал иначе">
+              {data.cards.map((card) => <p key={`${card.words}:${card.why}`}>«{card.words}»: {card.why}</p>)}
+            </Notice>
+          )}
           {data.facts && (
             <section className="wt-modal__block" aria-label="Факты">
               <h3 className="wt-modal__title">Факты</h3>
