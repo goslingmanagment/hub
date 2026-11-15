@@ -65,6 +65,8 @@ interface SandboxPersonSpec {
   login: { username: string; role: LoginRole; invited?: true; passwordEnv?: string } | null;
   /** Works (and opens) both test pages. */
   works: boolean;
+  /** Hands the shift in on the board («Сдаёт смену доской»), from a day before the seed's «now». */
+  board?: true;
 }
 
 export const SANDBOX_PEOPLE: readonly SandboxPersonSpec[] = [
@@ -72,9 +74,9 @@ export const SANDBOX_PEOPLE: readonly SandboxPersonSpec[] = [
     login: { username: "t-owner", role: "owner", passwordEnv: "SANDBOX_PASSWORD_T_OWNER" } },
   { code: "t-lead", displayName: "Тест: тимлид", role: "team_lead", state: "working", works: true,
     login: { username: "t-lead", role: "team_lead", passwordEnv: "SANDBOX_PASSWORD_T_LEAD" } },
-  { code: "t-chat-1", displayName: "Тест: чаттер 1", role: "chatter", state: "working", works: true,
+  { code: "t-chat-1", displayName: "Тест: чаттер 1", role: "chatter", state: "working", works: true, board: true,
     login: { username: "t-chat-1", role: "chatter", passwordEnv: "SANDBOX_PASSWORD_T_CHAT_1" } },
-  { code: "t-chat-2", displayName: "Тест: чаттер 2", role: "chatter", state: "working", works: true,
+  { code: "t-chat-2", displayName: "Тест: чаттер 2", role: "chatter", state: "working", works: true, board: true,
     login: { username: "t-chat-2", role: "chatter", passwordEnv: "SANDBOX_PASSWORD_T_CHAT_2" } },
   { code: "t-new", displayName: "Тест: новичок", role: "chatter", state: "invited", works: true,
     login: { username: "t-new", role: "chatter", invited: true } },
@@ -182,7 +184,7 @@ async function assertNamesFree(db: Database) {
   }
 }
 
-async function ensurePerson(db: Database, spec: SandboxPersonSpec, pageIds: readonly number[], env: NodeJS.ProcessEnv) {
+async function ensurePerson(db: Database, spec: SandboxPersonSpec, pageIds: readonly number[], env: NodeJS.ProcessEnv, now: Date) {
   let person = await findPersonRowByCode(db, spec.code);
   const created = person === null;
   if (person === null) {
@@ -221,6 +223,13 @@ async function ensurePerson(db: Database, spec: SandboxPersonSpec, pageIds: read
   if (spec.works) {
     const [has] = await rows(db, sql`select count(*)::int as n from person_working_pages where person_id = ${person.id}`);
     if (Number(has?.n ?? 0) === 0) await replacePersonWorkingPages(db, person.id, pageIds);
+  }
+  if (spec.board) {
+    // A shift is on the board only when the right was granted before it began (shift-report-board-view.ts), and the
+    // scenarios' shifts begin hours before «now»: the right is dated a day back, and a later grant is moved back to it.
+    const since = new Date(now.getTime() - 24 * 60 * 60_000).toISOString();
+    await db.execute(sql`insert into person_rights (person_id, "right", granted_at) values (${person.id}, 'submits_shift', ${since}::timestamptz)
+      on conflict (person_id, "right") do update set granted_at = least(person_rights.granted_at, excluded.granted_at)`);
   }
   return { code: spec.code, personId: person.id, created, login, passwordSet };
 }
@@ -468,7 +477,7 @@ export async function seedSandbox(app: AppContext, input: SandboxSeedInput): Pro
     const model = await ensureModel(db);
     const pages = await ensurePages(db, model.id);
     const people = [];
-    for (const spec of SANDBOX_PEOPLE) people.push(await ensurePerson(db, spec, pages.map((page) => page.id), env));
+    for (const spec of SANDBOX_PEOPLE) people.push(await ensurePerson(db, spec, pages.map((page) => page.id), env, now));
     return { model, pages, people };
   });
   const scenarios: SandboxSeedResult["scenarios"] = {};
