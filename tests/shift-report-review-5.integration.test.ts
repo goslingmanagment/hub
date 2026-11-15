@@ -155,13 +155,13 @@ describe("the board's money, the final review's second reader", () => {
       await q(
         `insert into chatter_activity_minutes (user_id, page_id, minute, input)
          select $1, $2, minute, true
-         from generate_series(date_trunc('minute', now() - make_interval(hours => $3)), date_trunc('minute', now() - make_interval(hours => $4)), interval '1 minute') minute`,
+         from generate_series(date_trunc('minute', now() - make_interval(hours => $3::int)), date_trunc('minute', now() - make_interval(hours => $4::int)), interval '1 minute') minute`,
         [anna, pageOne, from, to],
       );
       await q(
         `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
-         select 'fansly', $1, ($4::bigint + n)::text, '7700000088', $2, 'fansly-extension', false, false, now() - make_interval(hours => $3) + interval '3 minutes' * n, 'hand'
-         from generate_series(0, ($3 - $5) * 20 - 1) n`,
+         select 'fansly', $1, ($4::bigint + n)::text, '7700000088', $2, 'fansly-extension', false, false, now() - make_interval(hours => $3::int) + interval '3 minutes' * n, 'hand'
+         from generate_series(0, ($3::int - $5::int) * 20 - 1) n`,
         [pageOne, anna, from, 9_800_000_000 + from * 1_000, to],
       );
     }
