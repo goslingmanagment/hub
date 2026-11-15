@@ -90,7 +90,7 @@ function MyShift({ rows, loading, failed }: { rows: readonly MyShiftRow[] | unde
     <section className="today-card" aria-labelledby="today-shift">
       <h2 className="today-card__title" id="today-shift">
         Моя смена
-        <Link className="wt-link today-card__more" to="/my/shifts">все смены</Link>
+        <Link className="wt-link today-card__more" to="/shifts/mine">все смены</Link>
       </h2>
       {body}
     </section>

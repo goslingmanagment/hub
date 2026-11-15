@@ -70,7 +70,6 @@ const leadScreens: RouteObject[] = [
  */
 const chatterScreens: RouteObject[] = [
   { path: "start", lazy: () => import("../screens/start/index.js").then((m) => ({ Component: m.StartScreen })) },
-  { path: "my/shifts", lazy: () => import("../screens/my-shifts/index.js").then((m) => ({ Component: m.MyShiftsScreen })) },
 ];
 
 /**
@@ -109,7 +108,12 @@ const everyoneScreens: RouteObject[] = [
   { path: "waiting", lazy: () => import("../screens/waiting/entry.js").then((m) => ({ Component: m.WaitingEntry })) },
   // «Смены» and «Разбор смены» (products package T): the team's, a chatter's too — Hub cuts every read to the viewer's
   // teams (services/teams.ts); a chatter reaches them from «Смены» → «Команда».
-  { path: "shifts", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },
+  // One «Смены» (products package W): a chatter's «Мои» (their shifts with their reports; `/my/shifts` leads here) and
+  // «Команда» (the team's journal); the owner and a team lead read the journal of their teams, `?mine=1` their own.
+  { path: "shifts", lazy: () => import("../screens/shifts/entry.js").then((m) => ({ Component: m.ShiftsEntry })) },
+  { path: "shifts/mine", lazy: () => import("../screens/shifts/entry.js").then((m) => ({ Component: m.MineEntry })) },
+  { path: "shifts/team", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },
+  { path: "shifts/schedule", lazy: () => import("../screens/shifts/Schedule.js").then((m) => ({ Component: m.ScheduleScreen })) },
   {
     path: "shifts/:userId/:shiftStart",
     handle: { screenKey: (params) => `${params.userId ?? ""}/${params.shiftStart ?? ""}` } satisfies ScreenHandle,

@@ -55,11 +55,6 @@ function NotForChatter() {
 function ForChatterOnly() {
   const location = useLocation();
   const path = location.pathname.replace(/\/+$/, "");
-  if (path === "/my/shifts" || path === "/my/reports") {
-    const search = new URLSearchParams(location.search);
-    search.set("mine", "1");
-    return <Navigate to={{ pathname: "/shifts", search: `?${search.toString()}` }} replace />;
-  }
   if (path === "/start") return <Navigate to={{ pathname: "/", search: location.search }} replace />;
   return <NotYours />;
 }

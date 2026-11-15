@@ -168,6 +168,37 @@
     color: var(--ui-text);
   }
 
+  /* A phone: who and since when on the first two lines, the three facts in a row under them; nothing overlaps. */
+  @media (max-width: 640px) {
+    .shifts-now__row {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 20px;
+      grid-template-areas: "who who who go" "since since since go" "f1 f2 f3 go";
+      gap: 6px 12px;
+      padding: 10px 12px 10px 16px;
+    }
+
+    .shifts-now__who { grid-area: who; }
+    .shifts-now__since { grid-area: since; white-space: normal; }
+    .shifts-now__fact:nth-of-type(3) { grid-area: f1; }
+    .shifts-now__fact:nth-of-type(4) { grid-area: f2; }
+    .shifts-now__fact:nth-of-type(5) { grid-area: f3; }
+    .shifts-now__go { grid-area: go; }
+
+    .shifts-now__fact,
+    .shifts-now__waiting {
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-start;
+      gap: 0;
+      white-space: normal;
+    }
+
+    .shifts-now__unit {
+      font-size: var(--ui-fs-13);
+      line-height: var(--ui-lh-13);
+    }
+  }
+
   /* ---------------------------------------------------------- The grid */
 
   /*
@@ -488,5 +519,113 @@
     font-size: var(--ui-fs-13);
     line-height: var(--ui-lh-13);
     text-overflow: ellipsis;
+  }
+}
+
+/* «Смены → График»: a team's people, their slot in words and on the day's strip. */
+@layer components {
+  .sched-team + .sched-team {
+    margin-top: var(--ui-space-4);
+  }
+
+  .sched-rows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .sched-row {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) minmax(200px, 1.2fr) minmax(240px, 2fr);
+    align-items: center;
+    gap: 12px 24px;
+    padding: 10px 20px;
+  }
+
+  .sched-row--head {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  .sched-hours {
+    display: flex;
+    justify-content: space-between;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sched-row + .sched-row:not(.sched-row--head + .sched-row) {
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .sched-row__who,
+  .sched-row__slots {
+    min-width: 0;
+  }
+
+  .sched-row__slots {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .sched-slot__hours {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .sched-strip {
+    position: relative;
+    display: block;
+    height: 12px;
+    border-radius: 6px;
+    background: var(--ui-track, var(--ui-hover));
+    overflow: hidden;
+  }
+
+  .sched-strip__tick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--ui-line);
+  }
+
+  .sched-strip__bar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: 6px;
+    background: var(--ui-accent);
+    opacity: 0.75;
+  }
+
+  .sched-gaps {
+    margin: 0;
+    padding: 10px 20px 14px;
+    border-top: 1px solid var(--ui-line-soft);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  @media (max-width: 640px) {
+    .sched-row--head {
+      display: none;
+    }
+
+    .sched-row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 6px;
+      padding: 10px 16px;
+    }
+
+    .sched-gaps {
+      padding: 10px 16px 14px;
+    }
   }
 }

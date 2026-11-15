@@ -2,17 +2,14 @@ import { Tabs } from "@agency_hub_core/ui";
 import { useMe } from "./useMe";
 
 /**
- * «Мои» and «Команда» on a chatter's «Смены» (products plan §2.3): their own shifts with their reports, and the shifts
- * of their teams (Hub cuts them to the teams, services/teams.ts). The owner and a team lead read the journal itself.
+ * The tabs of «Смены» (products plan §2.3, package W): a chatter's «Мои» (their own shifts with their reports) and
+ * «Команда» (the shifts of their teams; Hub cuts them to the teams, services/teams.ts); the owner and a team lead read
+ * the journal of their teams. Everyone has «График»: the standing schedule of the teams.
  */
 export function ShiftsTabs() {
   const { role } = useMe();
-  if (role !== "chatter") return null;
-  return (
-    <Tabs
-      label="Чьи смены"
-      className="wb-shifts-tabs"
-      items={[{ to: "/my/shifts", label: "Мои", end: true }, { to: "/shifts", label: "Команда", end: true }]}
-    />
-  );
+  const items = role === "chatter"
+    ? [{ to: "/shifts/mine", label: "Мои", end: true }, { to: "/shifts/team", label: "Команда", end: true }, { to: "/shifts/schedule", label: "График", end: true }]
+    : [{ to: "/shifts", label: "Журнал", end: true }, { to: "/shifts/schedule", label: "График", end: true }];
+  return <Tabs label="Смены" className="wb-shifts-tabs" items={items} />;
 }
