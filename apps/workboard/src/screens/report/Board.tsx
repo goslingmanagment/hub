@@ -265,7 +265,8 @@ export function ReportBoard({ report, host, transport, light }: {
       return;
     }
     const ok = () => {
-      toast(report.posts.length > 1 ? `Пост ${post.modelName} скопирован, вставьте его в «Отчётность»` : "Пост скопирован, вставьте его в «Отчётность»");
+      // Two models: two messages. «Отчётность» (the ledger's reader) takes one model from a message, never a second.
+      toast(report.posts.length > 1 ? `Пост ${post.modelName} скопирован: отправьте его в «Отчётность» отдельным сообщением` : "Пост скопирован, вставьте его в «Отчётность»");
       // Hub remembers the copy of this model's post; its failure changes nothing the person sees.
       write.mutateAsync({ op: "postCopied", model: modelSlug }).catch(() => {});
     };

@@ -1,7 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { mirrorCustomsLeadRight } from "./team-roles.ts";
+import { mirrorCustomsLeadRight, signedInLoginSql } from "./team-roles.ts";
 
 // The people registry (0384–0386; ecosystem plan 2026-11-12, package A): one
 // record per person of the agency, with the logins and agent keys that are
@@ -1019,8 +1019,9 @@ export async function listPeopleCatalogUsers(db: Database, realm: PeopleRealm = 
 
 /**
  * The content manager of each page (products plan C4): the login of a person of the content manager's role whose
- * working pages include the page and who has not left — her product's matters (a post to approve, its outcome) wait
- * for her. Several on one page: the lowest login id. A page with none is not in the map (its matters stay the owner's).
+ * working pages include the page, who has not left and whose login has signed in (`signedInLoginSql`, the one rule of
+ * who leads: an invited person never signed in is nobody's box yet) — her product's matters (a post to approve, its
+ * outcome) wait for her. Several on one page: the lowest login id. A page with none is not in the map (its matters stay the owner's).
  */
 export async function listContentManagerLoginsByPage(db: Database): Promise<Map<string, number>> {
   const result = await db.execute<Row>(sql`
@@ -1031,7 +1032,7 @@ export async function listContentManagerLoginsByPage(db: Database): Promise<Map<
       join person_logins l on l.person_id = p.id
       join users u on u.id = l.user_id
      where p.role = 'content_manager' and p.state <> 'left'
-       and u.role = 'content_manager' and u.disabled_at is null and u.deleted_at is null
+       and u.role = 'content_manager' and ${signedInLoginSql(sql`u`)}
      group by pg.label`);
   return new Map(result.rows.map((row) => [String(row.label), Number(row.user_id)]));
 }
