@@ -1,5 +1,7 @@
+import { hubEntryHref } from "@agency_hub_core/ui/sites";
+import { useMe } from "@/shared/useMe";
 import { useMemo } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { usePageDeletedFans } from "@/screens/fans/data";
 import { usePageFilter } from "@/screens/fans/frame";
 import { Pagination } from "@agency_hub_core/ui/console/Pagination";
@@ -72,6 +74,7 @@ function DeletedList({ pageLabel, offset, query, onOffset }: {
   query: ReturnType<typeof usePageDeletedFans>;
   onOffset: (offset: number) => void;
 }) {
+  const { isOwner } = useMe();
   if (!query.data) return query.isError ? <NoAnswerPanel retry={query.refetch} /> : <TableSkeleton rows={8} columns={5} />;
   const { items, total } = query.data;
   return (
@@ -81,7 +84,8 @@ function DeletedList({ pageLabel, offset, query, onOffset }: {
         <p className="fan-count">
           {accountsWord(total)}. Даты показывают, когда Hub заметил удаление, а не точное время. Операции этих фанов остаются в истории.
         </p>
-        <Link className="link" to={`/money/transactions?${new URLSearchParams({ page: pageLabel })}`}>Все операции страницы</Link>
+        {/* «Операции» is Hub's, the owner's: on the console's name, signed in on the way. */}
+        {isOwner && <a className="link" href={hubEntryHref(window.location.origin, `/money/transactions?${new URLSearchParams({ page: pageLabel })}`)}>Все операции страницы</a>}
       </div>
       <section className="card" aria-label="Удалили аккаунт">
         <div className="table-wrap">

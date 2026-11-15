@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo, type ReactNode } from "react";
+import { createContext, Fragment, useCallback, useContext, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton, Tabs } from "@agency_hub_core/ui";
@@ -96,7 +96,36 @@ export interface PageFreshness {
  * The console's header of a screen, in Workboard's: the title (the row's, or the object's on a card), the period and
  * the page filter of the row, the dates and «Обновлено», the tabs of «Фаны» on its lists.
  */
-export function PageHeader({ title, description, actions, window, fresh }: {
+/** Whether the screen draws its header itself: the console's frame drew one for screens that do not (Ушли, a card's error). */
+const HeaderSeen = createContext<((seen: boolean) => void) | null>(null);
+
+/** The frame of a moved screen: its header when the screen draws none. */
+export function FansFrame({ children }: { children: ReactNode }) {
+  const [seen, setSeen] = useState(false);
+  return (
+    <HeaderSeen.Provider value={setSeen}>
+      <div className="console-kit">
+        {!seen && <DefaultHeader />}
+        {children}
+      </div>
+    </HeaderSeen.Provider>
+  );
+}
+
+function DefaultHeader() {
+  return <HeaderView />;
+}
+
+export function PageHeader(props: Parameters<typeof HeaderView>[0]) {
+  const seen = useContext(HeaderSeen);
+  useLayoutEffect(() => {
+    seen?.(true);
+    return () => seen?.(false);
+  }, [seen]);
+  return <HeaderView {...props} />;
+}
+
+function HeaderView({ title, description, actions, window, fresh }: {
   title?: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
