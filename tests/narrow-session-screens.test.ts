@@ -47,7 +47,9 @@ function reach(entries: readonly string[]): { modules: Set<string>; operations: 
       where.add(relative(SRC, file));
       operations.set(match[1]!, where);
     }
-    for (const match of text.matchAll(/(?:\bfrom\s+|\bimport\s*\(\s*)["']([^"']+)["']/g)) {
+    // A part behind the lead boundary (shared/leadOnly.tsx) renders only for whoever leads a team: never a narrow session.
+    const open = text.replace(/\bleadOnly\(\s*\(\)\s*=>\s*import\(\s*["'][^"']+["']\s*\)/g, "");
+    for (const match of open.matchAll(/(?:\bfrom\s+|\bimport\s*\(\s*)["']([^"']+)["']/g)) {
       const next = resolveImport(file, match[1]!);
       if (next) walk(next);
     }
@@ -97,9 +99,9 @@ describe("the narrow web session and the chatter's screens", () => {
     expect([...passwordOnly].filter((operation) => narrow.has(operation))).toEqual([]);
   });
 
-  it("knows the chatter's menu and name menu: «Начало», «Мои смены», «Смены», «Фаны», «Кастомы», «Продажи», «Аккаунт и устройства»", () => {
+  it("knows the chatter's menu and name menu: «Начало», «Сегодня», «Ждут вас», «Мои смены», «Смены», «Фаны», «Кастомы», «Продажи», «Аккаунт и устройства»", () => {
     expect(chatterScreens().map((screen) => screen.path).sort()).toEqual([
-      "/workboard/account", "/workboard/customs", "/workboard/fans", "/workboard/my/shifts", "/workboard/sales", "/workboard/shifts", "/workboard/start",
+      "/workboard/account", "/workboard/customs", "/workboard/fans", "/workboard/my/shifts", "/workboard/sales", "/workboard/shifts", "/workboard/start", "/workboard/today", "/workboard/waiting",
     ]);
   });
 

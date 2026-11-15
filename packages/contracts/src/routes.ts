@@ -30,6 +30,7 @@ import { customOrderRouteSchemas } from "./routes-custom-orders.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
 import { teamRouteSchemas } from "./routes-teams.ts";
+import { workboardTodayRouteSchemas } from "./routes-workboard-today.ts";
 import { fanRouteSchemas } from "./routes-fans.ts";
 import { shiftHandinRouteSchemas } from "./routes-shift-handins.ts";
 import { saleClaimRouteSchemas } from "./routes-sale-claims.ts";
@@ -8397,7 +8398,8 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof saleChainRouteSchemas
   & typeof shiftReportNoteRouteSchemas
   & typeof erasureRouteSchemas
-  & typeof saleDecisionRouteSchemas;
+  & typeof saleDecisionRouteSchemas
+  & typeof workboardTodayRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
@@ -8423,6 +8425,7 @@ export const routeSchemas: RouteSchemas = {
   ...shiftReportNoteRouteSchemas,
   ...erasureRouteSchemas,
   ...saleDecisionRouteSchemas,
+  ...workboardTodayRouteSchemas,
 };
 export type AuthState = z.infer<typeof authStateSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;

@@ -296,8 +296,10 @@ describe("teams: who sees whom (package T)", () => {
     expect(money).toEqual([]);
 
     const ownerChanged: string[] = [];
-    // `teamRoles` IS the records: the one read whose answer changes with them by design.
-    for (const read of reads.filter((one) => one.key !== "teamRoles" && !unstable.has(one.url))) {
+    // `teamRoles` IS the records, and «Сегодня» names each team's lead (`workboardToday`): the reads whose answers change
+    // with them by design.
+    const RECORDS = new Set(["teamRoles", "workboardToday"]);
+    for (const read of reads.filter((one) => !RECORDS.has(one.key) && !unstable.has(one.url))) {
       const response = await get(read.url, "olga");
       const after = `${response.statusCode} ${JSON.stringify(normalize(safeJson(response.body)))}`;
       if (ownerBefore.get(read.url) !== after) {

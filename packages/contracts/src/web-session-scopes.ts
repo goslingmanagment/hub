@@ -31,8 +31,14 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   // «Мои смены»: the person's own shift numbers and the team's average (package N).
   "accountShiftNumbers",
   "accountReports",
-  // The chatter's strip «Ждут вас» above «Мои смены»: a narrow session reads as a chatter (their own, never money).
+  // «Ждут вас» of a chatter (products package W: a menu item of their own): a narrow session reads as a chatter (their
+  // own, never money), the list and its groups' count.
   "mattersList",
+  "mattersWaiting",
+  // «Сегодня» and «Мои смены» (products package W): the person's shifts with their reports, paired on the server; the
+  // previous shift's comment and the customs to give (the team part is never a narrow session's).
+  "accountShifts",
+  "workboardToday",
   // Отчёт смены (ecosystem package F): the shift screen the extension opens, «Сдать смену» on it.
   "shiftReport",
   "shiftReportsList",

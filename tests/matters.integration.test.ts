@@ -178,11 +178,13 @@ describe("matters", () => {
     })).json());
     expect(ownerOwn.matters.some((one) => one.title.includes("money"))).toBe(false);
 
-    // «Ждут вас» is the dashboard's: a chatter's session is refused.
-    // «Ждут вас» of the team is everyone's read since the teams (package T): a chatter who leads nothing waits for nothing there.
+    // «Ждут вас» is every role's menu item (products package W): a chatter who leads nothing waits for their own matters,
+    // the same as the extension's number, never another person's.
     const aliceWaiting = await asSession("alice", "/api/v1/matters/waiting");
     expect(aliceWaiting.statusCode).toBe(200);
-    expect(mattersWaitingResponseSchema.parse(aliceWaiting.json())).toMatchObject({ groups: [], total: 0 });
+    const aliceGroups = mattersWaitingResponseSchema.parse(aliceWaiting.json());
+    expect(aliceGroups.total).toBe(mine.count);
+    expect(aliceGroups.customOrders).toBe(0);
   });
 
   it("an agent key writes its own kinds by key, on its pages, for living people; the server's kinds stay the server's", async (context) => {

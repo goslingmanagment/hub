@@ -33,19 +33,15 @@ import { noteParts, placeNotes, type NoteRow, type PlacedNote } from "@/shared/r
 import { useRowBackState } from "@/shared/links";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { ShiftsTabs } from "@/shared/ShiftsTabs";
-import { MyMatters } from "../waiting/MyMatters";
 import { usePeriod } from "@/shared/usePeriod";
 import {
   MY_SHIFTS_MAX_DAYS,
-  comparisonOf,
   factsOf,
-  joinShifts,
   myShiftsWindow,
-  previousReportedMills,
+  rowsOf,
   useMyNumbers,
   useMyShiftNotes,
   useMyShifts,
-  usePreviousReports,
   useShiftNow,
   type MyShiftRow,
   type MyShiftsFacts,
@@ -335,20 +331,19 @@ export function MyShiftsScreen() {
   const queryClient = useQueryClient();
   const window = useMemo(() => myShiftsWindow(period), [period]);
   const read = useMyShifts(window, period.current);
-  const previous = usePreviousReports(window);
   const numbers = useMyNumbers(window, period.current);
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const journal = useRef<HTMLDivElement>(null);
   useReportEdge(journal, COLUMNS.findIndex((column) => column.key === "total"));
 
   const data = read.data;
-  const reports = data?.reports?.reports ?? null;
   // The drafts came, the posts did not: the drafts show, and nothing is claimed of a shift without one.
-  const postsRead = data?.reports?.postsRead ?? true;
-  const rows = useMemo(() => (data ? joinShifts({ shifts: data.stats.shifts, reports, postsRead, window, hub: data.hub }) : undefined), [data, reports, postsRead, window]);
+  const postsRead = data?.postsRead ?? true;
+  // Which report is which shift's is Hub's (`accountShifts`): the rows come paired.
+  const rows = useMemo(() => (data ? rowsOf(data.rows) : undefined), [data]);
   // A shift whose report is Hub's opens its own screen (ecosystem package F); the others open in place, as before.
   const backHere = useRowBackState("Мои смены");
-  const facts = useMemo(() => (rows ? factsOf(rows, reports !== null && postsRead) : undefined), [rows, reports, postsRead]);
+  const facts = useMemo(() => (rows && data ? factsOf(rows, data.reportsRead && postsRead) : undefined), [rows, data, postsRead]);
   // «Мои деньги» (ecosystem package H1): nothing until the person's switch is on.
   const money = useMyMoneyParts(window, COLUMNS, rows);
   // The day's note under its last shift: only a day that has something to say here (the report's sum is the row's own).
@@ -358,7 +353,7 @@ export function MyShiftsScreen() {
     [rows, dayNotes],
   );
   const columns = useMemo(() => withNotes(money.columns, notes), [money.columns, notes]);
-  const unavailable: Unavailable = data === undefined ? null : data.reports === null ? "reports" : postsRead ? null : "posts";
+  const unavailable: Unavailable = data === undefined ? null : !data.reportsRead ? "reports" : postsRead ? null : "posts";
 
   // The shift going on is shown once: as the journal's first row when the period holds it, else above the journal
   // («Сейчас на смене», from the read of the last two days — a past period, or a night begun before its first day).
@@ -366,9 +361,11 @@ export function MyShiftsScreen() {
   const now = useShiftNow(data !== undefined && ongoing === null);
   const nowShift = ongoing === null ? now.data ?? null : null;
 
-  const comparison = comparisonOf(window, read.dataUpdatedAt || Date.now(), ongoing?.startedAt ?? null);
-  // The window before without its posts is no comparison: its sums would be the drafts'.
-  const previousMills = previousReportedMills(previous.data?.postsRead === false ? null : previous.data?.reports ?? null, comparison);
+  // The window before, cut at the same point while this one goes on (Hub's): its reports' sum, or nothing to compare with.
+  const previousStarts = data ? Date.parse(data.previous.startsAt) : window.startsAt;
+  const previousEnds = data ? Date.parse(data.previous.endsAt) : window.startsAt;
+  const comparison = { label: formatDayRange(moscowDayOf(previousStarts), moscowDayOf(Math.max(previousStarts, previousEnds - 1))), sameTime: data?.previous.sameTime ?? false };
+  const previousMills = data?.previous.reportedMills ?? null;
   const refreshing = read.isPlaceholderData && read.isFetching;
   const versus = `К ${comparison.label}${comparison.sameTime ? " на это же время" : ""}, по отчётам`;
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["my-shifts"] });
@@ -473,7 +470,6 @@ export function MyShiftsScreen() {
       />
       <div className="wb-content mys">
         <ShiftsTabs />
-        <MyMatters />
         {window.clipped && (
           <Notice title={`Смены видны не больше чем за ${MY_SHIFTS_MAX_DAYS} день`}>
             Чтобы увидеть {formatDayRange(period.from, addDays(window.from, -1))}, выберите эти дни отдельно. Сейчас показаны {formatDayRange(window.from, window.to)}.

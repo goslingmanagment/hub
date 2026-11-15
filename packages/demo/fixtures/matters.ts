@@ -257,11 +257,11 @@ function mattersList(request: DemoRequest): ListAnswer {
 }
 
 function mattersWaiting(request: DemoRequest): WaitingAnswer {
-  // Only what waits for the viewer themself; the owner here holds no team lead's role (the agency has team leads).
-  const matters = request.role === "chatter" ? [] : visible(request).filter((matter) => matter.mine);
+  // Only what waits for the viewer themself (a chatter: their own); the owner here holds no team lead's role.
+  const matters = visible(request).filter((matter) => matter.mine);
   // The list's groups, as Hub counts them (the one table), for every role: the Home's chips and the number.
   const waiting = matters.filter((matter) => !MATTER_INFO_KINDS.includes(matter.kind));
-  const groups = request.role === "chatter" ? [] : WAITING_GROUPS.filter((group) => group.id !== "info").flatMap((group) => {
+  const groups = WAITING_GROUPS.filter((group) => group.id !== "info").flatMap((group) => {
     const inGroup = waiting.filter((matter) => waitingGroupOf(matter.kind) === group.id);
     const tone = worstWaitingTone(inGroup.map((matter) => waitingToneOf(matter.kind)));
     const list = request.role === "owner" ? HUB_WAITING_PATH : WORKBOARD_WAITING_PATH;
