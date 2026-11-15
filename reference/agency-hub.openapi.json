@@ -364026,6 +364026,34 @@
                         "additionalProperties": false
                       }
                     },
+                    "sandbox": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "people": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "lastWorkedAt": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "people",
+                            "lastWorkedAt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
                     "limits": {
                       "type": "object",
                       "properties": {
@@ -364055,6 +364083,7 @@
                     "reporters",
                     "routines",
                     "copies",
+                    "sandbox",
                     "limits",
                     "serverNow"
                   ],
