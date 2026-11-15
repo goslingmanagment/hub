@@ -2,6 +2,8 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 
 import { requireHumanPrincipal } from "../../services/auth.ts";
 import { readSaleChain, type ChainViewer } from "../../services/sale-chain.ts";
+import { readTeamSalesList } from "../../services/team-sales-list.ts";
+import { teamPagesFor } from "../../services/teams.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -20,12 +22,20 @@ export function registerSaleChainRoutes(server: ApiServer, ctx: ApiModuleContext
     requireHumanPrincipal(principal);
     // A narrow session (opened from the extension) reads as a chatter whatever the role.
     const role = principal.narrowDeviceTokenId === undefined ? principal.user.role : "chatter";
+    // The pages: the viewer's teams' and their own (products package T, `teamPagesFor`), as «Продажи → Список продаж».
+    const pageIds = role === "owner" ? [] : (await teamPagesFor(appContext, principal)) ?? principal.assignedPageIds;
     const viewer: ChainViewer = role === "owner"
       ? { kind: "owner" }
       : role === "team_lead"
-        ? { kind: "team_lead", pageIds: principal.assignedPageIds }
-        : { kind: "chatter", userId: principal.user.id, pageIds: principal.assignedPageIds };
+        ? { kind: "team_lead", pageIds }
+        : { kind: "chatter", userId: principal.user.id, pageIds };
     return readSaleChain(appContext, viewer, request.query);
+  });
+
+  // «Продажи → Список продаж» (products plan §2.3): every sale of the viewer's teams, whose and why, the report it is in.
+  server.get("/api/v1/team/sales/list", { schema: routeSchemas.teamSalesList }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return readTeamSalesList(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 
   server.get("/api/v1/agent/team/sale-chain", { schema: routeSchemas.agentSaleChain }, async (request) => {

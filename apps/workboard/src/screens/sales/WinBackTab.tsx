@@ -18,14 +18,13 @@ import {
   readWindow,
   ripening,
   share,
-  useSaveWinBackApproach,
-  useWinBackApproaches,
   useWinBackResults,
   winBackView,
   type Approach,
   type WinBackCounts,
   type WinBackLine,
 } from "./data";
+import { useSaveWinBackApproach, useWinBackApproaches } from "./winBackApproaches";
 import { BACK_LABEL, barWidth, BeyondReach, BySwitch, Folds, HowItCounts, LineName, NoAnswer, SalesHeader, WindowNotice, openColumn, panelColumns, skeletonColumns, useSalesParams, windowWords } from "./parts";
 
 /**

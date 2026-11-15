@@ -25,16 +25,19 @@ import "./sales.css";
 export const TABS = [
   { tab: "price", label: "Цена", sleeping: false },
   { tab: "speed", label: "Скорость ответа", sleeping: false },
-  { tab: "win-back", label: "Возврат фанов", sleeping: true },
+  // The team's own (routes.tsx: never a chatter's session): «Возврат фанов» writes the owner's approaches.
+  { tab: "win-back", label: "Возврат фанов", sleeping: true, team: true },
   { tab: "greetings", label: "Приветствия и охват", sleeping: true },
   // «Рассылки» of one Fansly page (products package M: moved from the console's «Контент»), the owner's.
-  { tab: "mass", label: "Рассылки", sleeping: false, ownerOnly: true },
+  { tab: "mass", label: "Рассылки", sleeping: false, ownerOnly: true, team: true },
+  // Every sale of the viewer's teams: whose it is and why, the report it is in (products plan §2.3).
+  { tab: "list", label: "Список продаж", sleeping: false },
 ] as const;
 
 export type SalesTab = (typeof TABS)[number]["tab"];
 
-/** The back label of a card opened from here: «← Что продаёт». */
-export const BACK_LABEL = "Что продаёт";
+/** The back label of a card opened from here: «← Продажи». */
+export const BACK_LABEL = "Продажи";
 
 /** The cut and the open panel, in the address: `?by=chatters`, `?open=chatter:4`. */
 export function useSalesParams() {
@@ -82,7 +85,7 @@ export function SalesHeader({ meta, updatedAt, onRefresh, refreshing, stale = fa
   const { isOwner } = useMe();
   return (
     <ScreenHeader
-      title="Что продаёт"
+      title="Продажи"
       period={period}
       pageFilter={pageFilter}
       // Not null: the header would fill an empty line with «Сравнение с …», and nothing here is compared. A no-break

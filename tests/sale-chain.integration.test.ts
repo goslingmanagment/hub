@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { saleChainResponseSchema, type SaleChainResponse } from "@agency_hub_core/contracts";
+import { saleChainResponseSchema, teamSalesListResponseSchema, type SaleChainResponse, type TeamSalesListResponse } from "@agency_hub_core/contracts";
 import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -312,5 +312,44 @@ describe("a sale's chain of money: who reads it and how much", () => {
       broken = false;
       Object.assign(app.config, { ledgerPayoutsKey: key });
     }
+  });
+
+  // «Продажи → Список продаж»: the same sales, listed by the viewer's pages; whose in the chain's words; the chain to open
+  // is a chatter's only for a sale of theirs; nothing of anyone's pay.
+  it("lists the sales of the viewer's pages, whose and why, a chatter's chain only of their own", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const list = async (who: string, query = ""): Promise<TeamSalesListResponse> => {
+      const response = await asSession(who, `/api/v1/team/sales/list?from=2026-11-10&to=2026-11-10${query}`);
+      expect(response.statusCode, `${who}: ${response.body}`).toBe(200);
+      return teamSalesListResponseSchema.parse(response.json());
+    };
+    const ids = (answer: TeamSalesListResponse) => answer.sales.map((sale) => sale.transactionId).sort((a, b) => a - b);
+
+    const owner = await list("boss");
+    expect(ids(owner)).toEqual([sales.anna, sales.bella, sales.other, sales.nobody].sort((a, b) => a - b));
+    expect(owner.counts).toMatchObject({ all: 4, people: 3, nobody: 1, owner: 0, mine: 0 });
+    expect(owner.sales.every((sale) => sale.chain)).toBe(true);
+    expect(owner.sales.find((sale) => sale.transactionId === sales.nobody)?.home).toMatchObject({ kind: "nobody", state: "none" });
+    expect(ids(await list("boss", "&home=nobody"))).toEqual([sales.nobody]);
+
+    // A team lead: their pages only, every chain of them.
+    const lead = await list("lead");
+    expect(ids(lead)).toEqual([sales.anna, sales.bella, sales.nobody].sort((a, b) => a - b));
+    expect(lead.sales.every((sale) => sale.chain)).toBe(true);
+
+    // A chatter: the sales of their pages, the chain of their own only; «Мои» is theirs.
+    const anna = await list("anna");
+    expect(ids(anna)).toEqual([sales.anna, sales.bella, sales.nobody].sort((a, b) => a - b));
+    expect(anna.sales.filter((sale) => sale.chain).map((sale) => sale.transactionId)).toEqual([sales.anna]);
+    expect(anna.sales.find((sale) => sale.transactionId === sales.bella)?.people).toEqual([{ userId: await fixtureUserId(app, "bella"), name: "bella", mine: false }]);
+    expect(anna.counts.mine).toBe(1);
+    expect(ids(await list("anna", "&home=mine"))).toEqual([sales.anna]);
+    // A colleague's report is a state: no sum of it.
+    expect(anna.sales.find((sale) => sale.transactionId === sales.bella)?.report.amountMills).toBeNull();
+    expect(ids(await list("cora"))).toEqual([sales.other]);
+    // Another page by name is refused, not emptied.
+    expect((await asSession("cora", "/api/v1/team/sales/list?from=2026-11-10&to=2026-11-10&pageLabel=mia-1")).statusCode).toBe(403);
+    // Every chain the list offers opens.
+    for (const sale of anna.sales.filter((one) => one.chain)) expect((await chainOf("anna", sale.transactionId)).sale.transactionId).toBe(sale.transactionId);
   });
 });

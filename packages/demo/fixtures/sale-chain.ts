@@ -1,4 +1,4 @@
-import type { SaleChainLink, SaleChainResponse } from "@agency_hub_core/contracts";
+import { TEAM_SALES_LIST_PAGE, type SaleChainLink, type SaleChainResponse, type TeamSaleHomeFilterWire, type TeamSalesListResponse } from "@agency_hub_core/contracts";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import { demoError, hashString, queryString, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
@@ -7,7 +7,7 @@ import { DAY_MS, HOUR_MS, addDays, mskDay } from "./account-model.ts";
 import { HISTORY_DAYS, ledgerRange } from "./money-ledger.ts";
 import { fanTransactions, pagePopulation } from "./page-world.ts";
 import { demoClaimsOfSale } from "./sale-claims.ts";
-import { demoChainShifts, type DemoChainShift } from "./shift-reports.ts";
+import { demoChainShifts, demoShiftSalesIn, type DemoChainShift } from "./shift-reports.ts";
 import { demoPersonPay } from "./team-ledger.ts";
 
 /**
@@ -250,7 +250,89 @@ function consoleSale(now: Date, pageLabel: string, ref: string): Sale | null {
   return null;
 }
 
+/** A shift line's sale as the chain reads it (by Hub's id); null — no line names it. */
+function lineSale(now: Date, transactionId: number): { sale: Sale; entries: DemoChainShift[] } | null {
+  const entries = demoChainShifts(now, { transactionId });
+  const first = entries[0]?.line;
+  if (first === undefined || first === null) return null;
+  return { entries, sale: { transactionId, pageLabel: first.pageLabel, platform: first.platform, kind: first.kind, occurredAt: Date.parse(first.occurredAt), netMills: first.netMills, fan: first.fan } };
+}
+
+/** The list's filter a home falls in, besides «all» and «mine». */
+function filterOf(home: Home): TeamSaleHomeFilterWire {
+  switch (home.kind) {
+    case "shift": return home.shares.length > 0 ? "people" : "nobody";
+    case "decide": return "owner";
+    case "nobody": return "nobody";
+    default: return "none";
+  }
+}
+
+const HOME_FILTERS = ["all", "mine", "people", "owner", "pot", "waiting", "nobody", "none"] as const satisfies readonly TeamSaleHomeFilterWire[];
+
+/**
+ * «Продажи → Список продаж» (`teamSalesList`): the sales the demo's shifts carry in the window, on the viewer's pages,
+ * each with its chain's «Чья» and its person's report as the chain words them; a chatter may open the chain of their own.
+ */
+function teamSalesList(request: DemoRequest): TeamSalesListResponse | DemoReply {
+  const viewer = viewerOf(request);
+  const from = queryString(request, "from") ?? mskDay(request.now.getTime() - 6 * DAY_MS);
+  const to = queryString(request, "to") ?? mskDay(request.now.getTime());
+  const page = queryString(request, "pageLabel");
+  const filter = (queryString(request, "home") ?? "all") as TeamSaleHomeFilterWire;
+  const offset = Number(queryString(request, "offset") ?? 0) || 0;
+  const pages = viewer.kind === "owner" ? null : new Set(viewer.user.pages);
+  const me = viewer.kind === "owner" ? demoUserByRole("owner").id : viewer.user.id;
+  const rows = demoShiftSalesIn(request.now, Date.parse(`${from}T00:00:00+03:00`), Date.parse(`${to}T00:00:00+03:00`) + DAY_MS)
+    .filter((one) => (pages === null || pages.has(one.pageLabel)) && (page === undefined || one.pageLabel === page))
+    .flatMap((one) => {
+      const found = lineSale(request.now, one.transactionId);
+      if (found === null) return [];
+      const home = homeOfLines(found.entries, found.sale, request.now);
+      return [{ ...found, home, filter: filterOf(home), mine: home.shares.some((share) => share.user.id === me) }];
+    });
+  const counts = Object.fromEntries(HOME_FILTERS.map((key) => [key, rows.filter((row) => key === "all" || (key === "mine" ? row.mine : row.filter === key)).length])) as TeamSalesListResponse["counts"];
+  const picked = rows.filter((row) => filter === "all" || (filter === "mine" ? row.mine : row.filter === filter));
+  const shown = picked.slice(offset, offset + TEAM_SALES_LIST_PAGE);
+  return {
+    from,
+    to,
+    sales: shown.map(({ sale, home, entries, mine }) => {
+      const words = homeLink(home, sale, request.now, viewer);
+      const share = home.shares.find((one) => one.user.id === me) ?? home.shares[0] ?? null;
+      // A colleague's share reads as a team lead reads it: the report's state, no sums of another person.
+      const asViewer: Viewer = viewer.kind === "chatter" && share !== null && share.user.id !== me ? { kind: "team_lead", user: viewer.user } : viewer;
+      let report: Link = home.kind === "decide" ? { state: "wait", words: "ни в чей отчёт, пока владелец не решит", link: null, amountMills: null }
+        : home.kind === "before_rule" ? { state: "none", words: "по-старому: в посте за день", link: null, amountMills: null }
+        : { state: "none", words: "ни в чей отчёт, пока её не заявят", link: null, amountMills: null };
+      if (share !== null) {
+        report = person(share, sale, home, asViewer, request).report;
+        if (home.shares.length > 1) report = { ...report, words: `${share.user.name}: ${report.words}` };
+      }
+      const involved = mine || demoClaimsOfSale(request.now, sale.transactionId).some((claim) => claim.claimant.id === me || claim.side.id === me)
+        || entries.some((entry) => entry.owner.id === me);
+      return {
+        transactionId: sale.transactionId,
+        pageLabel: sale.pageLabel,
+        platform: sale.platform,
+        kind: sale.kind,
+        occurredAt: new Date(sale.occurredAt).toISOString(),
+        netMills: sale.netMills,
+        fan: sale.fan,
+        home: { state: words.state, words: words.words, kind: words.kind, reason: words.reason, above: words.above, dispute: words.dispute },
+        people: [...new Map(home.shares.map((one) => [one.user.id, one.user])).values()].map((user) => ({ userId: user.id, name: user.name, mine: user.id === me })),
+        report,
+        chain: viewer.kind !== "chatter" || involved,
+      };
+    }),
+    counts,
+    nextOffset: picked.length > offset + TEAM_SALES_LIST_PAGE ? offset + TEAM_SALES_LIST_PAGE : null,
+    serverNow: request.now.toISOString(),
+  };
+}
+
 export const saleChainHandlers: DemoHandlers = {
+  teamSalesList,
   saleChain: (request): Chain | DemoReply => {
     const viewer = viewerOf(request);
     const saleId = Number(queryString(request, "saleId") ?? Number.NaN);

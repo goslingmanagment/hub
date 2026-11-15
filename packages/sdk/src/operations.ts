@@ -521,6 +521,7 @@ export const kernelOperations = {
   teamPeople: { method: "GET", path: "/api/v1/team/people" },
   teamRoleSet: { method: "POST", path: "/api/v1/team/roles" },
   teamRoles: { method: "GET", path: "/api/v1/team/roles" },
+  teamSalesList: { method: "GET", path: "/api/v1/team/sales/list" },
   teamSalesPpv: { method: "GET", path: "/api/v1/team/sales/ppv" },
   teamSalesReplies: { method: "GET", path: "/api/v1/team/sales/replies" },
   teamShiftReview: { method: "GET", path: "/api/v1/team/shift-review" },
