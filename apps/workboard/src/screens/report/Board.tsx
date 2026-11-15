@@ -314,7 +314,9 @@ export function ReportBoard({ report, host, transport, light }: {
       await run({ op: "unask", transactionId: row.transactionId }, "Вопрос отменён");
       return;
     }
-    if (choice.ask !== null) {
+    // «Моя» on a sale the rule does not give the person takes one line of why, question or not (the server refuses
+    // the word without it): the same field, and with no one to ask the sale is taken at once.
+    if (choice.ask !== null || (choice.line.statement === "mine" && personNote(row) === null)) {
       await commitNote();
       setAsk((one) => ({ key: row.key, choice, text: one?.key === row.key ? one.text : "" }));
       return;
@@ -341,7 +343,12 @@ export function ReportBoard({ report, host, transport, light }: {
     if (ask === null) return;
     const row = rowByKey(board, ask.key);
     const text = ask.text.trim();
-    if (!row || row.transactionId === null || ask.choice.ask === null || text === "") return;
+    if (!row || row.transactionId === null || text === "") return;
+    if (ask.choice.ask === null) {
+      const taken = await run({ op: "line", transactionId: row.transactionId, body: { ...ask.choice.line, note: text } }, choiceToast(row, ask.choice, board));
+      if (taken) setAsk(null);
+      return;
+    }
     const to = ask.choice.ask;
     const ok = await run({ op: "ask", transactionId: row.transactionId, statement: to.statement, shareWithUserId: to.shareWithUserId, note: text },
       to.to === "owner" ? `Вопрос ушёл ${board.decider.kind === "team_lead" && board.decider.user ? board.decider.user.forms.dat : "владельцу"}` : `Вопрос ушёл ${to.forms?.dat ?? ""}`);
@@ -475,12 +482,13 @@ export function ReportBoard({ report, host, transport, light }: {
     if (row.before !== null) return row.note ? <div className="ux">{noteLine(row)}</div> : null;
     const parts: ReactNode[] = [];
     if (miss !== null && miss.key === row.key) parts.push(<div className="miss" key="miss">{miss.words}</div>);
-    if (ask?.key === row.key && ask.choice.ask !== null) {
+    if (ask?.key === row.key) {
       const to = ask.choice.ask;
       const decider = board.decider.kind === "team_lead" && board.decider.user ? board.decider.user.forms : null;
-      const whom = to.to === "owner" ? decider?.acc ?? "владельца" : to.forms?.acc ?? "";
+      const whom = to === null ? "" : to.to === "owner" ? decider?.acc ?? "владельца" : to.forms?.acc ?? "";
       // The server's own words when it sends the question straight to the decider («Олег сдаёт смену по-старому, решит владелец»).
-      const hint = to.words ?? (to.to === "owner" ? "Решит владелец. До его ответа продажа остаётся в общаке." : `${to.forms?.nom ?? ""} ответит в ChatGoose. Пока он не согласился, продажа его.`);
+      const hint = to === null ? "Спрашивать некого: продажа станет вашей сразу."
+        : to.words ?? (to.to === "owner" ? "Решит владелец. До его ответа продажа остаётся в общаке." : `${to.forms?.nom ?? ""} ответит в ChatGoose. Пока он не согласился, продажа его.`);
       parts.push(
         <div className="frm" key="ask">
           <label className="frm-l" htmlFor={`ask-${row.key}`}>Почему продажа ваша?</label>
@@ -488,7 +496,7 @@ export function ReportBoard({ report, host, transport, light }: {
             <input className="fld" id={`ask-${row.key}`} ref={focusField} value={ask.text} placeholder="Одной строкой" autoComplete="off" maxLength={300}
               onChange={(event) => setAsk({ ...ask, text: event.target.value })}
               onKeyDown={(event) => onField(event, () => void sendAsk(), () => setAsk(null))} />
-            <button type="button" className="btn btn--line btn--sm" disabled={ask.text.trim() === "" || write.isPending} onClick={() => void sendAsk()}>Спросить {whom}</button>
+            <button type="button" className="btn btn--line btn--sm" disabled={ask.text.trim() === "" || write.isPending} onClick={() => void sendAsk()}>{to === null ? "Забрать" : `Спросить ${whom}`}</button>
             <button type="button" className="btn btn--quiet btn--sm" onClick={() => setAsk(null)}>Отмена</button>
           </div>
           <div className="frm-h">{hint}</div>
