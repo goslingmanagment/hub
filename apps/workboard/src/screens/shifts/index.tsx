@@ -142,7 +142,6 @@ export function ShiftsScreen() {
       <>
         <WeekGrid
           model={model}
-          isOwner={isOwner}
           versus={versus}
           loading={!model}
           refreshing={refreshing}
