@@ -19,7 +19,7 @@ import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in
 // and takes a shift's highest version as its report (ledger internal/reports/hub.go) — still counts each sale once.
 // Money: required.
 //
-// anna really works mia-1 from 22 to 20 hours ago (minutes and messages): the rule gives her the page's sales of those
+// anna really works mia-1 from 23 to 18 hours ago (minutes and messages): the rule gives her the page's sales of those
 // hours.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
@@ -84,17 +84,17 @@ describe("a report whose shift is merged after the hand-in", () => {
     });
     expect(created.statusCode, created.body).toBe(200);
     await q("update person_rights set granted_at = now() - interval '30 days'");
-    // anna's work on mia-1: every minute from 22 to 20 hours ago, a message every three minutes.
+    // anna's work on mia-1: every minute from 23 to 18 hours ago, a message every three minutes.
     await q(
       `insert into chatter_activity_minutes (user_id, page_id, minute, input)
        select $1, $2, minute, true
-       from generate_series(date_trunc('minute', now() - interval '22 hours'), date_trunc('minute', now() - interval '20 hours'), interval '1 minute') minute`,
+       from generate_series(date_trunc('minute', now() - interval '23 hours'), date_trunc('minute', now() - interval '18 hours'), interval '1 minute') minute`,
       [anna, pageOne],
     );
     await q(
       `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
-       select 'fansly', $1, (9900000000 + n)::text, '7700000088', $2, 'fansly-extension', false, false, now() - interval '22 hours' + interval '3 minutes' * n, 'hand'
-       from generate_series(0, 39) n`,
+       select 'fansly', $1, (9900000000 + n)::text, '7700000088', $2, 'fansly-extension', false, false, now() - interval '23 hours' + interval '3 minutes' * n, 'hand'
+       from generate_series(0, 99) n`,
       [pageOne, anna],
     );
   }, 180_000);
@@ -109,14 +109,14 @@ describe("a report whose shift is merged after the hand-in", () => {
     const inserted = await q(
       `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
          gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
-       values ($1, 'tx-merge-feed-1', 'tip', 'tip', 'posted', 'ok', $2, $2, $3, 4000, now() - interval '21 hours', 'fansly:rest', 'USD') returning id`,
+       values ($1, 'tx-merge-feed-1', 'tip', 'tip', 'posted', 'ok', $2, $2, $3, 4000, now() - interval '20 hours 30 minutes', 'fansly:rest', 'USD') returning id`,
       [pageOne, NET + 4_000, NET],
     );
     const sale = Number(inserted.rows[0].id);
     const now = new Date();
     await refreshSaleHomes(app.db, { from: new Date(now.getTime() - 48 * HOUR_MS), to: now, now });
-    // anna's work of 22–20 hours ago: the shift row handed in; the row it is joined into comes with the merge.
-    const gone = await shiftRow(22.5, 19.5);
+    // anna's work of 23–18 hours ago: the shift row handed in; the row it is joined into comes with the merge.
+    const gone = await shiftRow(23.5, 17.5);
     await handInAndConfirm(asSession, "anna", gone);
     const home = (await q("select home, reason, shares from sale_homes where transaction_id = $1", [sale])).rows[0];
     const counted = (await q(
@@ -154,7 +154,7 @@ describe("a report whose shift is merged after the hand-in", () => {
     expect(countedByLedger()).toBe(NET);
 
     // Merged: the report moves to the shift that remains; the ledger reads; anna hands it in again; the ledger reads.
-    const kept = await shiftRow(22.6, 19.4);
+    const kept = await shiftRow(23.6, 17.4);
     await q("update shifts set state = 'merged', merged_into = $2 where id = $1", [gone, kept]);
     await settleGoneShifts(app, new Date());
     expect((await q("select shift_id::int as shift_id from shift_handins where shift_id in ($1, $2)", [gone, kept])).rows).toEqual([{ shift_id: kept }]);
