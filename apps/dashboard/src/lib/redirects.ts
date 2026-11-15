@@ -9,7 +9,7 @@
 import { matchPath } from "react-router";
 import { ALL_PAGES_PARAM } from "./pageParam.js";
 import { decodedPath, pathSegment } from "@agency_hub_core/ui/path";
-import { teamToWorkboard, workboardHref } from "./workboard.js";
+import { teamPeopleInHub, teamToWorkboard } from "./workboard.js";
 
 export type RouteParams = Readonly<Record<string, string | undefined>>;
 
@@ -186,7 +186,8 @@ const SETTINGS_TAB_TARGET: Readonly<Record<string, string>> = {
   pages: "/settings/pages",
   models: "/settings/pages",
   credentials: "/settings/pages",
-  users: workboardHref("access"),
+  // The staff list was the registry: Hub «Люди» (products plan §4.3).
+  users: "/people",
   personas: "/settings/ai/personas",
   notifications: "/settings/notifications",
   collection: "/system/onlyfans-api#collection",
@@ -221,6 +222,8 @@ export const SETTINGS_INDEX_RULE: LegacyRule = {
  * routes/ToWorkboard.tsx apply the same rules.
  */
 export function resolveLegacyUrl(url: string, today?: string): string | null {
+  const people = teamPeopleInHub(url);
+  if (people !== null) return people;
   const workboard = teamToWorkboard(url, today);
   if (workboard !== null) return workboard;
   const parsed = new URL(url, "https://hub.invalid");

@@ -308,7 +308,7 @@ function useColumns(list: PeopleList, isOwner: boolean, page: string | null): Co
           const slot = slotSummary(person);
           const going = numbers.now.onShiftSince ? statusOf({ state: "active", disabledAt: null, now: numbers.now }).words : null;
           // Line 2, one line: the shift going on now (green) and the working pages, then the slot. The rest is the card's.
-          // A slot that does not fit whole is left out of the row (registry.css), never cut to a stub.
+          // A slot that does not fit whole is left out of the row (packages/ui styles/people.css), never cut to a stub.
           const head: ReactNode[] = [
             going ? <span key="live" className="registry-who__live">{going}</span> : null,
             person.workingPages.length > 0 ? <PageLabels key="pages" labels={person.workingPages.map((one) => one.pageLabel)} max={3} className="registry-who__pages" /> : null,

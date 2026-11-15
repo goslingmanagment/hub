@@ -1,11 +1,10 @@
 import { CalendarPlus, Pencil } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { Button, Card, Disclosure, ErrorState, Field, Modal, Notice, Select, SkeletonText, Switch, Table, TextInput, Textarea, toast, type Column } from "@agency_hub_core/ui";
+import { Button, Card, Disclosure, ErrorState, Field, Modal, Notice, Select, SkeletonText, Switch, Table, TextInput, toast, type Column } from "@agency_hub_core/ui";
 import { formatDay, formatMills } from "@agency_hub_core/ui/format";
 import { addDays, moscowToday } from "@agency_hub_core/ui/moscow";
 import { EMPTY_SLOT, SlotFields, WorkingPagesPicker, fixMills, shareBasisPoints, shareText, slotBody, slotProblem, type SlotDraft } from "@agency_hub_core/ui/people/forms";
-import { slotWords, weekdaysWords, type Weekday } from "@agency_hub_core/ui/people/words";
-import { ruPlural } from "@agency_hub_core/ui/plural";
+import { slotWords, type Weekday } from "@agency_hub_core/ui/people/words";
 import {
   refusal,
   useCatalogPages,

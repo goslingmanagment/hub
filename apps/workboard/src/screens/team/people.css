@@ -3,12 +3,6 @@
  * ribbon, the two-line numbers of a row, the sales blocks. Tokens only.
  */
 @layer components {
-  /* The narrow rights, a switch each, one under another. */
-  .registry-rights {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
 
   /* ------------------------------------------------- A number with its change under it */
 
@@ -29,10 +23,6 @@
   .people-num .ui-delta {
     font-size: var(--ui-fs-14);
     line-height: var(--ui-lh-14);
-  }
-
-  .people-dash {
-    color: var(--ui-text-3);
   }
 
   /* Set two-line headers (Head.tsx): the labels of a row of headers start on one line, a qualifier hangs under. */
@@ -113,15 +103,6 @@
     border-top: 1px solid var(--ui-line-strong);
   }
 
-  /* A page's name inside a line of tabular figures: its digit keeps the text's own width («mia-1», not «mia - 1»). */
-  .people-meta .ui-page,
-  .people-kind .ui-page,
-  .people-fan .ui-page,
-  .people-tip .ui-page,
-  .people-shifts .ui-page {
-    font-variant-numeric: normal;
-  }
-
   /* ------------------------------------------------- Below the table: people without shifts */
 
   .people-aside {
@@ -130,85 +111,9 @@
     gap: 16px;
   }
 
-  .people-idle {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 24px;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-  }
-
-  .people-idle__label {
-    color: var(--ui-text-2);
-  }
-
-  .people-folded {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 12px 24px;
-    padding: 8px 0 0;
-  }
-
-  .people-note {
-    max-width: var(--ui-measure);
-    margin: 0;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
   .people-help p {
     max-width: var(--ui-measure);
     margin: 0 0 8px;
-  }
-
-  /* ------------------------------------------------- The card's header line */
-
-  /* One line, whatever the pages and the tab: the tabs under it never move (Р2). */
-  .people-meta {
-    display: flex;
-    flex-wrap: nowrap;
-    align-items: center;
-    min-height: 28px;
-    overflow: hidden;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-    white-space: nowrap;
-  }
-
-  .people-meta__part {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    min-width: 0;
-  }
-
-  .people-meta__part:last-child {
-    flex: 0 1 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .people-meta__sep {
-    padding: 0 12px;
-    color: var(--ui-text-3);
-  }
-
-  .people-meta .ui-page {
-    color: var(--ui-text-2);
-    font-variant-numeric: normal;
-  }
-
-  /* As «и ещё N» of the shared page list. */
-  .people-meta__more {
-    color: var(--ui-text-2);
-    text-decoration: underline dotted;
-    text-decoration-color: var(--ui-line-strong);
-    text-underline-offset: 4px;
-    cursor: help;
   }
 
   /* The pages in a hint: one a line, never broken inside a name («ivy- / 2»). */
@@ -218,26 +123,6 @@
     gap: 2px;
     white-space: nowrap;
     font-variant-numeric: normal;
-  }
-
-  .people-meta__strong {
-    color: var(--ui-text);
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .people-meta .people-meta__live {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--ui-good-text);
-    font-weight: 500;
-    text-decoration: none;
-  }
-
-  .people-meta a.people-meta__live:hover {
-    text-decoration: underline;
-    text-underline-offset: 3px;
   }
 
   /* ------------------------------------------------- The verdict: the app's row of tiles */
@@ -660,32 +545,12 @@
     color: var(--ui-text-3);
   }
 
-  /* ------------------------------------------------- Sales of a person */
-
-  .people-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 24px;
-    align-items: stretch;
-  }
-
   .people-skeleton-lines {
     display: flex;
     flex-direction: column;
     gap: 16px;
   }
 
-  .people-grid__wide {
-    grid-column: 1 / -1;
-    max-width: none;
-    margin: 0 0 -8px;
-  }
-
-  @media (max-width: 1100px) {
-    .people-grid {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
 
   .people-rates {
     display: flex;
@@ -846,11 +711,3 @@
     gap: 16px;
   }
 }
-
-/* «Команды и права» (products package T). */
-.ppl-team-roles { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
-.ppl-team-roles__model { display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 12px; align-items: start; }
-.ppl-team-roles__name { display: grid; gap: 2px; font-weight: 600; }
-.ppl-team-roles__lead { font-weight: 400; color: var(--ui-text-muted, var(--text-muted)); font-size: 13px; }
-.ppl-team-roles__kinds { display: grid; gap: 10px; }
-@media (max-width: 640px) { .ppl-team-roles__model { grid-template-columns: 1fr; } }

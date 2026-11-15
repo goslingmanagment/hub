@@ -1,7 +1,7 @@
 import { Check, ExternalLink } from "lucide-react";
 import type { PersonStartStepId } from "@agency_hub_core/contracts";
 import { Button, Card, cx } from "@agency_hub_core/ui";
-import { hubPersonPath } from "@agency_hub_core/ui/people/paths";
+import { hubPersonPath } from "@agency_hub_core/contracts";
 import { formatDay } from "@agency_hub_core/ui/format";
 import { hubHref } from "@/shared/links";
 import { deviceWords } from "@/screens/start/words";

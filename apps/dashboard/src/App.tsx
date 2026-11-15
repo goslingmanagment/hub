@@ -15,6 +15,7 @@ import { statsRoutes } from "./routes/screens/stats.js";
 import { systemRoutes } from "./routes/screens/system.js";
 import { trafficRoutes } from "./routes/screens/traffic.js";
 import { waitingRoutes } from "./routes/screens/waiting.js";
+import { peopleRoutes, TeamPeopleToHub } from "./routes/screens/people.js";
 import { applicationsRoutes } from "./routes/screens/applications.js";
 import { ToWorkboard } from "./routes/ToWorkboard.js";
 import { pageScreensRoutes } from "./routes/screens/fans-page.js";
@@ -37,6 +38,8 @@ export function App() {
           <Route path="/join" element={<JoinPage />} />
           {/* «Команда» is Workboard now: every old address of it leaves for its screen there
               (lib/workboard.ts), before any frame of the console loads. «Анкеты» stay below. */}
+          {/* «Команда → Люди» was the registry: Hub «Люди» now (products plan §4.3), the rest of «Команда» is Workboard's. */}
+          <Route path="/team/people/*" element={<TeamPeopleToHub />} />
           <Route path="/team/*" element={<ToWorkboard />} />
           <Route path="/held-sends" element={<ToWorkboard />} />
           {/* «Фаны» and «Рассылки» moved to Workboard (products package M). */}
@@ -55,6 +58,7 @@ export function App() {
                 {publicationsRoutes()}
                 {trafficRoutes()}
                 {applicationsRoutes()}
+                {peopleRoutes()}
                 {settingsRoutes()}
                 {systemRoutes()}
               </Route>

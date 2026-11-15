@@ -1,12 +1,11 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { AdminCreateInviteBody, KernelOperationResponse } from "@agency_hub_core/contracts";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
-import { kernel } from "@/shared/hub";
-import { usersQuery } from "@/shared/usersQuery";
+import { kernel } from "@/api/sdk";
 
 /**
- * Доступ — the data layer (spec §4.8, and the «Доступ» tab of Человек §4.4 through
- * src/screens/access/PersonAccess.tsx). The screen and the panel read only this file.
+ * A login's access — the data layer of Hub «Люди» (the card's «Входы и устройства» and «Доступ к страницам», through
+ * ./PersonAccess.tsx; it was Workboard's «Доступ»). The panel reads only this file.
  *
  * Reads (the owner's only; Hub refuses everyone else): `adminListUsers`,
  * `adminPages`, `adminListDeviceTokens`, `adminListAccountLinks`,
@@ -29,13 +28,20 @@ import { usersQuery } from "@/shared/usersQuery";
  */
 
 export type AdminUser = KernelOperationResponse<"adminListUsers">[number];
-export type AdminPage = KernelOperationResponse<"adminPages">[number];
+export type { AdminPage } from "@agency_hub_core/ui/people/registry";
+export { pagesByModel } from "@agency_hub_core/ui/people/registry";
 export type DeviceItem = KernelOperationResponse<"adminListDeviceTokens">[number];
 export type LinkItem = KernelOperationResponse<"adminListAccountLinks">[number];
 type AiLimits = KernelOperationResponse<"adminAiChatterLimits">;
 
-/** The people list is the entry Люди reads too (src/shared/reads.ts): a write here refreshes them all. */
-const USERS_KEY = usersQuery.queryKey;
+/** `adminListUsers` (the owner's): every login, read by the card's access and the invitation. */
+const usersQuery = queryOptions({
+  queryKey: ["team", "users"] as const,
+  queryFn: () => kernel.adminListUsers(),
+});
+
+/** A write here refreshes every reader of the logins. */
+export const USERS_KEY = usersQuery.queryKey;
 const PAGES_KEY = ["access", "pages"] as const;
 const devicesKey = (userId: number) => ["access", "user", userId, "devices"] as const;
 const linksKey = (userId: number) => ["access", "user", userId, "links"] as const;
@@ -65,17 +71,6 @@ export function useAiLimit(userId: number) {
     select: (data: AiLimits) => ({ row: data.chatters.find((chatter) => chatter.userId === userId) ?? null }),
     staleTime: 60_000,
   });
-}
-
-/** Pages under their models, in the catalog's order. */
-export function pagesByModel(pages: readonly AdminPage[]): { modelSlug: string; modelName: string; pages: AdminPage[] }[] {
-  const groups = new Map<string, { modelSlug: string; modelName: string; pages: AdminPage[] }>();
-  for (const page of pages) {
-    const group = groups.get(page.modelSlug);
-    if (group) group.pages.push(page);
-    else groups.set(page.modelSlug, { modelSlug: page.modelSlug, modelName: page.modelName, pages: [page] });
-  }
-  return [...groups.values()];
 }
 
 // ── writes ───────────────────────────────────────────────────────────────────

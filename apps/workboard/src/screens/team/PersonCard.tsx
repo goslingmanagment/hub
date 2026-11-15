@@ -4,7 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { Card, EmptyState, ErrorState, LinkButton, Segmented, Skeleton, StatusDot, Tabs, toast } from "@agency_hub_core/ui";
 import { PersonMeta as PersonMetaLine } from "@agency_hub_core/ui/people/PersonMeta";
-import { hubPersonPath } from "@agency_hub_core/ui/people/paths";
+import { hubPersonPath } from "@agency_hub_core/contracts";
 import { TeamRolesCard, type TeamRoleChange } from "@agency_hub_core/ui/people/TeamRoles";
 import { capitalized, statusOf } from "@agency_hub_core/ui/people/words";
 import { carryParams, hubHref, personCodePath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";

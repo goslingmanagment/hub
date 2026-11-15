@@ -1,5 +1,5 @@
 /* Сообщения людям: the owner's press beside a «Скопировать». Tokens only. */
-@layer components {
+@layer ui {
   .people-message-send__why {
     margin: 0;
     color: var(--ui-text-2);

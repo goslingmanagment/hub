@@ -98,6 +98,7 @@ export * from "./person-start.ts";
 export * from "./routes-people.ts";
 export * from "./routes-teams.ts";
 export * from "./routes-fans.ts";
+export * from "./people-paths.ts";
 // Система → «Состояние»: the routines and copies of every place (package P), spread by routes.ts.
 export * from "./system-state.ts";
 export * from "./routes-system-state.ts";

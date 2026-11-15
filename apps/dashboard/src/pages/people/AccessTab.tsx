@@ -1,26 +1,24 @@
-import { ExternalLink } from "lucide-react";
+import { Link } from "react-router";
 import { Badge, Card, EmptyState, Section } from "@agency_hub_core/ui";
-import { PersonAccess } from "@/screens/access/PersonAccess";
-import { whenWords } from "@/screens/access/when";
-import { consoleHref } from "@/shared/links";
-import { liveLogins, type RegistryLogin, type RegistryPerson } from "./registry.js";
-import { ROLE_WORD } from "./words.js";
+import { liveLogins, type RegistryLogin, type RegistryPerson } from "@agency_hub_core/ui/people/registry";
+import { whenWords } from "@agency_hub_core/ui/people/when";
+import { ROLE_WORD } from "@agency_hub_core/ui/people/words";
+import { PersonAccess } from "./PersonAccess";
 
 /**
- * «Доступ и входы» of a person's card (the owner's only): each of the person's
- * Hub logins with everything «Доступ» had for it — pages, the sign-in link and
- * the password reset, devices, the AI limit, switching off and the other ways
- * to end the access, deleting the account — through the very same panel
- * (access/PersonAccess.tsx): every control keeps its request and its question.
- * An agent's keys are listed here and changed in the console. A person without
- * a login (a content manager, a contractor) has nothing here.
+ * «Входы и устройства» (`part: "logins"`) and «Доступ к страницам» (`part: "pages"`) of a person's card in Hub
+ * «Люди»: each of the person's Hub logins with everything Workboard's «Доступ» had for it — the sign-in link and the
+ * password reset, devices, the AI limit, switching off and the other ways to end the access, deleting the account; or
+ * its pages — through the very same panel (./PersonAccess.tsx): every control keeps its request and its question. An
+ * agent's keys are listed on «Входы и устройства» and changed in «Система», «Агенты и ключи». A person without a login
+ * (a content manager, a contractor) has nothing here.
  */
-export function AccessTab({ person, onChanged }: { person: RegistryPerson; onChanged: () => void }) {
+export function AccessTab({ person, part, onChanged }: { person: RegistryPerson; part: "logins" | "pages"; onChanged: () => void }) {
   const logins = liveLogins(person);
   const deleted = person.logins.filter((login) => login.state === "deleted");
   return (
     <div className="registry-tab">
-      {person.kind === "agent" && <AgentKeys person={person} />}
+      {person.kind === "agent" && part === "logins" && <AgentKeys person={person} />}
       {logins.length === 0 && person.kind !== "agent" && (
         <Card>
           <EmptyState title="Входа в Hub нет">
@@ -35,10 +33,10 @@ export function AccessTab({ person, onChanged }: { person: RegistryPerson; onCha
           description={loginWords(login)}
           className="registry-login"
         >
-          <PersonAccess userId={login.userId} variant="page" onChanged={onChanged} onDeleted={onChanged} />
+          <PersonAccess userId={login.userId} variant="page" part={part} onChanged={onChanged} onDeleted={onChanged} />
         </Section>
       ))}
-      {deleted.length > 0 && (
+      {deleted.length > 0 && part === "logins" && (
         <p className="people-note">Удалённые входы: {deleted.map((login) => login.username).join(", ")}. Их история работы осталась за человеком.</p>
       )}
     </div>
@@ -62,8 +60,8 @@ function AgentKeys({ person }: { person: RegistryPerson }) {
   return (
     <Card
       title={<>Ключи агента <span className="access-count">{person.agentKeys.length}</span></>}
-      description="Выдают, продлевают и отзывают ключи в консоли."
-      actions={<a className="access-link" href={consoleHref("/system/agent-keys")} target="_blank" rel="noopener">Агенты и ключи <ExternalLink size={14} strokeWidth={1.75} aria-label="откроется консоль" /></a>}
+      description="Выдают, продлевают и отзывают ключи в «Системе»."
+      actions={<Link className="access-link" to="/system/agent-keys">Агенты и ключи</Link>}
     >
       {person.agentKeys.length === 0 ? <p className="access-text">Ключей нет.</p> : (
         <ul className="access-list">

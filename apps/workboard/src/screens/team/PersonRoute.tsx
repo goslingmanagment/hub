@@ -1,7 +1,7 @@
 import { useLayoutEffect } from "react";
 import { Navigate, useLocation, useParams } from "react-router";
 import { registryTabLanding } from "@agency_hub_core/ui/old-addresses";
-import { TEAM_PERSON_TABS } from "@agency_hub_core/ui/people/paths";
+import { TEAM_PERSON_TABS } from "@agency_hub_core/contracts";
 import { ScreenFallback } from "@/app/Shell";
 import { hubHref } from "@/shared/links";
 import { useMe } from "@/shared/useMe";

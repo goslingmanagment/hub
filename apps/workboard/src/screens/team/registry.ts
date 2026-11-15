@@ -15,7 +15,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { AdminPersonPayTermBody, AdminPersonUpdateBody } from "@agency_hub_core/contracts";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
-import { PEOPLE_REGISTRY_KEY, teamPeopleQuery } from "@agency_hub_core/ui/people";
+import { PEOPLE_REGISTRY_KEY } from "@agency_hub_core/ui/people";
 import type { OwnerCard, TeamPeople } from "@agency_hub_core/ui/people/registry";
 import { kernel } from "@/shared/hub";
 
@@ -28,10 +28,7 @@ const MINUTE = 60_000;
 export const REGISTRY_KEY = PEOPLE_REGISTRY_KEY;
 const cardKey = (code: string) => ["people", "person", code] as const;
 
-/** Everyone of the registry the viewer reads (`teamPeople`): the list, every card and every team screen's names. */
-export function useTeamPeople() {
-  return useQuery(teamPeopleQuery(kernel));
-}
+export { useTeamPeople } from "./teamPeople";
 
 /** The owner's card of one person (`adminPerson`): never enabled for anyone else. */
 export function useOwnerCard(code: string, enabled: boolean) {

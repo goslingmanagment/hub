@@ -1,10 +1,361 @@
 /*
- * The registry's parts of «Люди» and the person's card (registry.ts): the
- * marks under a name, the slot cell, the card's tabs «Доступ и входы» and
- * «График и условия», the forms' working pages and slot. Tokens only; the
- * shapes are those of «Доступ» (access.css) and «Люди» (people.css).
+ * The people both products draw (packages/ui/src/people): Hub «Люди» (the registry) and Workboard «Команда» (the team
+ * at work) — the person's line under the name, the registry's marks and forms (working pages, a slot, the terms), the
+ * team records' switches, the quiet lists and hints. Tokens only. Each app keeps its own screen's rules beside it.
  */
-@layer components {
+@layer ui {
+  /* The narrow rights, a switch each, one under another. */
+  .registry-rights {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .people-dash {
+    color: var(--ui-text-3);
+  }
+
+  /* A page's name inside a line of tabular figures: its digit keeps the text's own width («mia-1», not «mia - 1»). */
+  .people-meta .ui-page,
+  .people-kind .ui-page,
+  .people-fan .ui-page,
+  .people-tip .ui-page,
+  .people-shifts .ui-page {
+    font-variant-numeric: normal;
+  }
+
+  .people-idle {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 24px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .people-idle__label {
+    color: var(--ui-text-2);
+  }
+
+  .people-folded {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 12px 24px;
+    padding: 8px 0 0;
+  }
+
+  .people-note {
+    max-width: var(--ui-measure);
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* ------------------------------------------------- The card's header line */
+
+  /* One line, whatever the pages and the tab: the tabs under it never move (Р2). */
+  .people-meta {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    min-height: 28px;
+    overflow: hidden;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    white-space: nowrap;
+  }
+
+  .people-meta__part {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .people-meta__part:last-child {
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .people-meta__sep {
+    padding: 0 12px;
+    color: var(--ui-text-3);
+  }
+
+  .people-meta .ui-page {
+    color: var(--ui-text-2);
+    font-variant-numeric: normal;
+  }
+
+  /* As «и ещё N» of the shared page list. */
+  .people-meta__more {
+    color: var(--ui-text-2);
+    text-decoration: underline dotted;
+    text-decoration-color: var(--ui-line-strong);
+    text-underline-offset: 4px;
+    cursor: help;
+  }
+
+  .people-meta__strong {
+    color: var(--ui-text);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .people-meta .people-meta__live {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ui-good-text);
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .people-meta a.people-meta__live:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  /* ------------------------------------------------- Sales of a person */
+
+  .people-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 24px;
+    align-items: stretch;
+  }
+
+  .people-grid__wide {
+    grid-column: 1 / -1;
+    max-width: none;
+    margin: 0 0 -8px;
+  }
+
+  /* «Команды и права» (products package T). */
+  .ppl-team-roles { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; }
+
+  .ppl-team-roles__model { display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 12px; align-items: start; }
+
+  .ppl-team-roles__name { display: grid; gap: 2px; font-weight: 600; }
+
+  .ppl-team-roles__lead { font-weight: 400; color: var(--ui-text-muted, var(--text-muted)); font-size: 13px; }
+
+  .ppl-team-roles__kinds { display: grid; gap: 10px; }
+
+  .access-text {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+  }
+
+  .access-hint {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .access-count {
+    margin-left: 6px;
+    color: var(--ui-text-3);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .access-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--ui-accent);
+    font-size: var(--ui-fs-14);
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .access-link:hover {
+    text-decoration: underline;
+  }
+
+  /* ------------------------------------------------------------ The invite */
+
+  .access-invite {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .access-invite__check {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .access-invite__pages {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  .access-invite__pages legend {
+    margin-bottom: 8px;
+    padding: 0;
+  }
+
+  .access-invite__models {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+  }
+
+  .access-invite__group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 16px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius);
+  }
+
+  /* A model over its pages: the «вся модель» tick, or only its name. */
+  .access-invite__model {
+    display: flex;
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--ui-line-soft);
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .access-invite__model--single {
+    min-height: 32px;
+    align-items: flex-end;
+  }
+
+  .access-invite__list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .access-invite__page {
+    display: flex;
+    padding: 6px 0;
+  }
+
+  /* A tick's words on one line: «mia-1  Fansly», «Mia Hart  вся модель». */
+  .access-words {
+    display: inline-flex;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    align-items: baseline;
+    gap: 0 8px;
+  }
+
+  .access-words .access-hint {
+    font-weight: 400;
+  }
+
+  .access-invite__more {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 24px;
+    padding-top: 12px;
+  }
+
+  .access-invite__days {
+    width: 120px;
+  }
+
+  .access-invite__picked {
+    margin-right: auto;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+  }
+
+  .access-list {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .access-list__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 56px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--ui-line-soft);
+  }
+
+  .access-list__row:last-child {
+    border-bottom: 0;
+  }
+
+  .access-list__main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    color: var(--ui-text);
+  }
+
+  .access-list__main--text {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .access-list--quiet .access-list__main {
+    color: var(--ui-text-2);
+  }
+
+  .access-end .access-text {
+    flex: 1 1 280px;
+  }
+
+  /* An action of a list row that shows on hover and focus of its row (one device's «Завершить вход»). */
+  .access-list--hover .access-on-hover {
+    opacity: 0;
+    transition: opacity var(--ui-fast);
+  }
+
+  .access-list--hover .access-list__row:hover .access-on-hover,
+  .access-list--hover .access-list__row:focus-within .access-on-hover {
+    opacity: 1;
+  }
+
+  /* ----------------------------------------------------------- Round 2 */
+
+  /* «Изменить в таблице»: a link that is a button (it closes the panel and lights the row). */
+  .access-link--button {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: var(--ui-fs-14);
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: var(--ui-radius-sm);
+  }
+
+  .access-link--button:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: 2px;
+  }
+
   /* ------------------------------------------------- The list */
 
   /*
@@ -436,5 +787,15 @@
   .registry-payout__text {
     color: var(--ui-text);
     white-space: pre-wrap;
+  }
+
+  @media (max-width: 1100px) {
+    .people-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 640px) {
+    .ppl-team-roles__model { grid-template-columns: 1fr; }
   }
 }

@@ -1,39 +1,5 @@
 /* Доступ: the matrix, the invite, a person's panel. Tokens only. */
 @layer components {
-  .access-text {
-    margin: 0;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-  }
-
-  .access-hint {
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
-  .access-count {
-    margin-left: 6px;
-    color: var(--ui-text-3);
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .access-link {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    color: var(--ui-accent);
-    font-size: var(--ui-fs-14);
-    font-weight: 500;
-    text-decoration: none;
-    white-space: nowrap;
-  }
-
-  .access-link:hover {
-    text-decoration: underline;
-  }
 
   .access-skeleton {
     padding: 24px;
@@ -262,108 +228,6 @@
     cursor: progress;
   }
 
-  /* ------------------------------------------------------------ The invite */
-
-  .access-invite {
-    display: flex;
-    flex-direction: column;
-    gap: 24px;
-  }
-
-  .access-invite__check {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin: 0;
-  }
-
-  .access-invite__pages {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin: 0;
-    padding: 0;
-    border: 0;
-    min-width: 0;
-  }
-
-  .access-invite__pages legend {
-    margin-bottom: 8px;
-    padding: 0;
-  }
-
-  .access-invite__models {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 16px;
-  }
-
-  .access-invite__group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 12px 16px;
-    border: 1px solid var(--ui-line);
-    border-radius: var(--ui-radius);
-  }
-
-  /* A model over its pages: the «вся модель» tick, or only its name. */
-  .access-invite__model {
-    display: flex;
-    padding-bottom: 8px;
-    margin-bottom: 4px;
-    border-bottom: 1px solid var(--ui-line-soft);
-    color: var(--ui-text);
-    font-weight: 600;
-  }
-
-  .access-invite__model--single {
-    min-height: 32px;
-    align-items: flex-end;
-  }
-
-  .access-invite__list {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .access-invite__page {
-    display: flex;
-    padding: 6px 0;
-  }
-
-  /* A tick's words on one line: «mia-1  Fansly», «Mia Hart  вся модель». */
-  .access-words {
-    display: inline-flex;
-    flex-wrap: nowrap;
-    white-space: nowrap;
-    align-items: baseline;
-    gap: 0 8px;
-  }
-
-  .access-words .access-hint {
-    font-weight: 400;
-  }
-
-  .access-invite__more {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-start;
-    gap: 24px;
-    padding-top: 12px;
-  }
-
-  .access-invite__days {
-    width: 120px;
-  }
-
-  .access-invite__picked {
-    margin-right: auto;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-  }
-
   /* -------------------------------------------------------------- A link */
 
   .access-reveal {
@@ -508,45 +372,6 @@
     line-height: var(--ui-lh-15);
   }
 
-  .access-list {
-    display: flex;
-    flex-direction: column;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .access-list__row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    min-height: 56px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--ui-line-soft);
-  }
-
-  .access-list__row:last-child {
-    border-bottom: 0;
-  }
-
-  .access-list__main {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    color: var(--ui-text);
-  }
-
-  .access-list__main--text {
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
-  .access-list--quiet .access-list__main {
-    color: var(--ui-text-2);
-  }
-
   .access-end {
     display: flex;
     flex-wrap: wrap;
@@ -555,23 +380,8 @@
     gap: 12px 24px;
   }
 
-  .access-end .access-text {
-    flex: 1 1 280px;
-  }
-
   .access-delete {
     margin-top: 4px;
-  }
-
-  /* An action of a list row that shows on hover and focus of its row (one device's «Завершить вход»). */
-  .access-list--hover .access-on-hover {
-    opacity: 0;
-    transition: opacity var(--ui-fast);
-  }
-
-  .access-list--hover .access-list__row:hover .access-on-hover,
-  .access-list--hover .access-list__row:focus-within .access-on-hover {
-    opacity: 1;
   }
 
   @media (hover: none) {
@@ -592,25 +402,6 @@
     display: inline-block;
     padding: 2px 0;
     cursor: default;
-  }
-
-  /* ----------------------------------------------------------- Round 2 */
-
-  /* «Изменить в таблице»: a link that is a button (it closes the panel and lights the row). */
-  .access-link--button {
-    padding: 0;
-    border: 0;
-    background: none;
-    font: inherit;
-    font-size: var(--ui-fs-14);
-    font-weight: 500;
-    cursor: pointer;
-    border-radius: var(--ui-radius-sm);
-  }
-
-  .access-link--button:focus-visible {
-    outline: var(--ui-focus);
-    outline-offset: 2px;
   }
 
   /* The person's row the panel sent the owner to: a short glow, then the row as it was (Д-н1). */

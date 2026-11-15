@@ -14,7 +14,7 @@
  */
 import { addDays, isMoscowDay, moscowToday, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import { decodedPath } from "@agency_hub_core/ui/path";
-import { hubPersonPath, type HubPersonTab } from "@agency_hub_core/ui/people/paths";
+import { hubPersonPath, type HubPersonTab } from "@agency_hub_core/contracts";
 import { WORKBOARD_PATH } from "@agency_hub_core/ui/screens";
 import { ALL_PAGES_PARAM } from "./pageParam.js";
 

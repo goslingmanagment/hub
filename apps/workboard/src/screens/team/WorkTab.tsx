@@ -1,12 +1,11 @@
 import { useMemo, type ReactNode } from "react";
-import { useLocation } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES } from "@agency_hub_core/contracts";
-import { Button, Card, Delta, Disclosure, Duration, EmptyState, LinkButton, Money, Section, Skeleton, Tooltip, readDelta } from "@agency_hub_core/ui";
+import { Button, Card, Delta, Disclosure, Duration, EmptyState, Money, Section, Skeleton, Tooltip, readDelta } from "@agency_hub_core/ui";
 import { formatDuration, formatMills, formatPercent } from "@agency_hub_core/ui/format";
 import { addDays } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { hubHref, personPath } from "@/shared/links";
-import { hubPersonPath } from "@agency_hub_core/ui/people/paths";
+import { hubHref } from "@/shared/links";
+import { hubPersonPath } from "@agency_hub_core/contracts";
 import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, PER_SHIFT_HINT } from "@/shared/metrics";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
@@ -196,7 +195,6 @@ function HowItCounts() {
 function NoShifts({ card }: { card: PersonCard }) {
   const { period, setPeriod } = usePeriod();
   const { isOwner } = useMe();
-  const location = useLocation();
   const person = card.person!;
   const before = person.work?.previous ?? null;
   const toAccess = isOwner ? <Button onClick={() => window.location.assign(hubHref(hubPersonPath(person.userId, "logins")))}>Доступ в Hub</Button> : undefined;

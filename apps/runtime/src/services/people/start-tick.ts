@@ -1,4 +1,4 @@
-import { MATTER_PERSON_START_KINDS, type MatterPersonStartKind, type PersonStart, type PersonStartStepId } from "@agency_hub_core/contracts";
+import { MATTER_PERSON_START_KINDS, hubPersonPath, teamPersonHref, type MatterPersonStartKind, type PersonStart, type PersonStartStepId } from "@agency_hub_core/contracts";
 import {
   closeMatter,
   listOpenMattersOfKinds,
@@ -52,12 +52,13 @@ export function startFindings(people: ReadonlyArray<{ row: Pick<PersonRow, "code
   const want: Finding[] = [];
   for (const { row, start } of people) {
     if (!start?.newcomer) continue;
-    const card = `/workboard/people/${encodeURIComponent(row.code)}`;
+    // A page is given in Hub «Люди» («Доступ к страницам»); the newcomer's way is watched on their «Команда» card.
+    const card = teamPersonHref(row.code);
     if (!start.steps.some((step) => step.step === "pages" && step.done)) {
       want.push({
         key: `person.no_pages:${row.code}`, kind: "person.no_pages", code: row.code,
         title: `Назначьте страницу новичку: ${row.displayName}`,
-        evidence: { code: row.code }, link: `${card}/access`,
+        evidence: { code: row.code }, link: hubPersonPath(row.code, "pages"),
       });
     }
     if (start.stuck && start.current !== null) {

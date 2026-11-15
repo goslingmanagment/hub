@@ -5,11 +5,12 @@ import { Button, Disclosure, Field, Modal, Notice, Segmented, Spinner, TextInput
 import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { INVITE_DEFAULT_DAYS, INVITE_MAX_DAYS, daysToHours, findByLogin, isValidUsername } from "@agency_hub_core/ui/teamAccess";
-import { useAccessPages, useAccessUsers } from "@/screens/access/data";
-import type { RevealedLink } from "@/screens/access/LinkReveal";
-import { EMPTY_SLOT, SlotFields, WorkingPagesPicker, fixMills, shareBasisPoints, slotBody, slotEmpty, slotProblem, type SlotDraft } from "./forms.js";
-import { refusal, type CreatedPerson, type RegistryPerson, type useCreatePerson } from "./registry.js";
-import { codeFromName } from "./words.js";
+import { EMPTY_SLOT, SlotFields, WorkingPagesPicker, fixMills, shareBasisPoints, slotBody, slotEmpty, slotProblem, type SlotDraft } from "@agency_hub_core/ui/people/forms";
+import { refusal, type CreatedPerson, type RegistryPerson } from "@agency_hub_core/ui/people/registry";
+import { codeFromName } from "@agency_hub_core/ui/people/words";
+import { useAccessPages, useAccessUsers } from "./data";
+import type { RevealedLink } from "./LinkReveal";
+import type { useCreatePerson } from "./registry";
 
 /**
  * «Пригласить» (the owner's): a person of the registry in ONE call

@@ -3,7 +3,7 @@ import { useCallback, useMemo, type ReactNode } from "react";
 import { Link, useLocation, type To } from "react-router";
 import { Person, type PersonStatus } from "@agency_hub_core/ui";
 import { pickPeriodParams } from "@agency_hub_core/ui/period";
-import type { TeamPersonTab } from "@agency_hub_core/ui/people/paths";
+import type { TeamPersonTab } from "@agency_hub_core/contracts";
 import { hubEntryHref } from "@agency_hub_core/ui/sites";
 
 /**

@@ -8,6 +8,8 @@
 @import "../../../packages/ui/src/styles/place.css";
 @import "../../../packages/ui/src/styles/waiting.css";
 @import "../../../packages/ui/src/styles/console.css";
+@import "../../../packages/ui/src/styles/people.css";
+@import "../../../packages/ui/src/styles/people-messages.css";
 @import "./pages/settings/settings-ui.css";
 @import "./styles/screens/home-money.css";
 @import "../../../packages/ui/src/styles/console-pages.css";

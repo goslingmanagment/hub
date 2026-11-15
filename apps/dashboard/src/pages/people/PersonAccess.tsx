@@ -1,4 +1,4 @@
-import { ExternalLink, KeyRound, LogOut, RotateCcw } from "lucide-react";
+import { KeyRound, LogOut, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Card, Checkbox, Confirm, Disclosure, EmptyState, ErrorState, Modal, Money, Notice, PageLabels, SkeletonText, TextInput, toast, platformWord } from "@agency_hub_core/ui";
 import {
@@ -10,8 +10,8 @@ import {
   splitDevices,
   teamStatus,
 } from "@agency_hub_core/ui/teamAccess";
-import { consoleHref } from "@/shared/links";
-import { useMe } from "@/shared/useMe";
+import { Link } from "react-router";
+import { useViewer } from "./registry";
 import {
   pagesByModel,
   useAccessPages,
@@ -33,10 +33,13 @@ import {
 } from "./data";
 import { LinkReveal, type RevealedLink } from "./LinkReveal";
 import { usePageAccess } from "./pageAccess";
-import { whenWords } from "./when";
+import { whenWords } from "@agency_hub_core/ui/people/when";
 import "./access.css";
 
 /**
+ * One login's access in Hub «Люди» (it was Workboard's «Доступ»): on the card's «Входы и устройства» the sign-in links,
+ * devices, the AI limit and ending the access (`part: "logins"`), on «Доступ к страницам» the pages (`part: "pages"`).
+ *
  * One person's access (spec §4.4 «Доступ», §4.8): pages, sign-in links,
  * devices, the AI limit for reading, switching off — today's staff card
  * (apps/dashboard/src/pages/team/people/PersonPage.tsx), adapted to the
@@ -53,6 +56,8 @@ import "./access.css";
 export interface PersonAccessProps {
   userId: number;
   variant: "page" | "drawer";
+  /** Which tab of the card: the login's sign-in and devices, or its pages. */
+  part: "logins" | "pages";
   onChanged?: () => void;
   /** After the account is deleted: leave wherever the panel was. */
   onDeleted?: () => void;
@@ -82,13 +87,10 @@ function Block({ title, aside, children, variant }: { title: ReactNode; aside?: 
   );
 }
 
-export function PersonAccess({ userId, variant, onChanged, onDeleted, onEditInMatrix }: PersonAccessProps) {
-  const { isOwner, user: me } = useMe();
-  const users = useAccessUsers(isOwner);
+export function PersonAccess({ userId, variant, part, onChanged, onDeleted, onEditInMatrix }: PersonAccessProps) {
+  const { meId } = useViewer();
+  const users = useAccessUsers();
   const user = users.data?.find((one) => one.id === userId && !one.deletedAt) ?? null;
-  if (!isOwner) {
-    return <EmptyState title="Доступ видит только владелец" compact={variant === "drawer"}>Страницы, ссылки и устройства людей меняет владелец.</EmptyState>;
-  }
   if (!users.data) {
     return users.isError
       ? <ErrorState onRetry={() => void users.refetch()} retrying={users.isFetching} compact={variant === "drawer"} />
@@ -97,12 +99,13 @@ export function PersonAccess({ userId, variant, onChanged, onDeleted, onEditInMa
   if (!user) {
     return <EmptyState title="Сотрудник больше недоступен" compact={variant === "drawer"}>Этот аккаунт удалён или больше не доступен.</EmptyState>;
   }
-  return <PersonAccessBody key={user.id} user={user} variant={variant} meId={me?.id ?? null} onChanged={onChanged} onDeleted={onDeleted} onEditInMatrix={onEditInMatrix} />;
+  return <PersonAccessBody key={user.id} user={user} variant={variant} part={part} meId={meId} onChanged={onChanged} onDeleted={onDeleted} onEditInMatrix={onEditInMatrix} />;
 }
 
-function PersonAccessBody({ user, variant, meId, onChanged, onDeleted, onEditInMatrix }: {
+function PersonAccessBody({ user, variant, part, meId, onChanged, onDeleted, onEditInMatrix }: {
   user: AdminUser;
   variant: "page" | "drawer";
+  part: "logins" | "pages";
   meId: number | null;
   onChanged: (() => void) | undefined;
   onDeleted: (() => void) | undefined;
@@ -155,13 +158,22 @@ function PersonAccessBody({ user, variant, meId, onChanged, onDeleted, onEditInM
   // full-width card for one fold; the active person's «Закрыть доступ» stays across, under everything.
   const shortEnd = status !== "active" && user.role !== "owner";
 
+  if (part === "pages") {
+    return (
+      <div className="access-panel access-panel--page">
+        {pages}
+        {pageAccess.dialog}
+      </div>
+    );
+  }
+
   return (
     <div className={variant === "page" ? "access-panel access-panel--page" : "access-panel"}>
       {notice}
       {variant === "page" ? (
         <div className="access-panel__grid">
-          <div className="access-panel__col">{pages}{limit}{shortEnd && status === "disabled" && end}</div>
-          <div className="access-panel__col">{links}{devices}{shortEnd && status !== "disabled" && end}</div>
+          <div className="access-panel__col">{links}{limit}{shortEnd && status === "disabled" && end}</div>
+          <div className="access-panel__col">{devices}{shortEnd && status !== "disabled" && end}</div>
         </div>
       ) : (
         <>{pages}{links}{devices}{limit}</>
@@ -388,7 +400,7 @@ function DevicesBlock({ user, variant, onAsk }: { user: AdminUser; variant: "pag
 function AiLimitBlock({ userId, variant }: { userId: number; variant: "page" | "drawer" }) {
   const limit = useAiLimit(userId);
   return (
-    <Block title="Лимит ИИ на день" variant={variant} aside={<a className="access-link" href={consoleHref("/settings/ai/limits")} target="_blank" rel="noopener">Изменить в консоли <ExternalLink size={14} strokeWidth={1.75} aria-label="откроется консоль" /></a>}>
+    <Block title="Лимит ИИ на день" variant={variant} aside={<Link className="access-link" to="/settings/ai/limits">Изменить в настройках</Link>}>
       {limit.isLoading && !limit.data ? <SkeletonText lines={1} /> : !limit.data ? (
         <ErrorState compact onRetry={() => void limit.refetch()} retrying={limit.isFetching} />
       ) : !limit.data.row ? (

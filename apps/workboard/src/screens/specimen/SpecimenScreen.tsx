@@ -368,7 +368,7 @@ export function SpecimenScreen() {
               columns={columns}
               rows={rows}
               rowKey={(row) => String(row.id)}
-              rowHref={(row) => (row.team ? undefined : `/people/${row.id}`)}
+              rowHref={(row) => (row.team ? undefined : `/team/${row.id}`)}
               rowState={() => back}
               rowEmphasis={(row) => !!row.team}
               rowQuiet={(row) => row.status === "disabled"}
@@ -533,8 +533,8 @@ export function SpecimenScreen() {
                   label="Разделы карточки"
                   items={[
                     { to: "/__specimen", label: "Работа", end: true },
-                    { to: "/people/2/sales", label: "Продажи" },
-                    { to: "/people/2/access", label: "Доступ" },
+                    { to: "/team/2/sales", label: "Продажи" },
+                    { to: "/team/2/schedule", label: "График и условия" },
                   ]}
                 />
               </div>

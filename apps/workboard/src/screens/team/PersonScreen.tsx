@@ -2,7 +2,7 @@ import { type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import { useLocation, useParams } from "react-router";
 import { Badge, Card, EmptyState, ErrorState, LinkButton, Money, Skeleton, StatusDot, Tabs, Tooltip } from "@agency_hub_core/ui";
-import { hubPersonPath } from "@agency_hub_core/ui/people/paths";
+import { hubPersonPath } from "@agency_hub_core/contracts";
 import { capitalized, periodShort, ROLE_WORD, statusOf } from "@agency_hub_core/ui/people/words";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { carryParams, hubHref, personPath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";

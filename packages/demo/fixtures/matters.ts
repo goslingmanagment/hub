@@ -107,8 +107,8 @@ function standing(request: DemoRequest): Seed[] {
   }
   seeds.push(
     { kind: "publication.draft", key: "publication.draft:5101", title: "Пост на утверждение: mia-1", pages: ["mia-1"], link: "/content/publications?status=draft&window=all&page=all", agoMs: 5 * HOUR },
-    { kind: "people.login_unlinked", key: "people.login_unlinked:12", title: "Вход без человека: tester.q", evidence: { userId: 12, username: "tester.q", namesake: { person: "tester-q", name: "Тестер", state: "left", leftOn: isoAt(now - 40 * DAY).slice(0, 10) } }, link: "/workboard/people/12/access", agoMs: 6 * DAY },
-    { kind: "people.page_without_access", key: "people.page_without_access:olya-m", title: "Работает без доступа: Оля, mia-of", pages: ["mia-of"], evidence: { person: "olya-m", pages: ["mia-of"], logins: ["olya.m"] }, link: "/workboard/people/7/access", agoMs: 20 * HOUR },
+    { kind: "people.login_unlinked", key: "people.login_unlinked:12", title: "Вход без человека: tester.q", evidence: { userId: 12, username: "tester.q", namesake: { person: "tester-q", name: "Тестер", state: "left", leftOn: isoAt(now - 40 * DAY).slice(0, 10) } }, link: "/people/12/logins", agoMs: 6 * DAY },
+    { kind: "people.page_without_access", key: "people.page_without_access:olya-m", title: "Работает без доступа: Оля, mia-of", pages: ["mia-of"], evidence: { person: "olya-m", pages: ["mia-of"], logins: ["olya.m"] }, link: "/people/olya-m/pages", agoMs: 20 * HOUR },
     {
       kind: "ledger.check", key: "ledger.check:card_cover", title: "Проверка ledger не проходит: карты покрывают списания", money: true,
       evidence: { check: "card_cover", name: "карты покрывают списания", severity: "warn", summary: "карта •0042: на счёте 5.40, к списанию 120.00 до 14.11, не хватает 114.60", failingSince: isoAt(now - 1.6 * DAY) },
@@ -133,7 +133,7 @@ function standing(request: DemoRequest): Seed[] {
     {
       kind: "people.access_idle", key: "people.access_idle:all", title: "Доступ без работы 30 дней: 3 страницы у 2 человек",
       evidence: { days: 30, activitySince: null, people: [{ person: "ivan-p", name: "Иван", pages: ["mia-of", "mia-vip-of"] }, { person: "kate-v", name: "Катя", pages: ["nova-1"] }] },
-      link: "/workboard/people", agoMs: 4 * DAY,
+      link: "/workboard/team", agoMs: 4 * DAY,
     },
   );
   return seeds;

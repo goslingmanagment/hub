@@ -2,6 +2,9 @@ import { z } from "zod";
 
 import {
   AGENT_KEY_EXPIRING_DAYS,
+  hubPersonPath,
+  teamPersonHref,
+  type HubPersonTab,
   LEDGER_CHECK_RED_HOURS,
   LEDGER_OFF_PLATFORM_DAYS,
   MATTER_CHECK_KIND_PERIODS,
@@ -99,9 +102,16 @@ const PAID_ROLES: ReadonlySet<string> = new Set(["chatter", "team_lead"]);
 
 export type PeopleCheckKind = Extract<MatterCheckKind, `people.${string}`>;
 
-/** Where a person is opened: their card in Workboard «Люди» (`/people/:code`, a tab of it). */
-function personLink(code: string, tab = ""): string {
-  return `/workboard/people/${encodeURIComponent(code)}${tab}`;
+/**
+ * Where a matter about a person is decided (products plan §4.3): the registry — who the person is, logins, page access,
+ * rights, proposals — is Hub «Люди» (`/people/:code[/tab]`); how they work — working pages, the schedule, the pay terms
+ * — is Workboard «Команда» (`/workboard/team/:code/schedule`). The paths are the one place, contracts people-paths.ts.
+ */
+function personLink(code: string, tab: HubPersonTab = "person"): string {
+  return hubPersonPath(code, tab);
+}
+function workLink(code: string): string {
+  return teamPersonHref(code, "schedule");
 }
 
 /** How far back «worked on a model» is read for the teams' gaps. */
@@ -160,7 +170,8 @@ export function offTeamItem(snapshot: PeopleCheckSnapshot, now: Date): MirrorIte
       days: OFF_TEAM_DAYS, emptyTeams, people,
       proposal: "Поправить рабочие страницы в реестре: предложением агента (people proposals) или в карточке человека.",
     },
-    link: "/workboard/people",
+    // Working pages are changed with the schedule, in Workboard «Команда».
+    link: "/workboard/team",
   };
 }
 
@@ -204,7 +215,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
             person: person.code, leftOn: person.leftOn, logins: living.map((login) => login.username), deviceTokens: tokens,
             agentKeys: keys.map((key) => key.name),
           },
-          link: personLink(person.code, "/access"),
+          link: personLink(person.code, "logins"),
         });
       }
       continue;
@@ -221,7 +232,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
           pageLabels: [],
           money: false,
           evidence: { person: person.code, role: person.role },
-          link: personLink(person.code),
+          link: workLink(person.code),
         });
       }
       if ((snapshot.workingPages.get(person.id) ?? []).length === 0) {
@@ -232,7 +243,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
           pageLabels: [],
           money: false,
           evidence: { person: person.code, role: person.role },
-          link: personLink(person.code),
+          link: workLink(person.code),
         });
       }
     }
@@ -250,7 +261,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
         pageLabels: without,
         money: false,
         evidence: { person: person.code, pages: without, logins: living.map((login) => login.username) },
-        link: personLink(person.code, "/access"),
+        link: personLink(person.code, "pages"),
       });
     }
   }
@@ -272,7 +283,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
         userId: login.userId, username: login.username, role: login.role, deviceTokens: login.liveDeviceTokens,
         namesake: namesake === undefined ? null : { person: namesake.code, name: namesake.displayName, state: namesake.state, leftOn: namesake.leftOn },
       },
-      link: `/workboard/people/${login.userId}/access`,
+      link: personLink(String(login.userId), "logins"),
     });
   }
 
@@ -310,7 +321,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
       pageLabels: [],
       money: false,
       evidence: { code, proposals: open.count, since: open.since.toISOString(), newPerson: person === undefined },
-      link: person ? personLink(person.code) : "/workboard/people",
+      link: person ? personLink(person.code) : "/people",
     });
   }
 
@@ -344,7 +355,7 @@ export function peopleCheckItems(snapshot: PeopleCheckSnapshot, now: Date): Reco
       money: false,
       // `activitySince`: the extension's activity is known only from this day, when it is younger than the window.
       evidence: { days: PEOPLE_ACCESS_IDLE_DAYS, activitySince: since, people: idle },
-      link: "/workboard/people",
+      link: "/people",
     });
   }
   return out;

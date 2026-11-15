@@ -2,7 +2,7 @@ import { Copy } from "lucide-react";
 import { useState } from "react";
 import { Button, Field, Modal, Notice, Textarea, TimeMsk, toast } from "@agency_hub_core/ui";
 import { buildJoinLink, currentOrigin, telegramMessage, type LinkKind } from "@agency_hub_core/ui/teamAccess";
-import { PeopleMessageSend } from "@/shared/peopleMessages";
+import { PeopleMessageSend } from "./MessageSend";
 
 /**
  * The one and only place a fresh link is ever visible (the console's
