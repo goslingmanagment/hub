@@ -121,7 +121,7 @@ describe("the board «Отчёт», the final review's third reader", () => {
     modelId = model!.id;
     pageOne = (await createFanslyPage(app.db, { modelId, label: "mia-1" }))!.id;
     for (const [name, role] of [["anna", "chatter"], ["bella", "chatter"], ["cora", "chatter"], ["lena", "team_lead"]] as const) {
-      await createUserAccount(app, { username: name, role }, { source: "cli" });
+      await createUserAccount(app, role === "team_lead" ? { username: name, role, password: `${name}-password-for-tests` } : { username: name, role }, { source: "cli" });
       users[name] = await fixtureUserId(app, name);
       await setUserPassword(app, { userId: users[name]!, password: `${name}-password-for-tests` }, { source: "cli" });
       await assignUserToPage(app.db, users[name]!, pageOne);
