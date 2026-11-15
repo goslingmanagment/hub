@@ -2,12 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import argon2 from "argon2";
 import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 
-import { teamQuestionWriteResponseSchema, teamSwapsResponseSchema } from "@agency_hub_core/contracts";
+import { mattersListResponseSchema, teamQuestionWriteResponseSchema, teamSwapsResponseSchema } from "@agency_hub_core/contracts";
 import { createFanslyPage, createModel, insertPersonLogin, insertPersonRow, listPersonScheduleSlotRows, type Database } from "@agency_hub_core/db";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { assignPageToUser, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { registrySlots } from "../apps/runtime/src/services/sale-homes.ts";
 import { slotRuns } from "../apps/runtime/src/services/sale-rule.ts";
+import { runTeamQuestionsTick } from "../apps/runtime/src/services/team-questions-tick.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
@@ -230,6 +231,76 @@ describe("«Подмена»: a question whose «Можно» writes the day's l
     // Touching, not overlapping: from 02:00 the hours are free.
     const touching = await ask("anna", { date: next, pageLabels: ["alfa-1"], start: "02:00", end: "06:00", coverPersonCode: "lena" });
     expect(touching.statusCode, touching.body).toBe(200);
+  });
+
+  it("takes every page of the absent person's slot, whichever page it was asked from", async (context) => {
+    if (!testDb) return context.skip();
+    const app = createTestAppContext(testDb);
+    // Ira works alfa-1 and alfa-2 on one slot of every page, 10:00–18:00 (production's shape).
+    const alfa = Number((await testDb.pool.query("select model_id from pages where label = 'alfa-1'")).rows[0]!.model_id);
+    const second = (await createFanslyPage(db, { modelId: alfa, label: "alfa-2" })).id;
+    const user = await createUserAccount(app, { username: "ira", role: "chatter" }, { source: "cli" });
+    await db.execute(sql`update users set password_hash = ${await argon2.hash(PASSWORD, { type: argon2.argon2id })} where id = ${user.id}`);
+    for (const label of ["alfa-1", "alfa-2"]) await assignPageToUser(app, { userId: user.id, pageLabel: label }, { source: "cli" });
+    const row = await insertPersonRow(db, {
+      code: "ira", displayName: "ira", kind: "human", role: "chatter", state: "working", leftOn: null, telegramUserId: null,
+      telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
+    });
+    await insertPersonLogin(db, { personId: row.id, userId: user.id, linkedByUserId: null });
+    await db.execute(sql`insert into person_working_pages (person_id, page_id, position) values (${row.id}, ${pageA}, 0), (${row.id}, ${second}, 1)`);
+    await db.execute(sql`insert into person_schedule_slots (person_id, page_id, start_minute, end_minute, valid_from) values (${row.id}, null, 600, 1080, '2026-01-01')`);
+    people.ira = row.id;
+    cookies.ira = await login("ira");
+
+    // «Ждут вас → Спросить»: one page chosen in the form.
+    const date = moscowDay(Date.now() + 7 * DAY_MS);
+    const asked = await as("ira", "POST", "/api/v1/team/questions", {
+      pageLabel: "alfa-1", kind: "swap", text: "Не выйду", swap: { date, pageLabels: ["alfa-1"], start: "10:00", end: "18:00", coverPersonCode: "carl" },
+    });
+    expect(asked.statusCode, asked.body).toBe(200);
+    const question = teamQuestionWriteResponseSchema.parse(asked.json()).question;
+    expect([...question.swap!.pages].sort()).toEqual(["alfa-1", "alfa-2"]);
+    expect((await as("lena", "POST", `/api/v1/team/questions/${question.id}/answer`, { answer: "yes" })).statusCode).toBe(200);
+    expect(await runs("ira", at(date, "12:00"), second)).toBe(false);
+    expect(await runs("ira", at(date, "12:00"), pageA)).toBe(false);
+  });
+
+  it("keeps the covering person's matter until the swap's END, and closes a swap question nobody decided before its hours ended", async (context) => {
+    if (!testDb) return context.skip();
+    const app = createTestAppContext(testDb);
+    const date = moscowDay(Date.now() + 8 * DAY_MS);
+    const ask = async (start: string, end: string) => {
+      const asked = await as("anna", "POST", "/api/v1/team/questions", {
+        pageLabel: "alfa-1", kind: "swap", text: "Не выйду", swap: { date, pageLabels: ["alfa-1"], start, end, coverPersonCode: "carl" },
+      });
+      expect(asked.statusCode, asked.body).toBe(200);
+      return teamQuestionWriteResponseSchema.parse(asked.json()).question.id;
+    };
+    // Over midnight, approved: Carl's matter stays past midnight while the swap still runs, and goes when it ends.
+    const night = await ask("22:00", "02:00");
+    expect((await as("lena", "POST", `/api/v1/team/questions/${night}/answer`, { answer: "yes" })).statusCode).toBe(200);
+    const nextDay = moscowDay(Date.parse(`${date}T12:00:00+03:00`) + DAY_MS);
+    const coverOpen = async () => (await testDb!.pool.query("select state from matters where reason_key = $1", [`question.cover:${night}`])).rows[0]!.state;
+    await runTeamQuestionsTick(app, new Date(at(nextDay, "00:05")));
+    expect(await coverOpen()).toBe("open");
+    await runTeamQuestionsTick(app, new Date(at(nextDay, "02:05")));
+    expect(await coverOpen()).toBe("closed");
+
+    // Asked and never decided: once its hours have ended it closes itself, «не решён вовремя», and the asker is told once.
+    const lapsed = await ask("08:00", "12:00");
+    await runTeamQuestionsTick(app, new Date(at(date, "11:00")));
+    expect((await testDb.pool.query("select state from team_questions where id = $1", [lapsed])).rows[0]!.state).toBe("open");
+    await runTeamQuestionsTick(app, new Date(at(date, "12:05")));
+    await runTeamQuestionsTick(app, new Date(at(date, "12:15")));
+    const row = (await testDb.pool.query("select state, answer, answer_text, answered_by_user_id from team_questions where id = $1", [lapsed])).rows[0]!;
+    expect(row).toMatchObject({ state: "answered", answer: "no", answered_by_user_id: null });
+    expect(String(row.answer_text)).toContain("не решён вовремя");
+    const told = mattersListResponseSchema.parse((await as("anna", "GET", "/api/v1/matters?state=open")).json()).matters
+      .filter((one) => one.mine && one.kind === "question.answered" && one.object?.id === String(lapsed));
+    expect(told.map((one) => one.title)).toEqual(["Подмена не решена вовремя"]);
+    expect((await testDb.pool.query("select state from matters where reason_key = $1", [`question.asked:${lapsed}`])).rows[0]!.state).toBe("closed");
+    // No swap lines were written.
+    expect((await testDb.pool.query("select count(*)::int as n from person_schedule_slots where question_id = $1", [lapsed])).rows[0]!.n).toBe(0);
   });
 
   it("sends a lead's «Предложить сетку» to the owner", async (context) => {

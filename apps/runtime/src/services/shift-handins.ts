@@ -286,18 +286,18 @@ interface ReportWindow {
 async function reportWindowOf(db: Database, subject: Subject, slots: readonly RuleSlot[], catalog: PageCatalog, shiftEnd: number): Promise<ReportWindow> {
   const { shift } = subject;
   const held = shift.pages.filter((page) => page.salesFrom !== null).map((page) => page.pageLabel);
-  const slot = slotWindowOf(slots, { userIds: new Set(subject.userIds), startedAt: shift.startedAt.getTime(), endedAt: shiftEnd });
+  // A slot of every page stands for the person's working pages, page by page: a swap's `off` of one page cuts it there.
+  const working = subject.person === null ? [] : await listPersonWorkingPageRows(db, [subject.person.personId]);
+  const slot = slotWindowOf(slots, {
+    userIds: new Set(subject.userIds), startedAt: shift.startedAt.getTime(), endedAt: shiftEnd, pagesOfAll: working.map((row) => row.pageId),
+  });
   const pages = new Set(held);
   if (slot !== null) {
-    // A slot of every page stands for the person's working pages.
-    const working = slot.pageIds.includes(null) && subject.person !== null
-      ? (await listPersonWorkingPageRows(db, [subject.person.personId])).map((row) => row.label)
-      : [];
     for (const pageId of slot.pageIds) {
       const label = pageId === null ? undefined : catalog.labelOf.get(pageId);
       if (label !== undefined) pages.add(label);
     }
-    for (const label of working) pages.add(label);
+    if (slot.pageIds.includes(null)) for (const row of working) pages.add(row.label);
   }
   return {
     from: Math.min(shift.startedAt.getTime(), slot?.from ?? Number.POSITIVE_INFINITY),

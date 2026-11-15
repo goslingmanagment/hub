@@ -159,11 +159,13 @@ export function claimedSale(sale: DraftSale, context: Pick<DraftContext, "userId
 /**
  * The report's window by the person's schedule: the slot occurrences that ran together with the shift, joined with
  * it — from the earlier start to the later end — and their pages (null: every page of the person). Null — no slot
- * ran with it. `slots` name the person by login (`personId`), as the rule reads them. Pure.
+ * ran with it. `slots` name the person by login (`personId`), as the rule reads them. `pagesOfAll` — the person's
+ * working pages, which a line of every page stands for: given, such a line runs page by page, each cut by that page's
+ * swap `off` (as the rule's `slotRuns`); not given, it stays a line of every page. Pure.
  */
 export function slotWindowOf(
   slots: readonly RuleSlot[],
-  input: { userIds: ReadonlySet<number>; startedAt: number; endedAt: number },
+  input: { userIds: ReadonlySet<number>; startedAt: number; endedAt: number; pagesOfAll?: readonly number[] },
 ): { from: number; to: number; pageIds: Array<number | null> } | null {
   const own = slots.filter((slot) => input.userIds.has(slot.personId));
   if (own.length === 0) return null;
@@ -187,15 +189,21 @@ export function slotWindowOf(
   let from = Number.POSITIVE_INFINITY;
   let to = Number.NEGATIVE_INFINITY;
   const pageIds = new Set<number | null>();
+  const pagesOfAll = input.pagesOfAll !== undefined && input.pagesOfAll.length > 0 ? input.pagesOfAll : null;
   for (const run of runs) {
     if (run.slot.day === "off") continue;
-    const pieces = run.slot.day === "cover" ? [{ start: run.start, end: run.end }]
-      : withoutHours({ start: run.start, end: run.end }, offs.filter((off) => off.slot.pageId === run.slot.pageId));
-    for (const piece of pieces) {
-      if (piece.end <= input.startedAt || piece.start >= input.endedAt) continue;
-      from = Math.min(from, piece.start);
-      to = Math.max(to, piece.end);
-      pageIds.add(run.slot.pageId);
+    // A line of every page runs on each of the person's pages, each cut by its own `off` (a page's swap does not take
+    // the person off the other pages).
+    const onPages: Array<number | null> = run.slot.pageId === null && run.slot.day === undefined && pagesOfAll !== null ? [...pagesOfAll] : [run.slot.pageId];
+    for (const pageId of onPages) {
+      const pieces = run.slot.day === "cover" ? [{ start: run.start, end: run.end }]
+        : withoutHours({ start: run.start, end: run.end }, offs.filter((off) => off.slot.pageId === pageId));
+      for (const piece of pieces) {
+        if (piece.end <= input.startedAt || piece.start >= input.endedAt) continue;
+        from = Math.min(from, piece.start);
+        to = Math.max(to, piece.end);
+        pageIds.add(pageId);
+      }
     }
   }
   return Number.isFinite(from) ? { from, to, pageIds: [...pageIds] } : null;
