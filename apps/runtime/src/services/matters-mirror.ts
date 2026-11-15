@@ -13,6 +13,7 @@ import {
   closeMatter,
   listAgentHydrationRequests,
   listClientSendCustody,
+  listContentManagerLoginsByPage,
   listMatterChecks,
   listMatterPageLabels,
   listNotificationIncidentsWithPages,
@@ -99,6 +100,8 @@ const DAY_MS = 86_400_000;
 export function publicationItems(
   kind: "publication.draft" | "publication.unknown",
   publications: ReadonlyArray<{ id: number; pageLabel: string; kind: string; publishAt: string; version: number }>,
+  /** The content manager of a page (products plan C4): her post waits for her; a page with none — the owner's. */
+  managerOf: ReadonlyMap<string, number> = new Map(),
 ): MirrorItem[] {
   const status = kind === "publication.draft" ? "draft" : "unknown";
   return publications.map((publication) => ({
@@ -110,7 +113,14 @@ export function publicationItems(
     evidence: { publicationId: publication.id, kind: publication.kind, publishAt: publication.publishAt, version: publication.version },
     // The post's card in ContentOps' «Публикации» (products package C2): Hub's hop finds the page's model.
     link: `/contentops/publications?${new URLSearchParams({ page: publication.pageLabel, publication: String(publication.id), status, window: "all" })}`,
+    ...ownerOfPage(managerOf, publication.pageLabel),
   }));
+}
+
+/** A post's matter waits for the content manager of its page; with none, for the kind's role (the owner). */
+function ownerOfPage(managerOf: ReadonlyMap<string, number>, pageLabel: string | null): { owner?: MatterOwner } {
+  const userId = pageLabel === null ? undefined : managerOf.get(pageLabel);
+  return userId === undefined ? {} : { owner: { userId } };
 }
 
 /** Held sends («Зависшие отправки»): who sent and when, never the fan or the text. */
@@ -190,7 +200,7 @@ export function isOfapiOffIncident(item: { kind: string; platform: string | null
  */
 export function failureItems(
   incidents: ReadonlyArray<{ id: number; incidentKey: string; kind: string; pageLabel: string | null; platform: string | null; openedAt: Date | string }>,
-  input: { loginPages: ReadonlySet<string>; ofapiOff: boolean },
+  input: { loginPages: ReadonlySet<string>; ofapiOff: boolean; managerOf?: ReadonlyMap<string, number> },
 ): MirrorItem[] {
   return incidents
     .filter((incident) => !(input.ofapiOff && isOfapiOffIncident(incident)))
@@ -207,6 +217,8 @@ export function failureItems(
         openedAt: new Date(incident.openedAt).toISOString(),
       },
       link: "/system/failures?page=all",
+      // «Не вышел» is the post's outcome: it waits for the content manager of its page, like the post did.
+      ...(incident.kind === "publication_not_published" ? ownerOfPage(input.managerOf ?? new Map(), incident.pageLabel) : {}),
     }));
 }
 
@@ -519,13 +531,15 @@ export async function runMattersMirror(
     return true;
   };
 
+  // The content managers of the pages (products plan C4): a post's matters wait for the one of its page.
+  const managerOf = await listContentManagerLoginsByPage(app.db).catch(() => new Map<string, number>());
   await read(["publication.draft"], async () => {
-    const items = publicationItems("publication.draft", await listPublicationsWire(app.db, { pageIds: null, status: "draft", limit: PUBLICATIONS_LIMIT }));
+    const items = publicationItems("publication.draft", await listPublicationsWire(app.db, { pageIds: null, status: "draft", limit: PUBLICATIONS_LIMIT }), managerOf);
     return [{ kind: "publication.draft", items, capped: items.length === PUBLICATIONS_LIMIT }];
   });
   await read(["publication.unknown"], async () => [{
     kind: "publication.unknown",
-    items: publicationItems("publication.unknown", await listPublicationsWire(app.db, { pageIds: null, status: "unknown", limit: PUBLICATIONS_LIMIT })),
+    items: publicationItems("publication.unknown", await listPublicationsWire(app.db, { pageIds: null, status: "unknown", limit: PUBLICATIONS_LIMIT }), managerOf),
   }]);
   await read(["send.held"], async () => {
     const list = await listClientSendCustody(app.db, { state: "held", pages: "all", limit: HELD_LIMIT, offset: 0 });
@@ -547,7 +561,7 @@ export async function runMattersMirror(
   }
   await read(["incident.open"], async () => {
     const incidents = await listNotificationIncidentsWithPages(app.db, { status: "open", limit: INCIDENTS_LIMIT });
-    return [{ kind: "incident.open", items: failureItems(incidents.items, { loginPages, ofapiOff: !ofapiOn }) }];
+    return [{ kind: "incident.open", items: failureItems(incidents.items, { loginPages, ofapiOff: !ofapiOn, managerOf }) }];
   });
   await read(["extension.critical"], async () => {
     const range = { from: new Date(Date.parse(`${today}T00:00:00Z`) - 6 * DAY_MS).toISOString().slice(0, 10), to: today };

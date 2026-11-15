@@ -50,7 +50,25 @@ export async function contentopsPasswordSignin(
 ): Promise<AuthSsoSignedInResponse> {
   // The owner role (the agency's owner and the test team's) is refused before its password is looked at.
   const known = await findUserByUsername(app.db, normalizeUsername(input.username));
-  if (known?.role === "owner") return refused("owner");
+  // Every refusal that is not «не подходят» leaves its trace in the journal (the plain wrong password writes
+  // `auth.login_failed` in the sign-in service itself).
+  const refusedTrace = async (reason: "owner" | "no_access", user: { id: number; username: string }) =>
+    recordAudit(app, {
+      source: "api",
+      targetUserId: user.id,
+      eventType: "auth.login_refused",
+      metadata: {
+        username: user.username,
+        via: "contentops",
+        reason,
+        ...(input.ip ? { ip: input.ip } : {}),
+        ...(input.userAgent ? { userAgent: input.userAgent } : {}),
+      },
+    });
+  if (known?.role === "owner") {
+    await refusedTrace("owner", known);
+    return refused("owner");
+  }
   let session: { sessionId: number; userId: number };
   try {
     session = await verifyPasswordAndLockUser(app, input, async (dbTx, locked) => {
@@ -72,7 +90,11 @@ export async function contentopsPasswordSignin(
       return { sessionId: opened.sessionId, userId: locked.id };
     });
   } catch (error) {
-    if (error instanceof NoContentops) return refused("no_access");
+    if (error instanceof NoContentops) {
+      // The transaction rolled back: the trace of a right password without ContentOps is written outside it.
+      if (known) await refusedTrace("no_access", known);
+      return refused("no_access");
+    }
     if (error instanceof TooManyRequestsError) return refused("locked");
     if (error instanceof UnauthorizedError) return refused("wrong");
     throw error;

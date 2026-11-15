@@ -6,6 +6,7 @@ import { isOfapiOffFailure } from "../apps/dashboard/src/lib/failures.ts";
 import { engineStatusState } from "../apps/dashboard/src/pages/settings/engine/engineDisplay.ts";
 import { enginePageStatus } from "../apps/dashboard/src/pages/settings/engine/enginePageSummary.ts";
 import {
+  failureItems,
   isOfapiOffIncident,
   loginPageLabels,
   paidDayChangeItems,
@@ -123,5 +124,23 @@ describe("the matters mirror keeps the screens' rules", () => {
       expect(pageOf(moved!.search)).toBe("mia-1");
       expect(postOf(moved!.search)).toBe(5101);
     }
+  });
+});
+
+describe("a post's matters wait for the content manager of its page (products plan C4)", () => {
+  const post = { id: 49, pageLabel: "test-1", kind: "wall_post", publishAt: "2026-11-16T20:00:00.000Z", version: 1 };
+  it("a draft and an unknown outcome: hers when the page has one, the owner's otherwise", () => {
+    const managerOf = new Map([["test-1", 77]]);
+    expect(publicationItems("publication.draft", [post], managerOf)[0]?.owner).toEqual({ userId: 77 });
+    expect(publicationItems("publication.unknown", [post], managerOf)[0]?.owner).toEqual({ userId: 77 });
+    expect(publicationItems("publication.draft", [{ ...post, pageLabel: "lora-1" }], managerOf)[0]?.owner).toBeUndefined();
+  });
+
+  it("«не вышел» too; any other failure stays the owner's", () => {
+    const managerOf = new Map([["test-1", 77]]);
+    const incident = { id: 5, incidentKey: "k", kind: "publication_not_published", pageLabel: "test-1", platform: "fansly", openedAt: new Date() };
+    const [notOut, other] = failureItems([incident, { ...incident, id: 6, kind: "auth_blocked" }], { loginPages: new Set(), ofapiOff: false, managerOf });
+    expect(notOut?.owner).toEqual({ userId: 77 });
+    expect(other?.owner).toBeUndefined();
   });
 });

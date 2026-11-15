@@ -1016,3 +1016,22 @@ export async function listPeopleCatalogUsers(db: Database, realm: PeopleRealm = 
     pageLabels: Array.isArray(row.page_labels) ? (row.page_labels as string[]) : [],
   }));
 }
+
+/**
+ * The content manager of each page (products plan C4): the login of a person of the content manager's role whose
+ * working pages include the page and who has not left — her product's matters (a post to approve, its outcome) wait
+ * for her. Several on one page: the lowest login id. A page with none is not in the map (its matters stay the owner's).
+ */
+export async function listContentManagerLoginsByPage(db: Database): Promise<Map<string, number>> {
+  const result = await db.execute<Row>(sql`
+    select pg.label, min(u.id) as user_id
+      from people p
+      join person_working_pages w on w.person_id = p.id
+      join pages pg on pg.id = w.page_id
+      join person_logins l on l.person_id = p.id
+      join users u on u.id = l.user_id
+     where p.role = 'content_manager' and p.state <> 'left'
+       and u.role = 'content_manager' and u.disabled_at is null and u.deleted_at is null
+     group by pg.label`);
+  return new Map(result.rows.map((row) => [String(row.label), Number(row.user_id)]));
+}
