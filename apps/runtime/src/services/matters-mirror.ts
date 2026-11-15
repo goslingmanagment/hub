@@ -19,7 +19,6 @@ import {
   listChatterLoginsOfPeople,
   listOpenMattersOfKinds,
   listSyncPages,
-  listVisibleMatters,
   matterChanges,
   MatterWriterConflictError,
   openMatter,
@@ -357,9 +356,14 @@ export interface MattersMirrorTally {
 
 type MirrorApp = AppContext;
 
-/** Every open matter of the kind as the owner reads it: the count read back (`extension.critical` counts its events). */
+/**
+ * Every open matter of the kind the mirror wrote, of both realms: the count read back (`extension.critical` counts its
+ * events). The source lists what it lists and the mirror writes an item about test pages as the test team's matter
+ * (matterOfRealm, sandbox/realm.ts), so the owner's own view would differ from the source by every test item and warn
+ * each minute; both realms are counted, as both are written.
+ */
 async function readBackCount(app: MirrorApp, kind: MatterMirrorKind): Promise<number> {
-  const matters = await listVisibleMatters(app.db, { viewer: { userId: 0, role: "owner", pageIds: [] }, state: "open", kinds: [kind], limit: 10_000 });
+  const matters = await listOpenMattersOfKinds(app.db, [kind]);
   return matters.reduce((sum, matter) => sum + matterWeight(matter), 0);
 }
 

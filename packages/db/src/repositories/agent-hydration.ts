@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { livePageSql } from "./realm.ts";
 import type {
   AgentHydrationCostNote,
   AgentHydrationLane,
@@ -732,6 +733,8 @@ export async function listAutoApprovableOnlyfansHydrationRequests(
       and r.admissible = true
       and (r.expires_at is null or r.expires_at > ${now})
       and p.platform = 'onlyfans'
+      -- Nothing of a test page is read from a platform (sandbox/realm.ts): never approved by itself.
+      and ${livePageSql(sql`r.page_id`)}
       and k.revoked_at is null
       and k.expires_at > ${now}
       and 'request:hydration' = any(k.capabilities)

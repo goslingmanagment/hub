@@ -9,6 +9,7 @@ import {
   telegramDeliveryAttempts,
 } from "../schema.ts";
 import type { NotificationIncidentKind, NotificationIncidentStatus } from "./notifications.ts";
+import { livePageSql } from "./realm.ts";
 
 // The paging sweep's persistence: which latch episodes it has
 // seen, which one the owner was paged about, and the episode history the flap
@@ -78,6 +79,8 @@ export async function listNotificationPagingCandidates(
       eq(notificationIncidentPaging.notificationIncidentId, notificationIncidents.id),
     )
     .where(and(
+      // Nothing about a test page is ever paged (sandbox/realm.ts), not even the recovery of one opened before the wall.
+      livePageSql(notificationIncidents.platformAccountId),
       or(
         eq(notificationIncidents.status, "open"),
         gte(notificationIncidents.resolvedAt, input.resolvedSince),
@@ -350,7 +353,8 @@ export async function listNotificationIncidentCyclesSince(
       eq(notificationIncidents.id, notificationIncidentCycles.notificationIncidentId),
     )
     .leftJoin(pages, eq(notificationIncidentCycles.platformAccountId, pages.id))
-    .where(gte(notificationIncidentCycles.openedAt, input.since))
+    // The live agency's episodes only (sandbox/realm.ts): the digest goes to the owner's Telegram.
+    .where(and(gte(notificationIncidentCycles.openedAt, input.since), livePageSql(notificationIncidentCycles.platformAccountId)))
     .orderBy(desc(notificationIncidentCycles.openedAt), desc(notificationIncidentCycles.id))
     .limit(input.limit ?? 5_000);
 

@@ -1,12 +1,31 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel, insertPersonLogin, insertPersonRow, type Database } from "@agency_hub_core/db";
+import {
+  createFanslyPage,
+  createModel,
+  ensureFanslySyncPages,
+  insertPersonLogin,
+  insertPersonRow,
+  listDueFanFactConversations,
+  listFansWaitingSince,
+  listNotificationIncidentsWithPages,
+  listNotificationPagingCandidates,
+  listOfapiMappedPages,
+  livePageArraySql,
+  liveUserSql,
+  testPageSql,
+  testUserSql,
+  type Database,
+} from "@agency_hub_core/db";
 
 import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { runCustomOrderChecks } from "../apps/runtime/src/services/custom-orders/checks.ts";
 import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { runMatterChecks } from "../apps/runtime/src/services/matter-checks.ts";
+import { notifyWrongTransactionsWriterIncident } from "../apps/runtime/src/services/notification-incidents.ts";
+import { runNotificationPagingSweep } from "../apps/runtime/src/services/notification-paging-sweep.ts";
+import { runPeopleMessages } from "../apps/runtime/src/services/people-messages/index.ts";
 import { runPeopleStartTick } from "../apps/runtime/src/services/people/start-tick.ts";
 import { runSaleClaims } from "../apps/runtime/src/services/sale-claims.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
@@ -187,4 +206,69 @@ describe("background passes keep the test team out of the live agency's matters"
     expect(test.rows.length).toBeGreaterThan(0);
     expect(test.rows.every((row) => row.owner_role === null && row.owner_user_id !== null)).toBe(true);
   }, 600_000);
+});
+
+// The general proof (sweep S2, inventory in 8-docs/2026-11-13-products/results/S2-realm-sweep): whatever a background
+// path lists «all» of, nothing of the test team reaches the owner's Telegram, a platform, AI money or a live matter. The
+// producers run for every page alike (a test page is treated like any page), and then every table a path out of Hub
+// writes is read for test pages, people and logins: the wall is where those rows are made, not in each producer.
+describe("nothing of the test team leaves Hub through a background path", () => {
+  it("incidents, paging, people messages, the sync host, the OnlyFans API fleet, the morning report and AI lanes", async (context) => {
+    if (!withTeam) return context.skip();
+    const app = createTestAppContext(withTeam);
+    const db = app.db as Database;
+    const pages = (await db.execute<{ id: string; label: string; platform: "fansly" | "onlyfans"; test: boolean }>(sql`
+      select p.id, p.label, p.platform, m.is_test as test from pages p join models m on m.id = p.model_id order by p.id`)).rows
+      .map((row) => ({ id: Number(row.id), label: row.label, platform: row.platform, test: row.test === true }));
+    const testPages = pages.filter((page) => page.test);
+    const testLabels = new Set(testPages.map((page) => page.label));
+    const live = pages.find((page) => !page.test)!;
+    expect(testPages.map((page) => page.platform).sort()).toEqual(["fansly", "onlyfans"]);
+    // The test pages carry what the lists read: fans who wrote, in the archive.
+    const archived = await db.execute<{ n: number }>(sql`select count(*)::int as n from message_archive a
+      where not a.is_sent_by_me and ${testPageSql(sql`a.account_id`)}`);
+    expect(archived.rows[0]!.n).toBeGreaterThan(0);
+
+    // A producer of the paging pipeline fires for every page alike; the test OnlyFans page holds an account as if bound.
+    for (const page of pages) {
+      await notifyWrongTransactionsWriterIncident(app, {
+        platformAccountId: page.id, pageLabel: page.label, platform: page.platform, attemptedWriter: "realm-sweep", assignedWriter: null,
+      });
+    }
+    const testOnlyfans = testPages.find((page) => page.platform === "onlyfans")!;
+    await db.execute(sql`update pages set ofapi_account_id = 'acct_realm_sweep' where id = ${testOnlyfans.id}`);
+    await ensureFanslySyncPages(db, { createdBy: "realm-sweep" });
+    const later = new Date(Date.now() + 2 * DAY);
+    await runNotificationPagingSweep(app, { now: later });
+    await runPeopleMessages(app, { now: new Date(T0 + 7 * DAY + HOUR), transport: async () => { throw new Error("nothing is sent in this test"); } });
+
+    // The live page's incident is there: the producer ran.
+    const liveIncidents = await db.execute<{ n: number }>(sql`select count(*)::int as n from notification_incidents where platform_account_id = ${live.id}`);
+    expect(liveIncidents.rows[0]!.n).toBe(1);
+    // Every row a path out of Hub writes, read for the test realm.
+    const offenders = await db.execute<{ what: string; id: string }>(sql`
+      select 'incident' as what, i.id::text as id from notification_incidents i where ${testPageSql(sql`i.platform_account_id`)}
+      union all select 'incident cycle', c.id::text from notification_incident_cycles c where ${testPageSql(sql`c.platform_account_id`)}
+      union all select 'outbox', o.id::text from notification_delivery_outbox o join notification_incidents i on i.id = o.notification_incident_id
+        where ${testPageSql(sql`i.platform_account_id`)}
+      union all select 'sync page', s.page_id::text from sync_pages s where ${testPageSql(sql`s.page_id`)}
+      union all select 'sync state', st.page_id::text from page_sync_states st where ${testPageSql(sql`st.page_id`)}
+      union all select 'link run', r.id::text from page_link_stat_runs r where ${testPageSql(sql`r.platform_account_id`)}
+      union all select 'people message', pm.id::text from people_messages pm
+        where pm.recipient_user_id is not null and ${testUserSql(sql`pm.recipient_user_id`)}
+      union all select 'ai usage', a.id::text from ai_usage_events a
+        where ${testPageSql(sql`a.page_id`)} or (a.user_id is not null and ${testUserSql(sql`a.user_id`)})
+      union all select 'live matter', m.id::text from matters m
+        where not ${livePageArraySql(sql`m.page_ids`)} and (m.owner_user_id is null or ${liveUserSql(sql`m.owner_user_id`)})`);
+    expect(offenders.rows).toEqual([]);
+
+    // The lists those paths read, each the live agency's.
+    expect((await listOfapiMappedPages(db)).map((page) => page.id)).not.toContain(testOnlyfans.id);
+    expect((await listNotificationIncidentsWithPages(db, { limit: 500 })).items.filter((item) => item.pageLabel !== null && testLabels.has(item.pageLabel))).toEqual([]);
+    expect((await listNotificationPagingCandidates(db, { resolvedSince: new Date(0) })).filter((one) => testLabels.has(one.pageLabel ?? ""))).toEqual([]);
+    const waiting = await listFansWaitingSince(db, { now: later, minWaitHours: 0, maxDays: 60 });
+    expect(waiting.filter((row) => testLabels.has(row.pageLabel))).toEqual([]);
+    const due = await listDueFanFactConversations(db, { pageIds: pages.map((page) => page.id), now: later, quietMinutes: 0, activeHours: 60 * 24, limit: 1000 });
+    expect(due.filter((one) => testLabels.has(one.pageLabel))).toEqual([]);
+  }, 300_000);
 });
