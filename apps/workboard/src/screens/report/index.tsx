@@ -4,9 +4,9 @@ import { createClient } from "@kernel/sdk";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { kernel as sessionKernel } from "@/shared/hub";
 import { ReportBoard, type Host } from "./Board";
-import { BoardKernel, useCurrentReport, useReport } from "./data";
+import { BoardFetch, BoardKernel, useCurrentReport, useReport } from "./data";
 import { frameState } from "./model";
-import { FRAME_PARENT_ORIGINS, acceptPort, isLocalOrigin, portTransport, type PortTransport } from "./transport";
+import { acceptPort, portTransport, takeFrameKey, type PortTransport } from "./transport";
 import type { ShiftReportResponse } from "@agency_hub_core/contracts";
 import "./board.css";
 
@@ -94,40 +94,40 @@ export function ReportScreen() {
   }, []);
   return (
     <BoardKernel.Provider value={sessionKernel}>
+      <BoardFetch.Provider value={sessionFetch}>
       {params.shiftId !== undefined && shiftId === null
         ? <Gate><b>Такой смены нет</b>В адресе нет номера смены.</Gate>
         : shiftId === null
           ? <CurrentBoard host="tab" light={light} transport={null} />
           : <ShiftBoard key={shiftId} shiftId={shiftId} host="tab" light={light} transport={null} />}
+      </BoardFetch.Provider>
     </BoardKernel.Provider>
   );
 }
 
-/** The sites the frame takes a port from: fansly.com and ChatSpace; a dev build also the stand's and the demo's local hosts. */
-function allowedParent(origin: string): boolean {
-  return FRAME_PARENT_ORIGINS.includes(origin) || (import.meta.env.DEV && isLocalOrigin(origin));
-}
+/** A request outside the SDK's operations (a new one of Hub's before the SDK has it), on Workboard's session. */
+const sessionFetch: typeof fetch = (input, init) => fetch(input, { ...init, credentials: "same-origin" });
 
-/** `/frame/report[?shift=<id>]`: the board in the extension's frame, its requests over the extension's port. */
+/** `/frame/report[?shift=<id>]`: the board in the extension's frame, its requests over the extension's port (handshake v2). */
 export function FrameReportScreen() {
   const [search] = useSearchParams();
   const shiftId = numberOf(search.get("shift"));
-  const [transport, setTransport] = useState<PortTransport | "waiting" | "none">("waiting");
+  const [link, setLink] = useState<{ kind: "waiting" } | { kind: "none" } | { kind: "version"; port: MessagePort | null } | { kind: "port"; transport: PortTransport }>({ kind: "waiting" });
   useEffect(() => {
     document.title = TITLE;
     let alive = true;
     let held: PortTransport | null = null;
-    void acceptPort(window, allowedParent).then((port) => {
+    // The key is read once and leaves the address at once.
+    const key = takeFrameKey(window);
+    void acceptPort(window, key).then((result) => {
       if (!alive) {
-        port?.close();
+        if (result.kind !== "none") result.port?.close();
         return;
       }
-      if (port === null) {
-        setTransport("none");
-        return;
-      }
-      held = portTransport(port);
-      setTransport(held);
+      if (result.kind === "port") {
+        held = portTransport(result.port);
+        setLink({ kind: "port", transport: held });
+      } else setLink(result);
     });
     return () => {
       alive = false;
@@ -135,14 +135,39 @@ export function FrameReportScreen() {
     };
   }, []);
   // The board's API client in the frame: no credentials, every request over the port.
-  const kernel = useMemo(() => (typeof transport === "object" ? createClient({ baseUrl: "", fetch: transport.fetch }) : null), [transport]);
-  if (transport === "waiting") return <Gate waiting>Открываем отчёт…</Gate>;
-  if (transport === "none" || kernel === null) return <Gate><b>Откройте отчёт из ChatGoose</b>Отчёт смены открывается кнопкой «Отчёт» в ChatGoose на Fansly или в ChatSpace.</Gate>;
+  const transport = link.kind === "port" ? link.transport : null;
+  const kernel = useMemo(() => (transport ? createClient({ baseUrl: "", fetch: transport.fetch }) : null), [transport]);
+  if (link.kind === "waiting") return <Gate waiting>Открываем отчёт…</Gate>;
+  if (link.kind === "version") return <UpdateExtension port={link.port} />;
+  if (transport === null || kernel === null) return <Gate><b>Откройте отчёт из ChatGoose</b>Отчёт смены открывается кнопкой «Отчёт» в ChatGoose на Fansly или в ChatSpace.</Gate>;
   return (
     <BoardKernel.Provider value={kernel}>
-      {shiftId === null
-        ? <CurrentBoard host="frame" light={null} transport={transport} />
-        : <ShiftBoard key={shiftId} shiftId={shiftId} host="frame" light={null} transport={transport} />}
+      <BoardFetch.Provider value={transport.fetch}>
+        {shiftId === null
+          ? <CurrentBoard host="frame" light={null} transport={transport} />
+          : <ShiftBoard key={shiftId} shiftId={shiftId} host="frame" light={null} transport={transport} />}
+      </BoardFetch.Provider>
     </BoardKernel.Provider>
+  );
+}
+
+/** The extension speaks another version of the frame's protocol: open the board in a tab instead. */
+function UpdateExtension({ port }: { port: MessagePort | null }) {
+  const [asked, setAsked] = useState(false);
+  return (
+    <Gate>
+      <b>Обновите ChatGoose</b>
+      {port ? (
+        <>
+          <span>Эта версия расширения не умеет открывать отчёт поверх сайта. Пока его можно открыть во вкладке.</span>
+          <button type="button" className="btn btn--line btn--sm" disabled={asked} onClick={() => {
+            port.postMessage({ t: "open-tab" });
+            setAsked(true);
+          }}>{asked ? "Открываем во вкладке…" : "Открыть во вкладке"}</button>
+        </>
+      ) : (
+        <span>Эта версия расширения не умеет открывать отчёт поверх сайта. Пока откройте его из меню ChatGoose: значок расширения, «Сдать смену».</span>
+      )}
+    </Gate>
   );
 }

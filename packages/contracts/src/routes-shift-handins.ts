@@ -302,13 +302,21 @@ export const shiftReportProposalParamsSchema = z.object({ shiftId: shiftIdParam,
 export const shiftReportSightingParamsSchema = z.object({ shiftId: shiftIdParam, sightingId: shiftIdParam });
 
 /** «Подтверждаю»: signs one exact candidate. */
-export const shiftReportConfirmBodySchema = z.object({ candidateId: intId });
+export const shiftReportConfirmBodySchema = z.object({
+  candidateId: intId,
+  /** What the person saw when they pressed: the total and the count of the bar. A different board is refused `changed`. */
+  seenTotalMills: mills.optional(),
+  seenCount: z.number().int().nonnegative().optional(),
+});
 
 export const shiftReportConfirmResponseSchema = z.object({
   /** A version was made from the candidate. */
   confirmed: z.boolean(),
-  /** Why not: superseded — a correction or a re-check made a newer candidate (it is in `report`); not_ready — the phase is not «Подтвердите». Null — confirmed. */
-  refused: z.enum(["superseded", "not_ready"]).nullable(),
+  /**
+   * Why not: superseded — a correction or a re-check made a newer candidate (it is in `report`); changed — the board
+   * is not what the person saw (`seenTotalMills`, `seenCount`); not_ready — the phase is not «Подтвердите». Null — confirmed.
+   */
+  refused: z.enum(["superseded", "changed", "not_ready"]).nullable(),
   /** The fresh board. */
   report: shiftReportResponseSchema,
 });

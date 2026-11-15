@@ -4,7 +4,7 @@ import { millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/
 import { demoError, intBetween, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_USERS, demoPage, demoUserByRole, type DemoUser } from "../world.ts";
 import { DAY_MS, MINUTE_MS, chatterWorld, mskDay, type DemoSale, type DemoShift } from "./account-model.ts";
-import { demoBoardReport, demoBoardWrite } from "./shift-report-board.ts";
+import { demoBoardReport, demoBoardWrite, demoPreviewBoardOf } from "./shift-report-board.ts";
 import { demoClaimedLines, demoLineId, demoLineOutcome, demoOffPlatformOf, demoOwnShare, demoReportClaims, demoShiftId, onDemoSettle } from "./sale-claims.ts";
 
 /**
@@ -276,7 +276,8 @@ function reportOf(request: DemoRequest, found: Found): Report | DemoReply {
     posts: own && latest ? postOf(latest.body, found.shift, found.owner) : [],
     colleagues: own ? DEMO_USERS.filter((user) => user.active && user.id !== found.owner.id && user.role === "chatter" && user.pages.some((page) => found.shift.pages.includes(page))).map((user) => ({ userId: user.id, name: user.name })) : [],
     claims: demoReportClaims({ now: request.now, shiftId: found.id, ownerId: found.owner.id, lineIds: new Set((view?.lines ?? draft.lines).map((row) => row.transactionId)), own }),
-    board: null,
+    // The «Отчёт» board's preview of the shift (the demo chatter hands in the old way): read only, from this report.
+    board: own ? demoPreviewBoardOf(draft, { startedAt: new Date(found.shift.start).toISOString(), pages: found.shift.pages }, { userId: found.owner.id, name: found.owner.name }) : null,
     serverNow: request.now.toISOString(),
   };
 }

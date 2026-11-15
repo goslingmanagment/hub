@@ -9,7 +9,8 @@ import "./board.css";
  * The demo's own pages of the «Отчёт» board (`pnpm dev:workboard:demo` only, never a production build): an index of
  * the prototype's scenarios with their demo shifts (packages/demo/fixtures/shift-report-board.ts), and a stand-in for
  * the extension that draws the board in its frame (`__report/frame`): the handshake, the requests over the port, the
- * collapsed bar «Отчёт смены» with «Сверка» and «К отчёту», the clipboard. Each link starts a fresh copy of its
+ * collapsed bar «Отчёт смены» with «Сверка» and «К отчёту», the clipboard. Handshake version 2: the key in the frame's
+ * address, the port offered on load until the frame answers `ready`; `?v=1` plays an extension of an older version. Each link starts a fresh copy of its
  * scenario (the cookie `hub-demo-board`).
  */
 
@@ -29,6 +30,7 @@ const SCENARIOS: ReadonlyArray<{ id: number; name: string; what: string }> = [
   { id: 9_120_013, name: "Правка", what: "Отчёт открыт снова: «Было …, стало …»" },
   { id: 9_120_014, name: "5 страниц", what: "Колонки уходят вбок" },
   { id: 9_120_015, name: "Страница без продаж", what: "Узкая колонка «За смену продаж нет»" },
+  { id: 9_120_016, name: "Просмотр без права", what: "Сдача смены доской не включена: доска только для чтения" },
 ];
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -68,7 +70,8 @@ export function ReportDemoIndex() {
         </table>
         <p style={{ marginTop: 18, color: "var(--ink-muted)" }}>
           Рамка расширения: <code>{BASE}/frame/report?shift=&lt;смена&gt;</code> принимает порт от сайта (здесь его роль играет страница «в рамке»).
-          Без порта за 10 секунд говорит «Откройте отчёт из ChatGoose».
+          Без ключа или порта за 10 секунд говорит «Откройте отчёт из ChatGoose»; расширение старой версии:{" "}
+          <a className="lk is-clay" onClick={fresh} href={role("chatter", "/__report/frame?shift=9120001&v=1")}>«Обновите ChatGoose»</a>.
         </p>
       </div>
     </div>
@@ -102,18 +105,28 @@ export function ReportDemoFrame() {
   const [open, setOpen] = useState(true);
   const [state, setState] = useState<Extract<FrameMessage, { t: "state" }> | null>(null);
   const [compare, setCompare] = useState<Extract<FrameMessage, { t: "find" }>["sale"] | null>(null);
+  // The extension's key for this frame (handshake v2): in the frame's address only. `?v=1` plays an old extension.
+  const [key] = useState(() => Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join(""));
+  const version = Number(search.get("v") ?? 2);
   useEffect(() => {
     document.title = "Отчёт смены: рамка";
-    const onHello = (event: MessageEvent) => {
-      const frame = frameRef.current;
-      const data = event.data as { cg?: string } | null;
-      if (!frame || event.source !== frame.contentWindow || data?.cg !== "report-board/hello" || portRef.current) return;
+    const frame = frameRef.current;
+    if (!frame) return;
+    let tries = 0;
+    let timer: number | null = null;
+    const offer = () => {
+      if (portRef.current || tries >= 20 || !frame.contentWindow) return;
+      tries += 1;
       const channel = new MessageChannel();
-      portRef.current = channel.port1;
       const answer = (message: ExtensionMessage) => channel.port1.postMessage(message);
       channel.port1.onmessage = (message) => {
         const one = message.data as FrameMessage;
-        if (one.t === "fetch") {
+        if (one.t === "ready") {
+          portRef.current = channel.port1;
+          if (timer !== null) window.clearInterval(timer);
+        } else if (one.t === "open-tab") {
+          window.location.assign(`${BASE}/report/${shift ?? ""}`);
+        } else if (one.t === "fetch") {
           void fetch(one.path, { method: one.method, body: one.body, headers: one.body === null ? {} : { "content-type": "application/json" }, credentials: "same-origin" })
             .then(async (response) => answer({ t: "fetch:result", id: one.id, status: response.status, body: await response.text() }))
             .catch(() => answer({ t: "fetch:result", id: one.id, error: "network" }));
@@ -129,18 +142,26 @@ export function ReportDemoFrame() {
           void navigator.clipboard.writeText(one.text).then(() => answer({ t: "copy:result", ok: true }), () => answer({ t: "copy:result", ok: false }));
         }
       };
-      frame.contentWindow?.postMessage({ cg: "report-board/port", v: 1 }, window.location.origin, [channel.port2]);
+      frame.contentWindow.postMessage({ cg: "report-board/port", v: version, key }, window.location.origin, [channel.port2]);
     };
-    window.addEventListener("message", onHello);
-    return () => window.removeEventListener("message", onHello);
-  }, []);
+    // On the frame's load, then every 500 ms (a new channel each time) until the frame says ready, at most 20 times.
+    const onLoad = () => {
+      offer();
+      timer = window.setInterval(offer, 500);
+    };
+    frame.addEventListener("load", onLoad);
+    return () => {
+      frame.removeEventListener("load", onLoad);
+      if (timer !== null) window.clearInterval(timer);
+    };
+  }, [key, version, shift]);
   const back = () => {
     const transactionId = compare?.transactionId ?? null;
     setOpen(true);
     setCompare(null);
     portRef.current?.postMessage({ t: "show", transactionId } satisfies ExtensionMessage);
   };
-  const src = `${BASE}/frame/report${shift ? `?shift=${encodeURIComponent(shift)}` : ""}`;
+  const src = `${BASE}/frame/report${shift ? `?shift=${encodeURIComponent(shift)}` : ""}#k=${key}&v=2`;
   return (
     <div className="rb">
       <style>{MINI_CSS}</style>

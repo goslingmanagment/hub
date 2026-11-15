@@ -1,24 +1,11 @@
 /**
  * The board in the extension's frame (`/workboard/frame/report`, R-protocol.md): no credential ever enters the frame.
- * The frame says hello to its parent, accepts ONE `MessagePort` from it (the content script of fansly.com or
- * chat.onlymonster.ai), and from then on every API request of the board goes over that port as a `fetch` message; the
+ * The extension puts a key into the frame's address; the frame accepts ONE `MessagePort` from its parent with that key
+ * (handshake version 2), and from then on every API request of the board goes over that port as a `fetch` message; the
  * extension's background performs it with the device token and answers `fetch:result`. No React here.
  */
 
-export const FRAME_PROTOCOL_VERSION = 1;
-/** The sites the extension draws the frame on (production). A dev build also takes the stand's local origins. */
-export const FRAME_PARENT_ORIGINS: readonly string[] = ["https://fansly.com", "https://chat.onlymonster.ai"];
-
-/** The hosts a dev build's stand and the demo serve from: 127.0.0.1, localhost and `*.localhost`. */
-export function isLocalOrigin(origin: string): boolean {
-  try {
-    const { hostname } = new URL(origin);
-    return hostname === "127.0.0.1" || hostname === "localhost" || hostname.endsWith(".localhost");
-  } catch {
-    return false;
-  }
-}
-
+export const FRAME_PROTOCOL_VERSION = 2;
 /** What crosses the port, frame → extension (R-protocol.md «Messages over the port»). */
 export type FrameMessage =
   | { t: "fetch"; id: number; method: string; path: string; body: string | null }
@@ -26,7 +13,10 @@ export type FrameMessage =
   | { t: "collapse" }
   | { t: "find"; sale: FindSale }
   | { t: "copy"; text: string }
-  | { t: "statement"; pages: string[] };
+  | { t: "statement"; pages: string[] }
+  /** «Обновите ChatGoose»: the board in a tab by the extension's one-time link (not in R-protocol.md yet: an extension that does not know it ignores it). */
+  | { t: "open-tab" }
+  | { t: "ready"; v: number };
 
 export interface FindSale {
   transactionId: number | null;
@@ -181,64 +171,70 @@ export function portTransport(port: PortLike, options: { timeoutMs?: number } = 
 /** The part of `window` the handshake uses (a fake one in tests). */
 export interface FrameWindowLike {
   parent: unknown;
+  location: { hash: string; pathname: string; search: string };
+  history: { replaceState(data: unknown, unused: string, url?: string): void };
   addEventListener(type: "message", listener: (event: MessageEvent) => void): void;
   removeEventListener(type: "message", listener: (event: MessageEvent) => void): void;
 }
-export interface ParentLike {
-  postMessage(message: unknown, targetOrigin: string): void;
-}
 
-export const HELLO_EVERY_MS = 500;
-export const HELLO_TIMES = 20;
 /** No port in this long: «Откройте отчёт из ChatGoose». */
 export const PORT_WAIT_MS = 10_000;
 
 /**
- * Handshake version 1: say `report-board/hello` to the parent every 500 ms (at most 20 times) and take the first
- * `report-board/port` whose source is the parent and whose origin is allowed; later ones are ignored. Null — not in a
- * frame, or no port within 10 s.
+ * The frame's own address carries the key and the version: `#k=<key>&v=2`. Read once, then the hash is removed from
+ * the address (a reload or a copied address never holds it). Null — no key.
  */
-export function acceptPort(win: FrameWindowLike, allowed: (origin: string) => boolean, timing: { everyMs?: number; times?: number; waitMs?: number } = {}): Promise<MessagePort | null> {
-  const parent = win.parent as ParentLike | null;
-  if (parent === null || parent === undefined || parent === (win as unknown)) return Promise.resolve(null);
-  const everyMs = timing.everyMs ?? HELLO_EVERY_MS;
-  const times = timing.times ?? HELLO_TIMES;
-  const waitMs = timing.waitMs ?? PORT_WAIT_MS;
+export function takeFrameKey(win: Pick<FrameWindowLike, "location" | "history">): { key: string; v: number } | null {
+  const hash = win.location.hash.replace(/^#/, "");
+  if (hash === "") return null;
+  const params = new URLSearchParams(hash);
+  win.history.replaceState(null, "", `${win.location.pathname}${win.location.search}`);
+  const key = params.get("k");
+  if (key === null || !/^[0-9a-f]{16,128}$/i.test(key)) return null;
+  const v = Number(params.get("v") ?? FRAME_PROTOCOL_VERSION);
+  return { key, v: Number.isInteger(v) ? v : -1 };
+}
+
+export type Handshake =
+  | { kind: "port"; port: MessagePort }
+  /** The extension speaks a version this frame does not know: «Обновите ChatGoose». Its port, if it sent one. */
+  | { kind: "version"; port: MessagePort | null }
+  /** Not in a frame, no key, or no port in 10 s: «Откройте отчёт из ChatGoose». */
+  | { kind: "none" };
+
+/**
+ * Handshake version 2 (R-protocol.md): the frame broadcasts nothing. It takes the first `report-board/port` whose
+ * source is its parent and whose `key` is the key of its own address, answers `{ t: "ready", v: 2 }` on that port,
+ * and ignores everything else. A message with the right key and another version means the extension is of another
+ * version.
+ */
+export function acceptPort(win: FrameWindowLike, frameKey: { key: string; v: number } | null, waitMs = PORT_WAIT_MS): Promise<Handshake> {
+  const parent = win.parent;
+  if (parent === null || parent === undefined || parent === (win as unknown) || frameKey === null) return Promise.resolve({ kind: "none" });
+  if (frameKey.v !== FRAME_PROTOCOL_VERSION) return Promise.resolve({ kind: "version", port: null });
   return new Promise((resolve) => {
-    let said = 0;
     let done = false;
-    const finish = (port: MessagePort | null) => {
+    const finish = (result: Handshake) => {
       if (done) return;
       done = true;
-      clearInterval(hello);
       clearTimeout(giveUp);
       win.removeEventListener("message", onMessage);
-      resolve(port);
+      resolve(result);
     };
     const onMessage = (event: MessageEvent) => {
-      const data = event.data as { cg?: unknown; v?: unknown } | null;
+      const data = event.data as { cg?: unknown; v?: unknown; key?: unknown } | null;
       if (event.source !== parent || data === null || typeof data !== "object") return;
-      if (data.cg !== "report-board/port" || data.v !== FRAME_PROTOCOL_VERSION) return;
-      if (!allowed(event.origin)) return;
-      const port = event.ports?.[0];
-      if (port === undefined) return;
-      finish(port);
-    };
-    const say = () => {
-      if (said >= times) {
-        clearInterval(hello);
+      if (data.cg !== "report-board/port" || data.key !== frameKey.key) return;
+      const port = event.ports?.[0] ?? null;
+      if (data.v !== FRAME_PROTOCOL_VERSION) {
+        finish({ kind: "version", port });
         return;
       }
-      said += 1;
-      try {
-        parent.postMessage({ cg: "report-board/hello", v: FRAME_PROTOCOL_VERSION }, "*");
-      } catch {
-        // A parent that cannot be reached answers nothing: the wait runs out.
-      }
+      if (port === null) return;
+      port.postMessage({ t: "ready", v: FRAME_PROTOCOL_VERSION });
+      finish({ kind: "port", port });
     };
     win.addEventListener("message", onMessage);
-    const hello = setInterval(say, everyMs);
-    const giveUp = setTimeout(() => finish(null), waitMs);
-    say();
+    const giveUp = setTimeout(() => finish({ kind: "none" }), waitMs);
   });
 }

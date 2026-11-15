@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acceptPort,
   portTransport,
+  takeFrameKey,
   type FrameWindowLike,
   type PortLike,
 } from "../apps/workboard/src/screens/report/transport.ts";
@@ -108,56 +109,82 @@ describe("the board's requests over the port", () => {
   });
 });
 
-describe("the handshake", () => {
+describe("the handshake (version 2)", () => {
   type Handler = (event: MessageEvent) => void;
-  function frameWindow() {
+  const KEY = "0123456789abcdef0123456789abcdef";
+  function frameWindow(hash = `#k=${KEY}&v=2`) {
     const handlers = new Set<Handler>();
-    const hellos: unknown[] = [];
-    const parent = { postMessage: (message: unknown, target: string) => hellos.push({ message, target }) };
+    const told: unknown[] = [];
+    const parent = { postMessage: (message: unknown) => told.push(message) };
+    const replaced: string[] = [];
     const win: FrameWindowLike = {
       parent,
+      location: { hash, pathname: "/workboard/frame/report", search: "?shift=7" },
+      history: { replaceState: (_data, _unused, url) => replaced.push(url ?? "") },
       addEventListener: (_type, handler) => handlers.add(handler),
       removeEventListener: (_type, handler) => handlers.delete(handler),
     };
     const deliver = (event: Partial<MessageEvent>) => handlers.forEach((handler) => handler(event as MessageEvent));
-    return { win, parent, hellos, deliver, handlers };
+    return { win, parent, told, replaced, deliver, handlers };
   }
-  const allowed = (origin: string) => origin === "https://fansly.com";
-  const port = (name: string) => ({ name }) as unknown as MessagePort;
+  function port(name: string) {
+    const said: unknown[] = [];
+    return { name, said, postMessage: (message: unknown) => said.push(message) } as unknown as MessagePort & { said: unknown[]; name: string };
+  }
 
-  it("says hello to the parent until it holds a port, and takes the first allowed one from the parent only", async () => {
-    vi.useFakeTimers();
-    const { win, parent, hellos, deliver, handlers } = frameWindow();
-    const accepted = acceptPort(win, allowed, { everyMs: 500, times: 20, waitMs: 10_000 });
-    expect(hellos).toEqual([{ message: { cg: "report-board/hello", v: 1 }, target: "*" }]);
-    vi.advanceTimersByTime(1_000);
-    expect(hellos).toHaveLength(3);
-    const message = { cg: "report-board/port", v: 1 };
-    deliver({ source: {} as MessageEventSource, origin: "https://fansly.com", data: message, ports: [port("not the parent")] });
-    deliver({ source: parent as unknown as MessageEventSource, origin: "https://evil.example", data: message, ports: [port("bad origin")] });
-    deliver({ source: parent as unknown as MessageEventSource, origin: "https://fansly.com", data: { cg: "report-board/port", v: 2 }, ports: [port("other version")] });
-    deliver({ source: parent as unknown as MessageEventSource, origin: "https://fansly.com", data: message, ports: [port("the one")] });
-    deliver({ source: parent as unknown as MessageEventSource, origin: "https://fansly.com", data: message, ports: [port("later")] });
-    expect(await accepted).toEqual({ name: "the one" });
-    expect(handlers.size).toBe(0);
-    vi.advanceTimersByTime(5_000);
-    expect(hellos).toHaveLength(3);
+  it("reads the key once from its own address and removes it", () => {
+    const { win, replaced } = frameWindow();
+    expect(takeFrameKey(win)).toEqual({ key: KEY, v: 2 });
+    expect(replaced).toEqual(["/workboard/frame/report?shift=7"]);
+    expect(takeFrameKey(frameWindow("").win)).toBeNull();
+    expect(takeFrameKey(frameWindow("#v=2").win)).toBeNull();
   });
 
-  it("says at most 20 hellos and gives up after 10 seconds", async () => {
+  it("takes the first port from the parent with its key, answers ready on it, and says nothing to the parent", async () => {
     vi.useFakeTimers();
-    const { win, hellos } = frameWindow();
-    const accepted = acceptPort(win, allowed);
+    const { win, parent, told, deliver, handlers } = frameWindow();
+    const accepted = acceptPort(win, takeFrameKey(win));
+    vi.advanceTimersByTime(3_000);
+    const wrongSource = port("not the parent");
+    const wrongKey = port("a page script's guess");
+    const right = port("the one");
+    const later = port("later");
+    const message = (key: string) => ({ cg: "report-board/port", v: 2, key });
+    deliver({ source: {} as MessageEventSource, data: message(KEY), ports: [wrongSource] });
+    deliver({ source: parent as unknown as MessageEventSource, data: message("ffffffffffffffffffffffffffffffff"), ports: [wrongKey] });
+    deliver({ source: parent as unknown as MessageEventSource, data: { cg: "report-board/port", v: 2 }, ports: [port("no key")] });
+    deliver({ source: parent as unknown as MessageEventSource, data: message(KEY), ports: [right] });
+    deliver({ source: parent as unknown as MessageEventSource, data: message(KEY), ports: [later] });
+    const result = await accepted;
+    expect(result.kind).toBe("port");
+    expect(result.kind === "port" && (result.port as unknown as { name: string }).name).toBe("the one");
+    expect(right.said).toEqual([{ t: "ready", v: 2 }]);
+    expect(wrongKey.said).toEqual([]);
+    expect(later.said).toEqual([]);
+    expect(told).toEqual([]);
+    expect(handlers.size).toBe(0);
+  });
+
+  it("knows an extension of another version by the right key, or by its own address", async () => {
+    const { win, parent, deliver } = frameWindow();
+    const accepted = acceptPort(win, takeFrameKey(win));
+    const old = port("old extension");
+    deliver({ source: parent as unknown as MessageEventSource, data: { cg: "report-board/port", v: 1, key: KEY }, ports: [old] });
+    expect(await accepted).toEqual({ kind: "version", port: old });
+    const newer = frameWindow(`#k=${KEY}&v=3`);
+    expect(await acceptPort(newer.win, takeFrameKey(newer.win))).toEqual({ kind: "version", port: null });
+  });
+
+  it("gives up after 10 seconds, at once without a key or outside a frame", async () => {
+    vi.useFakeTimers();
+    const { win } = frameWindow();
+    const accepted = acceptPort(win, takeFrameKey(win));
     vi.advanceTimersByTime(10_001);
-    expect(await accepted).toBeNull();
-    expect(hellos).toHaveLength(20);
-  });
-
-  it("answers null at once outside a frame", async () => {
-    const handlers = new Set<Handler>();
-    const win = { addEventListener: (_type: "message", handler: Handler) => handlers.add(handler), removeEventListener: () => {} } as unknown as FrameWindowLike & { parent: unknown };
-    (win as { parent: unknown }).parent = win;
-    expect(await acceptPort(win, allowed)).toBeNull();
-    expect(handlers.size).toBe(0);
+    expect(await accepted).toEqual({ kind: "none" });
+    const keyless = frameWindow("");
+    expect(await acceptPort(keyless.win, takeFrameKey(keyless.win))).toEqual({ kind: "none" });
+    const top = frameWindow();
+    (top.win as { parent: unknown }).parent = top.win;
+    expect(await acceptPort(top.win, takeFrameKey(top.win))).toEqual({ kind: "none" });
   });
 });

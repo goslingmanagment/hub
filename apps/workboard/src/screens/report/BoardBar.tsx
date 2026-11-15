@@ -27,14 +27,15 @@ import {
  * correction. Plus «Ещё» (what the prototype does not draw, what worked before it): «Мимо площадки», «Найти продажу».
  */
 export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: RefObject<HTMLElement | null> }) {
-  const { board, report, own, host, pending, run, show } = actions;
+  const { board, report, own, preview, host, pending, run, show } = actions;
   const [more, setMore] = useState<"menu" | "off" | "find" | null>(null);
   const bare = useRef(0);
   const total = board.totals.nowMills;
   const count = board.totals.count;
-  const was = board.totals.wasMills;
+  // «Было»: Hub's (a correction, Gengar's edits), or what the person saw when «Подтверждаю» was refused as changed.
+  const was = actions.seenMills ?? board.totals.wasMills;
   const changed = was !== null && was !== total;
-  const editing = own && (board.phase === "draft" || board.phase === "fixing");
+  const editing = own && !preview && (board.phase === "draft" || board.phase === "fixing");
   const candidate = board.candidate;
 
   const link = (row: Row, text?: string) => (
@@ -49,7 +50,14 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
     switch (hub.state) {
       case "running": return <span className="k"><i className="spin" />Hub сверяет суммы с кошельками</span>;
       case "matched": return <span className="k is-ok"><Ico name="check" size={14} />Hub: суммы сошлись с кошельками</span>;
-      case "found": return <span className="k is-amb"><Ico name="plus" size={14} />Hub дочитал кошельки: ещё {salesCount(hub.foundCount)}, {plus(hub.foundMills)}</span>;
+      case "found": {
+        const found = allRows(board).filter((row) => row.foundByHub === true);
+        return (
+          <span className="k is-amb"><Ico name="plus" size={14} />Hub дочитал кошельки: ещё {salesCount(hub.foundCount)}, {plus(hub.foundMills)}
+            {found.length > 0 && <span className="lks"><button type="button" className="lk is-clay" onClick={() => actions.showMany(found.map((row) => row.key))}>Показать</button></span>}
+          </span>
+        );
+      }
       case "unchecked": return <span className="k is-amb"><Ico name="clock" size={14} />Hub не сверил {named("unchecked")}. Можно подтвердить, сверка придёт позже.</span>;
       case "statement": return <span className="k"><i className="spin" />Ждём выписку {named("statement")}</span>;
     }
@@ -76,7 +84,16 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
   let status: ReactNode = null;
   let main: ReactNode;
 
-  if (board.phase === "draft" || board.phase === "fixing") {
+  if (preview) {
+    // Before the person hands in on the board: how Hub counts the shift, and the old way stays.
+    main = (
+      <>
+        <span className="tot">{sumWords}: {count}, <b>{usd(total)}</b></span>
+        <p className="cf"><b>Сдача смены здесь ещё не включена.</b> Отчёт по-прежнему собирает Генгар по /smena, а вы отправляете его в Отчётность. Здесь видно, как его посчитает Hub.</p>
+        <span className="grow" />
+      </>
+    );
+  } else if (board.phase === "draft" || board.phase === "fixing") {
     if (editing) {
       const lost = allRows(board).find(isLost) ?? null;
       const bareList = bareRows(board);
@@ -148,6 +165,18 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
     else if (own && lateCards.length > 0) what = <span className="nq"><Ico name="pen" size={14} />Генгар дочитал: {lateCards.length} {plural(lateCards.length, "правка", "правки", "правок")}{link(lateCards[0]!, "Показать")}</span>;
     else if (candidate?.gengar.state === "silent") what = <span className="nq is-q"><Ico name="clock" size={14} />Подтверждён по проверке Hub. Генгар дочитает позже, его проверка придёт сюда же.</span>;
     else if (!own && (report.view?.comment ?? "") !== "") what = <CommentText text={report.view?.comment ?? ""} />;
+    // The post in «Отчётность»: quiet lines over the bar.
+    const post = own ? board.post ?? null : null;
+    const postLines: ReactNode[] = [];
+    if (post?.late && post.copiedAt === null) {
+      postLines.push(<span className="k is-amb" key="late"><Ico name="clock" size={14} />Пост за {day(`${report.shift.reportDate}T12:00:00+03:00`)} опоздал больше чем на сутки: ledger его сам не примет</span>);
+    }
+    if (post && post.copiedAt !== null && post.changedSinceCopy) {
+      postLines.push(<span className="k is-amb" key="changed"><Ico name="pen" size={14} />Пост изменился. Исправьте прежний пост в «Отчётности», новый не пишите</span>);
+    } else if (post && post.copiedAt !== null && !post.seen) {
+      postLines.push(<span className="k" key="unseen"><Ico name="clock" size={14} />Пост в «Отчётность» ещё не пришёл</span>);
+    }
+    status = postLines.length > 0 ? <>{postLines}</> : null;
     main = (
       <>
         {counted}
@@ -224,18 +253,21 @@ function More({ actions, kind, setKind }: { actions: BoardActions; kind: "menu" 
     if (anchor && bar) setLeft(Math.max(8, anchor.getBoundingClientRect().left - bar.getBoundingClientRect().left - 4));
   }, [kind]);
   useEffect(() => {
+    // Esc closes the panel first (before the board's own Esc, which collapses the frame).
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setKind(null);
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setKind(null);
     };
     const onDown = (event: MouseEvent) => {
       const target = event.target as Element | null;
       if (target?.closest(".pnl") || target?.closest(".menu") || target?.closest("[data-more]")) return;
       setKind(null);
     };
-    document.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey, true);
     document.addEventListener("mousedown", onDown);
     return () => {
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("mousedown", onDown);
     };
   }, [setKind]);

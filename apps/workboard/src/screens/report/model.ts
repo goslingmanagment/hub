@@ -150,6 +150,8 @@ export interface Ask {
   /** colleague — the rule's holder answers; owner — the pot's, or the decider's. */
   to: "colleague" | "owner";
   forms: PersonNameForms | null;
+  /** The server's words when the question goes straight to the decider («Олег сдаёт смену по-старому, решит владелец»). */
+  words: string | null;
   statement: "mine" | "share";
   shareWithUserId: number | null;
 }
@@ -171,8 +173,43 @@ export interface Choice {
 /** Whether the row is the person's own by the rule (all of it, or half): only then may it go to someone else. */
 const ownByRule = (row: Row) => row.rule.owner.kind === "me" || row.rule.owner.kind === "share";
 
+/** The mark a word is, when it is not a question. */
+function lineOfKey(key: ChoiceKey, ruleKey: ChoiceKey | null): Choice["line"] {
+  const [kind, id] = key.split(":");
+  const userId = id === undefined ? null : Number(id);
+  return key === ruleKey ? { statement: null }
+    : kind === "me" ? { statement: "mine" }
+      : kind === "share" ? { statement: "share", shareWithUserId: userId }
+        : kind === "user" ? { statement: "give", toUserId: userId }
+          : kind === "pot" ? { statement: "pot" } : { statement: "not_mine" };
+}
+
+/** The group of a word in the menu (a line between groups): one's own and halves, colleagues, the pot and nobody. */
+const groupOf = (key: ChoiceKey) => (key === "me" || key.startsWith("share:") ? 0 : key.startsWith("user:") ? 1 : 2);
+
+/** The server's menu (`row.choices`): exactly its words, its hints and whom each one asks. */
+function serverChoices(row: Row, choices: NonNullable<Row["choices"]>): Choice[][] {
+  const ruleKey = keyOfOwner(row.rule.owner);
+  const groups: Choice[][] = [[], [], []];
+  for (const one of choices) {
+    const key = keyOfOwner(one.owner);
+    if (key === null) continue;
+    const ask: Ask | null = one.asks === null ? null : {
+      to: one.asks.to === "colleague" ? "colleague" : "owner",
+      forms: one.asks.user?.forms ?? null,
+      words: one.asks.to === "decider" ? one.asks.words : null,
+      statement: key === "me" ? "mine" : "share",
+      shareWithUserId: key.startsWith("share:") ? Number(key.slice(6)) : null,
+    };
+    groups[groupOf(key)]!.push({ key, label: upper(one.owner.words), words: one.owner.words, hint: one.hint, ask, line: lineOfKey(key, ruleKey) });
+  }
+  return groups.filter((group) => group.length > 0);
+}
+
 /** The menu «Чья продажа» of a row, in groups (a line between them). The current word is `currentKey`. */
 export function choicesOf(board: Board, row: Row): { groups: Choice[][]; currentKey: ChoiceKey | null } {
+  const currentKeyOf = () => (row.ask !== null && askOpen(row) ? keyOfOwner(row.ask.want) : keyOfOwner(row.owner));
+  if (row.choices !== undefined) return { groups: serverChoices(row, row.choices), currentKey: currentKeyOf() };
   const ruleKey = keyOfOwner(row.rule.owner);
   const granted = row.ask !== null && (row.ask.state === "agreed" || row.ask.state === "decided" || row.ask.state === "silence");
   const holder = row.rule.owner;
@@ -183,16 +220,12 @@ export function choicesOf(board: Board, row: Row): { groups: Choice[][]; current
     const ask: Ask | null = !asks ? null : {
       to: holder.kind === "user" || holder.kind === "share" ? "colleague" : "owner",
       forms: holder.kind === "user" || holder.kind === "share" ? formsOf(board, holder.userId, holder.name) : null,
+      words: null,
       statement: kind === "me" ? "mine" : "share",
       shareWithUserId: kind === "share" ? userId : null,
     };
     const hint = key === ruleKey ? "по правилу" : ask === null ? "" : ask.to === "owner" ? "решит владелец" : `спросим ${ask.forms!.acc}`;
-    const line: Choice["line"] = key === ruleKey ? { statement: null }
-      : kind === "me" ? { statement: "mine" }
-        : kind === "share" ? { statement: "share", shareWithUserId: userId }
-          : kind === "user" ? { statement: "give", toUserId: userId }
-            : kind === "pot" ? { statement: "pot" } : { statement: "not_mine" };
-    return { key, label, words, hint, ask, line };
+    return { key, label, words, hint, ask, line: lineOfKey(key, ruleKey) };
   };
   const me = choice("me", "Моя", "моя");
   const halves = board.colleagues.map((one) => choice(`share:${one.userId}`, `Пополам с ${one.forms.ins}`, `пополам с ${one.forms.ins}`));
@@ -203,12 +236,13 @@ export function choicesOf(board: Board, row: Row): { groups: Choice[][]; current
   if (ownByRule(row)) {
     groups = [[me, ...halves], people, [pot, nobody]];
   } else {
-    // Someone else's sale (a colleague's, the pot's, nobody's): one cannot give it away; «Моя» and «Пополам с …» ask its holder.
+    // Someone else's sale (a colleague's, the pot's, nobody's): one cannot give it away. Offered only «Моя» and
+    // «Пополам с <its holder>», which ask the holder; the rule's own word stays to go back to.
+    const holderHalf = holder.kind === "user" && holder.userId !== null ? halves.filter((one) => one.key === `share:${holder.userId}`) : [];
     const rule = [...people, pot, nobody].find((one) => one.key === ruleKey);
-    groups = [[me, ...halves], ...(rule ? [[rule]] : [])];
+    groups = [[me, ...holderHalf], ...(rule ? [[rule]] : [])];
   }
-  const currentKey = row.ask !== null && askOpen(row) ? keyOfOwner(row.ask.want) : keyOfOwner(row.owner);
-  return { groups, currentKey };
+  return { groups, currentKey: currentKeyOf() };
 }
 
 /** The word a tick press means (the prototype's `ACT.tick`): off — back to the rule, the half to its partner, or nobody; on — the rule's own word, or «моя». */

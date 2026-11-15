@@ -234,6 +234,19 @@ export const shiftReportRowSchema = z.object({
   canNote: z.boolean(),
   /** Wants a look: a «нет в Hub», a late row, a claim to answer, a proposal, Gengar's comment. */
   attention: z.boolean(),
+  /**
+   * The menu «Чья продажа» of the row, as the server allows it (absent — the board's own rule, until every reader
+   * sends it): each word, whether choosing it asks someone (a colleague, or the decider when there is nobody to ask —
+   * then `words` says why: «Олег сдаёт смену по-старому, решит владелец»), and the grey hint («по правилу», «спросим
+   * Олега», «решит владелец»).
+   */
+  choices: z.array(z.object({
+    owner: shiftReportOwnerSchema,
+    asks: z.object({ to: z.enum(["colleague", "decider"]), user: personSchema.nullable(), words: z.string() }).nullable(),
+    hint: z.string(),
+  })).optional(),
+  /** Hub's re-read of the wallet after the hand-in found this sale («Hub дочитал кошельки: … · Показать»). */
+  foundByHub: z.boolean().optional(),
 });
 export type ShiftReportRow = z.infer<typeof shiftReportRowSchema>;
 
@@ -354,6 +367,24 @@ export const shiftReportBoardSchema = z.object({
   handedInAt: isoTimestamp.nullable(),
   /** When the newest version was made; null — not counted. */
   countedAt: isoTimestamp.nullable(),
+  /**
+   * Read only, the rule's board of a person without the board yet (`submits_shift` off): no ticks, no «чья», no
+   * «Сдать смену»; the old notice in the bar's place. Absent — read `enabled` of the response.
+   */
+  preview: z.boolean().optional(),
+  /** The comment the previous shift on these pages left («От прошлой смены (Олег): „…“»); null — none. */
+  previous: z.object({ user: personSchema.nullable(), comment: z.string(), at: isoTimestamp }).nullable().optional(),
+  /**
+   * The counted version's post in «Отчётность»: when the person copied it, whether the post arrived in «Отчётность»
+   * (`seen`), whether the report changed since it was copied, and whether it is a day late (the ledger will not take
+   * it by itself). Null — nothing counted.
+   */
+  post: z.object({
+    copiedAt: isoTimestamp.nullable(),
+    seen: z.boolean(),
+    changedSinceCopy: z.boolean(),
+    late: z.boolean(),
+  }).nullable().optional(),
 });
 export type ShiftReportBoard = z.infer<typeof shiftReportBoardSchema>;
 

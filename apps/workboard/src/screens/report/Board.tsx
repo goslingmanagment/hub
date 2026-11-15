@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { SHIFT_REPORT_QUICK_WORDS, type ShiftReportResponse } from "@agency_hub_core/contracts";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { BoardBar } from "./BoardBar";
-import { useBoardWrite, type Write } from "./data";
+import { useBoardWrite, usePostCopied, type Write } from "./data";
 import { Ico } from "./icons";
 import {
   agentNote,
@@ -50,6 +50,12 @@ export interface BoardActions {
   board: Board;
   report: ShiftReportResponse;
   own: boolean;
+  /** The person's own board before they hand in on it (`submits_shift` off): read only, the old notice in the bar. */
+  preview: boolean;
+  /** «Подтверждаю» was refused because the board changed: what the person saw, for «Было …, стало …». */
+  seenMills: number | null;
+  /** Light rows (Hub's found ones) and scroll to the first. */
+  showMany: (keys: string[]) => void;
   host: Host;
   pending: boolean;
   run: (write: Write, done?: string | null) => Promise<boolean>;
@@ -61,6 +67,10 @@ export interface BoardActions {
   collapse: () => void;
   confirm: (candidateId: number) => Promise<void>;
 }
+
+/** Ticks and «чья» change only while the report is a draft (or a correction), never in a preview. */
+export const canTick = (row: Row, board: Board, preview: boolean) =>
+  row.editable && !preview && (board.phase === "draft" || board.phase === "fixing");
 
 const QUICK = SHIFT_REPORT_QUICK_WORDS;
 
@@ -74,14 +84,19 @@ export function ReportBoard({ report, host, transport, light }: {
   const board = report.board;
   const shiftId = report.shift.id;
   const own = report.access === "own";
+  // The preview: the flag when Hub sends it, until then the person's switch (`enabled`).
+  const preview = own && (board.preview ?? report.enabled === false);
   const write = useBoardWrite(shiftId);
+  const postCopied = usePostCopied(shiftId);
+  const [seenMills, setSeenMills] = useState<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
   const colsRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [ask, setAsk] = useState<{ key: string; choice: Choice; text: string } | null>(null);
   const [edit, setEdit] = useState<{ key: string; draft: string } | null>(null);
-  const [hl, setHl] = useState<string | null>(light ? keyOfTransaction(light) : null);
+  const [lit, setLit] = useState<string[]>(light ? [keyOfTransaction(light)] : []);
+  const setHl = useCallback((key: string | null) => setLit(key === null ? [] : [key]), []);
   const [beforeOpen, setBeforeOpen] = useState<Record<string, boolean>>({});
   const [toastText, setToastText] = useState<{ text: string; on: boolean }>({ text: "", on: false });
   const toastTimer = useRef<number | null>(null);
@@ -134,6 +149,13 @@ export function ReportBoard({ report, host, transport, light }: {
     setHl(key);
     if (row.before !== null) setBeforeOpen((open) => ({ ...open, [row.pageLabel]: true }));
     pendingReveal.current = { key, smooth: true };
+  }, [board, setHl]);
+  const showMany = useCallback((keys: string[]) => {
+    const rows = keys.map((key) => rowByKey(board, key)).filter((row): row is Row => row !== null);
+    if (rows.length === 0) return;
+    setMenu(null);
+    setLit(rows.map((row) => row.key));
+    pendingReveal.current = { key: rows[0]!.key, smooth: true };
   }, [board]);
   useLayoutEffect(() => {
     const next = pendingReveal.current;
@@ -201,13 +223,16 @@ export function ReportBoard({ report, host, transport, light }: {
       toast("Поста пока нет: он появится, когда отчёт учтён");
       return;
     }
-    const ok = () => toast("Пост скопирован, вставьте его в «Отчётность»");
+    const ok = () => {
+      toast("Пост скопирован, вставьте его в «Отчётность»");
+      postCopied();
+    };
     if (transport) {
       void transport.copy(text).then((done) => (done ? ok() : copyHere(text).then((here) => (here ? ok() : toast("Не получилось скопировать: браузер не дал доступ к буферу")))));
       return;
     }
     void copyHere(text).then((done) => (done ? ok() : toast("Не получилось скопировать: браузер не дал доступ к буферу")));
-  }, [report.posts, toast, transport]);
+  }, [report.posts, toast, transport, postCopied]);
 
   const collapse = useCallback(() => {
     void commitNote();
@@ -215,20 +240,29 @@ export function ReportBoard({ report, host, transport, light }: {
     transport?.post({ t: "collapse" });
   }, [commitNote, transport]);
 
-  /** «Подтверждаю» signs one exact candidate; a superseded one is refused with the fresh board, which the person looks at again. */
+  /**
+   * «Подтверждаю» signs one exact candidate and what the person saw (the bar's total and count). A board that changed
+   * is refused with the fresh one: the person sees «Было …, стало …» and presses again; never pressed by itself.
+   */
   const confirm = useCallback(async (candidateId: number) => {
+    const seen = { total: board.totals.nowMills, count: board.totals.count };
     try {
-      const answer = await write.mutateAsync({ op: "confirm", candidateId });
+      const answer = await write.mutateAsync({ op: "confirm", candidateId, seenTotalMills: seen.total, seenCount: seen.count });
       const { confirmed, refused } = answer as { confirmed: boolean; refused: string | null };
-      toast(confirmed ? "Отчёт учтён" : refused === "superseded" ? "Отчёт изменился: проверьте его и подтвердите снова" : "Отчёт пока нельзя подтвердить");
+      setSeenMills(!confirmed && (refused === "changed" || refused === "superseded") ? seen.total : null);
+      toast(confirmed ? "Отчёт учтён" : refused === "changed" || refused === "superseded" ? "Отчёт изменился: проверьте его и подтвердите снова" : "Отчёт пока нельзя подтвердить");
     } catch (error) {
       const status = hubErrorStatus(error);
       toast(status === null || status >= 500 ? "Hub не ответил: неизвестно, учтён ли отчёт" : "Не получилось. Hub вернул ошибку");
     }
-  }, [write, toast]);
+  }, [write, toast, board.totals.nowMills, board.totals.count]);
+  // «Было …» lives while the board waits for the second press.
+  useEffect(() => {
+    if (board.phase !== "confirm") setSeenMills(null);
+  }, [board.phase]);
 
   const actions: BoardActions = {
-    board, report, own, host, pending: write.isPending, run, toast, show, commitNote, openNote, copyPost, collapse, confirm,
+    board, report, own, preview, seenMills, showMany, host, pending: write.isPending, run, toast, show, commitNote, openNote, copyPost, collapse, confirm,
   };
 
   // ── rows' own presses ──
@@ -251,7 +285,7 @@ export function ReportBoard({ report, host, transport, light }: {
   };
 
   const tick = async (row: Row) => {
-    if (!row.editable || row.transactionId === null) return;
+    if (!canTick(row, board, preview) || row.transactionId === null) return;
     if (row.ask !== null && row.ask.state === "asked") {
       await run({ op: "unask", transactionId: row.transactionId }, "Вопрос отменён");
       return;
@@ -271,23 +305,29 @@ export function ReportBoard({ report, host, transport, light }: {
     if (!row || row.transactionId === null || ask.choice.ask === null || text === "") return;
     const to = ask.choice.ask;
     const ok = await run({ op: "ask", transactionId: row.transactionId, statement: to.statement, shareWithUserId: to.shareWithUserId, note: text },
-      to.to === "owner" ? "Вопрос ушёл владельцу" : `Вопрос ушёл ${to.forms?.dat ?? ""}`);
+      to.to === "owner" ? `Вопрос ушёл ${board.decider.kind === "team_lead" && board.decider.user ? board.decider.user.forms.dat : "владельцу"}` : `Вопрос ушёл ${to.forms?.dat ?? ""}`);
     if (ok) setAsk(null);
   };
 
   // ── keys: Esc closes the menu and the fields, Enter saves them ──
 
+  // In the frame, Esc with nothing open collapses the board (the extension relies on it: the frame holds the keys).
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || event.defaultPrevented) return;
       if (menu !== null) {
         setMenu(null);
         event.preventDefault();
+        return;
+      }
+      if (host === "frame") {
+        event.preventDefault();
+        collapse();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [menu]);
+  }, [menu, host, collapse]);
 
   // A click outside the menu closes it.
   useEffect(() => {
@@ -325,7 +365,7 @@ export function ReportBoard({ report, host, transport, light }: {
 
   const ownerHtml = (row: Row) => {
     const word = ownerWord(row);
-    if (row.editable) {
+    if (canTick(row, board, preview)) {
       const open = menu === row.key;
       return (
         <button type="button" className={`ow ${word.cls}`} data-menu={row.key} aria-haspopup="menu" aria-expanded={open} title="Чья продажа"
@@ -345,7 +385,7 @@ export function ReportBoard({ report, host, transport, light }: {
     const inner = look === "mix" ? <Ico name="dash" size={12} /> : look === "on" ? <Ico name="tick" size={12} /> : null;
     const checked = look === "mix" ? "mixed" : look === "on";
     const label = `${row.siteWords} ${row.fan.name ?? ""}, ${clock(row.occurredAt)}`;
-    if (!row.editable) return <span className={`ck${cls}`} role="checkbox" aria-checked={checked} aria-disabled="true" aria-label={label}>{inner}</span>;
+    if (!canTick(row, board, preview)) return <span className={`ck${cls}`} role="checkbox" aria-checked={checked} aria-disabled="true" aria-label={label}>{inner}</span>;
     const tip = look === "mix" ? "Ждём ответа. Нажмите, чтобы отменить вопрос" : look === "on" ? "В вашем отчёте. Снять галочку" : "Не ваша. Поставить галочку, забрать в отчёт";
     return (
       <button type="button" className={`ck${cls}`} role="checkbox" aria-checked={checked} aria-label={label} title={tip} onClick={() => void tick(row)}>
@@ -373,13 +413,32 @@ export function ReportBoard({ report, host, transport, light }: {
     return <span className="tx is-plain" title={fansly ? row.platformRef ?? undefined : undefined}>{text}</span>;
   };
 
+  /** A row's saved comment: the person's, someone else's (named), or Gengar's (serif, «написал Генгар»). */
+  const noteLine = (row: Row): ReactNode => {
+    const agent = agentNote(row);
+    const text = row.note?.by !== "agent" && row.note !== null ? row.note.text : agent;
+    if (!text) return null;
+    const byAgent = text === agent && (row.note === null || row.note.by === "agent");
+    return (
+      <div className="nt" key="nt">
+        <Ico name="note" size={13} />
+        <span className={`t${byAgent ? " is-g" : ""}`}>{text}</span>
+        {byAgent && <span className="by">написал Генгар</span>}
+        {row.note?.by === "other" && <span className="by">{row.note.byName}</span>}
+      </div>
+    );
+  };
+
   const underHtml = (row: Row): ReactNode => {
-    if (row.before !== null) return null;
+    // A sale of the shift before: only its comment (the next shift reads it).
+    if (row.before !== null) return row.note ? <div className="ux">{noteLine(row)}</div> : null;
     const parts: ReactNode[] = [];
     if (ask?.key === row.key && ask.choice.ask !== null) {
       const to = ask.choice.ask;
-      const whom = to.to === "owner" ? "владельца" : to.forms?.acc ?? "";
-      const hint = to.to === "owner" ? "Решит владелец. До его ответа продажа остаётся в общаке." : `${to.forms?.nom ?? ""} ответит в ChatGoose. Пока он не согласился, продажа его.`;
+      const decider = board.decider.kind === "team_lead" && board.decider.user ? board.decider.user.forms : null;
+      const whom = to.to === "owner" ? decider?.acc ?? "владельца" : to.forms?.acc ?? "";
+      // The server's own words when it sends the question straight to the decider («Олег сдаёт смену по-старому, решит владелец»).
+      const hint = to.words ?? (to.to === "owner" ? "Решит владелец. До его ответа продажа остаётся в общаке." : `${to.forms?.nom ?? ""} ответит в ChatGoose. Пока он не согласился, продажа его.`);
       parts.push(
         <div className="frm" key="ask">
           <label className="frm-l" htmlFor={`ask-${row.key}`}>Почему продажа ваша?</label>
@@ -498,19 +557,8 @@ export function ReportBoard({ report, host, transport, light }: {
         </div>,
       );
     } else {
-      const agent = agentNote(row);
-      const text = row.note?.by !== "agent" && row.note !== null ? row.note.text : agent;
-      if (text) {
-        const byAgent = text === agent && (row.note === null || row.note.by === "agent");
-        parts.push(
-          <div className="nt" key="nt">
-            <Ico name="note" size={13} />
-            <span className={`t${byAgent ? " is-g" : ""}`}>{text}</span>
-            {byAgent && <span className="by">написал Генгар</span>}
-            {row.note?.by === "other" && <span className="by">{row.note.byName}</span>}
-          </div>,
-        );
-      }
+      const line = noteLine(row);
+      if (line) parts.push(line);
     }
     return parts.length ? <div className="ux">{parts}</div> : null;
   };
@@ -527,24 +575,25 @@ export function ReportBoard({ report, host, transport, light }: {
     );
     if (row.before !== null) {
       return (
-        <div className={`r is-dim is-not${hl === row.key ? " is-hl" : ""}`} data-row={row.key} key={row.key}>
+        <div className={`r is-dim is-not${lit.includes(row.key) ? " is-hl" : ""}`} data-row={row.key} key={row.key}>
           {checkHtml(row)}{title}{amount}
           <div className="r2">{whereHtml(row)}<span className="rs">{row.reasonWords}</span></div>
+          {underHtml(row)}
         </div>
       );
     }
     let end: ReactNode = null;
     if (row.sighting !== null && !row.sighting.added) {
       const sightingId = row.sighting.id;
-      end = own && (board.phase === "draft" || board.phase === "fixing")
+      end = own && !preview && (board.phase === "draft" || board.phase === "fixing")
         ? <button type="button" className="btn btn--line btn--xs" disabled={write.isPending} onClick={() => { setHl(row.key); void run({ op: "sighting", sightingId }, "Добавлено в отчёт"); }}><Ico name="plus" size={12} />Добавить</button>
         : null;
     } else if (row.late && !row.ticked) {
       const transactionId = row.transactionId;
-      end = own && transactionId !== null && board.phase === "counted"
+      end = own && !preview && transactionId !== null && board.phase === "counted"
         ? <button type="button" className="btn btn--line btn--xs" disabled={write.isPending} onClick={() => { setHl(row.key); void run({ op: "resend", transactionIds: [transactionId] }, `Досдано: ${row.fan.name ?? ""} ${usd(row.netMills)} в отчёте`); }}>Досдать</button>
         : null;
-    } else if (row.canNote) {
+    } else if (row.canNote && !preview) {
       end = (
         <button type="button" className={`cm${wantsNote(row) ? " is-ask" : ""}`} onClick={() => {
           if (edit?.key === row.key) {
@@ -560,7 +609,7 @@ export function ReportBoard({ report, host, transport, light }: {
     const reason = row.reasonWords;
     const cls = ["r"];
     if (!row.ticked) cls.push("is-not");
-    if (hl === row.key) cls.push("is-hl");
+    if (lit.includes(row.key)) cls.push("is-hl");
     return (
       <div className={cls.join(" ")} data-row={row.key} key={row.key}>
         {checkHtml(row)}{title}{amount}
@@ -634,6 +683,12 @@ export function ReportBoard({ report, host, transport, light }: {
               <button type="button" className="btn btn--quiet btn--sm" title="Свернуть доску в полосу внизу" onClick={collapse}><Ico name="min" size={14} />Свернуть</button>
             )}
           </header>
+          {own && board.previous && board.previous.comment.trim() !== "" && (
+            <div className="prev" title={board.previous.comment}>
+              <Ico name="note" size={13} />
+              <span className="t">От прошлой смены{board.previous.user ? ` (${board.previous.user.forms.nom})` : ""}: „{board.previous.comment}“</span>
+            </div>
+          )}
           <div className="cols" ref={colsRef}>{board.columns.map(columnHtml)}</div>
           <BoardBar actions={actions} barRef={barRef} />
         </section>

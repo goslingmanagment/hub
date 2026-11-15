@@ -10,6 +10,8 @@ import type { ShiftReportConfirmResponse, ShiftReportLineBody, ShiftReportOffPla
  */
 
 export const BoardKernel = createContext<KernelClient | null>(null);
+/** The same client's raw fetch, for an operation of Hub the SDK does not have yet (`post-copied`). */
+export const BoardFetch = createContext<typeof fetch | null>(null);
 
 function useKernel(): KernelClient {
   const kernel = useContext(BoardKernel);
@@ -68,7 +70,7 @@ export type Write =
   | { op: "ask"; transactionId: number; statement: "mine" | "share"; shareWithUserId: number | null; note: string }
   | { op: "unask"; transactionId: number }
   | { op: "submit" }
-  | { op: "confirm"; candidateId: number }
+  | { op: "confirm"; candidateId: number; seenTotalMills: number; seenCount: number }
   | { op: "reopen" }
   | { op: "reopenCancel" }
   | { op: "resend"; transactionIds: number[] }
@@ -86,7 +88,7 @@ function send(kernel: KernelClient, shiftId: number, write: Write): Promise<unkn
     case "ask": return kernel.shiftReportAsk({ params, body: { transactionId: write.transactionId, statement: write.statement, shareWithUserId: write.shareWithUserId, note: write.note } });
     case "unask": return kernel.shiftReportAskWithdraw({ params: { shiftId, transactionId: write.transactionId } });
     case "submit": return kernel.shiftReportSubmit({ params });
-    case "confirm": return kernel.shiftReportConfirm({ params, body: { candidateId: write.candidateId } });
+    case "confirm": return kernel.shiftReportConfirm({ params, body: { candidateId: write.candidateId, seenTotalMills: write.seenTotalMills, seenCount: write.seenCount } });
     case "reopen": return kernel.shiftReportReopen({ params });
     case "reopenCancel": return kernel.shiftReportReopenCancel({ params });
     case "resend": return kernel.shiftReportResend({ params, body: { transactionIds: write.transactionIds } });
@@ -118,4 +120,22 @@ export function useBoardWrite(shiftId: number) {
       void queryClient.invalidateQueries({ queryKey: reportKey(shiftId), exact: true });
     },
   });
+}
+
+/**
+ * «Скопировать пост» tells Hub the post was copied (`POST …/post-copied`): Hub then watches «Отчётность» for it. Not an
+ * SDK operation yet: a raw request on the board's own client (the session, or the extension's port). Its failure
+ * changes nothing the person sees.
+ */
+export function usePostCopied(shiftId: number) {
+  const raw = useContext(BoardFetch);
+  const queryClient = useQueryClient();
+  return () => {
+    if (raw === null) return;
+    void raw(`/api/v1/shift-reports/${shiftId}/post-copied`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+      .then((response) => {
+        if (response.ok) void queryClient.invalidateQueries({ queryKey: reportKey(shiftId), exact: true });
+      })
+      .catch(() => {});
+  };
 }

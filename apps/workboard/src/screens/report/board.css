@@ -208,3 +208,31 @@
 .rb .gate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;color:var(--ink-muted);font-size:13.5px;line-height:20px}
 .rb .gate b{font-size:15px;font-weight:600;color:var(--ink-strong)}
 .rb .gate .spin{width:16px;height:16px}
+/* «От прошлой смены (Олег): „…“»: one quiet line over the columns of one's own board */
+.rb .prev{flex:none;display:flex;align-items:center;gap:7px;min-height:30px;padding:5px 16px;border-bottom:1px solid var(--rule-2);font-size:12.5px;line-height:18px;color:var(--ink-2);white-space:nowrap}
+.rb .prev .ico{color:var(--ink-faint)}
+.rb .prev .t{min-width:0;overflow:hidden;text-overflow:ellipsis}
+
+/* a phone: one column per screen width, swiped sideways; the header and the bar wrap instead of squeezing */
+@media (max-width:720px){
+  .rb .view{min-width:0}
+  .rb .bh{flex-wrap:wrap;height:auto;row-gap:2px;padding:8px 10px 8px 14px}
+  .rb .bh-t{flex:1 1 100%;white-space:normal}
+  .rb .bh-off{display:none}
+  .rb .bh-sum:first-of-type{margin-left:0}
+  .rb .bh-sum+.btn{margin-left:auto}
+  .rb .cols{scroll-snap-type:x mandatory}
+  .rb .col,.rb .col.is-empty{flex:0 0 100%;min-width:100%;scroll-snap-align:start}
+  .rb .bar-st{flex-wrap:wrap;row-gap:4px;gap:4px 14px;padding:8px 14px 0;white-space:normal}
+  .rb .bar-st .k{flex-wrap:wrap;white-space:normal}
+  .rb .bar-st .k .lks{flex-wrap:wrap}
+  .rb .bar-m{flex-wrap:wrap;gap:8px 12px;padding:8px 14px 10px}
+  .rb .memo{flex:1 1 100%;max-width:none;order:5}
+  .rb .bar-m .hint{order:6}
+  .rb .bar-m .grow{display:none}
+  .rb .bar-m .btn--lg{order:7;flex:1 1 0}
+  .rb .cf{flex:1 1 100%}
+  .rb .nq{flex:1 1 100%;white-space:normal}
+  .rb .toast{white-space:normal;max-width:calc(100% - 32px)}
+  .rb .pnl{left:8px!important;right:8px;width:auto}
+}
