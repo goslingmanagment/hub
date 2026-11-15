@@ -46,6 +46,11 @@ const kindWord = (kind: TeamQuestionKind) => TEAM_QUESTION_KIND_WORDS[kind];
 export interface AskStart {
   kind: TeamQuestionKind;
   pageLabel?: string;
+  /**
+   * The extension's fan panel (products package R5, the window in its frame): the fan asked about, the page fixed, the
+   * kinds about a fan only, `door: "extension"`; nobody's team list is read.
+   */
+  fan?: { ref: string; name: string | null };
   /** «Подмена»: the slot's hours and pages; the absent person's code when a lead asks for them. */
   swap?: { pageLabels: string[]; start: string; end: string; absentPersonCode?: string; absentName?: string };
 }
@@ -64,21 +69,25 @@ function swapLine(input: { date: string; start: string; end: string; pages: read
  * «Спросить»: a page, what about, the fan when there is one, one line. «Подмена» asks the day, the hours and who covers
  * (a person of the same team); «График» (a lead's proposal of the standing schedule) goes to the owner.
  */
-export function AskModal({ onClose, start }: { onClose: () => void; start?: AskStart }) {
-  const pages = usePages();
-  const people = useTeamPeople();
+/** What one asks about a fan (the extension's fan panel): no swap, no schedule. */
+const FAN_KINDS: readonly TeamQuestionKind[] = ["discount_over_50", "free_paid", "custom_price", "whale_terms"];
+
+export function AskModal({ onClose, start, onAsked }: { onClose: () => void; start?: AskStart; onAsked?: () => void }) {
+  const fanStart = start?.fan ?? null;
+  const pages = usePages({ enabled: fanStart === null });
+  const people = useTeamPeople({ enabled: fanStart === null });
   const { leadsTeam, isOwner, user } = useMe();
   const refresh = useRefresh();
   const [pageLabel, setPageLabel] = useState(start?.pageLabel ?? "");
   const [kind, setKind] = useState<TeamQuestionKind>(start?.kind ?? "discount_over_50");
-  const [fanName, setFanName] = useState("");
+  const [fanName, setFanName] = useState(fanStart?.name ?? "");
   const [text, setText] = useState("");
   const [date, setDate] = useState(addDays(moscowToday(), 1));
   const [from, setFrom] = useState(start?.swap?.start ?? "");
   const [to, setTo] = useState(start?.swap?.end ?? "");
   const [cover, setCover] = useState("");
   const list = (pages.data ?? []).filter((page) => page.platform !== "telegram");
-  const page = pageLabel || list[0]?.label || "";
+  const page = fanStart !== null ? (start?.pageLabel ?? "") : pageLabel || list[0]?.label || "";
   const swapPages = start?.swap?.pageLabels ?? (page ? [page] : []);
   // Who may cover: a person of the same team (working a page of the same model), not the absent one.
   const modelOf = (label: string) => list.find((one) => one.label === label)?.modelSlug ?? null;
@@ -93,7 +102,7 @@ export function AskModal({ onClose, start }: { onClose: () => void; start?: AskS
     .sort((a, b) => a.displayName.localeCompare(b.displayName, "ru")), [people.data, absentCode, model]);
   const coverName = covers.find((person) => person.code === cover)?.displayName ?? "";
   // «График» is a lead's word to the owner; the owner decides, he does not ask.
-  const kinds = TEAM_QUESTION_KINDS.filter((one) => one !== "schedule" || (leadsTeam && !isOwner));
+  const kinds = fanStart !== null ? FAN_KINDS : TEAM_QUESTION_KINDS.filter((one) => one !== "schedule" || (leadsTeam && !isOwner));
   const swap = kind === "swap";
   const swapReady = date > moscowToday() && TIME.test(from) && TIME.test(to) && cover !== "" && swapPages.length > 0;
   const words = text.trim() || (swap && swapReady ? swapLine({ date, start: from, end: to, pages: swapPages, cover: coverName, absent: start?.swap?.absentName }) : "");
@@ -101,14 +110,16 @@ export function AskModal({ onClose, start }: { onClose: () => void; start?: AskS
     meta: { suppressGlobalError: true },
     mutationFn: () => kernel.teamQuestionAsk({
       body: {
-        pageLabel: swap ? swapPages[0]! : page, kind, text: words, ...(fanName.trim() && !swap ? { fanName: fanName.trim() } : {}), door: "workboard",
+        pageLabel: swap ? swapPages[0]! : page, kind, text: words, ...(fanName.trim() && !swap ? { fanName: fanName.trim() } : {}),
+        ...(fanStart !== null ? { fanRef: fanStart.ref, door: "extension" as const } : { door: "workboard" as const }),
         ...(swap ? { swap: { date, pageLabels: swapPages, start: from, end: to, coverPersonCode: cover, ...(start?.swap?.absentPersonCode ? { absentPersonCode: start.swap.absentPersonCode } : {}) } } : {}),
       },
     }),
     onSuccess: (answer) => {
       toast.success(answer.question.decider.kind === "owner" ? "Вопрос ушёл владельцу" : `Вопрос ушёл: ${answer.question.decider.name}`);
       refresh();
-      onClose();
+      if (onAsked !== undefined) onAsked();
+      else onClose();
     },
     onError: () => toast.error(swap ? "Подмена не ушла: проверьте день, часы и кто выйдет" : "Вопрос не ушёл. Попробуйте ещё раз"),
   });
@@ -130,7 +141,9 @@ export function AskModal({ onClose, start }: { onClose: () => void; start?: AskS
             : swap ? "Ответит тимлид команды, а если его нет, владелец. «Можно» сразу ставит подмену в график на этот день."
               : "Ответит тот, кто решает по этой модели: тимлид команды, а если его нет, владелец."}
         </p>
-        {start?.swap === undefined && (
+        {fanStart !== null ? (
+          <p className="wt-ask__lead">{start?.pageLabel}{fanStart.name ? `, фан ${fanStart.name}` : ""}</p>
+        ) : start?.swap === undefined && (
           <Field label="Страница">
             {(control) => (
               <Select {...control} value={page} onChange={(event) => setPageLabel(event.target.value)}>
@@ -139,7 +152,7 @@ export function AskModal({ onClose, start }: { onClose: () => void; start?: AskS
             )}
           </Field>
         )}
-        {start === undefined && (
+        {(start === undefined || fanStart !== null) && (
           <Field label="О чём">
             {(control) => (
               <Select {...control} value={kind} onChange={(event) => setKind(event.target.value as TeamQuestionKind)}>
@@ -176,7 +189,7 @@ export function AskModal({ onClose, start }: { onClose: () => void; start?: AskS
             </Field>
           </>
         )}
-        {!swap && kind !== "schedule" && (
+        {!swap && kind !== "schedule" && fanStart === null && (
           <Field label="Фан" hint="Если вопрос про фана">
             {(control) => <TextInput {...control} value={fanName} onChange={(event) => setFanName(event.target.value)} maxLength={200} placeholder="Имя фана" />}
           </Field>

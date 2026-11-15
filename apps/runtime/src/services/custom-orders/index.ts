@@ -130,11 +130,12 @@ export async function customLeads(db: Database): Promise<Array<{ userId: number;
 
 /**
  * The viewer of a human principal: their role and pages, and whether their person «ведёт кастомы». A narrow session
- * (opened from the extension, no password) reads as a chatter whatever the role, as everywhere it is let in.
+ * (opened from the extension, no password) reads as a chatter whatever the role, as everywhere it is let in; so does the
+ * extension's own narrow token (`clientProfile`: the fan panel's «Отдан» and the frame's «Записать кастом», package R5).
  */
 export async function customViewerOf(app: CustomApp, principal: HumanAuthPrincipal): Promise<CustomViewer> {
   const leads = await customLeads(app.db);
-  const narrow = principal.narrowDeviceTokenId !== undefined;
+  const narrow = principal.narrowDeviceTokenId !== undefined || principal.clientProfile !== undefined;
   const role = !narrow && (principal.user.role === "owner" || principal.user.role === "team_lead")
     ? principal.user.role
     : "chatter";
@@ -907,6 +908,20 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
   }
 }
 
+/**
+ * Who writes on the board: a cookie session, or the extension's own narrow token (products package R5) for what its
+ * fan panel does — «Записать кастом» in the board's own form in its frame, and «Отдан»; it reads as a chatter
+ * (customViewerOf). Answers the door the write is recorded by.
+ */
+function boardWriterDoor(principal: AuthPrincipal, action: CustomOrderAction | "record"): "workboard" | "extension" {
+  if (principal.kind !== "agent" && principal.authMethod === "device_token" && principal.clientProfile === "chat-extension") {
+    if (action !== "record" && action !== "given") throw notAllowed("From the extension an order is recorded or given; every other step is Workboard's");
+    return "extension";
+  }
+  requireSessionUser(principal);
+  return "workboard";
+}
+
 /** `customOrderAct`: one step on the board, answered with the order after it. */
 export async function actOnCustomOrder(
   app: CustomApp,
@@ -914,12 +929,13 @@ export async function actOnCustomOrder(
   input: { code: string; body: CustomOrderActionBody },
   now: Date = new Date(),
 ): Promise<CustomOrderDetailResponse> {
-  requireSessionUser(principal);
-  const viewer = await customViewerOf(app, principal);
+  const door = boardWriterDoor(principal, input.body.action as CustomOrderAction);
+  const human = principal as HumanAuthPrincipal;
+  const viewer = await customViewerOf(app, human);
   const order = await visibleOrder(app, viewer, input.code);
   if (!mayTakeStep(viewer, order, input.body.action as CustomOrderAction)) throw notAllowed();
   const step = await boardStep(app, viewer, order, input.body, now);
-  await applyCustomStep(app, { orderId: order.id, step, actor: { door: "workboard", userId: principal.user.id }, viewer, now });
+  await applyCustomStep(app, { orderId: order.id, step, actor: { door, userId: human.user.id }, viewer, now });
   return detailOf(app, viewer, (await findCustomOrder(app.db, order.id))!, now);
 }
 
@@ -990,8 +1006,9 @@ export async function createCustomOrderOnBoard(
   body: CustomOrderCreateBody,
   now: Date = new Date(),
 ): Promise<CustomOrderDetailResponse> {
-  requireSessionUser(principal);
-  const viewer = await customViewerOf(app, principal);
+  const door = boardWriterDoor(principal, "record");
+  const human = principal as HumanAuthPrincipal;
+  const viewer = await customViewerOf(app, human);
   let pageId: number;
   let fanId: number | null = null;
   let conversationRef: string | null = null;
@@ -1023,8 +1040,8 @@ export async function createCustomOrderOnBoard(
   const telegramRef = body.telegramRef === undefined ? null : parseTelegramRef(body.telegramRef);
   const id = await recordCustomOrder(app, {
     pageId, fanId, buyer: fanId === null && body.fan !== undefined ? body.fan.slice(0, 300) : null, conversationRef, card: body.card,
-    deadlineOn: null, acceptedByUserId: principal.user.id, origin: "workboard", paymentTransactionId: payment,
-    telegramRefs: telegramRef === null ? [] : [telegramRef], actor: { door: "workboard", userId: principal.user.id }, now,
+    deadlineOn: null, acceptedByUserId: human.user.id, origin: door, paymentTransactionId: payment,
+    telegramRefs: telegramRef === null ? [] : [telegramRef], actor: { door, userId: human.user.id }, now,
   });
   return detailOf(app, viewer, (await findCustomOrder(app.db, id))!, now);
 }

@@ -23,7 +23,7 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-84 routes marked "yes", and every route marked "no" refuses it with 403.
+87 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
 ## Routes (569)
@@ -393,9 +393,9 @@ A full device token is not affected.
 | POST | `/api/v1/client/pages/:pageLabel/win-back/attempts` | `clientWinBackAttempt` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/sale-sightings` | `clientSaleSightings` | `apiKey` | — | — | yes |
 | GET | `/api/v1/custom-orders` | `customOrdersBoard` | `any-session` | — | — | no |
-| POST | `/api/v1/custom-orders` | `customOrderCreate` | `any-session` | — | — | no |
+| POST | `/api/v1/custom-orders` | `customOrderCreate` | `any` | — | — | yes |
 | GET | `/api/v1/custom-orders/:code` | `customOrder` | `any-session` | — | — | no |
-| POST | `/api/v1/custom-orders/:code` | `customOrderAct` | `any-session` | — | — | no |
+| POST | `/api/v1/custom-orders/:code` | `customOrderAct` | `any` | — | — | yes |
 | POST | `/api/v1/custom-orders/sales/:transactionRef/dismiss` | `customSaleDismiss` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `any-session` | — | — | no |
 | PATCH | `/api/v1/fans/:platform/:platformUserId/flags` | `setFanFlags` | `owner-session` | — | — | no |
@@ -574,7 +574,7 @@ A full device token is not affected.
 | GET | `/api/v1/team/newcomers` | `teamNewcomers` | `any-session` | — | — | no |
 | GET | `/api/v1/team/people` | `teamPeople` | `any-session` | — | — | no |
 | GET | `/api/v1/team/questions` | `teamQuestions` | `any-session` | — | — | no |
-| POST | `/api/v1/team/questions` | `teamQuestionAsk` | `any-session` | — | — | no |
+| POST | `/api/v1/team/questions` | `teamQuestionAsk` | `any` | — | — | yes |
 | POST | `/api/v1/team/questions/:id/answer` | `teamQuestionAnswer` | `any-session` | — | — | no |
 | POST | `/api/v1/team/questions/:id/close` | `teamQuestionClose` | `any-session` | — | — | no |
 | POST | `/api/v1/team/questions/:id/swap/revoke` | `teamSwapRevoke` | `any-session` | — | — | no |

@@ -11,6 +11,6 @@ export {
  * owner with everyone, anyone else with the people of their teams (products package T). The owner's cards and writes
  * stay in registry.ts.
  */
-export function useTeamPeople() {
-  return useQuery(teamPeopleQuery(kernel));
+export function useTeamPeople(options: { enabled?: boolean } = {}) {
+  return useQuery({ ...teamPeopleQuery(kernel), enabled: options.enabled ?? true });
 }

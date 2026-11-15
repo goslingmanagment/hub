@@ -2,11 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { kernel } from "./hub.js";
 
 /** The pages the viewer reaches (`pages`), in the catalog's order: for the page filter and page chips. */
-export function usePages() {
+export function usePages(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["pages"],
     queryFn: () => kernel.pages(),
     staleTime: 5 * 60_000,
+    // The extension's frame names the page itself and reads no page list (packages R5).
+    enabled: options.enabled ?? true,
   });
 }
 

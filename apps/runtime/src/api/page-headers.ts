@@ -22,18 +22,36 @@ export function pageHeaders(isProduction: boolean): Record<string, string> {
 }
 
 /**
- * The «Отчёт» board in the extension's frame (products plan 2026-11-13, package R; R-protocol.md): exactly the paths of
- * `BOARD_FRAME_PATHS` may be framed — by the two sites the extension works on — and carry no `x-frame-options`. A further
- * frame screen joins the list by name, never by a prefix. No credential enters that frame: its page reads no cookie and
- * starts no sign-in, every request goes to the extension over a port. Every other answer keeps `pageHeaders`.
+ * Workboard's screens in the extension's frame (products plan 2026-11-13: package R, the «Отчёт» board; package R5, the
+ * customs record form and the question window; R-protocol.md): exactly the paths of `BOARD_FRAME_PATHS` may be framed —
+ * by the two sites the extension works on — and carry no `x-frame-options`; a further frame screen joins the list by
+ * name, never by a prefix. Only on the team's name (`WEB_TEAM_ORIGIN`, Workboard's one address): the same path on hub.
+ * keeps `pageHeaders`. No credential enters such a frame: its page reads no cookie and starts no sign-in, every request
+ * goes to the extension over a port. Every other answer keeps `pageHeaders`.
  */
-export const BOARD_FRAME_PATHS = ["/workboard/frame/report"] as const;
+export const BOARD_FRAME_PATHS = ["/workboard/frame/report", "/workboard/frame/custom", "/workboard/frame/ask"] as const;
 export const BOARD_FRAME_ANCESTORS = ["https://fansly.com", "https://chat.onlymonster.ai"] as const;
 
 /** Whether a request's path (its query and fragment aside) is one of the frame's. */
 export function isBoardFramePath(url: string): boolean {
   const path = url.split(/[?#]/)[0] ?? "";
   return (BOARD_FRAME_PATHS as readonly string[]).includes(path);
+}
+
+/**
+ * Whether a request is a frame screen's on the team's name: its path is one of the frame's and, in production, the
+ * request came to the team's host (`teamOrigin`'s); outside production any name (the stand, `localhost`).
+ */
+export function isTeamFrameRequest(input: { url: string; hostname: string; isProduction: boolean; teamOrigin: string }): boolean {
+  if (!isBoardFramePath(input.url)) return false;
+  if (!input.isProduction) return true;
+  let teamHost: string;
+  try {
+    teamHost = new URL(input.teamOrigin).hostname;
+  } catch {
+    return false;
+  }
+  return input.hostname.toLowerCase() === teamHost.toLowerCase();
 }
 
 /**

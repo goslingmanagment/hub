@@ -12,14 +12,17 @@ import { canAccessPage, type HumanAuthPrincipal } from "../auth.ts";
 import { ConflictError } from "../errors.ts";
 import {
   applyCustomStep,
+  customLeaderContext,
   customViewerOf,
+  leaderWire,
   deliveryCandidatesOf,
   notAllowed,
   paymentCandidatesOf,
   recordCustomOrder,
   type CustomStep,
 } from "./index.ts";
-import { cardOf, extensionStateOf, extensionStepOf, mayTakeStep, priceMillsOf, priceTextOf, STEP_FROM } from "./rules.ts";
+import { cardOf, extensionStateOf, extensionStepOf, mayTakeStep, overdueDaysOf, priceMillsOf, priceTextOf, STEP_FROM, type CustomViewer } from "./rules.ts";
+import type { CustomLeaderContext } from "./index.ts";
 
 /**
  * The released extension's block «Кастомы» (Chat Memory week 4: the tab
@@ -42,7 +45,23 @@ const EXTENSION_PAYMENT_KINDS = ["tip"] as const;
 
 const iso = (at: Date | null) => (at === null ? null : at.toISOString());
 
-function extensionCustomOf(principal: HumanAuthPrincipal, order: CustomOrderRow, candidates: ClientFanCardResponse["customs"][number]["deliveryCandidates"]): ClientFanCardResponse["customs"][number] {
+/** What the fan panel says of the order as Workboard does (package R5): its state, deadline, who has it, «Отдан». */
+function workboardFieldsOf(order: CustomOrderRow, viewer: CustomViewer, leaders: CustomLeaderContext, now: Date) {
+  return {
+    orderState: order.state,
+    deadlineOn: order.deadlineOn,
+    overdueDays: overdueDaysOf(order, now),
+    leader: leaderWire(leaders, order),
+    mayGive: STEP_FROM.given.includes(order.state) && mayTakeStep(viewer, order, "given"),
+  };
+}
+
+function extensionCustomOf(
+  principal: HumanAuthPrincipal,
+  order: CustomOrderRow,
+  candidates: ClientFanCardResponse["customs"][number]["deliveryCandidates"],
+  workboard: ReturnType<typeof workboardFieldsOf>,
+): ClientFanCardResponse["customs"][number] {
   const card = cardOf(order.card);
   const state = extensionStateOf(order);
   return {
@@ -61,6 +80,7 @@ function extensionCustomOf(principal: HumanAuthPrincipal, order: CustomOrderRow,
     createdAt: order.createdAt.toISOString(),
     deliveryCandidates: candidates,
     ...extensionStepOf(order),
+    ...workboard,
   };
 }
 
@@ -73,12 +93,13 @@ export async function extensionCardCustoms(
   const orders = (await listCustomOrdersOfFans(app.db, { fanIds: input.personIds, now: input.now, recentDays: RECENT_DAYS }))
     .filter((order) => order.pageId !== null && canAccessPage(principal, order.pageId));
   const customs: ClientFanCardResponse["customs"] = [];
+  const [viewer, leaders] = orders.length === 0 ? [null, null] : await Promise.all([customViewerOf(app, principal), customLeaderContext(app, principal)]);
   for (const order of orders) {
     const open = extensionStateOf(order) === "ordered" || extensionStateOf(order) === "paid";
     const candidates = open ? await deliveryCandidatesOf(app.db, order, SUGGESTIONS) : [];
     customs.push(extensionCustomOf(principal, order, candidates.map((message) => ({
       messageRef: message.messageRef, at: message.at.toISOString(), mediaCount: message.mediaCount, priceMills: message.priceMills,
-    }))));
+    })), workboardFieldsOf(order, viewer!, leaders!, input.now)));
   }
   const payments = input.askedPageId === null || input.personIds.length === 0 ? [] : await paymentCandidatesOf(
     app.db, { pageId: input.askedPageId, fanId: input.personIds[0]! }, EXTENSION_PAYMENT_KINDS, input.now, SUGGESTIONS,

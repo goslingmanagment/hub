@@ -170,9 +170,10 @@ export const teamQuestionRouteSchemas = {
     response: { 200: teamQuestionsResponseSchema, ...errors },
   },
   teamQuestionAsk: {
-    auth: { kind: "any-session" }, tags: ["client"],
+    auth: { kind: "any" }, tags: ["client"],
     summary: "Ask whoever decides: a kind, the fan when there is one, one line",
-    description: "Any session (the extension's narrow one too). A page of the asker's teams or their own; the decider is "
+    description: "Any session (the extension's narrow one too) or the extension's device token (the question window in its frame, "
+      + "package R5). A page of the asker's teams or their own; the decider is "
       + "the lead of the page's model, the owner when the team has none or its lead asks. Opens the decider's matter.",
     body: teamQuestionAskBodySchema,
     response: { 200: teamQuestionWriteResponseSchema, ...errors },

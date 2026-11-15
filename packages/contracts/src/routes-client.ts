@@ -2873,6 +2873,17 @@ export const clientFanCustomSchema = z.object({
     priceMills: mills.nullable(),
   })),
   ...clientCustomStepShape,
+  /**
+   * Products package R5 (the fan panel shows the order as Workboard does; all absent from an older Hub): the order's own
+   * state (CUSTOM_ORDER_STATES), its deadline (`YYYY-MM-DD`) and days overdue, who leads its step now — the panel says
+   * them in @agency_hub_core/look's words (customDeadlineWords, customLeaderWords) — and whether «Отдан» is this
+   * person's to press now (the board's own rule: `customOrderAct` `given`).
+   */
+  orderState: z.string().optional(),
+  deadlineOn: z.string().nullable().optional(),
+  overdueDays: z.number().int().nullable().optional(),
+  leader: z.object({ name: z.string().nullable(), product: z.string() }).nullable().optional(),
+  mayGive: z.boolean().optional(),
 });
 
 export const clientFanCardResponseSchema = z.object({

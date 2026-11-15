@@ -16,6 +16,8 @@ export type FrameMessage =
   | { t: "statement"; pages: string[] }
   /** «Обновите ChatGoose»: the board in a tab by the extension's one-time link (not in R-protocol.md yet: an extension that does not know it ignores it). */
   | { t: "open-tab" }
+  /** Package R5: a frame screen finished — the order recorded (its code), the question asked — the fan panel reads it again. */
+  | { t: "done"; screen: "custom" | "ask"; code?: string }
   | { t: "ready"; v: number };
 
 export interface FindSale {

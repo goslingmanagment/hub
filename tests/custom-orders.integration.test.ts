@@ -639,4 +639,37 @@ describe("custom orders: who sees and moves what", () => {
     const order = customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/${orders.daves}`)).json()).order;
     expect(order).toMatchObject({ fan: null, buyer: null, fanErased: true, state: "shot" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // Products package R5: the extension's own narrow token records an order through the board's form in its frame and
+  // gives one («Отдан» in the fan panel) — and nothing else, whoever the person is: the customs lead's extension takes
+  // no lead step; its writes are recorded by the door `extension`.
+  it("lets the extension's narrow token record and give, and no other step, the customs lead's either", async (context) => {
+    if (!server || !testDb) return context.skip();
+    const token = async (username: keyof typeof PASSWORDS) => {
+      const issued = await server!.inject({
+        method: "POST", url: "/api/v1/auth/device-tokens/password", headers: { "x-client-version": "chat-extension/3.31.0" },
+        payload: { username, password: PASSWORDS[username], label: "Firefox · macOS · ChatGoose", client: "chat-extension", mode: "active" },
+      });
+      expect(issued.statusCode, issued.body).toBe(200);
+      return (issued.json() as { token: string }).token;
+    };
+    const send = (value: string, url: string, payload: Record<string, unknown>) =>
+      server!.inject({ method: "POST", url, headers: { authorization: `Bearer ${value}`, "x-client-version": "chat-extension/3.31.0" }, payload });
+    const alice = await token("alice");
+    const carol = await token("carol");
+    const recorded = await send(alice, "/api/v1/custom-orders", { pageLabel: "lora-1", fan: "7400000001", card: { task: "Видео 5 минут", price: "80$" } });
+    expect(recorded.statusCode, recorded.body).toBe(200);
+    const order = customOrderDetailResponseSchema.parse(recorded.json()).order;
+    expect(order).toMatchObject({ state: "recorded", origin: "extension", pageLabel: "lora-1" });
+    // The customs lead's extension: no lead step, though the same person takes it on the board.
+    const checked = await send(carol, `/api/v1/custom-orders/${order.code}`, { action: "checked" });
+    expect(checked.statusCode, checked.body).toBe(409);
+    expect((checked.json() as { reason?: string }).reason).toBe("not_allowed");
+    // Not a page of hers: nothing on lora-2 through the token either.
+    expect((await send(alice, "/api/v1/custom-orders", { pageLabel: "lora-2", card: { task: "x" } })).statusCode).toBe(404);
+    // «Отдан» by the chatter's word, the board's own step.
+    const given = await send(alice, `/api/v1/custom-orders/${order.code}`, { action: "given" });
+    expect(given.statusCode, given.body).toBe(200);
+    expect(customOrderDetailResponseSchema.parse(given.json()).order.state).toBe("given");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

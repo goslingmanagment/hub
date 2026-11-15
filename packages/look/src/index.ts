@@ -6,6 +6,7 @@
  *   moscow  Moscow days: today, Monday, ranges, instants
  *   plural  Russian plural forms
  *   words   the dictionary: one word per thing
+ *   customs a custom order's deadline and who has it now
  */
 /** The vendored package's version: raise it when a client must notice (a name removed or renamed). */
 export const LOOK_VERSION = "1.0.0";
@@ -16,3 +17,4 @@ export * from "./format.js";
 export * from "./moscow.js";
 export * from "./plural.js";
 export * from "./words.js";
+export * from "./customs.js";

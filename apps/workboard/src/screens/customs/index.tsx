@@ -127,9 +127,20 @@ function OrderCard({ order, serverNow }: { order: CustomOrder; serverNow: string
  * button, and the extension's fan panel opening `/workboard/customs?record=1&page=<page>&fan=<fan>` in one step with the
  * fan filled in.
  */
-function RecordFromSaleModal({ sale, page: initialPage, fan: initialFan, onClose }: { sale?: CustomLookalikeSale; page?: string; fan?: string; onClose: () => void }) {
+export function RecordFromSaleModal({ sale, page: initialPage, fan: initialFan, fanName, fixedPage = false, onRecorded, onClose }: {
+  sale?: CustomLookalikeSale;
+  page?: string;
+  fan?: string;
+  /** How the fan panel names the fan (the frame): shown instead of the field. */
+  fanName?: string;
+  /** The extension's frame (package R5): the page and the fan come from the fan panel, no page list is read. */
+  fixedPage?: boolean;
+  /** Recorded: the frame tells the extension (the fan panel shows the order at once) instead of opening the order here. */
+  onRecorded?: (code: string) => void;
+  onClose: () => void;
+}) {
   const create = useCustomCreate();
-  const pages = usePages();
+  const pages = usePages({ enabled: !fixedPage });
   const navigate = useNavigate();
   const back = useBackState("Кастомы");
   const [task, setTask] = useState("");
@@ -147,7 +158,8 @@ function RecordFromSaleModal({ sale, page: initialPage, fan: initialFan, onClose
     create.mutate(body, {
       onSuccess: (detail) => {
         toast.success(`Записан ${detail.order.code}`);
-        navigate(`/customs/${detail.order.code}`, { state: back });
+        if (onRecorded !== undefined) onRecorded(detail.order.code);
+        else navigate(`/customs/${detail.order.code}`, { state: back });
       },
       onError: (error) => setFailure(stepFailure(error)),
     });
@@ -169,13 +181,22 @@ function RecordFromSaleModal({ sale, page: initialPage, fan: initialFan, onClose
           <p className="cus-muted">Фан, страница и оплата возьмутся из продажи: <Money mills={sale.grossMills} />, <TimeMsk at={sale.at} />. Карточку для модели потом можно дописать.</p>
         ) : (
           <>
-            <Field label="Страница">{(control) => (
-              <Select {...control} value={pageLabel} onChange={(event) => setPageLabel(event.target.value)}>
-                <option value="">Выберите страницу</option>
-                {(pages.data ?? []).map((one) => <option key={one.label} value={one.label}>{one.label}</option>)}
-              </Select>
-            )}</Field>
-            <Field label="Фан" hint="Ссылка на профиль, ник или номер">{(control) => <TextInput {...control} value={fan} onChange={(event) => setFan(event.target.value)} />}</Field>
+            {fixedPage ? (
+              <KeyValue items={[
+                { label: "Страница", value: <PageLabel label={pageLabel} /> },
+                ...(fan !== "" ? [{ label: "Фан", value: fanName ?? fan }] : []),
+              ]} />
+            ) : (
+              <Field label="Страница">{(control) => (
+                <Select {...control} value={pageLabel} onChange={(event) => setPageLabel(event.target.value)}>
+                  <option value="">Выберите страницу</option>
+                  {(pages.data ?? []).map((one) => <option key={one.label} value={one.label}>{one.label}</option>)}
+                </Select>
+              )}</Field>
+            )}
+            {!(fixedPage && initialFan) && (
+              <Field label="Фан" hint="Ссылка на профиль, ник или номер">{(control) => <TextInput {...control} value={fan} onChange={(event) => setFan(event.target.value)} />}</Field>
+            )}
           </>
         )}
         <Field label="Что снять">{(control) => <Textarea {...control} rows={4} value={task} onChange={(event) => setTask(event.target.value)} />}</Field>

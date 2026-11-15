@@ -121,4 +121,34 @@ describe("questions to whoever decides", () => {
     expect((await as("anna", "GET", `/api/v1/team/questions?id=${question.id}`)).statusCode).toBe(404);
     expect((await as("olga", "POST", `/api/v1/team/questions/${question.id}/answer`, { answer: "yes" })).statusCode).toBe(200);
   });
+
+  // Products package R5: the extension's fan panel asks through its frame with the device token (the narrow profile),
+  // the fan and the page filled in, `door: "extension"`; that token reads nothing else of the questions and decides none.
+  it("takes a question from the extension's narrow token, which neither reads the list nor answers", async (context) => {
+    if (!server || !testDb) return context.skip();
+    const token = async (username: string) => {
+      const issued = await server!.inject({
+        method: "POST", url: "/api/v1/auth/device-tokens/password", headers: { "x-client-version": "chat-extension/3.31.0" },
+        payload: { username, password: PASSWORD, label: "Firefox · macOS · ChatGoose", client: "chat-extension", mode: "active" },
+      });
+      expect(issued.statusCode, issued.body).toBe(200);
+      return (issued.json() as { token: string }).token;
+    };
+    const anna = await token("anna");
+    const lena = await token("lena");
+    const bearer = (value: string) => ({ authorization: `Bearer ${value}`, "x-client-version": "chat-extension/3.31.0" });
+    const asked = await server!.inject({
+      method: "POST", url: "/api/v1/team/questions", headers: bearer(anna),
+      payload: { pageLabel: "alfa-1", kind: "free_paid", text: "Отправить видео бесплатно?", fanRef: "720000000000000001", fanName: "Fan B", door: "extension" },
+    });
+    expect(asked.statusCode, asked.body).toBe(200);
+    const question = teamQuestionWriteResponseSchema.parse(asked.json()).question;
+    expect(question).toMatchObject({ decider: { kind: "team_lead", name: "lena" }, state: "open" });
+    // Off the token's list: the questions' list, and the decider's answer — even the lead's own extension.
+    expect((await server!.inject({ method: "GET", url: "/api/v1/team/questions", headers: bearer(anna) })).statusCode).toBe(403);
+    expect((await server!.inject({ method: "POST", url: `/api/v1/team/questions/${question.id}/answer`, headers: bearer(lena), payload: { answer: "yes" } })).statusCode).toBe(403);
+    // Another team's page is refused to the token as to the session.
+    const boris = await token("boris");
+    expect((await server!.inject({ method: "POST", url: "/api/v1/team/questions", headers: bearer(boris), payload: { pageLabel: "alfa-1", kind: "free_paid", text: "можно?" } })).statusCode).toBe(403);
+  });
 });
