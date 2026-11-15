@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { findOfapiReadDefinition, OFAPI_COLLECTION_REGISTRY, OFAPI_COLLECTION_LEGACY_OPERATIONS, OFAPI_READ_CATALOG, OFAPI_SCHEDULED_READ_COLLECTION_CATEGORIES, classifyOfapiCollectionOperation, type OfapiCollectionCategory, type OfapiCollectionContext, type OfapiCollectionJobStateFilter, type OfapiCollectionMode, type OfapiCollectionSettings } from "@agency_hub_core/shared";
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import { insertAuditEvent } from "./auth.ts";
 import { findOfapiCollectionCaptureJob, hashOfapiCaptureValue } from "./ofapi-capture.ts";
@@ -517,7 +518,7 @@ async function loadScheduleFacts(db: Database, pageIds: number[]) {
  */
 export async function listOfapiCollectionScheduleHealth(db: Database, now = new Date()) {
   const current = await state(db);
-  const pages = (await db.execute<{ id: string; label: string }>(sql`select id,label from pages where platform='onlyfans' and deleted_at is null order by label`)).rows
+  const pages = (await db.execute<{ id: string; label: string }>(sql`select id,label from pages where platform='onlyfans' and deleted_at is null and ${livePageSql(sql`pages.id`)} order by label`)).rows
     .map(row => ({ id: Number(row.id), label: row.label }));
   const facts = await loadScheduleFacts(db, pages.map(page => page.id));
   const policyRows = await loadPolicyRows(db, pages.map(page => page.id));
@@ -544,7 +545,7 @@ export async function getOfapiCollectionSnapshot(db: Database, allowedPageIds: n
   const current = await state(db);
   const pageRows = await db.execute<{ id: string; label: string; ofapi_account_id: string | null }>(sql`select id,label,ofapi_account_id from pages
     where platform='onlyfans' and deleted_at is null
-      ${allowedPageIds === null ? sql`` : allowedPageIds.length ? sql`and id in (${sql.join(allowedPageIds.map(id => sql`${id}`), sql`,`)})` : sql`and false`}
+      ${allowedPageIds === null ? sql`and ${livePageSql(sql`pages.id`)}` : allowedPageIds.length ? sql`and id in (${sql.join(allowedPageIds.map(id => sql`${id}`), sql`,`)})` : sql`and false`}
       ${selectedPageId === undefined ? sql`` : sql`and id=${selectedPageId}`} order by label`);
   const pages = pageRows.rows.map(row => ({ id: Number(row.id), label: row.label, accountId: row.ofapi_account_id }));
   const policies = [];

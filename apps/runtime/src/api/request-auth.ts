@@ -17,6 +17,7 @@ import {
   type HumanAuthPrincipal,
 } from "../services/auth.ts";
 import { UnauthorizedError } from "../services/errors.ts";
+import { ownerPageScope } from "../services/sandbox/realm.ts";
 
 // Module extraction: the request-level principal helpers that
 // every API module shares, factored out of the buildApiServer closure verbatim.
@@ -53,7 +54,9 @@ export function pageScopeFor(principal: AuthPrincipal) {
   if (isAgentPrincipal(principal)) {
     return principal.pageIds;
   }
-  return principal.user.role === "owner" ? undefined : principal.assignedPageIds;
+  // The test realm (services/sandbox/realm.ts): a test owner sees the test pages only; a live owner every page but
+  // those (no filter at all while there is no test page).
+  return principal.user.role === "owner" ? ownerPageScope(principal) : principal.assignedPageIds;
 }
 
 /**

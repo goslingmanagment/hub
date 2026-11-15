@@ -344,3 +344,5 @@ export * from "./repositories/client-bootstrap.ts";
 // generation, whether its AI request was admitted, a dossier version by body.
 export * from "./repositories/client-profile-from-generation.ts";
 export * from "./repositories/onlyfans-feed.ts";
+// The test realm (0414): the database half of the wall (apps/runtime/src/services/sandbox/realm.ts).
+export * from "./repositories/realm.ts";

@@ -93,6 +93,7 @@ import {
   type Subject,
 } from "./shift-handins.ts";
 import { checkLetsConfirm, confirmedLines, lineWithProposal, mayAct, proposalDelta, withSettlementsNow, type BoardAction } from "./shift-report-phases.ts";
+import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
 
 /**
  * The «Отчёт» board's operations (products plan 2026-11-13, package R), one service behind every door: the person's
@@ -527,8 +528,10 @@ export async function addShiftReportSighting(app: BoardApp, actor: HandinPersonA
 // ── Gengar's check (review:shift_reports) ────────────────────────────────────
 
 /** `agentShiftReportChecks`: candidates handed in and waiting for Gengar's answer, every page of the shift in the key's grant. */
-export async function readShiftReportChecks(app: BoardApp, input: { pageIds: readonly number[]; limit: number }, now: Date = new Date()): Promise<AgentShiftReportChecksResponse> {
+export async function readShiftReportChecks(app: BoardApp, input: { pageIds: readonly number[]; limit: number; realm?: "live" | "test" }, now: Date = new Date()): Promise<AgentShiftReportChecksResponse> {
   const granted = new Set(input.pageIds);
+  // The key's realm (sandbox/realm.ts): a live key never sees a test candidate, the test team's checker only those.
+  const testLogins = await testUserIds(app);
   const catalog = await pageCatalog(app.db);
   const waiting = await listCandidatesAwaitingCheck(app.db, { since: new Date(now.getTime() - 2 * DAY_MS), limit: 200 });
   const checks: AgentShiftReportChecksResponse["checks"] = [];
@@ -536,6 +539,7 @@ export async function readShiftReportChecks(app: BoardApp, input: { pageIds: rea
     if (checks.length >= input.limit) break;
     const subject = await subjectOf(app.db, one.shiftId).catch(() => null);
     if (subject === null) continue;
+    if (testLogins.has(subject.shift.userId) !== (input.realm === "test")) continue;
     const labels = subject.shift.pages.map((page) => page.pageLabel);
     if (!labels.every((label) => granted.has(catalog.idOf.get(label) ?? -1))) continue;
     const ids = one.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId]));
@@ -590,6 +594,8 @@ export async function answerShiftReportCheck(
   const handin = await findHandinById(app.db, candidate.handinId);
   if (handin === null) throw new NotFoundError("Not found");
   const subject = await subjectOf(app.db, handin.shiftId);
+  // The wall (sandbox/realm.ts): a candidate of the other realm is not found.
+  await requireShiftOfRealm(app, principal, handin.shiftId);
   const catalog = await pageCatalog(app.db);
   const granted = new Set(input.pageIds);
   const pageIds = subject.shift.pages.map((page) => catalog.idOf.get(page.pageLabel) ?? -1);

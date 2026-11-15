@@ -1,10 +1,10 @@
-import { findPageById } from "@agency_hub_core/db";
+import { findPageById, isTestPage } from "@agency_hub_core/db";
 import type { EgressContext, EgressScope } from "@agency_hub_core/platform-core";
 import { createProxyRequestDispatcher, createRequestDispatcher, type Platform } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { NotFoundError, ProxyMissingError } from "../errors.ts";
+import { ForbiddenError, NotFoundError, ProxyMissingError } from "../errors.ts";
 import {
   resolveStoredProxyConfig,
   resolveStoredProxyEgressKey,
@@ -105,6 +105,10 @@ export async function resolveEgress(
   const stored = await findPageById(app.db, scope.pageId);
   if (!stored) {
     throw new NotFoundError(`Page ${scope.pageId} not found for egress resolution`);
+  }
+  // A test page never reaches a platform (0414, sandbox/realm.ts): no egress at all, whoever asks.
+  if (await isTestPage(app.db, scope.pageId)) {
+    throw new ForbiddenError(`Page ${scope.pageId} is a test page: it never reaches a platform`);
   }
 
   const proxy = resolveStoredProxyConfig(app, stored.proxy);

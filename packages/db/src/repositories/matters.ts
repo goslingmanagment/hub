@@ -1,5 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 
+import { isTestUser, listTestPageIds, liveUserSql, testUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // Дела (0382, ecosystem plan package D): what waits for a person, one row per
@@ -85,6 +86,8 @@ export interface MatterViewer {
   role: MatterOwnerRole;
   /** The pages the person reaches (a team lead's role matters are cut to them). */
   pageIds: readonly number[];
+  /** A test person's login (0414): reads the test realm's matters only; absent, the live realm's only. */
+  realm?: "test";
 }
 
 const LOCK_SEED = 551_830_417;
@@ -208,12 +211,35 @@ const matterEvent = (db: Database, matter: MatterRow, event: string, actor: Matt
  * always; its fields when the finding changed), or reopens the closed one.
  * Refuses a key another writer holds (`MatterWriterConflictError`).
  */
+/**
+ * The realm of a matter (0414, apps/runtime/src/services/sandbox/realm.ts), decided here for every writer: a matter
+ * about test pages is a test person's by name — a role becomes the test person of that role who holds a login, else
+ * the test owner; one about live and test pages alike stays live and drops the test pages. A live matter is unchanged.
+ */
+async function matterOfRealm(db: Database, input: MatterOpenInput): Promise<MatterOpenInput> {
+  if (input.pageIds.length === 0) return input;
+  const testPages = new Set(await listTestPageIds(db));
+  const test = input.pageIds.filter((id) => testPages.has(id));
+  if (test.length === 0) return input;
+  if (test.length < input.pageIds.length) return { ...input, pageIds: input.pageIds.filter((id) => !testPages.has(id)) };
+  if ("userId" in input.owner && await isTestUser(db, input.owner.userId)) return input;
+  const role = "role" in input.owner ? input.owner.role : "owner";
+  const found = await db.execute<{ user_id: string | number }>(sql`
+    select pl.user_id from person_logins pl join people pe on pe.id = pl.person_id join users u on u.id = pl.user_id
+     where pe.is_test and u.disabled_at is null and u.deleted_at is null and pe.role in (${role}, 'owner')
+     order by (pe.role = ${role}) desc, pl.user_id limit 1`);
+  const userId = found.rows[0]?.user_id;
+  if (userId === undefined) throw new Error(`A matter about test pages has nobody of the test team to wait for: ${input.key}`);
+  return { ...input, owner: { userId: Number(userId) } };
+}
+
 export async function openMatter(
   db: Database,
-  input: MatterOpenInput,
+  given: MatterOpenInput,
   actor: MatterActor,
   now: Date = new Date(),
 ): Promise<{ matter: MatterRow; transition: MatterOpenTransition }> {
+  const input = await matterOfRealm(db, given);
   return db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     await lockKey(txDb, input.key);
@@ -351,6 +377,14 @@ export async function listClosedMattersOfKinds(db: Database, input: { kinds: rea
  * with money.
  */
 export function matterVisibility(viewer: MatterViewer): SQL {
+  // The realm first (0414): a test matter always waits for a test login by name (matterOfRealm and the trigger).
+  const realm = viewer.realm === "test"
+    ? sql`(m.owner_user_id is not null and ${testUserSql(sql`m.owner_user_id`)})`
+    : sql`(m.owner_user_id is null or ${liveUserSql(sql`m.owner_user_id`)})`;
+  return sql`(${realm} and ${matterRoleVisibility(viewer)})`;
+}
+
+function matterRoleVisibility(viewer: MatterViewer): SQL {
   if (viewer.role === "owner") return sql`true`;
   if (viewer.role === "team_lead") {
     return sql`(not m.money and (m.owner_user_id = ${viewer.userId}
@@ -374,15 +408,18 @@ export function matterHeldBy(viewer: MatterViewer, heldRoles: readonly MatterOwn
  * whose person has not left, or a working person of that role in the registry.
  * Nobody — the owner is the acting team lead.
  */
-export async function teamLeadRoleHeld(db: Database): Promise<boolean> {
+/** Whether someone of the realm holds the team lead's role (0414: a test team lead holds it for the test realm only). */
+export async function teamLeadRoleHeld(db: Database, realm: "live" | "test" = "live"): Promise<boolean> {
+  const userRealm = realm === "test" ? testUserSql(sql`u.id`) : liveUserSql(sql`u.id`);
   const result = await db.execute<{ held: boolean }>(sql`
     select (
       exists (
         select 1 from users u
          where u.role = 'team_lead' and u.disabled_at is null and u.deleted_at is null
            and not exists (select 1 from person_logins l join people p on p.id = l.person_id where l.user_id = u.id and p.state = 'left')
+           and ${userRealm}
       )
-      or exists (select 1 from people p where p.role = 'team_lead' and p.state = 'working')
+      or exists (select 1 from people p where p.role = 'team_lead' and p.state = 'working' and p.is_test = ${realm === "test"})
     ) as held`);
   return result.rows[0]?.held === true;
 }

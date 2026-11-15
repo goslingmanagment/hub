@@ -3,7 +3,8 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import type { AppContext } from "../../bootstrap.ts";
-import { SESSION_COOKIE_NAME, requireDeviceTokenUser, readSessionIdentity } from "../../services/auth.ts";
+import { SESSION_COOKIE_NAME, isAgentPrincipal, requireDeviceTokenUser, readSessionIdentity } from "../../services/auth.ts";
+import { isTestPrincipal, userIsTest } from "../../services/sandbox/realm.ts";
 import { AppError, BadRequestError } from "../../services/errors.ts";
 import {
   SSO_STATE_TTL_SECONDS,
@@ -240,7 +241,9 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     reply.header("cache-control", "no-store");
     const token = request.cookies[SESSION_COOKIE_NAME];
     const identity = isBearerRequest(request) || !token ? null : await readSessionIdentity(appContext, token);
-    if (identity === null) {
+    // The names behind nginx (the static reports on chatgoose., the other services' pages) hold real data: a test
+    // person is nobody there (sandbox/realm.ts).
+    if (identity === null || await userIsTest(appContext, identity.user.id)) {
       return reply.code(401).send({ error: "unauthorized", message: "Not signed in", statusCode: 401 });
     }
     reply.header("x-hub-user", String(identity.user.id));
@@ -248,6 +251,22 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     reply.header("x-hub-login", encodeURIComponent(identity.user.username));
     reply.header("x-hub-role", identity.user.role);
     return { user: identity.user };
+  });
+
+  // The static reports on chatgoose. (`/customs/`, `/fyp/`) behind nginx: a live person in, the test team out.
+  server.get("/api/v1/auth/static-reports", {
+    schema: routeSchemas.authStaticReports,
+    logLevel: "warn",
+  }, async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    const principal = await ctx.auth.resolvePrincipal(request);
+    if (!principal || isAgentPrincipal(principal)) {
+      return reply.code(401).send({ error: "unauthorized", message: "Not signed in", statusCode: 401 });
+    }
+    if (isTestPrincipal(principal)) {
+      return reply.code(403).send({ error: "forbidden", message: "Тестовой команде отчётов нет", statusCode: 403 });
+    }
+    return reply.code(204).send(null);
   });
 
   server.post("/api/v1/auth/sso/redeem", {

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { sql } from "drizzle-orm";
 
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // Project Browser (plan §3.2 «Подключение новой страницы через браузер»;
@@ -317,6 +318,7 @@ export async function listPagesWithoutBrowser(db: Database): Promise<Array<{
       from pages p
       left join egress_endpoints e on e.platform_account_id = p.id
      where p.platform = 'fansly' and p.status = 'active'
+       and ${livePageSql(sql`p.id`)}
        and not exists (select 1 from page_browsers b where b.page_id = p.id)
      order by p.label
   `);

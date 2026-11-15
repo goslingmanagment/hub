@@ -13,6 +13,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { testPageIds } from "./sandbox/realm.ts";
 
 /**
  * The decisions feed (review R2b-B): every change of a decision about whose a sale is, after a cursor, in the order the
@@ -36,7 +37,7 @@ function kindOf(decision: Pick<SaleDecisionRow, "kind" | "shares">): AgentSaleDe
 
 export async function readSaleDecisionsFeed(
   app: FeedApp,
-  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined },
+  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined; realm?: "live" | "test" },
   now: Date = new Date(),
 ): Promise<AgentSaleDecisionsFeedResponse> {
   const { db } = app;
@@ -44,12 +45,19 @@ export async function readSaleDecisionsFeed(
   // What was held back for the key and it may read now gets its new place first: this read serves it by the cursor.
   if (input.agentKeyId !== undefined) await releaseSaleDecisionChangesHeld(db, { agentKeyId: input.agentKeyId, pageIds: input.pageIds });
   await placeSaleDecisionChanges(db);
-  const fresh = await listSaleDecisionChangesAfter(db, { afterSeq, limit: input.limit });
+  const placed = await listSaleDecisionChangesAfter(db, { afterSeq, limit: input.limit });
+  // A decision about a test page is no key's (sandbox/realm.ts): dropped BEFORE the held list (a held change fails the
+  // ledger's check «дайте ключу эти страницы»). The cursor still moves past it.
+  const testPages = await testPageIds(app);
+  // The reader's realm: a live key's are the live agency's; the test team's checker reads only test pages' changes.
+  const live = (change: SaleDecisionChangeRow) =>
+    (change.pageId !== null && testPages.has(change.pageId)) === (input.realm === "test");
+  const fresh = { ...placed, changes: placed.changes.filter(live) };
   const readable = (change: SaleDecisionChangeRow) => change.pageId !== null && input.pageIds.includes(change.pageId);
   let held = fresh.changes.filter((change) => !readable(change));
   if (input.agentKeyId !== undefined) {
     await holdSaleDecisionChanges(db, { agentKeyId: input.agentKeyId, changeIds: held.map((change) => change.id) });
-    held = (await listSaleDecisionChangesHeld(db, input.agentKeyId)).filter((change) => !readable(change));
+    held = (await listSaleDecisionChangesHeld(db, input.agentKeyId)).filter((change) => live(change) && !readable(change));
   }
   const served = fresh.changes.filter(readable);
   const decisions = new Map((await listSaleDecisions(db, { ids: [...new Set([...served, ...held].map((change) => change.decisionId))] })).map((one) => [one.id, one]));
@@ -91,7 +99,7 @@ export async function readSaleDecisionsFeed(
       const decision = decisions.get(change.decisionId);
       return { seq: change.seq, decisionId: change.decisionId, pageLabel: decision === undefined ? null : labelOf(decision), reason: "page_outside_key" as const };
     }),
-    next: String(fresh.changes.at(-1)?.seq ?? afterSeq),
+    next: String(placed.changes.at(-1)?.seq ?? afterSeq),
     // `limit` counts places, held ones too: a page may carry fewer changes than asked while places follow.
     more: fresh.more,
     serverNow: now.toISOString(),

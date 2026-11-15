@@ -57,6 +57,7 @@ import {
   type CustomOrderSaleRow,
   type CustomOrderStateRow,
   type Database,
+  listTestPageIds,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -131,7 +132,11 @@ export async function customViewerOf(app: CustomApp, principal: HumanAuthPrincip
   const role = principal.narrowDeviceTokenId === undefined && (principal.user.role === "owner" || principal.user.role === "team_lead")
     ? principal.user.role
     : "chatter";
-  return { userId: principal.user.id, role, pageIds: principal.assignedPageIds, lead: leads.some((lead) => lead.userId === principal.user.id) };
+  return {
+    userId: principal.user.id, role, pageIds: principal.assignedPageIds, lead: leads.some((lead) => lead.userId === principal.user.id),
+    // The test realm (sandbox/realm.ts): the lead and the owner see every order of THEIR realm only.
+    realm: { test: principal.sandbox?.test === true, testPageIds: await listTestPageIds(app.db) },
+  };
 }
 
 // ── The wire ────────────────────────────────────────────────────────────────
@@ -218,7 +223,8 @@ const paymentWire = (sale: CustomOrderSaleRow): CustomOrderPayment => ({
 // ── The board ───────────────────────────────────────────────────────────────
 
 /** The sales that look like a custom with no order that `viewer` should see: the lead and the owner every page's, a team lead their pages', a chatter the chats they led. */
-export function lookalikesFor(viewer: CustomViewer, rows: readonly CustomLookalikeRow[]): CustomLookalikeRow[] {
+export function lookalikesFor(viewer: CustomViewer, given: readonly CustomLookalikeRow[]): CustomLookalikeRow[] {
+  const rows = given.filter((row) => seesOrder({ ...viewer, lead: true }, row));
   if (viewer.lead || viewer.role === "owner") return [...rows];
   if (viewer.role === "team_lead") return rows.filter((row) => viewer.pageIds.includes(row.pageId));
   return rows.filter((row) => row.ledByUserIds.includes(viewer.userId) && viewer.pageIds.includes(row.pageId));

@@ -32,6 +32,7 @@ import {
   withdrawShiftReportAsk,
 } from "../../services/shift-report-board.ts";
 import { recordSaleSightings } from "../../services/shift-handin-check.ts";
+import { realmOf, requireShiftOfRealm } from "../../services/sandbox/realm.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -53,6 +54,9 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
   async function person(request: Parameters<typeof requirePrincipal>[0]) {
     const principal = await requirePrincipal(request);
     requireHumanPrincipal(principal);
+    // The wall (sandbox/realm.ts): a shift of the other realm is not found.
+    const shiftId = (request as { params?: { shiftId?: number } }).params?.shiftId;
+    if (shiftId !== undefined) await requireShiftOfRealm(appContext, principal, Number(shiftId));
     return handinActorOf(principal);
   }
 
@@ -256,7 +260,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportChecks", ["review:shift_reports"]);
     let delivered = 0;
     try {
-      const checks = await readShiftReportChecks(appContext, { pageIds, limit: request.query.limit });
+      const checks = await readShiftReportChecks(appContext, { pageIds, limit: request.query.limit, realm: realmOf(principal) });
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId, operation: "agentShiftReportChecks", pageIds, verbatimText: false,
         requestSummary: { returned: checks.checks.length },
@@ -286,7 +290,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportsFeed", ["read:team", "read:money"]);
     let delivered = 0;
     try {
-      const feed = await readShiftReportsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId });
+      const feed = await readShiftReportsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId, realm: realmOf(principal) });
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId,
         operation: "agentShiftReportsFeed",

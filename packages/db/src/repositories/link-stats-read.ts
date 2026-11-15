@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 
 import type { TrafficLinkKind, TrafficValidFromBasis } from "@agency_hub_core/shared";
 
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import type { LinkSeries, LinkSeriesPoint } from "./link-stats-deltas.ts";
 import { linkStatRunUsableResultSql, type LinkStatKind, type LinkStatRunStatus } from "./ofapi.ts";
@@ -69,6 +70,7 @@ export async function listOfLinkPages(
           ? sql`(p.status = 'active'
                  or exists (select 1 from page_link_stat_snapshots s where s.platform_account_id = p.id))`
           : sql`p.status = 'active'`}
+      and ${input.pageId !== undefined ? sql`true` : livePageSql(sql`p.id`)}
     order by p.id
   `);
   return result.rows.map((row) => ({

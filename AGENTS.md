@@ -129,6 +129,17 @@ the owner's machine (outside this repository); a change that moves a home or add
 - **Whether routines and copies work**: «Система → Состояние» (`services/system-state.ts`, tables `system_routines`,
   `system_copies`): a reporter sends its whole list (`write:system_state`, the Mac's is `scripts/system-state/`), Hub
   adds its own schedules and judges; a problem is a matter.
+- **The test realm** (the test team on production, 0414): a model and a person can be test (`models.is_test`,
+  `people.is_test`); a page is test through its model, a login through its person. Live principals (the owner, chatters,
+  every agent key), feeds, checks and the owner's numbers never see it; a test principal sees only it; `t-owner` may call
+  only `SANDBOX_OWNER_OPERATIONS`. The wall is decided in `services/sandbox/realm.ts` (the principal's realm, the object
+  check `requireSameRealm`) and `packages/db/src/repositories/realm.ts` (the SQL conditions); a read that lists without a
+  page scope names those conditions, "all" pages means the live agency, and a background pass that mixes rows by a day,
+  a week or a role works on the live realm (or keeps the realms' keys and owners apart). Proof:
+  `tests/sandbox-realm-wall.integration.test.ts` (every read, before and after) and
+  `tests/sandbox-realm-background.integration.test.ts`. Seed: `cli.js sandbox:seed [--scenario shift customs matters]`
+  (passwords from `SANDBOX_PASSWORD_T_*`); removal `sandbox:remove` is the owner's word only. Nothing real is ever written
+  under the test realm, and nothing of it ever reaches a platform, Telegram, the ledger or AI money.
 - Lists in CHECK constraints (agent-key capabilities, person rights) are rewritten whole by every migration that
   widens them: at rebase take the union with main's. A migration's number must be above main's highest: the runner
   refuses a lower one once a higher one is applied.

@@ -105,6 +105,27 @@ function ServerBlock({ server, ledger }: { server: SystemStateResponse["server"]
   );
 }
 
+// ── The test team: one line, nothing of it in any other number ──────────────
+
+function SandboxLine({ sandbox }: { sandbox: NonNullable<SystemStateResponse["sandbox"]> }) {
+  return (
+    <section className="card" aria-labelledby="state-sandbox-title">
+      <dl className="state-lines">
+        <div className="state-line">
+          <dt id="state-sandbox-title">Тестовая команда</dt>
+          <dd>
+            <span>
+              {sandbox.people} {ruPlural(sandbox.people, "человек", "человека", "человек")},{" "}
+              {sandbox.lastWorkedAt === null ? "ещё не работала" : `работала ${formatAgo(sandbox.lastWorkedAt)}`}.
+              {" "}В ваших числах её нет.
+            </span>
+          </dd>
+        </div>
+      </dl>
+    </section>
+  );
+}
+
 // ── «Рутины» ────────────────────────────────────────────────────────────────
 
 function RoutineDetail({ routine }: { routine: SystemStateRoutine }) {
@@ -380,6 +401,8 @@ export function SystemStatePage() {
               ? <StatusPanel title="Копии пока никто не прислал" description="Сборщик мака присылает их вместе с рутинами." />
               : <CopyRows copies={data.copies} limitHours={data.limits.copyStaleHours} />}
           </section>
+
+          {data.sandbox && <SandboxLine sandbox={data.sandbox} />}
         </>
       )}
 

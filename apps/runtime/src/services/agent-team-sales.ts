@@ -68,7 +68,11 @@ function decided(
 
 export async function readAgentTeamSales(
   db: Database,
-  input: { from: Date; to: Date; now: Date; pages: ReadonlyArray<{ id: number; label: string }> },
+  input: {
+    from: Date; to: Date; now: Date; pages: ReadonlyArray<{ id: number; label: string }>;
+    /** Whose work (sandbox/realm.ts): the live agency's by default; a test key's, the test team's; the homes job, both. */
+    realm?: "live" | "test" | "both";
+  },
 ): Promise<AgentTeamSalesResponse> {
   const { from, to, now } = input;
   const workFrom = new Date(from.getTime() - AGENT_TEAM_SALES_WORK_BEFORE_DAYS * DAY_MS);
@@ -76,7 +80,7 @@ export async function readAgentTeamSales(
   const pageIds = input.pages.map((page) => page.id);
 
   // In turn, not Promise.all: `db` is the caller's transaction, one connection.
-  const people = await readPeopleWork(db, { from: workFrom, to: workTo, now, pages: "all" }, { inTurn: true });
+  const people = await readPeopleWork(db, { from: workFrom, to: workTo, now, pages: "all", realm: input.realm ?? "live" }, { inTurn: true });
   const sales: ShiftSale[] = pageIds.length === 0 ? [] : await listShiftSales(db, { pageIds, from, to });
   const ids = sales.map((sale) => sale.transactionId);
   const facts = await listSaleFacts(db, { transactionIds: ids });

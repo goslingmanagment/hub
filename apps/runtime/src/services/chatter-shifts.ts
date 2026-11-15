@@ -24,6 +24,7 @@ import {
   listOwnerLoginIds,
   listSaleLastWriters,
   listShiftSales,
+  listTestUserIds,
   recordChatterActivityBeat,
   type Database,
   type ShiftSale,
@@ -459,16 +460,27 @@ export function workOnPages(work: ComputedWork, labels: ReadonlySet<string>): Co
  */
 export async function readPeopleWork(
   db: Database,
-  input: { from: Date; to: Date; now: Date; pages: "all" | readonly number[]; userId?: number },
+  input: {
+    from: Date; to: Date; now: Date; pages: "all" | readonly number[]; userId?: number;
+    /**
+     * Whose work "all" pages hold (0414, sandbox/realm.ts): the live agency's (the default), the test team's, or both
+     * (the jobs that write shift rows for every page). Named pages decide by themselves: a person works pages of one realm.
+     */
+    realm?: "live" | "test" | "both";
+  },
   options?: { inTurn?: boolean },
 ): Promise<Map<number, PersonWork>> {
   const person = input.userId === undefined ? {} : { userId: input.userId };
   const readMinutes = () => listChatterActivityMinutes(db, { from: input.from, to: input.to, pages: "all", ...person });
   const readSends = () => countAuthoredSendsByMinute(db, { from: input.from, to: input.to, pages: "all", ...person });
   // `inTurn`: `db` is the caller's transaction, one connection — no Promise.all on it.
-  const [minutes, sends, owners] = options?.inTurn === true
-    ? [await readMinutes(), await readSends(), await listOwnerLoginIds(db)]
-    : await Promise.all([readMinutes(), readSends(), listOwnerLoginIds(db)]);
+  const [allMinutes, sends, owners, testLogins] = options?.inTurn === true
+    ? [await readMinutes(), await readSends(), await listOwnerLoginIds(db), await listTestUserIds(db)]
+    : await Promise.all([readMinutes(), readSends(), listOwnerLoginIds(db), listTestUserIds(db)]);
+  // One person's work, or named pages, decide by themselves: a person works pages of one realm.
+  const realm = input.pages === "all" && input.userId === undefined ? input.realm ?? "live" : "both";
+  const test = new Set(testLogins);
+  const minutes = realm === "both" ? allMinutes : allMinutes.filter((minute) => test.has(minute.userId) === (realm === "test"));
   const scope = input.pages === "all" ? null : new Set(input.pages);
   const labels = new Set<string>();
   const people = new Map<number, { username: string; pageIds: Map<string, number>; minutes: ActivityMinute[]; sent: SentMinute[] }>();

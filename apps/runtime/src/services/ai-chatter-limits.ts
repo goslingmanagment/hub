@@ -10,6 +10,7 @@ import {
   insertAuditEvent,
   listAiPersonalLimits,
   setAiPersonalDailyLimit,
+  isTestUser,
 } from "@agency_hub_core/db";
 import {
   MOSCOW_TIME_ZONE,
@@ -85,6 +86,10 @@ export async function evaluatePersonalAiLimit(
   input: { userId: number; now: Date },
 ): Promise<PersonalAiLimit | null> {
   const days = limitDaysOf(toBusinessDate(input.now, MOSCOW_TIME_ZONE));
+  // The test team spends no AI money (sandbox/realm.ts): its limit is zero and no pool is open to it.
+  if (await isTestUser(app.db, input.userId)) {
+    return { limitMicroUsd: 0, spentMicroUsd: 0, remainingMicroUsd: 0, pool: poolOf({ poolMicroUsd: 0, usedMicroUsd: 0 }), availableMicroUsd: 0, resetsAt: days.today.toExclusive };
+  }
   const state = await getAiPersonalLimitState(app.db, { userId: input.userId, ...days.today });
   if (!state || state.limitMicroUsd === null) return null;
   const pool = poolOf(await getAiLimitPoolState(app.db, days));

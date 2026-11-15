@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 
+import { livePageSql, liveUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // Сообщения людям (0403, package S): the server's sender's rows, and the reads
@@ -187,6 +188,8 @@ export async function listCurrentHandinVersionsSubmitted(
     from shift_handin_versions v
     join shift_handins h on h.id = v.handin_id and h.current_version = v.version
     where v.submitted_at >= ${input.from.toISOString()}::timestamptz and v.submitted_at < ${input.to.toISOString()}::timestamptz
+      -- A test person's report goes to no Telegram chat (0414).
+      and ${liveUserSql(sql`h.user_id`)}
     order by v.id
     limit ${input.limit}`);
   return result.rows.map((row) => ({
@@ -199,6 +202,7 @@ export async function findNewestCurrentHandinVersion(db: Database): Promise<{ ve
   const result = await db.execute<Row>(sql`
     select v.id, h.shift_id, v.version, v.submitted_at
     from shift_handin_versions v join shift_handins h on h.id = v.handin_id and h.current_version = v.version
+    where ${liveUserSql(sql`h.user_id`)}
     order by v.submitted_at desc, v.id desc limit 1`);
   const row = result.rows[0];
   return row === undefined ? null : { versionId: Number(row.id), shiftId: Number(row.shift_id), version: Number(row.version), submittedAt: date(row.submitted_at)! };
@@ -209,6 +213,8 @@ export async function listCustomOrdersMovedToModel(db: Database, input: { from: 
   const result = await db.execute<Row>(sql`
     select e.object_id, e.created_at from object_events e
     where e.object_type = 'custom_order' and e.event = 'custom_order.at_model' and (e.changes ->> 'telegramRef') is null
+      -- A test page's order goes to no model's group (0414).
+      and not exists (select 1 from custom_orders o where o.id::text = e.object_id and not ${livePageSql(sql`o.page_id`)})
       and e.created_at >= ${input.from.toISOString()}::timestamptz and e.created_at < ${input.to.toISOString()}::timestamptz
     order by e.created_at limit ${input.limit}`);
   return result.rows.map((row) => ({ orderId: Number(row.object_id), at: date(row.created_at)! }));
@@ -216,13 +222,13 @@ export async function listCustomOrdersMovedToModel(db: Database, input: { from: 
 
 /** The newest order (the example of the card). */
 export async function findNewestCustomOrderId(db: Database): Promise<number | null> {
-  const result = await db.execute<Row>(sql`select id from custom_orders order by created_at desc, id desc limit 1`);
+  const result = await db.execute<Row>(sql`select id from custom_orders o where ${livePageSql(sql`o.page_id`)} order by created_at desc, id desc limit 1`);
   return result.rows[0] === undefined ? null : Number(result.rows[0].id);
 }
 
 /** The newest matter of a kind, open or closed (the example of a reminder). */
 export async function findNewestMatterKeyOfKind(db: Database, kind: string): Promise<string | null> {
-  const result = await db.execute<Row>(sql`select key from matters where kind = ${kind} order by opened_at desc, id desc limit 1`);
+  const result = await db.execute<Row>(sql`select key from matters m where kind = ${kind} and (m.owner_user_id is null or ${liveUserSql(sql`m.owner_user_id`)}) order by opened_at desc, id desc limit 1`);
   return result.rows[0] === undefined ? null : String(result.rows[0].key);
 }
 
@@ -282,6 +288,6 @@ export async function findPeopleMessageRefusal(db: Database, userId: number): Pr
 
 /** The models by slug, for the chats' words. */
 export async function listPeopleMessageModels(db: Database): Promise<Array<{ slug: string; name: string }>> {
-  const result = await db.execute<Row>(sql`select slug, name from models order by sort_order asc, slug asc`);
+  const result = await db.execute<Row>(sql`select slug, name from models where not is_test order by sort_order asc, slug asc`);
   return result.rows.map((row) => ({ slug: String(row.slug), name: String(row.name) }));
 }

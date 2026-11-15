@@ -49,6 +49,7 @@ import {
 import { oldShiftCounts, saleKindOf, saleOriginOf, settleSale } from "./chatter-stats.ts";
 import type { ChatterSaleKind } from "@agency_hub_core/contracts";
 import { NotFoundError } from "./errors.ts";
+import { isTestPrincipal, userIsTest } from "./sandbox/realm.ts";
 import { SALE_HOME_REASON_TEXT, type SaleHomeReason } from "./sale-rule.ts";
 import {
   RULED_SALES_LEAD_MS, homeCredit, openWindowFrom, ownMoneyShares, piecesByUser, readPeopleLogins, readScreenHomes, readScreensRule, ruledWork,
@@ -867,6 +868,8 @@ export async function readTeamShiftReview(
   query: TeamShiftReviewQuery,
 ): Promise<TeamShiftReviewResponse> {
   requireOwner(principal);
+  // The wall (sandbox/realm.ts): an owner reviews the shifts of their realm only.
+  if ((await userIsTest(app, query.userId)) !== isTestPrincipal(principal)) throw new NotFoundError("The person has no shift at that time");
   return (await computeShiftReview(app, query)).review;
 }
 
@@ -940,8 +943,10 @@ export async function computeShiftReview(
   // Everyone's work around the shift, read once (and only when something asks): the colleagues of its pages, whose its
   // sales are, the sales before it no shift holds. A day before the earliest of those (a day back from the shift) and after it.
   let everyoneRead: Promise<ReadonlyMap<number, PersonWork>> | null = null;
+  // The colleagues of the person's realm (sandbox/realm.ts): a test shift's are the test team.
+  const realm = (await userIsTest(app, query.userId)) ? "test" as const : "live" as const;
   const everyone = () => (everyoneRead ??= readPeopleWork(app.db, {
-    from: new Date(start - 2 * DAY_MS), to: new Date(Math.min(end + DAY_MS, now.getTime())), now, pages: "all",
+    from: new Date(start - 2 * DAY_MS), to: new Date(Math.min(end + DAY_MS, now.getTime())), now, pages: "all", realm,
   }));
   const colleagues = !shiftNeedsColleagues(shift) ? [] : piecesOf(await everyone(), "shift").filter((one) => one.userId !== query.userId);
   const allFans = pagesWithAllFans(shift, colleagues, start, end);

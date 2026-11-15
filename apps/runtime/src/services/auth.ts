@@ -59,7 +59,8 @@ import {
   UnauthorizedError,
   type AuthFailureReason,
 } from "./errors.ts";
-import { findPageSummaryByLabel } from "@agency_hub_core/db";
+import { findPageSummaryByLabel, listTestPageIds } from "@agency_hub_core/db";
+import { ownerCanAccessPage, principalSandboxOf, type PrincipalSandbox } from "./sandbox/realm.ts";
 
 export const SESSION_COOKIE_NAME = "agency_hub_core_session";
 
@@ -148,6 +149,11 @@ export interface HumanAuthPrincipal {
    * and `requireDashboardUser` refuses it. Absent = a full session, as before.
    */
   narrowDeviceTokenId?: number;
+  /**
+   * The test realm (0414, services/sandbox/realm.ts): set for an owner of either realm and for every test login,
+   * from the person behind the login. Absent: a live non-owner, whose pages are live by the database.
+   */
+  sandbox?: PrincipalSandbox;
 }
 
 /**
@@ -170,6 +176,11 @@ export interface AgentAuthPrincipal {
   capabilities: readonly string[];
   /** The explicit page grant. No wildcard, never widened by role. */
   pageIds: number[];
+  /**
+   * The test realm (0414, sandbox/realm.ts): a key granted test pages only (the test team's checker) is a test
+   * principal; every other key is live. A key never holds pages of both realms (the database refuses it).
+   */
+  sandbox?: { test: true };
 }
 
 export type AuthPrincipal = HumanAuthPrincipal | AgentAuthPrincipal;
@@ -1117,12 +1128,14 @@ export async function authenticateSessionToken(app: AppContext, sessionToken: st
 
   await touchAuthSession(app.db, session.id);
 
+  const sandbox = await principalSandboxOf(app, user);
   return {
     authMethod: "session" as const,
     user,
     assignedPageIds: user.assignedPages.map((page) => page.id),
     authSessionId: session.id,
     ...(session.narrowDeviceTokenId === null ? {} : { narrowDeviceTokenId: session.narrowDeviceTokenId }),
+    ...(sandbox === undefined ? {} : { sandbox }),
   } satisfies AuthPrincipal;
 }
 
@@ -1186,7 +1199,8 @@ export function canAccessPage(principal: AuthPrincipal, pageId: number) {
   }
 
   if (principal.user.role === "owner") {
-    return true;
+    // The wall of the test realm (sandbox/realm.ts): a live owner never opens a test page, a test owner only those.
+    return ownerCanAccessPage(principal, pageId);
   }
 
   return principal.assignedPageIds.includes(pageId);
@@ -1342,6 +1356,7 @@ export async function authenticateDeviceToken(
     });
   }
 
+  const sandbox = await principalSandboxOf(app, user);
   return {
     principal: {
       authMethod: "device_token" as const,
@@ -1349,6 +1364,7 @@ export async function authenticateDeviceToken(
       assignedPageIds: user.assignedPages.map((page) => page.id),
       deviceTokenId: record.id,
       ...(isClientTokenProfile(record.clientProfile) ? { clientProfile: record.clientProfile } : {}),
+      ...(sandbox === undefined ? {} : { sandbox }),
     },
     failure: null,
   };
@@ -1383,6 +1399,8 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
     return null;
   }
 
+  const testPages = record.pageIds.length === 0 ? [] : await listTestPageIds(app.db);
+  const test = testPages.length > 0 && record.pageIds.every((pageId) => testPages.includes(pageId));
   return {
     kind: "agent" as const,
     authMethod: "agent_key" as const,
@@ -1390,6 +1408,7 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
     keyName: record.name,
     capabilities: record.capabilities,
     pageIds: record.pageIds,
+    ...(test ? { sandbox: { test: true as const } } : {}),
   } satisfies AgentAuthPrincipal;
 }
 

@@ -212,6 +212,11 @@ export const systemStateResponseSchema = z.object({
   /** Every routine not retired: problems first, then by place and title. */
   routines: z.array(systemStateRoutineSchema),
   copies: z.array(systemStateCopySchema),
+  /**
+   * The test team on production (0414; Hub's sandbox/realm.ts), one honest line: how many people, when one of them last
+   * worked. Null: there is none. Nothing of it is in any other number of the owner's.
+   */
+  sandbox: z.object({ people: z.number().int().nonnegative(), lastWorkedAt: isoTimestamp.nullable() }).nullable(),
   limits: z.object({
     /** A copy older than this is a problem. */
     copyStaleHours: z.number().int().positive(),

@@ -7,6 +7,7 @@ import {
   listSaleClaims,
   listShiftRows,
   listUserLeaveFacts,
+  listTestPageIds,
   listVisiblePages,
   upsertSaleHomes,
   type Database,
@@ -273,9 +274,11 @@ export async function computeSaleHomes(
   input: { from: Date; to: Date; now: Date; rule?: SaleRuleConfig; slots?: SaleSlotProvider },
 ): Promise<{ answer: AgentTeamSalesResponse; homes: SaleHome[]; pageIds: Map<string, number> }> {
   const rule = input.rule ?? SALE_RULE;
-  const pages = await listVisiblePages(db);
+  // Every page of both realms (sandbox/realm.ts): a test sale has its home like any other; the realms never meet in
+  // one sale (a person works pages of one realm).
+  const pages = [...await listVisiblePages(db), ...await listVisiblePages(db, await listTestPageIds(db))];
   const pageIds = new Map(pages.map((page) => [page.label, page.id]));
-  const answer = await readAgentTeamSales(db, { from: input.from, to: input.to, now: input.now, pages: pages.map((page) => ({ id: page.id, label: page.label })) });
+  const answer = await readAgentTeamSales(db, { from: input.from, to: input.to, now: input.now, pages: pages.map((page) => ({ id: page.id, label: page.label })), realm: "both" });
   const leftAt = await usersLeftAt(db, sendersOf(answer));
   const slots = await (input.slots ?? NO_SLOTS).slotsFor({ from: new Date(answer.workFrom), to: new Date(answer.workTo) });
   // What people said in their handed-in reports and what the owner decided, instead of the old shift-report tables.

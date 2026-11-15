@@ -72,7 +72,9 @@ import {
   type HandinVersionOffPlatform,
   type HandinVersionRow,
   type OffPlatformRow,
+  findPersonRowByCode,
 } from "@agency_hub_core/db";
+import { userIsTest } from "./sandbox/realm.ts";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
@@ -957,6 +959,8 @@ export async function readShiftReport(app: HandinApp, actor: HandinActor, shiftI
  * смены» makes) list a post of that day. Null — not known (the ledger away, not connected, or another person's rows).
  */
 async function postSeenOf(app: HandinApp, subject: Subject, reportDate: string): Promise<boolean | null> {
+  // The test team is never asked of the ledger (sandbox/realm.ts): «не известно».
+  if (await userIsTest(app, subject.shift.userId)) return null;
   try {
     const body = await ledgerGet(app, "/v1/report-days", { from: reportDate, to: reportDate, hub_user_id: String(subject.shift.userId) }, { client: "shift-report-board" });
     const days = parseLedgerReportDays(app, body).filter((day) => day.report_date === reportDate && (subject.person === null || day.person === subject.person.code));
@@ -1292,6 +1296,8 @@ export async function withdrawShiftReportOffPlatform(app: HandinApp, actor: Hand
  */
 export async function ledgerDayPaid(app: HandinApp, input: { personCode: string | null; reportDate: string }): Promise<boolean | null> {
   if (input.personCode === null || app.config.ledgerPayoutsKey == null) return null;
+  // The test team is never asked of the ledger (sandbox/realm.ts): «не известно».
+  if ((await findPersonRowByCode(app.db, input.personCode))?.isTest === true) return null;
   try {
     const payouts = await readLedgerPayouts(app, { from: input.reportDate, to: input.reportDate });
     const person = payouts.people.find((one) => one.slug === input.personCode);
@@ -1431,7 +1437,7 @@ export function feedLineOf(line: HandinVersionLine): AgentShiftReportsFeedRespon
  */
 export async function readShiftReportsFeed(
   app: HandinApp,
-  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined },
+  input: { pageIds: readonly number[]; since?: string | undefined; limit: number; agentKeyId?: number | undefined; realm?: "live" | "test" },
   now: Date = new Date(),
 ): Promise<AgentShiftReportsFeedResponse> {
   const afterSeq = input.since === undefined ? 0 : Number(input.since);
@@ -1440,7 +1446,7 @@ export async function readShiftReportsFeed(
   // it like any other, so an answer that is lost is asked again and brings it again.
   if (input.agentKeyId !== undefined) await releaseHandinFeedHeld(app.db, { agentKeyId: input.agentKeyId, pageIds: input.pageIds });
   await placeHandinVersionsInFeed(app.db);
-  const read = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds });
+  const read = await listHandinVersionsAfter(app.db, { afterSeq, limit: input.limit, pageIds: input.pageIds, realm: input.realm ?? "live" });
   let held = read.held;
   if (input.agentKeyId !== undefined) {
     await holdHandinFeedVersions(app.db, { agentKeyId: input.agentKeyId, versionIds: read.held.map((one) => one.id) });

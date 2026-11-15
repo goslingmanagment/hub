@@ -10,6 +10,7 @@ import {
   type Platform,
   SYNCED_PLATFORMS,
 } from "@agency_hub_core/shared";
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import {
   dailyRevenue,
@@ -38,12 +39,16 @@ import {
 import { egressKeySql } from "./egress.ts";
 import { settledTransactionState } from "./transaction-settled-state.ts";
 
+/** The page scope of a read: the pages named, or (none named) every page of the live agency (0414: the test realm's
+ * pages only to whoever names them). */
 function applyPageScope<T>(clauses: T[], pageIds?: number[]) {
   if (pageIds !== undefined) {
     if (pageIds.length === 0) {
       return { scoped: true, clauses };
     }
     clauses.push(inArray(pages.id, pageIds) as T);
+  } else {
+    clauses.push(livePageSql(pages.id) as T);
   }
 
   return { scoped: false, clauses };
@@ -164,9 +169,7 @@ export async function listRevenueModels(db: Database, pageIds?: number[]) {
   }
 
   const clauses: Array<SQL> = [revenuePlatformClause()];
-  if (pageIds !== undefined) {
-    clauses.push(inArray(pages.id, pageIds));
-  }
+  clauses.push(pageIds !== undefined ? inArray(pages.id, pageIds) : livePageSql(pages.id));
 
   return db.select({
     id: models.id,
@@ -189,9 +192,7 @@ export async function findRevenueModel(db: Database, modelSlug: string, pageIds?
   }
 
   const clauses = [eq(models.slug, modelSlug), revenuePlatformClause()];
-  if (pageIds !== undefined) {
-    clauses.push(inArray(pages.id, pageIds));
-  }
+  clauses.push(pageIds !== undefined ? inArray(pages.id, pageIds) : livePageSql(pages.id));
 
   const [row] = await db.select({
     id: models.id,
@@ -212,10 +213,7 @@ export async function listVisibleModels(db: Database, pageIds?: number[]) {
     return [];
   }
 
-  const clauses: Array<SQL> = [];
-  if (pageIds !== undefined) {
-    clauses.push(inArray(pages.id, pageIds));
-  }
+  const clauses: Array<SQL> = [pageIds !== undefined ? inArray(pages.id, pageIds) : livePageSql(pages.id)];
 
   return db.select({
     id: models.id,
@@ -256,6 +254,8 @@ function buildTransactionScopeClauses(
       return null;
     }
     clauses.push(inArray(transactions.platformAccountId, input.pageIds));
+  } else {
+    clauses.push(livePageSql(transactions.platformAccountId));
   }
 
   if (input.period?.from) {
@@ -294,6 +294,8 @@ function buildRevenueRollupClauses(
       return null;
     }
     clauses.push(inArray(dailyRevenue.platformAccountId, input.pageIds));
+  } else {
+    clauses.push(livePageSql(dailyRevenue.platformAccountId));
   }
 
   if (input.fromBusinessDate) {
@@ -1045,6 +1047,8 @@ export async function listFanPageContexts(
       return [];
     }
     clauses.push(inArray(fanPages.platformAccountId, pageIds));
+  } else {
+    clauses.push(livePageSql(fanPages.platformAccountId));
   }
 
   return db.select({
@@ -1413,6 +1417,8 @@ export async function getPlatformTotalSpendForFan(
       return 0n;
     }
     clauses.push(inArray(spenderLifetimePage.platformAccountId, input.pageIds));
+  } else {
+    clauses.push(livePageSql(spenderLifetimePage.platformAccountId));
   }
 
   const [row] = await db.select({

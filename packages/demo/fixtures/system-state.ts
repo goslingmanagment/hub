@@ -240,6 +240,7 @@ export function demoSystemState(request: DemoRequest): StateAnswer {
     ],
     routines,
     copies,
+    sandbox: { people: 6, lastWorkedAt: iso(new Date(now - 40 * 60_000)) },
     limits: { copyStaleHours: 36, reporterSilentMinutes: 30 },
     serverNow: iso(new Date(now)),
   };

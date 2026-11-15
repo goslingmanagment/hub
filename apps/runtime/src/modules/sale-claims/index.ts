@@ -27,6 +27,7 @@ import {
 } from "../../services/sale-decisions-door.ts";
 import { readSaleDecisionsFeed } from "../../services/sale-decisions-feed.ts";
 import { handinActorOf, handinAgentActorOf } from "../../services/shift-handins.ts";
+import { realmOf, requireDecidedOfRealm } from "../../services/sandbox/realm.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -49,6 +50,14 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
   async function owner(request: Parameters<typeof requirePrincipal>[0]) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
+    // The wall (sandbox/realm.ts): an owner decides about the sales of their realm only.
+    const params = (request as { params?: Record<string, unknown> }).params ?? {};
+    const body = ((request as { body?: unknown }).body ?? {}) as Record<string, unknown>;
+    const named = [params.transactionId, body.transactionId, ...(Array.isArray(body.transactionIds) ? body.transactionIds : [])]
+      .filter((value) => value !== undefined && value !== null).map(Number).filter(Number.isSafeInteger);
+    const offPlatformId = params.offPlatformId === undefined ? undefined : Number(params.offPlatformId);
+    const pageLabel = typeof body.pageLabel === "string" ? body.pageLabel : undefined;
+    await requireDecidedOfRealm(appContext, principal, { transactionIds: named, offPlatformId, pageLabel });
     return principal;
   }
 
@@ -155,6 +164,12 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
     summary: (answer: T) => Record<string, number | string>,
   ): Promise<T> {
     const principal = await requireAgentKeyPrincipal(request);
+    // The wall (sandbox/realm.ts), besides the key's pages: the sale or page named is of the key's realm.
+    const said = ((request as { body?: unknown }).body ?? {}) as Record<string, unknown>;
+    await requireDecidedOfRealm(appContext, principal, {
+      transactionIds: typeof said.transactionId === "number" ? [said.transactionId] : [],
+      pageLabel: typeof said.pageLabel === "string" ? said.pageLabel : undefined,
+    });
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: ["write:shift_reports"] });
     const pageIds = scope.pages.map((page) => page.id);
     let delivered = 0;
@@ -207,7 +222,7 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
     const pageIds = scope.pages.map((page) => page.id);
     let delivered = 0;
     try {
-      const feed = await readSaleDecisionsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId });
+      const feed = await readSaleDecisionsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId, realm: realmOf(principal) });
       delivered = feed.changes.length;
       await writeAgentAudit(db, { agentKeyId: principal.agentKeyId, operation: "agentSaleDecisionsFeed", pageIds, verbatimText: false, requestSummary: { returned: delivered } });
       return feed;

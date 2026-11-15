@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 
+import { testUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // The shift report as an object of Hub (0400; ecosystem plan 2026-11-12,
@@ -583,9 +584,9 @@ export interface HandinFeedHeld {
  * Feed rows by a condition, in the feed's order, at most `limit` places, each with the version's pages outside
  * `pageIds`. `more` — places follow the last one read (one place beyond the limit is asked for, to know).
  */
-async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: readonly number[], limit: number) {
+async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: readonly number[], limit: number, realm: "live" | "test" = "live") {
   const result = await db.execute<Row>(sql`
-    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code,
+    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code, ${testUserSql(sql`h.user_id`)} as realm_test,
       to_char(coalesce(v.report_date, h.report_date), 'YYYY-MM-DD') as report_date,
       array(
         select distinct line ->> 'pageLabel' from jsonb_array_elements(v.lines) as line
@@ -604,6 +605,9 @@ async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: re
   const served: HandinFeedRow[] = [];
   const held: HandinFeedHeld[] = [];
   for (const row of rows) {
+    // A version of the other realm is no key's (0414): never served, never held (a held version fails the ledger's
+    // check). A live key reads the live agency's; the test team's checker the test team's.
+    if ((row.realm_test === true) !== (realm === "test")) continue;
     const outside = (Array.isArray(row.outside) ? row.outside : []).map(String);
     const base = { seq: num(row.seq), shiftId: num(row.shift_id), userId: num(row.user_id), personCode: text(row.person_code), reportDate: String(row.report_date) };
     if (outside.length > 0) {
@@ -623,9 +627,9 @@ async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: re
  */
 export async function listHandinVersionsAfter(
   db: Database,
-  input: { afterSeq: number; limit: number; pageIds: readonly number[] },
+  input: { afterSeq: number; limit: number; pageIds: readonly number[]; realm?: "live" | "test" },
 ): Promise<{ served: HandinFeedRow[]; held: HandinFeedHeld[]; last: number | null; more: boolean }> {
-  return feedRows(db, sql`f.seq > ${input.afterSeq}`, input.pageIds, input.limit);
+  return feedRows(db, sql`f.seq > ${input.afterSeq}`, input.pageIds, input.limit, input.realm ?? "live");
 }
 
 /**

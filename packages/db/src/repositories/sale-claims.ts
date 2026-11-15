@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import type { HandinVersionLine, HandinVersionOffPlatform, HandinVersionPage } from "./shift-handins.ts";
 
@@ -657,7 +658,8 @@ export async function listDaysHandedIn(db: Database, input: { from: string; to: 
     select to_char(s.report_date, 'YYYY-MM-DD') as day
     from shifts s
     join person_logins l on l.user_id = s.user_id
-    join people p on p.id = l.person_id and p.kind = 'human'
+    -- The live agency's days (0414): a test shift never takes a real day out of the complete ones.
+    join people p on p.id = l.person_id and p.kind = 'human' and not p.is_test
     join person_rights r on r.person_id = p.id and r."right" = 'submits_shift' and s.started_at >= r.granted_at
     left join shift_handins h on h.shift_id = s.id
     where s.state = 'closed' and s.report_date between ${input.from}::date and ${input.to}::date
@@ -674,7 +676,7 @@ export async function listUnownedSales(db: Database, input: { days: readonly str
     select h.transaction_id, h.page_id, h.occurred_at, h.net_mills, h.home, h.reason,
       to_char(h.occurred_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day
     from sale_homes h
-    where h.home in ('nobody', 'decide')
+    where h.home in ('nobody', 'decide') and ${livePageSql(sql`h.page_id`)}
       and to_char(h.occurred_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') = any(${sql.param([...input.days])}::text[])
     order by h.occurred_at, h.transaction_id`);
   return result.rows.map((row) => ({

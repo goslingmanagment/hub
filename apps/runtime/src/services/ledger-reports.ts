@@ -14,6 +14,7 @@ import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import { requireSessionUser, type AuthPrincipal } from "./auth.ts";
 import { ServiceUnavailableError } from "./errors.ts";
+import { isTestPrincipal, SANDBOX_NO_DATA } from "./sandbox/realm.ts";
 import { checkWindow, ledgerGet, list, micros, millsOf, type LedgerReadApp } from "./ledger-payouts.ts";
 
 /**
@@ -333,6 +334,8 @@ export async function readAccountReports(
   options: { fetchImpl?: typeof fetch; now?: Date } = {},
 ): Promise<AccountReportsResponse> {
   requireSessionUser(principal);
+  // A test person's report days are never asked of the ledger (sandbox/realm.ts): «нет данных».
+  if (isTestPrincipal(principal)) throw new ServiceUnavailableError(`Ledger: ${SANDBOX_NO_DATA}`);
   const user = { id: principal.user.id, username: principal.user.username };
   const window = reportsWindow(query, options.now ?? new Date());
   const params = { from: window.from, to: window.to, hub_user_id: String(user.id), hub_username: user.username };
