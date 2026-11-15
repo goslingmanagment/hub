@@ -392,7 +392,7 @@ describe("the shift report: who reads, who writes", () => {
     // «В общак»: the person's word now (the mark, «по правке Генгара»), the owner's matter opens, the ledger reads «не моё».
     const pot = await keepCard(sale, { word: "pot" });
     expect(await markOf(sale)).toMatchObject({ statement: "pot", by_proposal_id: pot });
-    await runShiftReportBoardPass(app);
+    // The owner's matter opens with «Подтверждаю», not at the next minute pass.
     expect((await testDb.pool.query("select state, owner_role from matters where kind = 'sale.pot_offer'")).rows).toEqual([{ state: "open", owner_role: "owner" }]);
     const feed = agentShiftReportsFeedResponseSchema.parse((await asKey("ledger", "GET", "/api/v1/agent/shift-reports")).json());
     const fed = feed.reports.filter((one) => one.shiftId === shiftA).sort((a, b) => b.version - a.version)[0]!;
@@ -419,6 +419,14 @@ describe("the shift report: who reads, who writes", () => {
     expect(await markOf(sale)).toMatchObject({ statement: null });
     expect((await testDb.pool.query("select kind, source, state from sale_owner_decisions where transaction_id = $1", [sale])).rows)
       .toEqual([{ kind: "split", source: "dispute", state: "active" }]);
+    // Answered: the matter leaves at once (no pass), and the window re-read shows what was decided, not a 404.
+    expect((await testDb.pool.query("select state from matters where kind = 'sale.pot_offer'")).rows).toEqual([{ state: "closed" }]);
+    const decided = await asSession("boss", "GET", `/api/v1/sale-disputes/${sale}`);
+    expect(decided.statusCode, decided.body).toBe(200);
+    const after = saleDisputeResponseSchema.parse(decided.json());
+    expect(after.outcomes).toEqual([]);
+    expect(after.decision).toMatchObject({ outcome: "вернуть anna", note: "это её фан" });
+    expect(after.potOffer).toMatchObject({ userId: await fixtureUserId(app, "anna") });
     await runShiftReportBoardPass(app);
     expect((await testDb.pool.query("select state from matters where kind = 'sale.pot_offer'")).rows).toEqual([{ state: "closed" }]);
 
