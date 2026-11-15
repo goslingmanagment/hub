@@ -69,11 +69,12 @@ export function stepFailure(error: unknown): string {
 
 // ── The board's columns ─────────────────────────────────────────────────────
 
-export type ColumnId = "recorded" | "paid" | "at_model" | "shot" | "given";
+export type ColumnId = "recorded" | "paid" | "checked" | "at_model" | "shot" | "given";
 
 export const COLUMNS: ReadonlyArray<{ id: ColumnId; title: string; states: readonly CustomOrderState[]; empty: string }> = [
   { id: "recorded", title: "Записаны", states: ["recorded"], empty: "Новых нет" },
-  { id: "paid", title: "Оплачены", states: ["paid"], empty: "Все оплаченные у модели" },
+  { id: "paid", title: "Оплачены", states: ["paid"], empty: "Все оплаченные проверены" },
+  { id: "checked", title: "Проверены", states: ["checked"], empty: "Все проверенные у модели" },
   { id: "at_model", title: "У модели", states: ["at_model", "partly", "revision", "refused"], empty: "У модели ничего" },
   { id: "shot", title: "Сняты", states: ["shot"], empty: "Нечего отдавать" },
   { id: "given", title: "Отданы", states: ["given", "closed"], empty: "За неделю не отдавали" },
@@ -90,6 +91,7 @@ export const PART_WORDS: Record<CustomPart, string> = { video: "видео", pho
 export const partsWords = (parts: readonly CustomPart[]) => parts.map((part) => PART_WORDS[part]).join(" и ");
 
 export const STATE_TONE: Partial<Record<CustomOrderState, "success" | "warning" | "danger" | "info" | "off">> = {
+  checked: "info",
   partly: "info",
   revision: "warning",
   refused: "danger",
@@ -108,11 +110,18 @@ const dotted = (day: string) => `${day.slice(8, 10)}.${day.slice(5, 7)}`;
 export function deadlineWords(order: Pick<CustomOrder, "deadlineOn" | "overdueDays" | "state">, serverNow: string): { text: string; late: boolean } | null {
   if (order.deadlineOn === null) return null;
   if (order.overdueDays !== null) return { text: `просрочен на ${daysWord(order.overdueDays)}`, late: true };
-  if (!["recorded", "paid", "at_model", "partly", "revision"].includes(order.state)) return { text: `срок был ${dotted(order.deadlineOn)}`, late: false };
+  if (!["recorded", "paid", "checked", "at_model", "partly", "revision"].includes(order.state)) return { text: `срок был ${dotted(order.deadlineOn)}`, late: false };
   const today = moscowToday(Date.parse(serverNow));
   const left = Math.round((Date.parse(`${order.deadlineOn}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
   if (left <= 0) return { text: "сегодня последний день", late: false };
   return { text: `осталось ${daysWord(left)}, до ${dotted(order.deadlineOn)}`, late: false };
+}
+
+/** «У кого сейчас»: who leads the order's current step, and where («в ContentOps» for the shooting). */
+export function leaderWords(order: Pick<CustomOrder, "leader">): string | null {
+  if (order.leader === null) return null;
+  const who = order.leader.name ?? "владелец";
+  return order.leader.product === "contentops" ? `${who}, в ContentOps` : who;
 }
 
 /** The fan as the board names him: his name, or what the card says while he is not confirmed. */
@@ -126,6 +135,7 @@ export const EVENT_WORDS: Record<string, string> = {
   "custom_order.recorded": "Записан",
   "custom_order.payment": "Оплата привязана",
   "custom_order.payment_removed": "Оплата убрана",
+  "custom_order.checked": "Проверен",
   "custom_order.at_model": "Передан модели",
   "custom_order.partly": "Сдан частично",
   "custom_order.delivery": "Модель сдала",

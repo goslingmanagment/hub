@@ -11,7 +11,7 @@ import type { Database } from "../client.ts";
 // service writes both.
 
 export type CustomOrderStateRow =
-  | "recorded" | "paid" | "at_model" | "partly" | "shot" | "revision" | "refused" | "given" | "closed" | "cancelled";
+  | "recorded" | "paid" | "checked" | "at_model" | "partly" | "shot" | "revision" | "refused" | "given" | "closed" | "cancelled";
 export type CustomOrderOriginRow = "extension" | "agent" | "workboard" | "import";
 
 export interface CustomOrderRow {
@@ -20,6 +20,7 @@ export interface CustomOrderRow {
   pageLabel: string | null;
   platform: string | null;
   modelName: string | null;
+  modelSlug: string | null;
   fanId: number | null;
   fanRef: string | null;
   fanUsername: string | null;
@@ -72,6 +73,7 @@ function orderOf(row: Row): CustomOrderRow {
     pageLabel: (row.page_label as string | null) ?? null,
     platform: (row.platform as string | null) ?? null,
     modelName: (row.model_name as string | null) ?? null,
+    modelSlug: (row.model_slug as string | null) ?? null,
     fanId: num(row.fan_id),
     fanRef: (row.fan_ref as string | null) ?? null,
     fanUsername: (row.fan_username as string | null) ?? null,
@@ -109,7 +111,7 @@ function orderOf(row: Row): CustomOrderRow {
 }
 
 const ORDER_SELECT = sql`
-  select o.id, o.page_id, p.label as page_label, p.platform, m.name as model_name,
+  select o.id, o.page_id, p.label as page_label, p.platform, m.name as model_name, m.slug as model_slug,
     o.fan_id, f.platform_user_id as fan_ref, f.username as fan_username, f.display_name as fan_display_name,
     o.buyer, o.fan_erased_at,
     coalesce(o.conversation_ref, case when p.platform = 'onlyfans' then f.platform_user_id else (
@@ -191,7 +193,7 @@ export async function listCustomOrdersAwaitingGiving(db: Database, input: { page
   // "all": every order of the live agency (0414: the test realm's orders only to whoever names its pages).
   const pages = input.pageIds === "all" ? livePageSql(sql`o.page_id`) : input.pageIds.length === 0 ? sql`false` : sql`o.page_id = any(${ids(input.pageIds)})`;
   const result = await db.execute<Row>(sql`${ORDER_SELECT}
-    where ${pages} and o.state in ('paid', 'at_model', 'partly', 'shot', 'revision')
+    where ${pages} and o.state in ('paid', 'checked', 'at_model', 'partly', 'shot', 'revision')
       and (o.state in ('paid', 'shot') or coalesce(pay.n, 0) > 0)
     order by coalesce(pay.first_at, o.state_at) asc, o.id asc
     limit ${input.limit}`);
@@ -348,7 +350,8 @@ export async function moveCustomOrder(
     to: CustomOrderStateRow;
     note?: string | null;
     ref?: string | null;
-    given?: { messageRef: string; at: Date };
+    /** `messageRef` null — given by a person's word, no message named. */
+    given?: { messageRef: string | null; at: Date };
     at: Date;
   },
 ): Promise<boolean> {

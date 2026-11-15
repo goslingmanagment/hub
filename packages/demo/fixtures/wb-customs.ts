@@ -6,6 +6,9 @@
  * («ведёт кастомы»).
  */
 import {
+  CUSTOM_STATE_WORDS,
+  customPhaseOf,
+  customPhaseProduct,
   customOrderCode,
   parseCustomOrderCode,
   renderCardText,
@@ -65,7 +68,7 @@ const TASKS: readonly string[] = [
 const PRICES: readonly string[] = ["100$ тир Master + 50$", "150$ чаевые", "250$ уже оплачено", "100$ чаевые + 100$ после готовности", "60$", "150$ подписка + 50$ чаевые", "80$ чаевые", "220$"];
 const CLOTHES: readonly string[] = ["Красное бельё, каблуки", "Спортивный комплект", "Его футболка, под ней ничего", "Чёрное платье, чулки", "Фартук на голое тело"];
 /** The order of steps the seeds walk through; the board shows every column. */
-const STATE_CYCLE: readonly CustomOrderState[] = ["at_model", "paid", "shot", "recorded", "at_model", "partly", "given", "revision", "shot", "paid", "at_model", "closed", "refused", "given"];
+const STATE_CYCLE: readonly CustomOrderState[] = ["at_model", "paid", "shot", "recorded", "checked", "partly", "given", "revision", "shot", "at_model", "at_model", "closed", "refused", "given"];
 
 const DEMO_CHAT = "1000000001";
 /** A person as the people registry names them (the demo's users carry the name). */
@@ -188,6 +191,16 @@ function viewerOf(request: DemoRequest): CustomViewer {
 
 const pageIdOf = (label: string | null) => (label === null ? null : DEMO_DATA_PAGES.find((page) => page.label === label)?.id ?? null);
 
+/** «У кого сейчас» in the demo: the check is the team lead's, the shooting a made-up content manager's, the giving its chatter's. */
+function demoLeader(order: DemoOrder): CustomOrder["leader"] {
+  const phase = customPhaseOf(order.state);
+  if (phase === null) return null;
+  const name = phase === "check" ? demoUserByRole("team_lead").name
+    : phase === "shoot" ? (order.page === null ? null : "Вера")
+    : nameOf(order.acceptedBy) ?? demoUserByRole("team_lead").name;
+  return { name, phase, product: customPhaseProduct(phase) };
+}
+
 function wire(order: DemoOrder, now: number): CustomOrder {
   const page = order.page === null ? undefined : DEMO_DATA_PAGES.find((one) => one.label === order.page);
   const fan = order.fanRef === null || order.page === null ? undefined : demoFans(order.page).find((one) => one.platformUserId === order.fanRef);
@@ -198,6 +211,7 @@ function wire(order: DemoOrder, now: number): CustomOrder {
     pageLabel: order.page,
     platform: page?.platform ?? null,
     model: page?.modelName ?? null,
+    modelSlug: page?.modelSlug ?? null,
     fan: fan && page ? { platform: page.platform, fanRef: fan.platformUserId, username: profile!.username, displayName: profile!.displayName } : null,
     buyer: order.fanRef === null ? order.buyer : null,
     fanErased: false,
@@ -205,6 +219,8 @@ function wire(order: DemoOrder, now: number): CustomOrder {
     what: whatOf(order.card),
     deadlineOn: order.deadlineOn,
     state: order.state,
+    stateWord: CUSTOM_STATE_WORDS[order.state],
+    leader: demoLeader(order),
     stateAt: isoAt(order.stateAt),
     stateNote: order.stateNote,
     stateRef: null,

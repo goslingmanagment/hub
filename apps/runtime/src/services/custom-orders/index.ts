@@ -1,4 +1,5 @@
 import {
+  CUSTOM_STATE_WORDS,
   customOrderCode,
   parseCustomOrderCode,
   parseTelegramRef,
@@ -58,6 +59,7 @@ import {
   type CustomOrderStateRow,
   type Database,
   listTestPageIds,
+  type TeamFacts,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -84,6 +86,8 @@ import {
   type CustomViewer,
 } from "./rules.ts";
 import { waitingCustomSaleIds } from "./readers.ts";
+import { customStepLeader, ledPhasesOf, type CustomLeader } from "./leaders.ts";
+import { personOfLogin, teamFactsFor, teamPagesFor } from "../teams.ts";
 
 /**
  * Заказ кастома (ecosystem plan 2026-11-12, package I): the core every door
@@ -129,19 +133,48 @@ export async function customLeads(db: Database): Promise<Array<{ userId: number;
  */
 export async function customViewerOf(app: CustomApp, principal: HumanAuthPrincipal): Promise<CustomViewer> {
   const leads = await customLeads(app.db);
-  const role = principal.narrowDeviceTokenId === undefined && (principal.user.role === "owner" || principal.user.role === "team_lead")
+  const narrow = principal.narrowDeviceTokenId !== undefined;
+  const role = !narrow && (principal.user.role === "owner" || principal.user.role === "team_lead")
     ? principal.user.role
     : "chatter";
+  const test = principal.sandbox?.test === true;
+  const facts = await teamFactsFor(app, principal);
+  // The team's cut (services/teams.ts): the pages of the viewer's teams plus the pages their login was granted.
+  const team = role === "owner" ? undefined : await teamPagesFor(app, principal);
   return {
-    userId: principal.user.id, role, pageIds: principal.assignedPageIds, lead: leads.some((lead) => lead.userId === principal.user.id),
+    userId: principal.user.id, role, pageIds: team ?? principal.assignedPageIds, lead: leads.some((lead) => lead.userId === principal.user.id),
+    // Who leads which step, by the one rule (leaders.ts): a narrow session from the extension leads nothing.
+    leads: narrow ? { check: [], shoot: [] } : ledPhasesOf(facts, principal.user.id, test),
     // The test realm (sandbox/realm.ts): the lead and the owner see every order of THEIR realm only.
-    realm: { test: principal.sandbox?.test === true, testPageIds: await listTestPageIds(app.db) },
+    realm: { test, testPageIds: await listTestPageIds(app.db) },
   };
+}
+
+/** The one rule's inputs (leaders.ts): the team facts, and the person right's holder for an order of no known page. */
+export interface CustomLeaderContext {
+  facts: TeamFacts;
+  fallback: CustomLeader | null;
+}
+
+export async function customLeaderContext(app: CustomApp, principal?: object): Promise<CustomLeaderContext> {
+  const [facts, leads] = await Promise.all([teamFactsFor(app, principal), customLeads(app.db)]);
+  const first = leads[0];
+  const personId = first === undefined ? null : personOfLogin(facts, first.userId);
+  const name = personId === null ? first?.displayName ?? "" : facts.people.find((person) => person.personId === personId)?.name ?? first?.displayName ?? "";
+  return { facts, fallback: first === undefined ? null : { kind: "person", personId, userId: first.userId, name } };
+}
+
+/** «У кого сейчас» of an order on the wire. */
+export function leaderWire(context: CustomLeaderContext | null, row: CustomOrderRow): CustomOrder["leader"] {
+  if (context === null) return null;
+  const step = customStepLeader(context.facts, row, context.fallback);
+  if (step === null) return null;
+  return { name: step.leader.kind === "owner" ? null : step.leader.name || null, phase: step.phase, product: step.product };
 }
 
 // ── The wire ────────────────────────────────────────────────────────────────
 
-export function orderWire(row: CustomOrderRow, now: Date = new Date()): CustomOrder {
+export function orderWire(row: CustomOrderRow, now: Date = new Date(), leaders: CustomLeaderContext | null = null): CustomOrder {
   const card = cardOf(row.card);
   return {
     id: row.id,
@@ -149,6 +182,7 @@ export function orderWire(row: CustomOrderRow, now: Date = new Date()): CustomOr
     pageLabel: row.pageLabel,
     platform: row.platform,
     model: row.modelName,
+    modelSlug: row.modelSlug,
     fan: row.fanId === null || row.fanRef === null || row.platform === null
       ? null
       : { platform: row.platform, fanRef: row.fanRef, username: row.fanUsername, displayName: row.fanDisplayName },
@@ -158,6 +192,8 @@ export function orderWire(row: CustomOrderRow, now: Date = new Date()): CustomOr
     what: whatOf(card),
     deadlineOn: row.deadlineOn,
     state: row.state,
+    stateWord: CUSTOM_STATE_WORDS[row.state],
+    leader: leaderWire(leaders, row),
     stateAt: row.stateAt.toISOString(),
     stateNote: row.stateNote,
     stateRef: row.stateRef,
@@ -246,17 +282,18 @@ export async function readCustomOrdersBoard(
   }
   const everything = viewer.lead || viewer.role === "owner";
   const pageIds = pageId !== null ? [pageId] : everything ? "all" as const : viewer.pageIds;
-  const [rows, lookalikes, leads] = await Promise.all([
+  const [rows, lookalikes, leads, leaders] = await Promise.all([
     listCustomOrders(app.db, { pageIds, unknownPage: everything || viewer.role === "team_lead", doneSince: new Date(now.getTime() - DONE_DAYS * DAY_MS), limit: BOARD_LIMIT + 1 }),
     // The last week's, and the older ones a matter still waits about: «Записать» or «Не кастом» closes it here.
     listCustomLookalikeSales(app.db, { from: new Date(now.getTime() - DONE_DAYS * DAY_MS), to: now, limit: 200, alsoIds: await waitingCustomSaleIds(app.db) }),
     customLeads(app.db),
+    customLeaderContext(app, principal),
   ]);
   const visible = rows.filter((row) => seesOrder(viewer, row));
   return {
     viewer: { lead: leadsSteps(viewer), owner: viewer.role === "owner" },
     leads: [...new Set(leads.map((lead) => lead.displayName))],
-    orders: visible.slice(0, BOARD_LIMIT).map((row) => orderWire(row, now)),
+    orders: visible.slice(0, BOARD_LIMIT).map((row) => orderWire(row, now, leaders)),
     capped: visible.length > BOARD_LIMIT,
     lookalikes: lookalikesFor(viewer, lookalikes)
       .filter((row) => pageId === null || row.pageId === pageId)
@@ -307,19 +344,20 @@ async function historyOf(db: Database, orderId: number): Promise<CustomOrderDeta
   }));
 }
 
-const IN_WORK: readonly CustomOrderStateRow[] = ["recorded", "paid", "at_model", "partly", "shot", "revision"];
+const IN_WORK: readonly CustomOrderStateRow[] = ["recorded", "paid", "checked", "at_model", "partly", "shot", "revision"];
 
 async function detailOf(app: CustomApp, viewer: CustomViewer, order: CustomOrderRow, now: Date): Promise<CustomOrderDetailResponse> {
   const working = IN_WORK.includes(order.state);
-  const [payments, offered, deliveries, history, messages] = await Promise.all([
+  const [payments, offered, deliveries, history, messages, leaders] = await Promise.all([
     listCustomOrderPayments(app.db, order.id),
     order.state === "cancelled" ? Promise.resolve([]) : paymentCandidatesOf(app.db, order, ["tip", "subscription"], now, 10),
     working ? deliveryCandidatesOf(app.db, order, 10) : Promise.resolve([]),
     historyOf(app.db, order.id),
     orderMessagesOf(app.db, order.id),
+    customLeaderContext(app),
   ]);
   return {
-    order: orderWire(order, now),
+    order: orderWire(order, now, leaders),
     cardText: cardTextOf(order),
     sourceText: order.sourceText,
     messages,
@@ -386,13 +424,15 @@ export type CustomStep =
   | { action: "card"; telegramRef: string; postedAt?: Date | null; author?: string | null }
   | { action: "payment"; transactionId: number }
   | { action: "unpay"; transactionId: number }
+  | { action: "checked" }
   | { action: "at_model"; telegramRef?: string | undefined }
   | { action: "partly"; note?: string | undefined; ref?: string | undefined }
   /** A revision request: about `part`, or — none named — about the whole order. No `message`: a person's «Правка» on the board. */
   | { action: "revision"; note?: string | undefined; ref?: string | undefined; message?: CustomMessageInput; ordinal?: number; part?: CustomPart | undefined }
   | { action: "shot"; ref?: string | undefined }
   | { action: "refused"; reason: string; ref?: string | undefined }
-  | { action: "given"; messageRef: string; at: Date }
+  /** `messageRef` null — given by a person's word, no message named. */
+  | { action: "given"; messageRef: string | null; at: Date }
   | { action: "close" }
   | { action: "cancel"; reason?: string | undefined }
   | { action: "delivery"; message: CustomMessageInput; part: "video" | "photos" | undefined; complete: boolean }
@@ -494,6 +534,8 @@ export async function applyCustomStep(
   app: CustomApp,
   input: {
     orderId: number; step: CustomStep; actor: CustomActor; viewer: CustomViewer | null; now?: Date;
+    /** A person's step carried by another product's key (ContentOps «Съёмка»): «снят» is then their own word. */
+    byPerson?: boolean;
     /** Filled for a message step: the event it names and whether it is kept now or was before; null — not kept. */
     report?: { event: CustomEventResult | null };
   },
@@ -627,6 +669,11 @@ export async function applyCustomStep(
           await event("payment_removed", { transactionId: step.transactionId, ...(back ? { state: "recorded" } : {}) });
           return true;
         }
+        case "checked": {
+          await move("checked");
+          await event("checked", { from: order.state });
+          return true;
+        }
         case "at_model": {
           if (step.telegramRef !== undefined) {
             const added = await addCustomOrderCard(db, { orderId: order.id, telegramRef: step.telegramRef, at: now });
@@ -667,7 +714,8 @@ export async function applyCustomStep(
           // taken back afterwards does not undo it (`shot_by_hand_at`; the reader's «снят» is no such word).
           let answered = 0;
           if (step.action === "shot") {
-            const byHand = input.actor.userId !== undefined && input.actor.userId !== null;
+            // A person's own hand: on the board, or carried by another product's key (ContentOps «Съёмка»).
+            const byHand = (input.actor.userId !== undefined && input.actor.userId !== null) || input.byPerson === true;
             await updateCustomOrderFields(db, order.id, { partsDone: wantedParts(cardOf(order.card)), ...(byHand ? { shotByHandAt: now } : {}) }, now);
             answered = await closeCustomOrderRevisions(db, { orderId: order.id, at: now });
           }
@@ -767,7 +815,9 @@ export async function applyCustomStep(
         }
         case "given": {
           await moveCustomOrder(db, { orderId: order.id, from: [order.state], to: "given", given: { messageRef: step.messageRef, at: step.at }, at: now });
-          await event("given", { from: order.state, messageRef: step.messageRef, sentAt: step.at.toISOString() });
+          await event("given", step.messageRef === null
+            ? { from: order.state, byWord: true }
+            : { from: order.state, messageRef: step.messageRef, sentAt: step.at.toISOString() });
           return true;
         }
         case "close": {
@@ -823,6 +873,8 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
       const ref = body.telegramRef === undefined ? undefined : parseTelegramRef(body.telegramRef) ?? undefined;
       return body.action === "card" ? { action: "card", telegramRef: ref! } : { action: "at_model", telegramRef: ref };
     }
+    case "checked":
+      return { action: "checked" };
     case "payment": {
       const offered = await paymentCandidatesOf(app.db, order, ["tip", "subscription"], now, 50);
       if (!offered.some((sale) => String(sale.transactionId) === body.transactionRef)) throw notSuggested("The payment is not suggested for this order");
@@ -831,6 +883,8 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
     case "unpay":
       return { action: "unpay", transactionId: Number(body.transactionRef) };
     case "given": {
+      // «Отдан» by the person's word: no message named (given before the hub saw the chat, a chat it does not read).
+      if (body.messageRef === undefined) return { action: "given", messageRef: null, at: now };
       const offered = await deliveryCandidatesOf(app.db, order, 50);
       const found = offered.find((message) => message.messageRef === body.messageRef);
       if (found === undefined) throw notSuggested("The message is not suggested for this order");

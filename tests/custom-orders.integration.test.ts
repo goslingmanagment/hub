@@ -68,6 +68,8 @@ describe("custom orders: who sees and moves what", () => {
     )).rows[0]!.id;
     await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [users.carol, person]);
     await testDb.pool.query("insert into person_rights (person_id, \"right\") values ($1, 'customs_lead')", [person]);
+    // As Hub's one writer of rights mirrors it (0415): «ведёт кастомы» is a customs record on every model.
+    await testDb.pool.query("insert into team_roles (person_id, model_id, kind) values ($1, $2, 'customs')", [person, model!.id]);
 
     const fanOn = async (pageLabel: string, ref: string, username: string) => {
       const fanId = Number((await testDb!.pool.query<{ id: string }>(
@@ -206,6 +208,37 @@ describe("custom orders: who sees and moves what", () => {
     const cards = await agent("/api/v1/agent/custom-orders/cards", { cards: [{ telegramRef: "tg:2600000001/3/400" }, { telegramRef: "tg:2600000002/6/200" }], complete: true });
     expect(cards.statusCode, cards.body).toBe(200);
     expect(cards.json()).toMatchObject({ matched: [{ telegramRef: "tg:2600000002/6/200", code: order.code }], opened: 1 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("takes «Проверен» from the check's leader, a shooting step carried by ContentOps' key from its leader only, «Отдан» by a chatter's word", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const id = await recordCustomOrder(app, {
+      pageId: pages["lora-1"]!, fanId: null, buyer: null, conversationRef: null, card: { task: "Съёмка по шагам" }, deadlineOn: null,
+      acceptedByUserId: users.alice!, origin: "extension", actor: { door: "extension", userId: users.alice! },
+    });
+    const code = `K-${id}`;
+    // A chatter checks nothing; the customs lead (no team lead on the model) does.
+    expect((await act("alice", code, { action: "checked" })).statusCode).toBe(409);
+    const checked = customOrderDetailResponseSchema.parse((await act("carol", code, { action: "checked" })).json());
+    expect(checked.order).toMatchObject({ state: "checked", stateWord: "Проверен", leader: { name: "Carol", phase: "shoot", product: "contentops" } });
+    // ContentOps carries a person's step: someone who does not lead the shooting is refused, its leader is written as theirs.
+    const refused = await agent(`/api/v1/agent/custom-orders/${code}`, { action: "person_step", step: "at_model", onBehalfOf: "alice", deadlineOn: "2030-01-10" });
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json()).toMatchObject({ reason: "not_allowed" });
+    const handed = await agent(`/api/v1/agent/custom-orders/${code}`, { action: "person_step", step: "at_model", onBehalfOf: "carol", deadlineOn: "2030-01-10" });
+    expect(handed.statusCode, handed.body).toBe(200);
+    expect(handed.json().order).toMatchObject({ state: "at_model", deadlineOn: "2030-01-10" });
+    expect((await agent(`/api/v1/agent/custom-orders/${code}`, { action: "person_step", step: "shot", onBehalfOf: "carol" })).statusCode).toBe(200);
+    const shot = customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/${code}`)).json());
+    expect(shot.history.slice(-3).map((item) => [item.event, item.actor, item.onBehalfOf])).toEqual([
+      ["custom_order.deadline", "gengar", "Carol"],
+      ["custom_order.at_model", "gengar", "Carol"],
+      ["custom_order.shot", "gengar", "Carol"],
+    ]);
+    // «Отдан» with no message the hub suggests: the chatter's word.
+    const given = customOrderDetailResponseSchema.parse((await act("alice", code, { action: "given" })).json());
+    expect(given.order).toMatchObject({ state: "given", givenMessageRef: null });
+    expect(given.order.givenAt).not.toBeNull();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   /** A fresh order of lora-1 at the model, no Telegram card yet: a video, and photos when the card names how many. */

@@ -32,8 +32,8 @@ export interface TeamFacts {
   working: Array<{ personId: number; pageId: number }>;
   /** Live team records of people who have not left. */
   roles: TeamRoleRow[];
-  /** Which person each login is (living logins only). */
-  logins: Array<{ userId: number; personId: number }>;
+  /** Which person each login is (living logins only), and the login's role (a content manager's: `content_manager`). */
+  logins: Array<{ userId: number; personId: number; role?: string }>;
   /** The people (not left): name and realm. */
   people: Array<{ personId: number; name: string; test: boolean }>;
 }
@@ -61,7 +61,7 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
        where t.revoked_at is null and p.state <> 'left'
        order by t.granted_at, t.id`),
     db.execute<Row>(sql`
-      select l.user_id, l.person_id from person_logins l join users u on u.id = l.user_id
+      select l.user_id, l.person_id, u.role from person_logins l join users u on u.id = l.user_id
        where u.disabled_at is null and u.deleted_at is null`),
     db.execute<Row>(sql`select id, display_name, is_test from people where state <> 'left'`),
   ]);
@@ -70,7 +70,7 @@ export async function loadTeamFacts(db: Database): Promise<TeamFacts> {
     models: models.rows.map((row) => ({ modelId: Number(row.id), slug: String(row.slug), name: String(row.name ?? row.slug), test: row.is_test === true })),
     working: working.rows.map((row) => ({ personId: Number(row.person_id), pageId: Number(row.page_id) })),
     roles: roles.rows.map(roleOf),
-    logins: logins.rows.map((row) => ({ userId: Number(row.user_id), personId: Number(row.person_id) })),
+    logins: logins.rows.map((row) => ({ userId: Number(row.user_id), personId: Number(row.person_id), role: String(row.role) })),
     people: people.rows.map((row) => ({ personId: Number(row.id), name: String(row.display_name ?? ""), test: row.is_test === true })),
   };
 }

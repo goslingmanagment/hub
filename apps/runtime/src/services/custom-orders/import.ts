@@ -336,7 +336,7 @@ export async function applyCustomOrdersImport(app: ImportApp, plan: CustomOrders
 }
 
 const STATE_WORDS: Record<CustomOrderStateRow, string> = {
-  recorded: "записан", paid: "оплачен", at_model: "у модели", partly: "сдан частично", shot: "снят", revision: "правка",
+  recorded: "записан", paid: "оплачен", checked: "проверен", at_model: "у модели", partly: "сдан частично", shot: "снят", revision: "правка",
   refused: "отказ модели", given: "отдан", closed: "закрыт", cancelled: "отменён",
 };
 

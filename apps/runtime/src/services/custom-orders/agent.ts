@@ -24,9 +24,11 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../auth.ts";
 import { AppError, ConflictError } from "../errors.ts";
 import {
-  applyCustomStep, cardTextOf, messageWire, orderMessagesOf, orderWire, recordCustomOrder,
-  type CustomActor, type CustomEventResult, type CustomMessageInput, type CustomStep,
+  applyCustomStep, cardTextOf, customLeaderContext, messageWire, notAllowed, orderMessagesOf, orderWire, recordCustomOrder,
+  type CustomActor, type CustomEventResult, type CustomLeaderContext, type CustomMessageInput, type CustomStep,
 } from "./index.ts";
+import { phaseLeader } from "./leaders.ts";
+import { personOfLogin } from "../teams.ts";
 import { reportUnmatchedCards } from "./checks.ts";
 import { dottedDay, fanInputOf, moscowDay, parseCardText, STEP_FROM } from "./rules.ts";
 
@@ -61,11 +63,11 @@ function inGrant(scope: AgentCustomScope, order: CustomOrderRow): boolean {
 }
 
 async function agentOrderOf(app: AgentApp, order: CustomOrderRow, now: Date): Promise<AgentCustomOrder> {
-  return agentWire(order, await orderMessagesOf(app.db, order.id), now);
+  return agentWire(order, await orderMessagesOf(app.db, order.id), now, await customLeaderContext(app));
 }
 
-function agentWire(order: CustomOrderRow, messages: AgentCustomOrder["messages"], now: Date): AgentCustomOrder {
-  const { paidGrossMills: _gross, paidNetMills: _net, ...wire } = orderWire(order, now);
+function agentWire(order: CustomOrderRow, messages: AgentCustomOrder["messages"], now: Date, leaders: CustomLeaderContext | null): AgentCustomOrder {
+  const { paidGrossMills: _gross, paidNetMills: _net, ...wire } = orderWire(order, now, leaders);
   return { ...wire, cardText: cardTextOf(order), sourceText: order.sourceText, messages };
 }
 
@@ -75,8 +77,8 @@ export async function agentListCustomOrders(app: AgentApp, scope: AgentCustomSco
   const orders = await listAgentCustomOrders(app.db, {
     pageIds: scope.pages.map((page) => page.id), open: query.state === "open" && orderId === null && telegramRef === null, orderId, telegramRef, limit: query.limit,
   });
-  const messages = await listCustomOrderMessagesOf(app.db, orders.map((order) => order.id));
-  return { orders: orders.map((order) => agentWire(order, (messages.get(order.id) ?? []).map(messageWire), now)), serverNow: now.toISOString() };
+  const [messages, leaders] = await Promise.all([listCustomOrderMessagesOf(app.db, orders.map((order) => order.id)), customLeaderContext(app)]);
+  return { orders: orders.map((order) => agentWire(order, (messages.get(order.id) ?? []).map(messageWire), now, leaders)), serverNow: now.toISOString() };
 }
 
 /**
@@ -159,10 +161,56 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
   return { order: await agentOrderOf(app, (await findCustomOrder(app.db, id))!, now), outcome: "created" as const, event: null };
 }
 
+/**
+ * A person's step carried by another product's key (ContentOps «Съёмка», package C3): the key only carries it; the
+ * person must lead that step of the order by the one rule (leaders.ts) — the shooting's leader (a fan's complaint
+ * after «отдан»: the check's too), or the owner — and be of the order's realm. Written as theirs.
+ */
+async function personStep(
+  app: AgentApp, scope: AgentCustomScope, order: CustomOrderRow,
+  body: Extract<AgentCustomOrderUpdateBody, { action: "person_step" }>, now: Date,
+) {
+  const person = await findMatterPerson(app.db, body.onBehalfOf);
+  if (person === null) throw new ConflictError(`No living person "${body.onBehalfOf}"`, { reason: "person_unknown" });
+  const context = await customLeaderContext(app);
+  const personId = personOfLogin(context.facts, person.userId);
+  const personTest = personId !== null && context.facts.people.some((one) => one.personId === personId && one.test);
+  const orderTest = order.pageId !== null && context.facts.pages.some((page) => page.pageId === order.pageId && page.test);
+  // The test realm's wall (sandbox/realm.ts): a test order is moved by test people only, a live one by live people.
+  if (personTest !== orderTest) throw notFound();
+  const mine = (phase: "check" | "shoot") => {
+    const leader = phaseLeader(context.facts, order.pageId, phase, context.fallback);
+    return leader.kind === "person" && leader.userId === person.userId;
+  };
+  const leads = person.role === "owner" || mine("shoot") || (body.step === "revision" && order.state === "given" && mine("check"));
+  if (!leads) throw notAllowed("This step of the order is not the person's: the shooting's leader takes it");
+  const actor: CustomActor = { door: "api", agentKeyId: scope.principal.agentKeyId, onBehalfOfUserId: person.userId };
+  let changed = false;
+  if (body.step === "at_model" && body.deadlineOn !== undefined && body.deadlineOn !== order.deadlineOn) {
+    changed = await applyCustomStep(app, { orderId: order.id, step: { action: "deadline", deadlineOn: body.deadlineOn }, actor, viewer: null, now, byPerson: true });
+  }
+  const step: CustomStep = body.step === "at_model" ? { action: "at_model" }
+    : body.step === "partly" ? { action: "partly", note: body.note }
+    : body.step === "shot" ? { action: "shot" }
+    : body.step === "refused" ? { action: "refused", reason: body.note! }
+    : { action: "revision", note: body.note, part: body.part };
+  const current = (await findCustomOrder(app.db, order.id))!;
+  if (!STEP_FROM[step.action].includes(current.state)) {
+    throw notAllowed(`An order «${current.state}» takes no step «${step.action}»`);
+  }
+  changed = (await applyCustomStep(app, { orderId: order.id, step, actor, viewer: null, now, byPerson: true })) || changed;
+  return {
+    order: await agentOrderOf(app, (await findCustomOrder(app.db, order.id))!, now),
+    outcome: changed ? "changed" as const : "unchanged" as const,
+    event: null,
+  };
+}
+
 export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomScope, code: string, body: AgentCustomOrderUpdateBody, now: Date = new Date()) {
   const id = parseCustomOrderCode(code);
   const order = id === null ? null : await findCustomOrder(app.db, id);
   if (order === null || !inGrant(scope, order)) throw notFound();
+  if (body.action === "person_step") return personStep(app, scope, order, body, now);
   const ref = (text: string) => parseTelegramRef(text)!;
   type MessageBody = { telegramRef?: string | undefined; at?: string | undefined; author?: string | undefined; excerpt?: string | undefined };
   const message = (input: MessageBody | undefined, eventRef: string | undefined): CustomMessageInput => ({

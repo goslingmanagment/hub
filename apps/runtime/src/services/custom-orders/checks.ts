@@ -24,8 +24,10 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 import { applyCustomStep } from "./index.ts";
-import { CUSTOM_UNRECORDED_KIND, customsLeadByPage, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
+import { CUSTOM_UNRECORDED_KIND, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
 import { deadlinePassed, dottedDay } from "./rules.ts";
+import { customLeaderContext } from "./index.ts";
+import { leaderOwner, phaseLeader } from "./leaders.ts";
 import { testPageIds } from "../sandbox/realm.ts";
 
 /**
@@ -33,9 +35,12 @@ import { testPageIds } from "../sandbox/realm.ts";
  * pass, Hub's server): every five minutes it reads the orders and the sales and
  * makes the matters what they say, and closes those whose cause is gone.
  *
- *   custom.not_at_model      paid or recorded and not at the model for 24 h, or the model refused it 12 h ago and
- *                            nobody moved it since → the lead (deadline or not: such an order waits for no one else)
- *   custom.overdue           the deadline's day is over and it is not shot → the lead;
+ *   custom.not_at_model      paid or recorded and neither checked nor at the model for 24 h → the check's leader
+ *                            (Workboard: the team lead, else the customs lead, else the owner)
+ *   custom.checked_not_at_model  «Проверен» and not at the model for 24 h, or the model refused it 12 h ago and nobody
+ *                            moved it since → the shooting's leader (ContentOps: the content manager, else the customs
+ *                            lead, else the owner)
+ *   custom.overdue           the deadline's day is over and it is not shot → the shooting's leader;
  *   custom.overdue_owner     the same day one line for the owner, with the count
  *   custom.shot_not_given    shot and not given for 12 h → the chatter who accepted it
  *   custom.give_on_shift     … and the person on shift on its page
@@ -92,6 +97,8 @@ const pageOf = (order: CustomOrderRow) => order.pageLabel ?? "страница �
 /** Who leads customs of a page's orders: one owner for all, or by the page (its model's customs lead, then team lead). */
 export type LeadOf = MatterOwner | ((pageId: number | null) => MatterOwner);
 const leadFn = (lead: LeadOf) => (typeof lead === "function" ? lead : () => lead);
+/** Who leads a phase of a page's order (leaders.ts, the one rule); absent — `lead` for every phase. */
+export type PhaseLeadOf = (pageId: number | null, phase: "check" | "shoot") => MatterOwner;
 
 /** The findings of every order kind from the orders, pure: the rules above. */
 export function orderFindings(input: {
@@ -105,11 +112,15 @@ export function orderFindings(input: {
   onShift: ReadonlyMap<string, readonly number[]>;
   /** The test pages (sandbox/realm.ts): their orders get their own matters (the test team's), never the owner's count. */
   testPageIds?: ReadonlySet<number>;
-}): Record<"custom.not_at_model" | "custom.overdue" | "custom.overdue_owner" | "custom.shot_not_given" | "custom.give_on_shift", Finding[]> {
+  /** Who leads each phase (leaders.ts); absent — `lead` for every phase. */
+  phaseLead?: PhaseLeadOf;
+}): Record<"custom.not_at_model" | "custom.checked_not_at_model" | "custom.overdue" | "custom.overdue_owner" | "custom.shot_not_given" | "custom.give_on_shift", Finding[]> {
   const { now } = input;
   const leadOf = leadFn(input.lead);
+  const phaseOf = input.phaseLead ?? ((pageId: number | null) => leadOf(pageId));
   const out = {
     "custom.not_at_model": [] as Finding[],
+    "custom.checked_not_at_model": [] as Finding[],
     "custom.overdue": [] as Finding[],
     "custom.overdue_owner": [] as Finding[],
     "custom.shot_not_given": [] as Finding[],
@@ -122,20 +133,27 @@ export function orderFindings(input: {
     const since = now.getTime() - order.stateAt.getTime();
     const waitsAtStart = (order.state === "paid" || order.state === "recorded") && since >= NOT_AT_MODEL_HOURS * HOUR_MS;
     const refusedLong = order.state === "refused" && since >= REFUSED_HOURS * HOUR_MS;
-    if (waitsAtStart || refusedLong) {
-      const title = order.state === "refused"
-        ? `Кастом ${code}: отказ модели, решите, что дальше: ${pageOf(order)}`
-        : `Кастом ${code} ${order.state === "paid" ? "оплачен" : "записан"} и сутки не у модели: ${pageOf(order)}`;
+    const checkedLong = order.state === "checked" && since >= NOT_AT_MODEL_HOURS * HOUR_MS;
+    if (waitsAtStart) {
       out["custom.not_at_model"].push({
-        key: `custom.not_at_model:${code}`, title,
-        object: orderObject(order), pageIds, owner: leadOf(order.pageId), evidence: { code, state: order.state, since: order.stateAt.toISOString() }, link: orderLink(order),
+        key: `custom.not_at_model:${code}`, title: `Кастом ${code} ${order.state === "paid" ? "оплачен" : "записан"} и сутки не у модели: ${pageOf(order)}`,
+        object: orderObject(order), pageIds, owner: phaseOf(order.pageId, "check"), evidence: { code, state: order.state, since: order.stateAt.toISOString() }, link: orderLink(order),
       });
     }
-    if (["recorded", "paid", "at_model", "partly", "revision"].includes(order.state) && deadlinePassed(order.deadlineOn, now)) {
+    if (refusedLong || checkedLong) {
+      const title = order.state === "refused"
+        ? `Кастом ${code}: отказ модели, решите, что дальше: ${pageOf(order)}`
+        : `Кастом ${code} проверен и сутки не у модели: ${pageOf(order)}`;
+      out["custom.checked_not_at_model"].push({
+        key: `custom.checked_not_at_model:${code}`, title,
+        object: orderObject(order), pageIds, owner: phaseOf(order.pageId, "shoot"), evidence: { code, state: order.state, since: order.stateAt.toISOString() }, link: orderLink(order),
+      });
+    }
+    if (["recorded", "paid", "checked", "at_model", "partly", "revision"].includes(order.state) && deadlinePassed(order.deadlineOn, now)) {
       if (order.pageId === null || input.testPageIds?.has(order.pageId) !== true) overdue.push(order);
       out["custom.overdue"].push({
         key: `custom.overdue:${code}`, title: `Кастом ${code} просрочен: срок был ${dottedDay(order.deadlineOn!)}, ${pageOf(order)}`,
-        object: orderObject(order), pageIds, owner: leadOf(order.pageId), evidence: { code, deadlineOn: order.deadlineOn, state: order.state }, link: orderLink(order),
+        object: orderObject(order), pageIds, owner: phaseOf(order.pageId, "shoot"), evidence: { code, deadlineOn: order.deadlineOn, state: order.state }, link: orderLink(order),
       });
     }
     if (order.state === "shot" && since >= NOT_GIVEN_HOURS * HOUR_MS) {
@@ -145,7 +163,7 @@ export function orderFindings(input: {
       out["custom.shot_not_given"].push({
         key: `custom.shot_not_given:${code}`, title, object: orderObject(order), pageIds,
         // An order nobody accepted (imported) or a chatter without the right: the lead hands it over.
-        owner: acceptor === null ? leadOf(order.pageId) : { userId: acceptor }, evidence, link: orderLink(order),
+        owner: acceptor === null ? phaseOf(order.pageId, "check") : { userId: acceptor }, evidence, link: orderLink(order),
       });
       const onShift = (order.pageLabel === null ? [] : input.onShift.get(order.pageLabel) ?? [])
         .find((userId) => userId !== acceptor && input.recorders.has(userId));
@@ -268,11 +286,14 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
     tally.opened += done.opened;
     tally.closed += done.closed;
   };
-  const [lead, recorderRows, onShift] = await Promise.all([
-    customsLeadByPage(app),
+  const [leaders, recorderRows, onShift] = await Promise.all([
+    customLeaderContext(app),
     listUsersWithPersonRight(app.db, "records_customs"),
     listOnShiftUsersByPage(app.db, now),
   ]);
+  // Who leads each phase of a page's order: the one rule (leaders.ts); the chat side's findings are the check's.
+  const phaseLead: PhaseLeadOf = (pageId, phase) => leaderOwner(phaseLeader(leaders.facts, pageId, phase, leaders.fallback));
+  const lead = (pageId: number | null) => phaseLead(pageId, "check");
   const recorders = new Set(recorderRows.map((row) => row.userId));
 
   // Given and quiet for three days: closed by itself (a revision moves it out of «given» first).
@@ -286,8 +307,8 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
     }
   }
 
-  const orders = await listCustomOrdersInStates(app.db, ["recorded", "paid", "at_model", "partly", "shot", "revision", "refused"]);
-  const findings = orderFindings({ orders, now, lead, recorders, onShift, testPageIds: await testPageIds(app) });
+  const orders = await listCustomOrdersInStates(app.db, ["recorded", "paid", "checked", "at_model", "partly", "shot", "revision", "refused"]);
+  const findings = orderFindings({ orders, now, lead, phaseLead, recorders, onShift, testPageIds: await testPageIds(app) });
   for (const kind of Object.keys(findings) as Array<keyof typeof findings>) add(await reconcile(app, kind, findings[kind], now));
 
   // A sale that looks like a custom, a day old and still without an order: its chatter's with the right, else the

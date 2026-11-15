@@ -15,6 +15,7 @@ describe("a custom order on the extension's wire", () => {
     expect(unpaid).toEqual({
       recorded: "ordered",
       paid: "paid",
+      checked: "paid",
       at_model: "paid",
       partly: "paid",
       shot: "paid",
