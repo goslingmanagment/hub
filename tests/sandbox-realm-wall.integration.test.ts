@@ -348,7 +348,7 @@ describe("the wall of the test realm", () => {
     expect(differences(before, seeded, "seeded")).toEqual([]);
 
     const now = new Date();
-    await seedSandbox(app, { scenarios: ["shift", "customs", "matters"], env: SANDBOX_PASSWORDS, now });
+    await seedSandbox(app, { scenarios: ["shift", "customs", "matters", "publications"], env: SANDBOX_PASSWORDS, now });
     await syncShiftRowsSince(app.db, { from: new Date(now.getTime() - 3 * DAY_MS), now });
     await refreshSaleHomes(app.db, { from: new Date(now.getTime() - 3 * DAY_MS), to: now, now });
     await runCustomOrderChecks(app, now);
@@ -377,6 +377,31 @@ describe("the wall of the test realm", () => {
       appendFileSync(summary, `${JSON.stringify({ compared: before.size, statuses: Object.fromEntries(statuses), notProven })}\n`);
     }
   }, 900_000);
+
+  // «Публикации» (products package C2): the test pages' posts are the test realm's alone, both ways; a platform is never asked.
+  it("shows the test owner the test pages' publications and a live owner none, and asks no platform for them", async (context) => {
+    if (!server || !testDb) return context.skip();
+    await seedSandbox(createTestAppContext(testDb), { scenarios: ["publications"], env: SANDBOX_PASSWORDS, now: new Date(Date.now() - 60_000) });
+    if (tOwnerCookie === "") tOwnerCookie = await login("t-owner", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_OWNER);
+    const get = (url: string, cookie: string) => server!.inject({ method: "GET", url, headers: { cookie } });
+    const test = await get("/api/v1/admin/publications", tOwnerCookie);
+    expect(test.statusCode, test.body).toBe(200);
+    const statuses = new Set((test.json() as { publications: Array<{ pageLabel: string; status: string }> }).publications.map((one) => one.status));
+    expect([...statuses].sort()).toEqual(["approved", "draft", "published", "unknown", "withdrawn"]);
+    expect(liveWords.filter((word) => test.body.includes(`"${word}"`))).toEqual([]);
+    const settings = await get("/api/v1/admin/publications/settings", tOwnerCookie);
+    expect(settings.body).toContain('"test-1"');
+    expect(liveWords.filter((word) => settings.body.includes(`"${word}"`))).toEqual([]);
+    const ownerCookie = callers.find((one) => one.name === "owner")!.headers.cookie!;
+    for (const url of ["/api/v1/admin/publications", "/api/v1/admin/publications/settings", "/api/v1/admin/publications/queue"]) {
+      const live = await get(url, ownerCookie);
+      expect(live.statusCode, live.body).toBe(200);
+      expect(live.body.includes('"test-1"') || live.body.includes('"test-of"'), url).toBe(false);
+    }
+    const refresh = await server.inject({ method: "POST", url: "/api/v1/admin/publications/queue/refresh", headers: { cookie: tOwnerCookie }, payload: { pageLabel: "test-1" } });
+    expect(refresh.statusCode).toBe(409);
+    expect(refresh.json()).toMatchObject({ message: "тестовая страница: на площадку не отправляется" });
+  }, 300_000);
 
   it("a live owner cannot open a test page", async (context) => {
     if (!server || !testDb) return context.skip();

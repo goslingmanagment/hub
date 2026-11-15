@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { PUBLICATION_SWITCH_KEYS, routeSchemas } from "@agency_hub_core/contracts";
+import { PUBLICATION_SWITCH_KEYS, routeSchemas, type PublicationWire } from "@agency_hub_core/contracts";
 import type { PublicationStatus } from "@agency_hub_core/shared";
 import {
   ConfigOverrideTransitionError,
@@ -98,8 +98,8 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   const { requirePrincipal, requireAgentKeyPrincipal } = ctx.auth;
   const db = appContext.db;
 
-  async function pageByLabel(label: string) {
-    const page = (await listPublicationPages(db)).find((candidate) => candidate.label === label);
+  async function pageByLabel(label: string, realm: "live" | "test" = "live") {
+    const page = (await listPublicationPages(db, realm)).find((candidate) => candidate.label === label);
     if (!page) throw new NotFoundError("Page not found");
     return page;
   }
@@ -113,13 +113,21 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   type Person = Awaited<ReturnType<typeof requirePrincipal>>;
 
+  /** A test person (sandbox/realm.ts) works the test pages' publications, a live one the live pages'. */
+  const realmOf = (person: Person) => (person.sandbox?.test === true ? "test" as const : "live" as const);
+
+  /** The plain answer for a test page wherever a platform would be asked: Hub stops before it. */
+  const TEST_PAGE_WORDS = "тестовая страница: на площадку не отправляется";
+  const testRefusal = (id: number, publication: PublicationWire | null) =>
+    ({ results: [{ id, outcome: "refused" as const, reason: TEST_PAGE_WORDS, publication }] });
+
   function scopeOf(person: Person): ReadonlySet<number> | null {
     const scope = pageScopeFor(person);
     return scope === undefined ? null : new Set(scope);
   }
 
   async function scopedPage(person: Person, label: string) {
-    const page = await pageByLabel(label);
+    const page = await pageByLabel(label, realmOf(person));
     const scope = scopeOf(person);
     if (scope !== null && !scope.has(page.id)) throw new NotFoundError("Page not found");
     return page;
@@ -132,9 +140,17 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     if (!publication || !scope.has(publication.pageId)) throw new NotFoundError("Publication not found");
   }
 
+  /** The publication as the wire says it, for an answer that changed nothing. */
+  async function listPublicationsWireByIds(id: number): Promise<PublicationWire | null> {
+    const detail = await getPublicationDetail(db, id, { vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) }).catch(() => null);
+    if (detail === null) return null;
+    const { events: _events, revision: _revision, ...wire } = detail as PublicationWire & { events?: unknown; revision?: unknown };
+    return wire;
+  }
+
   async function scopedPages(person: Person) {
     const scope = scopeOf(person);
-    return (await listPublicationPages(db)).filter((page) => scope === null || scope.has(page.id));
+    return (await listPublicationPages(db, realmOf(person))).filter((page) => scope === null || scope.has(page.id));
   }
 
   /** The owner's audit row of a withdrawal and the schedule's refresh after it.
@@ -200,6 +216,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
     async queueRefresh(person: Person, pageLabel: string) {
       const page = await scopedPage(person, pageLabel);
+      if (realmOf(person) === "test") throw new ConflictError(TEST_PAGE_WORDS);
       if (page.platform !== "onlyfans" && page.platform !== "fansly") throw new NotFoundError("Not a page with a schedule");
       // The minutely jobs read it: OnlyFans by an owner action, Fansly by the page's engine.
       await requestPublicationQueueRefresh(db, { pageId: page.id, userId: person.user.id });
@@ -208,6 +225,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
     async withdrawPage(person: Person, pageLabel: string) {
       const page = await scopedPage(person, pageLabel);
+      if (realmOf(person) === "test") return { results: [] };
       // Fansly: through the page's engine, the result as each post's status (plan PR 9).
       const results = page.platform === "fansly"
         ? await withdrawAllFanslyPublications(appContext, { pageId: page.id, userId: person.user.id })
@@ -235,6 +253,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
     async withdraw(person: Person, id: number) {
       await requireInScope(person, id);
+      if (realmOf(person) === "test") return testRefusal(id, (await listPublicationsWireByIds(id)));
       const target = await getPublication(db, id);
       const results = target?.platform === "fansly"
         ? await withdrawFanslyPublications(appContext, { ids: [id], userId: person.user.id })
@@ -250,6 +269,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     // wall, through the page's engine; the outcome comes as the status.
     async deletePost(person: Person, id: number) {
       await requireInScope(person, id);
+      if (realmOf(person) === "test") return testRefusal(id, (await listPublicationsWireByIds(id)));
       const result = await deleteFanslyPublication(appContext, { id, userId: person.user.id });
       const publication = result.publication;
       if (publication !== null) {

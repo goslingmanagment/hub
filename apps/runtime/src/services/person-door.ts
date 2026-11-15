@@ -41,7 +41,8 @@ export const PERSON_DOOR_OPERATIONS = {
   personPublicationQueueList: { console: "adminPublicationQueueList", roles: SCREEN },
   personPublicationQueueRefresh: { console: "adminPublicationQueueRefresh", roles: SCREEN },
   personPublicationSettingsList: { console: "adminPublicationSettingsList", roles: SCREEN },
-  personPublicationSwitches: { console: "adminConfig", roles: SCREEN },
+  // Read beside the settings: the publishing switches alone, never the rest of the config.
+  personPublicationSwitches: { console: "adminPublicationSettingsList", roles: SCREEN },
   personPublicationSettingsUpdate: { console: "adminPublicationSettingsUpdate", roles: OWNER },
   personPublicationDeletePost: { console: "adminPublicationDeletePost", roles: OWNER },
   personPublicationWithdrawPage: { console: "adminPublicationWithdrawPage", roles: OWNER },

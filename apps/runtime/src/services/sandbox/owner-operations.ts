@@ -81,6 +81,22 @@ export const SANDBOX_OWNER_OPERATIONS: ReadonlySet<string> = new Set([
   "teamRoleSet",
   "reviewNotes",
   "reviewNoteAdd",
+  // «Публикации» and «Статистика» of the test pages (products package C2): the feed, the card and the actions that change
+  // only Hub's own row; a platform is never asked for a test page (publications' realm conditions, the screen's answer
+  // «тестовая страница: на площадку не отправляется»). Not here: a page's settings, the switches, deleting from a wall.
+  "adminPublicationList",
+  "adminPublicationGet",
+  "adminPublicationApprove",
+  "adminPublicationCancel",
+  "adminPublicationWithdraw",
+  "adminPublicationReplace",
+  "adminPublicationResolve",
+  "adminPublicationQueueList",
+  "adminPublicationQueueRefresh",
+  "adminPublicationSettingsList",
+  "creatorStatsContent",
+  "creatorStatsMedia",
+  "contentComments",
 ]);
 
 /** The refusal of an operation off the table, for a test owner; null for anyone else or an operation on it. */

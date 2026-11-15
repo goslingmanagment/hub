@@ -1,5 +1,7 @@
 import { sql } from "drizzle-orm";
 
+import { livePageSql } from "./realm.ts";
+
 import type { Database } from "../client.ts";
 
 // The run of an OnlyFans vault album (0397, 8-docs 2026-11-12-of-vault-album,
@@ -129,7 +131,7 @@ export async function listRunningOnlyfansVaultAlbumRuns(db: Database): Promise<O
   const result = await db.execute<Row>(sql`
     select r.* from onlyfans_vault_album_runs r
       join publications p on p.id = r.publication_id
-     where r.step <> 'done' and p.status = 'submitting' and p.kind = 'vault_album'
+     where r.step <> 'done' and p.status = 'submitting' and p.kind = 'vault_album' and ${livePageSql(sql`p.page_id`)}
      order by r.started_at, r.publication_id
   `);
   return result.rows.map(toRun);
@@ -142,7 +144,7 @@ export async function listDueOnlyfansVaultAlbums(db: Database, now: Date): Promi
       from publications p
       join pages pg on pg.id = p.page_id
      where p.status = 'approved' and p.kind = 'vault_album' and pg.platform::text = 'onlyfans' and pg.status = 'active'
-       and p.publish_at <= ${now}
+       and p.publish_at <= ${now} and ${livePageSql(sql`p.page_id`)}
      order by p.publish_at, p.id
   `);
   return result.rows.map((row) => ({
