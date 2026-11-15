@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { saleClaimAnswerResponseSchema, saleDisputeResponseSchema, shiftReportResponseSchema } from "@agency_hub_core/contracts";
+import { saleClaimAnswerResponseSchema, saleDisputeResponseSchema, shiftReportConfirmResponseSchema, shiftReportResponseSchema } from "@agency_hub_core/contracts";
 import { assignUserToPage, createFanslyPage, createModel, insertAgentKey, insertSaleClaim } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -391,5 +391,88 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
       await meanwhile.query("rollback").catch(() => undefined);
       meanwhile.release();
     }
+  });
+
+  // «Подтверждаю» signs what «Подтвердите» shows: one computation of both (shift-report-board-view.ts `signableOf`).
+  // Each case on its own shift of anna, so the sums are the case's alone. Raw presses: no «Исправить» in between.
+  const board = async (shiftId: number) => {
+    const read = await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftId}`);
+    expect(read.statusCode, read.body).toBe(200);
+    return shiftReportResponseSchema.parse(read.json()).board!;
+  };
+  const confirmAsShown = async (shiftId: number) => {
+    const shown = await board(shiftId);
+    expect(shown.phase).toBe("confirm");
+    const pressed = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftId}/confirm`, {
+      candidateId: shown.candidate!.id, seenTotalMills: shown.totals.nowMills, seenCount: shown.totals.count,
+    });
+    expect(pressed.statusCode, pressed.body).toBe(200);
+    const answer = shiftReportConfirmResponseSchema.parse(pressed.json());
+    expect(answer.refused).toBeNull();
+    expect(answer.confirmed).toBe(true);
+    return { shown, answer };
+  };
+  const handIn = async (shiftId: number) => {
+    const handed = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftId}/submit`);
+    expect(handed.statusCode, handed.body).toBe(200);
+    expect(shiftReportResponseSchema.parse(handed.json()).board?.phase).toBe("confirm");
+  };
+  const counted = async (shiftId: number) =>
+    Number((await testDb!.pool.query("select v.total_mills::int as total from shift_handins h join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version where h.shift_id = $1", [shiftId])).rows[0].total);
+
+  it("signs «мимо площадки» the owner confirmed while the report waits in «Подтвердите»: the board counts it, «Подтверждаю» goes through", async (context) => {
+    if (!testDb) return context.skip();
+    const shift = await insertShift(anna, "mia-1", "2026-11-12T15:00:00Z", "2026-11-12T23:00:00Z");
+    const added = await rawSession("anna", "POST", `/api/v1/shift-reports/${shift}/off-platform`, { amountMills: 30_000, fromWhom: "фан", whatFor: "кастом" });
+    expect(added.statusCode, added.body).toBe(200);
+    // Counted once (the owner confirms on a page of the report), then «Исправить», «Сдать смену»: it waits in «Подтвердите».
+    await handInAndConfirm(asSession, "anna", shift);
+    expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${shift}/reopen`)).statusCode).toBe(200);
+    await handIn(shift);
+    expect((await board(shift)).totals).toMatchObject({ nowMills: 0, wasMills: null });
+    const decided = await rawSession("boss", "POST", `/api/v1/off-platform/${added.json().line.id}/decide`, { decision: "confirm", pageLabel: "mia-1" });
+    expect(decided.statusCode, decided.body).toBe(200);
+    const { shown } = await confirmAsShown(shift);
+    expect(shown.totals).toMatchObject({ nowMills: 30_000, wasMills: 0 });
+    expect(await counted(shift)).toBe(30_000);
+  });
+
+  it("signs a colleague's agreement given while the report waits in «Подтвердите»: «Было 0, стало 10», then «Подтверждаю» goes through", async (context) => {
+    if (!testDb) return context.skip();
+    const shift = await insertShift(anna, "mia-1", "2026-11-13T15:00:00Z", "2026-11-13T23:00:00Z");
+    const sale = await bellasSale("tx-sign-agreed", 10_000);
+    const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${sale}`, { statement: "mine", note: "мой постоянный" });
+    expect(said.statusCode, said.body).toBe(200);
+    await handInAndConfirm(asSession, "anna", shift);
+    await runSaleClaims(app);
+    const claim = await testDb.pool.query("select id from sale_claims where transaction_id = $1 and state = 'asked'", [sale]);
+    expect(claim.rows).toHaveLength(1);
+    // «Исправить», «Сдать смену»: the taken sale counts 0 until bella answers.
+    expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${shift}/reopen`)).statusCode).toBe(200);
+    await handIn(shift);
+    expect((await board(shift)).totals).toMatchObject({ nowMills: 0 });
+    const agreed = await rawSession("bella", "POST", `/api/v1/sale-claims/${Number(claim.rows[0].id)}/answer`, { answer: "agree" });
+    expect(agreed.statusCode, agreed.body).toBe(200);
+    const { shown } = await confirmAsShown(shift);
+    expect(shown.totals).toMatchObject({ nowMills: 10_000, wasMills: 0, count: 1 });
+    expect(await counted(shift)).toBe(10_000);
+    expect((await newestLine(shift, sale))!.line).toMatchObject({ amountMills: 10_000, disputed: false, settled: "agreed" });
+  });
+
+  it("signs a sale's comment written in «Подтвердите»: the board shows it and the counted version keeps it", async (context) => {
+    if (!testDb) return context.skip();
+    const shift = await insertShift(anna, "mia-1", "2026-11-14T15:00:00Z", "2026-11-14T23:00:00Z");
+    const sale = await bellasSale("tx-sign-note", 12_000);
+    const said = await rawSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${sale}`, { statement: "mine", note: "мой постоянный" });
+    expect(said.statusCode, said.body).toBe(200);
+    await handIn(shift);
+    const row = (await board(shift)).columns.flatMap((column) => column.rows).find((one) => one.transactionId === sale);
+    expect(row).toMatchObject({ canNote: true, note: { text: "мой постоянный" } });
+    const noted = await rawSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${sale}`, { statement: "mine", note: "фан сам написал, что за чат" });
+    expect(noted.statusCode, noted.body).toBe(200);
+    const shownRow = (await board(shift)).columns.flatMap((column) => column.rows).find((one) => one.transactionId === sale);
+    expect(shownRow?.note?.text).toBe("фан сам написал, что за чат");
+    await confirmAsShown(shift);
+    expect((await newestLine(shift, sale))!.line).toMatchObject({ note: "фан сам написал, что за чат" });
   });
 });

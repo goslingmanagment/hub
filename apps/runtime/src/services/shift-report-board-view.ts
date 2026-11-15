@@ -8,8 +8,11 @@ import {
 } from "@agency_hub_core/contracts";
 import { deciderOf, personsOfLogins, teamFactsFor } from "./teams.ts";
 import {
+  findHandinPersonOfUser,
   findPreviousShiftComment,
   hasShiftReportReviewer,
+  listHandinMarks,
+  listOffPlatform,
   listCurrentWordsOfSales,
   listHandinCandidates,
   listHandinPeopleOfUsers,
@@ -36,9 +39,9 @@ import {
 } from "@agency_hub_core/db";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
-import { pageSums } from "./shift-handin-rules.ts";
-import { ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
-import { confirmedLines, gengarState, mayAct, type BoardActor } from "./shift-report-phases.ts";
+import { reportSums } from "./sale-claim-rules.ts";
+import { draftFacts, draftLines, linesPageSums, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { gengarState, mayAct, signedLines, type BoardActor } from "./shift-report-phases.ts";
 
 /**
  * The «Отчёт» board as a reader sees it (products plan 2026-11-13, package R; the contract shift-report-board.ts): a
@@ -187,7 +190,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   // version once counted. A reader without the draft sees the counted version only.
   let base: readonly HandinVersionLine[];
   if (!own && !input.draftPreview) base = latest?.lines ?? [];
-  else if ((phase === "checking" || phase === "confirm") && candidate !== null) base = phase === "confirm" ? confirmedLines(candidate.lines, ofCandidate) : candidate.lines;
+  else if (phase === "confirm" && candidate !== null && handin !== null) base = (await signableOf(db, { subject, catalog, handin, candidate })).lines;
+  else if (phase === "checking" && candidate !== null) base = candidate.lines;
   else if (phase === "counted" && latest !== null) base = latest.lines;
   else base = input.draft ?? latest?.lines ?? [];
   const cut = input.cutTo;
@@ -518,7 +522,11 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
 
   const byTimeDesc = (a: ShiftReportRow, b: ShiftReportRow) => b.occurredAt.localeCompare(a.occurredAt);
   const allRows = [...base.map((line) => rowOf(line, "base")), ...late.map((line) => rowOf(line, "late")), ...sightings.map(sightingRow)];
-  const sums = pageSums(allRows.map((row) => ({ pageLabel: row.pageLabel, amountMills: row.amountMills })), labels);
+  // The sums as a version makes them (`reportSums`): «мимо площадки» the owner confirmed counts on its page — what the
+  // board shows and what «Подтверждаю» signs are one number. A reader cut to their pages never sees «мимо площадки».
+  const offPlatform = cut !== null || handin === null ? [] : offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf)
+    .filter((line) => line.pageLabel == null || visible(line.pageLabel));
+  const sums = reportSums(allRows.map((row) => ({ pageLabel: row.pageLabel, amountMills: row.amountMills })), labels, offPlatform);
   const columns = labels.map((label) => {
     const rows = allRows.filter((row) => row.pageLabel === label).sort(byTimeDesc);
     const folded = before.filter((sale) => sale.pageLabel === label).map(beforeRow).sort(byTimeDesc);
@@ -656,4 +664,37 @@ export function hubOf(candidate: Pick<CandidateRow, "hubCheck">): NonNullable<Sh
 /** Whether Hub's check of a candidate is still reading a page. */
 export function hubPending(candidate: Pick<CandidateRow, "hubCheck">): boolean {
   return candidate.hubCheck.some((page) => page.state === "running" || page.state === "statement");
+}
+
+/**
+ * The cards of «отдать» whose colleague hands shifts in the old way (no board): by transaction, the colleague. Such a gift
+ * is the decider's (a Telegram post knows decisions, not agreements): it is never settled in the colleague's favour.
+ */
+export async function oldWayGives(db: Database, proposals: ReadonlyArray<Pick<ProposalRow, "kind" | "toWord" | "toUserId" | "transactionId">>): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  for (const proposal of proposals) {
+    if (proposal.kind !== "owner_change" || proposal.toWord !== "give" || proposal.toUserId === null) continue;
+    const colleague = await findHandinPersonOfUser(db, proposal.toUserId);
+    if (colleague?.submitsShiftSince == null) out.set(proposal.transactionId, proposal.toUserId);
+  }
+  return out;
+}
+
+/**
+ * What «Подтверждаю» would sign now: the ONE computation the board shows in «Подтвердите» and `confirmShiftReport`
+ * writes, so the person signs exactly what they see. The lines (`signedLines`: settlements as of now, the person's
+ * comments now, the cards kept), «мимо площадки» with the owner's confirmed sums on their pages, the page sums, the
+ * total and the count. `db` — the caller's transaction (the confirmation's turn) or the pool (the board's read).
+ */
+export async function signableOf(db: Database, input: { subject: Subject; catalog: PageCatalog; handin: HandinRow; candidate: CandidateRow }) {
+  const { subject, catalog, handin, candidate } = input;
+  const proposals = (await listHandinProposals(db, handin.id)).filter((one) => one.candidateId === candidate.id);
+  const applied = proposals.filter((one) => one.state === "proposed");
+  const marks = await listHandinMarks(db, handin.id);
+  const draft = draftLines(await draftFacts(db, subject, handin, catalog, candidate.cutoffAt, marks), marks);
+  const oldWay = await oldWayGives(db, applied);
+  const lines = signedLines({ candidate: candidate.lines, draft, proposals, notes: new Map(marks.map((mark) => [mark.transactionId, mark.note])), oldWay });
+  const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
+  const sums = linesPageSums(lines, candidate.pages.map((page) => page.pageLabel), offPlatform);
+  return { lines, offPlatform, sums, count: lines.filter((line) => line.amountMills > 0).length, proposals, applied, oldWay };
 }
