@@ -38,7 +38,8 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
     const model = modelOfPage.get(row.pageId);
     return model === undefined ? [] : [model];
   }));
-  const people = (await listPersonRows(app.db)).filter((row) => row.kind === "human" && row.role === "chatter" && row.isTest === test
+  // The realm's people (sandbox/realm.ts): the test owner's newcomers are the test team's, a live reader's the agency's.
+  const people = (await listPersonRows(app.db, test ? "test" : "live")).filter((row) => row.kind === "human" && row.role === "chatter" && row.isTest === test
     && (isNewcomerRow(row) || row.state === "working")
     // A lead's: of a team they lead; the owner's: every one, with no team yet too.
     && (owner || [...modelsOf(row.id)].some((model) => led.has(model))));
