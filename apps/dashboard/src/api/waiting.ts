@@ -6,6 +6,7 @@ import type { SyncBlocksPage } from "@agency_hub_core/contracts";
 import type { OfapiStatus } from "@/lib/statusWords";
 import { enginePageStatus } from "@/pages/settings/engine/enginePageSummary";
 import { engineStatusState } from "@/pages/settings/engine/engineDisplay";
+import { useAuthMe } from "./queries.js";
 import { kernel } from "./sdk.js";
 
 const MINUTE = 60_000;
@@ -20,7 +21,9 @@ const MINUTE = 60_000;
  * the console refreshes it): a screen reads it when it opens, not on a timer.
  */
 export function useOfapiStatusQuery(role: string): { status: OfapiStatus; isLoading: boolean; refetch: () => void } {
-  const config = useQuery(ofapiConfigQuery(kernel, role));
+  // A test owner may not read the config either: the answer is `unknown`, without a request (as for a team lead).
+  const testRealm = useAuthMe().data?.test === true;
+  const config = useQuery(ofapiConfigQuery(kernel, testRealm ? "team_lead" : role));
   const { refetch } = config;
   const retry = useCallback(() => {
     void refetch();

@@ -82,9 +82,12 @@ function ProductLines() {
   });
   const shifts = useTeamShifts(lastDay());
   const today = moscowToday();
+  // The publications of live pages are not the test owner's to read: the line then says the gaps alone.
+  const testRealm = useAuthMe().data?.test === true;
   const publications = useQuery({
     queryKey: ["publications", "today", today],
     queryFn: () => kernel.adminPublicationList({ query: { from: moscowDayStart(today), to: moscowDayStart(addDays(today, 1)), limit: 1000 } }),
+    enabled: !testRealm,
     refetchInterval: 5 * MINUTE,
     meta: { suppressGlobalError: true },
   });
@@ -102,7 +105,7 @@ function ProductLines() {
     },
     {
       id: "contentops", name: "ContentOps", to: contentopsHref(null, ""), external: true,
-      text: `сегодня выйдет ${known(outToday, String)}, ${known(gaps, (value) => count(value, "дыра", "дыры", "дыр"))} на неделе`,
+      text: `${testRealm ? "" : `сегодня выйдет ${known(outToday, String)}, `}${known(gaps, (value) => count(value, "дыра", "дыры", "дыр"))} на неделе`,
     },
     { id: "system", name: "Система", to: "/system/failures", text: `сбоев ${known(failures, String)}` },
   ];

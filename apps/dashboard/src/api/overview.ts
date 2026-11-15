@@ -5,10 +5,11 @@ import { businessDayOf } from "@/lib/revenueWindow";
 
 import { kernel } from "./sdk.js";
 
-export function useOverview() {
+export function useOverview(enabled = true) {
   return useQuery({
     queryKey: ["overview"],
     queryFn: () => kernel.overview(),
+    enabled,
     meta: { suppressGlobalError: true },
   });
 }
@@ -17,11 +18,12 @@ export function useOverview() {
  *  and at once when the owner comes back to it: new sales show without a reload. */
 export const REVENUE_REFRESH_MS = 60_000;
 
-export function useOverviewRevenue(period: string) {
+export function useOverviewRevenue(period: string, enabled = true) {
   return useQuery({
     queryKey: ["overviewRevenue", period],
     queryFn: () =>
       kernel.overviewRevenue({ query: { period } as RevenueQuery }),
+    enabled,
     refetchInterval: REVENUE_REFRESH_MS,
     refetchOnWindowFocus: true,
     meta: { suppressGlobalError: true },

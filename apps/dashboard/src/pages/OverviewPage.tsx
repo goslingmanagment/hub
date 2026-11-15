@@ -241,9 +241,11 @@ export function OverviewPage() {
   const state: OverviewState = { ...parseOverviewState(search, storedPeriod), period };
   const filter = usePageFilter();
   const pageLabel = filter.page;
-  const catalog = useOverview();
-  const revenue = useOverviewRevenue(period);
   const user = useAuthMe();
+  // The test team has no agency money: its owner's home says so and asks for none of it.
+  const testRealm = user.data?.test === true;
+  const catalog = useOverview(!testRealm);
+  const revenue = useOverviewRevenue(period, !testRealm);
   const role = user.data?.user.role ?? "team_lead";
   const isOwner = role === "owner";
   const ofapi = useOfapiStatus(role);
@@ -341,7 +343,9 @@ export function OverviewPage() {
   }
 
   let body: ReactNode;
-  if (!report && revenue.isError) {
+  if (testRealm) {
+    body = <StatusPanel title="В тестовой команде денег агентства нет" description="Доход страниц, выплаты площадок и трафик считаются только по живым страницам." />;
+  } else if (!report && revenue.isError) {
     body = <NoAnswerPanel retry={revenue.refetch} />;
   } else if (!report) {
     body = <LoadingReport />;
