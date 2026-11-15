@@ -914,6 +914,8 @@ read_remote_env_value() {
   run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; awk -v key=${escaped_key} 'function trim(value) { sub(/^[[:space:]]+/, \"\", value); sub(/[[:space:]]+$/, \"\", value); return value } /^[[:space:]]*(#|$)/ { next } { line = \$0; eq = index(line, \"=\"); if (eq == 0) next; name = trim(substr(line, 1, eq - 1)); if (name == key) { value = trim(substr(line, eq + 1)); quote = substr(value, 1, 1); if ((quote == \"\\\"\" || quote == sprintf(\"%c\", 39)) && substr(value, length(value), 1) == quote) value = substr(value, 2, length(value) - 2); print value; exit } }' .env.production"
 }
 
+# A page of a test model (the test team on production, 0414 `models.is_test`) is never synced and has no sync
+# states at all: it is not counted. `to_jsonb` reads the mark so the query also runs on a schema before 0414.
 verify_remote_legacy_onlyfans_dm_messages_retired() {
   local unsafe_count
   unsafe_count="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; ${REMOTE_COMPOSE} exec -T postgres sh -c 'set -eu
@@ -926,6 +928,10 @@ LEFT JOIN page_sync_states st
  AND st.stream = '\''dm_messages'\''
 WHERE p.platform = '\''onlyfans'\''
   AND p.status = '\''active'\''
+  AND NOT EXISTS (
+    SELECT 1 FROM models m
+    WHERE m.id = p.model_id AND coalesce((to_jsonb(m) ->> '\''is_test'\'')::boolean, false)
+  )
   AND (
     st.page_id IS NULL
     OR st.status <> '\''paused'\''
