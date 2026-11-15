@@ -16,6 +16,7 @@ import { shiftReportNoteHandlers } from "./shift-report-notes.ts";
 import { shellHandlers } from "./shell.ts";
 import { systemHandlers } from "./system.ts";
 import { teamHandlers } from "./team.ts";
+import { teamsHandlers } from "./teams.ts";
 import { moneyMonthHandlers } from "./money-month.ts";
 import { teamLedgerHandlers } from "./team-ledger.ts";
 import { teamQuestionsHandlers } from "./team-questions.ts";
@@ -57,6 +58,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   "sale-chain": saleChainHandlers,
   settings: settingsHandlers,
   system: systemHandlers,
+  // Teams: the team records and a lead's notes on a shift (teams.ts).
+  teams: teamsHandlers,
 };
 
 /** Every area's answers in one table. An operation belongs to one area only:

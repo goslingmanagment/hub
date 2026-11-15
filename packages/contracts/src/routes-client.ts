@@ -4117,7 +4117,7 @@ export const clientRouteSchemas = {
     },
   },
   teamShifts: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "The actual shifts of the team, from the chat extension's activity",
     description: "A cabinet route for the owner and team leads (cookie session); read-only and database-only. A "
@@ -4154,7 +4154,7 @@ export const clientRouteSchemas = {
     },
   },
   teamAuthorship: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "How many of each page's outgoing messages have an author, per day",
     description: "A cabinet route for the owner and team leads (cookie session); read-only and database-only. Per "
@@ -4171,7 +4171,7 @@ export const clientRouteSchemas = {
     },
   },
   teamEmptyHours: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "Empty hours of each page and who waited in them",
     description: "The owner and team leads, for the pages they reach; read-only and database-only. Per page over the "
@@ -4188,7 +4188,7 @@ export const clientRouteSchemas = {
     },
   },
   teamGreetings: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "Greetings of new subscribers and replies to broadcasts",
     description: "The owner and team leads, for the pages they reach; read-only and database-only. Per page over the "
@@ -4469,7 +4469,7 @@ export const clientRouteSchemas = {
     },
   },
   teamWinBackResults: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "Win-back results by approach and chatter",
     description: "A cabinet route for the owner and team leads; read-only. For the picks of the last `days` on the "
@@ -4565,7 +4565,7 @@ export const clientRouteSchemas = {
     },
   },
   teamChatterNumbers: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "The eight numbers of each chatter's shifts and week",
     description: "The owner and team leads, for the pages they reach; read-only. Shifts are week 1's actual shifts that "
@@ -4581,7 +4581,7 @@ export const clientRouteSchemas = {
     },
   },
   teamSalesPpv: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "PPV conversion by page, chatter and price",
     description: "The owner and team leads, for the pages they reach; read-only, database only. Personal PPVs sent in the "
@@ -4596,7 +4596,7 @@ export const clientRouteSchemas = {
     },
   },
   teamSalesReplies: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "How fast the page answered a fan, against whether the fan bought within 24 hours",
     description: "The owner and team leads, for the pages they reach; read-only, database only. Replies of the last "

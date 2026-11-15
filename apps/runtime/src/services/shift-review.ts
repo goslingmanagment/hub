@@ -42,7 +42,8 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireOwner, type AuthPrincipal } from "./auth.ts";
+import type { AuthPrincipal } from "./auth.ts";
+import { requireTeamReader, teamPagesFor } from "./teams.ts";
 import {
   SALE_LAST_WRITER_HOURS, lastWriterQuery, netOf, readPeopleWork, salesHeldBy, workHoldsShiftSale, type ComputedWork, type PersonPiece, type PersonWork,
 } from "./chatter-shifts.ts";
@@ -867,10 +868,16 @@ export async function readTeamShiftReview(
   principal: AuthPrincipal,
   query: TeamShiftReviewQuery,
 ): Promise<TeamShiftReviewResponse> {
-  requireOwner(principal);
-  // The wall (sandbox/realm.ts): an owner reviews the shifts of their realm only.
+  requireTeamReader(principal);
+  // The wall (sandbox/realm.ts): a reviewer reads the shifts of their realm only.
   if ((await userIsTest(app, query.userId)) !== isTestPrincipal(principal)) throw new NotFoundError("The person has no shift at that time");
-  return (await computeShiftReview(app, query)).review;
+  if (principal.user.role === "owner" && principal.narrowDeviceTokenId === undefined) return (await computeShiftReview(app, query)).review;
+  // Anyone else reads the review WHOLE (transcripts, «откуда текст») on the pages of their teams (answer 4):
+  // `teamPagesFor`, services/teams.ts. A shift with none of them is not theirs to open.
+  const granted = (await teamPagesFor(app, principal)) ?? [];
+  const { review, pagesRead } = await computeShiftReview(app, query, { grantedPageIds: granted });
+  if (pagesRead === 0) throw new NotFoundError("The person has no shift at that time");
+  return review;
 }
 
 /** Every sale on each page within the shift, whoever's: net, and by kind. Pure. */
@@ -904,7 +911,7 @@ export async function computeShiftReview(
   app: AppContext,
   query: TeamShiftReviewQuery,
   options: { grantedPageIds?: readonly number[] } = {},
-): Promise<{ review: TeamShiftReviewResponse; pagesLeftOut: string[] }> {
+): Promise<{ review: TeamShiftReviewResponse; pagesLeftOut: string[]; pagesRead: number }> {
   const now = new Date();
   const at = Date.parse(query.at);
   // The person's work SHIFT_REVIEW_NEIGHBOUR_DAYS around `at`, for the shifts before and after too, and a day more: a shift
@@ -1183,7 +1190,7 @@ export async function computeShiftReview(
     ...(byRule === null ? {} : { ruleFrom: rule!.from, withoutShiftSales: withoutShift.map(rowAsSettled) }),
     serverNow: now.toISOString(),
   };
-  return { review, pagesLeftOut };
+  return { review, pagesLeftOut, pagesRead: pages.length };
 }
 
 function firstInShift(chat: ShiftReviewChat): number {

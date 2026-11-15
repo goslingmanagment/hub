@@ -14,6 +14,7 @@ import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { carryParams, parseShiftKey, personPath, shiftPath, useBackState, useBackTarget, type BackTarget } from "@/shared/links";
 import { METRICS, UNANSWERED_NOW_LABEL, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { ReviewNotes } from "./Notes.js";
 import { Tiles, TilesSkeleton, type Tile } from "@/shared/Tiles";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
@@ -564,6 +565,7 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
         <section className="review-overview" aria-label="Вся смена">
           <Tiles tiles={tilesOf(index, when)} label="Смена в цифрах" />
           {notes.length > 0 && <p className="review-notes">{notes.join(" · ")}</p>}
+          <ReviewNotes userId={shift.userId} at={new Date(Math.round((shift.start + shift.end) / 2)).toISOString()} />
           <Pulse
             minutes={index.minutes}
             sales={index.sales}

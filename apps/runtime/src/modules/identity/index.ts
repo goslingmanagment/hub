@@ -38,6 +38,7 @@ import {
 } from "../../services/auth.ts";
 import { userForClosedEnum } from "../../services/closed-platform-responses.ts";
 import { NotFoundError } from "../../services/errors.ts";
+import { viewerTeams } from "../../services/teams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { registerSigninRoutes } from "./signin.ts";
 
@@ -81,6 +82,17 @@ async function productsOfPrincipal(app: AppContext, principal: Awaited<ReturnTyp
     }
   }
   return productsOf({ role: principal.user.role, narrow, test, personRole });
+}
+
+/** `me`'s teams; a registry that does not answer leaves them empty rather than failing «who am I». */
+async function teamsOfPrincipal(app: AppContext, principal: Awaited<ReturnType<ApiModuleContext["auth"]["requirePrincipal"]>>) {
+  if (principal.kind === "agent") return { mine: [], view: [], lead: [] };
+  try {
+    const teams = await viewerTeams(app, principal);
+    return { mine: teams.mine, view: teams.view, lead: principal.narrowDeviceTokenId === undefined ? teams.lead : [] };
+  } catch {
+    return { mine: [], view: [], lead: [] };
+  }
 }
 
 /** The origin a request came to (the sign-in's own rule), for the server's Workboard redirect (server.ts). */
@@ -142,6 +154,11 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       ...(principal.narrowDeviceTokenId === undefined ? {} : { narrow: true as const }),
       // The products this person crosses between with the frame's switcher (a narrow session: Workboard alone).
       products: await productsOfPrincipal(appContext, principal),
+      // Whose teams this person is in, sees and leads (services/teams.ts, the one place that answers it). The owner
+      // reads every team: his answer stays as it was.
+      ...(principal.user.role === "owner" ? {} : { teams: await teamsOfPrincipal(appContext, principal) }),
+      // A test person's login says so: the screens leave out what only the agency's owner reads.
+      ...(principal.sandbox?.test === true ? { test: true as const } : {}),
     };
   });
 

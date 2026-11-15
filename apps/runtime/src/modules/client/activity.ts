@@ -8,7 +8,6 @@ import {
   type TeamShiftsResponse,
 } from "@agency_hub_core/contracts";
 
-import { pageScopeFor } from "../../api/request-auth.ts";
 import { recordChatspaceTabState } from "../../services/chatspace-tab-watch.ts";
 import { listTeamShifts, recordClientActivity } from "../../services/chatter-shifts.ts";
 import { countClientMatters } from "../../services/matters.ts";
@@ -16,6 +15,7 @@ import { pulseReport } from "../../services/shift-report-board.ts";
 import { readTeamChatterNumbers } from "../../services/chatter-numbers.ts";
 import { readTeamAuthorship } from "../../services/team-authorship.ts";
 import { readTeamShiftReview } from "../../services/shift-review.ts";
+import { teamPagesFor } from "../../services/teams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -61,7 +61,7 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
     schema: routeSchemas.teamShifts,
   }, async (request): Promise<TeamShiftsResponse> => {
     const principal = await requirePrincipal(request);
-    return listTeamShifts(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+    return listTeamShifts(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 
   // Команда → «Разбор смены»: one shift opened up (the owner only).
@@ -76,7 +76,7 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
     schema: routeSchemas.teamAuthorship,
   }, async (request): Promise<TeamAuthorshipResponse> => {
     const principal = await requirePrincipal(request);
-    return readTeamAuthorship(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+    return readTeamAuthorship(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 
   server.get("/api/v1/team/chatter-numbers", {
@@ -84,7 +84,7 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
   }, async (request): Promise<TeamChatterNumbersResponse> => {
     const principal = await requirePrincipal(request);
     return readTeamChatterNumbers(appContext, principal, {
-      from: request.query.from, to: request.query.to, userId: request.query.userId, pageScope: pageScopeFor(principal),
+      from: request.query.from, to: request.query.to, userId: request.query.userId, pageScope: await teamPagesFor(appContext, principal),
     });
   });
 }

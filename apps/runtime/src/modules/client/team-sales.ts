@@ -1,7 +1,7 @@
 import { routeSchemas, type TeamSalesPpvResponse, type TeamSalesRepliesResponse } from "@agency_hub_core/contracts";
 
-import { pageScopeFor } from "../../api/request-auth.ts";
 import { readTeamSalesPpv, readTeamSalesReplies } from "../../services/team-sales.ts";
+import { teamPagesFor } from "../../services/teams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -18,13 +18,13 @@ export function registerTeamSalesRoutes(server: ApiServer, ctx: ApiModuleContext
     schema: routeSchemas.teamSalesPpv,
   }, async (request): Promise<TeamSalesPpvResponse> => {
     const principal = await requirePrincipal(request);
-    return readTeamSalesPpv(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+    return readTeamSalesPpv(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 
   server.get("/api/v1/team/sales/replies", {
     schema: routeSchemas.teamSalesReplies,
   }, async (request): Promise<TeamSalesRepliesResponse> => {
     const principal = await requirePrincipal(request);
-    return readTeamSalesReplies(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+    return readTeamSalesReplies(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 }

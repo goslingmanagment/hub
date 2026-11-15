@@ -24,7 +24,7 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 import { applyCustomStep } from "./index.ts";
-import { CUSTOM_UNRECORDED_KIND, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
+import { CUSTOM_UNRECORDED_KIND, customsLeadByPage, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
 import { deadlinePassed, dottedDay } from "./rules.ts";
 import { testPageIds } from "../sandbox/realm.ts";
 
@@ -89,11 +89,16 @@ const orderObject = (order: CustomOrderRow) => ({ type: "custom_order", id: Stri
 const orderLink = (order: CustomOrderRow) => `/workboard/customs/${customOrderCode(order.id)}`;
 const pageOf = (order: CustomOrderRow) => order.pageLabel ?? "страница не подтверждена";
 
+/** Who leads customs of a page's orders: one owner for all, or by the page (its model's customs lead, then team lead). */
+export type LeadOf = MatterOwner | ((pageId: number | null) => MatterOwner);
+const leadFn = (lead: LeadOf) => (typeof lead === "function" ? lead : () => lead);
+
 /** The findings of every order kind from the orders, pure: the rules above. */
 export function orderFindings(input: {
   orders: readonly CustomOrderRow[];
   now: Date;
-  lead: MatterOwner;
+  /** Who leads customs: one owner, or by the page's model (`customsLeadOwner`, per model since 0415). */
+  lead: LeadOf;
   /** The people with records_customs. */
   recorders: ReadonlySet<number>;
   /** Who is on a shift now, by page label. */
@@ -101,7 +106,8 @@ export function orderFindings(input: {
   /** The test pages (sandbox/realm.ts): their orders get their own matters (the test team's), never the owner's count. */
   testPageIds?: ReadonlySet<number>;
 }): Record<"custom.not_at_model" | "custom.overdue" | "custom.overdue_owner" | "custom.shot_not_given" | "custom.give_on_shift", Finding[]> {
-  const { now, lead } = input;
+  const { now } = input;
+  const leadOf = leadFn(input.lead);
   const out = {
     "custom.not_at_model": [] as Finding[],
     "custom.overdue": [] as Finding[],
@@ -122,14 +128,14 @@ export function orderFindings(input: {
         : `Кастом ${code} ${order.state === "paid" ? "оплачен" : "записан"} и сутки не у модели: ${pageOf(order)}`;
       out["custom.not_at_model"].push({
         key: `custom.not_at_model:${code}`, title,
-        object: orderObject(order), pageIds, owner: lead, evidence: { code, state: order.state, since: order.stateAt.toISOString() }, link: orderLink(order),
+        object: orderObject(order), pageIds, owner: leadOf(order.pageId), evidence: { code, state: order.state, since: order.stateAt.toISOString() }, link: orderLink(order),
       });
     }
     if (["recorded", "paid", "at_model", "partly", "revision"].includes(order.state) && deadlinePassed(order.deadlineOn, now)) {
       if (order.pageId === null || input.testPageIds?.has(order.pageId) !== true) overdue.push(order);
       out["custom.overdue"].push({
         key: `custom.overdue:${code}`, title: `Кастом ${code} просрочен: срок был ${dottedDay(order.deadlineOn!)}, ${pageOf(order)}`,
-        object: orderObject(order), pageIds, owner: lead, evidence: { code, deadlineOn: order.deadlineOn, state: order.state }, link: orderLink(order),
+        object: orderObject(order), pageIds, owner: leadOf(order.pageId), evidence: { code, deadlineOn: order.deadlineOn, state: order.state }, link: orderLink(order),
       });
     }
     if (order.state === "shot" && since >= NOT_GIVEN_HOURS * HOUR_MS) {
@@ -139,7 +145,7 @@ export function orderFindings(input: {
       out["custom.shot_not_given"].push({
         key: `custom.shot_not_given:${code}`, title, object: orderObject(order), pageIds,
         // An order nobody accepted (imported) or a chatter without the right: the lead hands it over.
-        owner: acceptor === null ? lead : { userId: acceptor }, evidence, link: orderLink(order),
+        owner: acceptor === null ? leadOf(order.pageId) : { userId: acceptor }, evidence, link: orderLink(order),
       });
       const onShift = (order.pageLabel === null ? [] : input.onShift.get(order.pageLabel) ?? [])
         .find((userId) => userId !== acceptor && input.recorders.has(userId));
@@ -164,12 +170,13 @@ export function orderFindings(input: {
 }
 
 /** A sale that looks like a custom and has no order a day later, pure: one matter per sale. */
-export function unrecordedFindings(input: { sales: readonly CustomLookalikeRow[]; recorders: ReadonlySet<number>; lead: MatterOwner }): Finding[] {
+export function unrecordedFindings(input: { sales: readonly CustomLookalikeRow[]; recorders: ReadonlySet<number>; lead: LeadOf }): Finding[] {
+  const leadOf = leadFn(input.lead);
   const out: Finding[] = [];
   for (const sale of input.sales) {
     // The chatter who led the chat when they record customs; else the lead — nobody else would see it.
     const chatter = sale.ledByUserIds.find((userId) => input.recorders.has(userId));
-    const owner: MatterOwner = chatter === undefined ? input.lead : { userId: chatter };
+    const owner: MatterOwner = chatter === undefined ? leadOf(sale.pageId) : { userId: chatter };
     out.push({
       key: unrecordedKey(sale.transactionId),
       title: `Похоже на кастом без заказа: ${sale.kind === "tier" ? "тир с кастомом" : "чаевые с запиской про кастом"}, ${sale.pageLabel}`,
@@ -262,7 +269,7 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
     tally.closed += done.closed;
   };
   const [lead, recorderRows, onShift] = await Promise.all([
-    customsLeadOwner(app),
+    customsLeadByPage(app),
     listUsersWithPersonRight(app.db, "records_customs"),
     listOnShiftUsersByPage(app.db, now),
   ]);

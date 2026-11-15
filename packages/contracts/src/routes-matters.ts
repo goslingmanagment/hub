@@ -35,7 +35,7 @@ export const matterRouteSchemas = {
     response: { 200: mattersListResponseSchema, ...readErrors },
   },
   mattersWaiting: {
-    auth: { kind: "session" }, tags: ["admin"],
+    auth: { kind: "any-session" }, tags: ["admin"],
     summary: "«Ждут вас» read from matters, by the list's groups (waiting-groups.ts): the chips, the menu's number and the list's counts",
     description: "Database only. What waits for the viewer themself, every role grouped by the one table; the number is "
       + "the groups' sum. A group whose source did not answer lately has `checked: false` («не удалось проверить») and "

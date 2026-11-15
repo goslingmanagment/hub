@@ -88,6 +88,11 @@ export interface MatterViewer {
   pageIds: readonly number[];
   /** A test person's login (0414): reads the test realm's matters only; absent, the live realm's only. */
   realm?: "test";
+  /**
+   * The pages of the models whose team the person LEADS by the team records (0415, the runtime's services/teams.ts),
+   * whatever the login's role: a team lead's role matters are read and held there. Absent: none.
+   */
+  leadPageIds?: readonly number[];
 }
 
 const LOCK_SEED = 551_830_417;
@@ -386,12 +391,22 @@ export function matterVisibility(viewer: MatterViewer): SQL {
 
 function matterRoleVisibility(viewer: MatterViewer): SQL {
   if (viewer.role === "owner") return sql`true`;
-  if (viewer.role === "team_lead") {
-    return sql`(not m.money and (m.owner_user_id = ${viewer.userId}
-      or (m.owner_role = 'team_lead' and (cardinality(m.page_ids) = 0 or m.page_ids && ${ids(viewer.pageIds)}))))`;
-  }
-  return sql`(not m.money and m.owner_user_id = ${viewer.userId})`;
+  // A team lead's role matter is read by the lead of a model of its pages (by the records, not the login's role); a
+  // matter of no page has no model: it is the owner's.
+  return sql`(not m.money and (m.owner_user_id = ${viewer.userId} or ${ledRoleMatter(viewer)}))`;
 }
+
+/** A team lead's role matter on the pages the viewer leads. */
+function ledRoleMatter(viewer: MatterViewer): SQL {
+  const led = viewer.leadPageIds ?? [];
+  if (led.length === 0) return sql`false`;
+  return sql`(m.owner_role = 'team_lead' and m.page_ids && ${ids(led)})`;
+}
+
+/** A team lead's role matter whose pages' models have no lead: the owner's, as the acting lead. */
+const unledRoleMatter = sql`(m.owner_role = 'team_lead' and not exists (
+  select 1 from team_roles tr join pages pg on pg.model_id = tr.model_id join people pp on pp.id = tr.person_id
+   where tr.kind = 'lead' and tr.revoked_at is null and pp.state <> 'left' and pg.id = any(m.page_ids)))`;
 
 /**
  * The matters that wait for the viewer THEMSELF, within what they may read: their
@@ -399,30 +414,14 @@ function matterRoleVisibility(viewer: MatterViewer): SQL {
  * every matter, but «Ждут вас» and its number are only what waits for them.
  */
 export function matterHeldBy(viewer: MatterViewer, heldRoles: readonly MatterOwnerRole[]): SQL {
-  if (heldRoles.length === 0) return sql`(m.owner_user_id = ${viewer.userId})`;
-  return sql`(m.owner_user_id = ${viewer.userId} or m.owner_role = any(${sql.param([...heldRoles])}::text[]))`;
+  const parts: SQL[] = [sql`m.owner_user_id = ${viewer.userId}`];
+  if (heldRoles.includes("owner")) parts.push(sql`m.owner_role = 'owner'`);
+  // A team lead's role matter waits for the lead of its model, or the owner while that model has none (0415).
+  if (heldRoles.includes("team_lead")) parts.push(viewer.role === "owner" ? unledRoleMatter : ledRoleMatter(viewer));
+  if (heldRoles.includes("chatter")) parts.push(sql`m.owner_role = 'chatter'`);
+  return sql`(${sql.join(parts, sql` or `)})`;
 }
 
-/**
- * Whether someone holds the team lead's role now: a living login of that role
- * whose person has not left, or a working person of that role in the registry.
- * Nobody — the owner is the acting team lead.
- */
-/** Whether someone of the realm holds the team lead's role (0414: a test team lead holds it for the test realm only). */
-export async function teamLeadRoleHeld(db: Database, realm: "live" | "test" = "live"): Promise<boolean> {
-  const userRealm = realm === "test" ? testUserSql(sql`u.id`) : liveUserSql(sql`u.id`);
-  const result = await db.execute<{ held: boolean }>(sql`
-    select (
-      exists (
-        select 1 from users u
-         where u.role = 'team_lead' and u.disabled_at is null and u.deleted_at is null
-           and not exists (select 1 from person_logins l join people p on p.id = l.person_id where l.user_id = u.id and p.state = 'left')
-           and ${userRealm}
-      )
-      or exists (select 1 from people p where p.role = 'team_lead' and p.state = 'working' and p.is_test = ${realm === "test"})
-    ) as held`);
-  return result.rows[0]?.held === true;
-}
 
 export async function listVisibleMatters(
   db: Database,

@@ -25,7 +25,8 @@ import {
 import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { requireApiKeyUser, requireDashboardUser, requireOwner, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
+import { requireApiKeyUser, requireOwner, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
+import { requireTeamReader } from "./teams.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
 import { ConflictError, NotFoundError } from "./errors.ts";
 import { clientCaptureProducer } from "./ingest-observations.ts";
@@ -139,7 +140,8 @@ export async function readTeamWinBackResults(
   principal: AuthPrincipal,
   input: { query: TeamWinBackResultsQuery; pageScope: readonly number[] | undefined },
 ): Promise<TeamWinBackResultsResponse> {
-  requireDashboardUser(principal);
+  // A cookie session of any role, cut to the viewer's teams by the caller (`teamPagesFor`, services/teams.ts).
+  requireTeamReader(principal);
   const now = new Date();
   const from = addUtcDays(startOfBusinessDay(now), -(input.query.days - 1));
   const rows = await listWinBackResults(app.db, { from, to: now, now, pages: input.pageScope ?? "all" });

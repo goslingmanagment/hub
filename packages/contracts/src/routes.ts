@@ -29,6 +29,7 @@ import { accountPayRouteSchemas } from "./routes-account-pay.ts";
 import { customOrderRouteSchemas } from "./routes-custom-orders.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
+import { teamRouteSchemas } from "./routes-teams.ts";
 import { shiftHandinRouteSchemas } from "./routes-shift-handins.ts";
 import { saleClaimRouteSchemas } from "./routes-sale-claims.ts";
 import { saleChainRouteSchemas } from "./routes-sale-chain.ts";
@@ -330,6 +331,12 @@ export const authStateSchema = z.object({
   /** The products this person crosses between with the frame's switcher (products.ts `productsOf`), in its order.
    *  Optional: the sign-in's answer and older servers leave it out. */
   products: z.array(z.enum(PRODUCTS)).optional(),
+  /** The person's teams (products package T, services/teams.ts), model ids: in by working pages, given «видит
+   *  команду», leading. The owner reads every team whatever these say. Optional: the sign-in's answer leaves it out. */
+  teams: z.object({ mine: z.array(intId), view: z.array(intId), lead: z.array(intId) }).optional(),
+  /** Present only for a test person's login (the test team, sandbox/realm.ts): what the agency's owner alone reads
+   *  (accounts, AI spend, agents' proposals) is not its to read, and the screens leave those blocks out. */
+  test: z.literal(true).optional(),
 });
 
 const serviceHealthStatusEnum = z.enum(["ok", "degraded"]);
@@ -8366,6 +8373,7 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof agentReportRouteSchemas
   & typeof accountPayRouteSchemas
   & typeof peopleRouteSchemas
+  & typeof teamRouteSchemas
   & typeof signinRouteSchemas
   & typeof systemStateRouteSchemas
   & typeof customOrderRouteSchemas
@@ -8389,6 +8397,7 @@ export const routeSchemas: RouteSchemas = {
   ...agentReportRouteSchemas,
   ...accountPayRouteSchemas,
   ...peopleRouteSchemas,
+  ...teamRouteSchemas,
   ...signinRouteSchemas,
   ...systemStateRouteSchemas,
   ...customOrderRouteSchemas,

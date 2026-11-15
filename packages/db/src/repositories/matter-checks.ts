@@ -61,6 +61,9 @@ export interface PeopleCheckPage {
   id: number;
   label: string;
   platform: string;
+  /** The page's model (a team is a model, 0415); absent in snapshots made by hand. */
+  modelId?: number;
+  modelName?: string;
 }
 
 export interface PeopleCheckSnapshot {
@@ -110,7 +113,9 @@ export async function readPeopleCheckSnapshot(db: Database, input: { today: stri
       select a.id, a.name, k.person_id, a.expires_at, a.revoked_at, a.replaced_at
         from agent_keys a left join person_agent_keys k on k.agent_key_id = a.id
        order by a.id`),
-    db.execute<Row>(sql`select id, label, platform from pages where ${livePageSql(sql`pages.id`)} order by id`),
+    db.execute<Row>(sql`
+      select pages.id, pages.label, pages.platform, pages.model_id, m.name as model_name
+        from pages join models m on m.id = pages.model_id where ${livePageSql(sql`pages.id`)} order by pages.id`),
     db.execute<Row>(sql`select person_id as owner, page_id as item from person_working_pages where ${livePersonSql(sql`person_working_pages.person_id`)} order by person_id, position`),
     db.execute<Row>(sql`select user_id as owner, platform_account_id as item from user_page_assignments where ${liveUserSql(sql`user_page_assignments.user_id`)} order by user_id, platform_account_id`),
     db.execute<Row>(sql`select distinct person_id from person_pay_terms where valid_from <= ${input.today}::date`),
@@ -149,7 +154,9 @@ export async function readPeopleCheckSnapshot(db: Database, input: { today: stri
       revokedAt: nullableDate(row.revoked_at),
       replacedAt: nullableDate(row.replaced_at),
     })),
-    pages: pages.rows.map((row) => ({ id: Number(row.id), label: String(row.label), platform: String(row.platform) })),
+    pages: pages.rows.map((row) => ({
+      id: Number(row.id), label: String(row.label), platform: String(row.platform), modelId: Number(row.model_id), modelName: String(row.model_name),
+    })),
     workingPages: groupIds(working.rows as Array<{ owner: unknown; item: unknown }>),
     access: groupIds(access.rows as Array<{ owner: unknown; item: unknown }>),
     withPayTerms: new Set(terms.rows.map((row) => Number(row.person_id))),

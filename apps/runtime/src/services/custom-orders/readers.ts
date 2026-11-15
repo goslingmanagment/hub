@@ -3,6 +3,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { deciderOf, modelOfPageId, teamFactsFor } from "../teams.ts";
 
 /**
  * «Кастомы оплачены, не отданы», read from the custom orders: the customs row of «Ждут вас» and the morning report's
@@ -17,6 +18,22 @@ import type { AppContext } from "../../bootstrap.ts";
 export async function customsLeadOwner(app: Pick<AppContext, "db">): Promise<MatterOwner> {
   const leads = await listUsersWithPersonRight(app.db, "customs_lead");
   return leads[0] === undefined ? { role: "team_lead" } : { userId: leads[0].userId };
+}
+
+/**
+ * Who leads customs of a page's orders, per model (0415): the model's «ведёт кастомы» record (the right above is
+ * mirrored there for every model), else the model's team lead, else the person right as before, else the team lead's
+ * role (its matter then waits for the model's lead or, with none, the owner: `matterHeldBy`). An order of no page: the
+ * person right, as before. `deciderOf` (services/teams.ts) is the one rule.
+ */
+export async function customsLeadByPage(app: Pick<AppContext, "db">): Promise<(pageId: number | null) => MatterOwner> {
+  const [facts, fallback] = await Promise.all([teamFactsFor(app), customsLeadOwner(app)]);
+  return (pageId) => {
+    const model = modelOfPageId(facts, pageId);
+    if (model === null) return fallback;
+    const decider = deciderOf(facts, model, "customs");
+    return decider.kind === "team_lead" ? { userId: decider.userId } : fallback;
+  };
 }
 
 /** «Похоже на кастом без заказа»: the matter of a sale that looks like a custom and has no order, one per sale. */

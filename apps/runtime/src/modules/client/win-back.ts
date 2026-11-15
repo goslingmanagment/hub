@@ -6,7 +6,6 @@ import {
   type TeamWinBackResultsResponse,
 } from "@agency_hub_core/contracts";
 
-import { pageScopeFor } from "../../api/request-auth.ts";
 import {
   readClientWinBack,
   readTeamWinBackApproaches,
@@ -14,6 +13,7 @@ import {
   recordClientWinBackAttempt,
   saveTeamWinBackApproach,
 } from "../../services/win-back.ts";
+import { teamPagesFor } from "../../services/teams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -42,7 +42,7 @@ export function registerClientWinBackRoutes(server: ApiServer, ctx: ApiModuleCon
     schema: routeSchemas.teamWinBackResults,
   }, async (request): Promise<TeamWinBackResultsResponse> => {
     const principal = await requirePrincipal(request);
-    return readTeamWinBackResults(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+    return readTeamWinBackResults(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 
   server.get("/api/v1/team/win-back/approaches", {

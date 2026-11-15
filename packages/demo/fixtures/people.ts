@@ -459,10 +459,17 @@ function specOf(request: DemoRequest): Rec | undefined {
 
 export const peopleHandlers: DemoHandlers = {
   teamPeople: (request) => {
-    if (request.role === "chatter") return demoError(403, "Forbidden", "Список людей — для владельца и тимлидов");
     const reg = world(request.now);
+    // Anyone but the owner reads the people of their teams, without contacts, keys or notes (Hub's services/teams.ts;
+    // the demo's chatter and team lead see every human, as everyone works every model here).
+    const team = request.role !== "owner";
     return {
-      people: [...reg.people].sort((a, b) => a.name.localeCompare(b.name, "ru")).map((rec) => personOf(rec, reg, request.now, request.scenario)),
+      people: [...reg.people].filter((rec) => !team || rec.kind === "human").sort((a, b) => a.name.localeCompare(b.name, "ru"))
+        .map((rec) => personOf(rec, reg, request.now, request.scenario))
+        .map((person) => (team ? {
+          ...person, telegram: { userId: null, handle: null, reportTag: null }, agentKeys: [], note: null, importNotes: [], openProposals: 0,
+          logins: person.logins.map((login) => ({ ...login, lastSeenAt: null })),
+        } : person)),
       unlinkedLogins: [],
       serverNow: iso(request.now),
     };

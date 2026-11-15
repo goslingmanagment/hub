@@ -412,4 +412,31 @@ describe("the wall of the test realm", () => {
     expect(refused).toEqual([]);
     expect(leaked).toEqual([]);
   }, 300_000);
+
+  it("the test owner's decisions and team records reach the test realm only: a live sale, page or person is 404", async (context) => {
+    if (!server || !testDb) return context.skip();
+    await seedSandbox(createTestAppContext(testDb), { scenarios: [], env: SANDBOX_PASSWORDS });
+    if (tOwnerCookie === "") tOwnerCookie = await login("t-owner", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_OWNER);
+    const call = async (method: "GET" | "POST", url: string, payload?: Record<string, unknown>) => (await server!.inject({
+      method, url, headers: { cookie: tOwnerCookie, ...(payload === undefined ? {} : { "content-type": "application/json" }) },
+      ...(payload === undefined ? {} : { payload }),
+    })).statusCode;
+    const [liveModel] = (await testDb.pool.query("select id from models where slug = $1", [live.modelSlug])).rows as Array<{ id: string }>;
+    const statuses = {
+      dispute: await call("GET", `/api/v1/sale-disputes/${live.transactionId}`),
+      decide: await call("POST", "/api/v1/sale-disputes/decide", { transactionId: live.transactionId, outcome: "nobody", note: null }),
+      offPlatformOnLivePage: await call("POST", "/api/v1/off-platform/1/decide", { decision: "confirm", pageLabel: live.pageLabel }),
+      teamRoleOfLivePerson: await call("POST", "/api/v1/team/roles", { personCode: live.personCode, modelId: Number(liveModel!.id), kind: "view", granted: true }),
+      reviewNoteOnLiveShift: await call("POST", "/api/v1/team/review-notes", {
+        userId: live.chatterUserId, at: new Date(today.getTime() - DAY_MS - 3 * 3_600_000).toISOString(), text: "x",
+      }),
+    };
+    expect(statuses).toEqual({ dispute: 404, decide: 404, offPlatformOnLivePage: 404, teamRoleOfLivePerson: 404, reviewNoteOnLiveShift: 404 });
+    const pending = await server.inject({ method: "GET", url: "/api/v1/off-platform", headers: { cookie: tOwnerCookie } });
+    expect(pending.statusCode).toBe(200);
+    expect(liveWords.some((word) => pending.body.includes(`"${word}"`))).toBe(false);
+    const roles = await server.inject({ method: "GET", url: "/api/v1/team/roles", headers: { cookie: tOwnerCookie } });
+    expect(roles.statusCode).toBe(200);
+    expect(liveWords.some((word) => roles.body.includes(`"${word}"`))).toBe(false);
+  }, 300_000);
 });

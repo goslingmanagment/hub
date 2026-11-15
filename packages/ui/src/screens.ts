@@ -381,7 +381,8 @@ export const SCREENS: readonly Screen[] = [
     notSearched: true,
   },
   {
-    id: "shifts", path: "/workboard/shifts", label: "Смены", title: "Смены", section: "team", product: "workboard", icon: "CalendarClock",
+    // Everyone's (products package T): the owner every team, anyone else their teams' (Hub cuts the reads).
+    id: "shifts", path: "/workboard/shifts", label: "Смены", title: "Смены", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"], icon: "CalendarClock",
     why: "Кто работал, сколько продал и как работал.",
     pageFilter: "any",
     keywords: "команда заработок кто работал на смене неделя журнал разбор смены без автора",

@@ -1,7 +1,7 @@
 import { routeSchemas, type TeamEmptyHoursResponse, type TeamGreetingsResponse } from "@agency_hub_core/contracts";
 
-import { pageScopeFor } from "../../api/request-auth.ts";
 import { readTeamEmptyHours, readTeamGreetings } from "../../services/team-coverage.ts";
+import { teamPagesFor } from "../../services/teams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -17,13 +17,13 @@ export function registerTeamCoverageRoutes(server: ApiServer, ctx: ApiModuleCont
     schema: routeSchemas.teamEmptyHours,
   }, async (request): Promise<TeamEmptyHoursResponse> => {
     const principal = await requirePrincipal(request);
-    return readTeamEmptyHours(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+    return readTeamEmptyHours(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 
   server.get("/api/v1/team/greetings", {
     schema: routeSchemas.teamGreetings,
   }, async (request): Promise<TeamGreetingsResponse> => {
     const principal = await requirePrincipal(request);
-    return readTeamGreetings(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+    return readTeamGreetings(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 }

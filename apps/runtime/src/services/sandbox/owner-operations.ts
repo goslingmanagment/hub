@@ -49,6 +49,19 @@ export const SANDBOX_OWNER_OPERATIONS: ReadonlySet<string> = new Set([
   // Customs of the test pages.
   "customOrdersBoard",
   "customOrder",
+  // The owner's word on whose a sale is: a dispute or a question (the pot's too), «мимо площадки». Each names a sale or a
+  // line of the test realm, else 404 (the sale-claims module's `requireDecidedOfRealm`; the list is cut to the realm).
+  "saleDispute",
+  "saleDisputeOfClaim",
+  "saleDisputeDecide",
+  "offPlatformPending",
+  "offPlatformDecide",
+  // Teams (package T): the records of the test models (a person and a model of the test realm, else 404) and the
+  // notes on the test shifts.
+  "teamRoles",
+  "teamRoleSet",
+  "reviewNotes",
+  "reviewNoteAdd",
 ]);
 
 /** The refusal of an operation off the table, for a test owner; null for anyone else or an operation on it. */

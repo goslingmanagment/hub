@@ -1,8 +1,8 @@
 import { routeSchemas, type ChatterStats, type TeamChatterStatsResponse, type TeamShiftSalesResponse } from "@agency_hub_core/contracts";
 
-import { pageScopeFor } from "../../api/request-auth.ts";
 import { readAccountChatterStats, readTeamChatterStats } from "../../services/chatter-stats.ts";
 import { readTeamShiftSales } from "../../services/team-shift-sales.ts";
+import { teamPagesFor } from "../../services/teams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -25,13 +25,13 @@ export function registerChatterStatsRoutes(server: ApiServer, ctx: ApiModuleCont
     schema: routeSchemas.teamChatterStats,
   }, async (request): Promise<TeamChatterStatsResponse> => {
     const principal = await requirePrincipal(request);
-    return readTeamChatterStats(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+    return readTeamChatterStats(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 
   server.get("/api/v1/team/shift-sales", {
     schema: routeSchemas.teamShiftSales,
   }, async (request): Promise<TeamShiftSalesResponse> => {
     const principal = await requirePrincipal(request);
-    return readTeamShiftSales(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+    return readTeamShiftSales(appContext, principal, { query: request.query, pageScope: await teamPagesFor(appContext, principal) });
   });
 }

@@ -32,6 +32,7 @@ import { ReportNoteLine } from "@/shared/ReportNote";
 import { noteParts, placeNotes, type NoteRow, type PlacedNote } from "@/shared/reportNotes";
 import { useRowBackState } from "@/shared/links";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { ShiftsTabs } from "@/shared/ShiftsTabs";
 import { MyMatters } from "../waiting/MyMatters";
 import { usePeriod } from "@/shared/usePeriod";
 import {
@@ -452,6 +453,7 @@ export function MyShiftsScreen() {
         stale={read.isRefetchError}
       />
       <div className="wb-content mys">
+        <ShiftsTabs />
         <MyMatters />
         {window.clipped && (
           <Notice title={`Смены видны не больше чем за ${MY_SHIFTS_MAX_DAYS} день`}>

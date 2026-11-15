@@ -507,7 +507,8 @@ export function WaitingScreen() {
           </>
         )}
       </div>
-      {isOwner && (Number.isSafeInteger(disputeParam) && disputeParam > 0 || Number.isSafeInteger(claimParam) && claimParam > 0) && (
+      {/* A dispute is its decider's: the owner, or the lead of the sale's team (Hub answers anyone else 403). */}
+      {(Number.isSafeInteger(disputeParam) && disputeParam > 0 || Number.isSafeInteger(claimParam) && claimParam > 0) && (
         <DisputeModal
           key={`${disputeParam}:${claimParam}`}
           transactionId={disputeParam > 0 ? disputeParam : null}

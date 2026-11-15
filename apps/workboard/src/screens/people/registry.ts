@@ -33,12 +33,11 @@ import type {
 import { KernelApiError } from "@agency_hub_core/ui/hubClient";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { kernel } from "@/shared/hub";
-import { usersQuery } from "@/shared/reads";
-import { PEOPLE_REGISTRY_KEY, teamPeopleQuery } from "@agency_hub_core/ui/people";
+import { usersQuery } from "@/shared/usersQuery";
+import { PEOPLE_REGISTRY_KEY } from "@agency_hub_core/ui/people";
 
-export type TeamPeople = KernelOperationResponse<"teamPeople">;
-export type RegistryPerson = TeamPeople["people"][number];
-export type RegistryLogin = RegistryPerson["logins"][number];
+export { liveLogins, personOfLogin, useTeamPeople, type RegistryLogin, type RegistryPerson, type TeamPeople } from "./teamPeople";
+import type { RegistryPerson, TeamPeople } from "./teamPeople";
 export type OwnerCard = KernelOperationResponse<"adminPerson">;
 export type PayTerm = OwnerCard["payTerms"][number];
 export type Slot = OwnerCard["scheduleSlots"][number];
@@ -49,11 +48,6 @@ const MINUTE = 60_000;
 export const REGISTRY_KEY = PEOPLE_REGISTRY_KEY;
 const cardKey = (code: string) => ["people", "person", code] as const;
 const OPEN_PROPOSALS_KEY = ["people", "proposals", "open"] as const;
-
-/** Everyone of the registry (`teamPeople`): the list, every card and every team screen's names read the same entry. */
-export function useTeamPeople() {
-  return useQuery(teamPeopleQuery(kernel));
-}
 
 /** The owner's card of one person (`adminPerson`): never enabled for anyone else. */
 export function useOwnerCard(code: string, enabled: boolean) {
@@ -167,16 +161,6 @@ export function useDecideProposal() {
 }
 
 // ── pure helpers ─────────────────────────────────────────────────────────────
-
-/** The person holding a login, if any. */
-export function personOfLogin(people: readonly RegistryPerson[], userId: number): RegistryPerson | null {
-  return people.find((person) => person.logins.some((login) => login.userId === userId)) ?? null;
-}
-
-/** The logins that count: not deleted (a deleted login cannot be worked or switched off). */
-export function liveLogins(person: Pick<RegistryPerson, "logins">): RegistryLogin[] {
-  return person.logins.filter((login) => login.state !== "deleted");
-}
 
 /** The latest moment any of the person's logins was seen; null — never. */
 export function lastSeenOf(person: Pick<RegistryPerson, "logins">): string | null {

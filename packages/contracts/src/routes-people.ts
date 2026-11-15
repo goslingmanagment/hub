@@ -63,7 +63,7 @@ export const peopleRouteSchemas = {
     response: { 200: accountPayoutDetailsResponseSchema, 400: errorResponseSchema, ...sessionErrors, 409: errorResponseSchema },
   },
   teamPeople: {
-    auth: { kind: "session" }, tags: ["admin"],
+    auth: { kind: "any-session" }, tags: ["admin"],
     summary: "The people of the agency, one record per person, with their logins, agent keys, working pages, schedule, rights"
       + " and Telegram — no money",
     description: "The owner and a team lead. The owner also gets the Hub logins no person holds yet. Pay terms are never here: "

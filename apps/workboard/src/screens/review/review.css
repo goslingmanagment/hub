@@ -1209,3 +1209,14 @@
     color: var(--ui-text-3);
   }
 }
+
+/* The lead's notes on a shift (products package T). */
+.review-notes-box { display: grid; gap: 8px; margin-top: 12px; padding: 12px 14px; border: 1px solid var(--ui-border, rgba(127, 127, 127, 0.25)); border-radius: 8px; }
+.review-notes-box__title { margin: 0; font-size: 14px; font-weight: 600; }
+.review-notes-box__empty { margin: 0; color: var(--ui-text-muted, inherit); font-size: 13px; }
+.review-notes-box__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.review-notes-box__list li { display: grid; gap: 2px; }
+.review-notes-box__who { color: var(--ui-text-muted, inherit); font-size: 12px; }
+.review-notes-box__text { white-space: pre-wrap; }
+.review-notes-box__form { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.review-notes-box__input { flex: 1 1 280px; min-height: 44px; resize: vertical; }

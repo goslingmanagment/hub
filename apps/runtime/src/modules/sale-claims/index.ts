@@ -50,6 +50,17 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
   async function owner(request: Parameters<typeof requirePrincipal>[0]) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
+    return realmChecked(request, principal);
+  }
+
+  /** A dispute's decider: the owner, or the lead of the sale's team (the service checks who, `requireDisputeDecider`). */
+  async function decider(request: Parameters<typeof requirePrincipal>[0]) {
+    const principal = await requirePrincipal(request);
+    requireHumanPrincipal(principal);
+    return realmChecked(request, principal);
+  }
+
+  async function realmChecked(request: Parameters<typeof requirePrincipal>[0], principal: Awaited<ReturnType<typeof requirePrincipal>> & { kind?: undefined }) {
     // The wall (sandbox/realm.ts): an owner decides about the sales of their realm only.
     const params = (request as { params?: Record<string, unknown> }).params ?? {};
     const body = ((request as { body?: unknown }).body ?? {}) as Record<string, unknown>;
@@ -74,15 +85,15 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
   // --- The owner ---------------------------------------------------------------
 
   server.get("/api/v1/sale-disputes/:transactionId", { schema: routeSchemas.saleDispute }, async (request) => {
-    return readSaleDispute(appContext, await owner(request), request.params.transactionId);
+    return readSaleDispute(appContext, await decider(request), request.params.transactionId);
   });
 
   server.get("/api/v1/sale-disputes/claim/:claimId", { schema: routeSchemas.saleDisputeOfClaim }, async (request) => {
-    return readSaleDisputeOfClaim(appContext, await owner(request), request.params.claimId);
+    return readSaleDisputeOfClaim(appContext, await decider(request), request.params.claimId);
   });
 
   server.post("/api/v1/sale-disputes/decide", { schema: routeSchemas.saleDisputeDecide }, async (request) => {
-    return decideSaleDispute(appContext, await owner(request), {
+    return decideSaleDispute(appContext, await decider(request), {
       transactionId: request.body.transactionId, claimId: request.body.claimId, outcome: request.body.outcome, note: request.body.note ?? null,
     });
   });

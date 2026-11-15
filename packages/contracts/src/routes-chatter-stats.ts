@@ -26,7 +26,7 @@ export const chatterStatsRouteSchemas = {
     response: { 200: chatterStatsSchema, ...errors },
   },
   teamChatterStats: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "A chatter's statistics, as their cabinet shows them, for the owner and team leads",
     description: "Read-only, database only. `people` — the chatters active on the viewer's pages lately; `stats` — the "
@@ -35,7 +35,7 @@ export const chatterStatsRouteSchemas = {
     response: { 200: teamChatterStatsResponseSchema, ...errors },
   },
   teamShiftSales: {
-    auth: { kind: "session" },
+    auth: { kind: "any-session" },
     tags: ["client"],
     summary: "The team's shifts of the window with their money: by day, by chatter, against the window before",
     description: "Read-only, database only; the owner and team leads, on the pages the viewer reaches (`pageLabel` "
