@@ -52,7 +52,11 @@ export async function readAgentShiftReview(app: AppContext, scope: AgentPages, q
   let found: Awaited<ReturnType<typeof computeShiftReview>> | null = null;
   for (const userId of logins) {
     try {
-      found = await computeShiftReview(app, { userId, at: query.at }, { grantedPageIds });
+      const one = await computeShiftReview(app, { userId, at: query.at }, { grantedPageIds });
+      // A shift on none of the key's pages is not the key's to open (as for a person, readTeamShiftReview): not even
+      // its frame — the login, the times, the pauses. A live key asking for a test person's shift ends here too.
+      if (one.pagesRead === 0) continue;
+      found = one;
       break;
     } catch (error) {
       if (!(error instanceof NotFoundError)) throw error;

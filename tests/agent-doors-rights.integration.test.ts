@@ -44,6 +44,8 @@ const KEYS = {
   content: { caps: ["read:content"], agent: "helper-content" },
   revoked: { caps: ["read:team"], agent: "helper-revoked" },
   unlinked: { caps: ["read:team"], agent: null },
+  // Granted a page the shift never touched: the shift is not this key's, not even its frame.
+  elsewhere: { caps: ["read:team", "read:money"], agent: "helper-elsewhere" },
   gone: { caps: ["read:team"], agent: "gone-bot" },
 } as const;
 type KeyName = keyof typeof KEYS;
@@ -76,6 +78,7 @@ describe("agent doors: who reads, and what", () => {
     const model = await createModel(app.db, { slug: "mia", name: "Mia" });
     const pageA = (await createFanslyPage(app.db, { modelId: model!.id, label: "mia-1" }))!.id;
     const pageB = (await createFanslyPage(app.db, { modelId: model!.id, label: "mia-2" }))!.id;
+    const pageC = (await createFanslyPage(app.db, { modelId: model!.id, label: "mia-3" }))!.id;
 
     const person = (code: string, kind: "agent" | "human", state: "working" | "left") => insertPersonRow(app.db, {
       code, displayName: code, kind, role: kind === "agent" ? "agent" : "chatter", state, leftOn: null, telegramUserId: null,
@@ -93,7 +96,7 @@ describe("agent doors: who reads, and what", () => {
         keyPrefix: token(name).slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
         keyDigest: sha256Hex(token(name)),
         capabilities: [...spec.caps],
-        pageIds: [pageA],
+        pageIds: [name === "elsewhere" ? pageC : pageA],
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * MIN),
         createdBy: owner,
       });
@@ -258,6 +261,14 @@ describe("agent doors: who reads, and what", () => {
       expect(body.review.chats.flatMap((chat) => chat.messages).every((message) => message.text === "")).toBe(true);
       expect(response.body).not.toContain("hello page a");
       expect((await review("plain", `person=helper&at=${encodeURIComponent(shiftAt)}`)).statusCode).toBe(404);
+    });
+
+    it("answers 404 for a shift on none of the key's pages: not even its frame", async (context) => {
+      if (!testDb) return context.skip();
+      const byLogin = await review("elsewhere", `userId=${chatterId}&at=${encodeURIComponent(shiftAt)}`);
+      expect(byLogin.statusCode, byLogin.body).toBe(404);
+      expect(byLogin.body).not.toContain("mia-1");
+      expect((await review("elsewhere", `person=chat&at=${encodeURIComponent(shiftAt)}`)).statusCode).toBe(404);
     });
 
     it("refuses a key without read:team and read:money, a revoked key and a session", async (context) => {
