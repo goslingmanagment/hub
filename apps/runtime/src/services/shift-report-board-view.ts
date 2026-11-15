@@ -1,0 +1,514 @@
+import {
+  SHIFT_REPORT_PHASE_CHIPS,
+  personNameForms,
+  type ShiftReportBoard,
+  type ShiftReportOwner,
+  type ShiftReportPhase,
+  type ShiftReportRow,
+} from "@agency_hub_core/contracts";
+import {
+  hasShiftReportReviewer,
+  listHandinCandidates,
+  listHandinColleagues,
+  listHandinNames,
+  listHandinProposals,
+  listHandinSaleFans,
+  listHandinSalesOnPages,
+  listOpenSaleSightings,
+  listSaleClaims,
+  listTransactionPlatformRefs,
+  type CandidateRow,
+  type Database,
+  type HandinRow,
+  type HandinVersionLine,
+  type HandinVersionRow,
+  type ProposalRow,
+  type SaleClaimRow,
+  type SaleSightingRow,
+} from "@agency_hub_core/db";
+import { formatUsdFromMills } from "@agency_hub_core/shared";
+
+import { pageSums } from "./shift-handin-rules.ts";
+import { ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { confirmedLines, gengarState, mayAct, type BoardActor } from "./shift-report-phases.ts";
+
+/**
+ * The «Отчёт» board as a reader sees it (products plan 2026-11-13, package R; the contract shift-report-board.ts): a
+ * column per page of the shift, rows as the sites' lists, newest first, the phase, the check, the questions, Gengar's
+ * cards, the totals. Read, never written: the operations are shift-report-board.ts. The sums are `pageSums`, the one
+ * place every number of a report is made.
+ */
+
+const DAY_MS = 86_400_000;
+const HOUR_MS = 3_600_000;
+const moscowDayStart = (at: number) => Date.parse(`${new Date(at + 3 * HOUR_MS).toISOString().slice(0, 10)}T00:00:00+03:00`);
+
+/** Who decides a dispute of a page's model, and how the texts name them. Today the owner (the team-lead package changes this one function). */
+export function disputeDecider(_input: { modelSlug: string | null }): ShiftReportBoard["decider"] {
+  return { kind: "owner", user: null, words: "владелец" };
+}
+
+/** The phase a report is in: a report handed in before the board (a version, no phase) is counted. */
+export function phaseOf(handin: Pick<HandinRow, "phase" | "state"> | null): ShiftReportPhase {
+  if (handin === null) return "draft";
+  if (handin.phase === "draft" && handin.state === "submitted") return "counted";
+  return handin.phase;
+}
+
+/** The board's switch for a shift: the person's right, granted before the shift began (a shift begun before is handed in the old way). */
+export function boardOn(subject: Pick<Subject, "person" | "shift">): boolean {
+  const since = subject.person?.submitsShiftSince ?? null;
+  return since !== null && since.getTime() <= subject.shift.startedAt.getTime();
+}
+
+const SITE_WORDS: Record<"fansly" | "onlyfans", Record<string, string>> = {
+  fansly: { message_purchase: "Media Sale to", post_purchase: "Media Sale to", subscription: "Subscription Sale to", tip: "Tip from", stream_tip: "Tip from" },
+  onlyfans: { message_purchase: "Payment for message from", post_purchase: "Payment for post from", subscription: "Subscription from", tip: "Tip from", stream_tip: "Tip from" },
+};
+export function siteWordsOf(platform: "fansly" | "onlyfans", kind: string): string {
+  return SITE_WORDS[platform][kind] ?? (platform === "fansly" ? "Sale to" : "Payment from");
+}
+
+const platformOf = (value: string | undefined): "fansly" | "onlyfans" => (value === "onlyfans" ? "onlyfans" : "fansly");
+
+interface People {
+  nameOf(userId: number): string;
+  person(userId: number): { userId: number; name: string; forms: ReturnType<typeof personNameForms> };
+}
+
+function owner(kind: ShiftReportOwner["kind"], userId: number | null, people: People, me: number): ShiftReportOwner {
+  const name = userId === null ? null : people.nameOf(userId);
+  const forms = name === null ? null : personNameForms(name);
+  switch (kind) {
+    case "me": return { kind, userId: me, name: people.nameOf(me), words: "моя" };
+    case "share": return { kind, userId, name, words: forms ? `пополам с ${forms.ins}` : "пополам" };
+    case "user": return { kind, userId, name, words: forms?.gen ?? "коллеги" };
+    case "pot": return { kind, userId: null, name: null, words: "общак" };
+    case "waiting": return { kind, userId, name, words: forms ? `ждёт смены ${forms.gen}` : "ждёт смены" };
+    case "decide": return { kind, userId: null, name: null, words: "решит владелец" };
+    default: return { kind: "nobody", userId: null, name: null, words: "ничья" };
+  }
+}
+
+/** Whose the rule says the line is. */
+function ruleOwner(line: HandinVersionLine, people: People, me: number): ShiftReportOwner {
+  if (line.rule.shareMills > 0) {
+    return line.rule.shareMills < line.netMills && line.rule.toUserId !== null ? owner("share", line.rule.toUserId, people, me) : owner("me", null, people, me);
+  }
+  if (line.rule.home === "pot") return owner("pot", null, people, me);
+  if (line.rule.home === "waiting") return owner("waiting", line.rule.toUserId ?? line.rule.senderUserId, people, me);
+  if (line.rule.home === "decide") return owner("decide", null, people, me);
+  if (line.rule.toUserId !== null) return owner("user", line.rule.toUserId, people, me);
+  return owner("nobody", null, people, me);
+}
+
+/** Whose the line is now: the person's word over the rule, an agreement or a decision as what it counts. */
+function lineOwner(line: HandinVersionLine, people: People, me: number): ShiftReportOwner {
+  switch (line.statement) {
+    case "give": return owner("user", line.toUserId ?? null, people, me);
+    case "pot": return owner("pot", null, people, me);
+    case "not_mine": return owner("nobody", null, people, me);
+    case "share": return owner("share", line.shareWithUserId, people, me);
+    case "mine": return owner("me", null, people, me);
+    default:
+      if (line.settled !== undefined && line.amountMills > 0) return owner("me", null, people, me);
+      return ruleOwner(line, people, me);
+  }
+}
+
+const sameOwner = (a: ShiftReportOwner, b: ShiftReportOwner) => a.kind === b.kind && (a.userId ?? 0) === (b.userId ?? 0);
+const plainUsd = (mills: number) => formatUsdFromMills(mills).replace(/\.00$/, "");
+
+export interface BoardRead {
+  db: Database;
+  subject: Subject;
+  catalog: PageCatalog;
+  actor: BoardActor;
+  /** A reader cut to their pages; null — the whole board. */
+  cutTo: Set<string> | null;
+  /** The owner and a team lead see the draft before a version exists. */
+  draftPreview: boolean;
+  handin: HandinRow | null;
+  versions: readonly HandinVersionRow[];
+  /** The draft now (own, or a preview); null — not read for this reader. */
+  draft: readonly HandinVersionLine[] | null;
+  now: Date;
+}
+
+/** The board of a shift as the reader may see it; null — no board for this shift (the right is off, or was granted after it began). */
+export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | null> {
+  const { db, subject, catalog, actor, handin, now } = input;
+  if (!boardOn(subject)) return null;
+  const me = subject.shift.userId;
+  const own = actor.access === "own";
+  const phase = phaseOf(handin);
+  const latest = input.versions.at(-1) ?? null;
+  const candidates = handin === null ? [] : await listHandinCandidates(db, handin.id);
+  const candidate: CandidateRow | null = candidates.at(-1) ?? null;
+  const proposals = handin === null ? [] : await listHandinProposals(db, handin.id);
+  const ofCandidate = candidate === null ? [] : proposals.filter((one) => one.candidateId === candidate.id);
+
+  // The lines the board stands on: the draft while it is edited, the candidate while it is checked and signed, the
+  // version once counted. A reader without the draft sees the counted version only.
+  let base: readonly HandinVersionLine[];
+  if (!own && !input.draftPreview) base = latest?.lines ?? [];
+  else if ((phase === "checking" || phase === "confirm") && candidate !== null) base = phase === "confirm" ? confirmedLines(candidate.lines, ofCandidate) : candidate.lines;
+  else if (phase === "counted" && latest !== null) base = latest.lines;
+  else base = input.draft ?? latest?.lines ?? [];
+  const cut = input.cutTo;
+  const visible = (label: string | null) => label !== null && (cut === null || cut.has(label));
+  base = base.filter((line) => line.transactionId !== null && visible(line.pageLabel));
+  const baseIds = new Set(base.map((line) => line.transactionId!));
+
+  // «После сдачи»: the person's by the rule, came after the hand-in, not in what is checked or counted.
+  const cutoff = candidate?.cutoffAt.getTime() ?? null;
+  const late = own && phase !== "draft" && phase !== "fixing" && cutoff !== null && input.draft !== null
+    ? input.draft.filter((line) => line.transactionId !== null && !baseIds.has(line.transactionId) && line.group === "mine" && line.amountMills > 0
+      && line.occurredAt !== null && Date.parse(line.occurredAt) >= cutoff && visible(line.pageLabel))
+    : [];
+
+  // The shift's pages, every one (a page with no sales too), then a page only a line names.
+  const shiftLabels = subject.shift.pages.map((page) => page.pageLabel).filter((label) => visible(label));
+  const labels = [...shiftLabels];
+  for (const line of [...base, ...late]) if (line.pageLabel !== null && !labels.includes(line.pageLabel)) labels.push(line.pageLabel);
+  const pageIds = labels.map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined);
+
+  // Sales of the same pages and day before the shift began: folded into one row a page.
+  const start = subject.shift.startedAt.getTime();
+  const before = (await listHandinSalesOnPages(db, { pageIds, from: new Date(moscowDayStart(start)), to: subject.shift.startedAt, limit: 500 }))
+    .filter((sale) => !baseIds.has(sale.transactionId));
+  // «Нет в Hub»: what the site showed and Hub does not hold, in the shift's window.
+  const windowEnd = subject.shift.state === "going" ? now : new Date(subject.shift.endedAt.getTime() + 1);
+  const sightings = (await listOpenSaleSightings(db, { pageIds, from: subject.shift.startedAt, to: windowEnd }))
+    .filter((one) => one.addedHandinId === null || one.addedHandinId === handin?.id);
+
+  const ids = [...baseIds, ...late.map((line) => line.transactionId!), ...before.map((sale) => sale.transactionId)];
+  const claims = ids.length === 0 ? [] : await listSaleClaims(db, { transactionIds: ids, kinds: ["claim"] });
+  const fans = await listHandinSaleFans(db, ids);
+  const refs = await listTransactionPlatformRefs(db, ids);
+  const colleagues = own ? await listHandinColleagues(db, { pageIds, exceptUserIds: subject.userIds }) : [];
+  const userIds = new Set<number>([me, ...colleagues.map((one) => one.userId)]);
+  for (const line of [...base, ...late]) for (const id of [line.rule.toUserId, line.rule.senderUserId, line.shareWithUserId, line.toUserId ?? null]) if (id !== null) userIds.add(id);
+  for (const claim of claims) for (const id of [claim.claimantUserId, claim.sideUserId]) if (id !== null) userIds.add(id);
+  for (const sale of before) for (const share of sale.home?.shares ?? []) userIds.add(share.userId);
+  const names = await listHandinNames(db, [...userIds]);
+  const people: People = {
+    nameOf: (userId) => names.get(userId) ?? `#${userId}`,
+    person: (userId) => {
+      const name = names.get(userId) ?? `#${userId}`;
+      return { userId, name, forms: personNameForms(name) };
+    },
+  };
+  const decider = disputeDecider({ modelSlug: catalog.info.get(labels[0] ?? "")?.modelSlug ?? null });
+  const editable = own && mayAct(actor, "edit", phase);
+  const canNote = own && mayAct(actor, "note", phase);
+  const counted = phase === "counted";
+
+  const askOf = (transactionId: number) => claims.find((claim) => claim.transactionId === transactionId && claim.claimantHandinId === handin?.id && claim.state !== "withdrawn") ?? null;
+  const incomingOf = (transactionId: number) => claims.find((claim) => claim.transactionId === transactionId && claim.sideUserId !== null
+    && subject.userIds.includes(claim.sideUserId) && claim.claimantHandinId !== handin?.id && claim.state !== "withdrawn") ?? null;
+  const proposalOf = (transactionId: number): ProposalRow | null => {
+    const mine = proposals.filter((one) => one.transactionId === transactionId && one.kind === "owner_change");
+    const late = mine.find((one) => one.state === "late");
+    if (late) return late;
+    return candidate === null ? null : mine.find((one) => one.candidateId === candidate.id) ?? null;
+  };
+  const noteProposalOf = (transactionId: number) => (candidate === null ? null : ofCandidate.find((one) => one.transactionId === transactionId && one.kind === "note") ?? null);
+
+  const rowOf = (line: HandinVersionLine, mode: "base" | "late"): ShiftReportRow => {
+    const id = line.transactionId!;
+    const platform = platformOf(catalog.info.get(line.pageLabel ?? "")?.platform);
+    const fansly = platform === "fansly";
+    const ref = refs.get(id) ?? null;
+    const ruleWords = ruleWordsOfLine(line, names);
+    const rule = ruleOwner(line, people, me);
+    const isLate = mode === "late";
+    const amount = isLate ? 0 : line.amountMills;
+    const ask = askOf(id);
+    const incoming = incomingOf(id);
+    const proposal = proposalOf(id);
+    const noteProposal = noteProposalOf(id);
+    let current = lineOwner(line, people, me);
+    let reason = "";
+    if (isLate) {
+      current = { ...owner("me", null, people, me), words: "после сдачи" };
+      reason = ruleWords;
+    } else if (ask !== null && ask.answer === null && (ask.state === "asked" || ask.state === "owner") && ask.silenceAt === null) {
+      current = rule;
+      reason = ask.sideUserId === null ? "ждём владельца" : `ждём ответа ${personNameForms(people.nameOf(ask.sideUserId)).gen}`;
+    } else if (ask !== null && ask.answer === "disagree" && ask.state === "owner" && ask.sideUserId !== null) {
+      current = rule;
+      reason = `${people.nameOf(ask.sideUserId)} не согласен, решит ${decider.words}`;
+    } else if (ask !== null && ask.state === "agreed" && ask.sideUserId !== null) {
+      reason = ask.silenceAt !== null ? `${people.nameOf(ask.sideUserId)} не ответил за сутки` : `${people.nameOf(ask.sideUserId)} согласился`;
+    } else if (incoming !== null && (incoming.state === "asked" || incoming.state === "owner") && incoming.claimantUserId !== null) {
+      reason = `${people.nameOf(incoming.claimantUserId)} оспаривает`;
+    } else if (proposal !== null && (proposal.state === "accepted" || (proposal.state === "proposed" && phase === "confirm"))) {
+      reason = "поменял Генгар";
+    } else if (proposal !== null && proposal.state === "declined" && counted) {
+      reason = `Генгар предлагал иначе, решит ${decider.words}`;
+    } else if (!sameOwner(current, rule)) {
+      reason = `по правилу ${rule.kind === "me" ? "ваша" : rule.words}`;
+    } else if (amount <= 0) {
+      reason = ruleWords;
+    }
+    if (current.kind === "share" && amount > 0 && !isLate) reason = `вам ${plainUsd(amount)}`;
+    const askWire = ask === null ? null : {
+      claimId: ask.id,
+      to: ask.sideUserId === null ? "owner" as const : "colleague" as const,
+      toUser: ask.sideUserId === null ? null : people.person(ask.sideUserId),
+      want: ask.statement === "share" && ask.shareWithUserId !== null ? owner("share", ask.shareWithUserId, people, me) : owner("me", null, people, me),
+      note: ask.claimantNote ?? "",
+      state: askState(ask),
+      answerNote: ask.answerNote,
+      answerBy: ask.sideUserId === null || ask.state !== "asked" ? null : new Date(ask.createdAt.getTime() + DAY_MS).toISOString(),
+      decision: ask.decisionId === null ? null : "решение владельца",
+    };
+    const incomingWire = incoming === null || incoming.claimantUserId === null ? null : {
+      claimId: incoming.id,
+      from: people.person(incoming.claimantUserId),
+      statement: incoming.statement === "share" ? "share" as const : "mine" as const,
+      note: incoming.claimantNote,
+      state: incoming.state === "asked" ? "asked" as const : incoming.state === "owner" ? "disputed" as const : "settled" as const,
+      canAnswer: own && incoming.kind === "claim" && incoming.answer === null && (incoming.state === "asked" || (incoming.state === "agreed" && incoming.silenceAt !== null)),
+      answer: incoming.answer,
+      answerBy: incoming.state === "asked" ? new Date(incoming.createdAt.getTime() + DAY_MS).toISOString() : null,
+    };
+    const shownProposal = proposal ?? noteProposal;
+    const proposalWire = shownProposal === null ? null : {
+      id: shownProposal.id,
+      kind: shownProposal.kind,
+      from: shownProposal.kind === "owner_change" ? wordOwner(shownProposal.fromWord, shownProposal.fromUserId, line, people, me) : null,
+      to: shownProposal.kind === "owner_change" ? wordOwner(shownProposal.toWord, shownProposal.toUserId, line, people, me) : null,
+      note: shownProposal.note,
+      deltaMills: shownProposal.deltaMills,
+      why: shownProposal.why,
+      state: shownProposal.state,
+      afterCounted: shownProposal.afterCounted,
+      by: "Генгар",
+    };
+    const noteText = line.note ?? (noteProposal !== null && noteProposal.state !== "declined" ? noteProposal.note : null);
+    const noteBy = line.noteByAgent === true || (line.note === null && noteText !== null) ? "agent" as const : "person" as const;
+    const attention = isLate || (incomingWire?.canAnswer ?? false)
+      || (phase === "confirm" && shownProposal !== null && shownProposal.state === "proposed")
+      || (shownProposal?.state === "late");
+    return {
+      key: `t${id}`,
+      transactionId: id,
+      pageLabel: line.pageLabel!,
+      platform,
+      platformRef: ref?.ref ?? null,
+      refLabel: fansly && ref !== null ? `#…${ref.ref.slice(-4)}` : null,
+      kind: line.kind,
+      siteWords: siteWordsOf(platform, line.kind),
+      fan: fans.get(id) ?? { fanRef: null, name: null, username: null },
+      occurredAt: line.occurredAt ?? new Date(0).toISOString(),
+      netMills: line.netMills,
+      grossMills: fansly || ref === null ? null : ref.grossMills,
+      rule: { owner: rule, reason: line.rule.reason, words: ruleWords },
+      owner: current,
+      statement: line.statement,
+      reasonWords: reason,
+      ticked: amount > 0,
+      amountMills: amount,
+      before: null,
+      late: isLate,
+      ask: askWire,
+      incoming: incomingWire,
+      proposal: proposalWire,
+      note: noteText === null ? null : { text: noteText, by: noteBy, byName: noteBy === "agent" ? "Генгар" : people.nameOf(me) },
+      sighting: null,
+      editable: editable && !isLate,
+      canNote: canNote && !isLate,
+      attention,
+    };
+  };
+
+  const sightingRow = (one: SaleSightingRow): ShiftReportRow => {
+    const label = catalog.labelOf.get(one.pageId) ?? String(one.pageId);
+    const platform = platformOf(catalog.info.get(label)?.platform);
+    const added = one.addedHandinId !== null && one.addedHandinId === handin?.id;
+    // Added, it counts on the board while it is edited; a version takes it only once Hub holds the sale.
+    const counts = added && (phase === "draft" || phase === "fixing");
+    return {
+      key: `s${one.id}`,
+      transactionId: null,
+      pageLabel: label,
+      platform,
+      platformRef: one.platformRef,
+      refLabel: platform === "fansly" ? `#…${one.platformRef.slice(-4)}` : null,
+      kind: one.kind,
+      siteWords: siteWordsOf(platform, one.kind),
+      fan: { fanRef: one.fanRef, name: one.fanName, username: one.fanRef },
+      occurredAt: one.occurredAt.toISOString(),
+      netMills: one.netMills,
+      grossMills: platform === "fansly" ? null : one.grossMills,
+      rule: { owner: owner("me", null, people, me), reason: "sighting", words: "Hub не поймал" },
+      owner: added ? owner("me", null, people, me) : { ...owner("me", null, people, me), words: "нет в Hub" },
+      statement: null,
+      reasonWords: added ? "добавили вы, Hub сверит" : "Hub не поймал",
+      ticked: counts,
+      amountMills: counts ? one.netMills : 0,
+      before: null,
+      late: false,
+      ask: null,
+      incoming: null,
+      proposal: null,
+      note: null,
+      sighting: { id: one.id, seenAt: one.firstSeenAt.toISOString(), added },
+      editable: false,
+      canNote: false,
+      attention: !added,
+    };
+  };
+
+  const beforeRow = (sale: (typeof before)[number]): ShiftReportRow => {
+    const platform = platformOf(sale.platform);
+    const ref = refs.get(sale.transactionId) ?? null;
+    const holder = sale.home?.shares[0]?.userId ?? null;
+    const whose = holder === null ? owner("nobody", null, people, me) : subject.userIds.includes(holder) ? owner("me", null, people, me) : owner("user", holder, people, me);
+    return {
+      key: `t${sale.transactionId}`,
+      transactionId: sale.transactionId,
+      pageLabel: sale.pageLabel,
+      platform,
+      platformRef: ref?.ref ?? null,
+      refLabel: platform === "fansly" && ref !== null ? `#…${ref.ref.slice(-4)}` : null,
+      kind: sale.kind,
+      siteWords: siteWordsOf(platform, sale.kind),
+      fan: sale.fan,
+      occurredAt: sale.occurredAt.toISOString(),
+      netMills: sale.netMills,
+      grossMills: platform === "fansly" || ref === null ? null : ref.grossMills,
+      rule: { owner: whose, reason: sale.home?.reason ?? "", words: holder === null ? "" : `смена ${personNameForms(people.nameOf(holder)).gen}` },
+      owner: whose,
+      statement: null,
+      reasonWords: holder === null ? "" : `смена ${personNameForms(people.nameOf(holder)).gen}`,
+      ticked: false,
+      amountMills: 0,
+      before: { user: holder === null ? null : people.person(holder) },
+      late: false,
+      ask: null,
+      incoming: null,
+      proposal: null,
+      note: null,
+      sighting: null,
+      editable: false,
+      canNote: false,
+      attention: false,
+    };
+  };
+
+  const byTimeDesc = (a: ShiftReportRow, b: ShiftReportRow) => b.occurredAt.localeCompare(a.occurredAt);
+  const allRows = [...base.map((line) => rowOf(line, "base")), ...late.map((line) => rowOf(line, "late")), ...sightings.map(sightingRow)];
+  const sums = pageSums(allRows.map((row) => ({ pageLabel: row.pageLabel, amountMills: row.amountMills })), labels);
+  const columns = labels.map((label) => {
+    const rows = allRows.filter((row) => row.pageLabel === label).sort(byTimeDesc);
+    const folded = before.filter((sale) => sale.pageLabel === label).map(beforeRow).sort(byTimeDesc);
+    const holders = [...new Set(folded.flatMap((row) => (row.before?.user ? [row.before.user.userId] : [])))].filter((id) => !subject.userIds.includes(id));
+    return {
+      pageLabel: label,
+      platform: platformOf(catalog.info.get(label)?.platform),
+      pageHandle: null,
+      modelName: catalog.info.get(label)?.modelName ?? null,
+      rows,
+      before: { count: folded.length, until: subject.shift.startedAt.toISOString(), people: holders.map((id) => people.person(id)), rows: folded },
+      marked: rows.filter((row) => row.ticked).length,
+      of: rows.length,
+      sumMills: sums.pages.find((page) => page.pageLabel === label)?.amountMills ?? 0,
+      attention: rows.some((row) => row.attention),
+    };
+  });
+
+  const models = new Set(labels.map((label) => catalog.info.get(label)?.modelSlug).filter((slug): slug is string => slug !== undefined));
+  const offShift = [...catalog.info.entries()]
+    .filter(([label, info]) => models.has(info.modelSlug) && !labels.includes(label) && visible(label))
+    .map(([pageLabel, info]) => ({ pageLabel, platform: platformOf(info.platform) }))
+    .sort((a, b) => a.pageLabel.localeCompare(b.pageLabel));
+
+  const reviewed = candidate === null ? false : await hasShiftReportReviewer(db, pageIds);
+  const candidateWire = candidate === null ? null : {
+    id: candidate.id,
+    number: candidate.number,
+    madeAt: candidate.madeAt.toISOString(),
+    by: candidate.door === "telegram" ? "со слов, через Генгара" : people.nameOf(candidate.actorUserId ?? me),
+    door: candidate.door,
+    cutoffAt: candidate.cutoffAt.toISOString(),
+    count: candidate.lines.filter((line) => line.amountMills > 0).length,
+    totalMills: candidate.totalMills,
+    hub: hubOf(candidate),
+    gengar: {
+      state: gengarState({ reviewed, answeredAt: candidate.gengarAnsweredAt, clean: candidate.gengarClean, handedInAt: candidate.madeAt, now }),
+      since: candidate.madeAt.toISOString(),
+      answeredAt: candidate.gengarAnsweredAt?.toISOString() ?? null,
+      proposals: ofCandidate.filter((one) => one.kind === "owner_change").length,
+      notes: ofCandidate.filter((one) => one.kind === "note").length,
+    },
+    superseded: candidate.supersededAt !== null,
+  };
+
+  const flat = columns.flatMap((column) => column.rows);
+  const waiting = flat.filter((row) => (row.ask !== null && (row.ask.state === "asked" || row.ask.state === "disputed"))
+    || (row.incoming !== null && row.incoming.state !== "settled") || (row.sighting !== null && !row.sighting.added) || row.late)
+    .map((row) => ({
+      key: row.key, transactionId: row.transactionId, pageLabel: row.pageLabel, fanName: row.fan.name ?? row.fan.username, netMills: row.netMills,
+      why: row.late ? "late" as const : row.ask !== null ? "ask" as const : row.incoming !== null ? "incoming" as const : "sighting" as const,
+    }));
+  const nowMills = sums.totalMills;
+  const wasMills = phase === "confirm" && candidate !== null && candidate.totalMills !== nowMills ? candidate.totalMills
+    : phase === "fixing" && latest !== null && latest.totalMills !== nowMills ? latest.totalMills : null;
+  const canConfirm = own && mayAct(actor, "confirm", phase) && candidate !== null && candidate.supersededAt === null;
+  const lateCards = proposals.some((one) => one.state === "late");
+  return {
+    phase,
+    chip: SHIFT_REPORT_PHASE_CHIPS[phase],
+    offShift,
+    columns,
+    candidate: candidateWire,
+    totals: { count: flat.filter((row) => row.ticked).length, nowMills, wasMills },
+    waiting,
+    colleagues: colleagues.map((one) => ({ userId: one.userId, name: one.name, forms: personNameForms(one.name) })),
+    decider,
+    canConfirm,
+    needsMe: own && (phase === "confirm" || flat.some((row) => row.late || (row.incoming?.canAnswer ?? false)) || lateCards),
+    handedInAt: candidate?.madeAt.toISOString() ?? null,
+    countedAt: latest?.submittedAt.toISOString() ?? null,
+  };
+}
+
+function askState(claim: SaleClaimRow): "asked" | "agreed" | "disputed" | "silence" | "decided" | "withdrawn" {
+  if (claim.state === "withdrawn") return "withdrawn";
+  if (claim.state === "decided") return "decided";
+  if (claim.state === "agreed") return claim.silenceAt !== null ? "silence" : "agreed";
+  if (claim.state === "owner" && claim.answer === "disagree") return "disputed";
+  return "asked";
+}
+
+function wordOwner(word: ProposalRow["fromWord"], userId: number | null, line: HandinVersionLine, people: People, me: number): ShiftReportOwner {
+  switch (word) {
+    case "mine": return owner("me", null, people, me);
+    case "share": return owner("share", userId, people, me);
+    case "give": return owner("user", userId, people, me);
+    case "pot": return owner("pot", null, people, me);
+    case "not_mine": return owner("nobody", null, people, me);
+    default: return ruleOwner(line, people, me);
+  }
+}
+
+/** Hub's check of a candidate as the board says it. */
+export function hubOf(candidate: Pick<CandidateRow, "hubCheck">): NonNullable<ShiftReportBoard["candidate"]>["hub"] {
+  const pages = candidate.hubCheck.map((page) => ({ ...page, at: page.at ?? null }));
+  const any = (state: string) => pages.some((page) => page.state === state);
+  const state = any("running") ? "running" as const : any("statement") ? "statement" as const : any("unchecked") ? "unchecked" as const : any("found") ? "found" as const : "matched" as const;
+  return {
+    state,
+    pages,
+    foundCount: pages.reduce((sum, page) => sum + page.foundCount, 0),
+    foundMills: pages.reduce((sum, page) => sum + page.foundMills, 0),
+  };
+}
+
+/** Whether Hub's check of a candidate is still reading a page. */
+export function hubPending(candidate: Pick<CandidateRow, "hubCheck">): boolean {
+  return candidate.hubCheck.some((page) => page.state === "running" || page.state === "statement");
+}

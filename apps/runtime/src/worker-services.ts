@@ -42,6 +42,7 @@ import { CUSTOM_CHECKS_QUEUE, runCustomOrderChecks } from "./services/custom-ord
 import { SALE_HOMES_QUEUE, runSaleHomesTick } from "./services/sale-homes.ts";
 import { runShiftReportMatters } from "./services/shift-handin-matters.ts";
 import { runSaleClaims } from "./services/sale-claims.ts";
+import { runShiftReportBoardPass } from "./services/shift-report-board.ts";
 import { SHIFT_ROWS_QUEUE, runShiftRowsTick } from "./services/shift-rows.ts";
 import { SYSTEM_STATE_QUEUE, runSystemStateTick } from "./services/system-state-tick.ts";
 import { PEOPLE_START_QUEUE, runPeopleStartTick } from "./services/people/start-tick.ts";
@@ -464,6 +465,11 @@ export async function startWorkerServices(
     // Заявки (package G): claims to the other side, a day's silence and disagreement to the owner, «мимо площадки», the week's nobody's sales.
     await runSaleClaims(app).catch((error: unknown) => {
       app.logger.warn({ err: error instanceof Error ? error.message : String(error) }, "sale claims pass failed; the rows are synced");
+    });
+    // The «Отчёт» board (package R): the server's timer — «Проверка» goes to «Подтвердите» when the check is done or 10
+    // minutes passed — and the person's matters «Подтвердите отчёт», «Генгар дочитал».
+    await runShiftReportBoardPass(app).catch((error: unknown) => {
+      app.logger.warn({ err: error instanceof Error ? error.message : String(error) }, "shift report board pass failed; the rows are synced");
     });
   });
   await boss.work(SALE_HOMES_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {

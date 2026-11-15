@@ -1,0 +1,145 @@
+import { SHIFT_REPORT_PHASES } from "@agency_hub_core/contracts";
+import type { HandinVersionLine } from "@agency_hub_core/db";
+import { describe, expect, it } from "vitest";
+
+import { linesPageSums } from "../apps/runtime/src/services/shift-handins.ts";
+import {
+  checkLetsConfirm,
+  confirmedLines,
+  lineWithWord,
+  mayAct,
+  phaseAfter,
+  silenceSettles,
+  type BoardAction,
+} from "../apps/runtime/src/services/shift-report-phases.ts";
+
+// The «Отчёт» board (package R): who may do what in each phase, when the check lets the person confirm, what a
+// version made at «Подтверждаю» counts with Gengar's proposals, and a day of silence.
+
+const ACTIONS: BoardAction[] = ["edit", "note", "ask", "handIn", "confirm", "reopen", "cancel", "resend", "answerProposal"];
+const person = { access: "own" as const, kind: "person" as const, enabled: true };
+const colleague = { access: "read" as const, kind: "person" as const, enabled: true };
+const agent = { access: "own" as const, kind: "agent" as const, enabled: true };
+
+function line(id: number, over: Partial<HandinVersionLine> & { shareMills?: number; home?: string; toUserId?: number | null } = {}): HandinVersionLine {
+  const net = over.netMills ?? 10_000;
+  const shareMills = over.shareMills ?? net;
+  return {
+    transactionId: id,
+    offPlatformId: null,
+    group: shareMills > 0 ? "mine" : "near",
+    pageLabel: "mia-2",
+    kind: "message_purchase",
+    occurredAt: "2026-11-12T19:00:00.000Z",
+    netMills: net,
+    rule: { home: over.home ?? (shareMills > 0 ? "shift" : "nobody"), reason: "holder", shareMills, toUserId: over.toUserId ?? null, senderUserId: null },
+    alreadyIn: null,
+    statement: null,
+    shareWithUserId: null,
+    note: null,
+    amountMills: shareMills,
+    added: false,
+    disputed: false,
+    ...over,
+  };
+}
+
+describe("who may do what on the board", () => {
+  it("a colleague, a team lead or the owner reading someone's board never confirms, edits or hands it in", () => {
+    for (const phase of SHIFT_REPORT_PHASES) {
+      for (const action of ACTIONS) expect(mayAct(colleague, action, phase)).toBe(false);
+    }
+  });
+
+  it("an agent never confirms, reopens, cancels, sends late sales or answers a card; it hands in «со слов» from the draft only", () => {
+    for (const phase of SHIFT_REPORT_PHASES) {
+      for (const action of ["confirm", "reopen", "cancel", "resend", "answerProposal", "ask"] as const) expect(mayAct(agent, action, phase)).toBe(false);
+    }
+    expect(mayAct(agent, "handIn", "draft")).toBe(true);
+    expect(mayAct(agent, "handIn", "confirm")).toBe(false);
+  });
+
+  it("the person confirms only in «Подтвердите», edits only in the draft and «Правка», and does nothing while it is checked", () => {
+    for (const phase of SHIFT_REPORT_PHASES) {
+      expect(mayAct(person, "confirm", phase)).toBe(phase === "confirm");
+      expect(mayAct(person, "edit", phase)).toBe(phase === "draft" || phase === "fixing");
+      expect(mayAct(person, "resend", phase)).toBe(phase === "counted");
+    }
+    for (const action of ACTIONS) expect(mayAct(person, action, "checking")).toBe(false);
+    expect(mayAct({ ...person, enabled: false }, "handIn", "draft")).toBe(false);
+  });
+
+  it("moves the phases as the prototype does", () => {
+    expect(phaseAfter("handIn", "draft", { counted: false, checkDone: false })).toBe("checking");
+    expect(phaseAfter("handIn", "fixing", { counted: true, checkDone: true })).toBe("confirm");
+    expect(phaseAfter("confirm", "confirm", { counted: false, checkDone: true })).toBe("counted");
+    expect(phaseAfter("reopen", "counted", { counted: true, checkDone: true })).toBe("fixing");
+    expect(phaseAfter("cancel", "fixing", { counted: true, checkDone: true })).toBe("counted");
+    expect(phaseAfter("cancel", "fixing", { counted: false, checkDone: true })).toBe("draft");
+  });
+});
+
+describe("the check holds the person for 10 minutes at most", () => {
+  const handedInAt = new Date("2026-11-12T23:04:00Z");
+  const at = (minutes: number) => new Date(handedInAt.getTime() + minutes * 60_000);
+
+  it("lets the person confirm at once when nothing checks it, or once both checks are in", () => {
+    expect(checkLetsConfirm({ handedInAt, now: handedInAt, hubPending: false, gengarPending: false })).toBe(true);
+  });
+
+  it("waits while Gengar reads or Hub reads a page, until the server's timer says 10 minutes", () => {
+    expect(checkLetsConfirm({ handedInAt, now: at(9.9), hubPending: false, gengarPending: true })).toBe(false);
+    expect(checkLetsConfirm({ handedInAt, now: at(9.9), hubPending: true, gengarPending: false })).toBe(false);
+    expect(checkLetsConfirm({ handedInAt, now: at(10), hubPending: true, gengarPending: true })).toBe(true);
+  });
+});
+
+describe("a version made at «Подтверждаю»", () => {
+  // The prototype's Gengar: Viggo «моя» → «пополам с Севой» (−$24), quill «ничья» → «моя» (+$8).
+  const viggo = line(3, { netMills: 48_000 });
+  const quill = line(20, { netMills: 8_000, shareMills: 0, home: "nobody" });
+  const dario = line(7, { netMills: 40_000 });
+  const share = { transactionId: 3, kind: "owner_change" as const, toWord: "share" as const, toUserId: 77, note: null };
+  const mine = { transactionId: 20, kind: "owner_change" as const, toWord: "mine" as const, toUserId: null, note: null };
+
+  it("counts the proposals the person did not decline", () => {
+    const lines = confirmedLines([viggo, quill, dario], [{ ...share, state: "proposed" }, { ...mine, state: "proposed" }]);
+    expect(lines.map((one) => one.amountMills)).toEqual([24_000, 8_000, 40_000]);
+    expect(linesPageSums(lines, ["mia-2"]).totalMills).toBe(72_000);
+    expect(lines[0]).toMatchObject({ statement: "share", shareWithUserId: 77 });
+  });
+
+  it("leaves a declined proposal's line as the person had it", () => {
+    const lines = confirmedLines([viggo, quill, dario], [{ ...share, state: "declined" }, { ...mine, state: "proposed" }]);
+    expect(lines.map((one) => one.amountMills)).toEqual([48_000, 8_000, 40_000]);
+    expect(lines[0]!.statement).toBeNull();
+    expect(linesPageSums(lines, ["mia-2"]).totalMills).toBe(96_000);
+  });
+
+  it("never applies a late proposal (it waits for «Принять»)", () => {
+    const lines = confirmedLines([viggo], [{ ...share, state: "late" }]);
+    expect(lines[0]!.amountMills).toBe(48_000);
+  });
+
+  it("counts nothing of a sale given to a colleague or to the pot", () => {
+    expect(lineWithWord(dario, { statement: "give", toUserId: 77 })).toMatchObject({ amountMills: 0, toUserId: 77, disputed: false });
+    expect(lineWithWord(dario, { statement: "pot" }).amountMills).toBe(0);
+  });
+});
+
+describe("a day of silence", () => {
+  const createdAt = new Date("2026-11-12T20:00:00Z");
+  const claim = { kind: "claim", state: "asked", sideUserId: 77, createdAt };
+  const later = (hours: number) => new Date(createdAt.getTime() + hours * 3_600_000);
+
+  it("settles a colleague's unanswered question for the one who asked after 24 hours, not before", () => {
+    expect(silenceSettles(claim, later(23.9))).toBe(false);
+    expect(silenceSettles(claim, later(24))).toBe(true);
+  });
+
+  it("never settles the pot's question or one already answered", () => {
+    expect(silenceSettles({ ...claim, sideUserId: null }, later(48))).toBe(false);
+    expect(silenceSettles({ ...claim, state: "owner" }, later(48))).toBe(false);
+    expect(silenceSettles({ ...claim, state: "agreed" }, later(48))).toBe(false);
+  });
+});

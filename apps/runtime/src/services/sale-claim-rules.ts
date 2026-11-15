@@ -36,8 +36,11 @@ export interface ReportLine {
   /** What a disputed «моё» claims while it counts nothing (review R2b-2). */
   claimedMills?: number | null;
   group: "mine" | "near";
-  statement: "mine" | "not_mine" | "share" | null;
+  /** The person's word; on the board also `give` (to `toUserId`) and `pot` (0412). */
+  statement: "mine" | "not_mine" | "share" | "give" | "pot" | null;
   shareWithUserId: number | null;
+  /** With `give`: the colleague the sale was given to. */
+  toUserId?: number | null;
   note: string | null;
   disputed: boolean;
   settled?: "agreed" | "owner";
@@ -191,6 +194,15 @@ export function ruleMarksOf(input: { reports: readonly ReportView[]; claims: rea
   for (const report of input.reports) {
     for (const line of report.lines) {
       if (line.transactionId === null || line.statement === null) continue;
+      // «Отдал Олегу» (R-board §3): the giver's «не моё» and the colleague's «моё», settled at once in his favour — the
+      // rule's own marks, never around it. «В общак»: the giver's «не моё»; whether it joins a pot is the owner's.
+      if (line.statement === "give" || line.statement === "pot") {
+        put(line.transactionId, { userId: report.userId, mark: "not_mine", shareWith: null, ownAmountMills: null, confirmed: true });
+        if (line.statement === "give" && line.toUserId != null) {
+          put(line.transactionId, { userId: line.toUserId, mark: "mine", shareWith: null, ownAmountMills: null, confirmed: true });
+        }
+        continue;
+      }
       put(line.transactionId, {
         userId: report.userId, mark: line.statement, shareWith: line.statement === "share" ? line.shareWithUserId : null, ownAmountMills: null, confirmed: true,
       });
