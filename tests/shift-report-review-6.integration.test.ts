@@ -70,8 +70,8 @@ async function sale(minutesAgo: number, kind: "tip" | "message_purchase" = "tip"
   const inserted = await q(
     `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
        gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
-     values ($1, $2, $3, $3, 'posted', 'ok', $4, $4, $5, 4000, now() - make_interval(mins => $6::int), 'fansly:rest', 'USD') returning id`,
-    [pageOne, `tx-review6-${refs}`, kind, NET + 4_000, NET, minutesAgo],
+     values ($1, $2, $3, $7, 'posted', 'ok', $4, $4, $5, 4000, now() - make_interval(mins => $6::int), 'fansly:rest', 'USD') returning id`,
+    [pageOne, `tx-review6-${refs}`, kind, NET + 4_000, NET, minutesAgo, kind],
   );
   await refreshHomes();
   return Number(inserted.rows[0].id);
