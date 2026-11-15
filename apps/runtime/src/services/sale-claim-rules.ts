@@ -120,7 +120,9 @@ export function deriveClaims(reports: readonly ReportView[]): DerivedClaim[] {
       const sides = new Map<number, number | null>();
       if (line.rule.toUserId !== null && line.rule.toUserId !== report.userId) sides.set(line.rule.toUserId, null);
       if (line.rule.home === "waiting" && line.rule.senderUserId !== null && line.rule.senderUserId !== report.userId) sides.set(line.rule.senderUserId, null);
-      for (const other of others) sides.set(other.report.userId, other.report.shiftId);
+      // A colleague whose report counts the sale; one who only claims it too (a disputed «моё», counting nothing) holds
+      // nothing to give: two takers are never asked of each other — one settlement per sale, with whoever holds it.
+      for (const other of others) if (other.line.amountMills > 0) sides.set(other.report.userId, other.report.shiftId);
       for (const [userId, known] of sides) {
         const shiftId = known ?? others.find((one) => one.report.userId === userId)?.report.shiftId ?? null;
         out.push({ ...base(report, line), kind: "claim", statement: "mine", shareWithUserId: null, sideUserId: userId, sideShiftId: shiftId });

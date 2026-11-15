@@ -179,6 +179,16 @@ describe("the people's words and the owner's decisions as the rule's inputs", ()
     expect(ruleMarksOf({ reports: [], claims: [{ ...asked, state: "agreed" }] }).get(7)).toEqual([said(101, "mine")]);
   });
 
+  it("asks two people who take one sale of whoever holds it, never of each other (third reader, 4)", () => {
+    const taken = { statement: "mine" as const, amountMills: 0, disputed: true, claimedMills: 36_000, rule: { home: "shift", reason: "holder", shareMills: 0, toUserId: 103, senderUserId: null } };
+    const claims = deriveClaims([
+      report(103, 3, "2026-11-05 21:00", [line(9, { group: "mine", amountMills: 36_000, rule: { home: "shift", reason: "holder", shareMills: 36_000, toUserId: null, senderUserId: null } })]),
+      report(101, 1, "2026-11-05 22:00", [line(9, taken)]),
+      report(102, 2, "2026-11-05 23:00", [line(9, taken)]),
+    ]);
+    expect(claims.map((claim) => [claim.kind, claim.claimantUserId, claim.sideUserId])).toEqual([["claim", 101, 103], ["claim", 102, 103]]);
+  });
+
   it("counts two settled lines that each give the whole sale as a double (third reader, 4)", () => {
     const settled = { group: "mine" as const, amountMills: 36_000, settled: "agreed" as const, rule: { home: "shift", reason: "holder", shareMills: 0, toUserId: 103, senderUserId: null } };
     const claims = deriveClaims([
