@@ -179,7 +179,10 @@ describe("matters", () => {
     expect(ownerOwn.matters.some((one) => one.title.includes("money"))).toBe(false);
 
     // «Ждут вас» is the dashboard's: a chatter's session is refused.
-    expect((await asSession("alice", "/api/v1/matters/waiting")).statusCode).toBe(403);
+    // «Ждут вас» of the team is everyone's read since the teams (package T): a chatter who leads nothing waits for nothing there.
+    const aliceWaiting = await asSession("alice", "/api/v1/matters/waiting");
+    expect(aliceWaiting.statusCode).toBe(200);
+    expect(mattersWaitingResponseSchema.parse(aliceWaiting.json())).toMatchObject({ groups: [], total: 0 });
   });
 
   it("an agent key writes its own kinds by key, on its pages, for living people; the server's kinds stay the server's", async (context) => {

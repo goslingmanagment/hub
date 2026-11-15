@@ -56,7 +56,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { awaitingGivingOf, customsLeadOwner } from "./custom-orders/readers.ts";
 import { AppError, ConflictError, NotFoundError } from "./errors.ts";
-import { ledPagesFor } from "./teams.ts";
+import { ledPagesFor, teamFactsFor } from "./teams.ts";
 
 /**
  * Дела (ecosystem plan §2, §6, package D): the reads of matters by every door
@@ -197,8 +197,27 @@ export async function heldRolesOf(_app: Pick<AppContext, "db">, viewer: MatterVi
 }
 
 /** Whether a matter waits for the viewer themself. */
-export function matterIsMine(matter: Pick<MatterRow, "owner">, viewer: MatterViewer, heldRoles: readonly MatterOwnerRole[]): boolean {
-  return "userId" in matter.owner ? matter.owner.userId === viewer.userId : heldRoles.includes(matter.owner.role);
+export function matterIsMine(
+  matter: Pick<MatterRow, "owner" | "pageIds">,
+  viewer: MatterViewer,
+  heldRoles: readonly MatterOwnerRole[],
+  /** The pages whose model has a lead (0415): a team lead's role matter there is the lead's, not the owner's. */
+  ledPages: ReadonlySet<number> = new Set(),
+): boolean {
+  if ("userId" in matter.owner) return matter.owner.userId === viewer.userId;
+  if (!heldRoles.includes(matter.owner.role)) return false;
+  if (matter.owner.role !== "team_lead") return true;
+  // As `matterHeldBy`: the owner holds it while no model of its pages has a lead; a lead, on the pages they lead.
+  if (viewer.role === "owner") return !matter.pageIds.some((pageId) => ledPages.has(pageId));
+  const mine = new Set(viewer.leadPageIds ?? []);
+  return matter.pageIds.some((pageId) => mine.has(pageId));
+}
+
+/** The pages whose model's team has a lead. */
+async function ledPagesOfAll(app: Pick<AppContext, "db">): Promise<Set<number>> {
+  const facts = await teamFactsFor(app);
+  const led = new Set(facts.roles.filter((role) => role.kind === "lead").map((role) => role.modelId));
+  return new Set(facts.pages.filter((page) => led.has(page.modelId)).map((page) => page.pageId));
 }
 
 /**
@@ -312,6 +331,7 @@ export async function readMattersList(app: MattersApp, principal: HumanAuthPrinc
     listMatterChecks(app.db),
   ]);
   const usernameOf = await listMatterUsernames(app.db, rows.flatMap((row) => ("userId" in row.owner ? [row.owner.userId] : [])));
+  const ledPages = viewer.role === "owner" ? await ledPagesOfAll(app) : new Set<number>();
   // The person's name where the login is a person's (the name «Люди» and «Кастомы» show): one read for all.
   const checkOf = new Map(checks.map((check) => [check.kind, check]));
   // The kinds the server keeps for this viewer: the mirrored ones they read (the owner every one, a team lead their
@@ -329,7 +349,7 @@ export async function readMattersList(app: MattersApp, principal: HumanAuthPrinc
     };
   });
   return {
-    matters: rows.map((row) => matterWire(row, pages.labelOf, usernameOf, matterIsMine(row, viewer, heldRoles))),
+    matters: rows.map((row) => matterWire(row, pages.labelOf, usernameOf, matterIsMine(row, viewer, heldRoles, ledPages))),
     kinds,
     serverNow: now.toISOString(),
   };

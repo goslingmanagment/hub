@@ -124,7 +124,13 @@ function normalize(value: unknown): unknown {
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([key]) => !CLOCK_KEYS.has(key)).map(([key, inner]) => [key, normalize(inner)]));
   }
-  if (typeof value === "string" && ISO.test(value) && Date.parse(value) > Date.now() - 10 * 60_000) return "<now>";
+  if (typeof value === "string" && ISO.test(value)) {
+    // A moment of this run, or a window counted back from it by whole hours (`from` = now − 24 h): the clock, not data.
+    const at = Date.parse(value);
+    if (at > Date.now() - 10 * 60_000) return "<now>";
+    const back = (Date.now() - at) % 3_600_000;
+    if (back < 120_000 || back > 3_600_000 - 120_000) return "<clock>";
+  }
   return value;
 }
 
@@ -174,8 +180,8 @@ async function work(db: Database, userId: number, pageId: number, fanRef: string
   const [fan] = (await db.execute<{ id: string }>(sql`insert into fans (platform, platform_user_id, username, display_name)
     values ('fansly', ${fanRef}, ${`fan_${suffix}`}, ${`Fan ${suffix}`}) returning id`)).rows;
   await db.execute(sql`insert into page_fans (fan_id, platform_account_id) values (${fan!.id}, ${pageId})`);
-  // Messages make the minutes a shift (without them it is a look-in).
-  for (let index = 0; index < 40; index += 1) {
+  // Messages make the minutes a shift (CHATTER_SHIFT_MIN_MESSAGES: without them it is a look-in).
+  for (let index = 0; index < 60; index += 1) {
     await db.execute(sql`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, conversation_ref, user_id,
       source, priced, with_media, observed_at) values ('fansly', ${pageId}, ${String(500_000 + suffix.charCodeAt(0) * 1000 + index)}, ${fanRef}, ${fanRef}, ${userId},
       'fansly-extension', false, false, ${new Date(shiftStart + (index + 1) * 3 * 60_000).toISOString()}::timestamptz)`);
@@ -237,11 +243,19 @@ describe("teams: who sees whom (package T)", () => {
     const reads = readsOf(server.routePolicyTable);
     expect(reads.length).toBeGreaterThan(250);
 
-    const ownerBefore = new Map<string, string>();
-    for (const read of reads) {
-      const response = await get(read.url, "olga");
-      ownerBefore.set(read.url, `${response.statusCode} ${JSON.stringify(normalize(safeJson(response.body)))}`);
-    }
+    const ownerAnswers = async () => {
+      const out = new Map<string, string>();
+      for (const read of reads) {
+        const response = await get(read.url, "olga");
+        out.set(read.url, `${response.statusCode} ${JSON.stringify(normalize(safeJson(response.body)))}`);
+      }
+      return out;
+    };
+    // Twice before the records: a read whose answer moves by itself (the clock, a cache the first read fills) proves
+    // nothing about the records and is set aside by name.
+    const ownerFirst = await ownerAnswers();
+    const ownerBefore = await ownerAnswers();
+    const unstable = new Set([...ownerBefore].filter(([url, value]) => ownerFirst.get(url) !== value).map(([url]) => url));
 
     // The team records: Lena leads team A (a chatter who leads her team stays a chatter).
     await testDb.pool.query("insert into team_roles (person_id, model_id, kind) values ($1, $2, 'lead')", [ids.personLeadA, ids.modelA]);
@@ -270,11 +284,17 @@ describe("teams: who sees whom (package T)", () => {
 
     const ownerChanged: string[] = [];
     // `teamRoles` IS the records: the one read whose answer changes with them by design.
-    for (const read of reads.filter((one) => one.key !== "teamRoles")) {
+    for (const read of reads.filter((one) => one.key !== "teamRoles" && !unstable.has(one.url))) {
       const response = await get(read.url, "olga");
-      if (ownerBefore.get(read.url) !== `${response.statusCode} ${JSON.stringify(normalize(safeJson(response.body)))}`) ownerChanged.push(read.key);
+      const after = `${response.statusCode} ${JSON.stringify(normalize(safeJson(response.body)))}`;
+      if (ownerBefore.get(read.url) !== after) {
+        ownerChanged.push(read.key);
+        if (process.env.TEAMS_DIFF) console.log("DIFF", read.key, "\nBEFORE", ownerBefore.get(read.url)?.slice(0, 700), "\nAFTER ", after.slice(0, 700));
+      }
     }
     expect(ownerChanged).toEqual([]);
+    // The team reads themselves must be among the proven ones.
+    expect(reads.filter((read) => read.key.startsWith("team") && unstable.has(read.url)).map((read) => read.key)).toEqual([]);
   }, 600_000);
 
   it("the team reads open for team A: both see its shifts, the lead opens a teammate's review, a chatter reads the team's people", async (context) => {
@@ -284,7 +304,7 @@ describe("teams: who sees whom (package T)", () => {
       const shifts = await get(`/api/v1/team/shifts?${window}`, who);
       expect(shifts.statusCode, shifts.body).toBe(200);
       const userIds = new Set((shifts.json() as { shifts: Array<{ userId: number }> }).shifts.map((shift) => shift.userId));
-      expect([...userIds].sort()).toEqual([ids.chatterA, ids.leadA].sort());
+      expect([...userIds].sort(), shifts.body.slice(0, 600)).toEqual([ids.chatterA, ids.leadA].sort());
     }
     const review = await get(`/api/v1/team/shift-review?userId=${ids.chatterA}&at=${encodeURIComponent(new Date(shiftStart + 60 * 60_000).toISOString())}`, "lena");
     expect(review.statusCode, review.body).toBe(200);

@@ -143,7 +143,7 @@ describe("people registry: pay terms reach the owner only", () => {
 
     const withTerms = agentPeopleResponseSchema.parse((await asKey("terms", "GET", "/api/v1/agent/people")).json());
     expect(withTerms.payTermsIncluded).toBe(true);
-    expect(withTerms.people[0]!.payTerms).toEqual([expect.objectContaining({ shareBasisPoints: SHARE, fixPerShiftMills: FIX })]);
+    expect(withTerms.people.find((person) => person.code === "chat")!.payTerms).toEqual([expect.objectContaining({ shareBasisPoints: SHARE, fixPerShiftMills: FIX })]);
 
     expect((await asKey("none", "GET", "/api/v1/agent/people")).statusCode).toBe(403);
     // Neither key reaches the owner's card, nor proposes without propose:people.
