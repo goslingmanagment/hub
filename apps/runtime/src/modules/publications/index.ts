@@ -9,6 +9,7 @@ import {
   getPublication,
   listModelPageIds,
   listPublicationPages,
+  listPublicationActorNames,
   listPublicationPageTargets,
   requestPublicationQueueRefresh,
 } from "@agency_hub_core/db";
@@ -217,6 +218,12 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       return { pages: scopeOf(person) === null && modelSlug === undefined ? pages : pages.filter((page) => labels.has(page.pageLabel)) };
     },
 
+    async targets(person: Person, pageLabel: string) {
+      const page = await scopedPage(person, pageLabel);
+      const targets = await listPublicationPageTargets(db, page.id);
+      return { pageLabel: page.label, platform: page.platform as "fansly" | "onlyfans", ...targets };
+    },
+
     async queueRefresh(person: Person, pageLabel: string) {
       const page = await scopedPage(person, pageLabel);
       if (realmOf(person) === "test") throw new ConflictError(TEST_PAGE_WORDS);
@@ -366,8 +373,20 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     const { client: _client, grant: _grant, ...query } = request.body;
     return screen.list(await as(request, "personPublicationList"), query);
   });
-  server.post("/api/v1/person/publications/get", { schema: routeSchemas.personPublicationGet }, async (request) =>
-    screen.get(await as(request, "personPublicationGet"), request.body.id));
+  server.post("/api/v1/person/publications/get", { schema: routeSchemas.personPublicationGet }, async (request) => {
+    const detail = await screen.get(await as(request, "personPublicationGet"), request.body.id);
+    // Who drafted, approved and moved it, by name: the card says «Автор: Генгар», «Утвердил: Диана».
+    const userIds = [detail.author.userId, detail.revision?.approvedByUserId ?? null, ...detail.events.map((event) => event.actorUserId)];
+    const agentKeyIds = [detail.author.agentKeyId, ...detail.events.map((event) => event.actorAgentKeyId)];
+    const names = await listPublicationActorNames(db, {
+      userIds: userIds.filter((id): id is number => id !== null),
+      agentKeyIds: agentKeyIds.filter((id): id is number => id !== null),
+    });
+    return { ...detail, names };
+  });
+  // Where a post of the page goes: its walls and tiers by name, never their prices (the agents' read, agentPublicationTargets).
+  server.post("/api/v1/person/publications/targets", { schema: routeSchemas.personPublicationTargets }, async (request) =>
+    screen.targets(await as(request, "personPublicationTargets"), request.body.pageLabel));
   server.post("/api/v1/person/publications/approve", { schema: routeSchemas.personPublicationApprove }, async (request) =>
     screen.approve(await as(request, "personPublicationApprove"), request.body.items));
   server.post("/api/v1/person/publications/cancel", { schema: routeSchemas.personPublicationCancel }, async (request) =>

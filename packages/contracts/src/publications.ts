@@ -295,6 +295,19 @@ export const publicationDetailSchema = publicationSchema.extend({
 });
 export type PublicationDetail = z.infer<typeof publicationDetailSchema>;
 
+/**
+ * The card through the person's door (ContentOps' «Публикации», products package C2): the detail with the names of
+ * who drafted, approved and moved the post — a person by the registry's display name, an agent by its key's name.
+ * A login without a person in the registry has no name here: never the login itself.
+ */
+export const personPublicationDetailSchema = publicationDetailSchema.extend({
+  names: z.object({
+    users: z.array(z.object({ id: z.number().int(), name: z.string() })),
+    agentKeys: z.array(z.object({ id: z.number().int(), name: z.string() })),
+  }),
+});
+export type PersonPublicationDetail = z.infer<typeof personPublicationDetailSchema>;
+
 export const publicationListQuerySchema = z.object({
   pageLabel: z.string().min(1).optional(),
   /** Only the pages of this model (Hub's slug, any case): ContentOps' «Публикации» shows one model (products plan §2.4). */

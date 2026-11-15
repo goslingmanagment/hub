@@ -196,6 +196,7 @@ const COMMENTS = { from: "2026-01-01T00:00:00.000Z", to: "2026-02-01T00:00:00.00
 const CALLS: Record<keyof typeof PERSON_DOOR_OPERATIONS, (aim: Aim) => { path: string; body: object }> = {
   personPublicationList: (aim) => ({ path: "publications/list", body: { pageLabel: aim.page } }),
   personPublicationGet: (aim) => ({ path: "publications/get", body: { id: aim.take().id } }),
+  personPublicationTargets: (aim) => ({ path: "publications/targets", body: { pageLabel: aim.page } }),
   personPublicationApprove: (aim) => ({ path: "publications/approve", body: { items: [aim.take()] } }),
   personPublicationCancel: (aim) => ({ path: "publications/cancel", body: { id: aim.take().id } }),
   personPublicationWithdraw: (aim) => ({ path: "publications/withdraw", body: { id: aim.take().id } }),
@@ -348,6 +349,29 @@ describe("the person's door", () => {
     const refresh = await call("personPublicationQueueRefresh", aim("T"), grants.testKm);
     expect(refresh.statusCode, refresh.body).toBe(409);
     expect(refresh.json()).toMatchObject({ message: "тестовая страница: на площадку не отправляется" });
+  });
+
+  it("names who drafted and approved a post, and where it goes, without logins or prices", async (context) => {
+    if (!server) return context.skip();
+    const list = await inject("POST", "/api/v1/person/publications/list", { bearer: KEY, payload: { client: "contentops", grant: grants.testKm, status: "approved" } });
+    const [post] = list.json<{ publications: Array<{ id: number; author: { userId: number | null } }> }>().publications;
+    expect(post, list.body).toBeDefined();
+    const card = await inject("POST", "/api/v1/person/publications/get", { bearer: KEY, payload: { client: "contentops", grant: grants.testKm, id: post!.id } });
+    expect(card.statusCode, card.body).toBe(200);
+    const { names, revision } = card.json<{ names: { users: Array<{ id: number; name: string }> }; revision: { approvedByUserId: number } }>();
+    // The seeded test posts are the test content manager's: her registry name, never her login.
+    for (const id of [post!.author.userId!, revision.approvedByUserId]) {
+      const named = names.users.find((user) => user.id === id);
+      expect(named?.name, card.body).toBeTruthy();
+      expect(named!.name).not.toBe("t-km");
+    }
+    const targets = await inject("POST", "/api/v1/person/publications/targets", { bearer: KEY, payload: { client: "contentops", grant: grants.testKm, pageLabel: "test-1" } });
+    expect(targets.statusCode, targets.body).toBe(200);
+    expect(targets.json()).toMatchObject({ pageLabel: "test-1", platform: "fansly", walls: [{ wallRef: "sandbox-wall", name: "Posts", defaultWall: true }] });
+    expect(targets.body).not.toMatch(/price/i);
+    // Another person's page is not there for her.
+    const foreign = await inject("POST", "/api/v1/person/publications/targets", { bearer: KEY, payload: { client: "contentops", grant: grants.testKm, pageLabel: "mia-1" } });
+    expect(foreign.statusCode).toBe(404);
   });
 
   it("records a change as the person's, never as ContentOps' key", async (context) => {
