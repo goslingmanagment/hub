@@ -32,6 +32,7 @@ import {
   withdrawShiftReportAsk,
 } from "../../services/shift-report-board.ts";
 import { recordSaleSightings } from "../../services/shift-handin-check.ts";
+import { requireShiftOfRealm } from "../../services/sandbox/realm.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -53,6 +54,9 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
   async function person(request: Parameters<typeof requirePrincipal>[0]) {
     const principal = await requirePrincipal(request);
     requireHumanPrincipal(principal);
+    // The wall (sandbox/realm.ts): a shift of the other realm is not found.
+    const shiftId = (request as { params?: { shiftId?: number } }).params?.shiftId;
+    if (shiftId !== undefined) await requireShiftOfRealm(appContext, principal, Number(shiftId));
     return handinActorOf(principal);
   }
 

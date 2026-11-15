@@ -60,6 +60,7 @@ import {
   type AuthFailureReason,
 } from "./errors.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
+import { ownerCanAccessPage, principalSandboxOf, type PrincipalSandbox } from "./sandbox/realm.ts";
 
 export const SESSION_COOKIE_NAME = "agency_hub_core_session";
 
@@ -148,6 +149,11 @@ export interface HumanAuthPrincipal {
    * and `requireDashboardUser` refuses it. Absent = a full session, as before.
    */
   narrowDeviceTokenId?: number;
+  /**
+   * The test realm (0412, services/sandbox/realm.ts): set for an owner of either realm and for every test login,
+   * from the person behind the login. Absent: a live non-owner, whose pages are live by the database.
+   */
+  sandbox?: PrincipalSandbox;
 }
 
 /**
@@ -1117,12 +1123,14 @@ export async function authenticateSessionToken(app: AppContext, sessionToken: st
 
   await touchAuthSession(app.db, session.id);
 
+  const sandbox = await principalSandboxOf(app, user);
   return {
     authMethod: "session" as const,
     user,
     assignedPageIds: user.assignedPages.map((page) => page.id),
     authSessionId: session.id,
     ...(session.narrowDeviceTokenId === null ? {} : { narrowDeviceTokenId: session.narrowDeviceTokenId }),
+    ...(sandbox === undefined ? {} : { sandbox }),
   } satisfies AuthPrincipal;
 }
 
@@ -1186,7 +1194,8 @@ export function canAccessPage(principal: AuthPrincipal, pageId: number) {
   }
 
   if (principal.user.role === "owner") {
-    return true;
+    // The wall of the test realm (sandbox/realm.ts): a live owner never opens a test page, a test owner only those.
+    return ownerCanAccessPage(principal, pageId);
   }
 
   return principal.assignedPageIds.includes(pageId);
@@ -1342,6 +1351,7 @@ export async function authenticateDeviceToken(
     });
   }
 
+  const sandbox = await principalSandboxOf(app, user);
   return {
     principal: {
       authMethod: "device_token" as const,
@@ -1349,6 +1359,7 @@ export async function authenticateDeviceToken(
       assignedPageIds: user.assignedPages.map((page) => page.id),
       deviceTokenId: record.id,
       ...(isClientTokenProfile(record.clientProfile) ? { clientProfile: record.clientProfile } : {}),
+      ...(sandbox === undefined ? {} : { sandbox }),
     },
     failure: null,
   };

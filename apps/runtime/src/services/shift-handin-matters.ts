@@ -12,6 +12,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { missingTitle } from "./shift-handin-rules.ts";
 import { SHIFT_REPORTS_MISSING_KIND, SHIFT_REPORT_MISSING_KIND } from "./shift-handins.ts";
+import { testUserIds } from "./sandbox/realm.ts";
 
 /**
  * «Смена не сдана» (ecosystem plan §6, package F): a shift closed two hours ago
@@ -97,7 +98,9 @@ export async function runShiftReportMatters(app: Pick<AppContext, "db" | "logger
     if (closed.transition === "closed") tally.closed += 1;
   }
 
-  const owner = ownerMissingOf(candidates, now);
+  // The owner's count is the live agency's (sandbox/realm.ts): a test person's missing report is their own matter only.
+  const testLogins = await testUserIds(app);
+  const owner = ownerMissingOf(candidates.filter((one) => !testLogins.has(one.userId)), now);
   if (owner === null) {
     const closed = await closeMatter(db, { key: OWNER_KEY, how: "resolved", writer: "server" }, SYSTEM, now);
     if (closed.transition === "closed") tally.closed += 1;

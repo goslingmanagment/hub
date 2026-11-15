@@ -11,6 +11,7 @@ import { sql } from "drizzle-orm";
 
 import type { Platform } from "@agency_hub_core/shared";
 
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import type { SyncAttemptClass } from "./sync/work.ts";
 import { timestampParam, toDate, toNumber, toRequiredDate } from "./sync/values.ts";
@@ -28,6 +29,7 @@ export async function listOpsLivePages(db: Database): Promise<OpsLivePageRow[]> 
       from pages p
      where p.status = 'active'
        and p.deleted_at is null
+       and ${livePageSql(sql`p.id`)}
      order by p.platform, p.label
   `);
   return result.rows.map((row) => ({ id: Number(row.id), label: row.label, platform: row.platform }));

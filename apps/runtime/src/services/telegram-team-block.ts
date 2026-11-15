@@ -1,4 +1,5 @@
 import {
+  listLivePageIds,
   listFansWaitingSince,
   listFirstChatterActivities,
   listShiftSales,
@@ -92,7 +93,8 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { f
   }
   let decide: TeamBlockFacts["decide"];
   if (rule !== null) {
-    const sales = (await listShiftSales(app.db, { pageIds: "all", from: input.from, to: input.to })).filter((sale) => ruledSale(rule, sale));
+    // The owner's morning report is the live agency's (sandbox/realm.ts): every live page, deleted ones too.
+    const sales = (await listShiftSales(app.db, { pageIds: await listLivePageIds(app.db), from: input.from, to: input.to })).filter((sale) => ruledSale(rule, sale));
     const homes = await readScreenHomes(app.db, {
       sales, openFrom: openWindowFrom(input.now, [...people.values()].flatMap((person) => person.work)), now: input.now, live: rule.live,
     });
@@ -110,7 +112,7 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { f
   const [orders, waiting, winBack] = await Promise.all([
     awaitingGivingOf(app, { pageIds: "all", limit: 500 }),
     listFansWaitingSince(app.db, { now: input.now, minWaitHours: WAITING_HOURS, maxDays: WAITING_MAX_DAYS }),
-    listWinBackResults(app.db, { from: new Date(input.now.getTime() - WIN_BACK_DAYS * DAY_MS), to: input.now, now: input.now, pages: "all" }),
+    listWinBackResults(app.db, { from: new Date(input.now.getTime() - WIN_BACK_DAYS * DAY_MS), to: input.now, now: input.now, pages: await listLivePageIds(app.db) }),
   ]);
   const paid = orders.map(waitsSince).sort((a, b) => a.getTime() - b.getTime());
   return {

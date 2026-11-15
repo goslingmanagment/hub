@@ -35,7 +35,9 @@ export type TransactionSource =
   // 0341: the OnlyFans feed from the chat extension on ChatSpace — a purchase
   // or a tip the page's socket announced, a row of the page's sales ledger.
   | "chatspace:ws"
-  | "chatspace:ledger";
+  | "chatspace:ledger"
+  // 0412: the test realm's seed (apps/runtime/src/services/sandbox/seed.ts), on test pages only.
+  | "sandbox";
 
 export interface UpsertTransactionInput {
   platformAccountId: number;

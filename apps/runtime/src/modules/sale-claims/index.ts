@@ -27,6 +27,7 @@ import {
 } from "../../services/sale-decisions-door.ts";
 import { readSaleDecisionsFeed } from "../../services/sale-decisions-feed.ts";
 import { handinActorOf, handinAgentActorOf } from "../../services/shift-handins.ts";
+import { requireSalesOfRealm } from "../../services/sandbox/realm.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -49,6 +50,12 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
   async function owner(request: Parameters<typeof requirePrincipal>[0]) {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
+    // The wall (sandbox/realm.ts): an owner decides about the sales of their realm only.
+    const params = (request as { params?: Record<string, unknown> }).params ?? {};
+    const body = ((request as { body?: unknown }).body ?? {}) as Record<string, unknown>;
+    const named = [params.transactionId, body.transactionId, ...(Array.isArray(body.transactionIds) ? body.transactionIds : [])]
+      .filter((value) => value !== undefined && value !== null).map(Number).filter(Number.isSafeInteger);
+    await requireSalesOfRealm(appContext, principal, named);
     return principal;
   }
 

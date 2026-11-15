@@ -2,6 +2,7 @@ import { and, sql } from "drizzle-orm";
 
 import type { Platform } from "@agency_hub_core/shared";
 
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import {
   egressEndpoints,
@@ -644,6 +645,7 @@ export async function retireLegacyOnlyFansDmMessages(
       from ${pages} p
       where p.platform = 'onlyfans'
         and p.status = 'active'
+        and ${livePageSql(sql`p.id`)}
       on conflict (page_id, stream) do nothing
     `);
 
@@ -1001,7 +1003,8 @@ export async function ensurePageSyncStates(
     .filter((platform) => LEGACY_EXECUTOR_PLATFORMS.includes(platform));
   // Tombstoned pages (deletePageByLabel) must never get sync states seeded
   // or maintained — a deleted page otherwise re-enters the planner forever.
-  const clauses = [sql`p.status = 'active'`, pageSyncPlatformScopeSql("p.id", platforms)];
+  // A test page is never synced (0412, sandbox/realm.ts): no sync states are seeded or kept for it.
+  const clauses = [sql`p.status = 'active'`, pageSyncPlatformScopeSql("p.id", platforms), livePageSql(sql`p.id`)];
   if (input?.pageId !== undefined) {
     clauses.push(sql`p.id = ${input.pageId}`);
   }

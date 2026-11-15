@@ -155,7 +155,8 @@ export function planShiftRows(input: { existing: readonly ShiftRowRecord[]; comp
  */
 export async function syncShiftRowsSince(db: Database, input: { from: Date; now: Date }): Promise<ShiftRowsSyncResult> {
   const { from, now } = input;
-  const people = await readPeopleWork(db, { from: new Date(from.getTime() - DAY_MS), to: now, now, pages: "all" });
+  // Every page's shifts, the test team's too (sandbox/realm.ts): a test shift is a row the test team works with.
+  const people = await readPeopleWork(db, { from: new Date(from.getTime() - DAY_MS), to: now, now, pages: "all", realm: "both" });
   const computed = [...people].flatMap(([userId, person]) => person.work
     .filter((work) => work.kind === "shift")
     .map((work) => shiftRowFactsOf(userId, work)));

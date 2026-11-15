@@ -4,6 +4,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { auditCtx } from "../../api/request-auth.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import { SESSION_COOKIE_NAME, requireDeviceTokenUser, readSessionIdentity } from "../../services/auth.ts";
+import { userIsTest } from "../../services/sandbox/realm.ts";
 import { AppError, BadRequestError } from "../../services/errors.ts";
 import {
   SSO_STATE_TTL_SECONDS,
@@ -240,7 +241,9 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     reply.header("cache-control", "no-store");
     const token = request.cookies[SESSION_COOKIE_NAME];
     const identity = isBearerRequest(request) || !token ? null : await readSessionIdentity(appContext, token);
-    if (identity === null) {
+    // The names behind nginx (the static reports on chatgoose., the other services' pages) hold real data: a test
+    // person is nobody there (sandbox/realm.ts).
+    if (identity === null || await userIsTest(appContext, identity.user.id)) {
       return reply.code(401).send({ error: "unauthorized", message: "Not signed in", statusCode: 401 });
     }
     reply.header("x-hub-user", String(identity.user.id));

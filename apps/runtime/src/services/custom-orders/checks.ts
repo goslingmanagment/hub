@@ -26,6 +26,7 @@ import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 import { applyCustomStep } from "./index.ts";
 import { CUSTOM_UNRECORDED_KIND, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
 import { deadlinePassed, dottedDay } from "./rules.ts";
+import { testPageIds } from "../sandbox/realm.ts";
 
 /**
  * Заказ кастома, the checks (ecosystem plan §6; one writer per kind — this
@@ -97,6 +98,8 @@ export function orderFindings(input: {
   recorders: ReadonlySet<number>;
   /** Who is on a shift now, by page label. */
   onShift: ReadonlyMap<string, readonly number[]>;
+  /** The test pages (sandbox/realm.ts): their orders get their own matters (the test team's), never the owner's count. */
+  testPageIds?: ReadonlySet<number>;
 }): Record<"custom.not_at_model" | "custom.overdue" | "custom.overdue_owner" | "custom.shot_not_given" | "custom.give_on_shift", Finding[]> {
   const { now, lead } = input;
   const out = {
@@ -123,7 +126,7 @@ export function orderFindings(input: {
       });
     }
     if (["recorded", "paid", "at_model", "partly", "revision"].includes(order.state) && deadlinePassed(order.deadlineOn, now)) {
-      overdue.push(order);
+      if (order.pageId === null || input.testPageIds?.has(order.pageId) !== true) overdue.push(order);
       out["custom.overdue"].push({
         key: `custom.overdue:${code}`, title: `Кастом ${code} просрочен: срок был ${dottedDay(order.deadlineOn!)}, ${pageOf(order)}`,
         object: orderObject(order), pageIds, owner: lead, evidence: { code, deadlineOn: order.deadlineOn, state: order.state }, link: orderLink(order),
@@ -277,7 +280,7 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
   }
 
   const orders = await listCustomOrdersInStates(app.db, ["recorded", "paid", "at_model", "partly", "shot", "revision", "refused"]);
-  const findings = orderFindings({ orders, now, lead, recorders, onShift });
+  const findings = orderFindings({ orders, now, lead, recorders, onShift, testPageIds: await testPageIds(app) });
   for (const kind of Object.keys(findings) as Array<keyof typeof findings>) add(await reconcile(app, kind, findings[kind], now));
 
   // A sale that looks like a custom, a day old and still without an order: its chatter's with the right, else the

@@ -8,6 +8,7 @@ import { previousBusinessDate } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { requireSessionUser, type AuthPrincipal } from "./auth.ts";
 import { NotFoundError, ServiceUnavailableError } from "./errors.ts";
+import { isTestPrincipal } from "./sandbox/realm.ts";
 import { checkWindow, ledgerGet, list, micros, payMillsOf } from "./ledger-payouts.ts";
 
 /**
@@ -152,6 +153,8 @@ export async function readAccountPay(
   const off: AccountPayResponse = { enabled: false, from: query.from, to: query.to, pay: null, serverNow };
   const person = await findOwnPayPerson(app.db, principal.user.id);
   if (person === null || person.seesOwnPaySince === null) return off;
+  // A test person's money is never asked of the ledger (sandbox/realm.ts): «нет данных».
+  if (isTestPrincipal(principal)) return { ...off, enabled: true };
 
   const read = { from: previousBusinessDate(query.from), to: query.to };
   const pay = await readLedgerPersonPay(app, person.code, read, { client: "account-pay", ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}) });

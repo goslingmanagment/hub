@@ -258,6 +258,8 @@ export const models = pgTable("models", {
   slug: text("slug").notNull().unique(),
   name: text("name").notNull(),
   sortOrder: integer("sort_order").default(0).notNull(),
+  // The test realm (0412): a test model's pages are what no live principal reads. Fixed at birth.
+  isTest: boolean("is_test").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
@@ -1531,7 +1533,7 @@ export const transactions = pgTable(
     ),
     sourceIdx: index("transactions_source_idx").on(table.source),
     sourceCheck: check("transactions_source_check", sql`
-      ${table.source} in ('onlymonster', 'ofapi:webhook', 'ofapi:rest', 'fansly:rest', 'harvest', 'chatspace:ws', 'chatspace:ledger')
+      ${table.source} in ('onlymonster', 'ofapi:webhook', 'ofapi:rest', 'fansly:rest', 'harvest', 'chatspace:ws', 'chatspace:ledger', 'sandbox')
     `),
     pendingBoundaryIdx: index("transactions_pending_boundary_idx").on(
       table.platformAccountId,

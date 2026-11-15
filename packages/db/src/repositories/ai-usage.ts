@@ -7,6 +7,7 @@ import {
   type AiUsageLedgerFeature,
 } from "@agency_hub_core/shared";
 
+import { liveUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import { aiUsageEvents, users } from "../schema.ts";
 
@@ -536,7 +537,7 @@ export async function listChatterUsageSummary(
       select ${users.id} as "userId",
              ${users.username} as username
       from ${users}
-      where ${users.role} = 'chatter'
+      where ${users.role} = 'chatter' and ${liveUserSql(users.id)}
     ),
     filtered_events as (
       select ${aiUsageEvents.id} as id,

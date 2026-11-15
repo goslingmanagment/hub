@@ -2,6 +2,7 @@ import { and, eq, gt, inArray, isNull, ne, sql } from "drizzle-orm";
 
 import type { UserRole } from "@agency_hub_core/shared";
 
+import { liveUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import { requireSingleRow } from "../rows.ts";
 import {
@@ -76,9 +77,10 @@ export async function findUserById(db: Database, userId: number) {
   });
 }
 
+/** Every login of the live agency (0412: a test person's login is the test realm's, never in this list). */
 export async function listUsers(db: Database) {
   return db.query.users.findMany({
-    where: isNull(users.deletedAt),
+    where: and(isNull(users.deletedAt), liveUserSql(users.id)),
     orderBy: (table, { asc }) => [asc(table.username)],
   });
 }

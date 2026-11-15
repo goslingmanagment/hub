@@ -12,6 +12,7 @@ import {
   type PublicationStatus,
 } from "@agency_hub_core/shared";
 
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // Publications (0297, docs/plans/2026-10-23-wall-posts): the rows, their status
@@ -1207,7 +1208,7 @@ export async function readPublicationDayVolume(db: Database, input: {
 export async function listPublicationPages(db: Database): Promise<Array<{ id: number; label: string; platform: string }>> {
   const result = await db.execute<Row>(sql`
     select id, label, platform::text as platform from pages
-     where status = 'active' and deleted_at is null
+     where status = 'active' and deleted_at is null and ${livePageSql(sql`pages.id`)}
      order by label
   `);
   return result.rows.map((row) => ({ id: num(row.id), label: String(row.label), platform: String(row.platform) }));

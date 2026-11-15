@@ -177,6 +177,7 @@ import { resolvePublishingStoppedIncident } from "./services/notification-incide
 import { approvePublications, updatePublicationSettings } from "./services/publications.ts";
 import { deleteFanslyPublication } from "./services/publications-fansly-delete.ts";
 import { resolvePageContext } from "./services/page-context.ts";
+import { registerSandboxCommands } from "./services/sandbox/cli.ts";
 import { ensureSyncQueues, sendSyncPlannerWakeup } from "./services/sync-queue.ts";
 import {
   buildStatusRows,
@@ -4186,6 +4187,8 @@ export function buildProgram() {
   registerSaleRuleCommands(program);
   // Claims and agreements: the one-off carry-over of the ledger's decisions and questions, the pass (sale-claims-cli.ts).
   registerSaleClaimCommands(program);
+  // The test team: its seed and its (owner's word only) removal (sandbox/cli.ts).
+  registerSandboxCommands(program);
 
   return program;
 }

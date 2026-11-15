@@ -98,6 +98,18 @@ export interface CustomViewer {
   pageIds: readonly number[];
   /** «Ведёт кастомы». */
   lead: boolean;
+  /**
+   * The test realm (0412, apps/runtime/src/services/sandbox/realm.ts): whether the viewer is a test person's login, and
+   * the test pages. A live viewer never sees a test page's order, a test viewer only those. Absent: no test realm.
+   */
+  realm?: { test: boolean; testPageIds: readonly number[] };
+}
+
+/** Whether the order is of the viewer's realm (an order of no known page is the live agency's). */
+function ofViewersRealm(viewer: CustomViewer, order: { pageId: number | null }): boolean {
+  if (viewer.realm === undefined) return true;
+  const test = order.pageId !== null && viewer.realm.testPageIds.includes(order.pageId);
+  return test === viewer.realm.test;
 }
 
 /** The lead's steps belong to the lead, the owner and a team lead. */
@@ -110,6 +122,7 @@ export function leadsSteps(viewer: CustomViewer): boolean {
  * those of no known page; a chatter only the orders of the pages they reach.
  */
 export function seesOrder(viewer: CustomViewer, order: { pageId: number | null }): boolean {
+  if (!ofViewersRealm(viewer, order)) return false;
   if (viewer.lead || viewer.role === "owner") return true;
   if (order.pageId === null) return viewer.role === "team_lead";
   return viewer.pageIds.includes(order.pageId);

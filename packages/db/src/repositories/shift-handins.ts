@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 
+import { testUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // The shift report as an object of Hub (0400; ecosystem plan 2026-11-12,
@@ -585,7 +586,7 @@ export interface HandinFeedHeld {
  */
 async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: readonly number[], limit: number) {
   const result = await db.execute<Row>(sql`
-    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code,
+    select ${VERSION_COLUMNS}, f.seq, h.shift_id, h.user_id, p.code as person_code, ${testUserSql(sql`h.user_id`)} as realm_test,
       to_char(coalesce(v.report_date, h.report_date), 'YYYY-MM-DD') as report_date,
       array(
         select distinct line ->> 'pageLabel' from jsonb_array_elements(v.lines) as line
@@ -604,6 +605,8 @@ async function feedRows(db: Database, where: ReturnType<typeof sql>, pageIds: re
   const served: HandinFeedRow[] = [];
   const held: HandinFeedHeld[] = [];
   for (const row of rows) {
+    // A test person's version is no key's (0412): never served, never held (a held version fails the ledger's check).
+    if (row.realm_test === true) continue;
     const outside = (Array.isArray(row.outside) ? row.outside : []).map(String);
     const base = { seq: num(row.seq), shiftId: num(row.shift_id), userId: num(row.user_id), personCode: text(row.person_code), reportDate: String(row.report_date) };
     if (outside.length > 0) {

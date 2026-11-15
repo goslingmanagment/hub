@@ -10,6 +10,7 @@ import {
   lockHandoffCode,
   markHandoffCodeUsed,
   type HandoffCodeRecord,
+  isTestUser,
 } from "@agency_hub_core/db";
 import { randomToken, sha256Hex, type UserRole } from "@agency_hub_core/shared";
 
@@ -481,7 +482,8 @@ export async function redeemServerCode(app: AppContext, input: {
       return null;
     }
     const status = await sessionStatus(dbTx, code.sessionId, code.userId);
-    if (!status) {
+    // A test person (sandbox/realm.ts) signs in to no other service but ContentOps, and never as the owner.
+    if (!status || (status.test && input.client !== SANDBOX_HANDOFF_CLIENT)) {
       await markHandoffCodeUsed(dbTx, { id: code.id });
       return null;
     }
@@ -493,7 +495,7 @@ export async function redeemServerCode(app: AppContext, input: {
       targetUserId: status.user.id,
       metadata: { client: input.client, username: status.user.username, sessionId: code.sessionId },
     });
-    return { user: status.user, owner: status.user.role === "owner", grant, expiresAt: status.expiresAt.toISOString() };
+    return { user: status.user, owner: status.user.role === "owner" && !status.test, grant, expiresAt: status.expiresAt.toISOString() };
   });
   if (outcome === null) {
     throw new ConflictError(NOT_REDEEMABLE);
@@ -509,8 +511,8 @@ export async function checkServerGrant(app: AppContext, input: {
   const grant = await findHandoffGrant(app.db, sha256Hex(input.grant));
   if (!grant || grant.target !== input.client) return { active: false };
   const status = await sessionStatus(app.db, grant.sessionId, grant.userId);
-  return status
-    ? { active: true, user: status.user, owner: status.user.role === "owner", expiresAt: status.expiresAt.toISOString() }
+  return status && (!status.test || input.client === SANDBOX_HANDOFF_CLIENT)
+    ? { active: true, user: status.user, owner: status.user.role === "owner" && !status.test, expiresAt: status.expiresAt.toISOString() }
     : { active: false };
 }
 
@@ -523,5 +525,8 @@ async function sessionStatus(db: AppContext["db"], sessionId: number, userId: nu
   }
   const user = await findUserById(db, userId);
   if (!user || user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) return null;
-  return { user: { id: user.id, username: user.username, role: user.role }, expiresAt: session.expiresAt };
+  return { user: { id: user.id, username: user.username, role: user.role }, expiresAt: session.expiresAt, test: await isTestUser(db, user.id) };
 }
+
+/** The one service a test person may be handed to (sandbox/realm.ts): ContentOps, the content manager's product. */
+const SANDBOX_HANDOFF_CLIENT = "contentops";

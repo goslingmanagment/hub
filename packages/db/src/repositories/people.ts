@@ -74,13 +74,31 @@ export interface PersonRow {
   note: string | null;
   importNotes: PersonImportNoteRow[];
   origin: PersonRowOrigin;
+  /** A test person (0412): the test realm's, never in a live answer. */
+  isTest: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
 
+/**
+ * Which realm a listing reads (0412, apps/runtime/src/services/sandbox/realm.ts): `live` (the default, every live
+ * reader) or `test` (a test principal). A listing never mixes them.
+ */
+export type PeopleRealm = "live" | "test";
+
+function personRealmSql(realm: PeopleRealm, alias: SQL = sql`p`): SQL {
+  return realm === "test" ? sql`${alias}.is_test` : sql`not ${alias}.is_test`;
+}
+
+/** A login (users.id expression) of the realm: a login without a person is live. */
+function loginRealmSql(realm: PeopleRealm, userId: SQL): SQL {
+  const test = sql`exists (select 1 from person_logins rl join people rp on rp.id = rl.person_id where rl.user_id = ${userId} and rp.is_test)`;
+  return realm === "test" ? test : sql`not ${test}`;
+}
+
 const PERSON_COLUMNS = sql`
   p.id, p.code, p.display_name, p.kind, p.role, p.state, p.left_on, p.telegram_user_id, p.telegram_handle, p.report_tag,
-  p.onboarding, p.note, p.import_notes, p.origin, p.created_at, p.updated_at`;
+  p.onboarding, p.note, p.import_notes, p.origin, p.is_test, p.created_at, p.updated_at`;
 
 function jsonArray<T>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[];
@@ -107,13 +125,14 @@ function personOf(row: Row): PersonRow {
     note: nullableText(row.note),
     importNotes: jsonArray<PersonImportNoteRow>(row.import_notes),
     origin: row.origin as PersonRowOrigin,
+    isTest: row.is_test === true,
     createdAt: date(row.created_at),
     updatedAt: date(row.updated_at),
   };
 }
 
-export async function listPersonRows(db: Database): Promise<PersonRow[]> {
-  const result = await db.execute<Row>(sql`select ${PERSON_COLUMNS} from people p order by p.display_name, p.code`);
+export async function listPersonRows(db: Database, realm: PeopleRealm = "live"): Promise<PersonRow[]> {
+  const result = await db.execute<Row>(sql`select ${PERSON_COLUMNS} from people p where ${personRealmSql(realm)} order by p.display_name, p.code`);
   return result.rows.map(personOf);
 }
 
@@ -144,15 +163,15 @@ export async function isOwnerTelegramUser(db: Database, telegramUserId: number):
 }
 
 /** The people any of whose parts changed at or after `since`: the record, a login's row, a key's revocation. */
-export async function listPersonRowsChangedSince(db: Database, since: Date): Promise<PersonRow[]> {
+export async function listPersonRowsChangedSince(db: Database, since: Date, realm: PeopleRealm = "live"): Promise<PersonRow[]> {
   const result = await db.execute<Row>(sql`
     select ${PERSON_COLUMNS}
       from people p
-     where p.updated_at >= ${since}
+     where ${personRealmSql(realm)} and (p.updated_at >= ${since}
         or exists (select 1 from person_logins l join users u on u.id = l.user_id
                     where l.person_id = p.id and u.updated_at >= ${since})
         or exists (select 1 from person_agent_keys k join agent_keys a on a.id = k.agent_key_id
-                    where k.person_id = p.id and a.revoked_at >= ${since})
+                    where k.person_id = p.id and a.revoked_at >= ${since}))
      order by p.updated_at, p.id`);
   return result.rows.map(personOf);
 }
@@ -172,15 +191,18 @@ export interface NewPersonRow {
   importNotes: PersonImportNoteRow[];
   origin: PersonRowOrigin;
   createdByUserId: number | null;
+  /** A test person (0412), fixed at birth: only the test realm's seed writes one. */
+  isTest?: boolean;
 }
 
 export async function insertPersonRow(db: Database, input: NewPersonRow): Promise<PersonRow> {
   const result = await db.execute<Row>(sql`
     insert into people as p (code, display_name, kind, role, state, left_on, telegram_user_id, telegram_handle, report_tag,
-                             onboarding, note, import_notes, origin, created_by_user_id)
+                             onboarding, note, import_notes, origin, created_by_user_id, is_test)
     values (${input.code}, ${input.displayName}, ${input.kind}, ${input.role}, ${input.state}, ${input.leftOn}::date,
             ${input.telegramUserId}, ${input.telegramHandle}, ${input.reportTag}, ${JSON.stringify(input.onboarding)}::jsonb,
-            ${input.note}, ${JSON.stringify(input.importNotes)}::jsonb, ${input.origin}, ${input.createdByUserId})
+            ${input.note}, ${JSON.stringify(input.importNotes)}::jsonb, ${input.origin}, ${input.createdByUserId},
+            ${input.isTest === true})
     returning ${PERSON_COLUMNS}`);
   return personOf(result.rows[0]!);
 }
@@ -252,7 +274,9 @@ export async function listPersonLoginRows(db: Database, personIds?: readonly num
 }
 
 /** Hub logins no person holds (person id 0). */
-export async function listUnlinkedLoginRows(db: Database): Promise<PersonLoginRow[]> {
+export async function listUnlinkedLoginRows(db: Database, realm: PeopleRealm = "live"): Promise<PersonLoginRow[]> {
+  // A login without a person is live: the test realm has none.
+  if (realm === "test") return [];
   const result = await db.execute<Row>(sql`
     select null::bigint as person_id, u.id as user_id, u.username, u.role, (u.password_hash is not null) as has_password,
            u.disabled_at, u.deleted_at, u.updated_at, ${LAST_SEEN}
@@ -263,12 +287,13 @@ export async function listUnlinkedLoginRows(db: Database): Promise<PersonLoginRo
 }
 
 /** Every Hub login with its person (null — no person holds it) and the person's name: whose a share of a sale is. */
-export async function listLoginPeople(db: Database): Promise<Array<{ userId: number; username: string; personId: number | null; displayName: string | null }>> {
+export async function listLoginPeople(db: Database, realm: PeopleRealm = "live"): Promise<Array<{ userId: number; username: string; personId: number | null; displayName: string | null }>> {
   const result = await db.execute<Row>(sql`
     select u.id as user_id, u.username, l.person_id, p.display_name
       from users u
       left join person_logins l on l.user_id = u.id
       left join people p on p.id = l.person_id
+     where ${loginRealmSql(realm, sql`u.id`)}
      order by u.id`);
   return result.rows.map((row) => ({
     userId: Number(row.user_id),
@@ -823,11 +848,11 @@ export interface PeopleCatalogAgentKey {
   revokedAt: Date | null;
 }
 
-export async function listPeopleCatalogPages(db: Database): Promise<PeopleCatalogPage[]> {
+export async function listPeopleCatalogPages(db: Database, realm: PeopleRealm = "live"): Promise<PeopleCatalogPage[]> {
   const result = await db.execute<Row>(sql`
     select pg.id, pg.label, pg.platform, pg.model_id, m.slug as model_slug
       from pages pg join models m on m.id = pg.model_id
-     where pg.status = 'active'
+     where pg.status = 'active' and ${realm === "test" ? sql`m.is_test` : sql`not m.is_test`}
      order by pg.id`);
   return result.rows.map((row) => ({
     id: Number(row.id),
@@ -838,12 +863,15 @@ export async function listPeopleCatalogPages(db: Database): Promise<PeopleCatalo
   }));
 }
 
-export async function listPeopleCatalogModels(db: Database): Promise<PeopleCatalogModel[]> {
-  const result = await db.execute<Row>(sql`select id, slug, name from models order by sort_order, slug`);
+export async function listPeopleCatalogModels(db: Database, realm: PeopleRealm = "live"): Promise<PeopleCatalogModel[]> {
+  const result = await db.execute<Row>(sql`select id, slug, name from models
+    where ${realm === "test" ? sql`is_test` : sql`not is_test`} order by sort_order, slug`);
   return result.rows.map((row) => ({ id: Number(row.id), slug: String(row.slug), name: String(row.name) }));
 }
 
-export async function listPeopleCatalogAgentKeys(db: Database): Promise<PeopleCatalogAgentKey[]> {
+export async function listPeopleCatalogAgentKeys(db: Database, realm: PeopleRealm = "live"): Promise<PeopleCatalogAgentKey[]> {
+  // Agent keys are the live realm's: a test owner sees none.
+  if (realm === "test") return [];
   const result = await db.execute<Row>(sql`select id, name, expires_at, revoked_at from agent_keys order by id`);
   return result.rows.map((row) => ({
     id: Number(row.id),
@@ -864,13 +892,14 @@ export interface PeopleCatalogUser {
   pageLabels: string[];
 }
 
-export async function listPeopleCatalogUsers(db: Database): Promise<PeopleCatalogUser[]> {
+export async function listPeopleCatalogUsers(db: Database, realm: PeopleRealm = "live"): Promise<PeopleCatalogUser[]> {
   const result = await db.execute<Row>(sql`
     select u.id, u.username, u.role, (u.password_hash is not null) as has_password, u.disabled_at, u.deleted_at,
            coalesce(array_agg(pg.label order by pg.label) filter (where pg.label is not null), '{}') as page_labels
       from users u
       left join user_page_assignments a on a.user_id = u.id
       left join pages pg on pg.id = a.platform_account_id
+     where ${loginRealmSql(realm, sql`u.id`)}
      group by u.id
      order by u.id`);
   return result.rows.map((row) => ({

@@ -2,6 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { truncateUtf16Safe } from "@agency_hub_core/shared";
 
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import { agentDatasetSqlMapping } from "./agent-dataset-map.ts";
 import { type CapturePayloadRef, capturePayloadRefFromColumns } from "./capture-payloads.ts";
@@ -209,7 +210,8 @@ export async function listAgentGrantPages(
  *  200-with-empty instead of becoming an existence oracle. */
 export async function countAgentVisiblePages(db: Database): Promise<number> {
   const result = await db.execute<{ count: string }>(
-    sql`select count(*)::text as count from pages where deleted_at is null`,
+    // The live agency's pages (0412): the test realm is no page a key could have been granted.
+    sql`select count(*)::text as count from pages where deleted_at is null and ${livePageSql(sql`pages.id`)}`,
   );
   return Number(result.rows[0]?.count ?? 0);
 }

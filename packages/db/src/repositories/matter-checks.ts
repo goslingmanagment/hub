@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 
+import { livePageSql, livePersonSql, liveUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // Проверки (ecosystem plan §6, package K): what the people checks read — the
@@ -94,28 +95,30 @@ function groupIds(rows: ReadonlyArray<{ owner: unknown; item: unknown }>): Map<n
 
 /** Everything the people checks need, in a handful of reads over small tables. */
 export async function readPeopleCheckSnapshot(db: Database, input: { today: string; idleSince: Date; now: Date }): Promise<PeopleCheckSnapshot> {
+  // The people checks are the live agency's (0412): the test team opens no matter of the owner's.
   const now = input.now.toISOString();
   const [people, logins, keys, pages, working, access, terms, inputs, since, proposals] = await Promise.all([
-    db.execute<Row>(sql`select id, code, display_name, kind, role, state, left_on::text as left_on from people order by id`),
+    db.execute<Row>(sql`select id, code, display_name, kind, role, state, left_on::text as left_on from people where not is_test order by id`),
     db.execute<Row>(sql`
       select u.id, u.username, u.role, l.person_id, (u.disabled_at is null and u.deleted_at is null) as living,
              (select count(*) from device_tokens t
                where t.user_id = u.id and t.revoked_at is null and t.expires_at > ${now}::timestamptz) as live_tokens
         from users u left join person_logins l on l.user_id = u.id
+       where ${liveUserSql(sql`u.id`)}
        order by u.id`),
     db.execute<Row>(sql`
       select a.id, a.name, k.person_id, a.expires_at, a.revoked_at, a.replaced_at
         from agent_keys a left join person_agent_keys k on k.agent_key_id = a.id
        order by a.id`),
-    db.execute<Row>(sql`select id, label, platform from pages order by id`),
-    db.execute<Row>(sql`select person_id as owner, page_id as item from person_working_pages order by person_id, position`),
-    db.execute<Row>(sql`select user_id as owner, platform_account_id as item from user_page_assignments order by user_id, platform_account_id`),
+    db.execute<Row>(sql`select id, label, platform from pages where ${livePageSql(sql`pages.id`)} order by id`),
+    db.execute<Row>(sql`select person_id as owner, page_id as item from person_working_pages where ${livePersonSql(sql`person_working_pages.person_id`)} order by person_id, position`),
+    db.execute<Row>(sql`select user_id as owner, platform_account_id as item from user_page_assignments where ${liveUserSql(sql`user_page_assignments.user_id`)} order by user_id, platform_account_id`),
     db.execute<Row>(sql`select distinct person_id from person_pay_terms where valid_from <= ${input.today}::date`),
     db.execute<Row>(sql`
       select user_id, page_id, max(minute) as last_input from chatter_activity_minutes
-       where input and minute >= ${input.idleSince.toISOString()}::timestamptz
+       where input and minute >= ${input.idleSince.toISOString()}::timestamptz and ${liveUserSql(sql`chatter_activity_minutes.user_id`)}
        group by user_id, page_id`),
-    db.execute<Row>(sql`select min(minute) as since from chatter_activity_minutes`),
+    db.execute<Row>(sql`select min(minute) as since from chatter_activity_minutes where ${liveUserSql(sql`chatter_activity_minutes.user_id`)}`),
     db.execute<Row>(sql`
       select person_id, proposed_code, count(*) as count, min(created_at) as since from person_proposals
        where state = 'open' group by person_id, proposed_code order by min(created_at)`),

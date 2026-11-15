@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 
+import { liveUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // The owner's personal daily AI limit of a person (0336) and what the person
@@ -106,7 +107,7 @@ export async function listAiPersonalLimits(
     left join ai_usage_events event on event.user_id = member.id
       and event.completed_at >= ${days.yesterday.from.toISOString()}::timestamptz
       and event.completed_at < ${days.today.toExclusive.toISOString()}::timestamptz
-    where member.deleted_at is null and member.disabled_at is null
+    where member.deleted_at is null and member.disabled_at is null and ${liveUserSql(sql`member.id`)}
     group by member.id
     order by 5 desc, lower(member.username)`);
   return (result.rows as Array<Record<string, NumericValue | string>>).map((row) => ({

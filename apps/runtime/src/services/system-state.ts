@@ -25,6 +25,7 @@ import {
   type SystemCopyRow,
   type SystemReporterRow,
   type SystemRoutineRow,
+  readSandboxSummary,
 } from "@agency_hub_core/db";
 import { MOSCOW_TIME_ZONE } from "@agency_hub_core/shared";
 
@@ -501,6 +502,7 @@ export async function readSystemState(app: StateApp, now: Date = new Date()): Pr
     })),
     routines: judged,
     copies: judgedCopies,
+    sandbox: await readSandboxSummary(app.db).then((one) => one === null ? null : { people: one.people, lastWorkedAt: one.lastWorkedAt?.toISOString() ?? null }),
     limits: { copyStaleHours: COPY_STALE_MS / 3_600_000, reporterSilentMinutes: REPORTER_SILENT_MS / MINUTE_MS },
     serverNow: now.toISOString(),
   };

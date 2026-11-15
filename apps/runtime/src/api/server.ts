@@ -50,6 +50,7 @@ import {
   TooManyRequestsError,
   UnauthorizedError,
 } from "../services/errors.ts";
+import { sandboxOwnerRefusal } from "../services/sandbox/owner-operations.ts";
 import {
   buildRoutePolicyIndex,
   computeAuthPolicyVerdict,
@@ -480,6 +481,15 @@ export async function buildApiServer(appContext: AppContext) {
     // The must_change_password route allowlist is gone
     // with the flag. Nothing reads the column any more; `mustChangePassword` on
     // the wire is a deprecated constant `false`.
+
+    // The owner of the test team is denied by default: one table says what it may call (sandbox/owner-operations.ts).
+    // Before the page's own answer, so an operation off the table is the same 403 for every page.
+    if (verdict.allow || verdict.statusCode !== 401) {
+      const sandboxRefusal = sandboxOwnerRefusal(entry.key, request.auth);
+      if (sandboxRefusal) {
+        throw sandboxRefusal;
+      }
+    }
 
     if (!verdict.allow) {
       switch (verdict.statusCode) {

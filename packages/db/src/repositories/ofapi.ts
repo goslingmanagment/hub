@@ -1,6 +1,7 @@
 import { OfapiAccountCustodyConflictError, ofapiAccountBelongsToPageSql } from "./ofapi-bindings.ts";
 import { and, asc, desc, eq, getTableColumns, gt, gte, inArray, isNotNull, lt, lte, ne, sql, type SQL } from "drizzle-orm";
 
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import {
   ofapiCreditLedger,
@@ -2583,7 +2584,8 @@ export async function listOnlyFansPagesForOfapiMapping(db: Database) {
       metadata: pages.metadata,
     })
     .from(pages)
-    .where(and(eq(pages.platform, "onlyfans"), eq(pages.status, "active")))
+    // A test page has no OnlyFans API account and is never offered one (0412).
+    .where(and(eq(pages.platform, "onlyfans"), eq(pages.status, "active"), livePageSql(pages.id)))
     .orderBy(asc(pages.label));
 }
 

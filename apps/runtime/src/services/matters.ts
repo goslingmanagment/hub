@@ -45,6 +45,7 @@ import {
   MatterWriterConflictError,
   openMatter,
   teamLeadRoleHeld,
+  listTestPageIds,
   type MatterCheckRow,
   type MatterOwner,
   type MatterOwnerRole,
@@ -176,7 +177,8 @@ type MattersApp = Pick<AppContext, "db">;
  */
 export function matterViewerOf(principal: HumanAuthPrincipal): MatterViewer {
   const role = principal.narrowDeviceTokenId === undefined ? principal.user.role as MatterOwnerRole : "chatter";
-  return { userId: principal.user.id, role, pageIds: principal.assignedPageIds };
+  // A test person's login reads the test realm's matters only (sandbox/realm.ts).
+  return { userId: principal.user.id, role, pageIds: principal.assignedPageIds, ...(principal.sandbox?.test === true ? { realm: "test" as const } : {}) };
 }
 
 /**
@@ -185,7 +187,7 @@ export function matterViewerOf(principal: HumanAuthPrincipal): MatterViewer {
  * constant); a team lead's; a chatter none.
  */
 export async function heldRolesOf(app: Pick<AppContext, "db">, viewer: MatterViewer): Promise<MatterOwnerRole[]> {
-  if (viewer.role === "owner") return (await teamLeadRoleHeld(app.db)) ? ["owner"] : ["owner", "team_lead"];
+  if (viewer.role === "owner") return (await teamLeadRoleHeld(app.db, viewer.realm ?? "live")) ? ["owner"] : ["owner", "team_lead"];
   if (viewer.role === "team_lead") return ["team_lead"];
   return [];
 }
@@ -205,7 +207,9 @@ async function customOrdersCount(app: MattersApp, viewer: MatterViewer): Promise
   if (viewer.role === "chatter") return undefined;
   if ("userId" in (await customsLeadOwner(app))) return 0;
   try {
-    return (await awaitingGivingOf(app, { pageIds: viewer.role === "owner" ? "all" : viewer.pageIds, limit: 5000 })).length;
+    // "all" is the live agency's; the test owner's every page is the test realm's (sandbox/realm.ts).
+    const every = viewer.realm === "test" ? await listTestPageIds(app.db) : "all" as const;
+    return (await awaitingGivingOf(app, { pageIds: viewer.role === "owner" ? every : viewer.pageIds, limit: 5000 })).length;
   } catch {
     return null;
   }

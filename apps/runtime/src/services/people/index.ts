@@ -82,7 +82,9 @@ import { millsFromInteger, millsToNumber, toBusinessDate } from "@agency_hub_cor
 
 import type { AppContext } from "../../bootstrap.ts";
 import { createInvite } from "../account-links.ts";
-import { recordAudit, withAuditTransaction, type AuditContext, type HumanAuthPrincipal } from "../auth.ts";
+import { assignPageToUserTx, recordAudit, withAuditTransaction, type AuditContext, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
+import { findPageSummaryByLabel } from "@agency_hub_core/db";
+import { realmOf, requireSameRealm } from "../sandbox/realm.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.ts";
 import { readStartForOwner } from "./start.ts";
 
@@ -278,9 +280,11 @@ function proposalView(row: PersonProposalRow): PersonProposal {
 
 /** The team's list (owner and team lead): no money anywhere in it. */
 export async function readTeamPeople(app: Pick<AppContext, "db">, principal: HumanAuthPrincipal, now = new Date()): Promise<TeamPeopleResponse> {
-  const rows = await listPersonRows(app.db);
+  // The registry of the principal's realm (sandbox/realm.ts): a test owner sees the test team, everyone else the agency.
+  const realm = realmOf(principal);
+  const rows = await listPersonRows(app.db, realm);
   const parts = await loadParts(app.db);
-  const unlinked = principal.user.role === "owner" ? await listUnlinkedLoginRows(app.db) : [];
+  const unlinked = principal.user.role === "owner" ? await listUnlinkedLoginRows(app.db, realm) : [];
   return {
     people: rows.map((row) => personView(row, parts, now)),
     unlinkedLogins: unlinked.map(loginView),
@@ -311,8 +315,10 @@ async function requirePerson(db: Db, code: string, options: { lock?: boolean } =
 }
 
 /** The owner's card of one person: everything, pay terms included. */
-export async function readPersonForOwner(app: Pick<AppContext, "db">, code: string, now = new Date()): Promise<AdminPersonResponse> {
-  return personDetail(app.db, await requirePerson(app.db, code), now);
+export async function readPersonForOwner(app: Pick<AppContext, "db">, code: string, now = new Date(), principal?: AuthPrincipal): Promise<AdminPersonResponse> {
+  const row = await requirePerson(app.db, code);
+  if (principal !== undefined) requireSameRealm(principal, row.isTest, () => new NotFoundError(`No person «${code}»`));
+  return personDetail(app.db, row, now);
 }
 
 // ── resolving a change ───────────────────────────────────────────────────────
@@ -564,7 +570,12 @@ async function updatePersonTx(db: Db, code: string, fields: ChangeFields, audit:
   return updated;
 }
 
-export async function updatePerson(app: Pick<AppContext, "db">, code: string, body: AdminPersonUpdateBody, audit: AuditContext, now = new Date()) {
+export async function updatePerson(app: Pick<AppContext, "db">, code: string, body: AdminPersonUpdateBody, audit: AuditContext, now = new Date(), principal?: AuthPrincipal) {
+  refuseForeignLogins(principal, body);
+  if (principal !== undefined) {
+    const row = await requirePerson(app.db, code);
+    requireSameRealm(principal, row.isTest, () => new NotFoundError(`No person «${code}»`));
+  }
   return withAuditTransaction(app, async (db) => personDetail(db, await updatePersonTx(db, code, body, audit), now));
 }
 
@@ -581,6 +592,7 @@ async function createPersonTx(
   audit: AuditContext,
   origin: PersonRowOrigin,
   importNotes: PersonImportNoteRow[] = [],
+  isTest = false,
 ): Promise<CreatedPerson> {
   const { code, kind: givenKind, invite, payTerms, ...fields } = body;
   const kind = givenKind ?? "human";
@@ -608,6 +620,8 @@ async function createPersonTx(
       importNotes,
       origin,
       createdByUserId: audit.actorUserId ?? null,
+      // A person the test owner makes is born test (sandbox/realm.ts).
+      isTest,
     });
   } catch (error) {
     return conflictOf(error);
@@ -619,13 +633,22 @@ async function createPersonTx(
   let created: CreatedPerson["invite"] = null;
   if (invite) {
     // createInvite runs in a savepoint of this transaction: a taken login rolls the person back too.
+    // A test person's login is linked BEFORE its pages are given (0412: the database checks a login's pages against
+    // its person's realm), so the test team's invitation takes its pages after the link.
     created = await createInvite({ ...app, db }, {
       username: invite.username,
       role: invite.role,
-      pageLabels: invite.pageLabels,
+      pageLabels: isTest ? [] : invite.pageLabels,
       expiresInHours: invite.expiresInHours,
     }, audit);
     await insertPersonLogin(db, { personId: row.id, userId: created.user.id, linkedByUserId: audit.actorUserId ?? null }).catch(conflictOf);
+    if (isTest) {
+      for (const label of invite.pageLabels) {
+        const page = await findPageSummaryByLabel(db, label);
+        if (!page) throw new NotFoundError(`Page "${label}" not found`);
+        await assignPageToUserTx(app, db, { userId: created.user.id, page }, audit);
+      }
+    }
     row = await updatePersonRow(db, row.id, {});
   }
   await recordAudit({ db }, {
@@ -637,9 +660,17 @@ async function createPersonTx(
   return { row, invite: created };
 }
 
-export async function createPerson(app: AppContext, body: AdminPersonCreateBody, audit: AuditContext, now = new Date()) {
+/** A test person's logins come only by its own invitation: never an existing login, never an agent key (0412). */
+function refuseForeignLogins(principal: AuthPrincipal | undefined, body: { logins?: unknown; agentKeys?: unknown }) {
+  if (principal !== undefined && realmOf(principal) === "test" && (body.logins !== undefined || body.agentKeys !== undefined)) {
+    throw new BadRequestError("В тестовой команде вход появляется только по приглашению");
+  }
+}
+
+export async function createPerson(app: AppContext, body: AdminPersonCreateBody, audit: AuditContext, now = new Date(), principal?: AuthPrincipal) {
+  refuseForeignLogins(principal, body);
   return withAuditTransaction(app, async (db) => {
-    const created = await createPersonTx(app, db, body, audit, "owner");
+    const created = await createPersonTx(app, db, body, audit, "owner", [], principal !== undefined && realmOf(principal) === "test");
     const detail = await personDetail(db, created.row, now);
     return {
       ...detail,

@@ -88,6 +88,7 @@ import {
   type MessageLocks,
 } from "./rules.ts";
 import type { PeopleTransport } from "./transport.ts";
+import { testUserIds } from "../sandbox/realm.ts";
 
 /**
  * Сообщения людям (ecosystem plan 2026-11-12, package S): the server's own
@@ -296,8 +297,10 @@ async function candidatesOf(app: MessagesApp, chats: PeopleMessageChats, now: Da
   await guarded("reminders", async () => {
     // The people's night: no reminder is made; in the morning the matter, if still open, makes it.
     if (inQuietHours(now)) return [];
+    // A test person gets no reminder (sandbox/realm.ts): no Telegram for the test team.
+    const testLogins = await testUserIds(app);
     const matters = (await listOpenMattersOfKinds(app.db, Object.keys(REMINDER_KINDS)))
-      .filter((matter) => now.getTime() - matter.openedAt.getTime() <= MATTER_LOOKBACK_MS && "userId" in matter.owner);
+      .filter((matter) => now.getTime() - matter.openedAt.getTime() <= MATTER_LOOKBACK_MS && "userId" in matter.owner && !testLogins.has(matter.owner.userId));
     const kindOf = (matter: MatterRow) => REMINDER_KINDS[matter.kind as keyof typeof REMINDER_KINDS];
     const done = await listExistingPeopleMessageKeys(app.db, matters.map((matter) => `${kindOf(matter)}:${matter.key}`));
     const reminders: Outgoing[] = [];

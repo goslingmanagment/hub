@@ -55,17 +55,17 @@ export function registerPeopleRoutes(server: ApiServer, ctx: ApiModuleContext) {
   });
 
   server.get("/api/v1/admin/people/:code", { schema: routeSchemas.adminPerson }, async (request) => {
-    return readPersonForOwner(appContext, request.params.code);
+    return readPersonForOwner(appContext, request.params.code, new Date(), await requirePrincipal(request));
   });
 
   server.post("/api/v1/admin/people", { schema: routeSchemas.adminPersonCreate }, async (request) => {
     const principal = await requirePrincipal(request);
-    return createPerson(appContext, request.body, auditCtx(principal));
+    return createPerson(appContext, request.body, auditCtx(principal), new Date(), principal);
   });
 
   server.patch("/api/v1/admin/people/:code", { schema: routeSchemas.adminPersonUpdate }, async (request) => {
     const principal = await requirePrincipal(request);
-    return updatePerson(appContext, request.params.code, request.body, auditCtx(principal));
+    return updatePerson(appContext, request.params.code, request.body, auditCtx(principal), new Date(), principal);
   });
 
   server.put("/api/v1/admin/people/:code/pay-terms", { schema: routeSchemas.adminPersonPayTermSet }, async (request) => {
