@@ -14,7 +14,7 @@ import { readShiftReportsFeed } from "../apps/runtime/src/services/shift-handins
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { handInAndConfirm } from "./helpers/shift-report-hand-in.ts";
+import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // Review round 2b of the shift report. (1) A report's date is the shift's date when it is handed in, not the date of
 // its first mark: a night shift that crossed into the next day after the first mark is reported — and fed to the
@@ -38,8 +38,9 @@ let bella = 0;
 let shiftB = 0;
 let refs = 0;
 
-const asSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
+const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
 const GENGAR = `${AGENT_KEY_TOKEN_PREFIX}review2-gengar-key`;
 const asAgent = (method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${GENGAR}` }, ...(payload ? { payload } : {}) });

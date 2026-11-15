@@ -128,6 +128,11 @@ export const shiftReportAskSchema = z.object({
   answerBy: isoTimestamp.nullable(),
   /** The decider's decision in plain words («владелец отдал вам», «владелец оставил в общаке»); null — none. */
   decision: z.string().nullable(),
+  /**
+   * The other side hands shifts in the old way (no board): the question went to the decider at once, no day of silence
+   * runs («Олег сдаёт смену по-старому, решит владелец»). Absent from an older server: false.
+   */
+  oldWay: z.boolean().optional(),
 });
 
 /** Someone claims a sale of the person: the amber strip under the row, answered «Согласен» / «Не согласен». */
@@ -183,6 +188,25 @@ export const shiftReportRowNoteSchema = z.object({
   byName: z.string(),
 });
 
+/**
+ * One item of a row's «чья» menu, as the server decides it: on someone else's sale only «Моя» and «Пополам с <держатель>»;
+ * on one's own «Моя», «Пополам с <каждый коллега>», «<коллега>» (отдать), «Общак», «Ничья».
+ */
+export const shiftReportChoiceSchema = z.object({
+  owner: shiftReportOwnerSchema,
+  /** What choosing it does: null — applied at once; else it asks (a colleague with the board answers; anyone else — the decider). */
+  asks: z.object({
+    to: z.enum(["colleague", "decider"]),
+    user: personSchema.nullable(),
+    /** «спросим Олега», «решит владелец», «Олег сдаёт смену по-старому, решит владелец». */
+    words: z.string(),
+  }).nullable(),
+  /** The menu's grey text: «по правилу», «спросим Олега», «решит владелец»; empty — none. */
+  hint: z.string(),
+  /** The current word. */
+  current: z.boolean(),
+});
+
 /** One row of a column: two lines, never more; the question, the claim, the card and the comment go under it. */
 export const shiftReportRowSchema = z.object({
   /** Stable within the board: `t<transactionId>`, or `s<sightingId>` for a row Hub does not hold. */
@@ -234,6 +258,10 @@ export const shiftReportRowSchema = z.object({
   canNote: z.boolean(),
   /** Wants a look: a «нет в Hub», a late row, a claim to answer, a proposal, Gengar's comment. */
   attention: z.boolean(),
+  /** What its «чья» menu offers (only while `editable`); absent or empty — no menu. */
+  choices: z.array(shiftReportChoiceSchema).optional(),
+  /** Hub's re-read after the hand-in found it («Hub дочитал кошельки: ещё 2 продажи … Показать» lights it). */
+  foundByHub: z.boolean().optional(),
 });
 export type ShiftReportRow = z.infer<typeof shiftReportRowSchema>;
 
@@ -354,6 +382,25 @@ export const shiftReportBoardSchema = z.object({
   handedInAt: isoTimestamp.nullable(),
   /** When the newest version was made; null — not counted. */
   countedAt: isoTimestamp.nullable(),
+  /**
+   * The person's own shift seen without the board (their right is off, or came after the shift began): read only, rows
+   * by the rule, no ticks, no «Сдать смену»; the screen shows the old notice («Сдача смены здесь ещё не включена…»).
+   */
+  preview: z.boolean().optional(),
+  /** The comment of the latest shift before this one on any of its pages, as soon as it is written (a draft's too); null — none. */
+  previous: z.object({ user: personSchema, comment: z.string(), at: isoTimestamp }).nullable().optional(),
+  /**
+   * The post for «Отчётность»: when the person last copied it, whether the ledger has seen the post of this report's
+   * day (null — not known), whether a version made since the copy changed a page sum («Пост изменился. Исправьте прежний
+   * пост в „Отчётности“, новый не пишите»), and whether the report's day is more than a day behind (the ledger's post
+   * reader refuses such a post: warn before copying). Null — nothing counted yet.
+   */
+  post: z.object({
+    copiedAt: isoTimestamp.nullable(),
+    seen: z.boolean().nullable(),
+    changedSinceCopy: z.boolean(),
+    late: z.boolean(),
+  }).nullable().optional(),
 });
 export type ShiftReportBoard = z.infer<typeof shiftReportBoardSchema>;
 

@@ -58,6 +58,7 @@ export * from "./repositories/sale-homes.ts";
 // The shift report as an object (0400): one per shift row, its draft edits, its versions, «мимо площадки».
 export * from "./repositories/shift-handins.ts";
 export * from "./repositories/shift-report-board.ts";
+export * from "./repositories/shift-handin-check.ts";
 export * from "./repositories/people-messages.ts";
 // Claims and agreements (0404): statements that touch another person, their answers, the owner's decisions of a sale.
 export * from "./repositories/sale-claims.ts";

@@ -194,9 +194,10 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     }
     const sale = sales.get(claim.transactionId);
     const side = claim.sideUserId === null ? null : people.get(claim.sideUserId) ?? null;
-    // The side answers on their own board or in «Ждут вас» (R-board §4), whether or not they hand shifts in in Hub; only
-    // with nobody to ask (none, or gone from the team) does it go to the decider at once.
-    const askable = claim.kind === "claim" && side !== null && side.state !== "left";
+    // The side answers on their own board or in «Ждут вас» only when they hand shifts in by the board too: a person who
+    // posts the old way is paid by a post Gengar writes from decisions, never agreements (arena round 3) — so anyone
+    // else, and nobody to ask, is the decider's at once (`no_side`), and no day of silence runs.
+    const askable = claim.kind === "claim" && side !== null && side.submitsShiftSince !== null && side.state !== "left";
     const why = claim.kind === "double" ? "double" as const : askable ? null : "no_side" as const;
     const asked = { state: why === null ? "asked" as const : "owner" as const, escalatedAt: why === null ? null : now, escalatedWhy: why };
     const said = {
@@ -234,7 +235,9 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
   for (const claim of open) {
     // A question asked from the draft (the board, 0412) stands while the person's draft says it: until «Отменить» or a
     // version of their report that no longer counts the sale.
-    const draftAsk = claim.origin === "draft" && !holding.some((report) => report.handinId === claim.claimantHandinId);
+    // A sale given to a colleague without the board (no word on the version that claims it) stands until it is decided or
+    // the word is taken back.
+    const draftAsk = claim.origin === "draft" && (claim.statement === null || !holding.some((report) => report.handinId === claim.claimantHandinId));
     if (!draftAsk && !claimStands(claim, holding)) {
       if (await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state })) tally.withdrawn += 1;
       continue;
@@ -254,9 +257,9 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
   return tally;
 }
 
-/** «/workboard/my/shifts/<id>?sale=<id>»: the side's shift report at the line. */
+/** «/workboard/report/<id>?sale=<id>»: the side's board at the row. */
 const sideLink = (claim: Pick<SaleClaimRow, "sideShiftId" | "transactionId">) =>
-  (claim.sideShiftId === null ? null : `/workboard/my/shifts/${claim.sideShiftId}${claim.transactionId === null ? "" : `?sale=${claim.transactionId}`}`);
+  (claim.sideShiftId === null ? null : `/workboard/report/${claim.sideShiftId}${claim.transactionId === null ? "" : `?sale=${claim.transactionId}`}`);
 
 const disputeKey = (claim: Pick<SaleClaimRow, "transactionId" | "id">) => (claim.transactionId === null ? `${SALE_DISPUTE_KIND}:q${claim.id}` : `${SALE_DISPUTE_KIND}:${claim.transactionId}`);
 
@@ -615,7 +618,7 @@ async function afterPaid(app: ClaimsApp, made: readonly MadeVersion[], now: Date
       owner: { role: "owner" },
       money: true,
       evidence: { shiftId: one.shiftId, version: one.version },
-      link: `/workboard/shifts/report/${one.shiftId}`,
+      link: `/workboard/report/${one.shiftId}`,
     }, SYSTEM, now).catch((error: unknown) => {
       app.logger.warn({ shiftId: one.shiftId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the owner's matter «после выплаты» did not open");
     });
@@ -712,8 +715,9 @@ export async function answerSaleClaim(
       throw new ConflictError("The message's sender is not this person", { reason: "sender_not_person" });
     }
   }
+  if (side !== null && side.submitsShiftSince === null) throw new ForbiddenError("The shift report is not switched on for this person");
+  // «Не согласен» is one press on the board: a line of why may come with it, never required.
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
-  if (input.answer === "disagree" && note === null) throw new BadRequestError("«Не согласен» needs one line of why", { reason: "note_required" });
   if (!answerable(found)) throw new ConflictError("This claim is already answered or decided", { reason: "claim_closed" });
 
   const door: HandinDoor = actor.kind === "agent" ? "telegram" : actor.door;
@@ -1281,7 +1285,7 @@ function saysOf(claim: SaleClaimRow, userId: number, now: Date): string[] {
   }
   if (claim.sideUserId === userId) {
     if (claim.answer === "agree") out.push(`«Согласен»${claim.answerNote ? `: ${claim.answerNote}` : ""}`);
-    else if (claim.answer === "disagree") out.push(`«Не согласен»: ${claim.answerNote ?? ""}`);
+    else if (claim.answer === "disagree") out.push(claim.answerNote === null ? "«Не согласен»" : `«Не согласен»: ${claim.answerNote}`);
     else if (claim.escalatedWhy === "silence") out.push(`нет ответа ${Math.floor((now.getTime() - claim.createdAt.getTime()) / HOUR_MS)} ч`);
     else if (claim.escalatedWhy === "no_side") out.push("сдаёт смену не в системе: спросить в системе нельзя");
     else if (claim.kind === "double") out.push("посчитана в своём отчёте раньше");

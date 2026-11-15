@@ -15,7 +15,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { listenOnLoopback } from "./helpers/network.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { handInAndConfirm, handInAndConfirmDirect } from "./helpers/shift-report-hand-in.ts";
+import { handInAndConfirm, handInAndConfirmDirect, editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // The second round of the final review of «чья продажа» and the shift report. (1) The agent's door changes nothing
 // outside the key's pages and nothing about another sale: what a decision replaces and what it answers are checked in
@@ -48,8 +48,9 @@ let bella = 0;
 let refs = 0;
 
 const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
-const asSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
+const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
 const asKey = (key: keyof typeof KEYS, method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${KEYS[key]}` }, ...(payload ? { payload } : {}) });
 

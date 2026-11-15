@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 83 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (520)
+## Routes (521)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -502,6 +502,7 @@ A full device token is not affected.
 | PUT | `/api/v1/shift-reports/:shiftId/lines/:transactionId` | `shiftReportLineSet` | `any` | — | — | yes |
 | POST | `/api/v1/shift-reports/:shiftId/off-platform` | `shiftReportOffPlatformAdd` | `any` | — | — | yes |
 | DELETE | `/api/v1/shift-reports/:shiftId/off-platform/:offPlatformId` | `shiftReportOffPlatformWithdraw` | `any` | — | — | yes |
+| POST | `/api/v1/shift-reports/:shiftId/post-copied` | `shiftReportPostCopied` | `any` | — | — | no |
 | POST | `/api/v1/shift-reports/:shiftId/proposals/:proposalId/answer` | `shiftReportProposalAnswer` | `any` | — | — | yes |
 | POST | `/api/v1/shift-reports/:shiftId/reopen` | `shiftReportReopen` | `any` | — | — | yes |
 | POST | `/api/v1/shift-reports/:shiftId/reopen/cancel` | `shiftReportReopenCancel` | `any` | — | — | yes |

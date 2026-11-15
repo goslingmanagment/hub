@@ -12,7 +12,7 @@ import type { HandinPersonActor } from "../apps/runtime/src/services/shift-handi
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { handInAndConfirm, handInAndConfirmDirect } from "./helpers/shift-report-hand-in.ts";
+import { handInAndConfirm, handInAndConfirmDirect, editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // The third round of the final review of «чья продажа» and the shift report. (1) A «долёт» stays in its own report:
 // the shift handed in again keeps the line, and a cancelled decision brings the report back to what the «долёт»
@@ -45,8 +45,9 @@ let worked = 0;
 let refs = 0;
 
 const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
-const asSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
+const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
 const asKey = (method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${KEY}` }, ...(payload ? { payload } : {}) });
 

@@ -473,6 +473,7 @@ export const kernelOperations = {
   shiftReportNotes: { method: "GET", path: "/api/v1/shift-report-notes" },
   shiftReportOffPlatformAdd: { method: "POST", path: "/api/v1/shift-reports/:shiftId/off-platform" },
   shiftReportOffPlatformWithdraw: { method: "DELETE", path: "/api/v1/shift-reports/:shiftId/off-platform/:offPlatformId" },
+  shiftReportPostCopied: { method: "POST", path: "/api/v1/shift-reports/:shiftId/post-copied" },
   shiftReportProposalAnswer: { method: "POST", path: "/api/v1/shift-reports/:shiftId/proposals/:proposalId/answer" },
   shiftReportReopen: { method: "POST", path: "/api/v1/shift-reports/:shiftId/reopen" },
   shiftReportReopenCancel: { method: "POST", path: "/api/v1/shift-reports/:shiftId/reopen/cancel" },

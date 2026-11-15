@@ -165,7 +165,7 @@ export function shiftLinkOf(input: { shift: HandinShift | null; workRef: string 
       : "заход, не смена: отчёта смены у него нет";
     return { state: "none", words, link: null, amountMills: null };
   }
-  const path = input.own ? `/workboard/my/shifts/${shift.id}?sale=${input.transactionId}` : `/workboard/shifts/report/${shift.id}?sale=${input.transactionId}`;
+  const path = `/workboard/report/${shift.id}?sale=${input.transactionId}`;
   return { state: shift.state === "going" ? "wait" : "done", words: `смена ${shiftWords(shift.startedAt, shift.endedAt)}${shift.state === "going" ? ", идёт" : ""}`, link: path, amountMills: null };
 }
 
@@ -175,7 +175,7 @@ export function hubReportLinkOf(input: { report: CurrentReport; transactionId: n
   const claimed = line.claimedMills ?? 0;
   const counted = claimed > 0 ? `спорно, ждёт решения: ${money(claimed)}` : line.amountMills > 0 ? `засчитано ${money(line.amountMills)}` : "в отчёте с нулём";
   const statement = line.statement === "not_mine" ? ", «не моё»" : line.statement === "share" ? ", «делим»" : line.statement === "mine" ? ", «моё»" : "";
-  const path = input.own ? `/workboard/my/shifts/${input.report.shiftId}?sale=${input.transactionId}` : `/workboard/shifts/report/${input.report.shiftId}?sale=${input.transactionId}`;
+  const path = `/workboard/report/${input.report.shiftId}?sale=${input.transactionId}`;
   return {
     state: line.disputed ? "open" : "done",
     words: `сдан: версия ${input.report.version}, ${formatDateTime(input.report.submittedAt.toISOString())}; ${input.sums.hubLine ? counted : claimed > 0 ? "спорно, ждёт решения" : line.amountMills > 0 ? "засчитана" : "не засчитана"}${statement}`,

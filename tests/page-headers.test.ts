@@ -28,6 +28,9 @@ describe("the headers of every answer", () => {
     }
     expect(isBoardFramePath("/workboard/frame/report")).toBe(true);
     expect(isBoardFramePath("/workboard/frame/report?shift=12")).toBe(true);
+    // Exactly the board's frame: another frame path is not lifted until it is listed by name.
+    expect(isBoardFramePath("/workboard/frame/other")).toBe(false);
+    expect(isBoardFramePath("/workboard/frame/report/x")).toBe(false);
     expect(isBoardFramePath("/workboard/report/12")).toBe(false);
     expect(isBoardFramePath("/workboard/frameworks")).toBe(false);
     expect(isBoardFramePath("/api/v1/workboard/frame/report")).toBe(false);

@@ -49,7 +49,9 @@ import {
   setCandidateGengarAnswer,
   setCandidateHubCheck,
   setHandinMark,
+  setHandinFixingFrom,
   setHandinPhase,
+  setHandinPostCopied,
   setHandinProposalState,
   setSaleSightingAdded,
   setSaleSightingMatched,
@@ -69,6 +71,7 @@ import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { runSaleClaims } from "./sale-claims.ts";
 import { SALE_RULE } from "./sale-rule.ts";
+import { matchSightings, runHubChecks, settleGoneShifts, startHubCheck, syncCheckMatters, syncLateMarks } from "./shift-handin-check.ts";
 import { boardOn, hubPending, phaseOf } from "./shift-report-board-view.ts";
 import {
   accessOf,
@@ -123,6 +126,16 @@ interface Board {
   phase: ShiftReportPhase;
 }
 
+/**
+ * A change the phase does not take now (ticks and «чья» in «Проверка», «Подтвердите», «Учтён»): the route answers 409
+ * with the fresh board; «Исправить» is the way back to editing.
+ */
+export class PhaseConflictError extends ConflictError {
+  constructor(readonly shiftId: number, phase: ShiftReportPhase) {
+    super(`Not now: the report is in «${phase}»; «Исправить» first`, { reason: "phase" });
+  }
+}
+
 /** The report the actor acts on, with its phase; the action must be the actor's in that phase. */
 async function boardFor(app: BoardApp, actor: HandinActor, shiftId: number, action: BoardAction): Promise<Board> {
   const { subject, catalog } = await writableSubject(app, actor, shiftId);
@@ -131,7 +144,7 @@ async function boardFor(app: BoardApp, actor: HandinActor, shiftId: number, acti
   const phase = phaseOf(handin);
   const access = accessOf(actor, subject, catalog).access;
   if (!mayAct({ access, kind: actor.kind, enabled: subject.enabled }, action, phase)) {
-    throw new ConflictError(`Not now: the report is in «${phase}»`, { reason: "phase" });
+    throw new PhaseConflictError(subject.shift.id, phase);
   }
   return { subject, catalog, handin, phase };
 }
@@ -150,6 +163,9 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
   const who = writer(actor);
   const pageIds = subject.shift.pages.map((page) => catalog.idOf.get(page.pageLabel)).filter((id): id is number => id !== undefined);
   const reviewed = await hasShiftReportReviewer(app.db, pageIds);
+  // Hub's own check of each page (shift-handin-check.ts): its first states, and the wallet reads asked after the commit.
+  const check = await startHubCheck(app.db, { subject, catalog });
+  const hubWaits = check.pages.some((page) => page.state === "running" || page.state === "statement");
 
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
@@ -160,15 +176,14 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
     const lines = draftLines(facts, marks);
     const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
     const sums = linesPageSums(lines, facts.pages, offPlatform);
-    // Hub's own check of each page is the reconciliation's (§5): it records its result here. Until then nothing reads.
-    const hubCheck: CandidateHubPage[] = [];
+    const hubCheck: CandidateHubPage[] = check.pages;
     const made = await insertCandidateWithin(db, {
       handinId: handin.id, door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
       telegramMessageRef: actor.kind === "agent" ? actor.sourceRef : null, telegramSenderId: actor.kind === "agent" ? actor.telegramUserId : null,
       cutoffAt: now, totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: handin.comment, ruleVersion: SALE_RULE.version,
       hubCheck, at: now,
     });
-    const next = checkLetsConfirm({ handedInAt: now, now, hubPending: false, gengarPending: reviewed }) ? "confirm" : "checking";
+    const next = checkLetsConfirm({ handedInAt: now, now, hubPending: hubWaits, gengarPending: reviewed }) ? "confirm" : "checking";
     await setHandinPhase(db, { handinId: handin.id, phase: next, at: now });
     await insertHandinEvent(db, {
       handinId: handin.id, event: "shift_report.handed_in", door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
@@ -177,6 +192,7 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
       at: now,
     });
   });
+  await check.ask().catch((error: unknown) => warn(app, error, "asking the wallets' read after a hand-in"));
   await closeMatter(app.db, { key: `${SHIFT_REPORT_MISSING_KIND}:${subject.shift.id}`, how: "resolved", writer: "server" }, SYSTEM, now).catch(() => undefined);
   await syncBoardMatters(app, now).catch((error: unknown) => warn(app, error, "the board's matters after a hand-in"));
   return readSubject(app, actor, subject, now);
@@ -194,7 +210,7 @@ const insertCandidateWithin = (db: Database, input: Parameters<typeof insertHand
 export async function confirmShiftReport(
   app: BoardApp,
   actor: HandinPersonActor,
-  input: { shiftId: number; candidateId: number },
+  input: { shiftId: number; candidateId: number; seenTotalMills?: number | undefined; seenCount?: number | undefined },
   options: { now?: Date; dayPaid?: (input: { personCode: string | null; reportDate: string }) => Promise<boolean | null> } = {},
 ): Promise<ShiftReportConfirmResponse> {
   const now = options.now ?? new Date();
@@ -225,6 +241,12 @@ export async function confirmShiftReport(
     const lines = confirmedLines(withSettlementsNow(candidate.lines, draft), proposals);
     const offPlatform = offPlatformOfRows(await listOffPlatform(db, locked.id), catalog.labelOf);
     const sums = linesPageSums(lines, candidate.pages.map((page) => page.pageLabel), offPlatform);
+    // «Подтверждаю» signs what the person saw: a colleague's answer or a decision since the board was drawn changes it,
+    // and then nothing is made — the fresh board says «Было …, стало …» and the person presses again.
+    const count = lines.filter((line) => line.amountMills > 0).length;
+    if ((input.seenTotalMills !== undefined && input.seenTotalMills !== sums.totalMills) || (input.seenCount !== undefined && input.seenCount !== count)) {
+      return { done: "changed" as const };
+    }
     const made = await insertHandinVersion(db, {
       handin: locked, door: actor.door, actorUserId: actor.userId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
       totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: candidate.comment, dayPaid, ruleVersion: candidate.ruleVersion,
@@ -256,14 +278,21 @@ export async function confirmShiftReport(
 export async function reopenShiftReport(app: BoardApp, actor: HandinPersonActor, input: { shiftId: number }, now: Date = new Date()): Promise<ShiftReportResponse> {
   const { subject, handin, phase } = await boardFor(app, actor, input.shiftId, "reopen");
   if (handin === null) throw new NotFoundError("Nothing handed in yet");
-  await setHandinPhase(app.db, { handinId: handin.id, phase: "fixing", at: now, from: [phase === "counted" && handin.phase === "draft" ? "draft" : phase] });
+  await app.db.transaction(async (tx) => {
+    const db = tx as unknown as Database;
+    if (await setHandinPhase(db, { handinId: handin.id, phase: "fixing", at: now, from: [phase === "counted" && handin.phase === "draft" ? "draft" : phase] })) {
+      // «Отмена» returns where «Исправить» came from.
+      await setHandinFixingFrom(db, { handinId: handin.id, from: phase === "confirm" ? "confirm" : "counted" });
+    }
+  });
   await syncBoardMatters(app, now).catch((error: unknown) => warn(app, error, "the board's matters after «Исправить»"));
   return readSubject(app, actor, subject, now);
 }
 
 /**
- * «Отмена» of «Правка»: back to the counted report as it was — the person's words go back to the counted version's —
- * or, with nothing counted yet, back to the draft.
+ * «Отмена» of «Правка»: back to the phase «Исправить» came from — the counted report as it was (only when a counted
+ * version exists: the words go back to its), or «Подтвердите» with the same candidate when it is still the newest (the
+ * words go back to the candidate's) — else to the draft.
  */
 export async function cancelShiftReportFix(app: BoardApp, actor: HandinPersonActor, input: { shiftId: number }, now: Date = new Date()): Promise<ShiftReportResponse> {
   const { subject, handin } = await boardFor(app, actor, input.shiftId, "cancel");
@@ -272,8 +301,13 @@ export async function cancelShiftReportFix(app: BoardApp, actor: HandinPersonAct
     const db = tx as unknown as Database;
     const locked = (await findHandinByShift(db, subject.shift.id, { lock: true }))!;
     const latest = (await listHandinVersions(db, locked.id)).at(-1) ?? null;
-    if (latest !== null) {
-      const held = new Map(latest.lines.flatMap((line) => (line.transactionId === null ? [] : [[line.transactionId, line] as const])));
+    const candidate = (await listHandinCandidates(db, locked.id)).at(-1) ?? null;
+    const back: "counted" | "confirm" | "draft" = locked.fixingFrom === "confirm" && candidate !== null && candidate.supersededAt === null && candidate.confirmedAt === null
+      ? "confirm"
+      : latest !== null ? "counted" : "draft";
+    const source = back === "counted" ? latest!.lines : back === "confirm" ? candidate!.lines : null;
+    if (source !== null) {
+      const held = new Map(source.flatMap((line) => (line.transactionId === null ? [] : [[line.transactionId, line] as const])));
       for (const mark of await listHandinMarks(db, locked.id)) {
         const line = held.get(mark.transactionId);
         const statement = line?.statement ?? null;
@@ -285,8 +319,19 @@ export async function cancelShiftReportFix(app: BoardApp, actor: HandinPersonAct
         });
       }
     }
-    await setHandinPhase(db, { handinId: locked.id, phase: latest === null ? "draft" : "counted", at: now, from: ["fixing"] });
+    await setHandinPhase(db, { handinId: locked.id, phase: back, at: now, from: ["fixing"] });
+    await setHandinFixingFrom(db, { handinId: locked.id, from: null });
   });
+  return readSubject(app, actor, subject, now);
+}
+
+/** «Скопировать пост»: remember it, so a later version that changes a page sum says «Пост изменился» and opens a matter. */
+export async function markShiftReportPostCopied(app: BoardApp, actor: HandinPersonActor, input: { shiftId: number }, now: Date = new Date()): Promise<ShiftReportResponse> {
+  const { subject } = await writableSubject(app, actor, input.shiftId);
+  const handin = await findHandinByShift(app.db, subject.shift.id);
+  if (handin === null || handin.currentVersion === null) throw new NotFoundError("Nothing counted yet");
+  await setHandinPostCopied(app.db, { handinId: handin.id, version: handin.currentVersion, at: now });
+  await syncCheckMatters(app, now).catch((error: unknown) => warn(app, error, "the post's matter after a copy"));
   return readSubject(app, actor, subject, now);
 }
 
@@ -316,13 +361,14 @@ export async function resendShiftReport(
     const cutoff = candidate?.cutoffAt.getTime() ?? latest.submittedAt.getTime();
     const marks = await listHandinMarks(db, locked.id);
     const draft = draftLines(await draftFacts(db, subject, locked, catalog, now, marks), marks);
-    const held = new Set(latest.lines.flatMap((line) => (line.transactionId === null || line.amountMills <= 0 ? [] : [line.transactionId])));
+    // Held: any line of the counted version (a word of the person's, even «не моё», keeps it theirs to change by «Исправить»).
+    const held = new Set(latest.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])));
     const open = await listSaleClaims(db, { transactionIds: [...input.transactionIds], states: ["asked", "owner"] });
     const take: HandinVersionLine[] = [];
     for (const id of new Set(input.transactionIds)) {
       const line = draft.find((one) => one.transactionId === id);
       const plain = line !== undefined && line.group === "mine" && line.statement === null && !line.disputed && line.amountMills > 0
-        && line.rule.shareMills > 0 && line.occurredAt !== null && Date.parse(line.occurredAt) >= cutoff && !held.has(id)
+        && line.rule.shareMills > 0 && !held.has(id)
         && !open.some((claim) => claim.transactionId === id);
       if (!plain) throw new BadRequestError("This sale goes the ordinary way: «Исправить»", { reason: "not_plain" });
       take.push(line);
@@ -361,6 +407,9 @@ export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, in
     const one = facts.classified.find((sale) => sale.sale.transactionId === input.body.transactionId);
     if (one === undefined || one.group !== "near") throw new BadRequestError("Only a sale the rule gives someone else is asked about", { reason: "not_asked" });
     const side = one.toUserId;
+    // A colleague without the board (they hand shifts in the old way) is not asked: the decider decides, no silence runs.
+    const sidePerson = side === null ? null : await findHandinPersonOfUser(db, side);
+    const sideOnBoard = sidePerson?.submitsShiftSince != null && sidePerson.state !== "left";
     if (input.body.statement === "share" && (side === null || input.body.shareWithUserId !== side)) {
       throw new BadRequestError("«Пополам» is asked of the sale's holder", { reason: "share_with_holder" });
     }
@@ -369,21 +418,21 @@ export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, in
       shareWithUserId: input.body.statement === "share" ? side : null, note, byUserId: actor.userId, byAgentKeyId: null, at: now,
     });
     const pageId = catalog.idOf.get(one.sale.pageLabel) ?? null;
-    const askable = side !== null && one.sale.home.kind !== "pot";
+    const askable = side !== null && one.sale.home.kind !== "pot" && sideOnBoard;
     const fields = {
       pageId, kind: "claim" as const, claimantVersion: null, statement: input.body.statement, shareWithUserId: input.body.statement === "share" ? side : null,
       claimantNote: note, claimedAt: now, sideShiftId: null,
       state: askable ? "asked" as const : "owner" as const, escalatedAt: askable ? null : now, escalatedWhy: askable ? null : "no_side" as const,
     };
     const existing = (await listSaleClaims(db, { transactionIds: [input.body.transactionId] }))
-      .find((claim) => claim.claimantHandinId === handin.id && (claim.sideUserId ?? 0) === (askable ? side ?? 0 : 0));
+      .find((claim) => claim.claimantHandinId === handin.id && (claim.sideUserId ?? 0) === (side ?? 0));
     if (existing !== undefined) {
       if (existing.state === "withdrawn") await reopenSaleClaim(db, existing.id, fields, now);
       else await updateSaleClaim(db, existing.id, { claimantNote: note, statement: fields.statement, shareWithUserId: fields.shareWithUserId }, now);
     } else {
       await insertSaleClaim(db, {
         ...fields, transactionId: input.body.transactionId, claimantUserId: subject.shift.userId, claimantHandinId: handin.id,
-        sideUserId: askable ? side : null, origin: "draft",
+        sideUserId: side, origin: "draft",
       }, now);
     }
   });
@@ -480,71 +529,6 @@ export async function addShiftReportSighting(app: BoardApp, actor: HandinPersonA
     }
   });
   return readSubject(app, actor, subject, now);
-}
-
-/**
- * What a page's own list on the site showed (the extension's observers): the rows Hub does not hold as transactions
- * are kept as sightings, once per (page, platform reference). Only a person with the board, on their own pages.
- */
-export async function recordSaleSightings(app: BoardApp, principal: HumanAuthPrincipal, body: ClientSaleSightingsBody, now: Date = new Date()) {
-  if (principal.authMethod !== "device_token") throw new ForbiddenError("The extension's device token only");
-  const person = await findHandinPersonOfUser(app.db, principal.user.id);
-  if (person?.submitsShiftSince == null) throw new ForbiddenError("The board is not switched on for this person");
-  const catalog = await pageCatalog(app.db);
-  const pageId = catalog.idOf.get(body.pageLabel);
-  if (pageId === undefined || !principal.assignedPageIds.includes(pageId)) throw new NotFoundError("No such page of yours");
-  const known = await listKnownPlatformRefs(app.db, { pageId, refs: body.rows.map((row) => row.platformRef) });
-  let kept = 0;
-  for (const row of body.rows) {
-    if (known.has(row.platformRef)) continue;
-    await upsertSaleSighting(app.db, {
-      pageId, platformRef: row.platformRef, kind: row.kind, fanRef: row.fanRef, fanName: row.fanName, occurredAt: new Date(row.occurredAt),
-      grossMills: row.grossMills, netMills: row.netMills, seenByUserId: principal.user.id, seenByDeviceTokenId: principal.deviceTokenId ?? null,
-    }, now);
-    kept += 1;
-  }
-  return { kept, known: body.rows.length - kept, serverNow: now.toISOString() };
-}
-
-/**
- * The reconciliation's interface (§5, another package builds the job): Hub's check of one candidate's pages, and a
- * sighting Hub now holds. A page that found more sales re-makes the candidate (the person sees them before confirming).
- */
-export async function recordHubCheck(app: BoardApp, input: { candidateId: number; pages: readonly CandidateHubPage[]; now?: Date }): Promise<void> {
-  const now = input.now ?? new Date();
-  const done = input.pages.every((page) => page.state !== "running" && page.state !== "statement");
-  await setCandidateHubCheck(app.db, { candidateId: input.candidateId, pages: input.pages, done, at: now });
-  await runShiftReportBoardPass(app, now);
-}
-
-/** A sighting Hub now holds as `transactionId`: no longer «нет в Hub»; its sale is a line of the draft from now on. */
-export async function matchSaleSighting(app: BoardApp, input: { sightingId: number; transactionId: number; now?: Date }): Promise<void> {
-  await setSaleSightingMatched(app.db, { id: input.sightingId, transactionId: input.transactionId, at: input.now ?? new Date() });
-}
-
-/** The candidate is re-made from the draft as it is now (the check found more sales): the person sees them before confirming. */
-export async function remakeCandidate(app: BoardApp, input: { shiftId: number; now?: Date }): Promise<void> {
-  const now = input.now ?? new Date();
-  const subject = await subjectOf(app.db, input.shiftId);
-  const catalog = await pageCatalog(app.db);
-  await app.db.transaction(async (tx) => {
-    const db = tx as unknown as Database;
-    await lockSaleSettlements(db);
-    const handin = await findHandinByShift(db, subject.shift.id, { lock: true });
-    if (handin === null || (handin.phase !== "checking" && handin.phase !== "confirm")) return;
-    const last = (await listHandinCandidates(db, handin.id)).at(-1);
-    if (last === undefined) return;
-    const marks = await listHandinMarks(db, handin.id);
-    const facts = await draftFacts(db, subject, handin, catalog, last.cutoffAt, marks);
-    const lines = draftLines(facts, marks);
-    const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
-    const sums = linesPageSums(lines, facts.pages, offPlatform);
-    await insertCandidateWithin(db, {
-      handinId: handin.id, door: last.door, actorUserId: last.actorUserId, agentKeyId: last.agentKeyId, telegramMessageRef: last.telegramMessageRef,
-      telegramSenderId: last.telegramSenderId, cutoffAt: last.cutoffAt, totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform,
-      comment: handin.comment, ruleVersion: SALE_RULE.version, hubCheck: last.hubCheck, at: now,
-    });
-  });
 }
 
 // ── Gengar's check (review:shift_reports) ────────────────────────────────────
@@ -675,6 +659,11 @@ export async function answerShiftReportCheck(
 export async function runShiftReportBoardPass(app: Pick<AppContext, "db" | "logger">, now: Date = new Date()): Promise<{ moved: number; matters: number }> {
   const { db } = app;
   let moved = 0;
+  // «Нет в Hub» that Hub now holds, Hub's check of every page, a shift cancelled or merged, the «после сдачи» mark.
+  await matchSightings(app, now).catch((error: unknown) => warn(app, error, "matching sightings"));
+  await runHubChecks(app, now).catch((error: unknown) => warn(app, error, "Hub's check"));
+  await settleGoneShifts(app, now).catch((error: unknown) => warn(app, error, "cancelled and merged shifts"));
+  await syncLateMarks(app, now).catch((error: unknown) => warn(app, error, "the «после сдачи» mark"));
   const catalog = await pageCatalog(db);
   for (const one of await listCheckingHandins(db, { limit: 500 })) {
     const candidate = (await listHandinCandidates(db, one.handinId)).filter((row) => row.supersededAt === null).at(-1);
@@ -685,7 +674,10 @@ export async function runShiftReportBoardPass(app: Pick<AppContext, "db" | "logg
     if (!checkLetsConfirm({ handedInAt: candidate.madeAt, now, hubPending: hubPending(candidate), gengarPending })) continue;
     if (await setHandinPhase(db, { handinId: one.handinId, phase: "confirm", at: now, from: ["checking"] })) moved += 1;
   }
-  const matters = await syncBoardMatters(app, now);
+  const matters = await syncBoardMatters(app, now) + await syncCheckMatters(app, now).catch((error: unknown) => {
+    warn(app, error, "the check's matters");
+    return 0;
+  });
   return { moved, matters };
 }
 
@@ -784,7 +776,9 @@ export async function pulseReport(app: Pick<AppContext, "db">, userId: number, n
   const person = (await listHandinPeopleOfUsers(app.db, [userId])).get(userId) ?? null;
   const asked = await listSaleClaims(app.db, { sideUserIds: person?.userIds ?? [userId], states: ["asked"], kinds: ["claim"], limit: 1 });
   const late = current.handin === null ? false : (await listHandinProposals(app.db, current.handin.id)).some((one) => one.state === "late");
-  return { shiftId: current.shiftId, phase, needsMe: phase === "confirm" || asked.length > 0 || late };
+  // «После сдачи» from the cheap mark the minute pass keeps (`late_sales`): no draft is computed here.
+  const afterHandIn = (current.handin?.lateSales ?? 0) > 0;
+  return { shiftId: current.shiftId, phase, needsMe: phase === "confirm" || asked.length > 0 || late || afterHandIn };
 }
 
 function warn(app: Pick<AppContext, "logger">, error: unknown, what: string) {

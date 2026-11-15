@@ -108,12 +108,19 @@ export interface HandinRow {
   phase: HandinPhase;
   /** When it entered the phase; null — never moved (a report older than 0412, or a draft). */
   phaseAt: Date | null;
+  /** The phase «Исправить» came from (0413); null — not fixing. */
+  fixingFrom: "counted" | "confirm" | null;
+  /** When the post was last copied and which version it was (0413). */
+  postCopiedAt: Date | null;
+  postCopiedVersion: number | null;
+  /** Sales of the person no version holds, found after it was counted (0413). */
+  lateSales: number;
 }
 
 export type HandinPhase = "draft" | "checking" | "confirm" | "counted" | "fixing";
 
 const HANDIN_COLUMNS = sql`h.id, h.shift_id, h.user_id, h.person_id, to_char(h.report_date, 'YYYY-MM-DD') as report_date, h.state, h.comment,
-  h.current_version, h.submitted_at, h.draft_updated_at, h.phase, h.phase_at`;
+  h.current_version, h.submitted_at, h.draft_updated_at, h.phase, h.phase_at, h.fixing_from, h.post_copied_at, h.post_copied_version, h.late_sales`;
 
 function handinOf(row: Row): HandinRow {
   return {
@@ -130,6 +137,10 @@ function handinOf(row: Row): HandinRow {
     // A report handed in before 0412 has a version and no phase of its own: it is counted.
     phase: (row.phase === undefined || row.phase === null ? "draft" : row.phase) as HandinPhase,
     phaseAt: nullableDate(row.phase_at),
+    fixingFrom: (row.fixing_from ?? null) as HandinRow["fixingFrom"],
+    postCopiedAt: nullableDate(row.post_copied_at),
+    postCopiedVersion: nullableNum(row.post_copied_version),
+    lateSales: row.late_sales === undefined || row.late_sales === null ? 0 : num(row.late_sales),
   };
 }
 
@@ -381,7 +392,9 @@ export type HandinVersionMadeFor =
    * A decision about the sale recorded «со слов» through the agent's door (review R2b-3): `said` — made, the version
    * carries what it gives; `cancelled` — cancelled, the version carries what rules without it.
    */
-  | { kind: "decision"; decisionId: number; transactionId: number; outcome: "said" | "cancelled" };
+  | { kind: "decision"; decisionId: number; transactionId: number; outcome: "said" | "cancelled" }
+  /** The shift row was cancelled after it was counted (0413): a version with no lines; no decision, no sale named. */
+  | { kind: "decision"; decisionId: null; transactionId: null; outcome: "cancelled" };
 
 export interface HandinVersionRow {
   id: number;

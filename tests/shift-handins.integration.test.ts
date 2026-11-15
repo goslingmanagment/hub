@@ -11,6 +11,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // Отчёт смены (ecosystem package F): who reads and who writes a shift's report.
 // The person hands in their own shift, only with their switch on, by their
@@ -38,8 +39,9 @@ let extensionToken = "";
 let shiftA = 0;
 let shiftOff = 0;
 
-const asSession = (who: string, method: "GET" | "POST" | "PUT" | "DELETE", url: string, payload?: Record<string, unknown>) =>
+const rawSession = (who: string, method: "GET" | "POST" | "PUT" | "DELETE", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
 const asKey = (key: keyof typeof KEYS, method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${KEYS[key]}` }, ...(payload ? { payload } : {}) });
 

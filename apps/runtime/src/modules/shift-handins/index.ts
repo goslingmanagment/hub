@@ -1,4 +1,5 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
+import type { FastifyReply } from "fastify";
 
 import { requireHumanPrincipal, type AgentAuthPrincipal } from "../../services/auth.ts";
 import {
@@ -23,12 +24,14 @@ import {
   cancelShiftReportFix,
   confirmShiftReport,
   readCurrentShiftReport,
+  markShiftReportPostCopied,
+  PhaseConflictError,
   readShiftReportChecks,
-  recordSaleSightings,
   reopenShiftReport,
   resendShiftReport,
   withdrawShiftReportAsk,
 } from "../../services/shift-report-board.ts";
+import { recordSaleSightings } from "../../services/shift-handin-check.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -53,6 +56,20 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     return handinActorOf(principal);
   }
 
+  /**
+   * A change of ticks or «чья» the phase does not take (`PhaseConflictError`): 409 with the fresh board, so the screen
+   * redraws what is true now. Any other error passes on.
+   */
+  async function withFreshBoard<T>(reply: FastifyReply, actor: ReturnType<typeof handinActorOf>, shiftId: number, body: () => Promise<T>): Promise<T | FastifyReply> {
+    try {
+      return await body();
+    } catch (error) {
+      if (!(error instanceof PhaseConflictError)) throw error;
+      const report = await readShiftReport(appContext, actor, shiftId).catch(() => undefined);
+      return reply.code(409).send({ error: "Conflict", message: error.message, statusCode: 409, reason: "phase", ...(report === undefined ? {} : { report }) });
+    }
+  }
+
   // --- The person's doors: Workboard and the extension ---------------------
 
   server.get("/api/v1/shift-reports", { schema: routeSchemas.shiftReportsList }, async (request) => {
@@ -67,10 +84,11 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     return readShiftReportClaimable(appContext, await person(request), request.params.shiftId);
   });
 
-  server.put("/api/v1/shift-reports/:shiftId/lines/:transactionId", { schema: routeSchemas.shiftReportLineSet }, async (request) => {
-    return setShiftReportLine(appContext, await person(request), {
+  server.put("/api/v1/shift-reports/:shiftId/lines/:transactionId", { schema: routeSchemas.shiftReportLineSet }, async (request, reply) => {
+    const actor = await person(request);
+    return withFreshBoard(reply, actor, request.params.shiftId, () => setShiftReportLine(appContext, actor, {
       shiftId: request.params.shiftId, transactionId: request.params.transactionId, body: request.body,
-    });
+    }));
   });
 
   server.put("/api/v1/shift-reports/:shiftId/comment", { schema: routeSchemas.shiftReportCommentSet }, async (request) => {
@@ -100,7 +118,13 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
   });
 
   server.post("/api/v1/shift-reports/:shiftId/confirm", { schema: routeSchemas.shiftReportConfirm }, async (request) => {
-    return confirmShiftReport(appContext, await person(request), { shiftId: request.params.shiftId, candidateId: request.body.candidateId });
+    return confirmShiftReport(appContext, await person(request), {
+      shiftId: request.params.shiftId, candidateId: request.body.candidateId, seenTotalMills: request.body.seenTotalMills, seenCount: request.body.seenCount,
+    });
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/post-copied", { schema: routeSchemas.shiftReportPostCopied }, async (request) => {
+    return markShiftReportPostCopied(appContext, await person(request), { shiftId: request.params.shiftId });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/reopen", { schema: routeSchemas.shiftReportReopen }, async (request) => {
@@ -115,12 +139,14 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     return resendShiftReport(appContext, await person(request), { shiftId: request.params.shiftId, transactionIds: request.body.transactionIds });
   });
 
-  server.post("/api/v1/shift-reports/:shiftId/asks", { schema: routeSchemas.shiftReportAsk }, async (request) => {
-    return askShiftReport(appContext, await person(request), { shiftId: request.params.shiftId, body: request.body });
+  server.post("/api/v1/shift-reports/:shiftId/asks", { schema: routeSchemas.shiftReportAsk }, async (request, reply) => {
+    const actor = await person(request);
+    return withFreshBoard(reply, actor, request.params.shiftId, () => askShiftReport(appContext, actor, { shiftId: request.params.shiftId, body: request.body }));
   });
 
-  server.delete("/api/v1/shift-reports/:shiftId/asks/:transactionId", { schema: routeSchemas.shiftReportAskWithdraw }, async (request) => {
-    return withdrawShiftReportAsk(appContext, await person(request), { shiftId: request.params.shiftId, transactionId: request.params.transactionId });
+  server.delete("/api/v1/shift-reports/:shiftId/asks/:transactionId", { schema: routeSchemas.shiftReportAskWithdraw }, async (request, reply) => {
+    const actor = await person(request);
+    return withFreshBoard(reply, actor, request.params.shiftId, () => withdrawShiftReportAsk(appContext, actor, { shiftId: request.params.shiftId, transactionId: request.params.transactionId }));
   });
 
   server.post("/api/v1/shift-reports/:shiftId/proposals/:proposalId/answer", { schema: routeSchemas.shiftReportProposalAnswer }, async (request) => {
@@ -129,8 +155,9 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     });
   });
 
-  server.post("/api/v1/shift-reports/:shiftId/sightings/:sightingId/add", { schema: routeSchemas.shiftReportSightingAdd }, async (request) => {
-    return addShiftReportSighting(appContext, await person(request), { shiftId: request.params.shiftId, sightingId: request.params.sightingId });
+  server.post("/api/v1/shift-reports/:shiftId/sightings/:sightingId/add", { schema: routeSchemas.shiftReportSightingAdd }, async (request, reply) => {
+    const actor = await person(request);
+    return withFreshBoard(reply, actor, request.params.shiftId, () => addShiftReportSighting(appContext, actor, { shiftId: request.params.shiftId, sightingId: request.params.sightingId }));
   });
 
   server.post("/api/v1/client/sale-sightings", { schema: routeSchemas.clientSaleSightings }, async (request) => {

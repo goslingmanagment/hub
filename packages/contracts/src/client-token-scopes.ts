@@ -131,6 +131,7 @@ export const CLIENT_TOKEN_PROFILES = {
       "shiftReportAskWithdraw",
       "shiftReportProposalAnswer",
       "shiftReportSightingAdd",
+      "shiftReportPostCopied",
       "clientSaleSightings",
 
       // chatspace-tab-state-v1: the always-on ChatSpace tab's report (the server's own hub user).

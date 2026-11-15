@@ -79,7 +79,7 @@ export async function runShiftReportMatters(app: Pick<AppContext, "db" | "logger
       owner: { userId: one.userId },
       money: false,
       evidence: { shiftId: one.shiftId, reportDate: one.reportDate, endedAt: one.endedAt.toISOString() },
-      link: `/workboard/my/shifts/${one.shiftId}`,
+      link: `/workboard/report/${one.shiftId}`,
     }, SYSTEM, now);
     if (opened.transition === "opened" || opened.transition === "reopened") tally.opened += 1;
   }

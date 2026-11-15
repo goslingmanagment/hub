@@ -12,7 +12,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { handInAndConfirm } from "./helpers/shift-report-hand-in.ts";
+import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // Заявки и договорённости (package G): who answers a claim, who decides a dispute, who sees what, and what the
 // settlement writes. The other side alone answers; a colleague, the claimant, a team lead, a chatter of another page
@@ -44,8 +44,9 @@ let shiftB = 0;
 let anna = 0;
 let bella = 0;
 
-const asSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
+const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
 const asKey = (key: keyof typeof KEYS, method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${KEYS[key]}` }, ...(payload ? { payload } : {}) });
 
@@ -178,7 +179,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     const mine = await asSession("bella", "GET", "/api/v1/matters?state=open");
     expect(mine.statusCode, mine.body).toBe(200);
     const matter = mine.json().matters.find((one: { kind: string }) => one.kind === "sale.claim");
-    expect(matter).toMatchObject({ money: false, link: `/workboard/my/shifts/${shiftB}?sale=${sale}` });
+    expect(matter).toMatchObject({ money: false, link: `/workboard/report/${shiftB}?sale=${sale}` });
     for (const who of ["cora", "dina", "anna"]) {
       const list = (await asSession(who, "GET", "/api/v1/matters?state=open")).json().matters as Array<{ kind: string }>;
       expect(list.some((one) => one.kind === "sale.claim")).toBe(false);

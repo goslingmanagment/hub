@@ -47,3 +47,20 @@ export async function handInAndConfirmDirect(
   expect(answer.confirmed, JSON.stringify(answer.refused)).toBe(true);
   return answer.report;
 }
+
+/**
+ * On the board ticks and «чья» change only while the report is edited: a counted report (or one that waits for its
+ * confirmation) is reopened first with «Исправить», as the person does. Wraps a test's session caller.
+ */
+export function editingSession<T extends Inject>(asSession: T): T {
+  return (async (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) => {
+    const line = /^\/api\/v1\/shift-reports\/(\d+)\/lines\//.exec(url);
+    if (method === "PUT" && line !== null) {
+      const report = shiftReportResponseSchema.safeParse((await asSession(who, "GET", `/api/v1/shift-reports/${line[1]}`)).json());
+      const phase = report.success ? report.data.board?.phase : undefined;
+      if (phase === "counted" || phase === "confirm") await asSession(who, "POST", `/api/v1/shift-reports/${line[1]}/reopen`);
+    }
+    return asSession(who, method, url, payload);
+  }) as T;
+}
+

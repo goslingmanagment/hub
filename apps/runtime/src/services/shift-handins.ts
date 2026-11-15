@@ -22,6 +22,7 @@ import {
   findLatestHandinShift,
   insertHandinEvent,
   insertOffPlatform,
+  insertSaleClaim,
   listActiveSaleDecisions,
   listCurrentHandinVersions,
   listHandinAgentKeyNames,
@@ -50,6 +51,8 @@ import {
   listPersonWorkingPageRows,
   listReportedSales,
   listSaleClaims,
+  updateSaleClaim,
+  reopenSaleClaim,
   listSaleFacts,
   listSaleHomes,
   listVisiblePages,
@@ -77,8 +80,8 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import { readLedgerPayouts } from "./ledger-payouts.ts";
 import { pagesWithLines, reportSums, settledShareOf } from "./sale-claim-rules.ts";
 import { claimsOfReport, runSaleClaims } from "./sale-claims.ts";
-import { handInShiftReport } from "./shift-report-board.ts";
-import { readBoard } from "./shift-report-board-view.ts";
+import { handInShiftReport, PhaseConflictError } from "./shift-report-board.ts";
+import { boardOn, phaseOf, readBoard } from "./shift-report-board-view.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { computeSaleHomes, registrySlots, ruleWorksOf } from "./sale-homes.ts";
 import {
@@ -735,6 +738,7 @@ function bodyOf(input: {
 export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: string | null): string | null {
   if (madeFor === null) return null;
   if (madeFor.kind === "off_platform") return madeFor.decision === "confirmed" ? "владелец подтвердил «мимо площадки»" : "владелец отклонил «мимо площадки»";
+  if (madeFor.kind === "decision" && madeFor.decisionId === null) return "смена отменена";
   if (madeFor.kind === "decision") return madeFor.outcome === "cancelled" ? "решение о продаже отменено" : "решение о продаже, записанное со слов";
   switch (madeFor.outcome) {
     case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;
@@ -930,6 +934,7 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
     posts: own && latest !== null && handin !== null ? postsOf(latest, subject, handin, context) : [],
     colleagues,
     claims,
+    boardShift: boardOn(subject),
     board: await readBoard({
       db, subject, catalog, cutTo: access.cutTo, draftPreview: access.draftPreview, handin, versions, draft, now,
       actor: { access: access.access, kind: actor.kind, enabled: subject.enabled },
@@ -1096,6 +1101,13 @@ export async function setShiftReportLine(
   const existing = await findHandinByShift(app.db, subject.shift.id);
   const marks = existing === null ? [] : await listHandinMarks(app.db, existing.id);
   const before = marks.find((mark) => mark.transactionId === input.transactionId);
+  const wordChanged = (before?.statement ?? null) !== statement || (before?.shareWithUserId ?? null) !== shareWith || (before?.toUserId ?? null) !== giveTo;
+  // On the board, ticks and «чья» change only while it is edited (draft, «Правка»); a sale's comment any time.
+  const phase = phaseOf(existing);
+  if (boardOn(subject) && wordChanged && phase !== "draft" && phase !== "fixing") throw new PhaseConflictError(subject.shift.id, phase);
+  // «Пополам» or «отдать» with a colleague who hands shifts in the old way (no board): the decider decides — a Telegram
+  // post knows decisions, not agreements (arena round 3) — and no day of silence runs.
+  let oldWayTo: { userId: number; pageId: number | null } | null = null;
   if (statement !== null && (before?.statement ?? null) !== statement) {
     // A new word: the sale must be a line of the draft that takes it — or, «моё», a sale the person may add by hand.
     const facts = await draftFacts(app.db, subject, existing, catalog, now, marks);
@@ -1117,6 +1129,9 @@ export async function setShiftReportLine(
       });
       if (shareWith !== null && !colleagues.some((one) => one.userId === shareWith)) throw new BadRequestError("Share with a colleague of the page", { reason: "share_with_unknown" });
       if (giveTo !== null && !colleagues.some((one) => one.userId === giveTo)) throw new BadRequestError("Give to a colleague of the page", { reason: "give_to_unknown" });
+      const colleague = shareWith ?? giveTo!;
+      const theirs = await findHandinPersonOfUser(app.db, colleague);
+      if (boardOn(subject) && line.group === "mine" && theirs?.submitsShiftSince == null) oldWayTo = { userId: colleague, pageId: catalog.idOf.get(line.sale.pageLabel) ?? null };
     }
   } else if (statement === "mine" && note === null) {
     throw new BadRequestError("«Это моё» needs one line of why", { reason: "note_required" });
@@ -1126,11 +1141,35 @@ export async function setShiftReportLine(
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     const handin = await handinFor(db, subject);
+    // Given to a colleague without the board: the person's share goes now (their «не моё»), the colleague's waits for the
+    // decider; «пополам» keeps the person's half and the other half waits.
+    const written = oldWayTo !== null && statement === "give" ? "not_mine" as const : statement;
     await setHandinMark(db, {
-      handinId: handin.id, transactionId: input.transactionId, statement, shareWithUserId: shareWith, toUserId: giveTo, note,
+      handinId: handin.id, transactionId: input.transactionId, statement: written, shareWithUserId: shareWith, toUserId: written === "give" ? giveTo : null, note,
       byUserId: who.byUserId, byAgentKeyId: who.byAgentKeyId, at: now,
     });
+    if (wordChanged) {
+      // A new word takes back a question asked from the draft about this sale.
+      for (const claim of (await listSaleClaims(db, { transactionIds: [input.transactionId], states: ["asked", "owner"] }))) {
+        if (claim.claimantHandinId === handin.id && claim.origin === "draft") await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state });
+      }
+    }
+    if (oldWayTo !== null) {
+      const fields = {
+        pageId: oldWayTo.pageId, kind: "claim" as const, claimantVersion: null, statement: statement === "share" ? "share" as const : null,
+        shareWithUserId: statement === "share" ? oldWayTo.userId : null, claimantNote: note, claimedAt: now, sideShiftId: null,
+        state: "owner" as const, escalatedAt: now, escalatedWhy: "no_side" as const,
+      };
+      const known = (await listSaleClaims(db, { transactionIds: [input.transactionId] }))
+        .find((claim) => claim.claimantHandinId === handin.id && claim.sideUserId === oldWayTo!.userId);
+      if (known === undefined) {
+        await insertSaleClaim(db, { ...fields, transactionId: input.transactionId, claimantUserId: subject.shift.userId, claimantHandinId: handin.id, sideUserId: oldWayTo.userId, origin: "draft" }, now);
+      } else if (known.state === "withdrawn") {
+        await reopenSaleClaim(db, known.id, fields, now);
+      }
+    }
   });
+  if (oldWayTo !== null) await runSaleClaims(app, now).catch(() => undefined);
   return { savedAt: now.toISOString() };
 }
 

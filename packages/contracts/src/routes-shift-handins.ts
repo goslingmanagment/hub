@@ -204,7 +204,17 @@ export const shiftReportResponseSchema = z.object({
    * person has no board (the right is off) or the reader may not see it.
    */
   board: shiftReportBoardSchema.nullable().default(null),
+  /**
+   * Whether THIS shift is a board shift: the person's right was on when it began (the agent's /smena decides by the
+   * shift, not by the person). Absent from an older server.
+   */
+  boardShift: z.boolean().optional(),
   serverNow: isoTimestamp,
+});
+
+/** A change the phase does not take now (ticks and «чья» in «Проверка», «Подтвердите», «Учтён»): 409 with the fresh board. */
+export const shiftReportPhaseConflictSchema = errorResponseSchema.extend({
+  report: shiftReportResponseSchema.optional(),
 });
 
 export const shiftReportLineBodySchema = z.object({
@@ -301,14 +311,20 @@ export const shiftReportAskParamsSchema = z.object({ shiftId: shiftIdParam, tran
 export const shiftReportProposalParamsSchema = z.object({ shiftId: shiftIdParam, proposalId: shiftIdParam });
 export const shiftReportSightingParamsSchema = z.object({ shiftId: shiftIdParam, sightingId: shiftIdParam });
 
-/** «Подтверждаю»: signs one exact candidate. */
-export const shiftReportConfirmBodySchema = z.object({ candidateId: intId });
+/** «Подтверждаю»: signs one exact candidate — and what the board showed of it. */
+export const shiftReportConfirmBodySchema = z.object({
+  candidateId: intId,
+  /** The total the board showed («Вы подтверждаете: 18 продаж на $461.40»): a version that would differ is not made (`changed`). */
+  seenTotalMills: mills.optional(),
+  /** The count the board showed. */
+  seenCount: z.number().int().nonnegative().optional(),
+});
 
 export const shiftReportConfirmResponseSchema = z.object({
   /** A version was made from the candidate. */
   confirmed: z.boolean(),
   /** Why not: superseded — a correction or a re-check made a newer candidate (it is in `report`); not_ready — the phase is not «Подтвердите». Null — confirmed. */
-  refused: z.enum(["superseded", "not_ready"]).nullable(),
+  refused: z.enum(["superseded", "not_ready", "changed"]).nullable(),
   /** The fresh board. */
   report: shiftReportResponseSchema,
 });
@@ -647,7 +663,7 @@ export const shiftHandinRouteSchemas = {
       + "(else 404); a statement the line does not take is 400.",
     params: shiftReportLineParamsSchema,
     body: shiftReportLineBodySchema,
-    response: { 200: shiftReportSavedResponseSchema, ...personErrors },
+    response: { 200: shiftReportSavedResponseSchema, ...personErrors, 409: shiftReportPhaseConflictSchema },
   },
   shiftReportCommentSet: {
     auth: { kind: "any" }, tags: ["client"],
@@ -736,6 +752,13 @@ export const shiftHandinRouteSchemas = {
     body: shiftReportConfirmBodySchema,
     response: { 200: shiftReportConfirmResponseSchema, ...personErrors },
   },
+  shiftReportPostCopied: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "«Скопировать пост»: remember the copy, so a later version that changes a page sum says «Пост изменился»",
+    description: `${ANY} Own counted report.`,
+    params: shiftReportParamsSchema,
+    response: { 200: shiftReportResponseSchema, ...personErrors },
+  },
   shiftReportReopen: {
     auth: { kind: "any" }, tags: ["client"],
     summary: "«Исправить»: back to editing («Правка»); a counted version stands until a new one is confirmed",
@@ -765,14 +788,14 @@ export const shiftHandinRouteSchemas = {
       + "While it is open the sale counts in nobody's sum.",
     params: shiftReportParamsSchema,
     body: shiftReportAskBodySchema,
-    response: { 200: shiftReportResponseSchema, ...personErrors },
+    response: { 200: shiftReportResponseSchema, ...personErrors, 409: shiftReportPhaseConflictSchema },
   },
   shiftReportAskWithdraw: {
     auth: { kind: "any" }, tags: ["client"],
     summary: "«Отменить» a question asked from the draft",
     description: ANY,
     params: shiftReportAskParamsSchema,
-    response: { 200: shiftReportResponseSchema, ...personErrors },
+    response: { 200: shiftReportResponseSchema, ...personErrors, 409: shiftReportPhaseConflictSchema },
   },
   shiftReportProposalAnswer: {
     auth: { kind: "any" }, tags: ["client"],
@@ -787,7 +810,7 @@ export const shiftHandinRouteSchemas = {
     summary: "«Добавить» a «нет в Hub» row: it counts on the board, a version takes it once Hub holds the sale",
     description: ANY,
     params: shiftReportSightingParamsSchema,
-    response: { 200: shiftReportResponseSchema, ...personErrors },
+    response: { 200: shiftReportResponseSchema, ...personErrors, 409: shiftReportPhaseConflictSchema },
   },
   clientSaleSightings: {
     auth: { kind: "apiKey" }, tags: ["client"],

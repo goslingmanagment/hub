@@ -191,16 +191,21 @@ export function ruleMarksOf(input: { reports: readonly ReportView[]; claims: rea
     marks.set(mark.userId, mark);
     bySale.set(sale, marks);
   };
+  // «Отдал Олегу» (R-board §3): the giver's «не моё» and the colleague's «моё», settled at once in his favour — the rule's
+  // own marks, never around it — unless the colleague's own report says otherwise: his word, written after this pass of
+  // gifts, wins («Олег не взял»: his «не моё», and the sale is nobody's). «В общак»: the giver's «не моё»; whether it
+  // joins a pot is the owner's.
+  for (const report of input.reports) {
+    for (const line of report.lines) {
+      if (line.transactionId === null || line.statement !== "give" || line.toUserId == null) continue;
+      put(line.transactionId, { userId: line.toUserId, mark: "mine", shareWith: null, ownAmountMills: null, confirmed: true });
+    }
+  }
   for (const report of input.reports) {
     for (const line of report.lines) {
       if (line.transactionId === null || line.statement === null) continue;
-      // «Отдал Олегу» (R-board §3): the giver's «не моё» and the colleague's «моё», settled at once in his favour — the
-      // rule's own marks, never around it. «В общак»: the giver's «не моё»; whether it joins a pot is the owner's.
       if (line.statement === "give" || line.statement === "pot") {
         put(line.transactionId, { userId: report.userId, mark: "not_mine", shareWith: null, ownAmountMills: null, confirmed: true });
-        if (line.statement === "give" && line.toUserId != null) {
-          put(line.transactionId, { userId: line.toUserId, mark: "mine", shareWith: null, ownAmountMills: null, confirmed: true });
-        }
         continue;
       }
       put(line.transactionId, {

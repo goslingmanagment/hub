@@ -22,18 +22,18 @@ export function pageHeaders(isProduction: boolean): Record<string, string> {
 }
 
 /**
- * The «Отчёт» board in the extension's frame (products plan 2026-11-13, package R; R-protocol.md): `/workboard/frame/*`
- * is the one path another site may frame — the two sites the extension works on — and it carries no `x-frame-options`.
- * No credential enters that frame: its page reads no cookie and starts no sign-in, every request goes to the extension
- * over a port. Every other answer keeps `pageHeaders`.
+ * The «Отчёт» board in the extension's frame (products plan 2026-11-13, package R; R-protocol.md): exactly the paths of
+ * `BOARD_FRAME_PATHS` may be framed — by the two sites the extension works on — and carry no `x-frame-options`. A further
+ * frame screen joins the list by name, never by a prefix. No credential enters that frame: its page reads no cookie and
+ * starts no sign-in, every request goes to the extension over a port. Every other answer keeps `pageHeaders`.
  */
-export const BOARD_FRAME_PATH = "/workboard/frame/";
+export const BOARD_FRAME_PATHS = ["/workboard/frame/report"] as const;
 export const BOARD_FRAME_ANCESTORS = ["https://fansly.com", "https://chat.onlymonster.ai"] as const;
 
-/** Whether a request's path is the board's frame. */
+/** Whether a request's path (its query and fragment aside) is one of the frame's. */
 export function isBoardFramePath(url: string): boolean {
-  const path = url.split("?")[0] ?? "";
-  return path === BOARD_FRAME_PATH.slice(0, -1) || path.startsWith(BOARD_FRAME_PATH);
+  const path = url.split(/[?#]/)[0] ?? "";
+  return (BOARD_FRAME_PATHS as readonly string[]).includes(path);
 }
 
 /**

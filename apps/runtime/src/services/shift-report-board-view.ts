@@ -7,8 +7,12 @@ import {
   type ShiftReportRow,
 } from "@agency_hub_core/contracts";
 import {
+  findPreviousShiftComment,
   hasShiftReportReviewer,
+  listCurrentWordsOfSales,
   listHandinCandidates,
+  listHandinPeopleOfUsers,
+  listNotesOfSales,
   listHandinColleagues,
   listHandinNames,
   listHandinProposals,
@@ -133,15 +137,21 @@ export interface BoardRead {
   /** The draft now (own, or a preview); null — not read for this reader. */
   draft: readonly HandinVersionLine[] | null;
   now: Date;
+  /** Whether the ledger has seen the post of this report's day (own, counted; null — not known or not asked). */
+  postSeen?: boolean | null;
 }
 
 /** The board of a shift as the reader may see it; null — no board for this shift (the right is off, or was granted after it began). */
 export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | null> {
-  const { db, subject, catalog, actor, handin, now } = input;
-  if (!boardOn(subject)) return null;
+  const { db, subject, catalog, handin, now } = input;
+  // Without the board (the right off, or granted after the shift began) the person still sees their own shift as the old
+  // screen showed it: read only, by the rule, the old notice. Anyone else sees no board of such a shift.
+  const preview = !boardOn(subject);
+  if (preview && input.actor.access !== "own") return null;
+  const actor: BoardActor = preview ? { ...input.actor, enabled: false } : input.actor;
   const me = subject.shift.userId;
   const own = actor.access === "own";
-  const phase = phaseOf(handin);
+  const phase = preview ? "draft" : phaseOf(handin);
   const latest = input.versions.at(-1) ?? null;
   const candidates = handin === null ? [] : await listHandinCandidates(db, handin.id);
   const candidate: CandidateRow | null = candidates.at(-1) ?? null;
@@ -160,12 +170,16 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   base = base.filter((line) => line.transactionId !== null && visible(line.pageLabel));
   const baseIds = new Set(base.map((line) => line.transactionId!));
 
-  // «После сдачи»: the person's by the rule, came after the hand-in, not in what is checked or counted.
-  const cutoff = candidate?.cutoffAt.getTime() ?? null;
-  const late = own && phase !== "draft" && phase !== "fixing" && cutoff !== null && input.draft !== null
+  // «После сдачи»: the person's by the rule and not in what is checked or counted — it came after the hand-in, or Hub
+  // received it after (a candidate holds every sale the draft had at its cutoff).
+  const late = own && !preview && phase !== "draft" && phase !== "fixing" && candidate !== null && input.draft !== null
     ? input.draft.filter((line) => line.transactionId !== null && !baseIds.has(line.transactionId) && line.group === "mine" && line.amountMills > 0
-      && line.occurredAt !== null && Date.parse(line.occurredAt) >= cutoff && visible(line.pageLabel))
+      && visible(line.pageLabel))
     : [];
+  // Rows Hub's re-read added: the candidate re-made at the same cutoff names what the one before lacked.
+  const previousCandidate = candidate === null ? null : candidates.find((one) => one.supersededBy === candidate.id && one.cutoffAt.getTime() === candidate.cutoffAt.getTime()) ?? null;
+  const foundIds = new Set(previousCandidate === null || candidate === null ? [] : candidate.lines
+    .flatMap((line) => (line.transactionId === null || previousCandidate.lines.some((one) => one.transactionId === line.transactionId) ? [] : [line.transactionId])));
 
   // The shift's pages, every one (a page with no sales too), then a page only a line names.
   const shiftLabels = subject.shift.pages.map((page) => page.pageLabel).filter((label) => visible(label));
@@ -192,6 +206,15 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   for (const claim of claims) for (const id of [claim.claimantUserId, claim.sideUserId]) if (id !== null) userIds.add(id);
   for (const sale of before) for (const share of sale.home?.shares ?? []) userIds.add(share.userId);
   const names = await listHandinNames(db, [...userIds]);
+  // Who of them hands shifts in by the board: a question, «отдать» or «пополам» with anyone else goes to the decider.
+  const boardPeople = await listHandinPeopleOfUsers(db, [...userIds]);
+  const onBoard = (userId: number) => boardPeople.get(userId)?.submitsShiftSince != null;
+  // «Олега» given and taken back: the colleague's own newest report says «не моё» of it.
+  const givenIds = [...base, ...late].flatMap((line) => (line.statement === "give" && line.transactionId !== null ? [line.transactionId] : []));
+  const takenBack = new Set((await listCurrentWordsOfSales(db, givenIds))
+    .filter((word) => word.statement === "not_mine" && [...base, ...late].some((line) => line.transactionId === word.transactionId && line.toUserId === word.userId))
+    .map((word) => word.transactionId));
+  const beforeNotes = await listNotesOfSales(db, before.map((sale) => sale.transactionId));
   const people: People = {
     nameOf: (userId) => names.get(userId) ?? `#${userId}`,
     person: (userId) => {
@@ -230,7 +253,15 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     const noteProposal = noteProposalOf(id);
     let current = lineOwner(line, people, me);
     let reason = "";
-    if (isLate) {
+    const oldWay = ask !== null && ask.sideUserId !== null && ask.escalatedWhy === "no_side" && (ask.state === "owner" || ask.state === "asked") && !onBoard(ask.sideUserId);
+    if (oldWay && ask !== null && ask.sideUserId !== null) {
+      // The other side hands shifts in the old way: the decider decides, no day of silence runs.
+      current = ask.statement === null ? owner("user", ask.sideUserId, people, me) : ask.statement === "share" ? owner("share", ask.sideUserId, people, me) : rule;
+      reason = `${people.nameOf(ask.sideUserId)} сдаёт смену по-старому, решит ${decider.words}`;
+    } else if (line.statement === "give" && takenBack.has(id) && line.toUserId != null) {
+      current = owner("nobody", null, people, me);
+      reason = `${people.nameOf(line.toUserId)} не взял`;
+    } else if (isLate) {
       current = { ...owner("me", null, people, me), words: "после сдачи" };
       reason = ruleWords;
     } else if (ask !== null && ask.answer === null && (ask.state === "asked" || ask.state === "owner") && ask.silenceAt === null) {
@@ -263,6 +294,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       answerNote: ask.answerNote,
       answerBy: ask.sideUserId === null || ask.state !== "asked" ? null : new Date(ask.createdAt.getTime() + DAY_MS).toISOString(),
       decision: ask.decisionId === null ? null : "решение владельца",
+      oldWay,
     };
     const incomingWire = incoming === null || incoming.claimantUserId === null ? null : {
       claimId: incoming.id,
@@ -321,8 +353,55 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       editable: editable && !isLate,
       canNote: canNote && !isLate,
       attention,
+      choices: editable && !isLate ? choicesOf(line, current) : [],
+      foundByHub: foundIds.has(id),
     };
   };
+
+  /** What a row's «чья» menu offers, and whom each choice would ask (R-board §3, §4; arena round 3: the board on both sides). */
+  function choicesOf(line: HandinVersionLine, current: ShiftReportOwner): NonNullable<ShiftReportRow["choices"]> {
+    const rule = ruleOwner(line, people, me);
+    const is = (one: ShiftReportOwner) => sameOwner(one, current);
+    const hintOf = (one: ShiftReportOwner, asks: { words: string } | null) => (sameOwner(one, rule) ? "по правилу" : asks?.words ?? "");
+    const askOf = (userId: number | null, pot: boolean): { to: "colleague" | "decider"; user: ReturnType<People["person"]> | null; words: string } | null => {
+      if (pot) return { to: "decider", user: null, words: `решит ${decider.words}` };
+      if (userId === null) return null;
+      if (!onBoard(userId)) return { to: "decider", user: people.person(userId), words: `${people.nameOf(userId)} сдаёт смену по-старому, решит ${decider.words}` };
+      return { to: "colleague", user: people.person(userId), words: `спросим ${personNameForms(people.nameOf(userId)).acc}` };
+    };
+    if (line.group !== "mine") {
+      // Someone else's sale: «Моя» and «Пополам с <держатель>» only, each a question (a nobody's sale is mine at once).
+      const holder = line.rule.toUserId;
+      const pot = line.rule.home === "pot" || line.rule.home === "decide";
+      const mine = owner("me", null, people, me);
+      const out = [{ owner: mine, asks: askOf(holder, pot && holder === null), hint: "", current: is(mine) }];
+      if (holder !== null) {
+        const half = owner("share", holder, people, me);
+        out.push({ owner: half, asks: askOf(holder, false), hint: "", current: is(half) });
+      }
+      return out.map((one) => ({ ...one, hint: hintOf(one.owner, one.asks) }));
+    }
+    // One's own sale: «Моя», «Пополам с <каждый коллега>», «<коллега>», «Общак», «Ничья»; with a colleague without the
+    // board «пополам» and «отдать» go to the decider.
+    const out: NonNullable<ShiftReportRow["choices"]> = [];
+    const mine = owner("me", null, people, me);
+    out.push({ owner: mine, asks: null, hint: hintOf(mine, null), current: is(mine) });
+    for (const colleague of colleagues) {
+      const half = owner("share", colleague.userId, people, me);
+      const asks = onBoard(colleague.userId) ? null : askOf(colleague.userId, false);
+      out.push({ owner: half, asks, hint: hintOf(half, asks), current: is(half) });
+    }
+    for (const colleague of colleagues) {
+      const theirs = owner("user", colleague.userId, people, me);
+      const asks = onBoard(colleague.userId) ? null : askOf(colleague.userId, false);
+      out.push({ owner: theirs, asks, hint: hintOf(theirs, asks), current: is(theirs) });
+    }
+    const pot = owner("pot", null, people, me);
+    out.push({ owner: pot, asks: null, hint: `решит ${decider.words}`, current: is(pot) });
+    const nobody = owner("nobody", null, people, me);
+    out.push({ owner: nobody, asks: null, hint: hintOf(nobody, null), current: is(nobody) });
+    return out;
+  }
 
   const sightingRow = (one: SaleSightingRow): ShiftReportRow => {
     const label = catalog.labelOf.get(one.pageId) ?? String(one.pageId);
@@ -391,7 +470,11 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       ask: null,
       incoming: null,
       proposal: null,
-      note: null,
+      // The shift before wrote why: the next one reads it at once.
+      note: (() => {
+        const written = beforeNotes.get(sale.transactionId);
+        return written === undefined ? null : { text: written.note, by: subject.userIds.includes(written.userId) ? "person" as const : "other" as const, byName: people.nameOf(written.userId) };
+      })(),
       sighting: null,
       editable: false,
       canNote: false,
@@ -459,6 +542,11 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     : phase === "fixing" && latest !== null && latest.totalMills !== nowMills ? latest.totalMills : null;
   const canConfirm = own && mayAct(actor, "confirm", phase) && candidate !== null && candidate.supersededAt === null;
   const lateCards = proposals.some((one) => one.state === "late");
+  const previousComment = await findPreviousShiftComment(db, { shiftId: subject.shift.id, pageLabels: shiftLabels, before: subject.shift.startedAt });
+  const previousNames = previousComment === null ? new Map<number, string>() : await listHandinNames(db, [previousComment.userId]);
+  const moscowToday = new Date(now.getTime() + 3 * HOUR_MS).toISOString().slice(0, 10);
+  const reportDay = latest?.reportDate ?? handin?.reportDate ?? subject.shift.reportDate;
+  const copied = handin?.postCopiedVersion == null ? null : input.versions.find((version) => version.version === handin.postCopiedVersion) ?? null;
   return {
     phase,
     chip: SHIFT_REPORT_PHASE_CHIPS[phase],
@@ -473,7 +561,28 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     needsMe: own && (phase === "confirm" || flat.some((row) => row.late || (row.incoming?.canAnswer ?? false)) || lateCards),
     handedInAt: candidate?.madeAt.toISOString() ?? null,
     countedAt: latest?.submittedAt.toISOString() ?? null,
+    preview,
+    previous: previousComment === null ? null : {
+      user: { userId: previousComment.userId, name: previousNames.get(previousComment.userId) ?? `#${previousComment.userId}`, forms: personNameForms(previousNames.get(previousComment.userId) ?? `#${previousComment.userId}`) },
+      comment: previousComment.comment,
+      at: previousComment.at.toISOString(),
+    },
+    post: !own || latest === null ? null : {
+      copiedAt: handin?.postCopiedAt?.toISOString() ?? null,
+      seen: input.postSeen ?? null,
+      changedSinceCopy: copied !== null && copied.version !== latest.version && postPagesDiffer(copied.pages, latest.pages),
+      // The ledger's post reader refuses a post whose date is more than a day behind (`date_mismatch`): warn before copying.
+      late: Date.parse(`${moscowToday}T00:00:00Z`) - Date.parse(`${reportDay}T00:00:00Z`) > DAY_MS,
+    },
   };
+}
+
+/** Whether two versions' page sums differ (what a post's lines say). Pure. */
+export function postPagesDiffer(a: ReadonlyArray<{ pageLabel: string; amountMills: number }>, b: ReadonlyArray<{ pageLabel: string; amountMills: number }>): boolean {
+  const of = (pages: ReadonlyArray<{ pageLabel: string; amountMills: number }>) => new Map(pages.filter((page) => page.amountMills !== 0).map((page) => [page.pageLabel, page.amountMills]));
+  const left = of(a);
+  const right = of(b);
+  return left.size !== right.size || [...left].some(([label, amount]) => right.get(label) !== amount);
 }
 
 function askState(claim: SaleClaimRow): "asked" | "agreed" | "disputed" | "silence" | "decided" | "withdrawn" {
@@ -499,7 +608,9 @@ function wordOwner(word: ProposalRow["fromWord"], userId: number | null, line: H
 export function hubOf(candidate: Pick<CandidateRow, "hubCheck">): NonNullable<ShiftReportBoard["candidate"]>["hub"] {
   const pages = candidate.hubCheck.map((page) => ({ ...page, at: page.at ?? null }));
   const any = (state: string) => pages.some((page) => page.state === state);
-  const state = any("running") ? "running" as const : any("statement") ? "statement" as const : any("unchecked") ? "unchecked" as const : any("found") ? "found" as const : "matched" as const;
+  // «сошлись» only when every page proved it: no pages (nothing asked) is «Hub не сверил», never «сошлись».
+  const state = pages.length === 0 ? "unchecked" as const
+    : any("running") ? "running" as const : any("statement") ? "statement" as const : any("unchecked") ? "unchecked" as const : any("found") ? "found" as const : "matched" as const;
   return {
     state,
     pages,
