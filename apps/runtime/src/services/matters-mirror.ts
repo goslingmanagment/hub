@@ -296,6 +296,9 @@ export function reportPostItems(reports: Pick<TeamLedgerReportsResponse, "posts"
     }));
 }
 
+/** The ledger's flag of a message that holds two reports (its `FlagSecondReport`): only the first is read. */
+const SECOND_REPORT_FLAG = "second_report";
+
 /** Why a post cannot be accrued, as its author reads it, by the first fixable flag (REPORT_POST_FIXABLE_FLAGS). */
 const POST_FIX_WORDS: Readonly<Record<(typeof REPORT_POST_FIXABLE_FLAGS)[number], string>> = {
   sum_mismatch: "строки аккаунтов не дают итог. Поправьте пост в «Отчётности»",
@@ -321,17 +324,23 @@ export function reportPostFixItems(
   const items: MirrorItem[] = [];
   for (const post of reports.posts) {
     const flags = REPORT_POST_FIXABLE_FLAGS.filter((flag) => post.flags.includes(flag));
+    // Two reports pasted into one message (the ledger's `second_report`): the first counts, the second is read by
+    // nobody until its author sends it as its own message. Not a flag that keeps the post out of the pay, so its own words.
+    const second = post.flags.includes(SECOND_REPORT_FLAG);
     const day = post.reportDate ?? moscowDay(post.postedAt);
-    if (flags.length === 0 || day === null || day < from) continue;
+    if ((flags.length === 0 && !second) || day === null || day < from) continue;
     const userId = post.person.slug === null ? undefined : loginOf.get(post.person.slug);
     if (userId === undefined) continue;
+    const said = formatDay(`${day}T12:00:00+03:00`);
     items.push({
       key: `report.post_fix:${post.id}`,
-      title: `Отчёт за ${formatDay(`${day}T12:00:00+03:00`)} не начислен: ${POST_FIX_WORDS[flags[0]!]}`,
+      title: flags.length > 0
+        ? `Отчёт за ${said} не начислен: ${POST_FIX_WORDS[flags[0]!]}`
+        : `В сообщении за ${said} два отчёта: прочитан только первый. Отправьте второй в «Отчётность» отдельным сообщением`,
       object: { type: "ledger_report_post", id: String(post.id) },
       pageLabels: [...new Set(post.pages.map((line) => line.pageLabel).filter((label): label is string => label !== null))],
       money: false,
-      evidence: { postId: post.id, reportDate: post.reportDate, day, postedAt: post.postedAt, flags, telegram: post.link },
+      evidence: { postId: post.id, reportDate: post.reportDate, day, postedAt: post.postedAt, flags: second ? [...flags, SECOND_REPORT_FLAG] : flags, telegram: post.link },
       link: `/workboard/shifts/mine?week=${day}&report=${day}`,
       owner: { userId },
     });
