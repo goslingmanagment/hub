@@ -149,6 +149,21 @@ export async function listTeamQuestions(
 }
 
 /** Answers an open question; false — it is not open any more (answered or withdrawn meanwhile). */
+/** The swap questions still open (asked, not answered or withdrawn): the tick closes those whose hours have ended. */
+export async function listOpenSwapQuestions(db: Database): Promise<TeamQuestionRow[]> {
+  const result = await db.execute<Row>(sql`${SELECT} where q.state = 'open' and q.kind = 'swap' and q.swap is not null order by q.id`);
+  return result.rows.map(questionOf);
+}
+
+/** A question nobody decided in time: answered «Нельзя» by nobody (no person answered it), with the words why. */
+export async function lapseTeamQuestion(db: Database, input: { id: number; text: string; at: Date }): Promise<boolean> {
+  const result = await db.execute<Row>(sql`
+    update team_questions set state = 'answered', answer = 'no', answer_text = ${input.text}, answered_by_user_id = null,
+      answered_at = ${input.at.toISOString()}::timestamptz
+    where id = ${input.id} and state = 'open' returning id`);
+  return result.rows.length > 0;
+}
+
 export async function answerTeamQuestion(
   db: Database,
   input: { id: number; answer: "yes" | "no"; text: string | null; byUserId: number; at: Date },

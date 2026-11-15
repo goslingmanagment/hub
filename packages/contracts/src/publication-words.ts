@@ -86,7 +86,22 @@ const EVENT_REASONS: Readonly<Record<string, string>> = {
   fansly_unsuccessful: "Fansly ответил отказом",
   upload_not_started: "файлы поста ещё загружаются",
   uploading: "файлы поста ещё загружаются",
+  // The checks' own codes (publications-fansly-checks.ts, publications-onlyfans-checks.ts: their reason lists).
+  not_out_yet: "пост на площадке есть, но его время ещё не пришло",
+  id_reads_another_post: "по номеру площадка показывает другой пост",
+  still_in_schedule_by_content: "пост с тем же содержимым всё ещё в расписании площадки",
+  list_shows_the_id: "номер поста есть в списке площадки, а сам пост не прочитался",
+  found_in_schedule_by_id: "Hub нашёл пост по номеру в расписании площадки",
+  collected_post_by_id: "Hub нашёл пост по номеру среди собранных",
+  no_platform_ref: "у публикации нет номера на площадке",
+  posts_incomplete: "посты страницы прочитаны неполно",
+  still_processing: "площадка ещё обрабатывает пост",
+  still_processing_at_last_check: "при последней проверке площадка всё ещё обрабатывала пост",
+  readiness_unknown: "площадка не сказала, готов ли пост",
 };
+
+/** A match that is not one post, written after the place the check looked in (`timeline_could_be_unproven`). */
+const PLACED_AMBIGUITY = /^(?:timeline|schedule|posts|stories)_(several_match|claimed_by_another|could_be_unproven)$/;
 
 /** Reasons Hub writes with a detail after a colon: the head says what happened. Most specific first. */
 const EVENT_REASON_PREFIXES: ReadonlyArray<readonly [string, string]> = [
@@ -115,6 +130,11 @@ export function statusReasonWords(reason: string | null): string | null {
   if (reason === null || reason === "") return null;
   const exact = EVENT_REASONS[reason];
   if (exact !== undefined) return exact;
+  const placed = PLACED_AMBIGUITY.exec(reason);
+  if (placed) return EVENT_REASONS[placed[1]!]!;
+  if (reason.startsWith("schedule_incomplete:")) {
+    return `расписание площадки прочитано неполно (${queueIncompleteWords(reason.slice("schedule_incomplete:".length).split(","))})`;
+  }
   // A vault album's reason (either platform): its parts in words, never «Другая причина».
   const album = albumReasonLine(reason);
   if (album !== null) return lowerFirst(album);
@@ -575,7 +595,11 @@ export interface AlbumRunWords {
   files: Array<{ name: string; size: string; state: string }>;
 }
 
-export function albumRunWords(run: AlbumRunLike): AlbumRunWords {
+/**
+ * `account`: the OnlyFans API account's day ceiling, what is left of it and the balance — agency money, the owner's
+ * alone (a content manager reads the album's own run and cost, and why the uploads stopped, in words).
+ */
+export function albumRunWords(run: AlbumRunLike, options: { account: boolean } = { account: true }): AlbumRunWords {
   const started = run.step !== null;
   const cents = run.account?.centsPer1000 ?? 149;
   const missing = [
@@ -593,7 +617,7 @@ export function albumRunWords(run: AlbumRunLike): AlbumRunWords {
     price: started
       ? `Потрачено ${numberFormat.format(run.spentCredits)} из ${creditsWords(run.estimateCredits)} ${creditsUsdWords(run.spentCredits, cents)}`
       : `Цена ${creditsWords(run.estimateCredits)} ${creditsUsdWords(run.estimateCredits, cents)}`,
-    ceiling: account === null
+    ceiling: account === null || !options.account
       ? null
       : account.dailyCredits === 0
         ? "Потолок альбомов в сутки 0 — пауза"

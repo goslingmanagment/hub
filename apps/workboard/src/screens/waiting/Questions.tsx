@@ -251,8 +251,9 @@ function QuestionFacts({ question }: { question: TeamQuestion }) {
         <>
           <dt>Ответ</dt>
           <dd className={question.answer === "yes" ? "wt-question__yes" : "wt-question__no"}>
-            {question.answer === "yes" ? "Можно" : "Нельзя"}{question.answerText ? `. ${question.answerText}` : ""}
-            <span className="wt-question__by"> {question.answeredBy}, {question.answeredAt ? formatDateTime(question.answeredAt) : ""}</span>
+            {/* Nobody answered a swap whose hours ended: Hub closed it, its words say so. */}
+            {question.answeredBy === null && question.answerText ? question.answerText : <>{question.answer === "yes" ? "Можно" : "Нельзя"}{question.answerText ? `. ${question.answerText}` : ""}</>}
+            <span className="wt-question__by"> {question.answeredBy === null ? "" : `${question.answeredBy}, `}{question.answeredAt ? formatDateTime(question.answeredAt) : ""}</span>
           </dd>
         </>
       )}
