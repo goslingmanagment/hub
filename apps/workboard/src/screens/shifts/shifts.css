@@ -168,6 +168,37 @@
     color: var(--ui-text);
   }
 
+  /* A phone: who and since when on the first two lines, the three facts in a row under them; nothing overlaps. */
+  @media (max-width: 640px) {
+    .shifts-now__row {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 20px;
+      grid-template-areas: "who who who go" "since since since go" "f1 f2 f3 go";
+      gap: 6px 12px;
+      padding: 10px 12px 10px 16px;
+    }
+
+    .shifts-now__who { grid-area: who; }
+    .shifts-now__since { grid-area: since; white-space: normal; }
+    .shifts-now__fact:nth-of-type(3) { grid-area: f1; }
+    .shifts-now__fact:nth-of-type(4) { grid-area: f2; }
+    .shifts-now__fact:nth-of-type(5) { grid-area: f3; }
+    .shifts-now__go { grid-area: go; }
+
+    .shifts-now__fact,
+    .shifts-now__waiting {
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-start;
+      gap: 0;
+      white-space: normal;
+    }
+
+    .shifts-now__unit {
+      font-size: var(--ui-fs-13);
+      line-height: var(--ui-lh-13);
+    }
+  }
+
   /* ---------------------------------------------------------- The grid */
 
   /*

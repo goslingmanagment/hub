@@ -292,14 +292,18 @@
       border: 0;
     }
 
+    /* The shift on the first line (the day, the clock, the worked time, the pages), its report's sum and state on the
+       second: a long state («Сдайте смену») or «предварительно» never lies over the day or the sum. */
     .mys-journal .ui-table td.mys-col-when {
       grid-column: 1 / -1;
-      grid-row: 1 / span 2;
+      grid-row: 1;
     }
 
     .mys-journal .ui-table td.mys-col-total {
-      grid-column: 2;
-      grid-row: 1;
+      grid-column: 1;
+      grid-row: 2;
+      justify-self: start;
+      margin-top: 4px;
     }
 
     .mys-journal .ui-table td.mys-col-total .mys-hub {
@@ -313,8 +317,9 @@
 
     .mys-journal .mys-state__badge {
       grid-column: 3;
-      grid-row: 1;
+      grid-row: 2;
       justify-self: end;
+      margin-top: 4px;
     }
 
     .mys-journal .mys-state__next,
@@ -328,7 +333,7 @@
     }
 
     /* The day's note goes under everything else of the row, across it: the sum keeps its place on the first line
-       (with «Мои деньги» on, my-money.css places the sum and the accrual inside it). */
+       (the second; with «Мои деньги» on, my-money.css places the sum and the accrual inside it). */
     .mys-journal .ui-table tbody td.mys-col-total:has(.mys-noted),
     .mys-journal .mys-noted,
     .mys-journal .mys-noted__sum:has(.mym-total) {
@@ -336,9 +341,10 @@
     }
 
     .mys-journal .mys-noted__sum:not(:has(.mym-total)) {
-      grid-column: 2;
-      grid-row: 1;
-      justify-self: end;
+      grid-column: 1;
+      grid-row: 2;
+      justify-self: start;
+      margin-top: 4px;
     }
 
     .mys-journal .mys-noted > .wb-report-note {

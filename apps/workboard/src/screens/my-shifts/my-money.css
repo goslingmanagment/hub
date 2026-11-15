@@ -95,9 +95,10 @@
     }
 
     .mys-journal .mym-total__sum {
-      grid-column: 2;
-      grid-row: 1;
-      justify-self: end;
+      grid-column: 1;
+      grid-row: 2;
+      justify-self: start;
+      margin-top: 4px;
     }
 
     .mys-journal .mym-total > .ui-tooltip-anchor {
