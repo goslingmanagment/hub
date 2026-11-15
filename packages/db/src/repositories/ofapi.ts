@@ -2710,7 +2710,8 @@ export async function listOfapiMappedPages(db: Database): Promise<OfapiMappedPag
       ofapiAuthChangedAt: pages.ofapiAuthChangedAt,
     })
     .from(pages)
-    .where(and(isNotNull(pages.ofapiAccountId), eq(pages.status, "active")))
+    // The OnlyFans API fleet is the live agency's (sandbox/realm.ts): a test page is never read, charged or checked.
+    .where(and(isNotNull(pages.ofapiAccountId), eq(pages.status, "active"), livePageSql(pages.id)))
     .orderBy(asc(pages.label));
 
   return rows.filter((row): row is OfapiMappedPageRow => row.ofapiAccountId !== null);

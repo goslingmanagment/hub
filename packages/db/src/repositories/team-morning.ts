@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { livePageSql } from "./realm.ts";
 import { AWAITING_MASS_MIN_CHATS } from "./spender-stats.ts";
 
 // The morning report's team block (Chat Memory week 5,
@@ -19,8 +20,9 @@ export async function listFansWaitingSince(
   input: { now: Date; minWaitHours: number; maxDays: number },
 ): Promise<PageWaitingRow[]> {
   const now = sql`${input.now.toISOString()}::timestamptz`;
-  // Every page's id: the archive's (account_id, occurred_at) index serves the window, not a scan of it.
-  const pageIds = (await db.execute<{ id: string | number }>(sql`select id from pages where deleted_at is null`)).rows.map((row) => String(row.id));
+  // Every live page's id (the owner's report is the live agency's, sandbox/realm.ts): the archive's (account_id,
+  // occurred_at) index serves the window, not a scan of it.
+  const pageIds = (await db.execute<{ id: string | number }>(sql`select id from pages where deleted_at is null and ${livePageSql(sql`pages.id`)}`)).rows.map((row) => String(row.id));
   if (pageIds.length === 0) return [];
   // A mass message answers nobody: a Fansly one, or one text (with its price and files) to
   // AWAITING_MASS_MIN_CHATS or more chats of the page in its clock hour — how OnlyMonster's look

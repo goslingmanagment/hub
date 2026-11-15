@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { testPageSql } from "./realm.ts";
 import {
   notificationDeliveryOutbox,
   telegramDeliveryAttempts,
@@ -95,17 +96,24 @@ export async function enqueueNotificationDeliveryOutbox(
     .where(eq(telegramSettings.id, 1))
     .limit(1);
 
+  // The last gate before Telegram (sandbox/realm.ts): a row about a test page is written suppressed, never sent.
+  const testRealm = await db.execute(sql`select exists (select 1 from notification_incidents i
+    where i.id = ${input.notificationIncidentId} and ${testPageSql(sql`i.platform_account_id`)}) as test`);
+  const aboutTestPage = (testRealm.rows[0] as { test?: boolean } | undefined)?.test === true;
+
   const notificationsEnabled = settings?.enabled ?? true;
   const policyEnabled = input.request.pagingPolicy === "ai_critical"
     ? settings?.aiCriticalAlertsEnabled ?? false
     : settings?.syncFailureAlertsEnabled ?? true;
-  const suppressionReason = !notificationsEnabled
-    ? "notifications_disabled"
-    : !policyEnabled
-      ? input.request.pagingPolicy === "ai_critical"
-        ? "ai_critical_alerts_disabled"
-        : "sync_failure_alerts_disabled"
-      : null;
+  const suppressionReason = aboutTestPage
+    ? "test_realm"
+    : !notificationsEnabled
+      ? "notifications_disabled"
+      : !policyEnabled
+        ? input.request.pagingPolicy === "ai_critical"
+          ? "ai_critical_alerts_disabled"
+          : "sync_failure_alerts_disabled"
+        : null;
   const state: NotificationDeliveryOutboxState = suppressionReason ? "suppressed" : "pending";
   const idempotencyKey = notificationDeliveryIdempotencyKey({
     notificationIncidentId: input.notificationIncidentId,

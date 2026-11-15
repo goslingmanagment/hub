@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { livePageSql } from "./realm.ts";
 import { acquireErasureFenceSharedLock } from "./erasure-fence.ts";
 import type { FanFactKind } from "./fan-card.ts";
 
@@ -107,6 +108,8 @@ export async function listDueFanFactConversations(
       ) as id
     ) x on x.id is not null
     join fans f on f.id = x.id
+    -- A test page spends no AI money (sandbox/realm.ts), whatever the setting lists.
+    where ${livePageSql(sql`d.page_id`)}
     order by d.last_at desc
     limit ${input.limit}`);
   return result.rows.map((row) => ({

@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
+import { livePageSql } from "../realm.ts";
 import {
   FANSLY_SEND_GUARD_RESTART_U,
   type FanslySendGuardOwnerEngine,
@@ -307,8 +308,8 @@ export class LiveGateClosedError extends Error {
 
 /**
  * Give a Fansly page its row (mode `off`) if it has none; never touches a row
- * that exists. A page of another platform gets none. Returns whether the row
- * was created.
+ * that exists. A page of another platform gets none, nor does a test page (it is never synced, sandbox/realm.ts).
+ * Returns whether the row was created.
  */
 export async function ensureSyncPage(
   db: Database,
@@ -318,20 +319,20 @@ export async function ensureSyncPage(
     insert into sync_pages (page_id, mode, mode_changed_by)
     select p.id, 'off', ${input.createdBy ?? "ensure"}
       from pages p
-     where p.id = ${input.pageId} and p.platform = 'fansly'
+     where p.id = ${input.pageId} and p.platform = 'fansly' and ${livePageSql(sql`p.id`)}
     on conflict (page_id) do nothing
   `);
   return { created: (result.rowCount ?? 0) > 0 };
 }
 
-/** Give every Fansly page its row (mode `off`) — the host at start, so a page
- *  onboarded after 0228 is listed too. Returns how many rows were created. */
+/** Give every live Fansly page its row (mode `off`) — the host at start, so a page
+ *  onboarded after 0228 is listed too; a test page never gets one. Returns how many rows were created. */
 export async function ensureFanslySyncPages(db: Database, input: { createdBy?: string } = {}): Promise<number> {
   const result = await db.execute(sql`
     insert into sync_pages (page_id, mode, mode_changed_by)
     select p.id, 'off', ${input.createdBy ?? "ensure"}
       from pages p
-     where p.platform = 'fansly'
+     where p.platform = 'fansly' and ${livePageSql(sql`p.id`)}
      order by p.id
     on conflict (page_id) do nothing
   `);

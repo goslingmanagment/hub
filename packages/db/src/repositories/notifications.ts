@@ -15,6 +15,7 @@ import {
   type NotificationDeliveryOutboxRequest,
   type NotificationDeliveryOutboxState,
 } from "./notification-outbox.ts";
+import { isTestPage, livePageSql } from "./realm.ts";
 
 export type NotificationIncidentKind =
   | "ofapi_binding_conflict"
@@ -194,6 +195,8 @@ export async function listNotificationIncidentsWithPages(
   if (input?.pageLabel) {
     clauses.push(eq(pages.label, input.pageLabel));
   }
+  // The live agency's incidents (sandbox/realm.ts): the owner's screens, the digest and the matters mirror read here.
+  clauses.push(livePageSql(notificationIncidents.platformAccountId));
 
   const whereClause = clauses.length > 0 ? and(...clauses) : undefined;
   const limit = input?.limit ?? 50;
@@ -288,6 +291,12 @@ async function openNotificationIncidentInternal(
 }> {
   const now = input.now ?? new Date();
   const eventTime = guard?.occurredAt ?? now;
+  // THE WALL of the test realm for alerting (0414, sandbox/realm.ts): a test page is never synced, bound or read
+  // from a platform, so nothing about it is a failure of the agency — no incident is opened, and so nothing is paged,
+  // put in the digest, mirrored into a matter or shown to the owner. One check here holds for every producer.
+  if (input.platformAccountId !== null && await isTestPage(db, input.platformAccountId)) {
+    return { incident: null, transition: "suppressed" };
+  }
   const values = {
     incidentKey: input.incidentKey,
     kind: input.kind,
