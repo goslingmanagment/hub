@@ -359,6 +359,9 @@ export const authStateSchema = z.object({
   /** Present only for a test person's login (the test team, sandbox/realm.ts): what the agency's owner alone reads
    *  (accounts, AI spend, agents' proposals) is not its to read, and the screens leave those blocks out. */
   test: z.literal(true).optional(),
+  /** Whether the person sees their own money (the person right «Видит свои деньги»; the same rule as `accountPay`'s
+   *  `enabled`). Optional: the sign-in's answer and older servers leave it out; a client then shows no «Мои деньги». */
+  ownMoney: z.boolean().optional(),
 });
 
 const serviceHealthStatusEnum = z.enum(["ok", "degraded"]);

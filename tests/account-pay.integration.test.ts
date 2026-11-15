@@ -117,6 +117,27 @@ describe("«Мои деньги»: the chatter's own pay behind the person's swi
   const read = (user: string, query: string) => server!.inject({ method: "GET", url: `/api/v1/account/pay${query}`, headers: { cookie: cookies[user]! } });
   const WINDOW = "?from=2026-11-08&to=2026-11-14";
 
+  it("says in `me` whether the person sees their own money, by the same switch, to the extension's token too", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const me = async (headers: Record<string, string>) => {
+      const answer = await server!.inject({ method: "GET", url: "/api/v1/auth/me", headers });
+      expect(answer.statusCode, answer.body).toBe(200);
+      return (answer.json() as { ownMoney?: unknown }).ownMoney;
+    };
+    expect(await me({ cookie: cookies.nikita! })).toBe(true);
+    expect(await me({ cookie: cookies.vanya! })).toBe(false);
+    expect(await me({ cookie: cookies.lone! })).toBe(false);
+    expect(await me({ cookie: cookies.boss! })).toBe(false);
+    for (const [user, expected] of [["nikita", true], ["vanya", false]] as const) {
+      const issued = await server!.inject({
+        method: "POST", url: "/api/v1/auth/device-tokens/password", headers: { "x-client-version": "chat-extension/3.31.0" },
+        payload: { username: user, password: `${user}-password-for-tests`, label: "Firefox · macOS · ChatGoose", client: "chat-extension", mode: "active" },
+      });
+      expect(issued.statusCode, issued.body).toBe(200);
+      expect(await me({ authorization: `Bearer ${(issued.json() as { token: string }).token}` })).toBe(expected);
+    }
+  });
+
   it("gives a chatter with the switch on their own sums, by date, and no terms", async (context) => {
     if (!testDb || !server) return context.skip();
     asked.length = 0;
