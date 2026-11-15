@@ -38,6 +38,7 @@ import {
 } from "../../services/auth.ts";
 import { userForClosedEnum } from "../../services/closed-platform-responses.ts";
 import { NotFoundError } from "../../services/errors.ts";
+import { seesOwnMoney } from "../../services/ledger-person-pay.ts";
 import { viewerTeams } from "../../services/teams.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { registerSigninRoutes } from "./signin.ts";
@@ -84,6 +85,15 @@ async function productsOfPrincipal(app: AppContext, principal: Awaited<ReturnTyp
     }
   }
   return productsOf({ role: principal.user.role, narrow, test, personRole, leadsCustoms });
+}
+
+/** `me`'s `ownMoney`; a registry that does not answer reads as off rather than failing «who am I». */
+async function ownMoneyOfPrincipal(app: AppContext, principal: Awaited<ReturnType<ApiModuleContext["auth"]["requirePrincipal"]>>): Promise<boolean> {
+  try {
+    return await seesOwnMoney(app.db, principal.user.id);
+  } catch {
+    return false;
+  }
 }
 
 /** `me`'s teams; a registry that does not answer leaves them empty rather than failing «who am I». */
@@ -159,6 +169,9 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       // Whose teams this person is in, sees and leads (services/teams.ts, the one place that answers it). The owner
       // reads every team: his answer stays as it was.
       ...(principal.user.role === "owner" ? {} : { teams: await teamsOfPrincipal(appContext, principal) }),
+      // Whether «Мои деньги» shows this person's money (the person right «Видит свои деньги», the same rule as
+      // `accountPay`'s `enabled`): the extension's popup shows the line only then (products package R5).
+      ownMoney: await ownMoneyOfPrincipal(appContext, principal),
       // A test person's login says so: the screens leave out what only the agency's owner reads.
       ...(principal.sandbox?.test === true ? { test: true as const } : {}),
     };

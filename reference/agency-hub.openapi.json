@@ -215189,6 +215189,9 @@
                       "enum": [
                         true
                       ]
+                    },
+                    "ownMoney": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -215499,6 +215502,9 @@
                       "enum": [
                         true
                       ]
+                    },
+                    "ownMoney": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
