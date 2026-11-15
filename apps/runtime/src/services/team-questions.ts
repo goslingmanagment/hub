@@ -239,7 +239,11 @@ export async function answerQuestion(
   if (!decidesIt(facts, principal, row)) throw new ForbiddenError("Only whoever decides answers it");
   const text = body.text === undefined || body.text === "" ? null : body.text;
   const swap = row.kind === "swap" && body.answer === "yes" ? row.swap : null;
-  if (swap !== null && swap.date < moscowDayOf(now.getTime())) throw new ConflictError("The swap's day has passed: answer «Нельзя» or let it be");
+  // A swap is decided before its hours: once its start has passed (Moscow), «Можно» would re-decide whose the sales of that
+  // junction already were.
+  if (swap !== null && now.getTime() >= swapStartsAt(swap)) {
+    throw new ConflictError("The swap has begun: answer «Нельзя» or let it be", { reason: "swap_started" });
+  }
   // «Можно» of a swap writes the day's lines of the schedule in the answer's own transaction: both or neither.
   await app.db.transaction(async (tx) => {
     if (!(await answerTeamQuestion(tx, { id, answer: body.answer, text, byUserId: principal.user.id, at: now }))) {
@@ -288,6 +292,11 @@ export async function closeQuestion(
 }
 
 // ── «Подмена» (products package W, 0422) ────────────────────────────────────
+
+/** The instant a swap's hours begin, Moscow time. Pure. */
+export function swapStartsAt(swap: Pick<TeamQuestionSwapRow, "date" | "startMinute">): number {
+  return Date.parse(`${swap.date}T00:00:00+03:00`) + swap.startMinute * 60_000;
+}
 
 /** The swap of an ask, checked: a day ahead, pages of one team, a covering person of that team, the absent person's pages. */
 async function swapOfBody(

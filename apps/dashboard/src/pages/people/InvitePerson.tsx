@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { AdminPersonCreateBody } from "@agency_hub_core/contracts";
 import { PERSON_CODE_PATTERN } from "@agency_hub_core/contracts";
-import { Button, Disclosure, Field, Modal, Notice, Segmented, Spinner, TextInput } from "@agency_hub_core/ui";
+import { Button, Checkbox, Disclosure, Field, Modal, Notice, Segmented, Spinner, TextInput } from "@agency_hub_core/ui";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { INVITE_DEFAULT_DAYS, INVITE_MAX_DAYS, daysToHours, findByLogin, isValidUsername } from "@agency_hub_core/ui/teamAccess";
@@ -60,6 +60,8 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
   const [role, setRole] = useState<InviteRole>("chatter");
   const [handle, setHandle] = useState("");
   const [working, setWorking] = useState<string[]>([]);
+  // «Ведёт команды» (products package W): a team lead invited as the lead of these models' teams, in one step.
+  const [leads, setLeads] = useState<string[]>([]);
   const [slot, setSlot] = useState<SlotDraft>(EMPTY_SLOT);
   const [from, setFrom] = useState(moscowToday());
   const [terms, setTerms] = useState<Record<string, { share: string; fix: string }>>({});
@@ -78,6 +80,13 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
     for (const page of pages.data ?? []) if (working.includes(page.label) && !seen.has(page.modelSlug)) seen.set(page.modelSlug, page.modelName);
     return [...seen].map(([slug, modelName]) => ({ slug, modelName }));
   }, [pages.data, working]);
+
+  // Every model of the pages the owner reaches: the teams a team lead may lead.
+  const allModels = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const page of pages.data ?? []) if (!seen.has(page.modelSlug)) seen.set(page.modelSlug, page.modelName);
+    return [...seen].map(([slug, modelName]) => ({ slug, modelName })).sort((a, b) => a.modelName.localeCompare(b.modelName, "ru"));
+  }, [pages.data]);
 
   const codeTaken = people.find((person) => person.code === code) ?? null;
   const loginTaken = withLogin ? findByLogin(users.data ?? [], login.trim()) : null;
@@ -116,6 +125,7 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
       workingPageLabels: working,
       ...(slotEmpty(slot) ? {} : { schedule: { from, slot: slotBody(slot) } }),
       ...(payTerms.length > 0 ? { payTerms } : {}),
+      ...(role === "team_lead" && leads.length > 0 ? { leadModelSlugs: leads } : {}),
       ...(withLogin ? { invite: { username: login.trim(), role: signsIn(role) ? role : "chatter" as const, pageLabels: working, expiresInHours: daysToHours(days) } } : {}),
     };
     create.mutate(body, {
@@ -194,6 +204,21 @@ export function InvitePerson({ people, create, onClose, onCreated, onAdded }: {
               : "Без входа в Hub: человек в реестре, со страницами и графиком, но расширение ему не нужно."}
           </p>
         </div>
+
+        {role === "team_lead" && (
+          <fieldset disabled={pending} className="access-invite__pages">
+            <legend className="ui-field__label">Ведёт команды</legend>
+            <p className="ui-field__hint registry-form__lead">Команды моделей, которые он ведёт с первого дня: его «Сегодня» сразу назовёт их.</p>
+            {allModels.map((model) => (
+              <Checkbox
+                key={model.slug}
+                label={model.modelName}
+                checked={leads.includes(model.slug)}
+                onChange={(on) => setLeads((current) => (on ? [...current, model.slug] : current.filter((slug) => slug !== model.slug)))}
+              />
+            ))}
+          </fieldset>
+        )}
 
         <fieldset disabled={pending} className="access-invite__pages">
           <legend className="ui-field__label">Рабочие страницы</legend>

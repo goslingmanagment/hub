@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { liveUserSql, testUserSql } from "./realm.ts";
 
 // Workboard «Сегодня» (products package W): reads only, over the shift rows (`shifts`, 0379), the reports handed in
 // (`shift_handins`, 0400) and a lead's notes (`review_notes`, 0415). Which pages a viewer may see is the caller's
@@ -67,13 +68,22 @@ export interface HandoverRow {
   comment: string;
 }
 
-/** The comments left for the next shift on reports of shifts ended since `since`, of logins other than `exceptUserIds`. */
-export async function listHandoverComments(db: Database, input: { since: Date; exceptUserIds: readonly number[]; limit: number }): Promise<HandoverRow[]> {
+/**
+ * The comments left for the next shift on reports of shifts ended since `since` on any of `pageLabels`, of logins other
+ * than `exceptUserIds`, of one realm (0414): cut in the query, then limited — never the agency's latest cut afterwards.
+ */
+export async function listHandoverComments(db: Database, input: {
+  since: Date; exceptUserIds: readonly number[]; pageLabels: readonly string[]; realm: "live" | "test"; limit: number;
+}): Promise<HandoverRow[]> {
+  if (input.pageLabels.length === 0) return [];
+  const realm = input.realm === "test" ? testUserSql(sql`s.user_id`) : liveUserSql(sql`s.user_id`);
   const result = await db.execute<Row>(sql`select s.id, s.user_id, u.username, s.state, s.started_at, s.ended_at, s.worked_minutes,
       to_char(s.report_date, 'YYYY-MM-DD') as report_date, s.pages, h.comment
     from shift_handins h join shifts s on s.id = h.shift_id join users u on u.id = s.user_id
     where s.state in ('going', 'closed') and s.ended_at >= ${input.since.toISOString()}::timestamptz
-      and btrim(h.comment) <> '' and not (s.user_id = any(${ids(input.exceptUserIds)}))
+      and btrim(h.comment) <> '' and not (s.user_id = any(${ids(input.exceptUserIds)})) and ${realm}
+      and exists (select 1 from jsonb_array_elements(s.pages) as shift_page
+                   where shift_page->>'pageLabel' = any(${sql.param([...input.pageLabels])}::text[]))
     order by s.ended_at desc, s.id desc
     limit ${input.limit}`);
   return result.rows.map((row) => ({ shift: shiftOf(row), comment: String(row.comment) }));
