@@ -89,7 +89,6 @@
 
 @layer components {
   :root {
-    --wb-side: 240px;
     --wb-gutter: 32px;
     --wb-bar: 72px;
     /* A table's header sticks right under the screen's bar. */
@@ -102,202 +101,9 @@
     }
   }
 
-  .wb-app {
-    display: grid;
-    grid-template-columns: var(--wb-side) minmax(0, 1fr);
-    min-height: 100vh;
-  }
-
-  /* The sidebar: the ground's colour, a hairline, full height, sticky. */
-  .wb-side {
-    position: sticky;
-    top: 0;
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    padding: 16px 12px 12px;
-    border-right: 1px solid var(--ui-line);
-    background: var(--ui-bg);
-    overflow-y: auto;
-  }
-
-  .wb-brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    height: 40px;
-    margin: 0 0 24px;
-    padding: 0 12px;
-    border-radius: var(--ui-radius);
-    color: var(--ui-text);
-    font-size: var(--ui-fs-16);
-    line-height: var(--ui-lh-16);
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    text-decoration: none;
-  }
-
-  .wb-brand__mark {
-    flex: none;
-    width: 24px;
-    height: 24px;
-    fill: var(--ui-text);
-  }
-
-  .wb-brand__bar {
-    fill: var(--ui-bg);
-  }
-
-  .wb-nav {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .wb-nav__item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    height: 40px;
-    padding: 0 12px;
-    border-radius: var(--ui-radius);
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-    font-weight: 500;
-    text-decoration: none;
-    transition: background-color var(--ui-fast), color var(--ui-fast);
-  }
-
-  .wb-nav__item:hover {
-    background: var(--ui-hover);
-    color: var(--ui-text);
-  }
-
-  .wb-nav__item[aria-current="page"] {
-    background: var(--ui-active);
-    color: var(--ui-text);
-  }
-
-  .wb-nav__icon {
-    flex: none;
-    color: var(--ui-text-3);
-  }
-
-  .wb-nav__item[aria-current="page"] .wb-nav__icon {
-    color: var(--ui-accent);
-  }
-
-  .wb-nav__label {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .wb-nav__count {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    gap: 6px;
-  }
-
-  /* A count of «Ждут вас» that could not be checked: a quiet question, not an alarm (D17). */
-  .wb-nav__unknown {
-    display: inline-grid;
-    place-items: center;
-    width: 22px;
-    height: 22px;
-    border: 1px dashed var(--ui-line-strong);
-    border-radius: 11px;
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-13);
-    line-height: 1;
-  }
-
-  .wb-nav__sep {
-    height: 1px;
-    margin: 12px 12px;
-    background: var(--ui-line);
-  }
-
-  .wb-side__foot {
-    margin-top: auto;
-    padding-top: 12px;
-    border-top: 1px solid var(--ui-line);
-  }
-
-  .wb-account {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 4px 4px 4px 12px;
-  }
-
-  .wb-account__avatar {
-    display: grid;
-    flex: none;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: var(--ui-active);
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-13);
-    font-weight: 600;
-  }
-
-  .wb-account__text {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .wb-account__name {
-    overflow: hidden;
-    color: var(--ui-text);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .wb-account__role {
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
-  /* A chatter's account row is their menu's button (account, theme, sign-out): the whole row answers. */
-  .wb-account--button {
-    width: 100%;
-    min-height: 48px;
-    padding: 6px 8px 6px 12px;
-    border: 0;
-    border-radius: var(--ui-radius);
-    background: transparent;
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    transition: background-color var(--ui-fast);
-  }
-
-  .wb-account--button:hover,
-  .wb-account--button[aria-expanded="true"] {
-    background: var(--ui-hover);
-  }
-
-  .wb-account--button:focus-visible {
-    outline: 2px solid var(--ui-focus);
-    outline-offset: -2px;
-  }
-
-  .wb-account__chevron {
-    flex: none;
-    color: var(--ui-text-3);
+  /* The product's frame is packages/ui's (Place.tsx, place.css); this wrapper only carries `data-part`. */
+  .wb-frame {
+    display: contents;
   }
 
   /* ---------------------------------------------------------- Tiles: a screen's numbers in one row */
@@ -718,57 +524,11 @@
     gap: 12px;
   }
 
-  /* Narrow windows: the sidebar becomes a strip on top (phones are 0 % of team work; it must only not break). */
+  /* Narrow windows: a smaller gutter, the header does not stick (the frame's own strip is place.css's, under 768 px). */
   @media (max-width: 960px) {
     :root {
       --wb-gutter: 16px;
       --ui-sticky-top: 0px;
-    }
-
-    .wb-app {
-      grid-template-columns: minmax(0, 1fr);
-      /* The strip keeps its height on a short screen: the window's rest is the screen's. */
-      grid-template-rows: auto 1fr;
-    }
-
-    .wb-side {
-      position: static;
-      flex-direction: row;
-      align-items: center;
-      gap: 8px;
-      height: auto;
-      padding: 8px 16px;
-      border-right: 0;
-      border-bottom: 1px solid var(--ui-line);
-      overflow-x: auto;
-    }
-
-    .wb-brand {
-      margin: 0;
-    }
-
-    .wb-brand span {
-      display: none;
-    }
-
-    .wb-nav {
-      flex-direction: row;
-    }
-
-    .wb-nav__sep {
-      width: 1px;
-      height: 24px;
-      margin: 8px 4px;
-    }
-
-    .wb-side__foot {
-      margin: 0 0 0 auto;
-      padding: 0;
-      border: 0;
-    }
-
-    .wb-account__text {
-      display: none;
     }
 
     .wb-header {
@@ -780,94 +540,55 @@
     }
   }
 
-  /*
-   * A chatter looks from a phone: the strip holds «Мои смены» and their menu (the avatar and a chevron), each a
-   * finger's target; the period's arrows and lengths too.
-   */
-  @media (max-width: 960px) {
-    .wb-app[data-part="chatter"] .wb-account--button {
-      width: auto;
-      min-height: 44px;
-      padding: 0 8px;
-      gap: 6px;
-    }
-
-    .wb-app[data-part="chatter"] .wb-nav__item {
-      height: 44px;
-    }
-  }
-
-  /* A newcomer's strip holds «Начало» too: on a phone the menu is the avatar alone, so all of it fits without a scroll. */
-  @media (max-width: 480px) {
-    .wb-app[data-part="chatter"] .wb-side {
-      gap: 4px;
-      padding: 8px 12px;
-    }
-
-    .wb-app[data-part="chatter"] .wb-account__chevron {
-      display: none;
-    }
-
-    /* Three items and more (a newcomer's «Начало» beside «Мои смены» and «Кастомы»): the others by their icon, the
-       open one with its name; every name stays for a screen reader. */
-    .wb-app[data-part="chatter"] .wb-nav:has(> .wb-nav__item:nth-of-type(3)) .wb-nav__item:not([aria-current="page"]) .wb-nav__label {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
-  }
-
+  /* A chatter looks from a phone: the period's arrows and lengths, buttons and fields are each a finger's target. */
   @media (max-width: 640px) {
-    .wb-app[data-part="chatter"] .wb-header__controls,
-    .wb-app[data-part="chatter"] .ui-period {
+    .wb-frame[data-part="chatter"] .wb-header__controls,
+    .wb-frame[data-part="chatter"] .ui-period {
       width: 100%;
     }
 
-    .wb-app[data-part="chatter"] .ui-period {
+    .wb-frame[data-part="chatter"] .ui-period {
       flex-wrap: wrap;
     }
 
-    .wb-app[data-part="chatter"] .ui-period__dates {
+    .wb-frame[data-part="chatter"] .ui-period__dates {
       width: 100%;
       height: 48px;
       padding: 1px;
     }
 
-    .wb-app[data-part="chatter"] .ui-period__arrow {
+    .wb-frame[data-part="chatter"] .ui-period__arrow {
       width: 44px;
       height: 44px;
     }
 
-    .wb-app[data-part="chatter"] .ui-period__label {
+    .wb-frame[data-part="chatter"] .ui-period__label {
       flex: 1;
       align-self: stretch;
       display: grid;
       place-items: center;
     }
 
-    .wb-app[data-part="chatter"] .ui-period .ui-seg {
+    .wb-frame[data-part="chatter"] .ui-period .ui-seg {
       display: flex;
       width: 100%;
       height: 48px;
     }
 
-    .wb-app[data-part="chatter"] .ui-period .ui-seg__item {
+    .wb-frame[data-part="chatter"] .ui-period .ui-seg__item {
       flex: 1 1 auto;
       justify-content: center;
       height: 44px;
       padding: 0 8px;
     }
 
-    .wb-app[data-part="chatter"] .ui-period > div:last-child {
+    .wb-frame[data-part="chatter"] .ui-period > div:last-child {
       width: 100%;
     }
 
     /* Buttons, fields and the items of a menu (it opens over the page, outside the app's frame) for a finger too. */
-    .wb-app[data-part="chatter"] .ui-btn,
-    :root:has(.wb-app[data-part="chatter"]) :is(.ui-menu__item, .ui-popover .ui-btn, .ui-popover .ui-input) {
+    .wb-frame[data-part="chatter"] .ui-btn,
+    :root:has(.wb-frame[data-part="chatter"]) :is(.ui-menu__item, .ui-popover .ui-btn, .ui-popover .ui-input) {
       min-height: 44px;
     }
   }
@@ -876,7 +597,7 @@
    * The page filter's empty place keeps the period in one spot from screen to screen (D15); a chatter has one
    * screen and no filter, so the empty place would only be a hole at the header's end.
    */
-  .wb-app[data-part="chatter"] .wb-header__slot:has(> .wb-filter-slot:only-child) {
+  .wb-frame[data-part="chatter"] .wb-header__slot:has(> .wb-filter-slot:only-child) {
     display: none;
   }
 }

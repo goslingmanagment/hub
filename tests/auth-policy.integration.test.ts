@@ -243,13 +243,14 @@ const MODULE_MATRIX: Array<{
   cells: Record<"anon" | "chatter" | "lead" | "owner", MatrixCell>;
 }> = [
   { module: "identity", url: "/api/v1/auth/me", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
-  { module: "catalog", url: "/api/v1/models", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
+  // A team lead has no Hub: the console's own reads are refused to them (team-lead-reads.ts); Workboard's stay theirs.
+  { module: "catalog", url: "/api/v1/models", cells: { anon: 401, chatter: 403, lead: 403, owner: "allowed" } },
   { module: "ingest", method: "POST", url: "/api/v1/ingest/observations", cells: { anon: 401, chatter: "allowed", lead: 403, owner: 403 } },
   { module: "conversations", url: "/api/v1/pages/lana/fans/9000001/profile", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
-  { module: "finance", url: "/api/v1/pages/lana/revenue?period=7d", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
+  { module: "finance", url: "/api/v1/pages/lana/revenue?period=7d", cells: { anon: 401, chatter: 403, lead: 403, owner: "allowed" } },
   { module: "audience", url: "/api/v1/pages/lana/subscribers", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
   { module: "ai", url: "/api/v1/admin/usage/chatters", cells: { anon: 401, chatter: 403, lead: 403, owner: "allowed" } },
-  { module: "ops", url: "/api/v1/sync/overview", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
+  { module: "ops", url: "/api/v1/sync/overview", cells: { anon: 401, chatter: 403, lead: 403, owner: "allowed" } },
 ];
 
 describe("per-module role matrix (Stage 19)", () => {

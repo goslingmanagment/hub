@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { useLocation } from "react-router";
 import { useInspectAccountLink, useRedeemAccountLink } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { CHATTER_HOME, NEWCOMER_START } from "@/lib/navigation";
+import { WORKBOARD_HOME } from "@/lib/navigation";
 import { CHATTER_SITE_ORIGIN } from "@/lib/sites";
 import {
   LINK_UNUSABLE_MESSAGE,
@@ -38,16 +38,17 @@ function Card({ children }: { children: ReactNode }) {
 
 /**
  * The invitation is used and the newcomer is signed in on this name (the
- * redeem set the session): on to Workboard's «Начало», which shows what is
- * left before the first shift. A page load: Workboard is its own app.
+ * redeem set the session): on to Workboard's home, which knows the role — a
+ * chatter's «Начало» while a step before the first shift is open, a team
+ * lead's Смены. A page load: Workboard is its own app (/join is on the team's name).
  */
-function ToStart() {
+function ToWorkboard() {
   useEffect(() => {
-    window.location.replace(NEWCOMER_START);
+    window.location.replace(WORKBOARD_HOME);
   }, []);
   return (
     <Card>
-      <p role="status" className="entry-text">Пароль сохранён. Открываем «Начало»…</p>
+      <p role="status" className="entry-text">Пароль сохранён. Открываем Workboard…</p>
     </Card>
   );
 }
@@ -103,8 +104,8 @@ export function JoinPage() {
 
   const username = redeem.data?.username ?? link.username;
 
-  // A newcomer goes on to «Начало», signed in; a new password after a reset keeps «Готово» (they know the way).
-  if (redeem.isSuccess && link.kind === "invite") return <ToStart />;
+  // A newcomer goes on to Workboard, signed in; a new password after a reset keeps «Готово» (they know the way).
+  if (redeem.isSuccess && link.kind === "invite") return <ToWorkboard />;
 
   if (redeem.isSuccess) {
     const offers = clientOffersForPlatforms(link.platforms);
@@ -126,7 +127,7 @@ export function JoinPage() {
           </>
         )}
         <div className="entry-after">
-          <a href={`${CHATTER_SITE_ORIGIN}${CHATTER_HOME}`} className="btn entry-submit">Открыть «Мои смены»</a>
+          <a href={`${CHATTER_SITE_ORIGIN}${WORKBOARD_HOME}`} className="btn entry-submit">Открыть «Мои смены»</a>
           <p className="entry-hint">Здесь ваши смены и отчёты по ним.</p>
         </div>
         <p className="entry-text mt-6">

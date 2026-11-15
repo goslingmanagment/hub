@@ -1,4 +1,5 @@
-import { routeSchemas } from "@agency_hub_core/contracts";
+import { productsOf, routeSchemas } from "@agency_hub_core/contracts";
+import { findPersonIdOfLogin, findPersonRowById } from "@agency_hub_core/db";
 import type { FastifyReply } from "fastify";
 
 import { auditCtx } from "../../api/request-auth.ts";
@@ -64,6 +65,27 @@ function clearCookie(reply: {
   });
 }
 
+/** `me`'s products: the login's role, the narrow session, the test realm and the person's role in the registry. */
+async function productsOfPrincipal(app: AppContext, principal: Awaited<ReturnType<ApiModuleContext["auth"]["requirePrincipal"]>>) {
+  const narrow = principal.narrowDeviceTokenId !== undefined;
+  const test = principal.kind !== "agent" && principal.sandbox?.test === true;
+  // The person's role only widens the list (a content manager's ContentOps): a registry that does not answer leaves it
+  // to the login's role rather than failing «who am I».
+  let personRole: string | null = null;
+  if (!narrow && principal.user.role !== "owner") {
+    try {
+      const personId = await findPersonIdOfLogin(app.db, principal.user.id);
+      personRole = personId === null ? null : (await findPersonRowById(app.db, personId))?.role ?? null;
+    } catch {
+      personRole = null;
+    }
+  }
+  return productsOf({ role: principal.user.role, narrow, test, personRole });
+}
+
+/** The origin a request came to (the sign-in's own rule), for the server's Workboard redirect (server.ts). */
+export { requestOriginOf } from "./signin.ts";
+
 export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
@@ -118,6 +140,8 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
       user: principal.authMethod === "device_token" ? userForClosedEnum(principal.user) : principal.user,
       // A narrow web session says so: Workboard opens the team's place alone for it.
       ...(principal.narrowDeviceTokenId === undefined ? {} : { narrow: true as const }),
+      // The products this person crosses between with the frame's switcher (a narrow session: Workboard alone).
+      products: await productsOfPrincipal(appContext, principal),
     };
   });
 

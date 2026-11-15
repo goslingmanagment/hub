@@ -539,7 +539,7 @@ describe("§7 — roles", () => {
       .toBe(200);
   }, 60_000);
 
-  it("team_lead: the dashboard yes, the owner routes no, the clients by assignment", async (context) => {
+  it("team_lead: Workboard yes, the console's own reads and the owner routes no, the clients by assignment", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     const ownerCookie = await loginCookie(setup.server, "dmitriy", OWNER_PASSWORD);
@@ -548,7 +548,9 @@ describe("§7 — roles", () => {
     const leadDevice = await signInDevice(setup.server, "lead", LEAD_PASSWORD, "Desktop · lead-pc");
     const bearer = { authorization: `Bearer ${leadDevice.token}` };
 
-    expect((await get(setup.server, "/api/v1/models", { cookie: leadCookie })).statusCode).toBe(200);
+    // Hub is the owner's: the console's own reads are refused to a team lead, Workboard's stay (team-lead-reads.ts).
+    expect((await get(setup.server, "/api/v1/models", { cookie: leadCookie })).statusCode).toBe(403);
+    expect((await get(setup.server, "/api/v1/team/people", { cookie: leadCookie })).statusCode).toBe(200);
     expect((await get(setup.server, "/api/v1/admin/users", { cookie: leadCookie })).statusCode)
       .toBe(403);
     expect((await get(setup.server, `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "lead")}/links`, { cookie: leadCookie }))

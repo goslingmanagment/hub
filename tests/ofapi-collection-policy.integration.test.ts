@@ -101,14 +101,15 @@ describe("OFAPI effective collection control", () => {
     expect((await testDb.pool.query("select state from page_sync_cursors where page_id=$1 and stream='posts'", [pageId])).rows[0].state).toEqual({ cursor: "saved-123" });
     expect((await getOfapiCollectionSnapshot(app.db, null)).policies.find(row => row.category === "posts_comments")?.usage.actualCreditsToday).toBe(3);
   });
-  it("API permits only owner mutations and scopes team-lead reads to assigned pages", async () => {
+  it("API permits only owner mutations and no team-lead reads (Hub is the owner's)", async () => {
     const owner = await cookie("owner", "owner"); const lead = await cookie("lead", "team_lead");
     const preview = await server!.inject({ method: "POST", url: "/api/v1/admin/ofapi/collection/preview", headers: { cookie: lead }, payload: { expectedRevision: 0, changes: [settings()] } });
     expect(preview.statusCode).toBe(403);
     const scoped = await server!.inject({ method: "GET", url: `/api/v1/admin/ofapi/collection?pageId=${pageId}`, headers: { cookie: lead } });
     expect(scoped.statusCode).toBe(403);
+    // A team lead has no Hub: «OnlyFans API» is the console's alone, refused to them (team-lead-reads.ts).
     const all = await server!.inject({ method: "GET", url: "/api/v1/admin/ofapi/collection", headers: { cookie: lead } });
-    expect(all.statusCode).toBe(200); expect(all.json().pages).toEqual([]); expect(all.json().audit).toEqual([]);
+    expect(all.statusCode).toBe(403);
     const apply = () => server!.inject({ method: "POST", url: "/api/v1/admin/ofapi/collection/apply", headers: { cookie: owner }, payload: { expectedRevision: 0, changes: [settings()] } });
     expect((await apply()).statusCode).toBe(200); expect((await apply()).statusCode).toBe(409);
   });

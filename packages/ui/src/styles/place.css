@@ -1,7 +1,7 @@
 /*
- * The frame of the owner's place (components/Place.tsx, components/Palette.tsx):
- * one sidebar and one search for the console and Workboard. Both apps load this
- * file, so the frame is the same to the pixel in either; it sets its own type
+ * A product's frame (components/Place.tsx, components/Palette.tsx): one sidebar
+ * and one search for Hub and Workboard, each with its own name and accent. Both
+ * apps load this file, so the frame is the same to the pixel in either; it sets its own type
  * (font, size, rendering) and does not inherit an app's body.
  */
 @layer ui {
@@ -65,11 +65,42 @@
     text-decoration: none;
   }
 
+  /* The brand line as the products' switcher: the same line, a button with a quiet chevron. */
+  .ui-side__brand--switch {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--ui-fast);
+  }
+
+  .ui-side__brand--switch > span {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .ui-side__brand--switch:hover,
+  .ui-side__brand--switch[aria-expanded="true"] {
+    background: var(--ui-hover);
+  }
+
+  .ui-side__brand--switch:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: var(--ui-focus-offset);
+  }
+
   .ui-side__mark {
     flex: none;
     width: 24px;
     height: 24px;
     fill: var(--ui-text);
+  }
+
+  /* Workboard's mark carries its accent, the ChatGoose family's clay (tokens.css `[data-product]`); Hub's stays ink-black. */
+  :root[data-product="workboard"] .ui-side__mark {
+    fill: var(--ui-accent);
   }
 
   .ui-side__bar {
@@ -174,16 +205,6 @@
     color: var(--ui-text-3);
     font-size: var(--ui-fs-13);
     line-height: 1;
-  }
-
-  /* The name a group of items is listed under («Команда»): words, not a link. */
-  .ui-side__group {
-    flex: none;
-    padding: 12px 12px 4px;
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-weight: 500;
   }
 
   .ui-side__rule {

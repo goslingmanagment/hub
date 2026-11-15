@@ -124,7 +124,7 @@ export function heldSendItems(sends: ReadonlyArray<{
     pageLabels: [send.pageLabel],
     money: false,
     evidence: { attemptId: send.attemptId, purpose: send.purpose, partIndex: send.partIndex, partCount: send.partCount, sentBy: send.username, sentAt: send.createdAt },
-    link: `/workboard/decisions?send=${encodeURIComponent(send.attemptId)}#held`,
+    link: `/workboard/waiting?send=${encodeURIComponent(send.attemptId)}#held`,
   }));
 }
 
@@ -235,7 +235,7 @@ export function saleQuestionItems(owner: readonly TeamLedgerQuestion[]): MirrorI
     pageLabels: question.pageLabel === "" ? [] : [question.pageLabel],
     money: question.netMills !== null,
     evidence: { questionId: question.id, askedAt: question.askedAt, occurredAt: question.occurredAt, netMills: question.netMills },
-    link: "/workboard/decisions#questions",
+    link: "/workboard/waiting#questions",
   }));
 }
 
@@ -270,7 +270,7 @@ export function reportPostItems(reports: Pick<TeamLedgerReportsResponse, "posts"
       pageLabels: [...new Set(post.pages.map((line) => line.pageLabel).filter((label): label is string => label !== null))],
       money: true,
       evidence: { postId: post.id, reportDate: post.reportDate, postedAt: post.postedAt, flags: post.flags, totalMills: post.totalMills, telegram: post.link },
-      link: "/workboard/decisions#reports",
+      link: "/workboard/waiting#reports",
     }));
 }
 

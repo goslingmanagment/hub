@@ -51,6 +51,7 @@ import {
   UnauthorizedError,
 } from "../services/errors.ts";
 import { sandboxOwnerRefusal } from "../services/sandbox/owner-operations.ts";
+import { teamLeadRefusal } from "../services/team-lead-reads.ts";
 import {
   buildRoutePolicyIndex,
   computeAuthPolicyVerdict,
@@ -62,7 +63,7 @@ import { formatRequestValidationMessage, requestBodyErrorStatus } from "./error-
 import { createRequestAuth, unauthorizedFor } from "./request-auth.ts";
 import { crossOriginRefusal } from "./origin-check.ts";
 import { narrowWebSessionRefusal } from "../services/narrow-web-session.ts";
-import { signinNamesOf } from "../services/signin-handoff.ts";
+import { signinNamesOf, workboardOnConsoleRedirect } from "../services/signin-handoff.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
@@ -71,7 +72,7 @@ import { registerClientRoutes } from "../modules/client/index.ts";
 import { registerAiAdminRoutes, registerAiRoutes } from "../modules/ai/index.ts";
 import { registerConversationsRoutes } from "../modules/conversations/index.ts";
 import { registerFinanceRoutes } from "../modules/finance/index.ts";
-import { registerIdentityRoutes } from "../modules/identity/index.ts";
+import { registerIdentityRoutes, requestOriginOf } from "../modules/identity/index.ts";
 import { registerIngestRoutes } from "../modules/ingest/index.ts";
 import { registerInsightsRoutes } from "../modules/insights/index.ts";
 import { registerOpsRoutes } from "../modules/ops/index.ts";
@@ -387,6 +388,15 @@ export async function buildApiServer(appContext: AppContext) {
   // The pages a change signed in by a cookie is taken from: Hub's own web names (origin-check.ts).
   const signinNames = signinNamesOf(appContext.config);
 
+  // Workboard has one address, the team's name: a Workboard page asked for on the console's name leaves for the same
+  // path there through the one-time hand-off (signin-handoff.ts), before any file or app shell is served.
+  server.addHook("onRequest", async (request, reply) => {
+    const to = workboardOnConsoleRedirect({ here: requestOriginOf(request), method: request.method, url: request.url }, signinNames);
+    if (to === null) return;
+    reply.header("cache-control", "no-store");
+    return reply.redirect(to, 302);
+  });
+
   // Route → declaration table, collected at registration time. Feeds the
   // generated authorization-policy document (and the SDK generator needs the
   // same method/path introspection).
@@ -488,6 +498,11 @@ export async function buildApiServer(appContext: AppContext) {
       const sandboxRefusal = sandboxOwnerRefusal(entry.key, request.auth);
       if (sandboxRefusal) {
         throw sandboxRefusal;
+      }
+      // Hub is the owner's: a team lead keeps Workboard's reads and none of the console's alone (team-lead-reads.ts).
+      const leadRefusal = teamLeadRefusal(entry.key, request.auth);
+      if (leadRefusal) {
+        throw leadRefusal;
       }
     }
 

@@ -1,3 +1,4 @@
+import { productsOf } from "../../contracts/src/products.ts";
 import { hoursAgo, iso, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_OFAPI_OFF_AT, DEMO_PAGES, demoUserByRole, type DemoPage } from "../world.ts";
 import { NEWCOMER, newcomerPages, signedInAsNewcomer } from "./person-start.ts";
@@ -16,6 +17,8 @@ function principal(request: DemoRequest) {
       mustChangePassword: false,
       assignedPages: DEMO_PAGES.filter((page) => user.pages.includes(page.label)).map(pageRef),
     },
+    // The products' switcher, as the server answers (a narrow session: Workboard alone).
+    products: productsOf({ role: user.role, narrow: request.narrow === true }),
   };
 }
 

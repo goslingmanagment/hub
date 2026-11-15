@@ -93,6 +93,11 @@ async function signIn(username: string, origin: string): Promise<string> {
   return cookieSet(response, SESSION_COOKIE_NAME)!;
 }
 
+/** A full session made by the service, not the sign-in route (the route allows 20 sign-ins a minute from one address). */
+async function sessionOf(username: string): Promise<string> {
+  return (await loginWithPassword(app, { username, password: `${username}-password-for-tests` })).sessionToken;
+}
+
 async function me(origin: string, session: string | undefined) {
   return request("GET", `${origin}/api/v1/auth/me`, { cookies: session ? { [SESSION_COOKIE_NAME]: session } : {} });
 }
@@ -151,6 +156,12 @@ beforeAll(async () => {
   await createUserAccount(app, { username: "chatter-a", role: "chatter" }, { source: "cli" });
   users.chatterA = await fixtureUserId(app, "chatter-a");
   await setUserPassword(app, { userId: users.chatterA, password: "chatter-a-password-for-tests" }, { source: "cli" });
+  // A team lead, and a chatter's login the owner works in his own extension (the same person as "owner", below).
+  await createUserAccount(app, { username: "lead", role: "team_lead", password: "lead-password-for-tests" }, { source: "cli" });
+  users.lead = await fixtureUserId(app, "lead");
+  await createUserAccount(app, { username: "owner-chats", role: "chatter" }, { source: "cli" });
+  users.ownerChats = await fixtureUserId(app, "owner-chats");
+  await setUserPassword(app, { userId: users.ownerChats, password: "owner-chats-password-for-tests" }, { source: "cli" });
   server = await buildApiServer(app);
   await server.ready();
 }, 180_000);
@@ -375,6 +386,53 @@ describe("a change made with a cookie", () => {
   });
 });
 
+describe("an owner-only change from either name (Workboard's money is on the team's name now)", () => {
+  it("is taken from the owner on the console's name and on the team's, and refused a team lead by role, never by name", async (context) => {
+    if (!server) return context.skip();
+    const create = (origin: string, session: string, code: string) => request("POST", `${origin}/api/v1/admin/people`, {
+      cookies: { [SESSION_COOKIE_NAME]: session },
+      headers: { origin },
+      payload: { code, displayName: `Person ${code}`, role: "chatter" },
+    });
+    const owner = await sessionOf("owner");
+    for (const [origin, code] of [[HUB, "from-console"], [TEAM, "from-team"]] as const) {
+      const made = await create(origin, owner, code);
+      expect(made.statusCode, `${origin}: ${made.body}`).toBe(200);
+    }
+    const lead = await sessionOf("lead");
+    const refused = await create(TEAM, lead, "from-lead");
+    expect(refused.statusCode, refused.body).toBe(403);
+    expect(refused.json()).not.toMatchObject({ error: "cross_origin" });
+    // Hub is the owner's: a team lead keeps Workboard's reads and none of the console's alone (team-lead-reads.ts).
+    expect((await request("GET", `${TEAM}/api/v1/overview`, { cookies: { [SESSION_COOKIE_NAME]: lead } })).statusCode).toBe(403);
+    expect((await request("GET", `${TEAM}/api/v1/team/people`, { cookies: { [SESSION_COOKIE_NAME]: lead } })).statusCode).toBe(200);
+    expect((await request("GET", `${HUB}/api/v1/overview`, { cookies: { [SESSION_COOKIE_NAME]: owner } })).statusCode).toBe(200);
+  });
+});
+
+describe("Workboard's one address", () => {
+  // The hand-off itself is walked above («the session planted on another name», «the silent try»); here, that a
+  // Workboard address on the console's name enters it, before any app shell is served, with nothing lost.
+  it("answers a Workboard address on the console's name with the hand-off to the same address on the team's", async (context) => {
+    if (!server) return context.skip();
+    for (const session of [await sessionOf("owner"), undefined]) {
+      const first = await request("GET", `${HUB}/workboard/shifts?days=30`, session ? { cookies: { [SESSION_COOKIE_NAME]: session } } : {});
+      expect(first.statusCode).toBe(302);
+      const hop = new URL(String(first.headers.location), HUB);
+      expect(hop.pathname).toBe("/api/v1/auth/sso");
+      expect(Object.fromEntries(hop.searchParams)).toEqual({ to: TEAM, next: `${TEAM}/workboard/shifts?days=30`, silent: "1" });
+    }
+    // On the team's name the app is served as before.
+    expect((await request("GET", `${TEAM}/workboard/shifts`)).statusCode).not.toBe(302);
+  });
+
+  it("names the person's products in `me`: the owner all of them, a team lead and a narrow session Workboard alone", async (context) => {
+    if (!server) return context.skip();
+    expect((await me(HUB, await sessionOf("owner"))).json()).toMatchObject({ products: ["hub", "workboard", "contentops", "tasks", "monitor"] });
+    expect((await me(TEAM, await sessionOf("lead"))).json()).toMatchObject({ products: ["workboard"] });
+  });
+});
+
 describe("/join", () => {
   it("signs the newcomer in on the name the link was opened on", async (context) => {
     if (!server) return context.skip();
@@ -537,6 +595,31 @@ describe("the narrow web session from the extension", () => {
     const revoked = await request("DELETE", `${HUB}/api/v1/auth/device-tokens/current`, { headers: { authorization: `Bearer ${device.token}` } });
     expect(revoked.statusCode, revoked.body).toBe(200);
     expect((await me(TEAM, session)).statusCode).toBe(401);
+  });
+
+  it("leaves the owner's full session as it is when the link is of another login of the same person", async (context) => {
+    if (!server) return context.skip();
+    const owner = await sessionOf("owner");
+    const made = await request("POST", `${HUB}/api/v1/admin/people`, {
+      cookies: { [SESSION_COOKIE_NAME]: owner },
+      headers: { origin: HUB },
+      payload: { code: "the-owner", displayName: "The owner", role: "owner", logins: { add: [users.owner!, users.ownerChats!] } },
+    });
+    expect(made.statusCode, made.body).toBe(200);
+    const full = await sessionOf("owner");
+    const { accepted } = await narrowSession("owner-chats", "owner-chats-password-for-tests", { [SESSION_COOKIE_NAME]: full });
+    expect(cookieSet(accepted, SESSION_COOKIE_NAME)).toBeUndefined();
+    expect((await me(TEAM, full)).json()).toMatchObject({ user: { role: "owner" } });
+    expect((await me(TEAM, full)).json()).not.toHaveProperty("narrow");
+  });
+
+  it("replaces a full session of another person with the narrow one (a shared browser)", async (context) => {
+    if (!server) return context.skip();
+    const someoneElse = await sessionOf("lead");
+    const { accepted } = await narrowSession("chatter-a", "chatter-a-password-for-tests", { [SESSION_COOKIE_NAME]: someoneElse });
+    const narrow = cookieSet(accepted, SESSION_COOKIE_NAME);
+    expect(narrow).toBeDefined();
+    expect((await me(TEAM, narrow)).json()).toMatchObject({ narrow: true, user: { username: "chatter-a" } });
   });
 
   it("leaves a browser's full session of the same person as it is, and its link works once", async (context) => {

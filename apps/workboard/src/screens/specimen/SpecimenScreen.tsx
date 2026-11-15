@@ -432,7 +432,7 @@ export function SpecimenScreen() {
               <Row label="Состояния">
                 <Button variant="primary" loading>Сохраняем…</Button>
                 <Button disabled title="Нечего сохранять">Сохранить</Button>
-                <LinkButton to="/decisions">Открыть решения</LinkButton>
+                <LinkButton to="/waiting">Открыть решения</LinkButton>
               </Row>
               <Row label="Значки и меню">
                 <IconButton icon={Pencil} label="Изменить" variant="secondary" />

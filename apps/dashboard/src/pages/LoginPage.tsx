@@ -3,7 +3,7 @@ import { useNavigate, Navigate, useSearchParams } from "react-router";
 import { PLACES } from "@agency_hub_core/look";
 import { useLogin, useAuthMe } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { afterSignIn, chatterExit, isSigninContinuation, leavesTheConsole, resolveLoginReturnPath, resolveRoleHome, silentSignInTry } from "@/lib/navigation";
+import { afterSignIn, hasHub, isSigninContinuation, leavesTheConsole, resolveLoginReturnPath, resolveRoleHome, silentSignInTry, workboardExit, workboardHere } from "@/lib/navigation";
 import { isChatterSite, isConsoleSite } from "@/lib/sites";
 
 // One sign-in screen for two names. A chatter signs in to the product they
@@ -44,9 +44,9 @@ export function LoginPage() {
   const [leaving, setLeaving] = useState<string | null>(null);
 
   // One door for two names. A sign-in on either is planted on the other on the
-  // way (afterSignIn); a chatter who signs in on the console's name — or comes
-  // to it with a session — is taken to their own place on the team's name,
-  // signed in. Nobody is signed out here.
+  // way (afterSignIn); a team lead or a chatter who signs in on the console's
+  // name — or comes to it with a session — is taken to Workboard on the team's
+  // name, signed in. Nobody is signed out here.
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
@@ -68,8 +68,8 @@ export function LoginPage() {
 
   // Already signed in on this name (not by this form a moment ago: its own
   // success decides where to go, after `me` was read back): another name's way
-  // back goes on; a chatter on the console's name goes to the team's; everyone
-  // else home.
+  // back goes on; someone without Hub on the console's name goes to Workboard
+  // on the team's; everyone else home (a Workboard home on the team's name).
   // A narrow session (opened from the extension, no password) is not a sign-in
   // here: another name does not take it, and its person comes to this page for
   // the password (Workboard's PasswordWayIn) — the form is shown, then back.
@@ -77,7 +77,7 @@ export function LoginPage() {
   if (auth?.user && signedIn && !login.isPending && !login.isSuccess) {
     const home = isSigninContinuation(returnTo)
       ? returnTo
-      : auth.user.role === "chatter" && isConsoleSite() ? chatterExit() : resolveRoleHome(auth.user.role, returnTo);
+      : !hasHub(auth.user.role) && isConsoleSite() ? workboardExit() : workboardHere(resolveRoleHome(auth.user.role, returnTo));
     return leavesTheConsole(home) ? <LeaveFor href={home} /> : <Navigate to={home} replace />;
   }
 

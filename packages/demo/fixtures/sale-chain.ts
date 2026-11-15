@@ -133,7 +133,7 @@ function homeLink(home: Home, sale: Sale, now: Date, viewer: Viewer): Chain["hom
     dispute = open.state === "owner" ? "спор открыт: решает владелец" : `спор открыт: ждёт ответа ${open.side.name} до ${when(open.createdAt + 24 * HOUR_MS)}`;
   }
   return {
-    state, words, link: open !== undefined && viewer.kind === "owner" ? `/workboard/decisions?dispute=${sale.transactionId}#questions` : null,
+    state, words, link: open !== undefined && viewer.kind === "owner" ? `/workboard/waiting?dispute=${sale.transactionId}#questions` : null,
     amountMills: null, kind: home.kind, reason, above, dispute,
   };
 }
@@ -173,7 +173,7 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
   const entry = share.shift;
   const reportDate = entry?.reportDate ?? mskDay(sale.occurredAt);
   const date = dayWords(reportDate);
-  const reportPath = entry === null ? null : own ? `/workboard/my/shifts/${entry.id}?sale=${sale.transactionId}` : `/workboard/shifts/report/${entry.id}?sale=${sale.transactionId}`;
+  const reportPath = entry === null ? null : `/workboard/report/${entry.id}?sale=${sale.transactionId}`;
   const shift: Link = entry === null
     ? { state: "none", words: home.reason === "owner_split" ? "без смены: продажа отдана решением или заявкой" : "смены нет", link: null, amountMills: null }
     : {

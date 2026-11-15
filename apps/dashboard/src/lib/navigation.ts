@@ -1,5 +1,5 @@
 import { pathSegment } from "@agency_hub_core/ui/path";
-import { NO_SILENT_SIGNIN, isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref, silentSignInHref } from "./sites.js";
+import { NO_SILENT_SIGNIN, isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref, silentSignInHref, workboardEntryHref } from "./sites.js";
 import type { Period, PeriodOption } from "../stores/periodStore.js";
 
 /**
@@ -189,13 +189,20 @@ export function buildLoginRoute(returnTo: string): string {
 export const CABINET_PATH = "/account";
 
 /**
- * A chatter's home: «Мои смены» in Workboard (`/workboard/` opens it), their
- * shifts with their reports (owner, 2026-11-10). Another app on this host: a
- * page load, never the console's router.
+ * Hub is the owner's place: a team lead and a chatter have Workboard alone
+ * (products plan §2.2; the server's `productsOf` says the same).
  */
-export const CHATTER_HOME = "/workboard/";
-/** Workboard's «Начало»: where /join lands a newcomer, signed in (package J). */
-export const NEWCOMER_START = "/workboard/start";
+export function hasHub(role: string): boolean {
+  return role === "owner";
+}
+
+/**
+ * Workboard's home (`/workboard/`): a chatter's «Мои смены» (or «Начало» while a
+ * newcomer's step is open), the team's Смены. Another app: a page load, never
+ * the console's router; on the console's name it is on the team's name
+ * (`workboardHere`).
+ */
+export const WORKBOARD_HOME = "/workboard/";
 
 /** «Мои смены» itself: where the cabinet's old tabs lead a chatter. */
 export const CHATTER_SHIFTS = "/workboard/my/shifts";
@@ -214,39 +221,46 @@ export function leavesTheConsole(path: string): boolean {
 }
 
 /**
- * Where a chatter is sent from a console page: their home in Workboard. On the
- * console's own name that home is on the team's name: the chatter is taken
- * there, signed in (the session crosses by a one-time code) — never turned away.
+ * A Workboard address (`/workboard/account`) as this page opens it: Workboard
+ * has one address, the team's name, so from the console's name the browser goes
+ * there through the one-time hand-off, signed in on the way (packages/ui sites.ts).
  */
-export function chatterExit(): string {
-  const team = isConsoleSite() ? peerSiteOrigin() : null;
-  return team === null ? CHATTER_HOME : signInHopHref(team, `${team}${CHATTER_HOME}`);
+export function workboardHere(path: string): string {
+  return typeof window === "undefined" || !isWorkboardPath(path) ? path : workboardEntryHref(window.location.origin, path);
 }
 
 /**
- * Where a signed-in principal belongs. A chatter has no owner page to return
- * to — every one of them answers 403 — so a remembered `next` wins only when it
- * is a place of theirs: Workboard (their part of it, owner 2026-11-10) or the
- * account page; anything else, or nothing, is their home, «Мои смены». On the
- * chatters' site every other role lands in the team's place — Workboard — or
- * on the account page when that was asked for: the console is not served on
- * that name. Elsewhere every other role keeps the requested destination.
+ * Where someone without Hub (a team lead, a chatter) is sent from a console
+ * page: Workboard's home. On the console's own name that home is on the team's
+ * name: they are taken there, signed in (the session crosses by a one-time
+ * code) — never turned away.
+ */
+export function workboardExit(): string {
+  return workboardHere(WORKBOARD_HOME);
+}
+
+/**
+ * Where a signed-in principal belongs. Someone without Hub (a team lead, a
+ * chatter) has no console page to return to, so a remembered `next` wins only
+ * when it is a place of theirs: Workboard or the account page; anything else,
+ * or nothing, is Workboard's home. On the chatters' site the owner too lands in
+ * Workboard or on the account page when that was asked for: the console is not
+ * served on that name. Elsewhere the owner keeps the requested destination.
  * `requested` has passed `resolveLoginReturnPath`: a path of this host.
  */
 export function resolveRoleHome(role: string, requested: string): string {
-  if (role === "chatter") return opensWorkboard(requested) || opensCabinet(requested) ? requested : CHATTER_HOME;
-  if (!isChatterSite()) return requested;
-  return opensWorkboard(requested) || opensCabinet(requested) ? requested : CHATTER_HOME;
+  if (hasHub(role) && !isChatterSite()) return requested;
+  return opensWorkboard(requested) || opensCabinet(requested) ? requested : WORKBOARD_HOME;
 }
 
 /**
- * The address a fresh sign-in loads next. On either of the two names the same
- * session is planted on the other one on the way (one-time code, a few
- * redirects): signed in on one, signed in on the other. A chatter who signed in
- * on the console's name lands in their place on the team's name; a chatter on
- * the team's name stays (the console has nothing for them). A way back into the
- * code's flow (`/api/v1/auth/sso?…`, another name asking) is followed as it is.
- * A local build on one name has no other name: the home itself.
+ * The address a fresh sign-in loads next. On the console's name the session is
+ * planted on the team's name on the way (one-time code, a few redirects):
+ * Workboard is there, and the owner's Hub home stays here. On the team's name
+ * the owner's session is planted on the console's name too; anyone else stays
+ * (Hub has nothing for them). A way back into the code's flow
+ * (`/api/v1/auth/sso?…`, another name asking) is followed as it is. A local
+ * build on one name has no other name: the home itself.
  */
 export function afterSignIn(role: string, requested: string): string {
   if (isSigninContinuation(requested)) return requested;
@@ -254,9 +268,9 @@ export function afterSignIn(role: string, requested: string): string {
   const peer = peerSiteOrigin();
   if (peer === null || typeof window === "undefined") return home;
   if (isConsoleSite()) {
-    return signInHopHref(peer, role === "chatter" ? `${peer}${home}` : `${window.location.origin}${home}`);
+    return signInHopHref(peer, !hasHub(role) || opensWorkboard(home) ? `${peer}${home}` : `${window.location.origin}${home}`);
   }
-  return role === "chatter" ? home : signInHopHref(peer, `${window.location.origin}${home}`);
+  return hasHub(role) ? signInHopHref(peer, `${window.location.origin}${home}`) : home;
 }
 
 /**

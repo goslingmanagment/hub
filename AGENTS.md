@@ -10,13 +10,17 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
   `dev-chatter-password` (client token), pages `dev-lora-of`, `dev-lora-vip-of`.
 - Dashboard: http://localhost:5173 (Vite, proxied to the API) — look at UI changes there, with your own eyes.
 - `pnpm dev:demo` — the dashboard alone, every screen full of an invented agency (no Docker, no API):
-  http://localhost:5180, `/__demo/role?as=team_lead|chatter` switches the role. Data: `packages/demo/fixtures/`
+  http://localhost:5180, `/__demo/role?as=team_lead|chatter` switches the role (a team lead and a chatter land in Workboard). Data: `packages/demo/fixtures/`
   (typed by the contracts, checked by `pnpm typecheck`). A new screen or API field gets its fixture there.
-- Workboard (`apps/workboard`, the owner's team control, served by Hub at `/workboard/`; design system `packages/ui`):
+- Two products, two frames (`packages/ui` Place.tsx; menus from `packages/ui/src/screens.ts` by each row's `product`):
+  Hub = the console (`apps/dashboard`, the owner's alone, `hub.`), Workboard = `apps/workboard` (every role, ONE address:
+  `chatgoose.…/workboard/`; Hub's server sends `hub.…/workboard/*` there through the sign-in hand-off). The product's
+  name opens the switcher (`auth/me` `products`). Old addresses: one table, `packages/ui/src/old-addresses.ts`.
   `pnpm dev:workboard:demo` → http://localhost:5190/workboard/ on the same demo data (`/workboard/__specimen` — every
-  component). Against a local API: `pnpm dev:workboard` (proxies `/api` to :3000). The console's «Команда» is Workboard
-  (every old `/team/*` address redirects there, `apps/dashboard/src/lib/workboard.ts`; only «Анкеты» stay in the console);
-  the console's dev servers proxy `/workboard` to Workboard's (5190 for `dev:demo`, 5191 for `dev:dashboard`), run it beside.
+  component). Against a local API: `pnpm dev:workboard` (proxies `/api` to :3000). The console's dev servers proxy
+  `/workboard` to Workboard's (5190 for `dev:demo`, 5191 for `dev:dashboard`), run it beside. To see both names and the
+  switcher, open the console's demo as `http://hub.localhost:5180` and `http://chatgoose.localhost:5180` (the demo
+  answers the hand-off itself).
 - API: `curl localhost:3000/api/v1/health`; the token and sample requests — `docs/runbooks/client-dev-hub.md`.
 - AI without spending money: `pnpm dev:fake-ai` + the variables from the same runbook.
 

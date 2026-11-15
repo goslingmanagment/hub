@@ -120,4 +120,12 @@
   :root[data-theme="dark"] {
     color-scheme: dark;
   }
+
+  :root[data-product="workboard"] {
+    --ui-accent: light-dark(#ad5230, #e08566);
+    --ui-accent-fill: light-dark(#ad5230, #a8502e);
+    --ui-accent-fill-hover: light-dark(#964526, #b85a35);
+    --ui-accent-soft: light-dark(#fbefe9, #33231b);
+    --ui-accent-line: light-dark(#efc9b8, #61412f);
+  }
 }

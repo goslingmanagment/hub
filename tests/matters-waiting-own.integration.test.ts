@@ -119,7 +119,7 @@ describe("«Ждут вас»: what waits for the viewer themself", () => {
     // Nobody leads customs and nobody holds the team lead's role: the owner's line of «Кастомы», counted.
     const acting = await waiting();
     expect(acting.customOrders).toBe(1);
-    expect(acting.groups.find((group) => group.id === "customs")).toMatchObject({ count: 1, to: "/workboard/decisions#customs" });
+    expect(acting.groups.find((group) => group.id === "customs")).toMatchObject({ count: 1, to: "/workboard/waiting#customs" });
     const withRow = acting.total;
 
     // A person leads customs: the count is nobody's — in no group and no number of the owner's.

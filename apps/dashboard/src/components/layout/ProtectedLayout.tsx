@@ -4,7 +4,7 @@ import { useAuthMe, usePages } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { QueryNotice } from "@/components/shared/QueryNotice";
-import { CABINET_PATH, buildLoginRoute, chatterExit, leavesTheConsole } from "@/lib/navigation";
+import { CABINET_PATH, buildLoginRoute, hasHub, leavesTheConsole, workboardExit } from "@/lib/navigation";
 import { isChatterSite } from "@/lib/sites";
 import { LeaveForWorkboard } from "@/routes/ToWorkboard";
 import { ConsoleFrame } from "./ConsoleFrame.js";
@@ -55,13 +55,12 @@ function ConsoleLayout() {
     </div>
   </div>;
 
-  // Every page behind this layout is owner or team-lead work and
-  // answers 403 for a chatter. Send them to their own home — «Мои смены» in
-  // Workboard, another app: a page load — instead of rendering a console full
-  // of refusals; on the console's own name, to that home on the team's name,
-  // signed in on the way.
-  if (data.user.role === "chatter") {
-    const exit = chatterExit();
+  // Hub is the owner's place (products plan §2.2): a team lead and a chatter
+  // have Workboard alone. Send them to its home — another product: a page
+  // load — instead of a console that is not theirs; on the console's own name,
+  // to that home on the team's name, signed in on the way.
+  if (!hasHub(data.user.role)) {
+    const exit = workboardExit();
     return leavesTheConsole(exit) ? <LeaveForWorkboard href={exit} /> : <Navigate to={exit} replace />;
   }
 
@@ -83,7 +82,7 @@ function ConsoleLayout() {
           <CommandPalette role={data.user.role} onClose={closePalette} />
         </Suspense>
       )}
-      <ConsoleFrame user={data.user} searchOpen={paletteOpen} setSearchOpen={setPaletteOpen}>
+      <ConsoleFrame user={data.user} products={data.products} searchOpen={paletteOpen} setSearchOpen={setPaletteOpen}>
         <main className="app-main">
           <div className="app-content">
             {isPageCatalogError && <div className="mb-6"><p className="mb-1 text-sm font-medium text-text-primary">Каталог страниц</p><QueryNotice error stale={Boolean(pages)} retry={refetchPages} /></div>}

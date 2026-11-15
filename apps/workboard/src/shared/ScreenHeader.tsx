@@ -1,7 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { PeriodControl, useFullWindow } from "@agency_hub_core/ui";
-import { placeName } from "@agency_hub_core/ui/place";
-import { useFace } from "./face.js";
+import { productName } from "@agency_hub_core/ui/place";
 import { Freshness } from "./Freshness.js";
 import { BackLink, type BackTarget } from "./links.js";
 import { PageFilter, PageFilterSlot } from "./PageFilter.js";
@@ -55,11 +54,10 @@ export function ScreenHeader({ title, documentTitle, back, period = false, pageF
   const { spec, period: resolved, today, setPeriod } = usePeriod();
   useFullWindow(fill);
   const name = documentTitle ?? (typeof title === "string" ? title : undefined);
-  // The owner's place is «Hub» in both apps; the team's is «Workboard».
-  const place = placeName(useFace());
+  // The browser tab: the screen, then the product.
   useEffect(() => {
-    if (name) document.title = `${name} — ${place}`;
-  }, [name, place]);
+    if (name) document.title = `${name} — ${productName("workboard")}`;
+  }, [name]);
 
   // The dates themselves stand in the period control; here only what they are compared with.
   const dates = period ? (

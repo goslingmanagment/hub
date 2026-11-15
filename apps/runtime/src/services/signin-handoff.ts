@@ -5,6 +5,7 @@ import {
   findDeviceTokenForUser,
   findHandoffGrant,
   findHandoffSession,
+  findPersonIdOfLogin,
   findUserById,
   insertHandoffCode,
   lockHandoffCode,
@@ -105,6 +106,31 @@ export function signinNamesOf(config: AppContext["config"]): SigninNames {
 /** Where a name leads when nobody said: the team's place for the team's name, the root elsewhere. */
 export function defaultLandingOf(origin: string, names: SigninNames): string {
   return origin === names.team ? `${origin}/workboard/` : `${origin}/`;
+}
+
+/** Workboard's address on a name (apps/workboard/src/base.ts). */
+const WORKBOARD_PATH = "/workboard";
+
+/**
+ * Workboard has ONE address for every role, the team's name (products plan §2.3, decided for the owner): a page of
+ * Workboard asked for on the console's name (`hub.…/workboard/shifts?days=30`, an owner's bookmark) is the same path
+ * on the team's name, reached through the one-time hand-off so the owner arrives signed in; with nobody signed in on
+ * the console's name the hand-off leads straight on (`silent`) and the team's name asks for the sign-in itself. The
+ * browser keeps the address's `#…` across the redirects. Null: not such a page (another name, the API, Workboard's
+ * built files, which a page already open may still ask for, the board's bare frame), or the two names are one.
+ */
+export function workboardOnConsoleRedirect(input: { here: string | null; method: string; url: string }, names: SigninNames): string | null {
+  if (input.here === null || input.here !== names.console || names.console === names.team) return null;
+  if (input.method !== "GET" && input.method !== "HEAD") return null;
+  const path = input.url.split(/[?#]/, 1)[0]!;
+  if (path !== WORKBOARD_PATH && !path.startsWith(`${WORKBOARD_PATH}/`)) return null;
+  if (path.startsWith(`${WORKBOARD_PATH}/assets/`)) return null;
+  // The «Отчёт» board's frame for the extension (`/workboard/frame/*`) is a bare page wherever it is asked for: no
+  // redirect, no sign-in, never `me` (page-headers.ts BOARD_FRAME_PATH).
+  if (path.startsWith(`${WORKBOARD_PATH}/frame/`)) return null;
+  const next = resolveBrowserNext(input.url, names.team, names);
+  if (next === null) return null;
+  return `/api/v1/auth/sso?${new URLSearchParams({ to: names.team, next, silent: "1" }).toString()}`;
 }
 
 /**
@@ -431,9 +457,11 @@ export async function acceptHandoffCode(app: AppContext, input: {
       || !user || user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) {
       return { kind: "refused", reason: "device_gone", next: code.next, clearState: false } as const;
     }
-    // This browser already holds the person's full session here: a narrow one would only take rights away.
+    // This browser already holds the person's full session here: a narrow one would only take rights away. The same
+    // PERSON of the registry, not only the same login: the owner works a chatter's login in his own extension, and
+    // that link must not replace his owner session on the team's name with a chatter's narrow one.
     const current = await liveFullSession(tx, input.currentSessionToken);
-    if (current && current.user.id === user.id) {
+    if (current && await samePerson(dbTx, current.user.id, user.id)) {
       return { kind: "keep", next: code.next } as const;
     }
     const created = await createWebSessionTx(app, dbTx, { userId: user.id, narrowDeviceTokenId: deviceTokenId });
@@ -446,6 +474,13 @@ export async function acceptHandoffCode(app: AppContext, input: {
     });
     return { kind: "cookie", sessionToken: created.sessionToken, expiresAt: created.expiresAt, next: code.next, clearState: false } as const;
   });
+}
+
+/** Two logins of one person of the registry (`person_logins`), or the same login. A login no person holds is itself alone. */
+async function samePerson(db: AppContext["db"], leftUserId: number, rightUserId: number): Promise<boolean> {
+  if (leftUserId === rightUserId) return true;
+  const left = await findPersonIdOfLogin(db, leftUserId);
+  return left !== null && left === await findPersonIdOfLogin(db, rightUserId);
 }
 
 // --- Another machine's server ---------------------------------------------

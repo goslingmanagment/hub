@@ -7,16 +7,15 @@ import { useThemeStore } from "@agency_hub_core/ui/theme";
 import { BASENAME } from "./routes.js";
 
 /**
- * The search of the owner's place in Workboard (Ctrl/⌘K, the frame's field):
- * the same window and the same screens as the console's — every screen of both
- * apps the role opens, by its name and its old words, and the theme. A console
- * screen is a page load; the console's own search also finds pages and fans.
+ * Workboard's search (Ctrl/⌘K, the frame's field): the same window as Hub's —
+ * every Workboard screen the role opens, by its name and its old words, and the
+ * theme. Hub's screens are Hub's search (the switcher crosses there).
  */
 export function WorkboardPalette({ role, onClose }: { role: string; onClose: () => void }) {
   const navigate = useNavigate();
   const setTheme = useThemeStore((state) => state.setTheme);
   const [query, setQuery] = useState("");
-  const commands = useMemo<Command[]>(() => [...screenCommands(role), ...themeCommands()], [role]);
+  const commands = useMemo<Command[]>(() => [...screenCommands(role, "workboard"), ...themeCommands()], [role]);
   const groups = useMemo(() => groupCommands(searchCommands(commands, query)), [commands, query]);
   const found = groups.some((group) => group.items.length > 0);
 
@@ -35,7 +34,7 @@ export function WorkboardPalette({ role, onClose }: { role: string; onClose: () 
       onPick={open}
       onClose={onClose}
       placeholder="Найти: раздел"
-      note={found ? null : "Ничего не нашлось. Ищите по названию раздела; страницы и фанов ищет поиск на экранах консоли."}
+      note={found ? null : "Ничего не нашлось. Ищите по названию раздела."}
     />
   );
 }

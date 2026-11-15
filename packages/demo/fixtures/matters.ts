@@ -79,7 +79,7 @@ function standing(request: DemoRequest): Seed[] {
         kind: "ledger.sale_question", key: `ledger.sale_question:${question.id}`, title: `Вопрос «чья продажа» №${question.id}: ${question.pageLabel}`,
         pages: question.pageLabel ? [question.pageLabel] : [], money: question.netMills !== null,
         evidence: { questionId: question.id, askedAt: question.askedAt, occurredAt: question.occurredAt, netMills: question.netMills },
-        link: "/workboard/decisions#questions", agoMs: now - Date.parse(question.askedAt),
+        link: "/workboard/waiting#questions", agoMs: now - Date.parse(question.askedAt),
       });
     }
   }
@@ -88,7 +88,7 @@ function standing(request: DemoRequest): Seed[] {
   seeds.push({
     kind: "ledger.report_post", key: "ledger.report_post:8812", title: "Пост в «Отчётности» не разобран", pages: ["mia-1"], money: true,
     evidence: { postId: 8812, reportDate: isoAt(now - 3 * DAY).slice(0, 10), postedAt: isoAt(now - 2.2 * DAY), flags: ["unknown_author"], totalMills: 124_200, telegram: CHAT },
-    link: "/workboard/decisions#reports", agoMs: 2.2 * DAY,
+    link: "/workboard/waiting#reports", agoMs: 2.2 * DAY,
   });
   seeds.push({
     kind: "ledger.paid_day_changed", key: "ledger.paid_day_changed:77", title: "Выплаченный день изменён: kate.v", money: true,
@@ -101,7 +101,7 @@ function standing(request: DemoRequest): Seed[] {
       seeds.push({
         kind: "send.held", key: `send.held:${send.attemptId}`, title: `Отправка без отчёта: ${send.pageLabel}`, pages: [send.pageLabel], owner: LEAD_ROLE,
         evidence: { attemptId: send.attemptId, purpose: send.purpose, partIndex: send.partIndex, partCount: send.partCount, sentBy: send.username, sentAt: send.createdAt },
-        link: `/workboard/decisions?send=${send.attemptId}#held`, agoMs: now - Date.parse(send.createdAt),
+        link: `/workboard/waiting?send=${send.attemptId}#held`, agoMs: now - Date.parse(send.createdAt),
       });
     }
   }

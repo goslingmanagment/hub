@@ -1,14 +1,15 @@
 /**
- * The owner's place in one table (design/ia.md §1.3, ecosystem plan §3.1): every
- * screen of the console, and Workboard's screens, with its address, its words,
- * who sees it, what the page filter and the period do on it. The menu of both
- * apps, the tabs, the crumbs, the search and the browser tab all read these
- * tables, so a screen is named the same everywhere and a new one has one place
- * to go: a new screen of «Команда» is one row here (section `team`), and both
- * apps list it.
+ * The agency's screens in one table (design/ia.md §1.3, products plan §7): every
+ * screen of Hub (the console, apps/dashboard) and of Workboard (apps/workboard),
+ * with its product, its address, its words, who sees it, what the page filter
+ * and the period do on it. Each product's menu, the tabs, the crumbs, the search
+ * and the browser tab all read these tables, so a screen is named the same
+ * everywhere and a new one has one place to go: a row here, with its product.
  *
- * Addresses are the host's: a console screen's path, a Workboard screen's under
- * /workboard/ (Hub serves Workboard there on the same name).
+ * A product has its own frame and its own menu (products plan §2.1): Hub's menu
+ * is its sections, Workboard's its screens; no product lists another's screens,
+ * and the frame's switcher crosses between them. Addresses are the host's: a Hub
+ * screen's path, a Workboard screen's under /workboard/ (the team's name).
  */
 import { matchPath } from "react-router";
 import type { Platform } from "@agency_hub_core/shared";
@@ -19,8 +20,14 @@ export type Role = "owner" | "team_lead" | string;
 /** The console's period values (apps/dashboard/src/lib/period.ts names and orders them). */
 export type PeriodKey = "today" | "24h" | "3d" | "7d" | "14d" | "30d" | "90d" | "180d" | "365d" | "all" | "day" | "week" | "month";
 
-/** Which app draws a screen: the console, or Workboard at /workboard/ on the same host (a page load between them). */
+/** Which app draws a screen: the console, or Workboard at /workboard/ (a page load between them). */
 export type ScreenApp = "console" | "workboard";
+
+/**
+ * The product a screen belongs to: Hub (the owner's place, drawn by the console) or Workboard (the chat team's, every
+ * role). The frame and the menu are chosen by the product, never by the role or the host.
+ */
+export type ScreenProduct = "hub" | "workboard";
 
 /** Workboard's address on the host: its Vite `base` (apps/workboard/src/base.ts). */
 export const WORKBOARD_PATH = "/workboard/";
@@ -104,12 +111,12 @@ export interface Screen {
   /** One sentence, up to 90 characters: what question the screen answers. */
   why: string;
   section: SectionId;
-  /** Workboard draws it (absent: the console). */
-  app?: "workboard";
+  /** The product it belongs to: Hub's screens the console draws, Workboard's Workboard. */
+  product: ScreenProduct;
   ownerOnly?: boolean;
   /** Who opens it, when it is not the owner and team leads (`ownerOnly`: the owner alone). */
   roles?: readonly Role[];
-  /** Where a menu lists the screen as itself (a screen of «Команда», Workboard's own menu). */
+  /** Workboard's menu lists its screens as themselves, with this icon. */
   icon?: MenuIcon;
   /** Listed only while this holds; its address opens whatever the menu says. */
   when?: MenuWhen;
@@ -169,7 +176,7 @@ function fansForcedPeriod(search: URLSearchParams): ForcedPeriod | null {
 /** Every screen of the owner's place: the console's, and Workboard's that a menu lists. The order inside a section is the order of its tabs. */
 export const SCREENS: readonly Screen[] = [
   {
-    id: "home", path: "/", label: "Главная", title: "Главная", section: "home",
+    id: "home", path: "/", label: "Главная", title: "Главная", section: "home", product: "hub",
     why: "Сколько заработали, что выросло и упало, что ждёт вас и кто на смене.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
@@ -178,9 +185,10 @@ export const SCREENS: readonly Screen[] = [
   },
 
   // ── Ждут вас ───────────────────────────────────────────────────────────
-  // Workboard's list of what waits for the owner (it was «Решения»); its number is the one read of «Ждут вас» (place.ts).
+  // Workboard's list of what waits (it was «Решения» at /workboard/decisions, which leads here); its number is the one
+  // read of «Ждут вас» (place.ts). Hub's «Ждут вас» opens it too, until Hub has the owner's combined list.
   {
-    id: "waiting", path: "/workboard/decisions", label: "Ждут вас", title: "Ждут вас", section: "waiting", app: "workboard", icon: "Inbox",
+    id: "waiting", path: "/workboard/waiting", label: "Ждут вас", title: "Ждут вас", section: "waiting", product: "workboard", icon: "Inbox",
     why: "Что ждёт вашего слова: вопросы, отчёты смен, кастомы, отправки.",
     pageFilter: "any",
     keywords: "решения чья продажа вопросы генгар отчёты посты не разобраны оплаченный день изменён кастомы проверить отправки зависшие",
@@ -189,13 +197,13 @@ export const SCREENS: readonly Screen[] = [
   // ── Деньги ─────────────────────────────────────────────────────────────
   {
     // The agency's month as the ledger keeps it (its month card, read by Hub); its first line beside Главная's income.
-    id: "money-month", path: "/money/month", label: "Месяц", title: "Деньги: месяц", section: "money", ownerOnly: true,
+    id: "money-month", path: "/money/month", label: "Месяц", title: "Деньги: месяц", section: "money", product: "hub", ownerOnly: true,
     why: "Месяц агентства по ledger: доход страниц, мимо площадок, оборот и где заработанное сейчас.",
     pageFilter: "all",
     keywords: "месяц карточка месяца ledger оборот заработано пришло едет мимо площадок доход страниц",
   },
   {
-    id: "transactions", path: "/money/transactions", label: "Операции", title: "Операции", section: "money",
+    id: "transactions", path: "/money/transactions", label: "Операции", title: "Операции", section: "money", product: "hub",
     why: "Из каких операций сложилась сумма.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
@@ -204,19 +212,19 @@ export const SCREENS: readonly Screen[] = [
     keywords: "транзакции продажи платежи",
   },
   {
-    id: "costs-ai", path: "/money/costs/ai", label: "ИИ", title: "Траты на ИИ", section: "money", ownerOnly: true,
+    id: "costs-ai", path: "/money/costs/ai", label: "ИИ", title: "Траты на ИИ", section: "money", product: "hub", ownerOnly: true,
     why: "Сколько денег на ИИ осталось, сколько ушло, на что и кем.",
     pageFilter: "all",
     keywords: "расходы траты ai anthropic",
   },
   {
-    id: "costs-anthropic", path: "/money/costs/anthropic", label: "Сверка с Anthropic", title: "Сверка с Anthropic", section: "money", ownerOnly: true,
+    id: "costs-anthropic", path: "/money/costs/anthropic", label: "Сверка с Anthropic", title: "Сверка с Anthropic", section: "money", product: "hub", ownerOnly: true,
     why: "Сходится ли учёт Hub со счётом Anthropic.",
     pageFilter: "all",
     keywords: "расходы счёт csv выгрузка",
   },
   {
-    id: "costs-onlyfans-api", path: "/money/costs/onlyfans-api", label: "OnlyFans API", title: "OnlyFans API", section: "money", ownerOnly: true,
+    id: "costs-onlyfans-api", path: "/money/costs/onlyfans-api", label: "OnlyFans API", title: "OnlyFans API", section: "money", product: "hub", ownerOnly: true,
     why: "Сколько кредитов осталось и на что они ушли.",
     pageFilter: "all",
     keywords: "кредиты расходы ofapi",
@@ -224,7 +232,7 @@ export const SCREENS: readonly Screen[] = [
 
   // ── Фаны ───────────────────────────────────────────────────────────────
   {
-    id: "fans", path: "/fans", label: "Платящие", title: "Платящие", section: "fans",
+    id: "fans", path: "/fans", label: "Платящие", title: "Платящие", section: "fans", product: "hub",
     why: "Кто приносит деньги, кто реже покупает, кого вернуть.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
@@ -233,28 +241,28 @@ export const SCREENS: readonly Screen[] = [
     keywords: "топ фанов спендеры",
   },
   {
-    id: "fans-subscribers", path: "/fans/subscribers", label: "Подписчики", title: "Подписчики", section: "fans",
+    id: "fans-subscribers", path: "/fans/subscribers", label: "Подписчики", title: "Подписчики", section: "fans", product: "hub",
     why: "Кто подписан сейчас, у кого кончается, кто без автопродления.",
     pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
     keywords: "подписки",
   },
   {
-    id: "fans-followers", path: "/fans/followers", label: "Фолловеры", title: "Фолловеры", section: "fans",
+    id: "fans-followers", path: "/fans/followers", label: "Фолловеры", title: "Фолловеры", section: "fans", product: "hub",
     why: "Кто фолловит страницу Fansly.",
     pageFilter: "one", onePageWay: "picker", platforms: FANSLY,
     platformsNote: "У страниц OnlyFans нет фолловеров.", platformsShort: "нет фолловеров",
     keywords: "фоллоу",
   },
   {
-    id: "fans-gone", path: "/fans/gone", label: "Ушли", title: "Ушли", section: "fans",
+    id: "fans-gone", path: "/fans/gone", label: "Ушли", title: "Ушли", section: "fans", product: "hub",
     why: "Кто удалил аккаунт или перестал быть виден.",
     pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
     keywords: "удалённые фаны",
   },
   {
-    id: "fans-by-spend", path: "/fans/by-spend", label: "По сумме трат", title: "По сумме трат", section: "fans",
+    id: "fans-by-spend", path: "/fans/by-spend", label: "По сумме трат", title: "По сумме трат", section: "fans", product: "hub",
     why: "Списки фанов по сумме трат: имена для списков на площадке.",
     pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
@@ -262,7 +270,7 @@ export const SCREENS: readonly Screen[] = [
     keywords: "спендеры автосписки",
   },
   {
-    id: "fans-by-spend-list", path: "/fans/by-spend/:bucketKey", label: "Список по сумме трат", title: "Список по сумме трат", section: "fans",
+    id: "fans-by-spend-list", path: "/fans/by-spend/:bucketKey", label: "Список по сумме трат", title: "Список по сумме трат", section: "fans", product: "hub",
     why: "Фаны одной корзины.",
     pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
@@ -271,7 +279,7 @@ export const SCREENS: readonly Screen[] = [
     crumbs: () => [...fansCrumbs(), { label: "По сумме трат", to: "/fans/by-spend" }],
   },
   {
-    id: "fan", path: "/fans/:pageLabel/:platform/:platformUserId", label: "Карточка фана", title: "Карточка фана", section: "fans",
+    id: "fan", path: "/fans/:pageLabel/:platform/:platformUserId", label: "Карточка фана", title: "Карточка фана", section: "fans", product: "hub",
     why: "Кто этот фан для этой страницы и на других страницах.",
     pageFilter: "none",
     period: { class: "shared", options: SPENDER_PERIODS },
@@ -279,7 +287,7 @@ export const SCREENS: readonly Screen[] = [
     crumbs: (params) => fansCrumbs(params.pageLabel),
   },
   {
-    id: "fan-any-page", path: "/fans/:platform/:platformUserId", label: "Карточка фана", title: "Карточка фана", section: "fans",
+    id: "fan-any-page", path: "/fans/:platform/:platformUserId", label: "Карточка фана", title: "Карточка фана", section: "fans", product: "hub",
     why: "Открывает страницу, на которой этот фан потратил больше всего.",
     pageFilter: "none",
     deep: true, notSearched: true,
@@ -288,7 +296,7 @@ export const SCREENS: readonly Screen[] = [
 
   // ── Статистика ─────────────────────────────────────────────────────────
   {
-    id: "stats", path: "/stats", label: "Главное", title: "Статистика Fansly", section: "stats", ownerOnly: true,
+    id: "stats", path: "/stats", label: "Главное", title: "Статистика Fansly", section: "stats", product: "hub", ownerOnly: true,
     why: "Как сам Fansly видит страницу: охват, деньги, подписчики.",
     pageFilter: "one", onePageWay: "substitute", platforms: FANSLY,
     platformsNote: "Статистику Hub собирает только для Fansly.", platformsShort: "только Fansly",
@@ -296,7 +304,7 @@ export const SCREENS: readonly Screen[] = [
     keywords: "аналитика обзор",
   },
   {
-    id: "stats-content", path: "/stats/content", label: "Контент", title: "Статистика Fansly: контент", section: "stats", ownerOnly: true,
+    id: "stats-content", path: "/stats/content", label: "Контент", title: "Статистика Fansly: контент", section: "stats", product: "hub", ownerOnly: true,
     why: "Какие медиа смотрят, покупают и комментируют.",
     pageFilter: "one", onePageWay: "substitute", platforms: FANSLY,
     platformsNote: "Статистику Hub собирает только для Fansly.", platformsShort: "только Fansly",
@@ -304,7 +312,7 @@ export const SCREENS: readonly Screen[] = [
     keywords: "аналитика медиа посты",
   },
   {
-    id: "stats-audience", path: "/stats/audience", label: "Аудитория", title: "Статистика Fansly: аудитория", section: "stats", ownerOnly: true,
+    id: "stats-audience", path: "/stats/audience", label: "Аудитория", title: "Статистика Fansly: аудитория", section: "stats", product: "hub", ownerOnly: true,
     why: "Откуда и когда смотрят, по каким тегам находят.",
     pageFilter: "one", onePageWay: "substitute", platforms: FANSLY,
     platformsNote: "Статистику Hub собирает только для Fansly.", platformsShort: "только Fansly",
@@ -312,7 +320,7 @@ export const SCREENS: readonly Screen[] = [
     keywords: "аналитика теги страны",
   },
   {
-    id: "stats-income", path: "/stats/income", label: "Доход Fansly", title: "Статистика Fansly: доход", section: "stats", ownerOnly: true,
+    id: "stats-income", path: "/stats/income", label: "Доход Fansly", title: "Статистика Fansly: доход", section: "stats", product: "hub", ownerOnly: true,
     why: "Доход по данным Fansly: по дням, по месяцам, сверка с Hub.",
     pageFilter: "one", onePageWay: "substitute", platforms: FANSLY,
     platformsNote: "Статистику Hub собирает только для Fansly.", platformsShort: "только Fansly",
@@ -323,7 +331,7 @@ export const SCREENS: readonly Screen[] = [
   // ── Контент ────────────────────────────────────────────────────────────
   // Публикации and Рассылки here; План, Приехало and Библиотека are ContentOps' (links of the section).
   {
-    id: "publications", path: "/content/publications", label: "Публикации", title: "Публикации", section: "content", ownerOnly: true,
+    id: "publications", path: "/content/publications", label: "Публикации", title: "Публикации", section: "content", product: "hub", ownerOnly: true,
     why: "Что и когда выйдет на стенах страниц.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не публикует в Telegram.",
@@ -332,7 +340,7 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     // A page's mass messages (a tab of the page's card until 12.11).
-    id: "content-mass-messages", path: "/content/mass-messages", label: "Рассылки", title: "Рассылки", section: "content", ownerOnly: true,
+    id: "content-mass-messages", path: "/content/mass-messages", label: "Рассылки", title: "Рассылки", section: "content", product: "hub", ownerOnly: true,
     why: "Массовые рассылки страницы: что ушло, кому и сколько принесло.",
     pageFilter: "one", onePageWay: "picker", platforms: FANSLY,
     platformsNote: "Рассылки Hub собирает только у страниц Fansly.", platformsShort: "только Fansly",
@@ -342,44 +350,44 @@ export const SCREENS: readonly Screen[] = [
   // ── Трафик ─────────────────────────────────────────────────────────────
   // The traffic routine stays on the owner's Mac; its daily summary comes here as an agent's report (package O).
   {
-    id: "traffic", path: "/traffic", label: "Сводка", title: "Трафик: сводка", section: "traffic", ownerOnly: true,
+    id: "traffic", path: "/traffic", label: "Сводка", title: "Трафик: сводка", section: "traffic", product: "hub", ownerOnly: true,
     why: "Каналы трафика: что работает и что ждёт решения. Сводку пишет агент трафика.",
     pageFilter: "none",
     keywords: "трафик каналы подрядчики циклы доска сводка агент",
   },
   {
     // A page's promo (a tab of the page's card until 12.11): Fansly's own, or the OnlyFans links as of 1 November.
-    id: "traffic-promo", path: "/traffic/promo", label: "Продвижение", title: "Трафик: продвижение", section: "traffic", ownerOnly: true,
+    id: "traffic-promo", path: "/traffic/promo", label: "Продвижение", title: "Трафик: продвижение", section: "traffic", product: "hub", ownerOnly: true,
     why: "Ссылки и промо страницы: откуда пришли подписчики и деньги.",
     pageFilter: "one", onePageWay: "picker", platforms: REPORTED,
     platformsNote: "Hub не собирает данные Telegram.",
     keywords: "продвижение промо ссылки трекинг кампании маркетинг ofapi marketing",
   },
 
-  // ── Команда: Workboard ─────────────────────────────────────────────────
-  // The team's screens are Workboard's (owner, 2026-11-10). A row here is an item under «Команда» for the
-  // owner and team leads, and an item of Workboard's own menu for whoever opens it there (a chatter: «Мои смены»).
+  // ── Workboard ──────────────────────────────────────────────────────────
+  // The chat team's product, every role's (products plan §2.3). A row here is an item of Workboard's menu, in this
+  // order, for whoever opens it (a chatter: «Мои смены»); Hub lists none of them.
   {
     // A newcomer's way to the first shift (package J), and their home until every step is done.
-    id: "start", path: "/workboard/start", label: "Начало", title: "Начало", section: "team", app: "workboard", roles: ["chatter"], icon: "Flag", when: "newcomer",
+    id: "start", path: "/workboard/start", label: "Начало", title: "Начало", section: "team", product: "workboard", roles: ["chatter"], icon: "Flag", when: "newcomer",
     why: "Шаги до первой смены: расширение, вход, страницы, первая работа, куда платить.",
     pageFilter: "none",
     notSearched: true,
   },
   {
-    id: "my-shifts", path: "/workboard/my/shifts", label: "Мои смены", title: "Мои смены", section: "team", app: "workboard", roles: ["chatter"], icon: "CalendarClock",
+    id: "my-shifts", path: "/workboard/my/shifts", label: "Мои смены", title: "Мои смены", section: "team", product: "workboard", roles: ["chatter"], icon: "CalendarClock",
     why: "Свои смены и отчёты по ним.",
     pageFilter: "none",
     notSearched: true,
   },
   {
-    id: "shifts", path: "/workboard/shifts", label: "Смены", title: "Смены", section: "team", app: "workboard", icon: "CalendarClock",
+    id: "shifts", path: "/workboard/shifts", label: "Смены", title: "Смены", section: "team", product: "workboard", icon: "CalendarClock",
     why: "Кто работал, сколько продал и как работал.",
     pageFilter: "any",
     keywords: "команда заработок кто работал на смене неделя журнал разбор смены без автора",
   },
   {
-    id: "people", path: "/workboard/people", label: "Люди", title: "Люди", section: "team", app: "workboard", icon: "Users",
+    id: "people", path: "/workboard/people", label: "Люди", title: "Люди", section: "team", product: "workboard", icon: "Users",
     why: "Кто в команде: работа, продажи, доступ и входы, график и условия.",
     pageFilter: "any",
     keywords: "чаттеры сотрудники кабинет чаттера числа доступ приглашение пользователи устройства логины страницы",
@@ -387,13 +395,13 @@ export const SCREENS: readonly Screen[] = [
   {
     // Заказы кастомов (package I): the owner and the person who leads customs see every order, a team lead and a
     // chatter the orders of their pages (Hub decides).
-    id: "customs", path: "/workboard/customs", label: "Кастомы", title: "Кастомы", section: "team", app: "workboard", roles: ["owner", "team_lead", "chatter"], icon: "Package",
+    id: "customs", path: "/workboard/customs", label: "Кастомы", title: "Кастомы", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"], icon: "Package",
     why: "Заказы кастомов: что заказано, оплачено, снято и отдано.",
     pageFilter: "any",
     keywords: "кастомы заказы кастомов съёмка видео фото ведущий кастомы отдать оплачен",
   },
   {
-    id: "sales", path: "/workboard/sales", label: "Что продаёт", title: "Что продаёт", section: "team", app: "workboard", icon: "TrendingUp",
+    id: "sales", path: "/workboard/sales", label: "Что продаёт", title: "Что продаёт", section: "team", product: "workboard", icon: "TrendingUp",
     why: "Что и по какой цене покупают, как быстро отвечают.",
     pageFilter: "any",
     // «Возврат фанов» and «Приветствия и охват» left its tabs on 12.11 (0 opened in 14 days): their addresses still open.
@@ -401,22 +409,22 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     // People's pay is the owner's alone (the ledger's answer reaches no other session).
-    id: "payouts", path: "/workboard/payouts", label: "Выплаты", title: "Выплаты", section: "team", app: "workboard", ownerOnly: true, icon: "Banknote",
+    id: "payouts", path: "/workboard/payouts", label: "Выплаты", title: "Выплаты", section: "team", product: "workboard", ownerOnly: true, icon: "Banknote",
     why: "Сколько начислено, к выплате и выплачено каждому.",
     pageFilter: "any",
     keywords: "долги начислено выплачено отчёты смен отчётность сумма изменена пост не разобран",
   },
 
   // ── Анкеты ─────────────────────────────────────────────────────────
-  // The questionnaires stayed in the console when «Команда» became Workboard, at their old addresses.
+  // The questionnaires are Hub's: they stayed in the console when «Команда» became Workboard, at their old addresses.
   {
-    id: "team-applications", path: "/team/applications", label: "Анкеты", title: "Анкеты моделей", section: "applications", ownerOnly: true,
+    id: "team-applications", path: "/team/applications", label: "Анкеты", title: "Анкеты моделей", section: "applications", product: "hub", ownerOnly: true,
     why: "Кто сейчас заполняет анкету модели на сайте, кто бросил, кто отправил.",
     pageFilter: "none",
     keywords: "анкета модели сайт найм заявки кандидатки",
   },
   {
-    id: "team-application", path: "/team/applications/:ref", label: "Анкета", title: "Анкета модели", section: "applications", ownerOnly: true,
+    id: "team-application", path: "/team/applications/:ref", label: "Анкета", title: "Анкета модели", section: "applications", product: "hub", ownerOnly: true,
     why: "Ответы одной анкеты по разделам.",
     pageFilter: "none",
     deep: true, notSearched: true,
@@ -425,13 +433,13 @@ export const SCREENS: readonly Screen[] = [
 
   // ── Настройки ──────────────────────────────────────────────────────────
   {
-    id: "settings-pages", path: "/settings/pages", label: "Модели и страницы", title: "Модели и страницы", section: "settings", ownerOnly: true,
+    id: "settings-pages", path: "/settings/pages", label: "Модели и страницы", title: "Модели и страницы", section: "settings", product: "hub", ownerOnly: true,
     why: "Из чего состоит агентство: модели, их страницы и кто на них работает.",
     pageFilter: "none",
     keywords: "агентство модели страницы каталог добавить страницу отключить браузеры страниц",
   },
   {
-    id: "settings-connect", path: "/settings/pages/connect", label: "Подключить страницу Fansly", title: "Подключить страницу Fansly", section: "settings", ownerOnly: true,
+    id: "settings-connect", path: "/settings/pages/connect", label: "Подключить страницу Fansly", title: "Подключить страницу Fansly", section: "settings", product: "hub", ownerOnly: true,
     why: "Прокси и черновик браузера новой страницы.",
     pageFilter: "none",
     deep: true,
@@ -439,7 +447,7 @@ export const SCREENS: readonly Screen[] = [
     crumbs: () => [{ label: "Настройки", to: "/settings/pages" }, { label: "Модели и страницы", to: "/settings/pages" }],
   },
   {
-    id: "settings-connect-profile", path: "/settings/pages/connect/:profileId", label: "Подключить страницу Fansly", title: "Подключить страницу Fansly", section: "settings", ownerOnly: true,
+    id: "settings-connect-profile", path: "/settings/pages/connect/:profileId", label: "Подключить страницу Fansly", title: "Подключить страницу Fansly", section: "settings", product: "hub", ownerOnly: true,
     why: "Браузер на сервере, выходной IP, вход, создать страницу.",
     pageFilter: "none",
     deep: true, notSearched: true,
@@ -447,7 +455,7 @@ export const SCREENS: readonly Screen[] = [
   },
   {
     // A page's own Fansly screens (they were tabs of the page's card, which left on 12.11): under its row here.
-    id: "settings-page-account", path: "/settings/pages/:pageLabel/account", label: "Аккаунт на Fansly", title: "Аккаунт на Fansly", section: "settings", ownerOnly: true,
+    id: "settings-page-account", path: "/settings/pages/:pageLabel/account", label: "Аккаунт на Fansly", title: "Аккаунт на Fansly", section: "settings", product: "hub", ownerOnly: true,
     why: "Как страница выглядит и как настроена на самом Fansly.",
     pageFilter: "none", platforms: FANSLY,
     platformsNote: "Этот экран есть только у страниц Fansly.",
@@ -455,7 +463,7 @@ export const SCREENS: readonly Screen[] = [
     crumbs: (params) => pageCrumbs(params.pageLabel),
   },
   {
-    id: "settings-page-login", path: "/settings/pages/:pageLabel/login", label: "Вход в Fansly", title: "Вход в Fansly", section: "settings", ownerOnly: true,
+    id: "settings-page-login", path: "/settings/pages/:pageLabel/login", label: "Вход в Fansly", title: "Вход в Fansly", section: "settings", product: "hub", ownerOnly: true,
     why: "Браузер страницы входит в Fansly со своего устройства и IP.",
     pageFilter: "none", platforms: FANSLY,
     platformsNote: "Этот экран есть только у страниц Fansly.",
@@ -463,46 +471,46 @@ export const SCREENS: readonly Screen[] = [
     crumbs: (params) => pageCrumbs(params.pageLabel),
   },
   {
-    id: "settings-personas", path: "/settings/ai/personas", label: "Персоны", title: "Персоны ИИ", section: "settings", ownerOnly: true,
+    id: "settings-personas", path: "/settings/ai/personas", label: "Персоны", title: "Персоны ИИ", section: "settings", product: "hub", ownerOnly: true,
     why: "Образы для ответов ИИ: их пишет владелец, выбирают чаттеры.",
     pageFilter: "none",
     keywords: "ai персоны ии инструкция промпт образ первые сообщения hi",
   },
   {
-    id: "settings-persona", path: "/settings/ai/personas/:key", label: "Персона", title: "Персона", section: "settings", ownerOnly: true,
+    id: "settings-persona", path: "/settings/ai/personas/:key", label: "Персона", title: "Персона", section: "settings", product: "hub", ownerOnly: true,
     why: "Образ для ответов ИИ: его выбирают чаттеры.",
     pageFilter: "none",
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Настройки", to: "/settings/pages" }, { label: "ИИ", to: "/settings/ai/personas" }, { label: "Персоны", to: "/settings/ai/personas" }],
   },
   {
-    id: "settings-new-persona", path: "/settings/ai/new-persona", label: "Новая персона", title: "Новая персона", section: "settings", ownerOnly: true,
+    id: "settings-new-persona", path: "/settings/ai/new-persona", label: "Новая персона", title: "Новая персона", section: "settings", product: "hub", ownerOnly: true,
     why: "Новый образ для ответов ИИ.",
     pageFilter: "none",
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Настройки", to: "/settings/pages" }, { label: "ИИ", to: "/settings/ai/personas" }, { label: "Персоны", to: "/settings/ai/personas" }],
   },
   {
-    id: "settings-features", path: "/settings/ai/features", label: "Функции ИИ", title: "Функции ИИ", section: "settings", ownerOnly: true,
+    id: "settings-features", path: "/settings/ai/features", label: "Функции ИИ", title: "Функции ИИ", section: "settings", product: "hub", ownerOnly: true,
     why: "Что из ИИ включено и какая модель, усилие и окно у каждой функции.",
     pageFilter: "none",
     keywords: "возможности функции ai модель усилие effort окно голосовые досье факты",
   },
   {
-    id: "settings-feature", path: "/settings/ai/features/:featureId", label: "Параметры функции", title: "Параметры функции", section: "settings", ownerOnly: true,
+    id: "settings-feature", path: "/settings/ai/features/:featureId", label: "Параметры функции", title: "Параметры функции", section: "settings", product: "hub", ownerOnly: true,
     why: "Все параметры одной функции и что будет, если её отключить.",
     pageFilter: "none",
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Настройки", to: "/settings/pages" }, { label: "ИИ", to: "/settings/ai/personas" }, { label: "Функции ИИ", to: "/settings/ai/features" }],
   },
   {
-    id: "settings-limits", path: "/settings/ai/limits", label: "Лимиты", title: "Лимиты ИИ на день", section: "settings", ownerOnly: true,
+    id: "settings-limits", path: "/settings/ai/limits", label: "Лимиты", title: "Лимиты ИИ на день", section: "settings", product: "hub", ownerOnly: true,
     why: "Сколько ИИ может стоить человеку за день по Москве.",
     pageFilter: "none",
     keywords: "ai лимиты личный лимит котёл общий запас",
   },
   {
-    id: "settings-notifications", path: "/settings/notifications", label: "Оповещения", title: "Оповещения в Telegram", section: "settings", ownerOnly: true,
+    id: "settings-notifications", path: "/settings/notifications", label: "Оповещения", title: "Оповещения в Telegram", section: "settings", product: "hub", ownerOnly: true,
     why: "Куда и что присылает Hub в Telegram, и ежедневный отчёт о доходе.",
     pageFilter: "none",
     keywords: "уведомления telegram телеграм бот отчёт сбои оповещения",
@@ -510,57 +518,57 @@ export const SCREENS: readonly Screen[] = [
 
   // ── Система ────────────────────────────────────────────────────────────
   {
-    id: "system-collection", path: "/system/collection", label: "Сбор данных", title: "Сбор данных", section: "system", ownerOnly: true,
+    id: "system-collection", path: "/system/collection", label: "Сбор данных", title: "Сбор данных", section: "system", product: "hub", ownerOnly: true,
     why: "Все страницы: собирается ли и что нажать.",
     pageFilter: "any",
     keywords: "синк синхронизация fansly onlyfans",
   },
   {
-    id: "system-collection-page", path: "/system/collection/:pageLabel", label: "Сбор данных страницы", title: "Сбор данных страницы", section: "system", ownerOnly: true,
+    id: "system-collection-page", path: "/system/collection/:pageLabel", label: "Сбор данных страницы", title: "Сбор данных страницы", section: "system", product: "hub", ownerOnly: true,
     why: "Что у этой страницы не собирается и как исправить.",
     pageFilter: "none",
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Система", to: "/system/collection" }, { label: "Сбор данных", to: "/system/collection" }],
   },
   {
-    id: "system-failures", path: "/system/failures", label: "Сбои", title: "Сбои", section: "system", ownerOnly: true,
+    id: "system-failures", path: "/system/failures", label: "Сбои", title: "Сбои", section: "system", product: "hub", ownerOnly: true,
     why: "Что сломалось, что делать и где чинить.",
     pageFilter: "any",
     keywords: "инциденты аномалии",
   },
   {
-    id: "system-history-requests", path: "/system/history-requests", label: "Заявки на историю", title: "Заявки на историю", section: "system", ownerOnly: true,
+    id: "system-history-requests", path: "/system/history-requests", label: "Заявки на историю", title: "Заявки на историю", section: "system", product: "hub", ownerOnly: true,
     why: "Заявки агентов на старую переписку: что ждёт решения и что уже было.",
     pageFilter: "any",
     keywords: "дозагрузка истории",
   },
   {
-    id: "system-agent-keys", path: "/system/agent-keys", label: "Агенты и ключи", title: "Агенты и ключи", section: "system", ownerOnly: true,
+    id: "system-agent-keys", path: "/system/agent-keys", label: "Агенты и ключи", title: "Агенты и ключи", section: "system", product: "hub", ownerOnly: true,
     why: "Ключи агентов и их права.",
     pageFilter: "none",
     keywords: "ключи агентов",
   },
   {
-    id: "system-reports", path: "/system/reports", label: "Отчёты агентов", title: "Отчёты агентов", section: "system", ownerOnly: true,
+    id: "system-reports", path: "/system/reports", label: "Отчёты агентов", title: "Отчёты агентов", section: "system", product: "hub", ownerOnly: true,
     why: "Страницы, которые публикуют агенты: что есть и когда обновлялось.",
     pageFilter: "none",
     keywords: "отчёты агентов доски сводки страницы агентов трафик",
   },
   {
-    id: "system-report", path: "/system/reports/:slug", label: "Отчёт агента", title: "Отчёт агента", section: "system", ownerOnly: true,
+    id: "system-report", path: "/system/reports/:slug", label: "Отчёт агента", title: "Отчёт агента", section: "system", product: "hub", ownerOnly: true,
     why: "Страница, которую опубликовал агент.",
     pageFilter: "none",
     deep: true, notSearched: true,
     crumbs: () => [{ label: "Система", to: "/system/collection" }, { label: "Отчёты агентов", to: "/system/reports" }],
   },
   {
-    id: "system-state", path: "/system/state", label: "Состояние", title: "Состояние", section: "system", ownerOnly: true,
+    id: "system-state", path: "/system/state", label: "Состояние", title: "Состояние", section: "system", product: "hub", ownerOnly: true,
     why: "Всё, что работает само: на сервере, на маке и на ПК, и копии. Проблемы наверху.",
     pageFilter: "none",
     keywords: "рутины копии бэкапы мак openclaw launchd задачи расписание здоровье",
   },
   {
-    id: "system-people-messages", path: "/system/people-messages", label: "Сообщения людям", title: "Сообщения людям", section: "system", ownerOnly: true,
+    id: "system-people-messages", path: "/system/people-messages", label: "Сообщения людям", title: "Сообщения людям", section: "system", product: "hub", ownerOnly: true,
     why: "Что сервер сам написал бы людям в Telegram: каждый вид, его текст и что задержано. Включается по одному.",
     pageFilter: "none",
     keywords: "telegram телеграм бот отправка напоминания отчётность карточка выплата приглашение",
@@ -568,7 +576,7 @@ export const SCREENS: readonly Screen[] = [
   {
     // Six screens until 12.11 (five never opened in 14 days): one page of sections now, each at its anchor.
     // A team lead opens it too and gets «Медиа» and «Выгрузки» alone, as before.
-    id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "OnlyFans API", title: "OnlyFans API", section: "system",
+    id: "system-onlyfans-api", path: "/system/onlyfans-api", label: "OnlyFans API", title: "OnlyFans API", section: "system", product: "hub",
     why: "OnlyFans API: включён ли, что собирал и что с ним можно сделать.",
     pageFilter: "none",
     keywords: "ofapi onlyfans",
@@ -584,7 +592,7 @@ export const SCREENS: readonly Screen[] = [
   {
     // Six screens until 12.11 (none opened in 14 days): one page of sections now, each at its anchor;
     // `#config-<key>` opens «Все параметры» on that key. «Расширение: замеры» keeps its own period, drawn in its section.
-    id: "system-dev", path: "/system/dev", label: "Разработчик", title: "Разработчик", section: "system", ownerOnly: true,
+    id: "system-dev", path: "/system/dev", label: "Разработчик", title: "Разработчик", section: "system", product: "hub", ownerOnly: true,
     why: "Для разработчика: журнал сбора, очередь, база, замеры расширения и все параметры сервера.",
     pageFilter: "none",
     period: { class: "own", options: ["today", "7d", "30d"], default: "7d" },
@@ -599,7 +607,7 @@ export const SCREENS: readonly Screen[] = [
     ],
   },
   {
-    id: "system-dev-run", path: "/system/dev/log/:runId", label: "Запуск сбора", title: "Запуск сбора", section: "system", ownerOnly: true,
+    id: "system-dev-run", path: "/system/dev/log/:runId", label: "Запуск сбора", title: "Запуск сбора", section: "system", product: "hub", ownerOnly: true,
     why: "Один запуск сбора: события и обращения к площадке.",
     pageFilter: "none",
     deep: true, notSearched: true,
@@ -677,9 +685,9 @@ export function screenVisible(screen: Screen, role: Role): boolean {
   return !screen.ownerOnly || role === "owner";
 }
 
-/** The app that draws a screen. */
-export function appOf(screen: Pick<Screen, "app">): ScreenApp {
-  return screen.app ?? "console";
+/** The app that draws a screen: Hub's screens are the console's. */
+export function appOf(screen: Pick<Screen, "product">): ScreenApp {
+  return screen.product === "workboard" ? "workboard" : "console";
 }
 
 /** The app an address of the host belongs to: Workboard's are under /workboard/. */
@@ -709,13 +717,10 @@ export interface Section {
   /** The screen header's title: the section, not the tab. */
   title: string;
   icon: MenuIcon;
+  /** The product whose menu lists it: Hub's sections are its menu; Workboard's one section holds its screens. */
+  product: ScreenProduct;
   ownerOnly?: boolean;
-  /**
-   * The menu lists the section's screens as items of their own, under the
-   * section's name (a heading, not a link): «Команда». Its tabs are its screens.
-   */
-  group?: boolean;
-  /** The menu item's number (one read for both apps, place.ts). */
+  /** The menu item's number (one read in both products, place.ts). */
   count?: MenuCount;
   /** Under the rule at the bottom of the menu. */
   lower?: boolean;
@@ -723,7 +728,7 @@ export interface Section {
    * The section's places elsewhere, after its tabs. ContentOps': they open it on
    * the model of the chosen page (it keeps a model's content at `/<model>/<path>`).
    * Workboard's: a list whose one place is a Workboard screen, linked from here
-   * (a page load on this host), for the roles that open it.
+   * (another product: the team's name), for the roles that open it.
    */
   outside?:
     | { site: "contentops"; label: string; links: readonly { label: string; path: string }[] }
@@ -736,31 +741,32 @@ const tab = (id: string, label: string, ...screens: string[]): SectionTab => ({ 
 /** A tab under «Ещё» (L2, 12.11: not opened in 14 days, not a duplicate). */
 const moreTab = (id: string, label: string, ...screens: string[]): SectionTab => ({ id, label, screens, more: true });
 
-/** The menu's order is this table's: Главная, Ждут вас, the console's sections, «Команда» last above the rule. */
+/** Hub's menu is this table's order (Главная, Ждут вас, its sections, then Настройки and Система under the rule); then Workboard's section. */
 export const SECTIONS: readonly Section[] = [
   {
-    id: "home", label: "Главная", title: "Главная", icon: "House", nav: "none",
+    id: "home", label: "Главная", title: "Главная", icon: "House", product: "hub", nav: "none",
     tabs: [tab("home", "Главная", "home")],
   },
   {
-    // One list of what waits for the owner (Workboard's, at its old address), right under Главная.
-    id: "waiting", label: "Ждут вас", title: "Ждут вас", icon: "Inbox", nav: "none", count: "waiting",
+    // What waits for the owner, right under Главная. For now it opens Workboard's list (another product, a page load
+    // on the team's name), with the same number; Hub's own combined list comes later.
+    id: "waiting", label: "Ждут вас", title: "Ждут вас", icon: "Inbox", product: "hub", nav: "none", count: "waiting",
     tabs: [tab("waiting", "Ждут вас", "waiting")],
   },
   {
-    id: "money", label: "Деньги", title: "Деньги", icon: "Wallet", nav: "tabs",
+    id: "money", label: "Деньги", title: "Деньги", icon: "Wallet", product: "hub", nav: "tabs",
     tabs: [
       tab("month", "Месяц", "money-month"),
       tab("costs", "Расходы", "costs-ai", "costs-anthropic", "costs-onlyfans-api"),
       tab("transactions", "Операции", "transactions"),
     ],
-    // The shift reports' list has one place, Команда → Выплаты → Отчёты (L2, 12.11); Деньги links it.
+    // The shift reports' list has one place, Workboard → Выплаты → Отчёты (L2, 12.11); Деньги links it.
     outside: { site: "workboard", links: [
-      { label: "Отчёты смен", to: "/workboard/payouts?view=reports", title: "Отчёты смен в Команда, Выплаты", ownerOnly: true },
+      { label: "Отчёты смен", to: "/workboard/payouts?view=reports", title: "Отчёты смен в Workboard, Выплаты", ownerOnly: true },
     ] },
   },
   {
-    id: "fans", label: "Фаны", title: "Фаны", icon: "Heart", nav: "tabs",
+    id: "fans", label: "Фаны", title: "Фаны", icon: "Heart", product: "hub", nav: "tabs",
     tabs: [
       tab("fans", "Платящие", "fans", "fan", "fan-any-page"),
       tab("by-spend", "По сумме трат", "fans-by-spend", "fans-by-spend-list"),
@@ -770,7 +776,8 @@ export const SECTIONS: readonly Section[] = [
     ],
   },
   {
-    id: "stats", label: "Статистика", title: "Статистика Fansly", icon: "ChartColumn", ownerOnly: true, nav: "tabs",
+    // The pages' Fansly statistics (it was «Статистика»; its screens and addresses are the same).
+    id: "stats", label: "Страницы", title: "Страницы", icon: "ChartColumn", product: "hub", ownerOnly: true, nav: "tabs",
     tabs: [
       tab("stats", "Главное", "stats"),
       tab("income", "Доход Fansly", "stats-income"),
@@ -780,7 +787,7 @@ export const SECTIONS: readonly Section[] = [
   },
   {
     // «Публикации» until 12.11: the content, the hub's part and ContentOps' (the model of the chosen page).
-    id: "content", label: "Контент", title: "Контент", icon: "Newspaper", ownerOnly: true, nav: "tabs",
+    id: "content", label: "Контент", title: "Контент", icon: "Newspaper", product: "hub", ownerOnly: true, nav: "tabs",
     tabs: [tab("publications", "Публикации", "publications"), tab("mass-messages", "Рассылки", "content-mass-messages")],
     outside: { site: "contentops", label: "ContentOps", links: [
       { label: "План", path: "plan" },
@@ -789,21 +796,15 @@ export const SECTIONS: readonly Section[] = [
     ] },
   },
   {
-    id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", ownerOnly: true, nav: "tabs",
+    id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", product: "hub", ownerOnly: true, nav: "tabs",
     tabs: [tab("summary", "Сводка", "traffic"), tab("promo", "Продвижение", "traffic-promo")],
   },
   {
-    id: "applications", label: "Анкеты", title: "Анкеты моделей", icon: "ClipboardList", ownerOnly: true, nav: "none",
+    id: "applications", label: "Анкеты", title: "Анкеты моделей", icon: "ClipboardList", product: "hub", ownerOnly: true, nav: "none",
     tabs: [tab("applications", "Анкеты", "team-applications", "team-application")],
   },
   {
-    // Workboard's screens, listed in place (owner, 2026-11-10: the team's control). Each row of the table's
-    // section «team» is one item here, in the table's order.
-    id: "team", label: "Команда", title: "Команда", icon: "Users", nav: "none", group: true,
-    tabs: SCREENS.filter((screen) => screen.section === "team").map((screen) => tab(screen.id, screen.label, screen.id)),
-  },
-  {
-    id: "settings", label: "Настройки", title: "Настройки", icon: "Settings", ownerOnly: true, lower: true, nav: "side",
+    id: "settings", label: "Настройки", title: "Настройки", icon: "Settings", product: "hub", ownerOnly: true, lower: true, nav: "side",
     tabs: [
       tab("pages", "Модели и страницы", "settings-pages", "settings-connect", "settings-connect-profile", "settings-page-account", "settings-page-login"),
       tab("ai", "ИИ", "settings-personas", "settings-persona", "settings-new-persona", "settings-features", "settings-feature", "settings-limits"),
@@ -811,7 +812,7 @@ export const SECTIONS: readonly Section[] = [
     ],
   },
   {
-    id: "system", label: "Система", title: "Система", icon: "Wrench", ownerOnly: true, lower: true, nav: "side",
+    id: "system", label: "Система", title: "Система", icon: "Wrench", product: "hub", ownerOnly: true, lower: true, nav: "side",
     tabs: [
       tab("collection", "Сбор данных", "system-collection", "system-collection-page"),
       tab("failures", "Сбои", "system-failures"),
@@ -823,6 +824,11 @@ export const SECTIONS: readonly Section[] = [
       tab("onlyfans-api", "OnlyFans API", "system-onlyfans-api"),
       tab("dev", "Разработчик", "system-dev", "system-dev-run"),
     ],
+  },
+  {
+    // Workboard's screens (the table's section «team»), each its own item of Workboard's menu (`productMenu`).
+    id: "team", label: "Workboard", title: "Workboard", icon: "Users", product: "workboard", nav: "none",
+    tabs: SCREENS.filter((screen) => screen.section === "team").map((screen) => tab(screen.id, screen.label, screen.id)),
   },
 ];
 
@@ -857,72 +863,62 @@ export function sectionHome(section: Section, role: Role): string {
   return homeScreen(section, role)?.path ?? "/";
 }
 
-/** The sections of this role's menu: Главная · Ждут вас · Деньги · Фаны · Команда for a team lead. */
+/** Hub's sections this role has: the owner's alone (a team lead has no Hub, products plan §2.2). */
 export function menuOf(role: Role): Section[] {
-  return SECTIONS.filter((section) => (!section.ownerOnly || role === "owner") && visibleSectionTabs(section, role).length > 0);
+  if (role !== "owner") return [];
+  return SECTIONS.filter((section) => section.product === "hub" && visibleSectionTabs(section, role).length > 0);
 }
 
-// ── The menu of the owner's place, item by item ──────────────────────────
+// ── A product's menu, item by item ────────────────────────────────────────
 
 /** A row with a condition is listed only while the app says it holds. */
 function listed(screen: Screen, holds: Partial<Record<MenuWhen, boolean>>): boolean {
   return screen.when === undefined || holds[screen.when] === true;
 }
 
-/** One item of the menu: a section, or a screen of a group («Команда»). */
+/** One item of a product's menu: a section of Hub, a screen of Workboard. */
 export interface MenuItem {
-  /** The section's id; a group's screen's own id. */
+  /** Hub: the section's id; Workboard: the screen's own id. */
   id: string;
   label: string;
   icon: MenuIcon;
-  /** Where it leads for this role: an address of the host. */
+  /** Where it leads for this role: an address of the product (a Workboard address is under /workboard/). */
   to: string;
-  /** The app at that address: another app's item is a page load, nothing else differs. */
+  /** The app at that address: an item of another product is a page load, on that product's name. */
   app: ScreenApp;
-  /** The group it is listed under («Команда»). */
-  group?: string;
   count?: MenuCount;
 }
 
 /**
- * The menu of the owner's place for a role, the same in the console and in
- * Workboard: the items above the rule and under it. A section without a screen
- * the role may open is not there.
+ * A product's menu for a role, the items above the rule and under it, from the one table:
+ * - Hub, the owner's alone: its sections (Главная · Ждут вас · Деньги · Фаны · Страницы · Контент · Трафик · Анкеты,
+ *   then Настройки · Система under the rule); a section without a screen the owner may open is not there.
+ * - Workboard, every role's: its screens the role opens, in the table's order, with their own icons (the owner and a
+ *   team lead: Ждут вас · Смены · Люди · Кастомы · Что продаёт, the owner also Выплаты; a chatter: Мои смены ·
+ *   Кастомы, «Начало» first while a newcomer's step is open).
  */
-export function placeMenu(role: Role, holds: Partial<Record<MenuWhen, boolean>> = {}): { upper: MenuItem[]; lower: MenuItem[] } {
+export function productMenu(product: ScreenProduct, role: Role, holds: Partial<Record<MenuWhen, boolean>> = {}): { upper: MenuItem[]; lower: MenuItem[] } {
   const upper: MenuItem[] = [];
   const lower: MenuItem[] = [];
-  // The owner's place is the owner's and team leads'; a chatter's menu is Workboard's own (`teamMenu`).
-  if (role === "chatter") return { upper, lower };
+  if (product === "workboard") {
+    for (const screen of SCREENS) {
+      if (screen.product !== "workboard" || screen.deep || !screenVisible(screen, role) || !listed(screen, holds)) continue;
+      const section = sectionById(screen.section);
+      upper.push({
+        id: screen.id, label: screen.label, icon: screen.icon ?? section?.icon ?? "Inbox", to: screen.path, app: "workboard",
+        ...(section?.count ? { count: section.count } : {}),
+      });
+    }
+    return { upper, lower };
+  }
   for (const section of menuOf(role)) {
     const home = homeScreen(section, role);
-    const items: MenuItem[] = section.group
-      ? visibleSectionTabs(section, role).flatMap((item) => tabRow(item, role).slice(0, 1)).filter((screen) => listed(screen, holds)).map((screen) => ({
-        id: screen.id, label: screen.label, icon: screen.icon ?? section.icon, to: screen.path, app: appOf(screen), group: section.label,
-      }))
-      : home ? [{
-        id: section.id, label: section.label, icon: section.icon, to: home.path, app: appOf(home), ...(section.count ? { count: section.count } : {}),
-      }] : [];
-    (section.lower ? lower : upper).push(...items);
+    if (!home) continue;
+    (section.lower ? lower : upper).push({
+      id: section.id, label: section.label, icon: section.icon, to: home.path, app: appOf(home), ...(section.count ? { count: section.count } : {}),
+    });
   }
   return { upper, lower };
-}
-
-/**
- * Workboard's own short menu (the team's place: a chatter, anyone on the team's
- * name): the Workboard screens the role opens, in the table's order, with
- * their own icons. Never a section of the console.
- */
-export function teamMenu(role: Role, holds: Partial<Record<MenuWhen, boolean>> = {}): MenuItem[] {
-  return menuOf(role).flatMap((section) => visibleSectionTabs(section, role).flatMap((item) => tabRow(item, role).slice(0, 1)))
-    .filter((screen) => appOf(screen) === "workboard" && listed(screen, holds))
-    .map((screen) => {
-      const section = sectionById(screen.section);
-      return {
-        id: section?.group ? screen.id : screen.section, label: screen.label, icon: screen.icon ?? section?.icon ?? "Inbox", to: screen.path, app: "workboard" as const,
-        ...(section?.count ? { count: section.count } : {}),
-      };
-    });
 }
 
 /** The first two segments of a Workboard address (`/workboard/people/7` → `/workboard/people`): a screen and everything under it. */
@@ -932,20 +928,18 @@ function workboardBranch(pathname: string): string | null {
 }
 
 /**
- * The menu item an address lights: its section's, or within a group its own
- * screen's. A Workboard address lights the screen it is under (a person's card
- * lights «Люди», a review «Смены»); an address with no item lights nothing.
+ * The menu item an address lights: a Hub screen's section, a Workboard screen itself. A Workboard address lights the
+ * screen it is under (a person's card lights «Люди», a review «Смены»); an address with no item lights nothing.
  */
 export function menuItemAt(pathname: string): string | null {
   let screen = matchScreen(pathname)?.screen ?? null;
   if (!screen) {
     const branch = workboardBranch(pathname);
-    screen = branch === null ? null : SCREENS.find((candidate) => appOf(candidate) === "workboard" && workboardBranch(candidate.path) === branch) ?? null;
+    screen = branch === null ? null : SCREENS.find((candidate) => candidate.product === "workboard" && workboardBranch(candidate.path) === branch) ?? null;
   }
   if (!screen) return null;
-  const section = sectionById(screen.section);
-  if (!section) return null;
-  return section.group ? screen.id : section.id;
+  if (screen.product === "workboard") return screen.id;
+  return sectionById(screen.section)?.id ?? null;
 }
 
 // ── A page's own screens ─────────────────────────────────────────────────

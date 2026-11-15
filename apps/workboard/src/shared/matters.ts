@@ -4,7 +4,7 @@ import { kernel } from "./hub.js";
 /**
  * Дела (ecosystem plan §6, packages D and K): «Ждут вас» as one list of what
  * waits for a person. The team's screens read matters and nothing else: the
- * address `/decisions` is the list, the menu's badge counts its groups.
+ * address `/waiting` is the list, the menu's badge counts its groups.
  */
 
 /**

@@ -56,13 +56,18 @@ describe("the way back after the sign-in", () => {
     expect(home("chatter", next)).toBe("/workboard/");
   });
 
-  it("leaves the owner and a team lead where they were going", () => {
-    for (const role of ["owner", "team_lead"]) {
-      expect(home(role, "/workboard/payouts?week=2026-11-02")).toBe("/workboard/payouts?week=2026-11-02");
-      expect(home(role, "/settings")).toBe("/settings");
-      expect(home(role, null)).toBe("/");
-      expect(home(role, "https://evil.example/workboard/")).toBe("/");
-    }
+  it("leaves the owner where they were going", () => {
+    expect(home("owner", "/workboard/payouts?week=2026-11-02")).toBe("/workboard/payouts?week=2026-11-02");
+    expect(home("owner", "/settings")).toBe("/settings");
+    expect(home("owner", null)).toBe("/");
+    expect(home("owner", "https://evil.example/workboard/")).toBe("/");
+  });
+
+  it("takes a team lead, who has no Hub, to Workboard, or where they were going in it", () => {
+    expect(home("team_lead", "/workboard/shifts?week=2026-11-02")).toBe("/workboard/shifts?week=2026-11-02");
+    expect(home("team_lead", "/settings")).toBe("/workboard/");
+    expect(home("team_lead", null)).toBe("/workboard/");
+    expect(home("team_lead", "https://evil.example/workboard/")).toBe("/workboard/");
   });
 
   it("on the chatters' site, takes every role to the team's place — Workboard — or the account page when asked", () => {

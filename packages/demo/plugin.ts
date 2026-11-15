@@ -163,9 +163,34 @@ function signInHtml(next: string | null): string {
 </html>`;
 }
 
-/** The console's homes: /login for nobody, the cabinet for a chatter, the start otherwise. */
+/** The console's homes: /login for nobody, Hub's Главная for the owner, Workboard for a team lead and a chatter (Hub is the owner's). */
 function consoleHome(role: DemoRole | "anon"): string {
-  return role === "anon" ? "/login" : role === "chatter" ? "/account" : "/";
+  return role === "anon" ? "/login" : role === "owner" ? "/" : "/workboard/";
+}
+
+/** The demo's two names (any port): the hand-off crosses only between them, as Hub's crosses only between its own. */
+const DEMO_NAMES = /^http:\/\/(hub|chatgoose)\.localhost(:\d+)?$/;
+
+/**
+ * The one-time hand-off between the two names (`/api/v1/auth/sso?to=…&next=…`, Hub's signin-handoff.ts): the demo
+ * has no sessions to plant, so the role travels instead — the other name's role switch, then `next`. A narrow session
+ * never travels (Hub's does not either); nobody signed in goes straight on. Null: not a hand-off this demo answers.
+ */
+function demoHandOff(url: URL, request: IncomingMessage): string | null {
+  const to = url.searchParams.get("to") ?? "";
+  if (!DEMO_NAMES.test(to)) return null;
+  let next: URL;
+  try {
+    next = new URL(url.searchParams.get("next") ?? "/", to);
+  } catch {
+    return null;
+  }
+  if (next.origin !== to) return null;
+  const path = `${next.pathname}${next.search}${next.hash}`;
+  const role = readCookie(request, ROLE_COOKIE);
+  const known = ROLES.find((item) => item === role);
+  if (known === undefined || readCookie(request, NARROW_COOKIE) === "1") return next.href;
+  return `${to}/__demo/role?${new URLSearchParams({ as: known, next: path }).toString()}`;
 }
 
 export function demoApi(options: DemoApiOptions = {}): Plugin {
@@ -194,6 +219,16 @@ export function demoApi(options: DemoApiOptions = {}): Plugin {
           response.setHeader("location", next ?? home(role));
           response.end();
           return;
+        }
+
+        if (url.pathname === "/api/v1/auth/sso") {
+          const location = demoHandOff(url, request);
+          if (location !== null) {
+            response.statusCode = 302;
+            response.setHeader("location", location);
+            response.end();
+            return;
+          }
         }
 
         if (options.signInPage && (request.method === "GET" || request.method === "HEAD") && url.pathname === "/login") {

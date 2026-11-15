@@ -1,6 +1,6 @@
 /**
- * What the search (Ctrl/⌘K) of the owner's place takes you to, and how a typed
- * query picks from it — the same in the console and in Workboard. The screens'
+ * What the search (Ctrl/⌘K) of a product's frame takes you to, and how a typed
+ * query picks from it — the same in Hub and in Workboard. The screens'
  * entries come from the one table of screens (screens.ts), so a screen is found
  * by the name it carries everywhere else, by the old words a habit remembers,
  * and a team lead finds only what they can open; a screen of the other app is a
@@ -17,6 +17,7 @@ import {
   visibleSectionTabs,
   type Role,
   type Screen,
+  type ScreenProduct,
   type Section,
 } from "./screens.js";
 import { THEME_OPTIONS, type ThemePreference } from "./theme.js";
@@ -57,10 +58,24 @@ function screenHint(section: Section, screen: Screen): string {
   return tab && tab.label !== screen.label ? `${section.label} · ${tab.label}` : section.label;
 }
 
-/** Every screen of both apps this role opens, by its name, its section and its old words. */
-export function screenCommands(role: Role): Command<never>[] {
+/**
+ * Every screen of one product this role opens, by its name, its section and its old words: the search of a product
+ * finds that product's screens (Hub's «Ждут вас» included, which opens Workboard's list for now).
+ */
+export function screenCommands(role: Role, product: ScreenProduct = "hub"): Command<never>[] {
   const commands: Command<never>[] = [];
+  if (product === "workboard") {
+    for (const screen of SCREENS) {
+      if (screen.product !== "workboard" || screen.notSearched || !screenVisible(screen, role)) continue;
+      commands.push({
+        id: `screen:${screen.id}`, label: screen.label, group: "Разделы", to: screen.path, hint: "",
+        keywords: `${screen.title} ${screen.keywords ?? ""}`, searchOnly: screen.deep === true,
+      });
+    }
+    return commands;
+  }
   for (const section of SECTIONS) {
+    if (section.product !== "hub") continue;
     const visibleTabs = visibleSectionTabs(section, role);
     // Under «Ещё» a tab is found by typing, as it is reached by a second click.
     const firstOfTab = new Set(visibleTabs.filter((item) => !item.more).map((item) => tabRow(item, role)[0]?.id));

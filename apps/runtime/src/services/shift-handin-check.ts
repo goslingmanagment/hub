@@ -332,7 +332,7 @@ export async function syncCheckMatters(app: CheckApp, now: Date): Promise<number
       key: `${POT_OFFER_KIND}:${one.transactionId}`, kind: POT_OFFER_KIND, source: "server",
       title: `${names.get(one.userId) ?? "Чаттер"} отдаёт продажу в общак: ${formatUsdFromMills(one.netMills)}, ${one.occurredAt.toISOString().slice(0, 10)}`,
       object: { type: "transaction", id: String(one.transactionId) }, pageIds: [one.pageId], owner: { role: "owner" }, money: true,
-      evidence: { transactionId: one.transactionId, shiftId: one.shiftId }, link: `/workboard/decisions?dispute=${one.transactionId}#questions`,
+      evidence: { transactionId: one.transactionId, shiftId: one.shiftId }, link: `/workboard/waiting?dispute=${one.transactionId}#questions`,
     });
   }
   for (const one of await listHandinsPostCopiedBehind(db)) {
