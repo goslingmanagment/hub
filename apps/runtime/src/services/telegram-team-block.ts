@@ -49,15 +49,21 @@ function escapeHtml(text: string) {
 }
 
 /** The block's lines (Telegram HTML); empty when there is nothing to say. Pure. */
-export function renderTeamBlock(facts: TeamBlockFacts, now: Date): string[] {
+/**
+ * The block's lines name where each thing is done (products plan §2.3): the chat team's work is Workboard's, on the
+ * team's name (`chatgoose.…/workboard/…`), whatever product the owner reads the morning in. Without the name (a test,
+ * a stand of one name) the lines are plain text.
+ */
+export function renderTeamBlock(facts: TeamBlockFacts, now: Date, links: { team?: string } = {}): string[] {
+  const at = (path: string, text: string) => (links.team === undefined ? text : `<a href="${escapeHtml(`${links.team}${path}`)}">${text}</a>`);
   const lines: string[] = [];
-  if (facts.shifts > 0) lines.push(`Смены за сутки: ${facts.shifts}`);
+  if (facts.shifts > 0) lines.push(`${at("/workboard/shifts", "Смены")} за сутки: ${facts.shifts}`);
   if (facts.decide !== undefined && facts.decide.sales > 0) {
-    lines.push(`Ждут вашего решения, чья продажа: ${facts.decide.sales} на ${formatUsdFromMills(facts.decide.netMills)}`);
+    lines.push(`${at("/workboard/waiting#questions", "Ждут вашего решения")}, чья продажа: ${facts.decide.sales} на ${formatUsdFromMills(facts.decide.netMills)}`);
   }
   if (facts.customsOpen > 0) {
     const oldest = facts.oldestCustomPaidAt === null ? "" : ` · самый старый оплачен ${Math.floor((now.getTime() - facts.oldestCustomPaidAt.getTime()) / DAY_MS)} дн назад`;
-    lines.push(`Кастомы не отданы: ${facts.customsOpen}${oldest}`);
+    lines.push(`${at("/workboard/customs", "Кастомы")} не отданы: ${facts.customsOpen}${oldest}`);
   }
   const waiting = facts.waiting.reduce((sum, page) => sum + page.waiting, 0);
   if (waiting > 0) {
@@ -70,7 +76,7 @@ export function renderTeamBlock(facts: TeamBlockFacts, now: Date): string[] {
     lines.push(`Вернуть, ${WIN_BACK_DAYS} дн: ${winBack.attempts} попыток · ответили ${winBack.replied72h} из ${winBack.matured72h} · `
       + `купили ${winBack.bought7d} из ${winBack.matured7d}`);
   }
-  return lines.length === 0 ? [] : ["👥 <b>Команда</b>", ...lines];
+  return lines.length === 0 ? [] : [`👥 <b>Команда</b> · ${at("/workboard/", "Workboard")}`, ...lines];
 }
 
 /** The facts of the block for the business day [from, to), as of `now`. */
