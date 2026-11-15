@@ -34,6 +34,12 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 const PASSWORDS = { SANDBOX_PASSWORD_T_OWNER: "sandbox-owner-1" };
 const WORDS = "тестовая страница: на площадку не отправляется";
 const DAY_MS = 86_400_000;
+/**
+ * The seed's «now», fixed: a few minutes back, never before the UTC day began — so the second run, a minute later,
+ * is another minute of the same day (its day, not the wall clock's minute, decides whether a run adds posts).
+ */
+const WALL = Date.now();
+const SEEDED_AT = new Date(Math.max(Date.parse(`${new Date(WALL).toISOString().slice(0, 10)}T00:00:00Z`), WALL - 5 * 60_000));
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
@@ -45,9 +51,9 @@ beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
   if (!testDb) return;
   app = createTestAppContext(testDb);
-  const seeded = await seedSandbox(app, { scenarios: ["publications"], env: PASSWORDS });
+  const seeded = await seedSandbox(app, { scenarios: ["publications"], env: PASSWORDS, now: SEEDED_AT });
   expect(seeded.scenarios.publications).toEqual({ publications: 5 });
-  // A second run in the same minute adds nothing.
+  // A second run the same day adds nothing (below).
   testPages = seeded.pages.map((page) => page.id);
   // The worst case: the test pages' publishing switched on and the Fansly page on its browser, as a live page's would be.
   for (const pageId of testPages) {
@@ -76,9 +82,10 @@ afterAll(async () => {
 const touches = (pageIds: readonly number[]) => pageIds.filter((id) => testPages.includes(id));
 
 describe("a test page's publications", () => {
-  it("are seeded in the states the feed shows, once a minute", async (context) => {
+  it("are seeded in the states the feed shows, once a day", async (context) => {
     if (!testDb) return context.skip();
-    const again = await seedSandbox(app, { scenarios: ["publications"], env: PASSWORDS });
+    // Later the same UTC day, another minute: nothing more.
+    const again = await seedSandbox(app, { scenarios: ["publications"], env: PASSWORDS, now: new Date(SEEDED_AT.getTime() + 60_000) });
     expect(again.scenarios.publications).toEqual({ publications: 0 });
     const states = await testDb.pool.query<{ status: string }>("select status from publications where page_id = any($1) order by status", [testPages]);
     expect(states.rows.map((row) => row.status)).toEqual(["approved", "draft", "published", "unknown", "withdrawn"]);
