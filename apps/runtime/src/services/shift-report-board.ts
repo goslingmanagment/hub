@@ -1,7 +1,6 @@
 import type {
   AgentShiftReportCheckBody,
   AgentShiftReportChecksResponse,
-  ClientSaleSightingsBody,
   ShiftReportAskBody,
   ShiftReportConfirmResponse,
   ShiftReportCurrentResponse,
@@ -36,7 +35,6 @@ import {
   listHandinShifts,
   listHandinsOfShifts,
   listHandinVersions,
-  listKnownPlatformRefs,
   listLateProposalHandins,
   listMatterPageLabels,
   listOffPlatform,
@@ -47,16 +45,13 @@ import {
   reopenSaleClaim,
   setCandidateConfirmed,
   setCandidateGengarAnswer,
-  setCandidateHubCheck,
   setHandinMark,
   setHandinFixingFrom,
   setHandinPhase,
   setHandinPostCopied,
   setHandinProposalState,
   setSaleSightingAdded,
-  setSaleSightingMatched,
   updateSaleClaim,
-  upsertSaleSighting,
   type CandidateHubPage,
   type CandidateRow,
   type Database,
@@ -357,8 +352,6 @@ export async function resendShiftReport(
     const locked = (await findHandinByShift(db, subject.shift.id, { lock: true }))!;
     const latest = (await listHandinVersions(db, locked.id)).at(-1);
     if (latest === undefined) throw new NotFoundError("Nothing counted yet");
-    const candidate = (await listHandinCandidates(db, locked.id)).at(-1) ?? null;
-    const cutoff = candidate?.cutoffAt.getTime() ?? latest.submittedAt.getTime();
     const marks = await listHandinMarks(db, locked.id);
     const draft = draftLines(await draftFacts(db, subject, locked, catalog, now, marks), marks);
     // Held: any line of the counted version (a word of the person's, even «не моё», keeps it theirs to change by «Исправить»).

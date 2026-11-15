@@ -582,7 +582,8 @@ function reportOf(request: DemoRequest, scenario: Scenario): Report {
   const state = stateOf(request, scenario);
   const own = request.role === "chatter";
   const full = boardOf(state, own, request.now.getTime());
-  const board = scenario === "preview" ? { ...full, preview: undefined } : full;
+  // Hub says it both ways: `preview` on the board and `enabled: false` on the response.
+  const board = full;
   const shiftId = DEMO_BOARD_SHIFTS[scenario];
   const version = state.counted ? {
     version: 1, submittedAt: state.countedAt ?? COUNTED.found, door: "workboard" as const, by: LEV.name, totalMills: state.countedMills, madeFor: null,
@@ -594,8 +595,8 @@ function reportOf(request: DemoRequest, scenario: Scenario): Report {
       workedMinutes: 480, reportDate: "2026-11-12", pages: board.columns.map((column) => column.pageLabel),
     },
     access: own ? "own" : "read",
-    // The preview scenario says it the old way only (`enabled: false`), as Hub does until its `preview` flag.
     enabled: !state.preview,
+    boardShift: !state.preview,
     canEdit: own && !state.preview,
     state: version ? "submitted" : "open",
     latest: version,

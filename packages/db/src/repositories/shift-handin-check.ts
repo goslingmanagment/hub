@@ -10,7 +10,6 @@ type Row = Record<string, unknown>;
 
 const num = (value: unknown) => Number(value);
 const date = (value: unknown) => (value instanceof Date ? value : new Date(String(value)));
-const nullableDate = (value: unknown) => (value === null || value === undefined ? null : date(value));
 const ids = (values: readonly number[]) => sql`${sql.param(values.map(String))}::bigint[]`;
 
 /**

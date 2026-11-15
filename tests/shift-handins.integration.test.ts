@@ -322,4 +322,45 @@ describe("the shift report: who reads, who writes", () => {
       .rows.map((row: { id: string }) => Number(row.id));
     expect(fedAfter.map((report) => report.id).sort()).toEqual(versionIds.sort());
   });
+
+  it("keeps what the site showed and Hub does not hold, journaled first; matches it when the sale arrives; the decider hears after 48 hours", async (context) => {
+    if (!testDb) return context.skip();
+    const ext = (payload: Record<string, unknown>) =>
+      server!.inject({ method: "POST", url: "/api/v1/client/sale-sightings", headers: { authorization: `Bearer ${extensionToken}` }, payload });
+    const row = { platformRef: "981336977431290668", kind: "tip", occurredAt: "2026-11-10T18:30:00.000Z", grossMills: null, netMills: 12_000, fanRef: "778899", fanName: "wren" };
+    // A cookie session is not the extension.
+    expect((await asSession("anna", "POST", "/api/v1/client/sale-sightings", { pageLabel: "mia-1", rows: [row] })).statusCode).toBe(403);
+    const first = await ext({ pageLabel: "mia-1", rows: [row] });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(first.json()).toMatchObject({ kept: 1, known: 0 });
+    // Again: one sighting, one journal row.
+    expect((await ext({ pageLabel: "mia-1", rows: [row] })).json()).toMatchObject({ kept: 1 });
+    expect((await testDb.pool.query("select count(*)::int as n from sale_sightings where platform_ref = $1", [row.platformRef])).rows[0].n).toBe(1);
+    expect((await testDb.pool.query("select count(*)::int as n from observations where kind = 'client.sale_sightings.v1'")).rows[0].n).toBe(1);
+    // A page the token may not work is refused.
+    expect((await ext({ pageLabel: "mia-2", rows: [row] })).statusCode).toBe(404);
+
+    // Unmatched for 48 hours: the decider's matter.
+    await testDb.pool.query("update sale_sightings set first_seen_at = now() - interval '49 hours' where platform_ref = $1", [row.platformRef]);
+    const { runShiftReportBoardPass } = await import("../apps/runtime/src/services/shift-report-board.ts");
+    await runShiftReportBoardPass(app);
+    const opened = await testDb.pool.query("select state from matters where kind = 'shift.report.sighting_unmatched'");
+    expect(opened.rows).toEqual([{ state: "open" }]);
+
+    // The sale arrives in Hub: the sighting is matched and the matter closes.
+    const pageId = (await testDb.pool.query("select id from pages where label = 'mia-1'")).rows[0].id;
+    await testDb.pool.query(
+      `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+         gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
+       values ($1, $2, 'tip', 'tip', 'posted', 'ok', 15000, 15000, 12000, 3000, '2026-11-10T18:30:00Z', 'fansly:rest', 'USD')`,
+      [pageId, row.platformRef],
+    );
+    await runShiftReportBoardPass(app);
+    const sighting = await testDb.pool.query("select matched_transaction_id is not null as matched from sale_sightings where platform_ref = $1", [row.platformRef]);
+    expect(sighting.rows[0].matched).toBe(true);
+    expect((await testDb.pool.query("select state from matters where kind = 'shift.report.sighting_unmatched'")).rows).toEqual([{ state: "closed" }]);
+    // Hub holds it now: the site showing it again keeps nothing.
+    expect((await ext({ pageLabel: "mia-1", rows: [row] })).json()).toMatchObject({ kept: 0, known: 1 });
+  });
 });
+

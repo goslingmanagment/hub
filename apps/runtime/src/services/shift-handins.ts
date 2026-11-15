@@ -77,7 +77,8 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
-import { readLedgerPayouts } from "./ledger-payouts.ts";
+import { ledgerGet, readLedgerPayouts } from "./ledger-payouts.ts";
+import { parseLedgerReportDays } from "./ledger-reports.ts";
 import { pagesWithLines, reportSums, settledShareOf } from "./sale-claim-rules.ts";
 import { claimsOfReport, runSaleClaims } from "./sale-claims.ts";
 import { handInShiftReport, PhaseConflictError } from "./shift-report-board.ts";
@@ -844,7 +845,7 @@ export async function readHandinVersionPosts(
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
-export async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject, now: Date): Promise<ShiftReportResponse> {
+export async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject, now: Date, options: { withPost?: boolean } = {}): Promise<ShiftReportResponse> {
   const { db } = app;
   const catalog = await pageCatalog(db);
   const access = accessOf(actor, subject, catalog);
@@ -937,16 +938,32 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
     boardShift: boardOn(subject),
     board: await readBoard({
       db, subject, catalog, cutTo: access.cutTo, draftPreview: access.draftPreview, handin, versions, draft, now,
+      // Asked only once the post was copied: before that there is nothing for the ledger to have seen.
+      postSeen: options.withPost === true && own && latest !== null && handin?.postCopiedAt != null ? await postSeenOf(app, subject, versionReportDate(latest, handin)) : null,
       actor: { access: access.access, kind: actor.kind, enabled: subject.enabled },
     }),
     serverNow: now.toISOString(),
   };
 }
 
-/** `shiftReport`: a shift and its report as the reader may see it. */
+/** `shiftReport`: a shift and its report as the reader may see it (the board's own read asks whether the ledger has seen the post). */
 export async function readShiftReport(app: HandinApp, actor: HandinActor, shiftId: number, now: Date = new Date()): Promise<ShiftReportResponse> {
   const subject = await subjectOf(app.db, shiftId);
-  return readSubject(app, actor, subject, now);
+  return readSubject(app, actor, subject, now, { withPost: true });
+}
+
+/**
+ * Whether the ledger has seen the post of the person's report day: its report days (`/v1/report-days`, the read «Мои
+ * смены» makes) list a post of that day. Null — not known (the ledger away, not connected, or another person's rows).
+ */
+async function postSeenOf(app: HandinApp, subject: Subject, reportDate: string): Promise<boolean | null> {
+  try {
+    const body = await ledgerGet(app, "/v1/report-days", { from: reportDate, to: reportDate, hub_user_id: String(subject.shift.userId) }, { client: "shift-report-board" });
+    const days = parseLedgerReportDays(app, body).filter((day) => day.report_date === reportDate && (subject.person === null || day.person === subject.person.code));
+    return days.some((day) => day.posted_at !== null || day.post_id !== null);
+  } catch {
+    return null;
+  }
 }
 
 /** The shift an agent means: by id, else the person's latest; the person by Telegram id or code. */
@@ -1377,6 +1394,31 @@ export async function draftLineOfSale(db: Database, shiftId: number, transaction
   return draftLines(facts, marks).find((line) => line.transactionId === transactionId) ?? null;
 }
 
+/**
+ * A version's line as the ledger's feed serves it: the format never changes (R-board §8) — the board's «отдал» and «в
+ * общак» read as «не моё» (`ledgerStatementOf`), an off-platform line is not a line here. Pure.
+ */
+export function feedLineOf(line: HandinVersionLine): AgentShiftReportsFeedResponse["reports"][number]["lines"] {
+  if (line.transactionId === null || line.pageLabel === null) return [];
+  return [{
+    transactionId: line.transactionId,
+    pageLabel: line.pageLabel,
+    group: line.group,
+    netMills: line.netMills,
+    ruleShareMills: line.rule.shareMills,
+    ruleHome: line.rule.home,
+    ruleReason: line.rule.reason,
+    statement: ledgerStatementOf(line.statement),
+    shareWithUserId: line.shareWithUserId,
+    note: line.note,
+    amountMills: line.amountMills,
+    claimedMills: line.claimedMills ?? null,
+    added: line.added,
+    disputed: line.disputed,
+    settled: line.settled ?? null,
+  }];
+}
+
 // ── The ledger's feed ────────────────────────────────────────────────────────
 
 /**
@@ -1420,24 +1462,7 @@ export async function readShiftReportsFeed(
       // Every line's page is a page of the version: one stored before `reportSums` named them all gets them here, at 0.
       pages: pagesWithLines(row.pages.map((page) => page.pageLabel), row.lines)
         .map((pageLabel) => row.pages.find((page) => page.pageLabel === pageLabel) ?? { pageLabel, amountMills: 0 }),
-      lines: row.lines.flatMap((line) => (line.transactionId === null || line.pageLabel === null ? [] : [{
-        transactionId: line.transactionId,
-        pageLabel: line.pageLabel,
-        group: line.group,
-        netMills: line.netMills,
-        ruleShareMills: line.rule.shareMills,
-        ruleHome: line.rule.home,
-        ruleReason: line.rule.reason,
-        // The feed's format does not change (R-board §8): the board's «отдал» and «в общак» read as «не моё».
-        statement: ledgerStatementOf(line.statement),
-        shareWithUserId: line.shareWithUserId,
-        note: line.note,
-        amountMills: line.amountMills,
-        claimedMills: line.claimedMills ?? null,
-        added: line.added,
-        disputed: line.disputed,
-        settled: line.settled ?? null,
-      }])),
+      lines: row.lines.flatMap(feedLineOf),
       offPlatform: row.offPlatform.filter((line) => line.state !== "withdrawn").map((line) => offPlatformWire(line)),
       comment: row.comment,
       dayPaid: row.dayPaid,
