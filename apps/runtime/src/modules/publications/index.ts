@@ -1,6 +1,19 @@
 import { createHash } from "node:crypto";
 
-import { PUBLICATION_SWITCH_KEYS, routeSchemas, type PublicationWire } from "@agency_hub_core/contracts";
+import {
+  PUBLICATION_SWITCH_KEYS,
+  albumReasonParts,
+  albumRunWords,
+  approveRefusalWords,
+  autostopReasonWords,
+  deleteResultWords,
+  findingWords,
+  routeSchemas,
+  statusReasonWords,
+  withdrawResultWords,
+  type PublicationFinding,
+  type PublicationWire,
+} from "@agency_hub_core/contracts";
 import type { PublicationStatus } from "@agency_hub_core/shared";
 import {
   ConfigOverrideTransitionError,
@@ -365,13 +378,24 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   server.post("/api/v1/admin/publications/:id/resolve", { schema: routeSchemas.adminPublicationResolve }, async (request) =>
     screen.resolve(await requirePrincipal(request), request.params.id, request.body));
 
+  // Hub's words of a publication's codes (publication-words.ts, the one table): the door carries them to ContentOps.
+  const wordsOfPublication = (publication: { statusReason: string | null; kind: string; findings: readonly PublicationFinding[]; media: readonly { role: string; position: number; source: string; mediaRef?: string | null; fileId?: number | null; name?: string | null }[] }) => ({
+    statusReason: statusReasonWords(publication.statusReason),
+    statusReasonParts: publication.kind === "vault_album" ? albumReasonParts(publication.statusReason) : null,
+    findings: publication.findings.map((finding) => findingWords(finding, publication.media)),
+  });
+  const withdrawWords = <R extends { outcome: string; reason: string | null }>(answer: { results: R[] }, words: (result: R) => string) => ({
+    results: answer.results.map((result) => ({ ...result, words: words(result) })),
+  });
+
   // The person's door: ContentOps' key + the person's grant, the same functions (services/person-door.ts).
   const as = async (request: { body: { client: string; grant: string } } & Parameters<typeof requireAgentKeyPrincipal>[0], operation: PersonDoorOperation) =>
     doorPerson(appContext, await requireAgentKeyPrincipal(request), request.body, operation);
 
   server.post("/api/v1/person/publications/list", { schema: routeSchemas.personPublicationList }, async (request) => {
     const { client: _client, grant: _grant, ...query } = request.body;
-    return screen.list(await as(request, "personPublicationList"), query);
+    const listed = await screen.list(await as(request, "personPublicationList"), query);
+    return { publications: listed.publications.map((publication) => ({ ...publication, words: wordsOfPublication(publication) })) };
   });
   server.post("/api/v1/person/publications/get", { schema: routeSchemas.personPublicationGet }, async (request) => {
     const detail = await screen.get(await as(request, "personPublicationGet"), request.body.id);
@@ -382,17 +406,27 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       userIds: userIds.filter((id): id is number => id !== null),
       agentKeyIds: agentKeyIds.filter((id): id is number => id !== null),
     });
-    return { ...detail, names };
+    return {
+      ...detail,
+      names,
+      words: {
+        ...wordsOfPublication(detail),
+        events: detail.events.map((event) => statusReasonWords(event.reason)),
+        album: detail.albumRun ? albumRunWords(detail.albumRun) : null,
+      },
+    };
   });
   // Where a post of the page goes: its walls and tiers by name, never their prices (the agents' read, agentPublicationTargets).
   server.post("/api/v1/person/publications/targets", { schema: routeSchemas.personPublicationTargets }, async (request) =>
     screen.targets(await as(request, "personPublicationTargets"), request.body.pageLabel));
-  server.post("/api/v1/person/publications/approve", { schema: routeSchemas.personPublicationApprove }, async (request) =>
-    screen.approve(await as(request, "personPublicationApprove"), request.body.items));
+  server.post("/api/v1/person/publications/approve", { schema: routeSchemas.personPublicationApprove }, async (request) => {
+    const answer = await screen.approve(await as(request, "personPublicationApprove"), request.body.items);
+    return { results: answer.results.map((result) => ({ ...result, words: result.outcome === "refused" ? approveRefusalWords(result.reason) : null })) };
+  });
   server.post("/api/v1/person/publications/cancel", { schema: routeSchemas.personPublicationCancel }, async (request) =>
     screen.cancel(await as(request, "personPublicationCancel"), request.body.id));
   server.post("/api/v1/person/publications/withdraw", { schema: routeSchemas.personPublicationWithdraw }, async (request) =>
-    screen.withdraw(await as(request, "personPublicationWithdraw"), request.body.id));
+    withdrawWords(await screen.withdraw(await as(request, "personPublicationWithdraw"), request.body.id), withdrawResultWords));
   server.post("/api/v1/person/publications/replace", { schema: routeSchemas.personPublicationReplace }, async (request) =>
     screen.replace(await as(request, "personPublicationReplace"), request.body.id));
   server.post("/api/v1/person/publications/resolve", { schema: routeSchemas.personPublicationResolve }, async (request) =>
@@ -401,14 +435,16 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     screen.queueList(await as(request, "personPublicationQueueList"), request.body.modelSlug));
   server.post("/api/v1/person/publications/queue/refresh", { schema: routeSchemas.personPublicationQueueRefresh }, async (request) =>
     screen.queueRefresh(await as(request, "personPublicationQueueRefresh"), request.body.pageLabel));
-  server.post("/api/v1/person/publications/settings", { schema: routeSchemas.personPublicationSettingsList }, async (request) =>
-    screen.settingsList(await as(request, "personPublicationSettingsList"), request.body.modelSlug));
+  server.post("/api/v1/person/publications/settings", { schema: routeSchemas.personPublicationSettingsList }, async (request) => {
+    const settings = await screen.settingsList(await as(request, "personPublicationSettingsList"), request.body.modelSlug);
+    return { ...settings, pages: settings.pages.map((page) => ({ ...page, autostopReasonWords: autostopReasonWords(page.autostopReason) })) };
+  });
   server.post("/api/v1/person/publications/settings/update", { schema: routeSchemas.personPublicationSettingsUpdate }, async (request) =>
     screen.settingsUpdate(await as(request, "personPublicationSettingsUpdate"), request.body.pageLabel, request.body.settings));
   server.post("/api/v1/person/publications/delete-post", { schema: routeSchemas.personPublicationDeletePost }, async (request) =>
-    screen.deletePost(await as(request, "personPublicationDeletePost"), request.body.id));
+    withdrawWords(await screen.deletePost(await as(request, "personPublicationDeletePost"), request.body.id), deleteResultWords));
   server.post("/api/v1/person/publications/withdraw-page", { schema: routeSchemas.personPublicationWithdrawPage }, async (request) =>
-    screen.withdrawPage(await as(request, "personPublicationWithdrawPage"), request.body.pageLabel));
+    withdrawWords(await screen.withdrawPage(await as(request, "personPublicationWithdrawPage"), request.body.pageLabel), withdrawResultWords));
 
   // The switches and limits of publishing (PUBLICATION_SWITCH_KEYS): read by the owner and a content manager, set by the
   // owner, through the config's one write path (services/live-config.ts). Nothing else of the config passes the door.
