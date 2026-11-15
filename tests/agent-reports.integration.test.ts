@@ -137,7 +137,7 @@ describe("agent reports", () => {
     expect((await server!.inject({ method: "GET", url: "/api/v1/agent/reports", headers: { authorization: `Bearer ${READER}` } })).statusCode).toBe(403);
   });
 
-  it("the owner reads every report, a team lead the ones opened to team leads, nobody else any", async (context) => {
+  it("the owner reads every report, nobody else any (a team lead has no Hub for now)", async (context) => {
     if (!testDb) return context.skip();
     expect((await put("traffic", TRAFFIC)).statusCode).toBe(200);
     expect((await put("team-board", { title: "Доска команды", section: "team", body: "Всё спокойно.", teamLeads: true })).statusCode).toBe(200);
@@ -148,14 +148,14 @@ describe("agent reports", () => {
       return reportsListResponseSchema.parse(response.json()).reports.map((report) => report.slug).sort();
     };
     expect(await slugs("boss")).toEqual(["team-board", "traffic"]);
-    expect(await slugs("lead")).toEqual(["team-board"]);
+    // A team lead has no Hub: «Отчёты агентов» is the console's screen, refused to them (team-lead-reads.ts) until
+    // Workboard shows the reports opened to team leads.
+    expect((await asSession("lead", "/api/v1/reports")).statusCode).toBe(403);
 
     const owner = await asSession("boss", "/api/v1/reports/traffic");
     expect(owner.statusCode, owner.body).toBe(200);
     expect(reportGetResponseSchema.parse(owner.json()).report.body).toBe(TRAFFIC.body);
-    expect((await asSession("lead", "/api/v1/reports/team-board")).statusCode).toBe(200);
-    // An owner-only report is, for a team lead, the same 404 as a missing one.
-    expect((await asSession("lead", "/api/v1/reports/traffic")).statusCode).toBe(404);
+    expect((await asSession("lead", "/api/v1/reports/team-board")).statusCode).toBe(403);
     expect((await asSession("boss", "/api/v1/reports/nothing-here")).statusCode).toBe(404);
 
     // A chatter's session, a chatter's device token, an agent key, nobody: no report.

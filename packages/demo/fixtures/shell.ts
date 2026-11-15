@@ -18,7 +18,7 @@ function principal(request: DemoRequest) {
       assignedPages: DEMO_PAGES.filter((page) => user.pages.includes(page.label)).map(pageRef),
     },
     // The products' switcher, as the server answers (a narrow session: Workboard alone).
-    products: productsOf(user.role, request.narrow === true),
+    products: productsOf({ role: user.role, narrow: request.narrow === true }),
   };
 }
 

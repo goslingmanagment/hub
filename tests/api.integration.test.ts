@@ -44,7 +44,6 @@ import {
   assignPageToUser,
   createUserAccount,
   setUserPassword,
-  unassignPageFromUser,
 } from "../apps/runtime/src/services/auth.ts";
 import {
   issueChatterDeviceToken,
@@ -2007,7 +2006,7 @@ describe("api integration", () => {
     });
   });
 
-  it("limits cross-page fan visibility for team leads and exposes full scope for owners", async (context) => {
+  it("refuses cross-page fan detail to a team lead (Hub's for now) and exposes full scope for owners", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -2030,12 +2029,9 @@ describe("api integration", () => {
         cookie: leadCookie,
       },
     });
-    expect(leadFan.statusCode).toBe(200);
-    expect(leadFan.json()).toMatchObject({
-      platformTotalSpendMills: 7000,
-    });
-    expect(leadFan.json().pages).toHaveLength(1);
-    expect(leadFan.json().pages[0]?.pageLabel).toBe("lana");
+    // Hub is the owner's: «Фаны» are the console's for now, refused to a team lead (team-lead-reads.ts); when they move
+    // to Workboard the lead's page scope (one of two pages here) is checked again.
+    expect(leadFan.statusCode).toBe(403);
 
     const deniedPage = await server.inject({
       method: "GET",
@@ -4006,31 +4002,8 @@ describe("api integration", () => {
       headers: { cookie: leadCookie },
     });
 
-    expect(leadResponse.statusCode).toBe(200);
-    const leadBody = leadResponse.json();
-    expect(leadBody.map((item: { pageLabel: string }) => item.pageLabel)).toEqual([
-      "lana",
-      "lana",
-      "lana",
-    ]);
-    expect(leadBody[0]?.proxyGapMs).toBeNull();
-    expect(leadBody[1]).toMatchObject({
-      timestamp: seeded.lanaRetryAt.toISOString(),
-      proxyGapMs: 5000,
-    });
-
-    await unassignPageFromUser(createTestAppContext(currentTestDb), {
-      userId: await fixtureUserId(createTestAppContext(currentTestDb), "lead"),
-      pageLabel: "lana",
-    }, { source: "cli" });
-
-    const noScopeResponse = await server.inject({
-      method: "GET",
-      url: "/api/v1/sync/requests?limit=10",
-      headers: { cookie: leadCookie },
-    });
-    expect(noScopeResponse.statusCode).toBe(200);
-    expect(noScopeResponse.json()).toEqual([]);
+    // Hub is the owner's: «Сбор данных» is the console's alone, refused to a team lead (team-lead-reads.ts).
+    expect(leadResponse.statusCode).toBe(403);
   }, 15_000);
 
   it("clamps sync request limits to 500 rows [sync-critical]", async (context) => {

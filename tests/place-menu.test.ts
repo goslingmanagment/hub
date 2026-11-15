@@ -122,23 +122,29 @@ describe("a link to the other product", () => {
 });
 
 describe("the products' switcher", () => {
-  it("is the owner's alone: every product; a team lead, a chatter and a narrow session have Workboard and no switcher", () => {
-    expect(productsOf("owner", false)).toEqual([...PRODUCTS]);
+  it("is the owner's: every product; a team lead, a chatter and a narrow session have Workboard and no switcher", () => {
+    expect(productsOf({ role: "owner", narrow: false })).toEqual([...PRODUCTS]);
     for (const [role, narrow] of [["owner", true], ["team_lead", false], ["chatter", false]] as const) {
-      expect(productsOf(role, narrow)).toEqual(["workboard"]);
-      expect(productLinks(productsOf(role, narrow), "workboard", CHATTER_SITE_ORIGIN)).toEqual([]);
+      expect(productsOf({ role, narrow })).toEqual(["workboard"]);
+      expect(productLinks(productsOf({ role, narrow }), "workboard", CHATTER_SITE_ORIGIN)).toEqual([]);
     }
   });
 
+  it("gives the test team's owner Hub, Workboard and ContentOps, never the outside tools; a content manager ContentOps", () => {
+    expect(productsOf({ role: "owner", narrow: false, test: true })).toEqual(["hub", "workboard", "contentops"]);
+    expect(productsOf({ role: "chatter", narrow: false, test: true, personRole: "content_manager" })).toEqual(["workboard", "contentops"]);
+    expect(productsOf({ role: "team_lead", narrow: false, test: true, personRole: "team_lead" })).toEqual(["workboard"]);
+  });
+
   it("ticks the product it is drawn in and crosses to the others in one step", () => {
-    const fromWorkboard = productLinks(productsOf("owner", false), "workboard", CHATTER_SITE_ORIGIN);
+    const fromWorkboard = productLinks(productsOf({ role: "owner", narrow: false }), "workboard", CHATTER_SITE_ORIGIN);
     expect(fromWorkboard.map((link) => [link.id, link.current, link.quiet])).toEqual([
       ["hub", false, false], ["workboard", true, false], ["contentops", false, false], ["tasks", false, true], ["monitor", false, true],
     ]);
     expect(fromWorkboard.find((link) => link.id === "hub")!.href.startsWith("/api/v1/auth/sso?")).toBe(true);
     expect(fromWorkboard.find((link) => link.id === "workboard")!.href).toBe("/workboard/");
     expect(fromWorkboard.find((link) => link.id === "contentops")!.href).toBe("https://contentops.gosling-agency.ru/auth/hub/start");
-    const fromHub = productLinks(productsOf("owner", false), "hub", CONSOLE_ORIGIN);
+    const fromHub = productLinks(productsOf({ role: "owner", narrow: false }), "hub", CONSOLE_ORIGIN);
     expect(fromHub.find((link) => link.id === "hub")!.href).toBe("/");
     expect(fromHub.find((link) => link.id === "workboard")!.href).toContain(encodeURIComponent(`${CHATTER_SITE_ORIGIN}/workboard/`));
   });

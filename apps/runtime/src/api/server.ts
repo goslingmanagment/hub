@@ -51,6 +51,7 @@ import {
   UnauthorizedError,
 } from "../services/errors.ts";
 import { sandboxOwnerRefusal } from "../services/sandbox/owner-operations.ts";
+import { teamLeadRefusal } from "../services/team-lead-reads.ts";
 import {
   buildRoutePolicyIndex,
   computeAuthPolicyVerdict,
@@ -497,6 +498,11 @@ export async function buildApiServer(appContext: AppContext) {
       const sandboxRefusal = sandboxOwnerRefusal(entry.key, request.auth);
       if (sandboxRefusal) {
         throw sandboxRefusal;
+      }
+      // Hub is the owner's: a team lead keeps Workboard's reads and none of the console's alone (team-lead-reads.ts).
+      const leadRefusal = teamLeadRefusal(entry.key, request.auth);
+      if (leadRefusal) {
+        throw leadRefusal;
       }
     }
 

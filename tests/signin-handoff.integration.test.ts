@@ -403,6 +403,10 @@ describe("an owner-only change from either name (Workboard's money is on the tea
     const refused = await create(TEAM, lead, "from-lead");
     expect(refused.statusCode, refused.body).toBe(403);
     expect(refused.json()).not.toMatchObject({ error: "cross_origin" });
+    // Hub is the owner's: a team lead keeps Workboard's reads and none of the console's alone (team-lead-reads.ts).
+    expect((await request("GET", `${TEAM}/api/v1/overview`, { cookies: { [SESSION_COOKIE_NAME]: lead } })).statusCode).toBe(403);
+    expect((await request("GET", `${TEAM}/api/v1/team/people`, { cookies: { [SESSION_COOKIE_NAME]: lead } })).statusCode).toBe(200);
+    expect((await request("GET", `${HUB}/api/v1/overview`, { cookies: { [SESSION_COOKIE_NAME]: owner } })).statusCode).toBe(200);
   });
 });
 
