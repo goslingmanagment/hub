@@ -377,8 +377,9 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       return { to: "colleague", user: people.person(userId), words: `спросим ${personNameForms(people.nameOf(userId)).acc}` };
     };
     if (line.group !== "mine") {
-      // Someone else's sale: «Моя» and «Пополам с <держатель>» only, each a question (a nobody's sale is mine at once).
-      const holder = line.rule.toUserId;
+      // Someone else's sale: «Моя» and «Пополам с <держатель>» only, each a question (a nobody's sale is mine at once,
+      // with the one line of why the server asks for). A sale that waits for its PPV's sender is that colleague's.
+      const holder = line.rule.toUserId ?? (line.rule.home === "waiting" ? line.rule.senderUserId : null);
       const pot = line.rule.home === "pot" || line.rule.home === "decide";
       const mine = owner("me", null, people, me);
       const out = [{ owner: mine, asks: askOf(holder, pot && holder === null), hint: "", current: is(mine) }];

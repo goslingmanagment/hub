@@ -400,7 +400,8 @@ export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, in
     const facts = await draftFacts(db, subject, handin, catalog, now, marks);
     const one = facts.classified.find((sale) => sale.sale.transactionId === input.body.transactionId);
     if (one === undefined || one.group !== "near") throw new BadRequestError("Only a sale the rule gives someone else is asked about", { reason: "not_asked" });
-    const side = one.toUserId;
+    // The other side: the sale's holder by the rule; of a sale that waits for its PPV's sender, that colleague.
+    const side = one.toUserId ?? (one.sale.home.kind === "waiting" ? facts.senders.get(one.sale.transactionId) ?? null : null);
     // A colleague without the board (they hand shifts in the old way) is not asked: the decider decides, no silence runs.
     const sidePerson = side === null ? null : await findHandinPersonOfUser(db, side);
     const sideOnBoard = sidePerson?.submitsShiftSince != null && sidePerson.state !== "left";
