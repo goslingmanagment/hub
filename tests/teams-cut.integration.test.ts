@@ -174,6 +174,12 @@ async function work(db: Database, userId: number, pageId: number, fanRef: string
   const [fan] = (await db.execute<{ id: string }>(sql`insert into fans (platform, platform_user_id, username, display_name)
     values ('fansly', ${fanRef}, ${`fan_${suffix}`}, ${`Fan ${suffix}`}) returning id`)).rows;
   await db.execute(sql`insert into page_fans (fan_id, platform_account_id) values (${fan!.id}, ${pageId})`);
+  // Messages make the minutes a shift (without them it is a look-in).
+  for (let index = 0; index < 40; index += 1) {
+    await db.execute(sql`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, conversation_ref, user_id,
+      source, priced, with_media, observed_at) values ('fansly', ${pageId}, ${`${suffix}-${index}`}, ${fanRef}, ${fanRef}, ${userId},
+      'fansly-extension', false, false, ${new Date(shiftStart + (index + 1) * 3 * 60_000).toISOString()}::timestamptz)`);
+  }
   const [sale] = (await db.execute<{ id: string }>(sql`insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type,
     transaction_state, raw_status, gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, is_active)
     values (${pageId}, ${fan!.id}, ${`t-${suffix}`}, 'tip', 'tip'::transaction_type, 'posted', 'posted', 20000, 20000, 16000,
@@ -248,8 +254,9 @@ describe("teams: who sees whom (package T)", () => {
         const response = await get(read.url, who);
         if (response.statusCode !== 200) continue;
         walked += 1;
+        const idKeys: Array<[string, number]> = [["pageId", ids.pageB], ["userId", ids.chatterB], ["modelId", ids.modelB]];
         const named = teamBWords.filter((word) => response.body.includes(`"${word}"`))
-          .concat([ids.pageB, ids.chatterB, ids.modelB].some((id) => new RegExp(`"(pageId|userId|modelId)":${id}[,}]`).test(response.body)) ? ["<team B id>"] : []);
+          .concat(idKeys.filter(([key, id]) => new RegExp(`"${key}":${id}[,}]`).test(response.body)).map(([key]) => `<team B ${key}>`));
         if (named.length > 0) leaks.push(`${who} ${read.key}: ${named.join(", ")}`);
         if (!read.key.startsWith("account")) {
           const found = forbiddenIn(safeJson(response.body));

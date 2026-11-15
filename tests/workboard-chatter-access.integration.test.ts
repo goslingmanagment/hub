@@ -82,6 +82,12 @@ function teamReads(chatterId: number): Array<[string, string]> {
   ];
 }
 
+/** The team reads a chatter may call since products package T: cut to their teams, never refused by role. */
+const TEAM_READS = new Set([
+  "teamShifts", "teamShiftSales", "teamChatterNumbers", "teamAuthorship", "teamChatterStats", "teamSalesPpv", "teamSalesReplies",
+  "teamGreetings", "teamWinBackResults", "mattersWaiting", "teamShiftReview",
+]);
+
 /** And what they write. */
 function teamWrites(chatterId: number): Array<[string, string, object]> {
   return [
@@ -153,13 +159,19 @@ describe("a chatter in Workboard", () => {
     await testDb?.stop();
   });
 
-  it("is refused every read of the team's screens", async (context) => {
+  it("is refused every read of the team's screens but the team reads, which name nobody of a team they are not in", async (context) => {
     if (!testDb || !server) return context.skip();
     const answers: Record<string, string> = {};
+    const opened: Record<string, string> = {};
     for (const [operation, url] of teamReads(users.nikita!)) {
-      answers[operation] = verdict(await server.inject({ method: "GET", url, headers: { cookie: cookies.nikita! } }));
+      const response = await server.inject({ method: "GET", url, headers: { cookie: cookies.nikita! } });
+      if (TEAM_READS.has(operation)) opened[operation] = `${response.statusCode >= 500 ? "error" : "answered"}${response.body.includes('"owner"') ? " naming the owner" : ""}`;
+      else answers[operation] = verdict(response);
     }
-    expect(answers).toEqual(Object.fromEntries(teamReads(users.nikita!).map(([operation]) => [operation, "refused"])));
+    expect(answers).toEqual(Object.fromEntries(teamReads(users.nikita!).filter(([operation]) => !TEAM_READS.has(operation)).map(([operation]) => [operation, "refused"])));
+    // Products package T: the team reads are everyone's, cut on the server to the reader's teams (services/teams.ts).
+    // Nikita works no page: in no team, his answers name nobody.
+    expect(opened).toEqual(Object.fromEntries([...TEAM_READS].filter((operation) => teamReads(users.nikita!).some(([one]) => one === operation)).map((operation) => [operation, "answered"])));
   });
 
   it("is refused every write of the team's screens", async (context) => {

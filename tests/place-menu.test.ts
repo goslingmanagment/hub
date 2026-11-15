@@ -51,8 +51,8 @@ describe("Workboard's menu", () => {
   });
 
   it("gives a chatter «Мои смены» and «Кастомы», «Начало» first only while a step is open", () => {
-    expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["my-shifts", "customs"]);
-    expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "my-shifts", "customs"]);
+    expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["my-shifts", "shifts", "customs"]);
+    expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "my-shifts", "shifts", "customs"]);
   });
 
   it("leads every role only to Workboard screens it may open", () => {
