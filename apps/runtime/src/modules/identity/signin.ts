@@ -351,7 +351,7 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     if (!checked.active) return { result: "refused" as const, reason: "wrong" as const };
     const { currentPassword, newPassword, ip, userAgent } = request.body;
     return contentopsPasswordChange(appContext, {
-      userId: checked.user.id, username: checked.user.username, currentPassword, newPassword, ip, userAgent,
+      userId: checked.user.id, username: checked.user.username, role: checked.user.role, currentPassword, newPassword, ip, userAgent,
     }, auditCtx(principal));
   });
 

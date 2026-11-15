@@ -108,13 +108,16 @@ export async function contentopsLinkSignin(
 
 /**
  * «Сменить пароль» in ContentOps' profile: the same change as Hub's own (every sign-in of the person ends), then the
- * person is signed in again by the new password and a new grant comes back.
+ * person is signed in again by the new password and a new grant comes back. The owner role is refused FIRST, before
+ * anything is checked or changed: the owner's password never passes through another service (the owner changes it
+ * in Hub), and his sign-ins stay as they are.
  */
 export async function contentopsPasswordChange(
   app: AppContext,
-  input: { userId: number; username: string; currentPassword: string; newPassword: string } & ClientOrigin,
+  input: { userId: number; username: string; role: string; currentPassword: string; newPassword: string } & ClientOrigin,
   audit: AuditContext,
 ): Promise<AuthSsoSignedInResponse> {
+  if (input.role === "owner") return refused("owner");
   try {
     await changeOwnPassword(app, { userId: input.userId, currentPassword: input.currentPassword, newPassword: input.newPassword });
   } catch (error) {
