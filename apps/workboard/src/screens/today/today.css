@@ -1,0 +1,288 @@
+/*
+ * «Сегодня»: cards in a grid that folds to one column on a narrow screen. Tokens only. On a phone (640 px and below)
+ * every row stacks: who on the first line, what under it — nothing overlaps, nothing is wider than the screen.
+ */
+@layer components {
+  .today {
+    gap: var(--ui-space-4);
+  }
+
+  .today-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: var(--ui-space-4);
+    align-items: start;
+  }
+
+  .today-part {
+    grid-column: 1 / -1;
+    margin: var(--ui-space-2) 0 0;
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+  }
+
+  .today-card {
+    min-width: 0;
+    padding: var(--ui-space-3) var(--ui-space-4) var(--ui-space-4);
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .today-card--wide {
+    grid-column: 1 / -1;
+  }
+
+  .today-card .wt-strip {
+    margin: 0;
+  }
+
+  .today-card__title,
+  .today-card .wt-strip__title {
+    display: flex;
+    align-items: baseline;
+    gap: var(--ui-space-2);
+    margin: 0 0 var(--ui-space-2);
+    font-size: var(--ui-fs-15);
+    line-height: var(--ui-lh-15);
+    font-weight: 600;
+  }
+
+  .today-card__sub {
+    color: var(--ui-text-2);
+    font-weight: 400;
+  }
+
+  .today-card__more,
+  .wt-strip__all {
+    margin-left: auto;
+    font-size: var(--ui-fs-14);
+    font-weight: 400;
+  }
+
+  .today-card__head {
+    margin: var(--ui-space-3) 0 var(--ui-space-1);
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-weight: 600;
+  }
+
+  .today-card__head--bad {
+    color: var(--ui-bad, var(--ui-text));
+  }
+
+  .today-card p {
+    margin: 0;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .wt-strip__none {
+    margin: 0;
+  }
+
+  /* «Ждут вас»'s first lines in a card: the line's own phone layout at any width (what, then age, the action under). */
+  .today-card .wt-sheet {
+    border: 0;
+    background: none;
+  }
+
+  .today-card .wt-line {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: var(--ui-space-1);
+    padding: var(--ui-space-2) 0;
+  }
+
+  .today-card .wt-line__go {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  /* ------------------------------------------------------------ Rows */
+
+  .today-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ui-space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .today-list__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px var(--ui-space-2);
+    min-width: 0;
+  }
+
+  .today-list__row--note {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .today-list__who {
+    min-width: 0;
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+
+  .today-list__what {
+    min-width: 0;
+    color: var(--ui-text-2);
+    overflow-wrap: anywhere;
+  }
+
+  .today-list__note {
+    color: var(--ui-text);
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+
+  .today-list__links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px var(--ui-space-3);
+  }
+
+  /* ------------------------------------------------------------ «Моя смена» */
+
+  .today-shift__when {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .today-shift__sums {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ui-space-2) var(--ui-space-6, 32px);
+    margin: var(--ui-space-3) 0;
+  }
+
+  .today-shift__sums dt {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+  }
+
+  .today-shift__sums dd {
+    margin: 2px 0 0;
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .today-report {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ui-space-2) var(--ui-space-3);
+  }
+
+  .today-report__words {
+    color: var(--ui-text-2);
+  }
+
+  /* ------------------------------------------------------------ The team's part */
+
+  .today-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ui-space-2) var(--ui-space-4);
+    margin: 0;
+  }
+
+  .today-steps__one dt {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+  }
+
+  .today-steps__one dd {
+    margin: 2px 0 0;
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .today-steps__one--none dd {
+    color: var(--ui-text-3);
+    font-weight: 400;
+  }
+
+  .today-unled {
+    margin: 0;
+    padding: var(--ui-space-2) var(--ui-space-3);
+    border-radius: var(--ui-radius);
+    background: var(--ui-accent-soft);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .today-first__cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--ui-space-3) var(--ui-space-4);
+  }
+
+  ol.today-first__list {
+    list-style: decimal;
+  }
+
+  .today-first__head {
+    margin: 0 0 var(--ui-space-1);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 600;
+  }
+
+  .today-first__list {
+    margin: 0 0 var(--ui-space-2);
+    padding-left: 18px;
+    list-style: disc;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .today-money {
+    grid-column: 1 / -1;
+  }
+
+  .today-money:empty {
+    display: none;
+  }
+
+  .today-week__facts {
+    margin-bottom: var(--ui-space-2);
+  }
+
+  @media (max-width: 640px) {
+    .today-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .today-card {
+      padding: var(--ui-space-3);
+    }
+
+    .today-list__row {
+      flex-direction: column;
+      gap: 0;
+    }
+
+    /* «Неделя»: two numbers a row. */
+    .today .today-week__facts.ui-facts--grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .today .today-week__facts .ui-fact:nth-child(odd) {
+      padding-left: 0;
+      border-left: 0;
+    }
+  }
+}

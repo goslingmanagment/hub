@@ -1,64 +1,36 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import type { AccountReportsResponse, ChatterStats, ShiftReportsListResponse } from "@agency_hub_core/contracts";
-import { addDays } from "@agency_hub_core/ui/moscow";
 import { kernel } from "@/shared/hub";
 import type { MyShiftsWindow, StatsShift } from "./model.js";
 
 export * from "./model.js";
 
 /**
- * Мои смены — the data layer (a chatter's own part of Workboard, owner
- * 2026-11-10). The screen reads only this file; what it shows is model.ts.
+ * Мои смены — the data layer (a chatter's own part of Workboard, owner 2026-11-10). The screen reads only this file;
+ * what it shows is model.ts.
  *
- * Both reads are the session's user's own (`any-session`; Hub takes the user
- * from the session, never from the query) and carry sales only — no rates, pay,
- * payouts or debts, nothing of anyone else:
- *   - `accountChatterStats` { days, until? } — the shifts of the period's window;
- *   - `accountReports` { from, to } — the ledger's reports of those days;
- *   - `shiftReportsList` { from, to } — the shift rows with the state of their report in Hub (ecosystem package F):
- *     empty while the person's switch «сдаёт смену в системе» is off, and then nothing on the screen changes;
+ * Every read is the session's user's own (`any-session`; Hub takes the user from the session, never from the query)
+ * and carries sales only — no rates, pay, payouts or debts, nothing of anyone else:
+ *   - `accountShifts` { days, until? } — the window's shifts, each with its report, paired by Hub
+ *     (services/own-shift-rows.ts): Hub's shift and its sales by the rule, the ledger's report, the report handed in in
+ *     Hub; and the window before's reports' sum to compare with;
  *   - `shiftReportNotes` { days, until? } — what stands between the person's own shifts of a day and their reports
  *     (shared/reportNotes.ts), read apart: the journal never waits for it.
  * Query keys start with "my-shifts".
  */
 
-export interface MyShiftsData {
-  stats: ChatterStats;
-  /** null — the reports did not come (the ledger is away: 503, or another failure). The shifts still show. */
-  reports: AccountReportsResponse | null;
-  /** The shifts' reports handed in in Hub; null — not read (the screen stays as before). */
-  hub: ShiftReportsListResponse | null;
-}
-
 /**
- * The period's shifts and their reports, read together so a shift and its
- * report always come from the same window: while another period is read, the
- * old pair stays on screen whole (never this week's shifts beside last week's
- * reports). Hub not answering fails the read (the screen's error state); the
- * ledger not answering leaves `reports` null.
+ * The period's shifts and their reports, one read: while another period is read, the old rows stay on screen whole.
+ * Hub not answering fails the read (the screen's error state); the ledger not answering is `reportsRead: false`.
  */
 export function useMyShifts(window: MyShiftsWindow, current: boolean) {
-  const query = useQuery({
-    queryKey: ["my-shifts", "period", window.days, window.until ?? null, window.reportsFrom, window.reportsTo],
-    queryFn: async (): Promise<MyShiftsData> => {
-      const [stats, reports, hub] = await Promise.allSettled([
-        kernel.accountChatterStats({ query: { days: window.days, ...(window.until ? { until: window.until } : {}) } }),
-        kernel.accountReports({ query: { from: window.reportsFrom, to: window.reportsTo } }),
-        kernel.shiftReportsList({ query: { from: addDays(window.from, -1), to: window.to } }),
-      ]);
-      if (stats.status === "rejected") throw stats.reason;
-      return {
-        stats: stats.value,
-        reports: reports.status === "fulfilled" ? reports.value : null,
-        hub: hub.status === "fulfilled" ? hub.value : null,
-      };
-    },
+  return useQuery({
+    queryKey: ["my-shifts", "period", window.days, window.until ?? null],
+    queryFn: () => kernel.accountShifts({ query: { days: window.days, ...(window.until ? { until: window.until } : {}) } }),
     placeholderData: keepPreviousData,
     staleTime: 60_000,
     // While a shift goes on, its worked time and sales move: a fresh read every minute (only while the tab is seen).
     refetchInterval: (state) => (current && state.state.data?.stats.shifts.some((shift) => shift.ongoing) ? 60_000 : false),
   });
-  return query;
 }
 
 /**
@@ -75,15 +47,6 @@ export function useMyShiftNotes(window: MyShiftsWindow) {
     retry: false,
   });
   return query.data?.notes ?? null;
-}
-
-/** The reports of the window before, for the change; any failure is no change, never a zero. */
-export function usePreviousReports(window: MyShiftsWindow) {
-  return useQuery({
-    queryKey: ["my-shifts", "previous", window.previous.reportsFrom, window.previous.reportsTo],
-    queryFn: () => kernel.accountReports({ query: { from: window.previous.reportsFrom, to: window.previous.reportsTo } }),
-    staleTime: 10 * 60_000,
-  });
 }
 
 /**

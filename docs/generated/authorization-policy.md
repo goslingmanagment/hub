@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 84 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (531)
+## Routes (533)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -34,6 +34,7 @@ A full device token is not affected.
 | PUT | `/api/v1/account/payout-details` | `accountPayoutDetailsSet` | `any-session` | — | — | no |
 | GET | `/api/v1/account/reports` | `accountReports` | `any-session` | — | — | no |
 | GET | `/api/v1/account/shift-numbers` | `accountShiftNumbers` | `any-session` | — | — | no |
+| GET | `/api/v1/account/shifts` | `accountShifts` | `any-session` | — | — | no |
 | GET | `/api/v1/account/start` | `accountStart` | `any-session` | — | — | no |
 | GET | `/api/v1/account/stats` | `accountChatterStats` | `any-session` | — | — | no |
 | GET | `/api/v1/admin/ai/accounts` | `adminAiAccountsList` | `owner-session` | — | — | no |
@@ -556,6 +557,7 @@ A full device token is not affected.
 | POST | `/api/v1/team/win-back/approaches` | `teamWinBackApproachSave` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/win-back/results` | `teamWinBackResults` | `any-session` | — | — | no |
 | GET | `/api/v1/transactions` | `crossPageTransactions` | `session` | — | — | no |
+| GET | `/api/v1/workboard/today` | `workboardToday` | `any-session` | — | — | no |
 | GET | `/api/v2/fans/search` | `fansSearch` | `any` | — | — | no |
 | GET | `/api/v2/spenders` | `spenders` | `any` | — | — | yes |
 | POST | `/api/v2/spenders:batch` | `spenderBatch` | `any` | — | — | yes |

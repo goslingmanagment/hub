@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import type { AccountShiftReport } from "@agency_hub_core/contracts";
+import { comparisonOf, ownShiftsWindow, pairShiftsWithReports, previousReportedMills } from "../packages/contracts/src/own-shift-rows.ts";
 import { resolvePeriod } from "../packages/ui/src/period.ts";
 import {
-  comparisonOf,
   factsOf,
-  joinShifts,
   myShiftsWindow,
-  previousReportedMills,
+  rowsOf,
   UNKNOWN_TIME,
   type StatsShift,
 } from "../apps/workboard/src/screens/my-shifts/model.ts";
 
-// Workboard's «Мои смены»: a chatter's shifts (Hub) and their reports (the agency
+/** Hub pairs (contracts own-shift-rows.ts, run by the server's `accountShifts`); the screen labels the rows. */
+const joinShifts = (input: Parameters<typeof pairShiftsWithReports>[0]) => rowsOf(pairShiftsWithReports(input));
+
+// Workboard's «Мои смены» and «Сегодня»: a chatter's shifts (Hub) and their reports (the agency
 // ledger: the agent's draft, the chatter's post in «Отчётность», or both) as one
-// row each. The ledger dates a report by the Moscow day its shift BEGAN, a
+// row each, paired by Hub's server. The ledger dates a report by the Moscow day its shift BEGAN, a
 // night's own day is the one holding most of it: the join goes by time, and a
 // post written without the agent — it has no window — by the day its shift began.
 
@@ -281,21 +283,23 @@ describe("factsOf", () => {
 describe("the window and the comparison", () => {
   const now = Date.parse(msk("2026-11-10", "23:00"));
 
-  it("reads a whole calendar week, and the reports from the day before it", () => {
-    const window = myShiftsWindow(resolvePeriod({ kind: "week", monday: "2026-11-09" }, "2026-11-10"), now);
-    expect(window).toMatchObject({ days: 7, until: "2026-11-15", from: "2026-11-09", to: "2026-11-15", clipped: false, reportsFrom: "2026-11-08", reportsTo: "2026-11-10" });
-    expect(window.previous).toMatchObject({ reportsFrom: "2026-11-01", reportsTo: "2026-11-08" });
+  it("asks Hub for a whole calendar week; Hub reads the reports from the day before it", () => {
+    const window = myShiftsWindow(resolvePeriod({ kind: "week", monday: "2026-11-09" }, "2026-11-10"));
+    expect(window).toMatchObject({ days: 7, until: "2026-11-15", from: "2026-11-09", to: "2026-11-15", clipped: false });
+    const hub = ownShiftsWindow({ days: window.days, until: window.until, now });
+    expect(hub).toMatchObject({ from: "2026-11-09", to: "2026-11-15", startsAt: window.startsAt, endsAt: window.endsAt, reportsFrom: "2026-11-08", reportsTo: "2026-11-10" });
+    expect(hub.previous).toMatchObject({ reportsFrom: "2026-11-01", reportsTo: "2026-11-08" });
   });
 
   it("shows the last 31 days of a longer own range", () => {
-    const window = myShiftsWindow(resolvePeriod({ kind: "range", from: "2026-09-01", to: "2026-10-31" }, "2026-11-10"), now);
+    const window = myShiftsWindow(resolvePeriod({ kind: "range", from: "2026-09-01", to: "2026-10-31" }, "2026-11-10"));
     expect(window).toMatchObject({ days: 31, until: "2026-10-31", from: "2026-10-01", to: "2026-10-31", clipped: true });
   });
 
   it("cuts the week before at the same point — at the start of the shift going on, whose report is not there yet", () => {
-    const window = myShiftsWindow(resolvePeriod({ kind: "week", monday: "2026-11-09" }, "2026-11-10"), now);
+    const window = ownShiftsWindow({ days: 7, until: "2026-11-15", now });
     const cut = comparisonOf(window, now, msk("2026-11-10", "20:00"));
-    expect(cut).toMatchObject({ endsAt: Date.parse(msk("2026-11-03", "20:00")), label: "2–3 нояб.", sameTime: true });
+    expect(cut).toMatchObject({ endsAt: Date.parse(msk("2026-11-03", "20:00")), sameTime: true });
     // Last week's Tuesday evening shift began after that point: it is not compared with today's, still without a report.
     const reports = [
       report(11, "2026-11-02", msk("2026-11-02", "18:00"), msk("2026-11-02", "23:00"), { totalMills: 60_000 }),
@@ -303,12 +307,12 @@ describe("the window and the comparison", () => {
     ];
     expect(previousReportedMills(reports, cut)).toBe(60_000);
     // A week that is over is compared with the whole week before it.
-    const past = myShiftsWindow(resolvePeriod({ kind: "week", monday: "2026-11-02" }, "2026-11-10"), now);
-    expect(comparisonOf(past, now, null)).toMatchObject({ label: "26 окт. – 1 нояб.", sameTime: false });
+    const past = ownShiftsWindow({ days: 7, until: "2026-11-08", now });
+    expect(comparisonOf(past, now, null)).toMatchObject({ startsAt: Date.parse(msk("2026-10-26", "00:00")), endsAt: Date.parse(msk("2026-11-02", "00:00")), sameTime: false });
   });
 
   it("has nothing to compare with when the ledger holds no report of the window before", () => {
-    const window = myShiftsWindow(resolvePeriod({ kind: "days", days: 14 }, "2026-11-10"), now);
+    const window = ownShiftsWindow({ days: 14, now });
     expect(previousReportedMills([], comparisonOf(window, now, null))).toBeNull();
     expect(previousReportedMills(null, comparisonOf(window, now, null))).toBeNull();
   });

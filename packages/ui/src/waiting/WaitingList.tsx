@@ -68,6 +68,8 @@ export interface WaitingContext {
   open: (param: "dispute" | "claim" | "offPlatform" | "nobody" | "unlinked", value: string) => void;
   /** A matter's link (a path of either product): Workboard's own inside Workboard, anything else by a page load. */
   link: (link: string, children: ReactNode) => ReactNode;
+  /** A colleague's question on the viewer's own sale, answered in the line («Согласен», «Не согласен»): Workboard's. */
+  answerClaim?: (claimId: number) => ReactNode;
 }
 type Context = WaitingContext;
 
@@ -156,6 +158,19 @@ function lineOf(matter: Matter, context: Context): Line {
         title,
         about: [send ? fanWords(context.fanOf(send), send.fanRef) : null, ...pages, sentBy ? `отправлял ${sentBy}` : null].filter((part): part is string => part !== null),
         action: <Button size="sm" variant="secondary" onClick={() => context.openSend(attemptId)}>Разобрать</Button>,
+      };
+    }
+    case "sale.claim": {
+      // A colleague asks for the viewer's sale: a day to answer, then it stays with the one who asked (`silenceSettles`).
+      const claimId = number(evidence.claimId);
+      const answerBy = text(evidence.answerBy);
+      const why = text(evidence.note);
+      if (!matter.mine || claimId === null || context.answerClaim === undefined) return base;
+      return {
+        ...base,
+        about: [why === null ? null : `«${why.trim()}»`, ...pages, answerBy === null ? null : `ответьте до ${formatDateTime(answerBy)}, иначе продажа останется за тем, кто забрал`]
+          .filter((part): part is string => part !== null),
+        action: context.answerClaim(claimId),
       };
     }
     case "sale.dispute": {

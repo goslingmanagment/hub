@@ -1,11 +1,10 @@
-import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router";
+import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ErrorState, Skeleton } from "@agency_hub_core/ui";
 import { groupOfAnchor } from "@agency_hub_core/ui/waiting/kinds";
 import { WaitingList, waitingSummary, type WaitingContext, type WaitingListProps } from "@agency_hub_core/ui/waiting/WaitingList";
 import { heldSendsQuery, saleQuestionsQuery } from "@/shared/decisions";
-import { consoleHref } from "@/shared/links";
 import { mattersListQuery, mattersWaitingQuery } from "@/shared/matters";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { useMe } from "@/shared/useMe";
@@ -13,6 +12,8 @@ import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
 import { ResolveSendModal } from "../decisions/HeldSends";
 import { DisputeModal, NobodyModal, OffPlatformModal, UnlinkedModal } from "./Disputes";
+import { goLink } from "./links";
+import { ClaimAnswer } from "./MyMatters";
 import { useFanNames, type FanRefOnPage, type HeldSend } from "../decisions/data";
 
 /**
@@ -23,15 +24,6 @@ import { useFanNames, type FanRefOnPage, type HeldSend } from "../decisions/data
  */
 
 const MINUTE = 60_000;
-
-/** A matter's link: Workboard's own (`/workboard/…`) inside the app, the console's by a page load. */
-function goLink(link: string, children: ReactNode): ReactNode {
-  if (link.startsWith("/workboard/") || link === "/workboard") {
-    const inside = link.slice("/workboard".length) || "/";
-    return <Link to={inside} className="wt-go">{children}</Link>;
-  }
-  return <a href={consoleHref(link)} className="wt-go">{children}</a>;
-}
 
 export function WaitingScreen() {
   const { isOwner } = useMe();
@@ -75,6 +67,7 @@ export function WaitingScreen() {
     openSend: (id) => setSend(id),
     open: (param, value) => setParam(param, value),
     link: goLink,
+    answerClaim: (claimId) => <ClaimAnswer claimId={claimId} />,
   };
   // Package G's windows, by the address (a matter's link lands on its window).
   const disputeParam = Number(search.get("dispute"));

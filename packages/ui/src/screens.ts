@@ -198,14 +198,6 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "any",
     keywords: "решения дела чья продажа вопросы отчёты кастомы отправки люди доступ сбои ledger публикации контент",
   },
-  // Workboard's list of what waits (it was «Решения» at /workboard/decisions): a team lead's and a chatter's whole,
-  // the owner's Workboard part (its number is that part of the same read).
-  {
-    id: "waiting", path: "/workboard/waiting", label: "Ждут вас", title: "Ждут вас", section: "team", product: "workboard", icon: "Inbox", count: "waiting",
-    why: "Что ждёт вашего слова: вопросы, отчёты смен, кастомы, отправки.",
-    pageFilter: "any",
-    keywords: "решения чья продажа вопросы генгар отчёты посты не разобраны оплаченный день изменён кастомы проверить отправки зависшие",
-  },
 
   // ── Деньги ─────────────────────────────────────────────────────────────
   {
@@ -322,6 +314,23 @@ export const SCREENS: readonly Screen[] = [
     why: "Шаги до первой смены: расширение, вход, страницы, первая работа, куда платить.",
     pageFilter: "none",
     notSearched: true,
+  },
+  {
+    // The home of every role (products plan §2.3, package W): the person's own day and the teams they lead; `/workboard/`
+    // leads here.
+    id: "today", path: "/workboard/today", label: "Сегодня", title: "Сегодня", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"], icon: "House",
+    why: "Что сегодня: смена, что ждёт, неделя; у тимлида кто на смене, отчёты и разборы.",
+    pageFilter: "none",
+    keywords: "главная дом начало дня от прошлой смены моя смена неделя кто на смене не вышел график дыры разборы первый день",
+  },
+  // Workboard's list of what waits (it was «Решения» at /workboard/decisions): a team lead's and a chatter's whole,
+  // the owner's Workboard part (its number is that part of the same read).
+  {
+    id: "waiting", path: "/workboard/waiting", label: "Ждут вас", title: "Ждут вас", section: "team", product: "workboard", icon: "Inbox", count: "waiting",
+    roles: ["owner", "team_lead", "chatter"],
+    why: "Что ждёт вашего слова: вопросы, отчёты смен, кастомы, отправки.",
+    pageFilter: "any",
+    keywords: "решения чья продажа вопросы генгар отчёты посты не разобраны оплаченный день изменён кастомы проверить отправки зависшие",
   },
   {
     id: "my-shifts", path: "/workboard/my/shifts", label: "Мои смены", title: "Мои смены", section: "team", product: "workboard", roles: ["chatter"], icon: "CalendarClock",
@@ -934,9 +943,9 @@ export interface MenuItem {
  * A product's menu for a role, the items above the rule and under it, from the one table:
  * - Hub, the owner's alone: its sections (Главная · Ждут вас · Деньги · Фаны · Страницы · Контент · Трафик · Анкеты ·
  *   Люди, then Настройки · Система under the rule); a section without a screen the owner may open is not there.
- * - Workboard, every role's: its screens the role opens, in the table's order, with their own icons (the owner and a
- *   team lead: Ждут вас · Смены · Команда · Кастомы · Что продаёт, the owner also Выплаты; a chatter: Мои смены ·
- *   Смены · Кастомы, «Начало» first while a newcomer's step is open, «Команда» while they lead a team).
+ * - Workboard, every role's: its screens the role opens, in the table's order, with their own icons (one menu, products
+ *   plan §2.3: Сегодня · Ждут вас · Смены · Команда · Фаны · Кастомы · …; «Начало» first while a newcomer's step is
+ *   open, «Команда» while they lead a team).
  */
 export function productMenu(product: ScreenProduct, role: Role, holds: Partial<Record<MenuWhen, boolean>> = {}): { upper: MenuItem[]; lower: MenuItem[] } {
   const upper: MenuItem[] = [];

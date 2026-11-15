@@ -13,9 +13,9 @@ export const TEAM: readonly Role[] = ["owner", "team_lead"];
 export const OWNER: readonly Role[] = ["owner"];
 export const CHATTER: readonly Role[] = ["chatter"];
 
-/** Where Workboard opens for a role: a chatter's «Мои смены», the team's Смены. */
-export function homePath(role: Role | null): string {
-  return role === "chatter" ? "/my/shifts" : "/shifts";
+/** Where Workboard opens: «Сегодня», every role's home (products plan §2.3); the role changes what is in it. */
+export function homePath(_role?: Role | null): string {
+  return "/today";
 }
 
 /** Who is signed in (`me`). A 401 sends to the console's sign-in by itself (hub.ts). */

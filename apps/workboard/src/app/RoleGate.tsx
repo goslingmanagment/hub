@@ -38,8 +38,8 @@ function NotForChatter() {
   useWorkboardTitle();
   return (
     <div className="wb-content">
-      <EmptyState title="Этот раздел для владельца и тимлидов" action={<LinkButton variant="primary" to={homePath("chatter")}>Мои смены</LinkButton>}>
-        Ваши смены и отчёты по ним в «Моих сменах».
+      <EmptyState title="Этот раздел для владельца и тимлидов" action={<LinkButton variant="primary" to={homePath("chatter")}>Сегодня</LinkButton>}>
+        Ваша смена, что ждёт вас и ваша неделя в «Сегодня».
       </EmptyState>
     </div>
   );
@@ -68,7 +68,7 @@ function NotYours() {
   useWorkboardTitle();
   return (
     <div className="wb-content">
-      <EmptyState title="Это раздел чаттера" action={<LinkButton to={homePath("owner")}>К сменам</LinkButton>}>
+      <EmptyState title="Это раздел чаттера" action={<LinkButton to={homePath("owner")}>Сегодня</LinkButton>}>
         Здесь чаттер видит свои смены и отчёты по ним. У вашей учётной записи их нет.
       </EmptyState>
     </div>

@@ -103,3 +103,8 @@ export function useMyMoneyParts(window: MyShiftsWindow, columns: readonly Column
   }, [pay, columns, accrual]);
   return { block: <MoneyBlock read={read} />, columns: withMoney };
 }
+
+/** «Мои деньги» alone, for «Сегодня»: the same block over the same read; nothing while the person's switch is off. */
+export function MyMoneyBlock({ window }: { window: Pick<MyShiftsWindow, "from" | "to"> }) {
+  return <MoneyBlock read={useMyMoney(window)} />;
+}

@@ -22,9 +22,8 @@ export interface ScreenHandle {
 }
 
 /**
- * `/` is Смены for the team and «Мои смены» for a chatter, with whatever the
- * address carried — and «Начало» for a newcomer with a step still open (it
- * leaves once every step is done). The start's read is a chatter's only.
+ * `/` is «Сегодня» for every role (products plan §2.3), with whatever the address carried — and «Начало» for a newcomer
+ * with a step still open (it leaves once every step is done). The start's read is a chatter's only.
  */
 function HomeRedirect() {
   const location = useLocation();
@@ -45,8 +44,6 @@ const teamScreens: RouteObject[] = [
   // The team's tabs of «Продажи» (a chatter's session never reaches their operations): «Возврат фанов», «Рассылки».
   { path: "sales/win-back", lazy: () => import("../screens/sales/team.js").then((m) => ({ Component: m.WinBackScreen })) },
   { path: "sales/mass", lazy: () => import("../screens/sales/team.js").then((m) => ({ Component: m.MassScreen })) },
-  // «Ждут вас» (it was Решения at `/decisions`, which leads here): the list read from matters.
-  { path: "waiting", lazy: () => import("../screens/waiting/index.js").then((m) => ({ Component: m.WaitingScreen })) },
   { path: "payouts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
 ];
 
@@ -102,6 +99,11 @@ function OldAddress() {
  * team lead and a chatter the orders of their pages (Hub decides).
  */
 const everyoneScreens: RouteObject[] = [
+  // «Сегодня» (products package W): the home of every role — the person's own day, and the teams they lead.
+  { path: "today", lazy: () => import("../screens/today/index.js").then((m) => ({ Component: m.TodayScreen })) },
+  // «Ждут вас» (it was Решения at `/decisions`, which leads here): every role's; whoever leads a team gets the team's
+  // list behind the lead boundary (screens/waiting/entry.tsx), anyone else their own.
+  { path: "waiting", lazy: () => import("../screens/waiting/entry.js").then((m) => ({ Component: m.WaitingEntry })) },
   // «Смены» and «Разбор смены» (products package T): the team's, a chatter's too — Hub cuts every read to the viewer's
   // teams (services/teams.ts); a chatter reaches them from «Смены» → «Команда».
   { path: "shifts", lazy: () => import("../screens/shifts/index.js").then((m) => ({ Component: m.ShiftsScreen })) },

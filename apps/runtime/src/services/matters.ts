@@ -295,11 +295,12 @@ async function pageIdOf(app: MattersApp, pageLabel: string | undefined, idOf: Ma
 export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPrincipal, now: Date = new Date()): Promise<MattersWaitingResponse> {
   const viewer = await matterViewerOf(app, principal);
   const heldRoles = await heldRolesOf(app, viewer);
-  // A chatter who leads no team waits for nothing here (their own matters are «Мои смены»'s strip).
+  // A chatter who leads no team waits for their own matters alone (Workboard «Ждут вас», products package W): no
+  // tracked kind, no customs line.
   const plain = viewer.role === "chatter" && heldRoles.length === 0;
   const [matters, checks] = await Promise.all([
-    // What waits for the viewer themself.
-    plain ? Promise.resolve([]) : listVisibleMatters(app.db, { viewer, state: "open", heldRoles, limit: 5000 }),
+    // What waits for the viewer themself (a plain chatter holds no role: their own user's alone).
+    listVisibleMatters(app.db, { viewer, state: "open", heldRoles, limit: 5000 }),
     listMatterChecks(app.db),
   ]);
   const kindState = kindStates(checks, now);
@@ -311,7 +312,7 @@ export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPr
     ...(viewer.role === "owner" ? MATTER_CHECK_KINDS.filter((kind) => !isMatterInfoKind(kind)) : []),
   ];
   const waiting = matters.filter((matter) => !isMatterInfoKind(matter.kind));
-  const groups = plain ? [] : buildWaitingGroups({
+  const groups = buildWaitingGroups({
     matters: waiting, kindState, trackedKinds,
     ...(orders === undefined ? {} : { customOrders: orders }),
     // The owner's groups lead to the owner's combined list in Hub; everyone else's to Workboard's.

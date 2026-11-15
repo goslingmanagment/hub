@@ -308,6 +308,7 @@ export * from "./repositories/media-looks.ts";
 // The people registry (0384–0386): people, their logins, keys, working pages, schedule, rights, pay terms, proposals.
 export * from "./repositories/people.ts";
 export * from "./repositories/team-roles.ts";
+export * from "./repositories/workboard-today.ts";
 // «Начало» of a newcomer (0402): the facts its steps close by, and where a person's payouts go.
 export * from "./repositories/person-start.ts";
 export * from "./repositories/publication-files.ts";
