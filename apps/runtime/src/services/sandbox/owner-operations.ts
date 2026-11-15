@@ -48,6 +48,11 @@ export const SANDBOX_OWNER_OPERATIONS: ReadonlySet<string> = new Set([
   "shiftReportNotes",
   "shiftReportsList",
   "shiftReport",
+  // Workboard «Сегодня», «Смены → Мои/График» and «Команда → Новички» (products package W): its own shifts (none: an
+  // owner works none), the teams of the test realm (the models of its realm, `workboardToday`), the test realm's newcomers.
+  "workboardToday",
+  "accountShifts",
+  "teamNewcomers",
   // What waits for it: the test realm's matters.
   "mattersList",
   "mattersWaiting",
