@@ -10,6 +10,7 @@ import {
   mayAct,
   phaseAfter,
   silenceSettles,
+  withSettlementsNow,
   type BoardAction,
 } from "../apps/runtime/src/services/shift-report-phases.ts";
 
@@ -143,3 +144,31 @@ describe("a day of silence", () => {
     expect(silenceSettles({ ...claim, state: "agreed" }, later(48))).toBe(false);
   });
 });
+
+describe("what changed since the hand-in, read at «Подтверждаю»", () => {
+  it("drops a «долёт» another report of the person took meanwhile: a sale counts in one report only", () => {
+    const late = line(30, { netMills: 100_000, added: true });
+    const own = line(31, { netMills: 20_000 });
+    // The draft now: the other report holds the «долёт», so it is no line here any more.
+    const lines = withSettlementsNow([late, own], [own]);
+    expect(lines.map((one) => one.transactionId)).toEqual([31]);
+  });
+
+  it("counts 0 a sale another report of the person holds now", () => {
+    const sold = line(32, { netMills: 50_000 });
+    const [held] = withSettlementsNow([sold], [{ ...sold, alreadyIn: { shiftId: 9, reportDate: "2026-11-12" }, amountMills: 0 }]);
+    expect(held).toMatchObject({ amountMills: 0, alreadyIn: { shiftId: 9 } });
+  });
+
+  it("takes a decision made since the hand-in, and drops one cancelled since", () => {
+    const disputed = line(33, { netMills: 16_000, shareMills: 0, home: "shift", toUserId: 5, statement: "mine", amountMills: 0, disputed: true, claimedMills: 16_000 });
+    const { claimedMills: _claimed, ...plain } = disputed;
+    const [decided] = withSettlementsNow([disputed], [{ ...plain, amountMills: 8_000, disputed: false, settled: "owner" }]);
+    expect(decided).toMatchObject({ amountMills: 8_000, disputed: false, settled: "owner" });
+    expect(decided).not.toHaveProperty("claimedMills");
+    const [cancelled] = withSettlementsNow([decided!], [disputed]);
+    expect(cancelled).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 16_000 });
+    expect(cancelled).not.toHaveProperty("settled");
+  });
+});
+

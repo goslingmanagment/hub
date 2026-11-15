@@ -3,6 +3,8 @@ import {
   type KernelOperationResponse, type ShiftReportBoard, type ShiftReportOwner, type ShiftReportPhase, type ShiftReportRow,
 } from "@agency_hub_core/contracts";
 
+import { millsFromDollars, millsToNumber } from "@agency_hub_core/shared";
+
 import { demoError, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 
 /**
@@ -116,7 +118,7 @@ const SHIFT_START = at(12, "18:00");
 const SHIFT_END = at(13, "02:00");
 const HANDED_IN = at(13, "02:04");
 const COUNTED = at(13, "02:09");
-const m = (usd: number) => Math.round(usd * 1000);
+const m = (usd: number) => millsToNumber(millsFromDollars(usd));
 
 const half = (own: Own) => (own.startsWith("half:") ? own.slice(5) as "seva" : null);
 const cut = (own: Own, net: number) => (own === "me" ? net : half(own) ? net / 2 : 0);
