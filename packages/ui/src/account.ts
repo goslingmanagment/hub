@@ -142,13 +142,13 @@ export type LinkKind = "invite" | "password_reset";
 export function joinHeadline(kind: LinkKind, username: string): string {
   return kind === "password_reset"
     ? `${username}, придумайте новый пароль`
-    : `Здравствуйте, ${username}! Придумайте пароль для ChatGoose`;
+    : `Здравствуйте, ${username}! Придумайте пароль`;
 }
 
 export function joinSubheadline(kind: LinkKind): string {
   return kind === "password_reset"
     ? "Все прежние входы завершены: после нового пароля войдите заново на каждом устройстве."
-    : "Логин уже есть, осталось придумать пароль, с которым вы будете входить.";
+    : "Логин уже есть. С этим паролем вы будете входить в Workboard и в расширение ChatGoose.";
 }
 
 export function doneHeadline(kind: LinkKind): string {
