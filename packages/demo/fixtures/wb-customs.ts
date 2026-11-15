@@ -68,7 +68,7 @@ const TASKS: readonly string[] = [
 const PRICES: readonly string[] = ["100$ тир Master + 50$", "150$ чаевые", "250$ уже оплачено", "100$ чаевые + 100$ после готовности", "60$", "150$ подписка + 50$ чаевые", "80$ чаевые", "220$"];
 const CLOTHES: readonly string[] = ["Красное бельё, каблуки", "Спортивный комплект", "Его футболка, под ней ничего", "Чёрное платье, чулки", "Фартук на голое тело"];
 /** The order of steps the seeds walk through; the board shows every column. */
-const STATE_CYCLE: readonly CustomOrderState[] = ["at_model", "paid", "shot", "recorded", "at_model", "partly", "given", "revision", "shot", "checked", "at_model", "closed", "refused", "given"];
+const STATE_CYCLE: readonly CustomOrderState[] = ["at_model", "paid", "shot", "recorded", "checked", "partly", "given", "revision", "shot", "at_model", "at_model", "closed", "refused", "given"];
 
 const DEMO_CHAT = "1000000001";
 /** A person as the people registry names them (the demo's users carry the name). */
