@@ -1,5 +1,7 @@
 // Product guidance, not runtime configuration. Applied values always come from
 // adminConfig. Research and consumer evidence: investigations/feature-controls-2026-09-11.
+import { contentopsScreen } from "@/lib/contentops";
+
 export type FeatureAdvice = "keep" | "optional" | "diagnostic" | "off";
 export type FeatureGroup = "Fansly" | "OnlyFans" | "AI и агенты" | "Система";
 export interface FeatureGate { key: string; off?: readonly (string | boolean)[]; }
@@ -126,7 +128,7 @@ const FEATURE_TUNING_KEYS: ReadonlySet<string> = new Set(["aiFeatureModels", "ai
  */
 export function configHomeHref(key: string): { to: string; hint: string } {
   if (key === "fanslyDefaultDelayMs") return { to: `/system/collection#config-${key}`, hint: "Сбор данных" };
-  if (key === "publishingEnabled" || key === "publishingOnlyfansEnabled") return { to: "/content/publications?panel=settings", hint: "Настройки публикации" };
+  if (key === "publishingEnabled" || key === "publishingOnlyfansEnabled") return { to: contentopsScreen("publications", { panel: "settings" }), hint: "Настройки публикации" };
   if (FEATURE_TUNING_KEYS.has(key)) return { to: "/settings/ai/features#tuning", hint: "Функции ИИ" };
   const feature = HUB_FEATURES.find((candidate) => candidate.keys.includes(key));
   if (feature) return { to: `/settings/ai/features/${encodeURIComponent(feature.id)}#config-${key}`, hint: "Функции ИИ" };

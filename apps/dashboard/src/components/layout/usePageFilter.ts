@@ -7,9 +7,7 @@ import { usePageFilterStore } from "@/stores/pageFilterStore";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
 /** Address parameters a change of the page makes meaningless: a list position,
- *  an expanded row, an opened record or panel. The period stays. So does an open
- *  post (`publication`): its panel reads the post by its own id, and the post keeps
- *  its own page whatever the filter says (design/screens/publications.md). */
+ *  an expanded row, an opened record or panel. The period stays. */
 const RESET_WITH_PAGE = ["offset", "row", "chart", "txOffset", "spendersOffset", "failure", "media", "fan", "show"] as const;
 
 export interface PageFilterView {

@@ -108,7 +108,8 @@ export function publicationItems(
     pageLabels: [publication.pageLabel],
     money: false,
     evidence: { publicationId: publication.id, kind: publication.kind, publishAt: publication.publishAt, version: publication.version },
-    link: `/content/publications?status=${status}&window=all&page=all`,
+    // The post's card in ContentOps' «Публикации» (products package C2): Hub's hop finds the page's model.
+    link: `/contentops/publications?${new URLSearchParams({ page: publication.pageLabel, publication: String(publication.id), status, window: "all" })}`,
   }));
 }
 

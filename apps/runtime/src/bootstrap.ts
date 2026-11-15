@@ -1,3 +1,4 @@
+import type { ContentopsProbe } from "./services/content-screens-moved.ts";
 import type { PageBrowserEndpoints } from "./services/egress/page-browser-login.ts";
 import { ofapiCollectionPolicyHooks } from "./services/ofapi-collection-policy.ts";
 import {
@@ -109,6 +110,9 @@ export interface AppContext {
    *  absent for the CLI and for AppContext literals (node-postgres' 10 s idle
    *  close lets a one-shot command exit). */
   poolLifetime?: PoolLifetime | undefined;
+  /** Whether ContentOps answers, asked before Hub sends a person to its «Публикации» or «Статистика»
+   *  (services/content-screens-moved.ts). Absent: its real `/healthz`. Tests point it at a fake. */
+  contentopsProbe?: ContentopsProbe | undefined;
   close(): Promise<void>;
 }
 

@@ -1,5 +1,5 @@
 import { Suspense, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
-import { ArrowUpRight, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Link, Outlet, useLocation, useNavigate, useSearchParams } from "react-router";
 import { useAuthMe } from "@/api/queries";
 import { useOfapiStatus } from "@/api/waiting";
@@ -20,10 +20,7 @@ import {
   type Section,
   type SectionTab,
 } from "@agency_hub_core/ui/screens";
-import { contentopsHref, contentopsModelsOf } from "@agency_hub_core/ui/sites";
-import { useAgentKeys } from "@/api/agentKeys";
 import { workboardHere } from "@/lib/navigation";
-import { useDashboardShell } from "./DashboardShellContext.js";
 import { PageScopeGate } from "./PageScopeGate.js";
 import { PageFilterChip } from "./PageFilterChip.js";
 import { PeriodControl, PeriodMissingNote } from "./PeriodControl.js";
@@ -67,16 +64,10 @@ function SubRow({ sectionTab, role, screen, search }: { sectionTab: SectionTab; 
 }
 
 /**
- * The section's places in another product (Контент: ContentOps' План, Приехало,
- * Библиотека) on the chosen page's model, named beside them, when ContentOps
- * holds that model (`contentopsModelsOf`: the pages of ContentOps' sign-in key);
- * a page whose model ContentOps does not hold has none. With every page chosen
- * there is no model to name: one link to ContentOps' own start.
+ * The section's places elsewhere, named beside its tabs: another section of Hub, or a Workboard screen (another
+ * product: a page load on the team's name).
  */
 function OutsideLinks({ outside, role }: { outside: NonNullable<Section["outside"]>; role: Role }) {
-  const filter = usePageFilter();
-  const { pages, findPageByLabel } = useDashboardShell();
-  const keys = useAgentKeys(outside.site === "contentops" && role === "owner");
   if (outside.site === "hub") {
     // Another section of Hub itself: a link inside the console.
     return (
@@ -85,38 +76,12 @@ function OutsideLinks({ outside, role }: { outside: NonNullable<Section["outside
       </span>
     );
   }
-  if (outside.site === "workboard") {
-    // A Workboard screen: another product, a page load on the team's name, the same tab.
-    const links = outside.links.filter((link) => !link.ownerOnly || role === "owner");
-    if (links.length === 0) return null;
-    return (
-      <span className="section-outside">
-        {links.map((link) => <a key={link.to} className="section-tab" href={workboardHere(link.to)} title={link.title}>{link.label}</a>)}
-      </span>
-    );
-  }
-  const page = findPageByLabel(filter.page ?? undefined);
-  const held = keys.data ? contentopsModelsOf(keys.data, pages) : null;
-  if (page && held && !held.has(page.modelSlug.toLowerCase())) return null;
-  if (!page || !held) {
-    return (
-      <span className="section-outside">
-        <a className="section-tab section-tab-outside" href={contentopsHref(null, "")} target="_blank" rel="noreferrer">
-          {outside.label}
-          <ArrowUpRight size={14} aria-hidden="true" />
-        </a>
-      </span>
-    );
-  }
+  // A Workboard screen: another product, a page load on the team's name, the same tab.
+  const links = outside.links.filter((link) => !link.ownerOnly || role === "owner");
+  if (links.length === 0) return null;
   return (
     <span className="section-outside">
-      <span className="section-outside-label">{outside.label} · {page.modelName}</span>
-      {outside.links.map((link) => (
-        <a key={link.path} className="section-tab section-tab-outside" href={contentopsHref(page.modelSlug, link.path)} target="_blank" rel="noreferrer">
-          {link.label}
-          <ArrowUpRight size={14} aria-hidden="true" />
-        </a>
-      ))}
+      {links.map((link) => <a key={link.to} className="section-tab" href={workboardHere(link.to)} title={link.title}>{link.label}</a>)}
     </span>
   );
 }

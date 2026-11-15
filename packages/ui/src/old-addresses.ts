@@ -89,6 +89,8 @@ export interface OldAddressRow {
 
 const HUB = "https://hub.gosling-agency.ru";
 const TEAM = "https://chatgoose.gosling-agency.ru";
+/** ContentOps' entry for Hub's addresses, reached signed in through its sign-in by Hub (products package C2). */
+const CONTENTOPS = "https://contentops.gosling-agency.ru";
 
 /** Every address opened today that must keep working, and where it lands now (an address of a person's access: the owner's landing). */
 export const OLD_ADDRESSES: readonly OldAddressRow[] = [
@@ -133,6 +135,18 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "matter", from: `${TEAM}/workboard/people/alex`, to: `${TEAM}/workboard/team/alex` },
   { who: "matter", from: `${TEAM}/workboard/people`, to: `${TEAM}/workboard/team` },
   { who: "people's message", from: `${TEAM}/workboard/customs/K-14`, to: `${TEAM}/workboard/customs/K-14` },
+  // «Публикации» and «Статистика → Контент» are ContentOps' screens (products package C2): Hub's server sends their
+  // addresses on (apps/runtime/src/services/content-screens-moved.ts) through ContentOps' sign-in by Hub to its
+  // `/hub/<screen>`, with Hub's model of the page or post; ContentOps opens that model's screen (its HubEntryRedirect).
+  { who: "owner's bookmark, a post open", from: `${HUB}/content/publications?page=mia-1&status=draft&window=all&publication=55`, to: `${CONTENTOPS}/hub/publications?model=mia&page=mia-1&status=draft&window=all&post=55` },
+  { who: "owner's bookmark", from: `${HUB}/content/publications?panel=settings`, to: `${CONTENTOPS}/hub/publications?panel=settings` },
+  { who: "owner's bookmark, before 12.11", from: `${HUB}/publications?page=all&status=unknown`, to: `${CONTENTOPS}/hub/publications?status=unknown` },
+  { who: "owner's bookmark, before 12.11", from: `${HUB}/publication-settings`, to: `${CONTENTOPS}/hub/publications?panel=settings` },
+  { who: "owner's bookmark", from: `${HUB}/content`, to: `${CONTENTOPS}/hub/publications` },
+  { who: "matter before C2", from: `${HUB}/content/publications?status=draft&window=all&page=all`, to: `${CONTENTOPS}/hub/publications?status=draft&window=all` },
+  { who: "matter since C2, Hub's hop", from: `${HUB}/contentops/publications?page=mia-1&publication=5101&status=unknown&window=all`, to: `${CONTENTOPS}/hub/publications?model=mia&page=mia-1&status=unknown&window=all&post=5101` },
+  { who: "owner's bookmark", from: `${HUB}/stats/content?page=mia-1&period=7d&media=851203394123456789`, to: `${CONTENTOPS}/hub/stats?model=mia&page=mia-1&days=7&media=%22851203394123456789%22` },
+  { who: "owner's bookmark, before 12.11", from: `${HUB}/stats?tab=content&days=30`, to: `${CONTENTOPS}/hub/stats?days=30` },
   // Workboard's own older addresses.
   { who: "Workboard, old", from: `${TEAM}/workboard/my/reports?days=14`, to: `${TEAM}/workboard/shifts/mine?days=14` },
   { who: "Workboard, old", from: `${TEAM}/workboard/access?person=7`, to: `${HUB}/people/7/logins` },

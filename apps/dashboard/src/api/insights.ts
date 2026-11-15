@@ -40,25 +40,6 @@ export function useStatsHoldings(pageLabel: string, options: QueryOptions = {}) 
   });
 }
 
-/** The comments of the posts, over the screen's UTC days (`from` 00:00Z … `to` exclusive). */
-export function useContentComments(
-  pageLabel: string,
-  window: { from: string; to: string },
-  options: QueryOptions = {},
-) {
-  return useQuery({
-    meta: STATS_META,
-    queryKey: ["contentComments", pageLabel, window.from, window.to],
-    queryFn: () => kernel.contentComments({
-      params: { pageLabel },
-      query: { ...window, limit: 200 },
-    }),
-    enabled: (options.enabled ?? true) && pageLabel.length > 0,
-    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[1] === pageLabel ? previous : undefined),
-    staleTime: 60_000,
-  });
-}
-
 /** Yesterday's UTC day: whole, and its tags fit the server's 500 rows (spec §0, п. 8). */
 function yesterday(now = new Date()): string {
   return new Date(Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
@@ -98,17 +79,3 @@ export function useFanslyMonths(pageLabel: string, options: QueryOptions = {}) {
   });
 }
 
-/** One media's price and all-time sales: the catalog's head, asked once when its card opens. */
-export function useMediaSales(pageLabel: string, mediaOfferId: string | null, window: { from: string; to: string }) {
-  return useQuery({
-    meta: STATS_META,
-    queryKey: ["statsMediaSales", pageLabel, mediaOfferId, window.from, window.to],
-    queryFn: () => kernel.statsMedia({
-      params: { pageLabel },
-      query: { ...window, mediaOfferRef: mediaOfferId!, limit: 1, bucketLimit: 1 },
-    }),
-    enabled: pageLabel.length > 0 && mediaOfferId !== null,
-    retry: false,
-    staleTime: 5 * 60_000,
-  });
-}

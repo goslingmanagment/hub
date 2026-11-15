@@ -29,6 +29,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  authenticateSessionToken,
   canAccessPage,
   isAgentPrincipal,
   requireOwner,
@@ -66,6 +67,7 @@ import { crossOriginRefusal } from "./origin-check.ts";
 import { narrowWebSessionRefusal } from "../services/narrow-web-session.ts";
 import { asFanReader, FAN_READ_OPERATIONS } from "../services/fan-reads.ts";
 import { signinNamesOf, workboardOnConsoleRedirect } from "../services/signin-handoff.ts";
+import { contentopsAddress, contentopsDownPage, contentScreenOf, createContentopsProbe, pageOf, postOf, testOwnerPage } from "../services/content-screens-moved.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
@@ -101,7 +103,7 @@ import { registerCustomOrderRoutes } from "../modules/custom-orders/index.ts";
 import { registerOutreachRoutes } from "../modules/outreach/index.ts";
 import { registerPublicationFileRoutes } from "../modules/publication-files/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
-import { findPageSummaryByLabel } from "@agency_hub_core/db";
+import { findModelSlugOf, findPageSummaryByLabel } from "@agency_hub_core/db";
 import {
   ensureSyncQueues,
   reconcileQueueRetention,
@@ -400,6 +402,32 @@ export async function buildApiServer(appContext: AppContext) {
     if (to === null) return;
     reply.header("cache-control", "no-store");
     return reply.redirect(to, 302);
+  });
+
+  // «Публикации» and «Статистика → Контент» are ContentOps' own screens (products package C2): every address of them,
+  // old or Hub's own hop, leaves for ContentOps here — signed in through Hub, on the model Hub knows — or says in words
+  // why not (the test team's owner; ContentOps not answering). services/content-screens-moved.ts.
+  const contentopsProbe = appContext.contentopsProbe ?? createContentopsProbe();
+  server.addHook("onRequest", async (request, reply) => {
+    if (request.method !== "GET" && request.method !== "HEAD") return;
+    const moved = contentScreenOf(request.url);
+    if (moved === null) return;
+    reply.header("cache-control", "no-store");
+    const token = request.cookies[SESSION_COOKIE_NAME];
+    const principal = token ? await authenticateSessionToken(appContext, token).catch(() => null) : null;
+    const owner = principal?.user.role === "owner";
+    const test = principal?.sandbox?.test === true;
+    if (owner && test) return reply.type("text/html; charset=utf-8").send(testOwnerPage());
+    if (!(await contentopsProbe.reachable())) {
+      return reply.code(503).type("text/html; charset=utf-8").send(contentopsDownPage(request.url));
+    }
+    // The model: a page's by its label (the address names it), a post's for a signed-in person; none, and ContentOps
+    // opens the person's last model.
+    const model = await findModelSlugOf(appContext.db, {
+      publicationId: principal ? postOf(moved.search) : null,
+      pageLabel: pageOf(moved.search),
+    }).catch(() => null);
+    return reply.redirect(contentopsAddress(moved, model), 302);
   });
 
   // Route → declaration table, collected at registration time. Feeds the

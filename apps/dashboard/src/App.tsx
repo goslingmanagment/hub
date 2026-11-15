@@ -9,7 +9,6 @@ import { LEGACY_ROUTES, SETTINGS_INDEX_RULE } from "./lib/redirects.js";
 import { Legacy } from "./routes/legacy.js";
 import { LiveLegacy, PageCardLegacy } from "./routes/LiveLegacy.js";
 import { homeMoneyRoutes, MoneyIndex } from "./routes/screens/home-money.js";
-import { publicationsRoutes } from "./routes/screens/publications.js";
 import { settingsRoutes } from "./routes/screens/settings.js";
 import { statsRoutes } from "./routes/screens/stats.js";
 import { systemRoutes } from "./routes/screens/system.js";
@@ -17,6 +16,7 @@ import { trafficRoutes } from "./routes/screens/traffic.js";
 import { waitingRoutes } from "./routes/screens/waiting.js";
 import { peopleRoutes, TeamPeopleToHub } from "./routes/screens/people.js";
 import { applicationsRoutes } from "./routes/screens/applications.js";
+import { ToContentops } from "./routes/ToContentops.js";
 import { ToWorkboard } from "./routes/ToWorkboard.js";
 import { pageScreensRoutes } from "./routes/screens/fans-page.js";
 
@@ -45,6 +45,10 @@ export function App() {
           {/* «Фаны» and «Рассылки» moved to Workboard (products package M). */}
           <Route path="/fans/*" element={<ToWorkboard />} />
           <Route path="/content/mass-messages" element={<ToWorkboard />} />
+          {/* ContentOps' «Публикации» and «Статистика» (package C2): Hub's server answers these addresses. */}
+          <Route path="/contentops/*" element={<ToContentops />} />
+          <Route path="/content/publications" element={<ToContentops />} />
+          <Route path="/stats/content" element={<ToContentops />} />
           {/* «Аккаунт и устройства» is Workboard's screen: the old address leads there (or a chatter's old tab to «Мои смены»). */}
           <Route path="/account" element={<ChatterLayout />} />
           <Route element={<ProtectedLayout />}>
@@ -55,7 +59,6 @@ export function App() {
                 {waitingRoutes()}
                 {pageScreensRoutes()}
                 {statsRoutes()}
-                {publicationsRoutes()}
                 {trafficRoutes()}
                 {applicationsRoutes()}
                 {peopleRoutes()}

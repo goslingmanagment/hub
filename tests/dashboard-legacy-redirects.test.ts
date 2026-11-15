@@ -32,7 +32,8 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   [20, "/ofapi-credits", "/money/costs/onlyfans-api"],
   [21, "/usage", "/money/costs/ai"],
   [22, "/ai-spend", "/money/costs/ai"],
-  [23, "/publication-settings", "/content/publications?panel=settings"],
+  // Публикации are ContentOps' since package C2: Hub's hop, which its server sends on (content-screens-moved.ts).
+  [23, "/publication-settings", "/contentops/publications?panel=settings"],
   // 24–31 and «Команда» itself: Workboard's screens (lib/workboard.ts, old-new-map.md §5). Today is 2026-11-10.
   [24, "/team", "/workboard/shifts"],
   [25, "/team/authors?days=1", "/workboard/shifts?authors=1"],
@@ -61,8 +62,8 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   [33, "/incidents", "/system/failures"],
   [34, "/analytics?page=mia-1&range=90d", "/stats?page=mia-1&period=90d"],
   [35, "/stats?tab=overview&days=30&page=mia-1", "/stats?page=mia-1&period=30d"],
-  [36, "/stats?tab=content&days=7", "/stats/content?period=7d"],
-  ["36, a slash at the end", "/stats/?tab=content&days=7", "/stats/content?period=7d"],
+  [36, "/stats?tab=content&days=7", "/contentops/stats?period=7d"],
+  ["36, a slash at the end", "/stats/?tab=content&days=7", "/contentops/stats?period=7d"],
   [37, "/stats?tab=audience&page=mia-1", "/stats/audience?page=mia-1"],
   [38, "/stats?days=180", "/stats?period=180d"],
   [39, "/notifications?tab=incidents", "/system/failures"],
@@ -117,10 +118,10 @@ const REDIRECTS: ReadonlyArray<readonly [number | string, string, string]> = [
   ["the card: Вход в Fansly", "/pages/mia-1/browser-login", "/settings/pages/mia-1/login"],
   ["the card: Продвижение", "/pages/mia-of/promo", "/traffic/promo?page=mia-of"],
   ["the card: Рассылки", "/pages/mia-1/mass-messages?offset=20", "/workboard/sales/mass?offset=20&page=mia-1"],
-  // L2 (12.11): Публикации are a tab of «Контент».
-  ["Публикации, a publication open", "/publications?page=mia-1&status=draft&window=all&publication=55", "/content/publications?page=mia-1&status=draft&window=all&publication=55"],
-  ["Публикации, the settings panel", "/publications?panel=settings", "/content/publications?panel=settings"],
-  ["Контент itself", "/content", "/content/publications"],
+  // Публикации were a tab of «Контент» (L2, 12.11) and are ContentOps' since package C2.
+  ["Публикации, a publication open", "/publications?page=mia-1&status=draft&window=all&publication=55", "/contentops/publications?page=mia-1&status=draft&window=all&publication=55"],
+  ["Публикации, the settings panel", "/publications?panel=settings", "/contentops/publications?panel=settings"],
+  ["Контент itself", "/content", "/contentops/publications"],
 ];
 
 describe("old addresses (design/ia.md §8.2)", () => {
@@ -137,7 +138,7 @@ describe("old addresses (design/ia.md §8.2)", () => {
     expect(resolveLegacyUrl("/settings?tab=engine&page=a%2Fb")).toBe("/system/collection/a%2Fb");
   });
 
-  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/traffic/promo?page=mia-of", "/settings/pages/mia-1/account", "/settings/pages/mia-1/login", "/content/publications?page=mia-1&status=draft&window=all", "/team/applications", "/team/applications/abc", "/system/dev", "/system/dev/log/42", "/account", "/join", "/login"])(
+  it.each(["/", "/?period=30d", "/?row=mia-1&chart=page:mia-1&sort=decline&period=30d", "/stats", "/stats?period=30d&page=mia-1", "/traffic/promo?page=mia-of", "/settings/pages/mia-1/account", "/settings/pages/mia-1/login", "/contentops/publications?page=mia-1&status=draft&window=all", "/team/applications", "/team/applications/abc", "/system/dev", "/system/dev/log/42", "/account", "/join", "/login"])(
     "leaves %s where it is",
     (url) => {
       expect(resolveLegacyUrl(url)).toBeNull();
@@ -148,6 +149,8 @@ describe("old addresses (design/ia.md §8.2)", () => {
     for (const [row, , to] of REDIRECTS) {
       const pathname = new URL(to, "https://hub.invalid").pathname;
       if (pathname.startsWith("/workboard/")) continue;
+      // ContentOps' screens: Hub's server answers the hop (old-addresses.test.ts walks it on).
+      if (pathname.startsWith("/contentops/")) continue;
       expect(matchScreen(pathname), `row ${row}: ${to}`).not.toBeNull();
     }
   });
@@ -165,9 +168,7 @@ describe("the table of screens", () => {
         }
       }
     }
-    // «Статистика → Контент» left the menu for ContentOps (products plan §2.2); its address opens until it moves.
-    const addressOnly = new Set(["stats-content"]);
-    const orphans = SCREENS.filter((screen) => !seen.has(screen.id) && !addressOnly.has(screen.id)).map((screen) => screen.id);
+    const orphans = SCREENS.filter((screen) => !seen.has(screen.id)).map((screen) => screen.id);
     expect(orphans).toEqual([]);
   });
 
