@@ -221,20 +221,12 @@ describe("custom orders: who sees and moves what", () => {
     expect((await act("alice", code, { action: "checked" })).statusCode).toBe(409);
     const checked = customOrderDetailResponseSchema.parse((await act("carol", code, { action: "checked" })).json());
     expect(checked.order).toMatchObject({ state: "checked", stateWord: "Проверен", leader: { name: "Carol", phase: "shoot", product: "contentops" } });
-    // ContentOps carries a person's step: someone who does not lead the shooting is refused, its leader is written as theirs.
-    const refused = await agent(`/api/v1/agent/custom-orders/${code}`, { action: "person_step", step: "at_model", onBehalfOf: "alice", deadlineOn: "2030-01-10" });
-    expect(refused.statusCode, refused.body).toBe(409);
-    expect(refused.json()).toMatchObject({ reason: "not_allowed" });
-    const handed = await agent(`/api/v1/agent/custom-orders/${code}`, { action: "person_step", step: "at_model", onBehalfOf: "carol", deadlineOn: "2030-01-10" });
-    expect(handed.statusCode, handed.body).toBe(200);
-    expect(handed.json().order).toMatchObject({ state: "at_model", deadlineOn: "2030-01-10" });
-    expect((await agent(`/api/v1/agent/custom-orders/${code}`, { action: "person_step", step: "shot", onBehalfOf: "carol" })).statusCode).toBe(200);
-    const shot = customOrderDetailResponseSchema.parse((await get("boss", `/api/v1/custom-orders/${code}`)).json());
-    expect(shot.history.slice(-3).map((item) => [item.event, item.actor, item.onBehalfOf])).toEqual([
-      ["custom_order.deadline", "gengar", "Carol"],
-      ["custom_order.at_model", "gengar", "Carol"],
-      ["custom_order.shot", "gengar", "Carol"],
-    ]);
+    // A key no longer carries a person's step by a login: the person acts through the person's door (person-door tests).
+    const byLogin = await agent(`/api/v1/agent/custom-orders/${code}`, { action: "person_step", step: "at_model", onBehalfOf: "carol" });
+    expect(byLogin.statusCode, byLogin.body).toBe(400);
+    // The shooting's leader (the customs lead: no content manager on the model) takes it on the board.
+    expect((await act("carol", code, { action: "at_model" })).statusCode).toBe(200);
+    expect((await act("carol", code, { action: "shot" })).statusCode).toBe(200);
     // «Отдан» with no message the hub suggests: the chatter's word.
     const given = customOrderDetailResponseSchema.parse((await act("alice", code, { action: "given" })).json());
     expect(given.order).toMatchObject({ state: "given", givenMessageRef: null });
