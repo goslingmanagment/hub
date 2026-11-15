@@ -243406,6 +243406,14 @@
                           },
                           "to": {
                             "type": "string"
+                          },
+                          "product": {
+                            "type": "string",
+                            "enum": [
+                              "hub",
+                              "workboard",
+                              "contentops"
+                            ]
                           }
                         },
                         "required": [
@@ -243414,7 +243422,88 @@
                           "count",
                           "checked",
                           "tone",
-                          "to"
+                          "to",
+                          "product"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "products": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "enum": [
+                              "hub",
+                              "workboard",
+                              "contentops"
+                            ]
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "checked": {
+                            "type": "boolean"
+                          },
+                          "tone": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "bad",
+                                  "warn"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "oldest": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "title": {
+                                    "type": "string"
+                                  },
+                                  "since": {
+                                    "type": "string"
+                                  },
+                                  "link": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "title",
+                                  "since",
+                                  "link"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "count",
+                          "checked",
+                          "tone",
+                          "oldest"
                         ],
                         "additionalProperties": false
                       }
@@ -243455,6 +243544,7 @@
                   "required": [
                     "active",
                     "groups",
+                    "products",
                     "total",
                     "failed",
                     "customOrders",

@@ -20,15 +20,9 @@ const MINUTE = 60_000;
 
 // ── fan names ────────────────────────────────────────────────────────────────
 
-export interface FanRefOnPage {
-  pageLabel: string;
-  fanRef: string;
-}
-
-export interface KnownFan {
-  name: string | null;
-  username: string | null;
-}
+// The list's own types (packages/ui waiting/WaitingList.tsx): what a line needs of a fan.
+import type { FanRefOnPage, KnownFan } from "@agency_hub_core/ui/waiting/WaitingList";
+export type { FanRefOnPage, KnownFan };
 
 const fanKey = (fan: FanRefOnPage) => `${fan.pageLabel}\u0000${fan.fanRef}`;
 

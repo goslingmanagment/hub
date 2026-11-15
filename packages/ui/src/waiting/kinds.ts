@@ -1,6 +1,6 @@
 import { WAITING_GROUPS, waitingGroupOf, type WaitingGroupId } from "@agency_hub_core/contracts";
-import { ruPlural } from "@agency_hub_core/ui/plural";
-import { contentopsHref } from "@agency_hub_core/ui/sites";
+import { ruPlural } from "../plural.js";
+import { contentopsHref } from "../sites.js";
 
 /**
  * «Ждут вас»: the anchors of the groups, the words for a kind that could not be

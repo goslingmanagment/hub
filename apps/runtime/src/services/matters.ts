@@ -3,9 +3,13 @@ import { createHash } from "node:crypto";
 import {
   isMatterCheckKind,
   isMatterInfoKind,
+  HUB_WAITING_PATH,
   WAITING_GROUPS,
+  WAITING_PRODUCTS,
+  WORKBOARD_WAITING_PATH,
   waitingGroupLink,
   waitingGroupOf,
+  waitingSinceOf,
   waitingToneOf,
   worstWaitingTone,
   isCustomOrderCheckKind,
@@ -120,7 +124,7 @@ export interface MatterKindState {
   applicable: boolean;
 }
 
-type WaitingMatter = Pick<MatterRow, "id" | "kind" | "pageIds" | "evidence">;
+type WaitingMatter = Pick<MatterRow, "id" | "kind" | "pageIds" | "evidence"> & Partial<Pick<MatterRow, "title" | "openedAt" | "link">>;
 
 /** The events a counter matter stands for (`extension.critical`: its 7 days' total), else 1: the mirror's tally. */
 export function matterWeight(matter: Pick<MatterRow, "kind" | "evidence">): number {
@@ -141,6 +145,8 @@ export function buildWaitingGroups(input: {
   kindState: (kind: string) => MatterKindState;
   trackedKinds: readonly string[];
   customOrders?: number | null;
+  /** The list the groups lead to: Workboard's (default), or the owner's combined one in Hub. */
+  list?: string;
 }): MattersWaitingResponse["groups"] {
   const groups: MattersWaitingResponse["groups"] = [];
   for (const group of WAITING_GROUPS) {
@@ -161,9 +167,36 @@ export function buildWaitingGroups(input: {
       ...input.matters.filter((matter) => waitingGroupOf(matter.kind) === group.id).map((matter) => waitingToneOf(matter.kind)),
       checked ? null : "warn",
     ]);
-    groups.push({ id: group.id, title: group.title, count, checked, tone, to: waitingGroupLink(group.id) });
+    groups.push({ id: group.id, title: group.title, count, checked, tone, to: waitingGroupLink(group.id, input.list), product: group.product });
   }
   return groups;
+}
+
+/**
+ * The groups by product (Hub · Workboard · ContentOps): the Home's tiles and Workboard's number. A product's count is
+ * its groups' sum, so the products sum to `total`; its oldest is the matter waiting longest since its reason began.
+ */
+export function buildWaitingProducts(groups: MattersWaitingResponse["groups"], matters: readonly WaitingMatter[], now: Date): MattersWaitingResponse["products"] {
+  const products: MattersWaitingResponse["products"] = [];
+  for (const product of WAITING_PRODUCTS) {
+    const own = groups.filter((group) => group.product === product.id);
+    if (own.length === 0) continue;
+    const ids = new Set(own.map((group) => group.id));
+    let oldest: { title: string; since: string; link: string | null } | null = null;
+    for (const matter of matters) {
+      if (!ids.has(waitingGroupOf(matter.kind)) || matter.title === undefined || matter.openedAt === undefined) continue;
+      const since = waitingSinceOf({ kind: matter.kind, openedAt: matter.openedAt.toISOString(), evidence: matter.evidence }, now.getTime());
+      if (oldest === null || since < oldest.since) oldest = { title: matter.title, since, link: matter.link ?? null };
+    }
+    products.push({
+      id: product.id, title: product.title,
+      count: own.reduce((sum, group) => sum + group.count, 0),
+      checked: own.every((group) => group.checked),
+      tone: worstWaitingTone(own.map((group) => group.tone)),
+      oldest,
+    });
+  }
+  return products;
 }
 
 // ── The doors ───────────────────────────────────────────────────────────────
@@ -277,14 +310,18 @@ export async function readMattersWaiting(app: MattersApp, principal: HumanAuthPr
     ...mirroredKindsOf(heldRoles),
     ...(viewer.role === "owner" ? MATTER_CHECK_KINDS.filter((kind) => !isMatterInfoKind(kind)) : []),
   ];
+  const waiting = matters.filter((matter) => !isMatterInfoKind(matter.kind));
   const groups = plain ? [] : buildWaitingGroups({
-    matters: matters.filter((matter) => !isMatterInfoKind(matter.kind)), kindState, trackedKinds,
+    matters: waiting, kindState, trackedKinds,
     ...(orders === undefined ? {} : { customOrders: orders }),
+    // The owner's groups lead to the owner's combined list in Hub; everyone else's to Workboard's.
+    list: viewer.role === "owner" ? HUB_WAITING_PATH : WORKBOARD_WAITING_PATH,
   });
   return {
     // A constant for the tabs opened before the switch was removed (contracts matters.ts): nothing of ours reads it.
     active: true,
     groups,
+    products: buildWaitingProducts(groups, waiting, now),
     total: groups.reduce((sum, group) => sum + group.count, 0),
     failed: groups.filter((group) => !group.checked).map((group) => group.id),
     customOrders: orders ?? 0,

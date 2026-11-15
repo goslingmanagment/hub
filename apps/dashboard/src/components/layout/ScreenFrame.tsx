@@ -77,6 +77,14 @@ function OutsideLinks({ outside, role }: { outside: NonNullable<Section["outside
   const filter = usePageFilter();
   const { pages, findPageByLabel } = useDashboardShell();
   const keys = useAgentKeys(outside.site === "contentops" && role === "owner");
+  if (outside.site === "hub") {
+    // Another section of Hub itself: a link inside the console.
+    return (
+      <span className="section-outside">
+        {outside.links.map((link) => <Link key={link.to} className="section-tab" to={link.to} title={link.title}>{link.label}</Link>)}
+      </span>
+    );
+  }
   if (outside.site === "workboard") {
     // A Workboard screen: another product, a page load on the team's name, the same tab.
     const links = outside.links.filter((link) => !link.ownerOnly || role === "owner");

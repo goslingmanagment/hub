@@ -1,5 +1,5 @@
 import {
-  MATTER_INFO_KINDS, WAITING_GROUPS, waitingGroupLink, waitingGroupOf, waitingToneOf, worstWaitingTone, type KernelOperationResponse, type Matter,
+  HUB_WAITING_PATH, MATTER_INFO_KINDS, WAITING_GROUPS, WAITING_PRODUCTS, WORKBOARD_WAITING_PATH, waitingGroupLink, waitingSinceOf, waitingGroupOf, waitingToneOf, worstWaitingTone, type KernelOperationResponse, type Matter,
 } from "@agency_hub_core/contracts";
 
 import { formatDay } from "@agency_hub_core/look/format";
@@ -264,11 +264,26 @@ function mattersWaiting(request: DemoRequest): WaitingAnswer {
   const groups = request.role === "chatter" ? [] : WAITING_GROUPS.filter((group) => group.id !== "info").flatMap((group) => {
     const inGroup = waiting.filter((matter) => waitingGroupOf(matter.kind) === group.id);
     const tone = worstWaitingTone(inGroup.map((matter) => waitingToneOf(matter.kind)));
-    return inGroup.length === 0 ? [] : [{ id: group.id, title: group.title, count: inGroup.length, checked: true, tone, to: waitingGroupLink(group.id) }];
+    const list = request.role === "owner" ? HUB_WAITING_PATH : WORKBOARD_WAITING_PATH;
+    return inGroup.length === 0 ? [] : [{ id: group.id, title: group.title, count: inGroup.length, checked: true, tone, to: waitingGroupLink(group.id, list), product: group.product }];
+  });
+  // By product, as Hub sums them (matters.ts buildWaitingProducts): the Home's tiles and Workboard's number.
+  const products = WAITING_PRODUCTS.flatMap((product) => {
+    const own = groups.filter((group) => group.product === product.id);
+    if (own.length === 0) return [];
+    const ids = new Set(own.map((group) => group.id));
+    const oldest = waiting.filter((matter) => ids.has(waitingGroupOf(matter.kind)))
+      .map((matter) => ({ title: matter.title, since: waitingSinceOf(matter, request.now.getTime()), link: matter.link }))
+      .sort((left, right) => left.since.localeCompare(right.since))[0] ?? null;
+    return [{
+      id: product.id, title: product.title, count: own.reduce((sum, group) => sum + group.count, 0), checked: true,
+      tone: worstWaitingTone(own.map((group) => group.tone)), oldest,
+    }];
   });
   return {
     active: true,
     groups,
+    products,
     total: groups.reduce((sum, group) => sum + group.count, 0),
     failed: [],
     customOrders: 0,

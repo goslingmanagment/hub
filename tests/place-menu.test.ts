@@ -28,14 +28,15 @@ describe("Hub's menu", () => {
     expect(menu.lower.map((item) => item.label)).toEqual(["Настройки", "Система"]);
   });
 
-  it("lists no Workboard screen but «Ждут вас», which opens Workboard's list for now", () => {
+  it("lists only Hub's own screens, «Ждут вас» the owner's list in Hub", () => {
     for (const item of items("hub", "owner")) {
       const screen = matchScreen(item.to)?.screen;
       expect(screen, item.to).toBeDefined();
       expect(screenVisible(screen!, "owner"), item.to).toBe(true);
       expect(addressApp(item.to), item.to).toBe(item.app);
-      if (item.app === "workboard") expect(item.id).toBe("waiting");
+      expect(item.app, item.to).toBe("console");
     }
+    expect(items("hub", "owner").find((item) => item.id === "waiting")?.to).toBe("/waiting");
   });
 
   it("is nobody else's: a team lead and a chatter have no Hub", () => {

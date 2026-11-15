@@ -19,6 +19,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { notificationLanguage, type NotificationLanguage } from "./notification-ru.ts";
 import { sendTelegramMessage, sendTelegramPhoto, type TelegramSendResult } from "./telegram.ts";
 import { renderDailyRevenueReportImage } from "./telegram-report-image.ts";
+import { signinNamesOf } from "./signin-handoff.ts";
 import { loadTeamBlockFacts, renderTeamBlock } from "./telegram-team-block.ts";
 
 export const TOP_PAGE_LIMIT = 10;
@@ -526,7 +527,10 @@ export async function buildDailyRevenueTelegramReport(
   // The team block never holds the revenue report back.
   let team: string[] = [];
   try {
-    team = renderTeamBlock(await loadTeamBlockFacts(app, { from: previousBusinessDayStart, to: currentBusinessDayStart, now: factsAt }), factsAt);
+    team = renderTeamBlock(
+      await loadTeamBlockFacts(app, { from: previousBusinessDayStart, to: currentBusinessDayStart, now: factsAt }), factsAt,
+      app.config ? { team: signinNamesOf(app.config).team } : {},
+    );
   } catch (error) {
     app.logger?.warn({ err: error }, "Morning report team block failed; sending the report without it");
   }

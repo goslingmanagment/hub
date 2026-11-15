@@ -15,6 +15,7 @@ import { settingsRoutes } from "./routes/screens/settings.js";
 import { statsRoutes } from "./routes/screens/stats.js";
 import { systemRoutes } from "./routes/screens/system.js";
 import { trafficRoutes } from "./routes/screens/traffic.js";
+import { waitingRoutes } from "./routes/screens/waiting.js";
 import { applicationsRoutes } from "./routes/screens/applications.js";
 import { ToWorkboard } from "./routes/ToWorkboard.js";
 
@@ -45,6 +46,7 @@ export function App() {
               <Route element={<ScreenFrame />}>
                 {/* Each group's routes live in its own file: routes/screens/<group>.tsx. */}
                 {homeMoneyRoutes()}
+                {waitingRoutes()}
                 {fansRoutes()}
                 {statsRoutes()}
                 {publicationsRoutes()}
