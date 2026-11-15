@@ -914,6 +914,7 @@ async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject,
     posts: own && latest !== null && handin !== null ? postsOf(latest, subject, handin, context) : [],
     colleagues,
     claims,
+    board: null,
     serverNow: now.toISOString(),
   };
 }
@@ -1065,6 +1066,8 @@ export async function setShiftReportLine(
   now: Date = new Date(),
 ): Promise<{ savedAt: string }> {
   const { subject, catalog } = await writableSubject(app, actor, input.shiftId);
+  // `give` and `pot` (the board's words, package R) are written by step 2 of the board; until then they are refused.
+  if (input.body.statement === "give" || input.body.statement === "pot") throw new BadRequestError("This word is not taken yet", { reason: "word_not_ready" });
   const statement: ShiftReportStatement | null = input.body.statement;
   const note = input.body.note === undefined || input.body.note === null || input.body.note.trim() === "" ? null : input.body.note.trim();
   const shareWith = statement === "share" ? input.body.shareWithUserId ?? null : null;

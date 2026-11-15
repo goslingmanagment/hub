@@ -118,6 +118,21 @@ export const CLIENT_TOKEN_PROFILES = {
       "shiftReportSubmit",
       // Заявки (ecosystem package G): the other side answers a claim on the extension's «Смена».
       "saleClaimAnswer",
+      // The «Отчёт» board (package R): the board in the extension's frame runs every request through the background with
+      // this token (chat-extension's allow-list follows R-protocol.md): the current shift, «Подтверждаю», «Исправить» and
+      // its «Отмена», «Досдать», a question from the draft and its «Отменить», a card of Gengar, «Добавить» a «нет в Hub»;
+      // and what the site's own list showed («нет в Hub»).
+      "shiftReportCurrent",
+      "shiftReportConfirm",
+      "shiftReportReopen",
+      "shiftReportReopenCancel",
+      "shiftReportResend",
+      "shiftReportAsk",
+      "shiftReportAskWithdraw",
+      "shiftReportProposalAnswer",
+      "shiftReportSightingAdd",
+      "clientSaleSightings",
+
       // chatspace-tab-state-v1: the always-on ChatSpace tab's report (the server's own hub user).
       "clientChatspaceTabState",
       // onlyfans-feed-v1: what the page's ChatSpace already received, passed on

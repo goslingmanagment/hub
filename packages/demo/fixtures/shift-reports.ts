@@ -4,6 +4,7 @@ import { millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/
 import { demoError, intBetween, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_USERS, demoPage, demoUserByRole, type DemoUser } from "../world.ts";
 import { DAY_MS, MINUTE_MS, chatterWorld, mskDay, type DemoSale, type DemoShift } from "./account-model.ts";
+import { demoBoardReport, demoBoardSubmit } from "./shift-report-board.ts";
 import { demoClaimedLines, demoLineId, demoLineOutcome, demoOffPlatformOf, demoOwnShare, demoReportClaims, demoShiftId, onDemoSettle } from "./sale-claims.ts";
 
 /**
@@ -275,6 +276,7 @@ function reportOf(request: DemoRequest, found: Found): Report | DemoReply {
     posts: own && latest ? postOf(latest.body, found.shift, found.owner) : [],
     colleagues: own ? DEMO_USERS.filter((user) => user.active && user.id !== found.owner.id && user.role === "chatter" && user.pages.some((page) => found.shift.pages.includes(page))).map((user) => ({ userId: user.id, name: user.name })) : [],
     claims: demoReportClaims({ now: request.now, shiftId: found.id, ownerId: found.owner.id, lineIds: new Set((view?.lines ?? draft.lines).map((row) => row.transactionId)), own }),
+    board: null,
     serverNow: request.now.toISOString(),
   };
 }
@@ -400,6 +402,8 @@ export const shiftReportHandlers: DemoHandlers = {
     return { sales, serverNow: request.now.toISOString() };
   },
   shiftReport: (request) => {
+    const board = demoBoardReport(request, idOf(request));
+    if (board !== null) return board;
     const found = find(request, idOf(request));
     return found === null ? demoError(404, "Not Found", "No such shift") : reportOf(request, found);
   },
@@ -435,6 +439,8 @@ export const shiftReportHandlers: DemoHandlers = {
     return { savedAt: request.now.toISOString() };
   },
   shiftReportSubmit: (request) => {
+    const board = demoBoardSubmit(request, idOf(request));
+    if (board !== null) return board;
     const found = writable(request);
     if (isReply(found)) return found;
     const one = keptOf(found.id);

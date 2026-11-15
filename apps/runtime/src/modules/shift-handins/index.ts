@@ -1,6 +1,7 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import { requireHumanPrincipal, type AgentAuthPrincipal } from "../../services/auth.ts";
+import { AppError } from "../../services/errors.ts";
 import {
   addShiftReportOffPlatform,
   handinActorOf,
@@ -77,9 +78,65 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     return submitShiftReport(appContext, await person(request), { shiftId: request.params.shiftId });
   });
 
+  // --- The «Отчёт» board (package R) -----------------------------------------
+
+  const notYet = () => {
+    throw new AppError("The «Отчёт» board is not built yet", 501, "not_implemented");
+  };
+
+  server.get("/api/v1/shift-reports/current", { schema: routeSchemas.shiftReportCurrent }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/confirm", { schema: routeSchemas.shiftReportConfirm }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/reopen", { schema: routeSchemas.shiftReportReopen }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/reopen/cancel", { schema: routeSchemas.shiftReportReopenCancel }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/resend", { schema: routeSchemas.shiftReportResend }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/asks", { schema: routeSchemas.shiftReportAsk }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
+  server.delete("/api/v1/shift-reports/:shiftId/asks/:transactionId", { schema: routeSchemas.shiftReportAskWithdraw }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/proposals/:proposalId/answer", { schema: routeSchemas.shiftReportProposalAnswer }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/sightings/:sightingId/add", { schema: routeSchemas.shiftReportSightingAdd }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
+  server.post("/api/v1/client/sale-sightings", { schema: routeSchemas.clientSaleSightings }, async (request) => {
+    await person(request);
+    return notYet();
+  });
+
   // --- The agent's door: «со слов» (write:shift_reports) ---------------------
 
-  async function agentScope(request: Parameters<typeof requireAgentKeyPrincipal>[0], operation: string, capabilities: Array<"write:shift_reports" | "read:team" | "read:money">) {
+  async function agentScope(request: Parameters<typeof requireAgentKeyPrincipal>[0], operation: string, capabilities: Array<"write:shift_reports" | "review:shift_reports" | "read:team" | "read:money">) {
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: capabilities });
     return { principal, scope, pageIds: scope.pages.map((page) => page.id) };
@@ -159,6 +216,18 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
       await audit(principal, "agentShiftReportSubmit", { shiftId: request.body.shiftId, reportVersion: report.latest?.version ?? 0 });
       return report;
     });
+  });
+
+  // --- Gengar's check after the hand-in (review:shift_reports) ---------------
+
+  server.get("/api/v1/agent/shift-reports/checks", { schema: routeSchemas.agentShiftReportChecks }, async (request) => {
+    const { scope } = await agentScope(request, "agentShiftReportChecks", ["review:shift_reports"]);
+    return settled(scope, async () => notYet());
+  });
+
+  server.post("/api/v1/agent/shift-reports/checks/:candidateId", { schema: routeSchemas.agentShiftReportCheckAnswer }, async (request) => {
+    const { scope } = await agentScope(request, "agentShiftReportCheckAnswer", ["review:shift_reports"]);
+    return settled(scope, async () => notYet());
   });
 
   // --- The ledger's feed (read:team and read:money) --------------------------

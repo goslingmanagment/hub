@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 73 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (508)
+## Routes (520)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -286,6 +286,8 @@ A full device token is not affected.
 | POST | `/api/v1/agent/sale-questions/close` | `agentSaleQuestionClose` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/shift-reports` | `agentShiftReportsFeed` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/shift-reports/checks` | `agentShiftReportChecks` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/shift-reports/checks/:candidateId` | `agentShiftReportCheckAnswer` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/shift-reports/claimable` | `agentShiftReportClaimable` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/shift-reports/comment` | `agentShiftReportCommentSet` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/shift-reports/draft` | `agentShiftReport` | `agentKey` | — | — | no |
@@ -381,6 +383,7 @@ A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/spenders/stats` | `clientSpenderStats` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/win-back` | `clientWinBack` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/win-back/attempts` | `clientWinBackAttempt` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/sale-sightings` | `clientSaleSightings` | `apiKey` | — | — | no |
 | GET | `/api/v1/custom-orders` | `customOrdersBoard` | `any-session` | — | — | no |
 | POST | `/api/v1/custom-orders` | `customOrderCreate` | `any-session` | — | — | no |
 | GET | `/api/v1/custom-orders/:code` | `customOrder` | `any-session` | — | — | no |
@@ -491,12 +494,21 @@ A full device token is not affected.
 | GET | `/api/v1/shift-report-notes` | `shiftReportNotes` | `any-session` | — | — | no |
 | GET | `/api/v1/shift-reports` | `shiftReportsList` | `any` | — | — | yes |
 | GET | `/api/v1/shift-reports/:shiftId` | `shiftReport` | `any` | — | — | yes |
+| POST | `/api/v1/shift-reports/:shiftId/asks` | `shiftReportAsk` | `any` | — | — | no |
+| DELETE | `/api/v1/shift-reports/:shiftId/asks/:transactionId` | `shiftReportAskWithdraw` | `any` | — | — | no |
 | GET | `/api/v1/shift-reports/:shiftId/claimable` | `shiftReportClaimable` | `any` | — | — | yes |
 | PUT | `/api/v1/shift-reports/:shiftId/comment` | `shiftReportCommentSet` | `any` | — | — | yes |
+| POST | `/api/v1/shift-reports/:shiftId/confirm` | `shiftReportConfirm` | `any` | — | — | no |
 | PUT | `/api/v1/shift-reports/:shiftId/lines/:transactionId` | `shiftReportLineSet` | `any` | — | — | yes |
 | POST | `/api/v1/shift-reports/:shiftId/off-platform` | `shiftReportOffPlatformAdd` | `any` | — | — | yes |
 | DELETE | `/api/v1/shift-reports/:shiftId/off-platform/:offPlatformId` | `shiftReportOffPlatformWithdraw` | `any` | — | — | yes |
+| POST | `/api/v1/shift-reports/:shiftId/proposals/:proposalId/answer` | `shiftReportProposalAnswer` | `any` | — | — | no |
+| POST | `/api/v1/shift-reports/:shiftId/reopen` | `shiftReportReopen` | `any` | — | — | no |
+| POST | `/api/v1/shift-reports/:shiftId/reopen/cancel` | `shiftReportReopenCancel` | `any` | — | — | no |
+| POST | `/api/v1/shift-reports/:shiftId/resend` | `shiftReportResend` | `any` | — | — | no |
+| POST | `/api/v1/shift-reports/:shiftId/sightings/:sightingId/add` | `shiftReportSightingAdd` | `any` | — | — | no |
 | POST | `/api/v1/shift-reports/:shiftId/submit` | `shiftReportSubmit` | `any` | — | — | yes |
+| GET | `/api/v1/shift-reports/current` | `shiftReportCurrent` | `any` | — | — | no |
 | GET | `/api/v1/sync/history-requests` | `syncHistoryRequests` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/history-requests/:requestRef` | `syncHistoryRequestGet` | `owner-session` | — | — | no |
 | POST | `/api/v1/sync/history-requests/:requestRef/cancel` | `syncHistoryRequestCancel` | `owner-session` | — | — | no |

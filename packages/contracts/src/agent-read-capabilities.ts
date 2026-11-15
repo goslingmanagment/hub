@@ -160,6 +160,14 @@ export const AGENT_CAPABILITIES = [
    * the message it was said in. Gengar's /smena. Never another person's money.
    */
   "write:shift_reports",
+  /**
+   * The «Отчёт» board's check after the hand-in (products plan 2026-11-13,
+   * package R): read the candidates waiting for a check on the key's pages and
+   * answer «замечаний нет» or proposals (whose a sale is, a note), each with
+   * why and the messages read. A proposal is a card the person accepts or
+   * declines; it is never the person's own word. Never confirms a report.
+   */
+  "review:shift_reports",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

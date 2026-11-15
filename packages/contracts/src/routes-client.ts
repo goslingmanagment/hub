@@ -29,6 +29,7 @@ import {
 import { z } from "zod";
 
 import { businessDate, errorResponseSchema, intId, isoTimestamp, mills } from "./primitives.ts";
+import { shiftReportPulseSchema } from "./shift-report-board.ts";
 
 /** Open token: the wire form of every growing vocabulary (reason, flag, capability, platform, role…). */
 export const clientOpenToken = z.string().min(1).max(64);
@@ -2478,6 +2479,12 @@ export const clientActivityResponseSchema = z.object({
    * only informs): the number on the extension's icon. Absent when it could not be counted; an older extension ignores it.
    */
   matters: z.number().int().nonnegative().optional(),
+  /**
+   * The «Отчёт» board (package R): the person's shift that needs them most, its phase and whether it waits for them
+   * (the dot on the fifth button). Null — a person without the board (`submits_shift` off): the button is not drawn.
+   * Absent from an older server.
+   */
+  report: shiftReportPulseSchema.nullable().optional(),
   serverNow: isoTimestamp,
 });
 

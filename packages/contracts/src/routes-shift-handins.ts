@@ -22,6 +22,7 @@ import { z } from "zod";
 
 import { businessDate, errorResponseSchema, intId, isoTimestamp, mills } from "./primitives.ts";
 import { shiftReportClaimSchema } from "./sale-claims.ts";
+import { shiftReportBoardSchema, shiftReportPhaseEnum, shiftReportWordEnum } from "./shift-report-board.ts";
 
 export const SHIFT_REPORT_STATEMENTS = ["mine", "not_mine", "share"] as const;
 export const SHIFT_REPORT_DOORS = ["extension", "workboard", "telegram"] as const;
@@ -198,14 +199,25 @@ export const shiftReportResponseSchema = z.object({
    * decision. A reader of shared pages sees those of the pages they may open; the owner every one.
    */
   claims: z.array(shiftReportClaimSchema).default([]),
+  /**
+   * The «Отчёт» board (package R, shift-report-board.ts): everything the board draws, a column per page. Null — the
+   * person has no board (the right is off) or the reader may not see it.
+   */
+  board: shiftReportBoardSchema.nullable().default(null),
   serverNow: isoTimestamp,
 });
 
 export const shiftReportLineBodySchema = z.object({
-  /** null — back to the rule's word. «не моё», «делим с…» on «Ваши продажи»; «моё» on «Рядом». */
-  statement: shiftReportStatementEnum.nullable(),
+  /**
+   * null — back to the rule's word. «не моё», «делим с…» on «Ваши продажи»; «моё» on «Рядом»; on the board also
+   * `give` (one's own sale to a colleague, `toUserId`) and `pot` (one's own sale to the pot). A word that makes the
+   * person's share larger at someone's cost is not a mark: it is a question (`shiftReportAsk`).
+   */
+  statement: shiftReportWordEnum.nullable(),
   /** With «делим с…»: the colleague. */
   shareWithUserId: intId.nullable().optional(),
+  /** With `give`: the colleague the sale is given to. */
+  toUserId: intId.nullable().optional(),
   /** Empty or null — none. «Моё» on «Рядом» needs one line of why. */
   note: z.string().trim().max(SHIFT_REPORT_NOTE_MAX).nullable().optional(),
 });
@@ -282,6 +294,161 @@ export const shiftReportClaimableResponseSchema = z.object({
   sales: z.array(shiftReportClaimableSaleSchema),
   serverNow: isoTimestamp,
 });
+
+// ── The «Отчёт» board's operations (package R) ──────────────────────────────
+
+export const shiftReportAskParamsSchema = z.object({ shiftId: shiftIdParam, transactionId: shiftIdParam });
+export const shiftReportProposalParamsSchema = z.object({ shiftId: shiftIdParam, proposalId: shiftIdParam });
+export const shiftReportSightingParamsSchema = z.object({ shiftId: shiftIdParam, sightingId: shiftIdParam });
+
+/** «Подтверждаю»: signs one exact candidate. */
+export const shiftReportConfirmBodySchema = z.object({ candidateId: intId });
+
+export const shiftReportConfirmResponseSchema = z.object({
+  /** A version was made from the candidate. */
+  confirmed: z.boolean(),
+  /** Why not: superseded — a correction or a re-check made a newer candidate (it is in `report`); not_ready — the phase is not «Подтвердите». Null — confirmed. */
+  refused: z.enum(["superseded", "not_ready"]).nullable(),
+  /** The fresh board. */
+  report: shiftReportResponseSchema,
+});
+
+/** «Досдать»: late sales the rule gives the person, into the next version at once. */
+export const shiftReportResendBodySchema = z.object({
+  transactionIds: z.array(intId).min(1).max(200),
+});
+
+/** «Почему продажа ваша?» → «Спросить Олега» / «Спросить владельца»: a question from the draft. */
+export const shiftReportAskBodySchema = z.object({
+  transactionId: intId,
+  /** What the person wants: «моя» or «пополам с …». */
+  statement: z.enum(["mine", "share"]),
+  shareWithUserId: intId.nullable().optional(),
+  /** The one line of why. */
+  note: z.string().trim().min(1).max(SHIFT_REPORT_NOTE_MAX),
+});
+
+/** A card of Gengar: decline it («Не согласен»), restore it («Вернуть правку»), or accept a late one («Принять»). */
+export const shiftReportProposalAnswerBodySchema = z.object({
+  answer: z.enum(["decline", "restore", "accept"]),
+});
+
+export const shiftReportCurrentResponseSchema = z.object({
+  /** The person's own shift that needs them most: the running one, else the newest not counted, else the newest; null — none. */
+  report: shiftReportResponseSchema.nullable(),
+  /** The pulse's view of it: the bar and the fifth button. */
+  phase: shiftReportPhaseEnum.nullable(),
+  serverNow: isoTimestamp,
+});
+
+// ── «Нет в Hub»: what the site's own list showed (the extension) ────────────
+
+export const clientSaleSightingsBodySchema = z.object({
+  pageLabel: z.string().min(1).max(63),
+  rows: z.array(z.object({
+    /** Fansly's transaction id; ChatSpace's statement id when it has one. */
+    platformRef: z.string().trim().min(1).max(200),
+    /** Hub's canonical type the site's words read as: message_purchase, post_purchase, tip, stream_tip, subscription. */
+    kind: z.string().min(1).max(64),
+    occurredAt: isoTimestamp,
+    grossMills: mills.min(0).max(100_000_000).nullable(),
+    netMills: mills.min(0).max(100_000_000),
+    fanRef: z.string().trim().min(1).max(200).nullable(),
+    fanName: z.string().trim().min(1).max(200).nullable(),
+  }).strict()).min(1).max(200),
+}).strict();
+
+export const clientSaleSightingsResponseSchema = z.object({
+  /** Rows Hub does not hold as transactions: kept (new or seen again). */
+  kept: z.number().int().nonnegative(),
+  /** Rows Hub already holds: nothing kept. */
+  known: z.number().int().nonnegative(),
+  serverNow: isoTimestamp,
+});
+
+// ── Gengar's check after the hand-in (review:shift_reports) ─────────────────
+
+export const agentShiftReportChecksQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+});
+
+export const agentShiftReportCheckSchema = z.object({
+  candidateId: intId,
+  shiftId: intId,
+  /** The person's code; null — a login no person holds. */
+  person: z.string().nullable(),
+  userId: intId,
+  personName: z.string(),
+  startedAt: isoTimestamp,
+  endedAt: isoTimestamp,
+  cutoffAt: isoTimestamp,
+  handedInAt: isoTimestamp,
+  pages: z.array(z.string()),
+  /** The candidate's lines as handed in, with the fan (the agent reads the chats by it). */
+  lines: z.array(z.object({
+    transactionId: intId,
+    pageLabel: z.string(),
+    kind: z.string(),
+    occurredAt: isoTimestamp,
+    netMills: mills,
+    fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable() }),
+    statement: shiftReportWordEnum.nullable(),
+    /** The colleague of «пополам» or of «отдал»; null — none. */
+    withUserId: intId.nullable(),
+    note: z.string().nullable(),
+    amountMills: mills,
+    ruleWords: z.string(),
+  })),
+  comment: z.string(),
+  /** The people a proposal may name. */
+  colleagues: z.array(z.object({ userId: intId, name: z.string() })),
+});
+
+export const agentShiftReportChecksResponseSchema = z.object({
+  /** Candidates waiting for the check on the key's pages (every page of the shift in the grant), oldest first. */
+  checks: z.array(agentShiftReportCheckSchema),
+  serverNow: isoTimestamp,
+});
+
+export const agentShiftReportCheckParamsSchema = z.object({ candidateId: shiftIdParam });
+
+export const agentShiftReportCheckBodySchema = z.object({
+  /** «замечаний нет» when there is no proposal. */
+  proposals: z.array(z.object({
+    /** A sale of the candidate (else 400 `not_in_candidate`). */
+    transactionId: intId,
+    kind: z.enum(["owner_change", "note"]),
+    /** owner_change: the word it should be (`rule` — back to the rule); `share` and `give` with `userId`. */
+    to: z.object({
+      word: z.enum(["rule", "mine", "not_mine", "share", "give", "pot"]),
+      userId: intId.nullable().optional(),
+    }).optional(),
+    /** note: the comment. */
+    note: z.string().trim().min(1).max(SHIFT_REPORT_NOTE_MAX).optional(),
+    /** One or two sentences of why. */
+    why: z.string().trim().min(1).max(600),
+    /** The messages it read (links or `<chat>:<message>`). */
+    messageRefs: z.array(z.string().trim().min(1).max(300)).max(20).default([]),
+  }).strict()).max(100),
+}).strict();
+
+export const agentShiftReportCheckResponseSchema = z.object({
+  candidateId: intId,
+  /** Proposals recorded. */
+  recorded: z.number().int().nonnegative(),
+  /** The report was already counted: the proposals became a matter for the person, nothing changed by itself. */
+  late: z.boolean(),
+  /** The candidate was superseded: nothing recorded, the newer one comes in the next `checks`. */
+  superseded: z.boolean(),
+  serverNow: isoTimestamp,
+});
+
+export type ShiftReportConfirmResponse = z.infer<typeof shiftReportConfirmResponseSchema>;
+export type ShiftReportCurrentResponse = z.infer<typeof shiftReportCurrentResponseSchema>;
+export type ShiftReportAskBody = z.infer<typeof shiftReportAskBodySchema>;
+export type ClientSaleSightingsBody = z.infer<typeof clientSaleSightingsBodySchema>;
+export type AgentShiftReportChecksResponse = z.infer<typeof agentShiftReportChecksResponseSchema>;
+export type AgentShiftReportCheckBody = z.infer<typeof agentShiftReportCheckBodySchema>;
 
 // ── The agent's door (write:shift_reports) ──────────────────────────────────
 
@@ -553,6 +720,98 @@ export const shiftHandinRouteSchemas = {
     description: "The version records the door `telegram`, the message reference, the sender's Telegram id and the key.",
     body: agentShiftReportSubmitBodySchema,
     response: { 200: shiftReportResponseSchema, ...agentErrors },
+  },
+  shiftReportCurrent: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "The «Отчёт» board of the person's own shift that needs them most: the running one, else the newest not counted, else the newest",
+    description: `${ANY} The board's frame opens with it when no shift is named.`,
+    response: { 200: shiftReportCurrentResponseSchema, ...personErrors },
+  },
+  shiftReportConfirm: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "«Подтверждаю»: the named candidate, with Gengar's proposals not declined, becomes the report's next version",
+    description: `${ANY} Own shift, switched on, phase «Подтвердите». A superseded candidate is refused with the fresh board; `
+      + "no agent door confirms.",
+    params: shiftReportParamsSchema,
+    body: shiftReportConfirmBodySchema,
+    response: { 200: shiftReportConfirmResponseSchema, ...personErrors },
+  },
+  shiftReportReopen: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "«Исправить»: back to editing («Правка»); a counted version stands until a new one is confirmed",
+    description: ANY,
+    params: shiftReportParamsSchema,
+    response: { 200: shiftReportResponseSchema, ...personErrors },
+  },
+  shiftReportReopenCancel: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "«Отмена» of «Правка»: back to the counted report as it was",
+    description: ANY,
+    params: shiftReportParamsSchema,
+    response: { 200: shiftReportResponseSchema, ...personErrors },
+  },
+  shiftReportResend: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "«Досдать»: sales that came after the hand-in and are the person's by the rule go into the next version at once",
+    description: `${ANY} Own counted report. Only sales the rule gives the person and the report does not hold (else 400).`,
+    params: shiftReportParamsSchema,
+    body: shiftReportResendBodySchema,
+    response: { 200: shiftReportResponseSchema, ...personErrors },
+  },
+  shiftReportAsk: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "«Спросить»: a question from the draft about a sale the rule gives a colleague or the pot",
+    description: `${ANY} Own draft. The colleague answers on their board or in «Ждут вас»; the pot is the decider's. `
+      + "While it is open the sale counts in nobody's sum.",
+    params: shiftReportParamsSchema,
+    body: shiftReportAskBodySchema,
+    response: { 200: shiftReportResponseSchema, ...personErrors },
+  },
+  shiftReportAskWithdraw: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "«Отменить» a question asked from the draft",
+    description: ANY,
+    params: shiftReportAskParamsSchema,
+    response: { 200: shiftReportResponseSchema, ...personErrors },
+  },
+  shiftReportProposalAnswer: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "A card of Gengar: «Не согласен», «Вернуть правку», or «Принять» a late one (opens «Правка» with it applied)",
+    description: ANY,
+    params: shiftReportProposalParamsSchema,
+    body: shiftReportProposalAnswerBodySchema,
+    response: { 200: shiftReportResponseSchema, ...personErrors },
+  },
+  shiftReportSightingAdd: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "«Добавить» a «нет в Hub» row: it counts on the board, a version takes it once Hub holds the sale",
+    description: ANY,
+    params: shiftReportSightingParamsSchema,
+    response: { 200: shiftReportResponseSchema, ...personErrors },
+  },
+  clientSaleSightings: {
+    auth: { kind: "apiKey" }, tags: ["client"],
+    summary: "«Нет в Hub»: the sales a page's own list showed on the site, as the extension saw them",
+    description: "Database only. A device token's. Hub keeps only rows it does not hold as transactions, once per "
+      + "(page, platform reference). Sent only for a person whose pulse carries `report`.",
+    body: clientSaleSightingsBodySchema,
+    response: { 200: clientSaleSightingsResponseSchema, ...personErrors },
+  },
+  agentShiftReportChecks: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "Candidates handed in and waiting for Gengar's check, on the key's pages (needs review:shift_reports)",
+    description: "Database only. Every page of the shift must be of the key's grant. Oldest first.",
+    querystring: agentShiftReportChecksQuerySchema,
+    response: { 200: agentShiftReportChecksResponseSchema, ...agentErrors },
+  },
+  agentShiftReportCheckAnswer: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "Gengar's answer to a candidate: «замечаний нет» or proposals (needs review:shift_reports); never a confirmation",
+    description: "A proposal names a sale of the candidate and a legal word. After the report is counted the proposals "
+      + "become a matter for the person and change nothing by themselves.",
+    params: agentShiftReportCheckParamsSchema,
+    body: agentShiftReportCheckBodySchema,
+    response: { 200: agentShiftReportCheckResponseSchema, ...agentErrors },
   },
   agentShiftReportsFeed: {
     auth: { kind: "agentKey" }, tags: ["agent"],
