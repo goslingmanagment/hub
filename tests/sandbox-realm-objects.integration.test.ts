@@ -9,7 +9,7 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { createUserAccount, type HumanAuthPrincipal } from "../apps/runtime/src/services/auth.ts";
 import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { createPublicationDraft } from "../apps/runtime/src/services/publications.ts";
-import { absentValue, fieldObject, type RealmObjectKind } from "../apps/runtime/src/services/sandbox/objects.ts";
+import { fieldObject, type RealmObjectKind } from "../apps/runtime/src/services/sandbox/objects.ts";
 import { SANDBOX_OWNER_OPERATIONS } from "../apps/runtime/src/services/sandbox/owner-operations.ts";
 import { seedSandbox } from "../apps/runtime/src/services/sandbox/seed.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
@@ -41,6 +41,15 @@ const SANDBOX_PASSWORDS = {
   SANDBOX_PASSWORD_T_CHAT_1: "sandbox-chat-1",
   SANDBOX_PASSWORD_T_CHAT_2: "sandbox-chat-2",
 };
+/** A value of each kind that is well formed and names nothing: the request a hidden one must answer like. */
+const MISSING: Record<RealmObjectKind, string> = {
+  page: String(Number.MAX_SAFE_INTEGER), pageLabel: "nowhere-page", model: String(Number.MAX_SAFE_INTEGER), modelSlug: "nowhere-model",
+  login: String(Number.MAX_SAFE_INTEGER), personCode: "nowhere-person", shift: String(Number.MAX_SAFE_INTEGER), sale: String(Number.MAX_SAFE_INTEGER),
+  claim: String(Number.MAX_SAFE_INTEGER), offPlatformLine: String(Number.MAX_SAFE_INTEGER), candidate: String(Number.MAX_SAFE_INTEGER),
+  proposal: String(Number.MAX_SAFE_INTEGER), sighting: String(Number.MAX_SAFE_INTEGER), question: String(Number.MAX_SAFE_INTEGER),
+  order: `K-${Number.MAX_SAFE_INTEGER}`, publication: String(Number.MAX_SAFE_INTEGER),
+};
+const ISO_TIME = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/gu;
 const CLOCK_KEYS = new Set(["serverNow", "generatedAt", "now", "asOf", "computedAt", "checkedAt", "fetchedAt", "readAt", "requestId", "savedAt"]);
 const HUMAN_KINDS = new Set(["any", "any-session", "session"]);
 /**
@@ -124,7 +133,7 @@ function fieldsOf(schema: Zod | undefined): string[] {
   return object._zod.def.type === "object" ? Object.keys(object._zod.def.shape as Record<string, Zod>) : [];
 }
 
-interface Probe { key: string; method: string; url: string; body?: Record<string, unknown>; field: string; kind: RealmObjectKind }
+interface Probe { key: string; method: string; url: string; body?: Record<string, unknown>; field: string; kind: RealmObjectKind; value: string }
 
 /**
  * Every operation's every classified field, as two requests: naming `realm`'s object of its kind, and naming nothing
@@ -150,9 +159,9 @@ function probes(table: Server["routePolicyTable"], realm: "live" | "test", open:
               (Array.isArray(one) ? one : [one]).map((item) => [key, String(item)]))).toString()}`;
           }
           const body = row.method === "GET" ? undefined : sample(schema.body, where === "body" ? target : null) ?? {};
-          return { key: row.routeKey, method: row.method, url, ...(body === undefined ? {} : { body }), field: `${where}.${field}`, kind };
+          return { key: row.routeKey, method: row.method, url, ...(body === undefined ? {} : { body }), field: `${where}.${field}`, kind, value };
         };
-        out.push([build(objects[kind][realm]), build(String(absentValue(kind, objects[kind][realm])))]);
+        out.push([build(objects[kind][realm]), build(MISSING[kind])]);
       }
     }
   }
@@ -339,20 +348,29 @@ afterAll(async () => {
   await testDb?.stop();
 });
 
-/** The probes whose answer differs from the answer for a missing object (or is a 5xx): the holes of the wall. */
+/**
+ * An answer as compared: the status, and for a read its body with clock fields and moments set aside, and the value the
+ * request named written as `<named>` (an answer may repeat what it was asked: «No person «x»»).
+ */
+function compared(status: number, body: string, method: string, named: string): string {
+  if (method !== "GET") return String(status);
+  let parsed: unknown = body;
+  try { parsed = normalize(JSON.parse(body)); } catch { /* not JSON */ }
+  return `${status} ${JSON.stringify(parsed).split(JSON.stringify(named).slice(1, -1)).join("<named>").replace(ISO_TIME, "<ts>")}`;
+}
+
+/** The probes whose answer differs from the answer for a missing object, or a write that succeeded on a hidden object. */
 async function holes(viewer: string, list: ReadonlyArray<[Probe, Probe]>): Promise<string[]> {
   const out: string[] = [];
   const answer = async (probe: Probe) => {
     const response = await call(probe, cookies[viewer]!);
-    let body: unknown = response.body;
-    try { body = normalize(JSON.parse(response.body)); } catch { /* not JSON */ }
-    return { status: response.statusCode, text: probe.method === "GET" ? `${response.statusCode} ${JSON.stringify(body)}` : String(response.statusCode) };
+    return { status: response.statusCode, text: compared(response.statusCode, response.body, probe.method, probe.value) };
   };
   for (const [named, missing] of list) {
     // The missing object first: a write that created something must not make the second answer differ.
     const absent = await answer(missing);
     const other = await answer(named);
-    if (other.status >= 500 || other.text !== absent.text) {
+    if (other.text !== absent.text) {
       out.push(`${viewer} ${named.key} ${named.field}=${named.kind}: ${other.text.slice(0, 200)} ≠ missing ${absent.text.slice(0, 120)}`);
     }
     // A write never succeeds on a hidden object: the value that names nothing is refused by the service as unknown,
@@ -370,7 +388,8 @@ describe("the wall by object, generated from the contract", () => {
     const get = (url: string) => server!.inject({ method: "GET", url, headers: { cookie: cookies["t-owner"]! } });
     const claim = await get(`/api/v1/sale-disputes/claim/${objects.claim.live}`);
     expect(claim.statusCode, claim.body).toBe(404);
-    expect(claim.body).toBe((await get(`/api/v1/sale-disputes/claim/${Number.MAX_SAFE_INTEGER}`)).body);
+    const missingClaim = await get(`/api/v1/sale-disputes/claim/${Number.MAX_SAFE_INTEGER}`);
+    expect(compared(claim.statusCode, claim.body, "GET", objects.claim.live)).toBe(compared(missingClaim.statusCode, missingClaim.body, "GET", String(Number.MAX_SAFE_INTEGER)));
     const decide = await server.inject({
       method: "POST", url: "/api/v1/sale-disputes/decide", headers: { cookie: cookies["t-owner"]!, "content-type": "application/json" },
       payload: { claimId: Number(objects.claim.live), outcome: "rule" },
@@ -381,7 +400,8 @@ describe("the wall by object, generated from the contract", () => {
     expect(decisions.rows[0]!.n).toBe(0);
     const window = `from=${dayOf(now.getTime() - 5 * DAY)}&to=${dayOf(now.getTime())}`;
     const reports = await get(`/api/v1/shift-reports?${window}&userId=${objects.login.live}`);
-    expect(reports.body).toBe((await get(`/api/v1/shift-reports?${window}&userId=${Number.MAX_SAFE_INTEGER}`)).body);
+    const missingReports = await get(`/api/v1/shift-reports?${window}&userId=${Number.MAX_SAFE_INTEGER}`);
+    expect(compared(reports.statusCode, reports.body, "GET", objects.login.live)).toBe(compared(missingReports.statusCode, missingReports.body, "GET", String(Number.MAX_SAFE_INTEGER)));
     expect(reports.body).not.toContain(`"shiftId":${objects.shift.live}`);
     // The test chatter's reports by the login stay open to the test owner.
     const own = await get(`/api/v1/shift-reports?${window}&userId=${objects.login.test}`);

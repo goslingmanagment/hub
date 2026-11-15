@@ -201,21 +201,28 @@ export function requestObjects(
   return namedValues(routeKey, parts).map(({ kind, value }) => ({ kind, value }));
 }
 
-/** A value of the kind that names no object at all: what a request naming the other realm's object is answered as. */
-export function absentValue(kind: RealmObjectKind, original: unknown): unknown {
-  if (kind === "order") return "K-9007199254740991";
-  if (BY_TEXT.has(kind)) return "∅";
-  return typeof original === "number" ? Number.MAX_SAFE_INTEGER : String(Number.MAX_SAFE_INTEGER);
+/**
+ * A value of the kind that names no object at all: what a request naming the other realm's object is answered as. The
+ * `index` keeps several hidden values of one request apart (each is put back in the answer, `restoreHidden`).
+ */
+export function absentValue(kind: RealmObjectKind, original: unknown, index = 0): unknown {
+  if (kind === "order") return `K-${Number.MAX_SAFE_INTEGER - index}`;
+  if (BY_TEXT.has(kind)) return `∅${index}`;
+  return typeof original === "number" ? Number.MAX_SAFE_INTEGER - index : String(Number.MAX_SAFE_INTEGER - index);
 }
+
+/** What was hidden in a request's part: the sentinel as it may come back in the answer, and the value it stands for. */
+const HIDDEN = new WeakMap<object, Array<{ sentinel: string; original: string }>>();
 
 /**
  * THE CHECK: every object the request names is of the principal's realm. One of the other realm is replaced, in the
  * request itself, by a value that names nothing (`absentValue`), so the operation answers EXACTLY as for an object that
- * does not exist — its own 404, its own empty list — and nothing tells «there, but not yours» from «not there» (no
- * oracle across the wall). A field that names the object an operation CREATES is `none` (the service's own «taken»
- * answers); every other field the sentinel reaches is refused by the service as unknown (tests/sandbox-realm-objects:
- * a hidden object never makes a write succeed). One query per kind. Returns how many were hidden. A live agent key is
- * left to its page grant (a live key never holds a test page, 0414): its hot read plane asks nothing more.
+ * does not exist — its own 404, its own empty list — and the value the request sent is put back wherever the answer
+ * repeats it (`restoreHidden`): nothing tells «there, but not yours» from «not there» (no oracle across the wall). A
+ * field that names the object an operation CREATES is `none` (the service's own «taken» answers); every other field the
+ * sentinel reaches is refused by the service as unknown (tests/sandbox-realm-objects: a hidden object never makes a
+ * write succeed). One query per kind. Returns how many were hidden. A live agent key is left to its page grant (a live
+ * key never holds a test page, 0414): its hot read plane asks nothing more.
  */
 export async function hideObjectsOfOtherRealm(
   app: { db: Database },
@@ -223,22 +230,50 @@ export async function hideObjectsOfOtherRealm(
   routeKey: string,
   parts: ReadonlyArray<Record<string, unknown> | null | undefined>,
 ): Promise<number> {
-  if (!principal) return 0;
-  const test = isTestPrincipal(principal) || isTestAgent(principal);
-  if (principal.kind === "agent" && !test) return 0;
+  const test = principalIsTest(principal);
+  if (test === null) return 0;
   const values = namedValues(routeKey, parts);
   const byKind = new Map<RealmObjectKind, NamedValue[]>();
   for (const one of values) byKind.set(one.kind, [...(byKind.get(one.kind) ?? []), one]);
-  let hidden = 0;
+  const echoes: Array<{ sentinel: string; original: string }> = [];
   for (const [kind, list] of byKind) {
     const realms = await realmsOf(app.db, kind, list.map((one) => one.value));
     for (const one of list) {
       const objectTest = realms.get(one.value);
       if (objectTest === undefined || objectTest === test) continue;
-      const original = (one.holder as Record<string | number, unknown>)[one.at];
-      (one.holder as Record<string | number, unknown>)[one.at] = absentValue(kind, original);
-      hidden += 1;
+      const holder = one.holder as Record<string | number, unknown>;
+      const sentinel = absentValue(kind, holder[one.at], echoes.length + 1);
+      holder[one.at] = sentinel;
+      echoes.push({ sentinel: String(sentinel), original: one.value });
     }
   }
-  return hidden;
+  if (echoes.length > 0) for (const part of parts) if (part !== null && part !== undefined) HIDDEN.set(part, echoes);
+  return echoes.length;
+}
+
+/** The realm a principal reads (true: test), or null for one the wall leaves to its grant (no principal, a live key). */
+function principalIsTest(principal: AuthPrincipal | null | undefined): boolean | null {
+  if (!principal) return null;
+  const test = isTestPrincipal(principal) || isTestAgent(principal);
+  return principal.kind === "agent" && !test ? null : test;
+}
+
+/** Whether a page (named by a route's `:pageLabel`) is of the other realm than the principal's: answered as missing. */
+export async function pageOfOtherRealm(app: { db: Database }, principal: AuthPrincipal | null | undefined, pageId: number): Promise<boolean> {
+  const test = principalIsTest(principal);
+  if (test === null) return false;
+  const objectTest = await objectIsTest(app.db, "page", String(pageId));
+  return objectTest !== null && objectTest !== test;
+}
+
+/** The answer with every hidden value of the request put back where the sentinel stands (a JSON or text answer). */
+export function restoreHidden(parts: ReadonlyArray<unknown>, payload: string): string {
+  const echoes = parts.flatMap((part) => (part !== null && typeof part === "object" ? HIDDEN.get(part) ?? [] : []));
+  if (echoes.length === 0) return payload;
+  let out = payload;
+  // Longest first: «∅12» before «∅1».
+  for (const { sentinel, original } of [...new Set(echoes)].sort((a, b) => b.sentinel.length - a.sentinel.length)) {
+    out = out.split(sentinel).join(JSON.stringify(original).slice(1, -1));
+  }
+  return out;
 }

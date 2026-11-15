@@ -51,7 +51,7 @@ import {
   TooManyRequestsError,
   UnauthorizedError,
 } from "../services/errors.ts";
-import { hideObjectsOfOtherRealm, requestObjects } from "../services/sandbox/objects.ts";
+import { hideObjectsOfOtherRealm, pageOfOtherRealm, requestObjects, restoreHidden } from "../services/sandbox/objects.ts";
 import { sandboxOwnerRefusal } from "../services/sandbox/owner-operations.ts";
 import { teamLeadRefusal } from "../services/team-lead-reads.ts";
 import { contentManagerRefusal } from "../services/content-manager-operations.ts";
@@ -504,6 +504,10 @@ export async function buildApiServer(appContext: AppContext) {
           return "not-found";
         }
         const resolved = await resolvePrincipal(request);
+        // A page of the other realm is missing, not refused (sandbox/objects.ts): no «there, but not yours».
+        if (await pageOfOtherRealm(appContext, resolved, page.id)) {
+          return "not-found";
+        }
         // A fans read answers by the viewer's teams (services/fan-reads.ts), every other read by the page's grant.
         const principal = resolved && FAN_READ_OPERATIONS.has(entry.key) ? await asFanReader(appContext, resolved) : resolved;
         return principal && canAccessPage(principal, page.id) ? "ok" : "denied";
@@ -577,6 +581,11 @@ export async function buildApiServer(appContext: AppContext) {
     const parts = [request.params, request.query, request.body] as Array<Record<string, unknown> | null>;
     if (requestObjects(entry.key, parts).length === 0) return;
     await hideObjectsOfOtherRealm(appContext, await resolvePrincipal(request), entry.key, parts);
+  });
+  // …and the values it hid are put back wherever the answer repeats them («No person «x»»), as for a missing object.
+  server.addHook("onSend", async (request, _reply, payload) => {
+    if (typeof payload !== "string") return payload;
+    return restoreHidden([request.params, request.query, request.body], payload);
   });
 
   // pg-boss for enqueuing sync trigger jobs (skip when no DB, e.g. contract

@@ -142,7 +142,9 @@ describe("the doors of the test realm", () => {
       const [missingMethod, missingUrl, missingBody] = missing[index]!;
       const absent = await call(missingMethod, missingUrl, cookie.owner, missingBody);
       const unclocked = (text: string) => text.replace(/"savedAt":"[^"]*"/u, "");
-      expect(`${answer.statusCode} ${unclocked(answer.body)}`, `live owner ${method} ${url} on a test object`).toBe(`${absent.statusCode} ${unclocked(absent.body)}`);
+      // An answer that repeats the sale it was asked about repeats the one asked (the wall puts it back).
+      const asked = unclocked(absent.body).split(String(Number.MAX_SAFE_INTEGER)).join(String(ids.testSale)).split("∅").join("test-1");
+      expect(`${answer.statusCode} ${unclocked(answer.body)}`, `live owner ${method} ${url} on a test object`).toBe(`${absent.statusCode} ${asked}`);
       expect(answer.body).not.toMatch(/"kept":[1-9]/u);
     }
     for (const [method, url, body] of deciders(ids.liveSale, "live-1")) {
