@@ -37,7 +37,11 @@ const teamBWords = ["bravo-1", "bravo", "Bravo", "boris", "Boris", "boris-b"];
 const FORBIDDEN_KEYS = new Set([
   "payTerms", "shareBasisPoints", "fixPerShiftMills", "payoutDetails", "payouts", "accruals", "accrualMills", "payMills", "rate",
   "telegram", "telegramUserId", "telegramHandle", "devices", "deviceTokens", "agentKeys", "lastSeenAt", "spendMicros", "costMicros",
+  // The ledger-fed pay of a person («Мои деньги», `accountPay`: the person's own only).
+  "accruedMills", "paidMills", "unpaidMills", "balanceMills", "owedMills", "payoutMills", "lastPayout", "oldestUnpaidDate",
 ]);
+/** A sale chain's links to a person's pay (`saleChain`): present for everyone, their sum only for whom it is. */
+const PAY_LINK_KEYS = new Set(["accrual", "payout"]);
 
 const today = new Date();
 const dayOf = (at: number) => new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
@@ -150,6 +154,7 @@ function forbiddenIn(value: unknown, path = ""): string[] {
   if (value === null || typeof value !== "object") return [];
   return Object.entries(value as Record<string, unknown>).flatMap(([key, inner]) => [
     ...(FORBIDDEN_KEYS.has(key) && carries(inner) ? [`${path}.${key}`] : []),
+    ...(PAY_LINK_KEYS.has(key) && inner !== null && typeof inner === "object" && (inner as { amountMills?: unknown }).amountMills != null ? [`${path}.${key}.amountMills`] : []),
     ...forbiddenIn(inner, `${path}.${key}`),
   ]);
 }
