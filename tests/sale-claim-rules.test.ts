@@ -288,3 +288,11 @@ describe("the sides of a disputed sale and the decider's answers (review round 2
   });
 });
 
+describe("a word on a sale «стык смен» (review round 2, N4)", () => {
+  it("decides nothing without the owner's decision, even with no question open", () => {
+    const junction = { home: "decide", reason: "no_last_writer", shareMills: 0, toUserId: null, senderUserId: null };
+    const marks = ruleMarksOf({ reports: [report(101, 1, "2026-11-05 22:00", [line(7, { statement: "mine", disputed: true, rule: junction })])], claims: [] }).get(7);
+    expect(marks).toEqual([{ ...said(101, "mine"), confirmed: false }]);
+  });
+});
+

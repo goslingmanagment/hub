@@ -60,6 +60,7 @@ import {
   type HandinVersionLine,
   type MatterActor,
   type ProposalRow,
+  type SaleClaimRow,
   type ProposalWord,
 } from "@agency_hub_core/db";
 
@@ -509,9 +510,13 @@ export async function withdrawShiftReportAsk(app: BoardApp, actor: HandinPersonA
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
     const handin = await handinFor(db, subject);
-    const open = (await listSaleClaims(db, { transactionIds: [input.transactionId], states: ["asked", "owner"] }))
+    const mine = (await listSaleClaims(db, { transactionIds: [input.transactionId], states: ["asked", "owner"] }))
       .filter((claim) => claim.claimantHandinId === handin.id);
-    if (open.length === 0) throw new NotFoundError("No question open on this sale");
+    if (mine.length === 0) throw new NotFoundError("No question open on this sale");
+    // «Не согласен» with Gengar's card is the decider's now: «Отменить» never gives the sale back without them — «Вернуть
+    // правку» takes the disagreement back (review round 2, «не проверено»).
+    const open = mine.filter((claim) => !isCardDispute(claim));
+    if (open.length === 0) throw new ConflictError("This sale waits for the decider: «Вернуть правку» takes the disagreement back", { reason: "card_dispute" });
     for (const claim of open) await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state });
     const mark = (await listHandinMarks(db, handin.id)).find((one) => one.transactionId === input.transactionId);
     await setHandinMark(db, {
@@ -587,6 +592,11 @@ export async function answerShiftReportProposal(
   if (disputed) await runSaleClaims(app, now).catch((error: unknown) => warn(app, error, "the claims pass after a card's answer"));
   await syncBoardMatters(app, now).catch((error: unknown) => warn(app, error, "the board's matters after a card"));
   return readSubject(app, actor, subject, now);
+}
+
+/** A question born of «Не согласен» with Gengar's card: the decider's at once, nobody else answers it. */
+export function isCardDispute(claim: Pick<SaleClaimRow, "origin" | "escalatedWhy" | "answer">): boolean {
+  return claim.origin === "draft" && claim.escalatedWhy === "disagree" && claim.answer === null;
 }
 
 /**

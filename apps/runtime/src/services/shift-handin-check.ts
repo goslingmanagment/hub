@@ -16,6 +16,7 @@ import {
   listCandidatesUnderCheck,
   listHandinsOfGoneShifts,
   listHandinsPostCopiedBehind,
+  listHandinsWithPostCopies,
   listHandinVersions,
   listKnownPlatformRefs,
   listMatterPageLabels,
@@ -81,6 +82,9 @@ export const SIGHTING_UNMATCHED_MS = 48 * 3_600_000;
 export const SIGHTING_UNMATCHED_KIND = "shift.report.sighting_unmatched";
 export const POT_OFFER_KIND = "sale.pot_offer";
 export const POST_CHANGED_KIND = "shift.report.post_changed";
+/** A report of two models whose one post was copied and another not for an hour: «Скопируйте пост <модель>». */
+export const POST_MISSING_KIND = "shift.report.post_missing";
+const POST_MISSING_AFTER_MS = 60 * 60_000;
 export const SHIFT_CANCELLED_KIND = "shift.report.shift_cancelled";
 export const SALE_SIGHTINGS_OBSERVATION_KIND = "client.sale_sightings.v1";
 
@@ -362,7 +366,29 @@ export async function syncCheckMatters(app: CheckApp, now: Date): Promise<number
       link: `/workboard/report/${one.shiftId}`,
     });
   }
-  for (const matter of await listOpenMattersOfKinds(db, [SIGHTING_UNMATCHED_KIND, POT_OFFER_KIND, POST_CHANGED_KIND])) {
+  // Two models, one post copied, the other not an hour later: the person's reminder, closed by the copy.
+  for (const one of await listHandinsWithPostCopies(db)) {
+    if (now.getTime() - one.firstCopiedAt.getTime() < POST_MISSING_AFTER_MS) continue;
+    const current = (await listHandinVersions(db, one.handinId)).at(-1);
+    if (current === undefined) continue;
+    const models = new Map<string, string>();
+    for (const page of current.pages) {
+      const info = catalog.info.get(page.pageLabel);
+      if (info !== undefined) models.set(info.modelSlug, info.modelName);
+    }
+    if (models.size < 2) continue;
+    for (const [modelSlug, modelName] of models) {
+      if (one.copied.includes(modelSlug)) continue;
+      await open({
+        key: `${POST_MISSING_KIND}:${one.handinId}:${modelSlug}`, kind: POST_MISSING_KIND, source: "server",
+        title: `Скопируйте пост ${modelName} в «Отчётность»`,
+        object: { type: "shift", id: String(one.shiftId) },
+        pageIds: current.pages.filter((page) => catalog.info.get(page.pageLabel)?.modelSlug === modelSlug).map((page) => pages.idOf.get(page.pageLabel)).filter((id): id is number => id !== undefined),
+        owner: { userId: one.userId }, money: false, evidence: { shiftId: one.shiftId, modelSlug }, link: `/workboard/report/${one.shiftId}`,
+      });
+    }
+  }
+  for (const matter of await listOpenMattersOfKinds(db, [SIGHTING_UNMATCHED_KIND, POT_OFFER_KIND, POST_CHANGED_KIND, POST_MISSING_KIND])) {
     if (want.has(matter.key)) continue;
     const closed = await closeMatter(db, { key: matter.key, how: "resolved", writer: "server" }, SYSTEM, now);
     if (closed.transition === "closed") touched += 1;

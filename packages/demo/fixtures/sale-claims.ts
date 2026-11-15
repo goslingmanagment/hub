@@ -263,6 +263,7 @@ function potOfferDispute(now: Date): KernelOperationResponse<"saleDispute"> {
     home: { kind: "shift", reason: "holder", words: "страницу держала одна смена", shares: [{ userId: lena.id, name: lena.name, mills: 24_000 }] },
     parties: [{ userId: lena.id, name: lena.name, role: "first", says: ["в общак: фан написал, что это за пост, не за чат"], countedMills: 0, claimedMills: null, shiftId: null }],
     claims: [],
+    cards: [],
     facts: null,
     outcomes: [
       { outcome: "pot", key: "pot", label: "В общак", gives: [{ userId: lena.id, mills: 0 }] , shares: [] },
@@ -409,6 +410,7 @@ function disputeOf(claim: DemoClaim, now: Date): KernelOperationResponse<"saleDi
       { userId: claim.side.id, name: claim.side.name, role: "second", says: says(claim.side), countedMills: net, claimedMills: null, shiftId: claim.sideShiftId },
     ],
     claims: [wire(claim)],
+    cards: [],
     // Both reports are handed in Hub in the demo: a decision gives each a new version.
     reports: [
       { userId: claim.claimant.id, name: claim.claimant.name, shiftId: claim.claimantShiftId, reportDate: claim.sale.occurredAt.slice(0, 10) },

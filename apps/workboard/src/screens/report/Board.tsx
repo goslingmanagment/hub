@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { SHIFT_REPORT_QUICK_WORDS, type ShiftReportResponse } from "@agency_hub_core/contracts";
-import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
+import { KernelApiError, hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { BoardBar } from "./BoardBar";
 import { phaseConflictReport, useBoardWrite, type Write } from "./data";
 import { Ico } from "./icons";
@@ -125,7 +125,10 @@ export function ReportBoard({ report, host, transport, light }: {
       return true;
     } catch (error) {
       const status = hubErrorStatus(error);
-      toast(phaseConflictReport(error) !== null ? "Сейчас это не меняется: доска обновилась"
+      const reason = error instanceof KernelApiError ? (error.body as { reason?: unknown } | null)?.reason : undefined;
+      toast(reason === "claim_settled" ? "Эта продажа уже решена: изменить её может только решающий"
+        : reason === "card_dispute" ? "Продажа ждёт решающего. Передумали — нажмите «Вернуть правку»"
+        : phaseConflictReport(error) !== null ? "Сейчас это не меняется: доска обновилась"
         : status === 401 && host === "frame" ? "ChatGoose не вошёл в Hub: войдите в расширении"
         : status === null || status >= 500 ? "Hub не ответил: неизвестно, сохранилось ли" : "Не получилось. Hub вернул ошибку");
       return false;

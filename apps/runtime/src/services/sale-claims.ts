@@ -45,7 +45,6 @@ import {
   listSaleClaims,
   listSaleDecisions,
   listUnownedSales,
-  listVisiblePages,
   lockSaleSettlements,
   openMatter,
   reopenSaleClaim,
@@ -92,7 +91,7 @@ import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, halvesOf, type SaleHomeRe
 import { realmOf, testUserIds } from "./sandbox/realm.ts";
 import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, teamFactsFor, type Decider } from "./teams.ts";
 import { dayWords } from "./shift-handin-rules.ts";
-import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, saleLineFacts, type HandinActor } from "./shift-handins.ts";
+import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, pageCatalog, saleLineFacts, type HandinActor } from "./shift-handins.ts";
 
 /**
  * Заявки и договорённости (ecosystem plan 2026-11-12, package G): what people
@@ -255,12 +254,23 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     ...(await listHandinSalesByIds(db, openSales)).filter((sale) => sale.home?.home === "pot").map((sale) => sale.transactionId),
     ...holding.flatMap((report) => report.lines.filter((line) => line.rule.home === "pot").map((line) => line.transactionId!)),
   ]);
+  // The reports a question from the draft was asked in: their phase now (a report in «Правка» still says what its draft says).
+  const askedIn = new Map<number, string>();
+  for (const handinId of new Set(open.flatMap((claim) => (claim.origin === "draft" && claim.claimantHandinId !== null ? [claim.claimantHandinId] : [])))) {
+    const handin = await findHandinById(db, handinId);
+    if (handin !== null) askedIn.set(handinId, handin.phase);
+  }
   for (const claim of open) {
-    // A question asked from the draft (the board, 0412) stands while the person's draft says it: until «Отменить» or a
-    // version of their report that no longer counts the sale.
+    // A question asked from the draft (the board, 0412) stands while the person's draft says it: while their report is
+    // edited, checked or waits for «Подтверждаю» (its draft and newest candidate say it), or its counted version carries
+    // the word; until «Отменить» or a version that no longer says it. A question asked from «Правка» of a counted report
+    // is judged by that, never by the version counted before it (review round 2, N4).
     // A sale given to a colleague without the board (no word on the version that claims it) stands until it is decided or
     // the word is taken back.
-    const draftAsk = claim.origin === "draft" && (claim.statement === null || !holding.some((report) => report.handinId === claim.claimantHandinId));
+    const ownLine = holding.find((report) => report.handinId === claim.claimantHandinId)?.lines.find((line) => line.transactionId === claim.transactionId);
+    const phase = claim.claimantHandinId === null ? undefined : askedIn.get(claim.claimantHandinId);
+    const draftAsk = claim.origin === "draft" && (claim.statement === null || ownLine === undefined
+      || phase === "fixing" || phase === "checking" || phase === "confirm" || ownLine.statement === claim.statement);
     if (!draftAsk && !claimStands(claim, holding)) {
       if (await updateSaleClaim(db, claim.id, { state: "withdrawn", closedAt: now }, now, { ifState: claim.state })) tally.withdrawn += 1;
       continue;
@@ -1255,7 +1265,9 @@ export async function decideOffPlatformLine(
   const row = await findOffPlatformWithReport(db, input.offPlatformId);
   if (row === null || row.state === "withdrawn") throw new NotFoundError("No such «мимо площадки» line");
   if (row.state !== "pending") throw new ConflictError("This line is already decided", { reason: "already_decided" });
-  const pages = await listVisiblePages(db);
+  // The page by the report's own catalog (both realms, as a report names its pages): a test team's page is no live one,
+  // and «мимо площадки» confirmed on it keeps it (review round 2, N6).
+  const catalog = await pageCatalog(db);
   const state = input.decision === "confirm" ? "confirmed" as const : "rejected" as const;
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
   const person = await findHandinPersonOfUser(db, row.userId);
@@ -1272,7 +1284,7 @@ export async function decideOffPlatformLine(
     if (input.decision === "confirm" && (label === null || !reportPages.includes(label))) {
       throw new BadRequestError("Confirm it on one of the report's pages", { reason: "page_not_in_report" });
     }
-    const pageId = label === null ? null : pages.find((page) => page.label === label)?.id ?? null;
+    const pageId = label === null ? null : catalog.idOf.get(label) ?? null;
     if (!(await decideOffPlatform(txDb, { id: row.id, state, pageId, note, byUserId: principal.user.id, at: now }))) {
       throw new ConflictError("This line is already decided", { reason: "already_decided" });
     }
@@ -1583,6 +1595,9 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
     }
   }
   if (claims.every((claim) => claim.kind === "imported" || claim.kind === "question")) outcomes.push({ outcome: "dismiss", key: "dismiss", label: "Закрыть без решения", gives: [], shares: [] });
+  const cardRows = await declinedCardsOf(db, claims);
+  const cardNames = await listHandinNames(db, cardRows.flatMap((card) => (card.toUserId === null ? [] : [card.toUserId])));
+  const cardName = (id: number | null) => (id === null ? "" : cardNames.get(id) ?? `#${id}`);
   // Which handed-in reports a decision gives a new version: the window says so instead of promising it of every report.
   const held = reports.filter((report) => report.lines.some((line) => line.transactionId === transactionId));
   const heldNames = await listHandinNames(db, held.map((report) => report.userId));
@@ -1602,6 +1617,12 @@ async function disputeOf(app: ClaimsApp, claims: readonly SaleClaimRow[], now: D
     },
     parties,
     claims: await claimWires(db, claims),
+    // The card of Gengar a side disagreed with: the decider reads what it wanted and why.
+    cards: cardRows.map((card) => ({
+      words: card.to === "pot" ? "в общак" : card.to === "give" ? `отдать ${cardName(card.toUserId)}` : card.to === "share" ? `пополам с ${cardName(card.toUserId)}`
+        : card.to === "mine" ? "это продажа спросившего" : card.to === "not_mine" ? "не продажа спросившего" : "по правилу",
+      why: card.why,
+    })),
     facts,
     outcomes,
     decision: decision === undefined ? null : { outcome: decision.outcome, note: decision.note, decidedAt: decision.decidedAt.toISOString(), by: decider },
@@ -1751,6 +1772,7 @@ async function potOfferDisputeOf(app: ClaimsApp, offer: PotOffer, now: Date, dec
       countedMills: line === undefined ? null : line.amountMills, claimedMills: line?.claimedMills ?? null, shiftId: own?.shiftId ?? offer.shiftId,
     }],
     claims: [],
+    cards: [],
     facts: null,
     outcomes: decided !== null ? [] : [
       { outcome: "pot", key: "pot", label: "В общак", gives: [{ userId: offer.userId, mills: 0 }], shares: [] },

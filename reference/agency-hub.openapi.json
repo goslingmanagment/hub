@@ -305346,6 +305346,26 @@
                         "additionalProperties": false
                       }
                     },
+                    "cards": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "words": {
+                            "type": "string"
+                          },
+                          "why": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "words",
+                          "why"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "facts": {
                       "anyOf": [
                         {
@@ -305755,6 +305775,7 @@
                     "home",
                     "parties",
                     "claims",
+                    "cards",
                     "facts",
                     "outcomes",
                     "decision",
@@ -306751,6 +306772,26 @@
                         "additionalProperties": false
                       }
                     },
+                    "cards": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "words": {
+                            "type": "string"
+                          },
+                          "why": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "words",
+                          "why"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "facts": {
                       "anyOf": [
                         {
@@ -307160,6 +307201,7 @@
                     "home",
                     "parties",
                     "claims",
+                    "cards",
                     "facts",
                     "outcomes",
                     "decision",

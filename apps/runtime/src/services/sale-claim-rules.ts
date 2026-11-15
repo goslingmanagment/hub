@@ -221,9 +221,12 @@ export function ruleMarksOf(input: { reports: readonly ReportView[]; claims: rea
         continue;
       }
       const claims = line.statement === "mine" || line.statement === "share";
+      // A word on a sale «стык смен, решит владелец» decides nothing without his decision (review round 2, N4): the
+      // junction is the owner's, never «по меткам чаттеров».
+      const junction = line.rule.home === "decide";
       put(line.transactionId, {
         userId: report.userId, mark: line.statement, shareWith: line.statement === "share" ? line.shareWithUserId : null, ownAmountMills: null,
-        confirmed: !(claims && waits(line.transactionId, report.userId)),
+        confirmed: !(claims && (waits(line.transactionId, report.userId) || junction)),
       });
     }
   }

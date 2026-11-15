@@ -120,6 +120,19 @@ export async function setHandinPostCopied(db: Database, input: { handinId: numbe
   }
 }
 
+/** Reports with at least one model's post copied (0427): when the first copy was made, and which models are copied. */
+export async function listHandinsWithPostCopies(db: Database): Promise<Array<{ handinId: number; shiftId: number; userId: number; firstCopiedAt: Date; copied: string[] }>> {
+  const result = await db.execute<Row>(sql`
+    select h.id, h.shift_id, h.user_id, min(c.copied_at) as first_copied_at, array_agg(c.model_slug order by c.model_slug) as copied
+    from shift_handins h join shift_handin_post_copies c on c.handin_id = h.id
+    where h.current_version is not null
+    group by h.id, h.shift_id, h.user_id`);
+  return result.rows.map((row) => ({
+    handinId: num(row.id), shiftId: num(row.shift_id), userId: num(row.user_id), firstCopiedAt: date(row.first_copied_at),
+    copied: (Array.isArray(row.copied) ? row.copied : []).map(String),
+  }));
+}
+
 /** Each model's copy of a report's post: which version, when. */
 export async function listHandinPostCopies(db: Database, handinId: number): Promise<Array<{ modelSlug: string; version: number; copiedAt: Date }>> {
   const result = await db.execute<Row>(sql`

@@ -74,6 +74,8 @@ export const saleDisputeResponseSchema = z.object({
   home: z.object({ kind: z.string(), reason: z.string(), words: z.string(), shares: z.array(z.object({ userId: intId, name: z.string(), mills })) }).nullable(),
   parties: z.array(saleDisputePartySchema),
   claims: z.array(saleClaimSchema),
+  /** Gengar's cards a side said «Не согласен» to: what the card wanted, in words, and Gengar's why (review round 2, N5). */
+  cards: z.array(z.object({ words: z.string(), why: z.string() })).default([]),
   /** The facts the rule read (the claimant's draft facts): sender, holders, whose slot, who wrote last. Null — not read. */
   facts: shiftReportLineFactsSchema.nullable(),
   /** The answers the owner may give, each with what it gives every party. */

@@ -281,6 +281,14 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     if (authorRoles.get(author) === "owner") return testOwner?.name ?? "владелец";
     return authorNames.get(author) ?? deciderOfLine(line).words;
   };
+  const decidedOwner = (transactionId: number): ShiftReportOwner | null => {
+    const decision = decisions.get(transactionId);
+    if (decision === undefined) return null;
+    if (decision.kind === "pot") return owner("pot", null, people, me);
+    if (decision.kind === "nobody") return owner("nobody", null, people, me);
+    const other = decision.shares.find((share) => share.percent > 0 && !subject.userIds.includes(share.userId));
+    return other === undefined ? null : owner("user", other.userId, people, me);
+  };
   const editable = own && mayAct(actor, "edit", phase);
   const canNote = own && mayAct(actor, "note", phase);
   const counted = phase === "counted";
@@ -309,7 +317,10 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     const incoming = incomingOf(id);
     const proposal = proposalOf(id);
     const noteProposal = noteProposalOf(id);
-    const rowDecider = deciderOfLine(line);
+    // A question nobody was asked of (a card the person disagreed with, a word with no other side) is the decider's
+    // straight away; one with no second side — the owner's (review round 2, N5).
+    const cardDispute = ask !== null && ask.origin === "draft" && ask.escalatedWhy === "disagree" && ask.answer === null;
+    const rowDecider = ask !== null && ask.sideUserId === null ? ownerDecider : deciderOfLine(line);
     // A card of whose the sale is, outranked by a decision or an agreement made since: «решено иначе», it changes nothing.
     const superseded = proposal !== null && (proposal.state === "proposed" || proposal.state === "late") && cardSuperseded(proposal, line);
     let current = lineOwner(line, people, me);
@@ -327,7 +338,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       reason = ruleWords;
     } else if (ask !== null && ask.answer === null && (ask.state === "asked" || ask.state === "owner") && ask.silenceAt === null) {
       current = rule;
-      reason = ask.sideUserId === null ? "ждём владельца" : `ждём ответа ${personNameForms(people.nameOf(ask.sideUserId)).gen}`;
+      reason = ask.sideUserId === null || cardDispute ? `ждём: решит ${rowDecider.words}` : `ждём ответа ${personNameForms(people.nameOf(ask.sideUserId)).gen}`;
     } else if (ask !== null && ask.answer === "disagree" && ask.state === "owner" && ask.sideUserId !== null) {
       current = rule;
       reason = `${people.nameOf(ask.sideUserId)} не согласен, решит ${rowDecider.words}`;
@@ -342,6 +353,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     } else if (line.settled === "owner") {
       // Decided by the decider («общак, решил владелец», «моя, решил владелец»): the word is what the decision gives.
       reason = `решил ${decidedBy(id, line)}`;
+      // The losing side: whose the decision made it — a colleague, the pot, nobody — never «моя» at $0 (round 2, P3).
+      if (amount <= 0) current = decidedOwner(id) ?? current;
     } else if (!sameOwner(current, rule)) {
       reason = `по правилу ${rule.kind === "me" ? "ваша" : rule.words}`;
     } else if (amount <= 0) {
@@ -350,8 +363,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     if (current.kind === "share" && amount > 0 && !isLate) reason = `вам ${plainUsd(amount)}`;
     const askWire = ask === null ? null : {
       claimId: ask.id,
-      to: ask.sideUserId === null ? "owner" as const : "colleague" as const,
-      toUser: ask.sideUserId === null ? null : people.person(ask.sideUserId),
+      to: ask.sideUserId === null || cardDispute ? "owner" as const : "colleague" as const,
+      toUser: ask.sideUserId === null || cardDispute ? null : people.person(ask.sideUserId),
       want: ask.statement === "share" && ask.shareWithUserId !== null ? owner("share", ask.shareWithUserId, people, me) : owner("me", null, people, me),
       note: ask.claimantNote ?? "",
       state: askState(ask),

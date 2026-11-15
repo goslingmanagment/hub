@@ -488,6 +488,51 @@ describe("the wall of the test realm", () => {
     expect(liveWords.some((word) => roles.body.includes(`"${word}"`))).toBe(false);
   }, 300_000);
 
+  // «Мимо площадки» the test owner confirms on a test report keeps the page it was confirmed on (round 2, N6): the page
+  // is found among the test realm's pages too, never only the live ones, and the next hand-in still counts it.
+  it("keeps the page of «мимо площадки» the test owner confirms on a test team's report", async (context) => {
+    if (!server || !testDb) return context.skip();
+    await seedSandbox(createTestAppContext(testDb), { scenarios: [], env: SANDBOX_PASSWORDS });
+    if (tOwnerCookie === "") tOwnerCookie = await login("t-owner", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_OWNER);
+    const chat2 = await login("t-chat-2", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_CHAT_2);
+    const shift = (await testDb.pool.query(
+      "select s.id from shifts s join users u on u.id = s.user_id where u.username = 't-chat-2' and s.state = 'closed' order by s.started_at desc limit 1",
+    )).rows[0] as { id: string } | undefined;
+    if (shift === undefined) return context.skip();
+    const shiftId = Number(shift.id);
+    const as = (method: "GET" | "POST", url: string, payload?: Record<string, unknown>) => server!.inject({
+      method, url, headers: { cookie: chat2, ...(payload === undefined ? {} : { "content-type": "application/json" }) }, ...(payload === undefined ? {} : { payload }),
+    });
+    const handInAndConfirm = async () => {
+      const phase = ((await as("GET", `/api/v1/shift-reports/${shiftId}`)).json().board as { phase: string } | null)?.phase;
+      if (phase === "counted" || phase === "confirm") expect((await as("POST", `/api/v1/shift-reports/${shiftId}/reopen`)).statusCode).toBe(200);
+      const handed = await as("POST", `/api/v1/shift-reports/${shiftId}/submit`);
+      expect(handed.statusCode, handed.body).toBe(200);
+      const board = handed.json().board as { phase: string; candidate: { id: number } | null; totals: { nowMills: number; count: number } };
+      expect(board.phase).toBe("confirm");
+      const confirmed = await as("POST", `/api/v1/shift-reports/${shiftId}/confirm`, { candidateId: board.candidate!.id });
+      expect(confirmed.statusCode, confirmed.body).toBe(200);
+    };
+    const added = await as("POST", `/api/v1/shift-reports/${shiftId}/off-platform`, { amountMills: 5_000, fromWhom: "фан", whatFor: "кастом" });
+    expect(added.statusCode, added.body).toBe(200);
+    await handInAndConfirm();
+    const label = (await testDb.pool.query(
+      "select v.pages -> 0 ->> 'pageLabel' as label from shift_handins h join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version where h.shift_id = $1", [shiftId],
+    )).rows[0].label as string;
+    const decided = await server.inject({
+      method: "POST", url: `/api/v1/off-platform/${added.json().line.id}/decide`, headers: { cookie: tOwnerCookie, "content-type": "application/json" },
+      payload: { decision: "confirm", pageLabel: label },
+    });
+    expect(decided.statusCode, decided.body).toBe(200);
+    expect((await testDb.pool.query("select page_id from off_platform_sales where id = $1", [added.json().line.id])).rows[0].page_id).not.toBeNull();
+    // «Исправить», «Сдать заново», «Подтверждаю»: the confirmed $5 still counts, on its page.
+    await handInAndConfirm();
+    const after = (await testDb.pool.query(
+      "select v.off_platform from shift_handins h join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version where h.shift_id = $1", [shiftId],
+    )).rows[0].off_platform as Array<{ id: number; pageLabel: string | null; state: string }>;
+    expect(after.find((one) => one.id === added.json().line.id)).toMatchObject({ state: "confirmed", pageLabel: label });
+  }, 300_000);
+
   // Workboard's own reads and writes of the test owner (products packages W): «Список продаж» and a sale's chain, the
   // questions to whoever decides. Each keeps to its realm by id as by list, and a test realm's money asks no ledger.
   it("keeps the sales list, a sale's chain and the questions to their realm, both ways", async (context) => {

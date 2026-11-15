@@ -159,4 +159,22 @@ describe("«Скопировать пост» on a shift of two models", () => {
     expect((await q("select reason_key from matters where kind = 'shift.report.post_changed' and state = 'open'")).rows.map((row) => String(row.reason_key)))
       .toEqual([expect.stringMatching(/:ari$/)]);
   });
+
+  it("reminds the person to copy the post of a model left uncopied an hour after another model's copy", async (context) => {
+    if (!testDb) return context.skip();
+    // Start the report's copies over: Ари copied two hours ago, Лилли never.
+    const handin = Number((await q("select id from shift_handins where shift_id = $1", [shift])).rows[0].id);
+    await q("delete from shift_handin_post_copies where handin_id = $1", [handin]);
+    expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${shift}/post-copied?model=ari`)).statusCode).toBe(200);
+    await q("update shift_handin_post_copies set copied_at = now() - interval '2 hours' where handin_id = $1", [handin]);
+    await syncCheckMatters(app, new Date());
+    const open = (await q("select title, owner_user_id::int as owner from matters where kind = 'shift.report.post_missing' and state = 'open'")).rows as Array<{ title: string; owner: number }>;
+    expect(open).toHaveLength(1);
+    expect(open[0]!.title).toContain("Лилли");
+    expect(open[0]!.owner).toBe(anna);
+    // Copied: the matter closes.
+    expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${shift}/post-copied?model=lilly`)).statusCode).toBe(200);
+    await syncCheckMatters(app, new Date());
+    expect((await q("select count(*)::int as n from matters where kind = 'shift.report.post_missing' and state = 'open'")).rows[0].n).toBe(0);
+  });
 });
