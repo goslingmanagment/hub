@@ -282,7 +282,10 @@ describe("the shift report: who reads, who writes", () => {
     });
     const feed = async () => agentShiftReportsFeedResponseSchema.parse((await asKey("ledger", "GET", "/api/v1/agent/shift-reports")).json());
     const fedBefore = (await feed()).reports.filter((report) => report.shiftId === shiftA);
-    expect((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/reopen`)).statusCode).toBe(200);
+    // The test before took a sale by hand: the report is already in «Правка» (its words change only there).
+    const phase = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shiftA}`)).json()).board?.phase;
+    if (phase === "counted" || phase === "confirm") expect((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/reopen`)).statusCode).toBe(200);
+    expect(shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shiftA}`)).json()).board?.phase).toBe("fixing");
     const handed = shiftReportResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`)).json());
     // A key reviews the shift's page: the report waits for its check.
     expect(handed.board).toMatchObject({ phase: "checking", chip: "Проверка", canConfirm: false, candidate: { gengar: { state: "reading" } } });
