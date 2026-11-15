@@ -12,7 +12,7 @@ import {
   type PublicationStatus,
 } from "@agency_hub_core/shared";
 
-import { livePageSql } from "./realm.ts";
+import { livePageSql, testPageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // Publications (0297, docs/plans/2026-10-23-wall-posts): the rows, their status
@@ -1205,10 +1205,12 @@ export async function readPublicationDayVolume(db: Database, input: {
 }
 
 /** The active pages, for the settings screen and label lookups. */
-export async function listPublicationPages(db: Database): Promise<Array<{ id: number; label: string; platform: string }>> {
+export async function listPublicationPages(db: Database, realm: "live" | "test" = "live"): Promise<Array<{ id: number; label: string; platform: string }>> {
+  // The test realm's pages (sandbox/realm.ts) are publication pages only for a test person's screen; the engine and every
+  // live reader keep to the live ones.
   const result = await db.execute<Row>(sql`
     select id, label, platform::text as platform from pages
-     where status = 'active' and deleted_at is null and ${livePageSql(sql`pages.id`)}
+     where status = 'active' and deleted_at is null and ${realm === "test" ? testPageSql(sql`pages.id`) : livePageSql(sql`pages.id`)}
      order by label
   `);
   return result.rows.map((row) => ({ id: num(row.id), label: String(row.label), platform: String(row.platform) }));
@@ -1284,7 +1286,7 @@ export async function listSubmittingOnlyfansPublications(db: Database): Promise<
       from publications p
       join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
       left join page_publishing_settings s on s.page_id = p.page_id
-     where p.status = 'submitting' and d.platform = 'onlyfans'
+     where ${livePageSql(sql`p.page_id`)} and p.status = 'submitting' and d.platform = 'onlyfans'
        -- A vault album is its own executor's (publications-onlyfans-vault.ts), never a post's.
        and p.kind <> 'vault_album'
      order by p.publish_at, p.id
@@ -1305,7 +1307,7 @@ export async function listDueOnlyfansPublications(db: Database, input: { now: Da
       from publications p
       join pages pg on pg.id = p.page_id
       join page_publishing_settings s on s.page_id = p.page_id
-     where p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
+     where ${livePageSql(sql`p.page_id`)} and p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
        and s.enabled and s.autostopped_at is null
        -- A vault album never becomes a post: its own executor sends it.
        and p.kind <> 'vault_album'
@@ -1329,7 +1331,7 @@ export async function listOnlyfansPublicationsForUpload(db: Database, input: { p
       from publications p
       join pages pg on pg.id = p.page_id
       join page_publishing_settings s on s.page_id = p.page_id
-     where p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
+     where ${livePageSql(sql`p.page_id`)} and p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
        and s.enabled and s.autostopped_at is null
        and p.kind <> 'vault_album'
        and exists (select 1 from publication_media m where m.publication_id = p.id and m.source = 'file')
@@ -1346,7 +1348,7 @@ export async function listSubmittingFanslyPublications(db: Database): Promise<Ar
     select d.*, p.page_id
       from publications p
       join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
-     where p.status = 'submitting' and d.platform = 'fansly'
+     where ${livePageSql(sql`p.page_id`)} and p.status = 'submitting' and d.platform = 'fansly'
      order by p.publish_at, p.id
   `);
   return result.rows.map((row) => ({ publicationId: num(row.publication_id), pageId: num(row.page_id), dispatch: toDispatch(row) }));
@@ -1365,7 +1367,7 @@ export async function listDueFanslyPublications(db: Database, input: { now: Date
       join pages pg on pg.id = p.page_id
       join page_publishing_settings s on s.page_id = p.page_id
       join sync_pages sp on sp.page_id = p.page_id
-     where p.status = 'approved' and pg.platform::text = 'fansly' and pg.status = 'active'
+     where ${livePageSql(sql`p.page_id`)} and p.status = 'approved' and pg.platform::text = 'fansly' and pg.status = 'active'
        and s.enabled and s.autostopped_at is null and sp.transport = 'browser'
        and ((p.kind <> 'story' and p.publish_at <= ${input.postsUntil})
          or (p.kind = 'story' and p.publish_at <= ${input.storiesUntil ?? input.now}))
@@ -1473,7 +1475,7 @@ export async function listOnlyfansCheckCandidates(db: Database): Promise<Onlyfan
       from publications p
       join pages pg on pg.id = p.page_id
       left join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
-     where pg.platform::text = 'onlyfans' and p.status in ('scheduled', 'processing', 'unknown')
+     where ${livePageSql(sql`p.page_id`)} and pg.platform::text = 'onlyfans' and p.status in ('scheduled', 'processing', 'unknown')
        and p.approved_revision_id is not null
        -- An album's outcome is its read back (publications-onlyfans-vault.ts), not a post's check.
        and p.kind <> 'vault_album'
@@ -1524,7 +1526,7 @@ export async function listFanslyCheckCandidates(db: Database): Promise<FanslyChe
       from publications p
       join pages pg on pg.id = p.page_id
       left join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
-     where pg.platform::text = 'fansly' and p.status in ('scheduled', 'unknown')
+     where ${livePageSql(sql`p.page_id`)} and pg.platform::text = 'fansly' and p.status in ('scheduled', 'unknown')
        and p.approved_revision_id is not null
        -- A vault album is no post: no read of the wall finds it (0323); an
        -- unknown one is a person's to decide.
@@ -1714,7 +1716,7 @@ export async function listFanslyQueuePages(db: Database): Promise<Array<{ pageId
                     where p.page_id = pg.id and p.status in ('submitting', 'scheduled') and p.kind <> 'story') as in_flight
       from pages pg
       join sync_pages sp on sp.page_id = pg.id
-     where pg.platform::text = 'fansly' and pg.status = 'active' and pg.deleted_at is null
+     where pg.platform::text = 'fansly' and pg.status = 'active' and pg.deleted_at is null and ${livePageSql(sql`pg.id`)}
      order by pg.label
   `);
   return result.rows.map((row) => ({ pageId: num(row.id), pageLabel: String(row.label), inFlight: row.in_flight === true }));
@@ -1909,7 +1911,7 @@ export async function listOnlyfansQueuePages(db: Database, now: Date): Promise<O
                     s.updated_by_user_id) as default_actor_user_id
       from pages pg
       left join page_publishing_settings s on s.page_id = pg.id
-     where pg.platform::text = 'onlyfans' and pg.status = 'active' and pg.deleted_at is null
+     where pg.platform::text = 'onlyfans' and pg.status = 'active' and pg.deleted_at is null and ${livePageSql(sql`pg.id`)}
        and pg.ofapi_account_id is not null
      order by pg.label
   `);
@@ -2038,7 +2040,7 @@ export async function listOnlyfansPublicationsWithUploads(db: Database): Promise
       from publications p
       join pages pg on pg.id = p.page_id
       join page_publishing_settings s on s.page_id = p.page_id
-     where p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
+     where ${livePageSql(sql`p.page_id`)} and p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
        and s.enabled and s.autostopped_at is null
        -- An album owes no post's create: its credits are its own account's.
        and p.kind <> 'vault_album'
@@ -2057,6 +2059,9 @@ export async function listOnlyfansPublicationsWithUploads(db: Database): Promise
  * off, nothing of Hub's on it and no such request gets no new kind of request.
  */
 export async function fanslyScheduleReadWanted(db: Database, pageId: number): Promise<boolean> {
+  // A test page's schedule is never read from Fansly (sandbox/realm.ts).
+  const [test] = (await db.execute<Row>(sql`select ${testPageSql(sql`${pageId}::bigint`)} as test`)).rows;
+  if (test?.test === true) return false;
   const result = await db.execute<Row>(sql`
     select exists(
       select 1 from page_publishing_settings where page_id = ${pageId} and enabled

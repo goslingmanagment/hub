@@ -136,7 +136,7 @@ beforeAll(async () => {
   await createUserAccount(app, { username: "lead", role: "team_lead", password: "lead-password-for-tests" }, { source: "cli" });
   const invited = await createInvite(app, { username: "chat", pageLabels: ["mia-1", "zoe-1"] }, { source: "cli" });
   await redeemAccountLink(app, { token: invited.link.token, password: "chat-password-for-tests" });
-  await seedSandbox(app, { scenarios: [], env: SANDBOX_PASSWORDS });
+  await seedSandbox(app, { scenarios: ["publications"], env: SANDBOX_PASSWORDS });
   server = await buildApiServer(app);
   await server.ready();
   const owner = await signIn("boss", "boss-password-for-tests");
@@ -296,10 +296,19 @@ describe("the person's door", () => {
     const list = await inject("POST", "/api/v1/person/publications/list", { bearer: KEY, payload: { client: "contentops", grant: grants.testKm } });
     expect(list.statusCode, list.body).toBe(200);
     expect(leaks(list.body, ["mia-1", "mia-2", "zoe-1"])).toEqual([]);
+    // The test pages' seeded posts are hers to see; a live person's lists never name them.
+    expect(list.body).toContain('"test-1"');
+    for (const who of ["owner", "kmA", "kmB"]) {
+      const live = await inject("POST", "/api/v1/person/publications/list", { bearer: KEY, payload: { client: "contentops", grant: grants[who] } });
+      expect(live.body.includes('"test-1"') || live.body.includes('"test-of"'), who).toBe(false);
+    }
     expect((await call("personCreatorStatsContent", aim("T"), grants.testKm)).statusCode).toBe(200);
     expect([403, 404]).toContain((await call("personCreatorStatsContent", aim("A"), grants.testKm)).statusCode);
     expect([403, 404]).toContain((await call("personCreatorStatsContent", aim("T"), grants.kmA)).statusCode);
-    expect([403, 404]).toContain((await call("personPublicationQueueRefresh", aim("T"), grants.testKm)).statusCode);
+    // A test page's schedule is never read from a platform: Hub says so in words.
+    const refresh = await call("personPublicationQueueRefresh", aim("T"), grants.testKm);
+    expect(refresh.statusCode, refresh.body).toBe(409);
+    expect(refresh.json()).toMatchObject({ message: "тестовая страница: на площадку не отправляется" });
   });
 
   it("records a change as the person's, never as ContentOps' key", async (context) => {

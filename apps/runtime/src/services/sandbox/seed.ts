@@ -17,8 +17,9 @@ import type { AppContext } from "../../bootstrap.ts";
 import { createAccountLinkForUserId } from "../account-links.ts";
 import { createUserOrRefuseDuplicate } from "../auth.ts";
 import { issueAgentKey, replaceAgentKey } from "../agent-keys.ts";
-import { AGENT_CAPABILITIES, type AgentCapability } from "@agency_hub_core/contracts";
+import { AGENT_CAPABILITIES, publicationContentSchema, type AgentCapability } from "@agency_hub_core/contracts";
 import { recordCustomOrder } from "../custom-orders/index.ts";
+import { approvePublications, createPublicationDraft } from "../publications.ts";
 import { openMatter } from "@agency_hub_core/db";
 
 /** Where an invitation is opened (packages/ui/src/sites.ts `CHATTER_SITE_ORIGIN`); `SANDBOX_JOIN_ORIGIN` overrides it. */
@@ -43,7 +44,10 @@ const JOIN_ORIGIN = "https://chatgoose.gosling-agency.ru";
  *              post, a subscription after a message, a sale nobody wrote for, sales before the shift began, one after
  *              the colleague's shift ended;
  *   customs  — custom orders on the steps the board of customs shows;
- *   matters  — what a team lead and a chatter find waiting.
+ *   matters  — what a team lead and a chatter find waiting;
+ *   publications — posts on both test pages in the states «Публикации» shows (a draft with a finding, an approved one for
+ *              tomorrow, one published yesterday, one whose outcome is unknown, a withdrawn one), with files of the test
+ *              pages' own vault. Hub never hands a test page's post to a platform (publications.ts realm conditions).
  * Each is re-runnable for «now»: a run in another minute adds a new day's worth, the same minute adds nothing.
  */
 
@@ -100,7 +104,7 @@ export function sandboxCheckerCapabilities(): AgentCapability[] {
   return CHECKER_CAPABILITIES.filter((one) => (AGENT_CAPABILITIES as readonly string[]).includes(one)) as AgentCapability[];
 }
 
-export const SANDBOX_SCENARIOS = ["shift", "customs", "matters"] as const;
+export const SANDBOX_SCENARIOS = ["shift", "customs", "matters", "publications"] as const;
 export type SandboxScenario = (typeof SANDBOX_SCENARIOS)[number];
 
 /** Provenance of every sale the seed writes (0414). */
@@ -468,6 +472,75 @@ async function seedMatters(db: Database, pages: SandboxSeedResult["pages"], now:
   return { matters: opened.length };
 }
 
+/**
+ * Posts of the test pages in every state the feed tells apart. A draft is made by Hub's own draft (its checks run), an
+ * approval by Hub's own approval (as the test content manager); the states only a platform's answer gives (published,
+ * unknown, withdrawn) are written directly with a journal row by «Hub». The test pages' vault holds three files the
+ * seed names, so the posts show files. Re-runnable for «now»: the same minute adds nothing.
+ */
+async function seedPublications(app: AppContext, pages: SandboxSeedResult["pages"], now: Date): Promise<Record<string, number>> {
+  const db = app.db;
+  const km = await testLogin(db, "t-km");
+  const stamp = stampOf(now);
+  const mark = `sandbox ${stamp}`;
+  const [done] = await rows(db, sql`select count(*)::int as n from publication_status_events where reason = ${mark}`);
+  if (Number(done?.n ?? 0) > 0) return { publications: 0 };
+  for (const page of pages.filter((one) => one.label === "test-1")) {
+    const platform = "fansly";
+    for (const n of [1, 2, 3]) {
+      // Files of this run's own (a file posted again within the page's threshold would wait for a person's word).
+      const ref = `sandbox-${page.label}-${stamp}-m${n}`;
+      await db.execute(sql`
+        insert into creator_raw_media (page_id, platform, media_ref, source_kind, first_origin, first_observed_at,
+                                       last_observed_at, content_hash, source_event_id, source_observation_id, source_account_seq)
+        select ${page.id}, ${platform}, ${ref}, 'vault_media', 'vault', ${now}, ${now}, ${"0".repeat(64)}, 1, 1, 1
+         where not exists (select 1 from creator_raw_media where page_id = ${page.id} and media_ref = ${ref})`);
+    }
+  }
+  const fansly = pages.find((page) => page.label === "test-1")!.id;
+  const onlyfans = pages.find((page) => page.label === "test-of")!.id;
+  // The Fansly test page's one wall, as Fansly would name it: a post goes to the default wall.
+  await db.execute(sql`
+    insert into page_walls (page_id, platform, wall_ref, name, default_wall, main_wall, first_observed_at, last_observed_at,
+                            content_hash, source_event_id, source_observation_id, source_account_seq)
+    select ${fansly}, 'fansly', 'sandbox-wall', 'Posts', true, true, ${now}, ${now}, ${"0".repeat(64)}, 1, 1, 1
+     where not exists (select 1 from page_walls where page_id = ${fansly})`);
+  const day = 24 * 60 * MINUTE;
+  const author = { kind: "human" as const, userId: km };
+  const at = (days: number, hourUtc: number) => new Date(Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`) + days * day + hourUtc * 60 * MINUTE);
+  const draft = (pageId: number, text: string, publishAt: Date, media: string[]) =>
+    createPublicationDraft(db, {
+      pageId, author, idempotencyKey: null, now,
+      body: publicationContentSchema.parse({ kind: "subscriber_post", text, media: media.map((mediaRef) => ({ source: "vault", mediaRef })), publishAt: publishAt.toISOString() }),
+    });
+  const approve = async (made: { id: number; version: number; findings: ReadonlyArray<{ code: string; blocking?: boolean }> }) => {
+    const [result] = await approvePublications(db, { items: [{ id: made.id, version: made.version }], userId: km, now });
+    if (result?.outcome !== "approved") {
+      throw new SandboxSeedRefused(`A test post was not approved: ${result?.reason ?? "no answer"} (${made.findings.map((one) => one.code).join(", ")})`);
+    }
+  };
+  // A file the vault does not hold: the draft's check names it and approval waits.
+  await draft(fansly, "Тест: пост с замечанием", at(1, 15), [`sandbox-test-1-${stamp}-m1`, "sandbox-not-in-vault"]);
+  await approve(await draft(fansly, "Тест: утверждён на завтра", at(1, 17), [`sandbox-test-1-${stamp}-m2`]));
+  const outcomes = [
+    { pageId: onlyfans, label: "test-of", text: "Тест: вышел вчера", publishAt: at(-1, 16), status: "published", reason: null },
+    { pageId: fansly, label: "test-1", text: "Тест: исход неизвестен", publishAt: at(-1, 18), status: "unknown", reason: "sandbox_unknown" },
+    { pageId: onlyfans, label: "test-of", text: "Тест: снят с расписания", publishAt: at(2, 12), status: "withdrawn", reason: "withdrawn" },
+  ] as const;
+  for (const one of outcomes) {
+    // The OnlyFans test page has no account at OnlyFansAPI, so no vault to name: its posts are text alone.
+    const made = await draft(one.pageId, one.text, at(3, 12), one.label === "test-of" ? [] : [`sandbox-${one.label}-${stamp}-m3`]);
+    await approve(made);
+    // Only a platform's answer moves a post there; the test realm has none, so the seed writes the state with Hub's
+    // journal row (its reason is the run's mark: the same minute adds nothing).
+    await db.execute(sql`update publications set status = ${one.status}, status_reason = ${one.reason}, publish_at = ${one.publishAt},
+                          status_changed_at = ${now}, version = version + 1, updated_at = ${now} where id = ${made.id}`);
+    await db.execute(sql`insert into publication_status_events (publication_id, from_status, to_status, actor_kind, reason, at)
+                          values (${made.id}, 'approved', ${one.status}, 'hub', ${mark}, ${now})`);
+  }
+  return { publications: 2 + outcomes.length };
+}
+
 /** Seeds the test team (and the scenarios asked for). Additive, idempotent; refuses before writing on a live name. */
 export async function seedSandbox(app: AppContext, input: SandboxSeedInput): Promise<SandboxSeedResult> {
   const env = input.env ?? process.env;
@@ -486,6 +559,7 @@ export async function seedSandbox(app: AppContext, input: SandboxSeedInput): Pro
     if (scenario === "shift") scenarios.shift = await seedShift(app.db, result.pages, now);
     if (scenario === "customs") scenarios.customs = await seedCustoms(app, result.pages, now);
     if (scenario === "matters") scenarios.matters = await seedMatters(app.db, result.pages, now);
+    if (scenario === "publications") scenarios.publications = await seedPublications(app, result.pages, now);
   }
   const checker = await ensureChecker(app);
   let checkerKey: string | null = null;
