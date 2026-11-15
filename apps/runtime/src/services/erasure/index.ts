@@ -1185,6 +1185,9 @@ export const FAN_TEXT_ERASURE_TABLES = [
   "shift_handins",
   "shift_handin_marks",
   "shift_handin_versions",
+  // The «Отчёт» board (0412): what «Сдать смену» records, and Gengar's cards on it.
+  "shift_handin_candidates",
+  "shift_handin_proposals",
 ] as const;
 
 const ENUM = "an enum the table's CHECK holds to its list";
@@ -1261,6 +1264,25 @@ export const FAN_TEXT_ERASURE_COLUMNS: readonly FanTextErasureColumn[] = [
   { column: "shift_handin_versions.comment", stance: "unlinked", why: "as shift_handins.comment, frozen in the version" },
   { column: "shift_handin_versions.rule_version", stance: "no_words", why: "the rule's version" },
   { column: "shift_handin_versions.made_for", stance: "no_words", why: "why the system made it: a kind, ids and an outcome" },
+  // The «Отчёт» board (0412).
+  { column: "shift_handins.phase", stance: "no_words", why: ENUM },
+  { column: "shift_handins.fixing_from", stance: "no_words", why: ENUM },
+  { column: "sale_claims.origin", stance: "no_words", why: ENUM },
+  { column: "shift_handin_candidates.door", stance: "no_words", why: ENUM },
+  { column: "shift_handin_candidates.telegram_message_ref", stance: "no_words", why: "the reference of the agent's message «со слов»" },
+  { column: "shift_handin_candidates.pages", stance: "no_words", why: "the pages' labels and sums" },
+  { column: "shift_handin_candidates.lines", stance: "cleared", target: "shift_handin_candidates", why: "the note of a line on the fan's sale, as a version's (`SHIFT_HANDIN_LINES_ERASURE`: the candidate's trigger lets the same change through)" },
+  { column: "shift_handin_candidates.off_platform", stance: "unlinked", why: OFF_PLATFORM_UNLINKED },
+  { column: "shift_handin_candidates.comment", stance: "unlinked", why: "as shift_handins.comment, frozen in the candidate" },
+  { column: "shift_handin_candidates.rule_version", stance: "no_words", why: "the rule's version" },
+  { column: "shift_handin_candidates.hub_check", stance: "no_words", why: "Hub's check per page: labels, states, counts and sums" },
+  { column: "shift_handin_proposals.kind", stance: "no_words", why: ENUM },
+  { column: "shift_handin_proposals.from_word", stance: "no_words", why: ENUM },
+  { column: "shift_handin_proposals.to_word", stance: "no_words", why: ENUM },
+  { column: "shift_handin_proposals.state", stance: "no_words", why: ENUM },
+  { column: "shift_handin_proposals.note", stance: "cleared", target: "shift_handin_proposals", why: "the comment Gengar proposed on the fan's sale" },
+  { column: "shift_handin_proposals.why", stance: "cleared", target: "shift_handin_proposals", why: "Gengar's words of why, read from the fan's chat" },
+  { column: "shift_handin_proposals.message_refs", stance: "cleared", target: "shift_handin_proposals", why: "the references of the fan's messages Gengar read" },
 ];
 
 /** The words Hub's writers put in a matter's evidence and in an object event's changes: a person's note (a claim's
@@ -1961,6 +1983,48 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     },
   });
 
+  // The «Отчёт» board (0412): a candidate's lines lose their notes as a version's do (the same setting, its own
+  // trigger), Gengar's cards on the fan's sales lose their words, and what the site showed of the fan («нет в Hub»)
+  // goes whole: it is a copy of the site's row, not the agency's work.
+  const handinCandidatePred = sql`exists (select 1 from jsonb_array_elements(lines) as line where ${fanLinePred})`;
+  targets.push({
+    plane: "hot",
+    target: "shift_handin_candidates",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from shift_handin_candidates where ${handinCandidatePred}`),
+    run: async (tx) => {
+      const { setting, value } = SHIFT_HANDIN_LINES_ERASURE;
+      await tx.execute(sql`select set_config(${setting}, ${value}, true)`);
+      const cleared = await execCount(tx, sql`
+        update shift_handin_candidates c
+        set lines = (
+          select jsonb_agg(case when ${fanLinePred} then line || '{"note": null}'::jsonb else line end order by i)
+          from jsonb_array_elements(c.lines) with ordinality as e(line, i))
+        where ${handinCandidatePred}`);
+      await tx.execute(sql`select set_config(${setting}, '', true)`);
+      return cleared;
+    },
+  });
+  const proposalPred = sql`transaction_id in (${fanSales}) and why <> ${MATTER_FAN_ERASED}`;
+  targets.push({
+    plane: "hot",
+    target: "shift_handin_proposals",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from shift_handin_proposals where ${proposalPred}`),
+    run: (tx) => execCount(tx, sql`
+      update shift_handin_proposals
+      set why = ${MATTER_FAN_ERASED}, note = case when note is null then null else ${MATTER_FAN_ERASED} end, message_refs = '[]'::jsonb
+      where ${proposalPred}`),
+  });
+  const sightingPred = sql`page_id in ${scope.pageIds} and fan_ref = ${ref}`;
+  targets.push({
+    plane: "hot",
+    target: "sale_sightings",
+    action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from sale_sightings where ${sightingPred}`),
+    run: (tx) => execCount(tx, sql`delete from sale_sightings where ${sightingPred}`),
+  });
+
   // Сообщения людям (0403, package S): a message the server made of the fan's order (its card) or of a handed-in
   // report that holds his sale (the post) keeps its row — kind, to whom, when, state — and loses its text. Before the
   // order and the transactions lose the fan: the predicate follows them.
@@ -2246,6 +2310,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["sale_claims", "page_id"],
     ["sale_owner_decisions", "page_id"],
     ["off_platform_sales", "page_id"],
+    // «Нет в Hub» (0412): what the page's own list on the site showed.
+    ["sale_sightings", "page_id"],
     // Chat Memory week 2: the facts lane's runs over the page's chats (0313).
     ["fan_fact_runs", "page_id"],
     // …and the page's chats an owner's rebuild reads again (0322).

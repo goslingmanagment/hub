@@ -14,6 +14,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { listenOnLoopback } from "./helpers/network.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // Review of the shift report (R2-a, R2-c). Money: after the owner decides a dispute (or the other side agrees), the
 // claimant's later hand-ins count exactly their share by it — settled, never disputed — whatever their old «моё» says;
@@ -36,8 +37,9 @@ let shiftTwoPages = 0;
 let shiftB = 0;
 let refs = 0;
 
-const asSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
+const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
 
 async function insertShift(userId: number, pages: string[], startedAt: Date, endedAt: Date): Promise<number> {
   const result = await testDb!.pool.query(
@@ -70,8 +72,7 @@ async function sale(pageId: number, net: number, minutesAgo: number, home: "bell
 }
 
 async function submit(shiftId: number) {
-  const submitted = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftId}/submit`);
-  expect(submitted.statusCode, submitted.body).toBe(200);
+  await handInAndConfirm(asSession, "anna", shiftId);
 }
 
 /** The newest version of a shift's report, and its line of a sale. */

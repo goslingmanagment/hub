@@ -8,10 +8,11 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
-import { submitShiftReport, type HandinPersonActor } from "../apps/runtime/src/services/shift-handins.ts";
+import type { HandinPersonActor } from "../apps/runtime/src/services/shift-handins.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { handInAndConfirm, handInAndConfirmDirect, editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // The third round of the final review of «чья продажа» and the shift report. (1) A «долёт» stays in its own report:
 // the shift handed in again keeps the line, and a cancelled decision brings the report back to what the «долёт»
@@ -44,8 +45,9 @@ let worked = 0;
 let refs = 0;
 
 const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
-const asSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
+const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
 const asKey = (method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${KEY}` }, ...(payload ? { payload } : {}) });
 
@@ -88,8 +90,7 @@ async function homeOf(transactionId: number) {
 }
 
 async function submit(shiftId: number) {
-  const submitted = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftId}/submit`);
-  expect(submitted.statusCode, submitted.body).toBe(200);
+  await handInAndConfirm(asSession, "anna", shiftId);
 }
 
 /** A decision «со слов» through the agent's door: its number and the report versions it made. */
@@ -220,7 +221,7 @@ describe("«чья продажа» and the shift report, the final review's thi
     const first = await shiftRow(16, 15);
     const second = await shiftRow(14, 13);
     // The hand-in of one shift waits for the ledger; meanwhile her other shift is handed in and takes the «долёт».
-    await submitShiftReport(app, annaAtWorkboard(), { shiftId: first }, {
+    await handInAndConfirmDirect(app, annaAtWorkboard(), { shiftId: first }, {
       dayPaid: async () => {
         await submit(second);
         return null;

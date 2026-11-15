@@ -104,10 +104,23 @@ export interface HandinRow {
   currentVersion: number | null;
   submittedAt: Date | null;
   draftUpdatedAt: Date | null;
+  /** The «Отчёт» board's phase (0412): draft, checking, confirm, counted, fixing. */
+  phase: HandinPhase;
+  /** When it entered the phase; null — never moved (a report older than 0412, or a draft). */
+  phaseAt: Date | null;
+  /** The phase «Исправить» came from (0413); null — not fixing. */
+  fixingFrom: "counted" | "confirm" | null;
+  /** When the post was last copied and which version it was (0413). */
+  postCopiedAt: Date | null;
+  postCopiedVersion: number | null;
+  /** Sales of the person no version holds, found after it was counted (0413). */
+  lateSales: number;
 }
 
+export type HandinPhase = "draft" | "checking" | "confirm" | "counted" | "fixing";
+
 const HANDIN_COLUMNS = sql`h.id, h.shift_id, h.user_id, h.person_id, to_char(h.report_date, 'YYYY-MM-DD') as report_date, h.state, h.comment,
-  h.current_version, h.submitted_at, h.draft_updated_at`;
+  h.current_version, h.submitted_at, h.draft_updated_at, h.phase, h.phase_at, h.fixing_from, h.post_copied_at, h.post_copied_version, h.late_sales`;
 
 function handinOf(row: Row): HandinRow {
   return {
@@ -121,6 +134,13 @@ function handinOf(row: Row): HandinRow {
     currentVersion: nullableNum(row.current_version),
     submittedAt: nullableDate(row.submitted_at),
     draftUpdatedAt: nullableDate(row.draft_updated_at),
+    // A report handed in before 0412 has a version and no phase of its own: it is counted.
+    phase: (row.phase === undefined || row.phase === null ? "draft" : row.phase) as HandinPhase,
+    phaseAt: nullableDate(row.phase_at),
+    fixingFrom: (row.fixing_from ?? null) as HandinRow["fixingFrom"],
+    postCopiedAt: nullableDate(row.post_copied_at),
+    postCopiedVersion: nullableNum(row.post_copied_version),
+    lateSales: row.late_sales === undefined || row.late_sales === null ? 0 : num(row.late_sales),
   };
 }
 
@@ -128,6 +148,12 @@ function handinOf(row: Row): HandinRow {
 export async function findHandinByShift(db: Database, shiftId: number, options: { lock?: boolean } = {}): Promise<HandinRow | null> {
   const result = await db.execute<Row>(sql`
     select ${HANDIN_COLUMNS} from shift_handins h where h.shift_id = ${shiftId} ${options.lock ? sql`for update` : sql``}`);
+  return result.rows[0] === undefined ? null : handinOf(result.rows[0]);
+}
+
+/** A report by its own id. */
+export async function findHandinById(db: Database, handinId: number): Promise<HandinRow | null> {
+  const result = await db.execute<Row>(sql`select ${HANDIN_COLUMNS} from shift_handins h where h.id = ${handinId}`);
   return result.rows[0] === undefined ? null : handinOf(result.rows[0]);
 }
 
@@ -169,26 +195,33 @@ async function touchDraft(db: Database, handinId: number, at: Date) {
 
 // ── The draft's marks ────────────────────────────────────────────────────────
 
-export type HandinStatement = "mine" | "not_mine" | "share";
+/** The person's word on a sale: the ledger's three, and on one's own sale `give` (to `toUserId`) and `pot` (0412). */
+export type HandinStatement = "mine" | "not_mine" | "share" | "give" | "pot";
 
 export interface HandinMarkRow {
   transactionId: number;
   statement: HandinStatement | null;
   shareWithUserId: number | null;
+  /** With `give`: the colleague. */
+  toUserId?: number | null;
   note: string | null;
   updatedAt: Date;
+  /** Written by an agent key «со слов»; null — by a person. */
+  byAgentKeyId?: number | null;
 }
 
 export async function listHandinMarks(db: Database, handinId: number): Promise<HandinMarkRow[]> {
   const result = await db.execute<Row>(sql`
-    select transaction_id, statement, share_with_user_id, note, updated_at
+    select transaction_id, statement, share_with_user_id, to_user_id, note, updated_at, updated_by_agent_key_id
     from shift_handin_marks where handin_id = ${handinId} order by transaction_id`);
   return result.rows.map((row) => ({
     transactionId: num(row.transaction_id),
     statement: (row.statement ?? null) as HandinStatement | null,
     shareWithUserId: nullableNum(row.share_with_user_id),
+    toUserId: nullableNum(row.to_user_id),
     note: text(row.note),
     updatedAt: date(row.updated_at),
+    byAgentKeyId: nullableNum(row.updated_by_agent_key_id),
   }));
 }
 
@@ -203,6 +236,8 @@ export async function setHandinMark(
     transactionId: number;
     statement: HandinStatement | null;
     shareWithUserId: number | null;
+    /** With `give`: the colleague; absent — none. */
+    toUserId?: number | null;
     note: string | null;
     byUserId: number | null;
     byAgentKeyId: number | null;
@@ -210,12 +245,13 @@ export async function setHandinMark(
   },
 ): Promise<void> {
   {
+    const toUserId = input.statement === "give" ? input.toUserId ?? null : null;
     await db.execute(sql`
-      insert into shift_handin_marks (handin_id, transaction_id, statement, share_with_user_id, note, updated_at, updated_by_user_id, updated_by_agent_key_id)
-      values (${input.handinId}, ${input.transactionId}, ${input.statement}, ${input.shareWithUserId}, ${input.note},
+      insert into shift_handin_marks (handin_id, transaction_id, statement, share_with_user_id, to_user_id, note, updated_at, updated_by_user_id, updated_by_agent_key_id)
+      values (${input.handinId}, ${input.transactionId}, ${input.statement}, ${input.shareWithUserId}, ${toUserId}, ${input.note},
         ${input.at.toISOString()}::timestamptz, ${input.byUserId}, ${input.byAgentKeyId})
       on conflict (handin_id, transaction_id) do update set
-        statement = excluded.statement, share_with_user_id = excluded.share_with_user_id, note = excluded.note,
+        statement = excluded.statement, share_with_user_id = excluded.share_with_user_id, to_user_id = excluded.to_user_id, note = excluded.note,
         updated_at = excluded.updated_at, updated_by_user_id = excluded.updated_by_user_id,
         updated_by_agent_key_id = excluded.updated_by_agent_key_id`);
   }
@@ -311,7 +347,11 @@ export interface HandinVersionLine {
   alreadyIn: { shiftId: number; reportDate: string } | null;
   statement: HandinStatement | null;
   shareWithUserId: number | null;
+  /** With `give`: the colleague it was given to (0412); absent — none. */
+  toUserId?: number | null;
   note: string | null;
+  /** The note was Gengar's, taken in at confirmation (0412); absent — the person's. */
+  noteByAgent?: boolean;
   amountMills: number;
   /** Outside the shift's window, added to it: a sale of the last 7 days no report of the person held («долёт»). */
   added: boolean;
@@ -352,7 +392,9 @@ export type HandinVersionMadeFor =
    * A decision about the sale recorded «со слов» through the agent's door (review R2b-3): `said` — made, the version
    * carries what it gives; `cancelled` — cancelled, the version carries what rules without it.
    */
-  | { kind: "decision"; decisionId: number; transactionId: number; outcome: "said" | "cancelled" };
+  | { kind: "decision"; decisionId: number; transactionId: number; outcome: "said" | "cancelled" }
+  /** The shift row was cancelled after it was counted (0413): a version with no lines; no decision, no sale named. */
+  | { kind: "decision"; decisionId: null; transactionId: null; outcome: "cancelled" };
 
 export interface HandinVersionRow {
   id: number;
@@ -971,7 +1013,8 @@ export async function listMissingHandins(db: Database, input: { endedAfter: Date
       and p.kind = 'human' and p.role <> 'owner' and p.state <> 'left'
       and exists (select 1 from person_pay_terms t where t.person_id = p.id)
       and s.started_at >= r.granted_at
-      and (h.id is null or h.state <> 'submitted')
+      -- A report handed in that waits for its check or its confirmation is not «не сдана» (0412).
+      and (h.id is null or (h.state <> 'submitted' and h.phase = 'draft'))
     order by s.ended_at, s.id`);
   return result.rows.map((row) => ({
     shiftId: num(row.shift_id),

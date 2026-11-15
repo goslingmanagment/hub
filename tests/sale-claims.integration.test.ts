@@ -12,6 +12,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // Заявки и договорённости (package G): who answers a claim, who decides a dispute, who sees what, and what the
 // settlement writes. The other side alone answers; a colleague, the claimant, a team lead, a chatter of another page
@@ -43,8 +44,9 @@ let shiftB = 0;
 let anna = 0;
 let bella = 0;
 
-const asSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
+const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
 const asKey = (key: keyof typeof KEYS, method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${KEYS[key]}` }, ...(payload ? { payload } : {}) });
 
@@ -79,8 +81,7 @@ async function bellasSale(ref: string, net: number): Promise<number> {
 async function annaClaims(sale: number, why: string): Promise<number> {
   const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${sale}`, { statement: "mine", note: why });
   expect(said.statusCode, said.body).toBe(200);
-  const submitted = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`);
-  expect(submitted.statusCode, submitted.body).toBe(200);
+  await handInAndConfirm(asSession, "anna", shiftA);
   await runSaleClaims(app);
   const claim = await testDb!.pool.query("select id, state, side_user_id from sale_claims where transaction_id = $1", [sale]);
   expect(claim.rows).toHaveLength(1);
@@ -178,7 +179,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     const mine = await asSession("bella", "GET", "/api/v1/matters?state=open");
     expect(mine.statusCode, mine.body).toBe(200);
     const matter = mine.json().matters.find((one: { kind: string }) => one.kind === "sale.claim");
-    expect(matter).toMatchObject({ money: false, link: `/workboard/my/shifts/${shiftB}?sale=${sale}` });
+    expect(matter).toMatchObject({ money: false, link: `/workboard/report/${shiftB}?sale=${sale}` });
     for (const who of ["cora", "dina", "anna"]) {
       const list = (await asSession(who, "GET", "/api/v1/matters?state=open")).json().matters as Array<{ kind: string }>;
       expect(list.some((one) => one.kind === "sale.claim")).toBe(false);
@@ -196,8 +197,10 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
       const refused = await asSession(who, "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" });
       expect(refused.statusCode, `${who}: ${refused.body}`).toBe(403);
     }
-    // «Не согласен» needs a line of why.
-    expect((await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree" })).statusCode).toBe(400);
+    // «Не согласен» «со слов» needs the person's line of why (the board's own «Не согласен» is one press: the next test).
+    const wordless = await asKey("writer", "POST", "/api/v1/agent/sale-claims/answer", { claimId, answer: "disagree", telegramUserId: SENDER_B, sourceRef: "chat:0" });
+    expect(wordless.statusCode, wordless.body).toBe(400);
+    expect(wordless.json().reason).toBe("note_required");
 
     // An agent: only with write:shift_reports, the message, and bella as its sender.
     expect((await asKey("none", "POST", "/api/v1/agent/sale-claims/answer", { claimId, answer: "agree", telegramUserId: SENDER_B, sourceRef: "chat:1" })).statusCode).toBe(403);
@@ -218,9 +221,10 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     if (!testDb) return context.skip();
     const sale = String((await testDb.pool.query("select id from transactions where transaction_id = 'tx-claim-one'")).rows[0].id);
     const claimId = String((await testDb.pool.query("select id from sale_claims where transaction_id = $1", [sale])).rows[0].id);
-    const answered = await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree", note: "фан мой, писала ему последней" });
+    // The board's «Не согласен» is one press, as the prototype: no line of why needed; the decider reads the claimant's reason.
+    const answered = await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree" });
     expect(answered.statusCode, answered.body).toBe(200);
-    expect(saleClaimAnswerResponseSchema.parse(answered.json()).claim).toMatchObject({ state: "owner", answer: "disagree" });
+    expect(saleClaimAnswerResponseSchema.parse(answered.json()).claim).toMatchObject({ state: "owner", answer: "disagree", answerNote: null });
     // Answered once: not again.
     expect((await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" })).statusCode).toBe(409);
     // ONE matter for the owner; the side's matter closed.
@@ -280,7 +284,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     if (!testDb) return context.skip();
     const added = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/off-platform`, { amountMills: 50_000, fromWhom: "фан", whatFor: "кастом" });
     expect(added.statusCode, added.body).toBe(200);
-    expect((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`)).statusCode).toBe(200);
+    await handInAndConfirm(asSession, "anna", shiftA);
     const id = added.json().line.id as number;
     for (const who of ["anna", "bella", "lead"]) {
       expect((await asSession(who, "POST", `/api/v1/off-platform/${id}/decide`, { decision: "confirm" })).statusCode).toBe(403);
@@ -324,8 +328,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     const say = async (body: Record<string, unknown>) => {
       const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${sale}`, body);
       expect(said.statusCode, said.body).toBe(200);
-      const submitted = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/submit`);
-      expect(submitted.statusCode, submitted.body).toBe(200);
+      await handInAndConfirm(asSession, "anna", shiftA);
       await runSaleClaims(app);
     };
     // bella does not agree: the claim is the owner's, with her answer.

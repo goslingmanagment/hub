@@ -98,6 +98,7 @@ export * from "./routes-people.ts";
 export * from "./system-state.ts";
 export * from "./routes-system-state.ts";
 export * from "./routes-shift-handins.ts";
+export * from "./shift-report-board.ts";
 // Система → «Сообщения людям»: the server's sender of messages to people, off twice (package S), spread by routes.ts.
 export * from "./people-messages.ts";
 export * from "./people-message-kinds.ts";

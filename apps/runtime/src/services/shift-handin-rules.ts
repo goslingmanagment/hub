@@ -195,11 +195,17 @@ const MINUTE_MS = 60_000;
 const MINUTES_OF_DAY = 1440;
 const moscowDay = (at: number) => new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
 
-export type Statement = "mine" | "not_mine" | "share";
+export type Statement = "mine" | "not_mine" | "share" | "give" | "pot";
 
-/** The statements a person may make of a line of a group: of «Ваши продажи» «не моё» and «делим с…», of «Рядом» «моё». */
+/**
+ * The statements a person may make of a line of a group: of «Ваши продажи» «не моё», «делим с…» and, on the board,
+ * «отдал коллеге» (`give`) and «в общак» (`pot`) — one's own sale only; of «Рядом» «моё» (on the board also «пополам с»
+ * the sale's holder, a question like «моё»).
+ */
 export function statementAllowed(group: DraftGroup, statement: Statement): boolean {
-  return group === "mine" ? statement === "not_mine" || statement === "share" : statement === "mine";
+  return group === "mine"
+    ? statement === "not_mine" || statement === "share" || statement === "give" || statement === "pot"
+    : statement === "mine" || statement === "share";
 }
 
 /**
@@ -222,10 +228,13 @@ export function lineAmount(input: {
 }): { amountMills: number; disputed: boolean; claimedMills?: number } {
   if (input.alreadyIn) return { amountMills: 0, disputed: false };
   if (input.group === "mine" && input.claimed !== true) {
-    if (input.statement === "not_mine") return { amountMills: 0, disputed: false };
+    // Given to a colleague or to the pot: the person's no more, at once (R-board §3).
+    if (input.statement === "not_mine" || input.statement === "give" || input.statement === "pot") return { amountMills: 0, disputed: false };
     if (input.statement === "share") return { amountMills: millsToNumber(millsPercentOf(input.netMills, 50)), disputed: false };
     return { amountMills: input.shareMills, disputed: false };
   }
+  // «Пополам с …» on someone else's sale: a question, counted nowhere until it is settled, claiming the half.
+  if (input.statement === "share") return { amountMills: 0, disputed: true, claimedMills: millsToNumber(millsPercentOf(input.netMills, 50)) };
   if (input.statement !== "mine") return { amountMills: 0, disputed: false };
   // The rule's home already gives the person a share of a sale they added (agreed, decided): that share, settled.
   if (input.claimed === true && input.shareMills > 0) return { amountMills: input.shareMills, disputed: false };
@@ -420,6 +429,11 @@ export function postTexts(input: {
   comment: string;
   /** A confirmed one is already in its page's sum (package G); a pending one is said to wait. */
   offPlatform: ReadonlyArray<{ amountMills: number; fromWhom: string; whatFor: string; state?: string; pageLabel?: string | null }>;
+  /**
+   * The version's number: the post's last line «Отчёт № N» (the board's prototype). The ledger's post reader stops at
+   * «Основные продажи» and «Комментарий» (ledger internal/reports/postparse.go): nothing after them is money.
+   */
+  number?: number;
 }): Array<{ modelSlug: string; modelName: string; text: string }> {
   const models: Array<{ slug: string; name: string }> = [];
   for (const page of input.pages) {
@@ -479,6 +493,7 @@ export function postTexts(input: {
           : `Мимо площадки, ждёт подтверждения владельца: ${money(line.amountMills)} от ${line.fromWhom}, ${line.whatFor}`);
       }
     }
+    if (input.number !== undefined) out.push("", `Отчёт № ${input.number}`);
     return { modelSlug: model.slug, modelName: model.name, text: out.join("\n") };
   });
 }

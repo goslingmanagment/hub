@@ -12,6 +12,7 @@ import { pageScopeFor } from "../../api/request-auth.ts";
 import { recordChatspaceTabState } from "../../services/chatspace-tab-watch.ts";
 import { listTeamShifts, recordClientActivity } from "../../services/chatter-shifts.ts";
 import { countClientMatters } from "../../services/matters.ts";
+import { pulseReport } from "../../services/shift-report-board.ts";
 import { readTeamChatterNumbers } from "../../services/chatter-numbers.ts";
 import { readTeamAuthorship } from "../../services/team-authorship.ts";
 import { readTeamShiftReview } from "../../services/shift-review.ts";
@@ -39,7 +40,12 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
       request.log.warn({ err: error }, "client activity: the person's matters could not be counted");
       return undefined;
     });
-    return matters === undefined ? beat : { ...beat, matters };
+    // The «Отчёт» board's fifth button and its dot (package R): null for a person without the board.
+    const report = await pulseReport(appContext, principal.user.id).catch((error: unknown) => {
+      request.log.warn({ err: error }, "client activity: the person's report could not be read");
+      return undefined;
+    });
+    return { ...beat, ...(matters === undefined ? {} : { matters }), ...(report === undefined ? {} : { report }) };
   });
 
   // The always-on ChatSpace tab's report (apps/chatspace-browser): kept for

@@ -40,6 +40,17 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "shiftReportOffPlatformAdd",
   "shiftReportOffPlatformWithdraw",
   "shiftReportSubmit",
+  // The «Отчёт» board (package R): the same board in a Workboard tab, by the session.
+  "shiftReportCurrent",
+  "shiftReportConfirm",
+  "shiftReportReopen",
+  "shiftReportReopenCancel",
+  "shiftReportResend",
+  "shiftReportAsk",
+  "shiftReportAskWithdraw",
+  "shiftReportProposalAnswer",
+  "shiftReportSightingAdd",
+  "shiftReportPostCopied",
   // Заявки (ecosystem package G): the other side answers a claim on their shift report.
   "saleClaimAnswer",
   // Цепочка продажи (package T): from a sale of the shift screen, whose it is down to its payout, as the person may see it.

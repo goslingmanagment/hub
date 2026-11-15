@@ -56,10 +56,10 @@ function reach(entries: readonly string[]): { modules: Set<string>; operations: 
   return { modules, operations };
 }
 
-/** The routes a chatter's session opens (routes.tsx `chatterScreens` and `everyoneScreens`): path and screen module. */
+/** The routes a chatter's session opens (routes.tsx `chatterScreens`, `everyoneScreens`, `boardScreens`): path and screen module. */
 function chatterRoutes(): Array<{ path: string; module: string | null }> {
   const text = readFileSync(ROUTES, "utf8");
-  const arrays = ["chatterScreens", "everyoneScreens"].map((name) => {
+  const arrays = ["chatterScreens", "everyoneScreens", "boardScreens"].map((name) => {
     const start = text.indexOf(`const ${name}: RouteObject[] = [`);
     expect(start, `routes.tsx has ${name}`).toBeGreaterThanOrEqual(0);
     return text.slice(start, text.indexOf("\n];", start));
@@ -77,6 +77,13 @@ function chatterScreens(): Array<{ id: string; path: string }> {
   const menu = teamMenu("chatter", { newcomer: true }).map((item) => ({ id: item.id, path: item.to }));
   return [...menu, { id: NAME_MENU_ACCOUNT.id, path: NAME_MENU_ACCOUNT.path }];
 }
+
+/**
+ * The «Отчёт» board (package R): no menu lists it (the extension's «Отчёт», «Мои смены» and every old link of «Смена»
+ * open it), and its frame for the extension asks the same operations over the extension's port.
+ */
+const BOARD = [{ id: "report", path: "/workboard/report" }] as const;
+const openedScreens = () => [...chatterScreens(), ...BOARD];
 
 /** Whether a route (`customs/:code`) is the screen's address or under it (`/workboard/customs`). */
 function under(screenPath: string, routePath: string): boolean {
@@ -96,14 +103,14 @@ describe("the narrow web session and the chatter's screens", () => {
     ]);
   });
 
-  it("every page a chatter's session opens is under a screen of those menus", () => {
-    const screens = chatterScreens();
+  it("every page a chatter's session opens is under a screen of those menus, or is the board", () => {
+    const screens = openedScreens();
     const orphans = chatterRoutes().filter((route) => route.module !== null && !screens.some((screen) => under(screen.path, route.path)));
     expect(orphans.map((route) => route.path)).toEqual([]);
   });
 
   const routes = chatterRoutes();
-  it.each(chatterScreens().map((screen) => [screen.id, screen] as const))("%s calls only what a narrow session may, or shows the way to the password", (_id, screen) => {
+  it.each(openedScreens().map((screen) => [screen.id, screen] as const))("%s calls only what a narrow session may, or shows the way to the password", (_id, screen) => {
     const modules = routes.filter((route) => route.module !== null && under(screen.path, route.path)).map((route) => route.module!);
     expect(modules.length, `${screen.path} has its screen's module in routes.tsx`).toBeGreaterThan(0);
     const { modules: reached, operations } = reach(modules);

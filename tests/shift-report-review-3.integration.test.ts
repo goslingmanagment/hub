@@ -10,11 +10,12 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
-import { readHandinVersionPosts, readShiftReportsFeed, submitShiftReport, type HandinPersonActor } from "../apps/runtime/src/services/shift-handins.ts";
+import { readHandinVersionPosts, readShiftReportsFeed, type HandinPersonActor } from "../apps/runtime/src/services/shift-handins.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { listenOnLoopback } from "./helpers/network.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { handInAndConfirm, handInAndConfirmDirect, editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // The second round of the final review of «чья продажа» and the shift report. (1) The agent's door changes nothing
 // outside the key's pages and nothing about another sale: what a decision replaces and what it answers are checked in
@@ -47,8 +48,9 @@ let bella = 0;
 let refs = 0;
 
 const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
-const asSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
+const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
 const asKey = (key: keyof typeof KEYS, method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${KEYS[key]}` }, ...(payload ? { payload } : {}) });
 
@@ -92,8 +94,7 @@ async function say(shiftId: number, transactionId: number, note: string, who = "
 }
 
 async function submit(shiftId: number, who = "anna") {
-  const submitted = await asSession(who, "POST", `/api/v1/shift-reports/${shiftId}/submit`);
-  expect(submitted.statusCode, submitted.body).toBe(200);
+  await handInAndConfirm(asSession, who, shiftId);
 }
 
 /** A decision «со слов» through the door: its number. */
@@ -315,7 +316,7 @@ describe("«чья продажа» and the shift report, the final review's sec
     await say(shift, disputed, "мой фан");
     await submit(shift);
     expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 0, claimedMills: 16_001, disputed: true });
-    await submitShiftReport(app, annaAtWorkboard(), { shiftId: shift }, {
+    await handInAndConfirmDirect(app, annaAtWorkboard(), { shiftId: shift }, {
       dayPaid: async () => {
         const decided = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: disputed, outcome: "half" });
         expect(decided.statusCode, decided.body).toBe(200);
@@ -335,7 +336,7 @@ describe("«чья продажа» and the shift report, the final review's sec
     const fresh = await shiftRow(anna, 54);
     const said = await sale(pageOne, 12_000, 65);
     await say(fresh, said, "мой");
-    await submitShiftReport(app, annaAtWorkboard(), { shiftId: fresh }, {
+    await handInAndConfirmDirect(app, annaAtWorkboard(), { shiftId: fresh }, {
       dayPaid: async () => {
         await decide("one", { transactionId: said, kind: "owner", shares: [{ person: "bella", percent: 100 }] });
         return null;
@@ -354,7 +355,7 @@ describe("«чья продажа» and the shift report, the final review's sec
     await submit(third);
     const decision = (await decide("one", { transactionId: given, kind: "owner", shares: [{ person: "anna", percent: 100 }] })).id;
     expect((await newest(third, given)).line).toMatchObject({ amountMills: 14_000, settled: "owner" });
-    await submitShiftReport(app, annaAtWorkboard(), { shiftId: third }, {
+    await handInAndConfirmDirect(app, annaAtWorkboard(), { shiftId: third }, {
       dayPaid: async () => {
         const cancelled = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: decision, note: "ошибка", telegramUserId: WORDS.telegramUserId, sourceRef: WORDS.sourceRef });
         expect(cancelled.statusCode, cancelled.body).toBe(200);

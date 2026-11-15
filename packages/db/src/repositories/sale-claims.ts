@@ -151,13 +151,17 @@ export interface SaleClaimRow {
   answerText: string | null;
   /** A question closed without an answer: why. */
   closeNote: string | null;
+  /** version — born from a handed-in version; draft — asked from the draft at «Спросить» (the board, 0412). */
+  origin: "version" | "draft";
+  /** A day of silence settled it for the one who asked (0412); null — not. */
+  silenceAt: Date | null;
 }
 
 const CLAIM_COLUMNS = sql`c.id, c.transaction_id, c.page_id, c.kind, c.claimant_user_id, c.claimant_handin_id, c.claimant_version, c.statement,
   c.share_with_user_id, c.claimant_note, c.claimed_at, c.side_user_id, c.side_shift_id, c.state, c.answer, c.answer_note, c.answered_at,
   c.answered_by_user_id, c.answered_by_agent_key_id, c.answer_door, c.answer_ref, c.escalated_at, c.escalated_why, c.decision_id,
   c.closed_at, c.ledger_question_id, c.question, c.who_text, c.ledger_ref, c.needs_link, c.created_at, c.asked_of, c.source_link,
-  c.asked_by_agent_key_id, c.answer_text, c.close_note`;
+  c.asked_by_agent_key_id, c.answer_text, c.close_note, c.origin, c.silence_at`;
 
 function claimOf(row: Row): SaleClaimRow {
   return {
@@ -197,6 +201,8 @@ function claimOf(row: Row): SaleClaimRow {
     askedByAgentKeyId: nullableNum(row.asked_by_agent_key_id),
     answerText: text(row.answer_text),
     closeNote: text(row.close_note),
+    origin: row.origin === "draft" ? "draft" : "version",
+    silenceAt: nullableDate(row.silence_at),
   };
 }
 
@@ -266,6 +272,8 @@ export interface SaleClaimInsert {
   askedOf?: "owner" | "chatters" | null;
   sourceLink?: string | null;
   askedByAgentKeyId?: number | null;
+  /** «Спросить» on the draft (0412); absent — a version's. */
+  origin?: "version" | "draft";
 }
 
 /** A new claim; a claim of the same report, sale and side already there — null (nothing written). */
@@ -274,7 +282,7 @@ export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: 
     insert into sale_claims (transaction_id, page_id, kind, claimant_user_id, claimant_handin_id, claimant_version, statement,
       share_with_user_id, claimant_note, claimed_at, side_user_id, side_shift_id, state, escalated_at, escalated_why, ledger_question_id,
       question, who_text, ledger_ref, needs_link, decision_id, closed_at, answer, answer_note, answered_at, created_at, updated_at,
-      asked_of, source_link, asked_by_agent_key_id)
+      asked_of, source_link, asked_by_agent_key_id, origin)
     values (${input.transactionId}, ${input.pageId}, ${input.kind}, ${input.claimantUserId}, ${input.claimantHandinId}, ${input.claimantVersion},
       ${input.statement}, ${input.shareWithUserId}, ${input.claimantNote}, ${input.claimedAt.toISOString()}::timestamptz, ${input.sideUserId},
       ${input.sideShiftId}, ${input.state}, ${input.escalatedAt?.toISOString() ?? null}::timestamptz, ${input.escalatedWhy ?? null},
@@ -282,7 +290,7 @@ export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: 
       ${input.ledgerRef == null ? null : JSON.stringify(input.ledgerRef)}::jsonb, ${input.transactionId === null}, ${input.decisionId ?? null},
       ${input.closedAt?.toISOString() ?? null}::timestamptz, ${input.answer ?? null}, ${input.answerNote ?? null},
       ${input.answeredAt?.toISOString() ?? null}::timestamptz, ${at.toISOString()}::timestamptz, ${at.toISOString()}::timestamptz,
-      ${input.askedOf ?? null}, ${input.sourceLink ?? null}, ${input.askedByAgentKeyId ?? null})
+      ${input.askedOf ?? null}, ${input.sourceLink ?? null}, ${input.askedByAgentKeyId ?? null}, ${input.origin ?? "version"})
     on conflict do nothing
     returning id`);
   const id = result.rows[0]?.id;
@@ -300,7 +308,7 @@ export async function updateSaleClaim(
   patch: Partial<Pick<SaleClaimRow,
     "state" | "answer" | "answerNote" | "answeredAt" | "answeredByUserId" | "answeredByAgentKeyId" | "answerDoor" | "answerRef"
     | "escalatedAt" | "escalatedWhy" | "decisionId" | "closedAt" | "claimantVersion" | "claimantNote" | "sideShiftId" | "transactionId" | "pageId"
-    | "answerText" | "closeNote" | "question">>,
+    | "answerText" | "closeNote" | "question" | "silenceAt" | "statement" | "shareWithUserId" | "sideUserId">>,
   at: Date,
   options: { ifState?: SaleClaimState } = {},
 ): Promise<boolean> {
@@ -330,6 +338,10 @@ export async function updateSaleClaim(
   if (patch.answerText !== undefined) put("answer_text", patch.answerText);
   if (patch.closeNote !== undefined) put("close_note", patch.closeNote);
   if (patch.question !== undefined) put("question", patch.question);
+  if (patch.silenceAt !== undefined) put("silence_at", iso(patch.silenceAt), "::timestamptz");
+  if (patch.statement !== undefined) put("statement", patch.statement);
+  if (patch.shareWithUserId !== undefined) put("share_with_user_id", patch.shareWithUserId);
+  if (patch.sideUserId !== undefined) put("side_user_id", patch.sideUserId);
   const only = options.ifState === undefined ? sql`` : sql` and state = ${options.ifState}`;
   const result = await db.execute(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only}`);
   return (result.rowCount ?? 0) > 0;

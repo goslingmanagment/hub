@@ -15,7 +15,7 @@ import { intId, isoTimestamp, mills } from "./primitives.ts";
  * that wait to be tied to a sale (`sale.decisions.unlinked`). Kept apart from MATTER_SERVER_KINDS (as the shift report's):
  * «Состояние» closes every open matter of those that its own pass did not find. An agent key may open none of them.
  */
-export const SALE_CLAIM_MATTER_KINDS = ["sale.claim", "sale.dispute", "sale.nobody_week", "off_platform.pending", "sale.decisions.unlinked"] as const;
+export const SALE_CLAIM_MATTER_KINDS = ["sale.claim", "sale.dispute", "sale.nobody_week", "off_platform.pending", "sale.decisions.unlinked", "sale.pot_offer"] as const;
 const SALE_CLAIM_KIND_SET: ReadonlySet<string> = new Set(SALE_CLAIM_MATTER_KINDS);
 export function isSaleClaimMatterKind(kind: string): boolean {
   return SALE_CLAIM_KIND_SET.has(kind);

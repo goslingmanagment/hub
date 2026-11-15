@@ -98,7 +98,13 @@ export function isMatterServerKind(kind: string): kind is MatterServerKind {
  * after the ledger paid its day (the owner's). Kept apart from MATTER_SERVER_KINDS: «Состояние» closes every open
  * matter of those that its own pass did not find.
  */
-export const SHIFT_REPORT_MATTER_KINDS = ["shift.report.missing", "shift.reports.missing", "shift.report.after_paid"] as const;
+export const SHIFT_REPORT_MATTER_KINDS = [
+  "shift.report.missing", "shift.reports.missing", "shift.report.after_paid",
+  // The «Отчёт» board (package R): the person's «Подтвердите отчёт», «Генгар дочитал: N правок» (shift-report-board.ts).
+  "shift.report.confirm", "shift.report.late_proposals",
+  // A sighting not in Hub for 48 hours (the decider's), the post changed after it was copied, the shift cancelled.
+  "shift.report.sighting_unmatched", "shift.report.post_changed", "shift.report.shift_cancelled",
+] as const;
 const SHIFT_REPORT_KIND_SET: ReadonlySet<string> = new Set(SHIFT_REPORT_MATTER_KINDS);
 export function isShiftReportMatterKind(kind: string): boolean {
   return SHIFT_REPORT_KIND_SET.has(kind);

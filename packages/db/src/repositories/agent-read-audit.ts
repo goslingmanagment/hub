@@ -157,6 +157,8 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   /** «Чья продажа» «со слов» (write:shift_reports, review R2b-3): the decision and the question written; the kind in `outcome`. */
   decisionId: "count",
   questionId: "count",
+  /** Gengar's check of a handed-in report (review:shift_reports, package R): which candidate; the answer in `outcome`. */
+  candidateId: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;

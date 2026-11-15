@@ -1,4 +1,5 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
+import type { FastifyReply } from "fastify";
 
 import { requireHumanPrincipal, type AgentAuthPrincipal } from "../../services/auth.ts";
 import {
@@ -15,6 +16,22 @@ import {
   submitShiftReport,
   withdrawShiftReportOffPlatform,
 } from "../../services/shift-handins.ts";
+import {
+  addShiftReportSighting,
+  answerShiftReportCheck,
+  answerShiftReportProposal,
+  askShiftReport,
+  cancelShiftReportFix,
+  confirmShiftReport,
+  readCurrentShiftReport,
+  markShiftReportPostCopied,
+  PhaseConflictError,
+  readShiftReportChecks,
+  reopenShiftReport,
+  resendShiftReport,
+  withdrawShiftReportAsk,
+} from "../../services/shift-report-board.ts";
+import { recordSaleSightings } from "../../services/shift-handin-check.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -39,6 +56,20 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     return handinActorOf(principal);
   }
 
+  /**
+   * A change of ticks or «чья» the phase does not take (`PhaseConflictError`): 409 with the fresh board, so the screen
+   * redraws what is true now. Any other error passes on.
+   */
+  async function withFreshBoard<T>(reply: FastifyReply, actor: ReturnType<typeof handinActorOf>, shiftId: number, body: () => Promise<T>): Promise<T | FastifyReply> {
+    try {
+      return await body();
+    } catch (error) {
+      if (!(error instanceof PhaseConflictError)) throw error;
+      const report = await readShiftReport(appContext, actor, shiftId).catch(() => undefined);
+      return reply.code(409).send({ error: "Conflict", message: error.message, statusCode: 409, reason: "phase", ...(report === undefined ? {} : { report }) });
+    }
+  }
+
   // --- The person's doors: Workboard and the extension ---------------------
 
   server.get("/api/v1/shift-reports", { schema: routeSchemas.shiftReportsList }, async (request) => {
@@ -53,10 +84,11 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     return readShiftReportClaimable(appContext, await person(request), request.params.shiftId);
   });
 
-  server.put("/api/v1/shift-reports/:shiftId/lines/:transactionId", { schema: routeSchemas.shiftReportLineSet }, async (request) => {
-    return setShiftReportLine(appContext, await person(request), {
+  server.put("/api/v1/shift-reports/:shiftId/lines/:transactionId", { schema: routeSchemas.shiftReportLineSet }, async (request, reply) => {
+    const actor = await person(request);
+    return withFreshBoard(reply, actor, request.params.shiftId, () => setShiftReportLine(appContext, actor, {
       shiftId: request.params.shiftId, transactionId: request.params.transactionId, body: request.body,
-    });
+    }));
   });
 
   server.put("/api/v1/shift-reports/:shiftId/comment", { schema: routeSchemas.shiftReportCommentSet }, async (request) => {
@@ -77,9 +109,66 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     return submitShiftReport(appContext, await person(request), { shiftId: request.params.shiftId });
   });
 
+  // --- The «Отчёт» board (package R): shift-report-board.ts --------------------
+
+  server.get("/api/v1/shift-reports/current", { schema: routeSchemas.shiftReportCurrent }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireHumanPrincipal(principal);
+    return readCurrentShiftReport(appContext, principal);
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/confirm", { schema: routeSchemas.shiftReportConfirm }, async (request) => {
+    return confirmShiftReport(appContext, await person(request), {
+      shiftId: request.params.shiftId, candidateId: request.body.candidateId, seenTotalMills: request.body.seenTotalMills, seenCount: request.body.seenCount,
+    });
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/post-copied", { schema: routeSchemas.shiftReportPostCopied }, async (request) => {
+    return markShiftReportPostCopied(appContext, await person(request), { shiftId: request.params.shiftId });
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/reopen", { schema: routeSchemas.shiftReportReopen }, async (request) => {
+    return reopenShiftReport(appContext, await person(request), { shiftId: request.params.shiftId });
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/reopen/cancel", { schema: routeSchemas.shiftReportReopenCancel }, async (request) => {
+    return cancelShiftReportFix(appContext, await person(request), { shiftId: request.params.shiftId });
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/resend", { schema: routeSchemas.shiftReportResend }, async (request) => {
+    return resendShiftReport(appContext, await person(request), { shiftId: request.params.shiftId, transactionIds: request.body.transactionIds });
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/asks", { schema: routeSchemas.shiftReportAsk }, async (request, reply) => {
+    const actor = await person(request);
+    return withFreshBoard(reply, actor, request.params.shiftId, () => askShiftReport(appContext, actor, { shiftId: request.params.shiftId, body: request.body }));
+  });
+
+  server.delete("/api/v1/shift-reports/:shiftId/asks/:transactionId", { schema: routeSchemas.shiftReportAskWithdraw }, async (request, reply) => {
+    const actor = await person(request);
+    return withFreshBoard(reply, actor, request.params.shiftId, () => withdrawShiftReportAsk(appContext, actor, { shiftId: request.params.shiftId, transactionId: request.params.transactionId }));
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/proposals/:proposalId/answer", { schema: routeSchemas.shiftReportProposalAnswer }, async (request) => {
+    return answerShiftReportProposal(appContext, await person(request), {
+      shiftId: request.params.shiftId, proposalId: request.params.proposalId, answer: request.body.answer,
+    });
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/sightings/:sightingId/add", { schema: routeSchemas.shiftReportSightingAdd }, async (request, reply) => {
+    const actor = await person(request);
+    return withFreshBoard(reply, actor, request.params.shiftId, () => addShiftReportSighting(appContext, actor, { shiftId: request.params.shiftId, sightingId: request.params.sightingId }));
+  });
+
+  server.post("/api/v1/client/sale-sightings", { schema: routeSchemas.clientSaleSightings }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireHumanPrincipal(principal);
+    return recordSaleSightings(appContext, principal, request.body);
+  });
+
   // --- The agent's door: «со слов» (write:shift_reports) ---------------------
 
-  async function agentScope(request: Parameters<typeof requireAgentKeyPrincipal>[0], operation: string, capabilities: Array<"write:shift_reports" | "read:team" | "read:money">) {
+  async function agentScope(request: Parameters<typeof requireAgentKeyPrincipal>[0], operation: string, capabilities: Array<"write:shift_reports" | "review:shift_reports" | "read:team" | "read:money">) {
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: capabilities });
     return { principal, scope, pageIds: scope.pages.map((page) => page.id) };
@@ -158,6 +247,36 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
       const report = await submitShiftReport(appContext, handinAgentActorOf(principal, pageIds, request.body), { shiftId: request.body.shiftId });
       await audit(principal, "agentShiftReportSubmit", { shiftId: request.body.shiftId, reportVersion: report.latest?.version ?? 0 });
       return report;
+    });
+  });
+
+  // --- Gengar's check after the hand-in (review:shift_reports) ---------------
+
+  server.get("/api/v1/agent/shift-reports/checks", { schema: routeSchemas.agentShiftReportChecks }, async (request) => {
+    const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportChecks", ["review:shift_reports"]);
+    let delivered = 0;
+    try {
+      const checks = await readShiftReportChecks(appContext, { pageIds, limit: request.query.limit });
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId, operation: "agentShiftReportChecks", pageIds, verbatimText: false,
+        requestSummary: { returned: checks.checks.length },
+      });
+      delivered = checks.checks.length;
+      return checks;
+    } finally {
+      await scope.finish(delivered);
+    }
+  });
+
+  server.post("/api/v1/agent/shift-reports/checks/:candidateId", { schema: routeSchemas.agentShiftReportCheckAnswer }, async (request) => {
+    const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportCheckAnswer", ["review:shift_reports"]);
+    return settled(scope, async () => {
+      const answer = await answerShiftReportCheck(appContext, principal, { candidateId: request.params.candidateId, pageIds, body: request.body });
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId, operation: "agentShiftReportCheckAnswer", pageIds: [], verbatimText: false,
+        requestSummary: { candidateId: answer.candidateId, returned: answer.recorded, outcome: answer.superseded ? "superseded" : answer.late ? "late" : answer.recorded === 0 ? "clean" : "proposals" },
+      });
+      return answer;
     });
   });
 

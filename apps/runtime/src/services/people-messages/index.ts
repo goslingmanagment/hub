@@ -220,7 +220,7 @@ async function reminderOf(app: MessagesApp, matter: MatterRow): Promise<Outgoing
       objectType: "matter",
       objectId: matter.key,
       about: `смена ${when}`,
-      text: `Смена ${when} не сдана. Сдайте её, пожалуйста: ${teamLink(app, matter.link ?? `/workboard/my/shifts/${shiftId}`)}`,
+      text: `Смена ${when} не сдана. Сдайте её, пожалуйста: ${teamLink(app, matter.link ?? `/workboard/report/${shiftId}`)}`,
       eventAt: matter.openedAt,
     };
   }
