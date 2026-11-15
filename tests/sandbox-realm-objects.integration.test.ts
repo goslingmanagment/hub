@@ -371,6 +371,28 @@ function compared(status: number, body: string, method: string, named: string): 
   return `${status} ${JSON.stringify(parsed)}`;
 }
 
+/** Where two compared answers part: the JSON path and both values, or the two texts' heads. */
+function firstDifference(left: string, right: string): string {
+  const [leftStatus, ...leftRest] = left.split(" ");
+  const [rightStatus, ...rightRest] = right.split(" ");
+  if (leftStatus !== rightStatus) return `${left.slice(0, 160)} ≠ missing ${right.slice(0, 160)}`;
+  const walk = (a: unknown, b: unknown, path: string): string | null => {
+    if (JSON.stringify(a) === JSON.stringify(b)) return null;
+    if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+      for (const key of new Set([...Object.keys(a as object), ...Object.keys(b as object)])) {
+        const found = walk((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], `${path}.${key}`);
+        if (found !== null) return found;
+      }
+    }
+    return `${path}: ${JSON.stringify(a)?.slice(0, 80)} ≠ missing ${JSON.stringify(b)?.slice(0, 80)}`;
+  };
+  try {
+    return `${leftStatus} ${walk(JSON.parse(leftRest.join(" ")), JSON.parse(rightRest.join(" ")), "$")}`;
+  } catch {
+    return `${left.slice(0, 160)} ≠ missing ${right.slice(0, 160)}`;
+  }
+}
+
 /** The probes whose answer differs from the answer for a missing object, or a write that succeeded on a hidden object. */
 async function holes(viewer: string, list: ReadonlyArray<[Probe, Probe]>): Promise<string[]> {
   const out: string[] = [];
@@ -383,7 +405,7 @@ async function holes(viewer: string, list: ReadonlyArray<[Probe, Probe]>): Promi
     const absent = await answer(missing);
     const other = await answer(named);
     if (other.text !== absent.text) {
-      out.push(`${viewer} ${named.key} ${named.field}=${named.kind}: ${other.text.slice(0, 200)} ≠ missing ${absent.text.slice(0, 120)}`);
+      out.push(`${viewer} ${named.key} ${named.field}=${named.kind}: ${firstDifference(other.text, absent.text)}`);
     }
     // A write never succeeds on a hidden object: the value that names nothing is refused by the service as unknown,
     // never created or bound under it (a field naming the object an operation CREATES is `none` in objects.ts).
