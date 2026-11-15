@@ -167,22 +167,22 @@ A full device token is not affected.
 | PATCH | `/api/v1/admin/people/:code` | `adminPersonUpdate` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/people/:code/import-notes/settle` | `adminPersonImportNoteSettle` | `owner-session` | — | — | no |
 | PUT | `/api/v1/admin/people/:code/pay-terms` | `adminPersonPayTermSet` | `owner-session` | — | — | no |
-| GET | `/api/v1/admin/publications` | `adminPublicationList` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/publications` | `adminPublicationList` | `any-session` | owner, content_manager | — | no |
 | POST | `/api/v1/admin/publications` | `adminPublicationCreate` | `owner-session` | — | — | no |
-| GET | `/api/v1/admin/publications/:id` | `adminPublicationGet` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/publications/:id` | `adminPublicationGet` | `any-session` | owner, content_manager | — | no |
 | PUT | `/api/v1/admin/publications/:id` | `adminPublicationUpdate` | `owner-session` | — | — | no |
-| POST | `/api/v1/admin/publications/:id/cancel` | `adminPublicationCancel` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications/:id/cancel` | `adminPublicationCancel` | `any-session` | owner, content_manager | — | no |
 | POST | `/api/v1/admin/publications/:id/delete-post` | `adminPublicationDeletePost` | `owner-session` | — | — | no |
-| POST | `/api/v1/admin/publications/:id/replace` | `adminPublicationReplace` | `owner-session` | — | — | no |
-| POST | `/api/v1/admin/publications/:id/resolve` | `adminPublicationResolve` | `owner-session` | — | — | no |
-| POST | `/api/v1/admin/publications/:id/withdraw` | `adminPublicationWithdraw` | `owner-session` | — | — | no |
-| POST | `/api/v1/admin/publications/approve` | `adminPublicationApprove` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications/:id/replace` | `adminPublicationReplace` | `any-session` | owner, content_manager | — | no |
+| POST | `/api/v1/admin/publications/:id/resolve` | `adminPublicationResolve` | `any-session` | owner, content_manager | — | no |
+| POST | `/api/v1/admin/publications/:id/withdraw` | `adminPublicationWithdraw` | `any-session` | owner, content_manager | — | no |
+| POST | `/api/v1/admin/publications/approve` | `adminPublicationApprove` | `any-session` | owner, content_manager | — | no |
 | GET | `/api/v1/admin/publications/files` | `adminPublicationFileList` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/publications/files` | `adminPublicationFileUpload` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/publications/files/:fileId` | `adminPublicationFileGet` | `owner-session` | — | — | no |
-| GET | `/api/v1/admin/publications/queue` | `adminPublicationQueueList` | `owner-session` | — | — | no |
-| POST | `/api/v1/admin/publications/queue/refresh` | `adminPublicationQueueRefresh` | `owner-session` | — | — | no |
-| GET | `/api/v1/admin/publications/settings` | `adminPublicationSettingsList` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/publications/queue` | `adminPublicationQueueList` | `any-session` | owner, content_manager | — | no |
+| POST | `/api/v1/admin/publications/queue/refresh` | `adminPublicationQueueRefresh` | `any-session` | owner, content_manager | — | no |
+| GET | `/api/v1/admin/publications/settings` | `adminPublicationSettingsList` | `any-session` | owner, content_manager | — | no |
 | PUT | `/api/v1/admin/publications/settings/:pageLabel` | `adminPublicationSettingsUpdate` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/publications/withdraw-page` | `adminPublicationWithdrawPage` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/queue/jobs` | `adminQueueJobs` | `owner-session` | — | — | no |
@@ -442,7 +442,7 @@ A full device token is not affected.
 | POST | `/api/v1/page-browser/proxy-check` | `pageBrowserProxyCheck` | `owner-session` | — | — | no |
 | GET | `/api/v1/pages` | `pages` | `any` | — | — | no |
 | POST | `/api/v1/pages/:pageLabel/client-send-custody/:attemptId/resolve` | `clientSendCustodyResolve` | `session` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `any-session` | owner, content_manager | page | no |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/messages` | `pageConversationMessages` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/profile` | `pageConversationProfile` | `any` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview` | `pageConversationPreview` | `any-session` | — | page | no |
@@ -471,8 +471,8 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/stats/coverage` | `statsCoverage` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/creator` | `creatorStatsOverview` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/creator/audience` | `creatorStatsAudience` | `owner-session` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/stats/creator/content` | `creatorStatsContent` | `owner-session` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/stats/creator/media/:mediaOfferId` | `creatorStatsMedia` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/stats/creator/content` | `creatorStatsContent` | `any-session` | owner, content_manager | page | no |
+| GET | `/api/v1/pages/:pageLabel/stats/creator/media/:mediaOfferId` | `creatorStatsMedia` | `any-session` | owner, content_manager | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/holdings` | `statsHoldings` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/media` | `statsMedia` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/tags` | `statsTags` | `owner-session` | — | page | no |

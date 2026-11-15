@@ -8278,7 +8278,8 @@ const baseRouteSchemas = {
     },
   },
   creatorStatsContent: {
-    auth: { kind: "owner-session", scope: "page" },
+    // «Статистика» inside ContentOps (products plan §2.4): the owner, and a content manager on the pages of their models.
+    auth: { kind: "any-session", roles: ["owner", "content_manager"], scope: "page" },
     tags: ["insights"],
     summary: "Fansly's 2026-10 media statistics of one page: its media by views in the window, with their posts",
     params: pageParamsSchema,
@@ -8286,7 +8287,8 @@ const baseRouteSchemas = {
     response: { 200: creatorStatsContentResponseSchema, 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema },
   },
   creatorStatsMedia: {
-    auth: { kind: "owner-session", scope: "page" },
+    // «Статистика» inside ContentOps (products plan §2.4): the owner, and a content manager on the pages of their models.
+    auth: { kind: "any-session", roles: ["owner", "content_manager"], scope: "page" },
     tags: ["insights"],
     summary: "Fansly's 2026-10 statistics of one media offer: days by surface, last hours, retention, tags",
     params: creatorStatsMediaParamsSchema,
@@ -8326,7 +8328,8 @@ const baseRouteSchemas = {
     },
   },
   contentComments: {
-    auth: { kind: "owner-session", scope: "page" },
+    // «Статистика» inside ContentOps (products plan §2.4): the owner, and a content manager on the pages of their models.
+    auth: { kind: "any-session", roles: ["owner", "content_manager"], scope: "page" },
     tags: ["insights"],
     summary: "Post comments with pagination/truncation honesty; likers declared empty",
     params: pageParamsSchema,

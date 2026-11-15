@@ -61,7 +61,7 @@ import {
   profileStatMeasure,
 } from "@agency_hub_core/shared";
 
-import { canAccessPage, requireOwner } from "../../services/auth.ts";
+import { canAccessPage, requireHumanPrincipal, requireOwner } from "../../services/auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError, ForbiddenError } from "../../services/errors.ts";
 import { getPageSummary } from "../../services/reporting.ts";
@@ -327,6 +327,21 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     return page;
   }
 
+  /**
+   * «Статистика» inside ContentOps (products plan §2.4): the owner, or a content manager on a page of their models
+   * (their page scope, auth.ts). The route's declaration already admits only those two roles.
+   */
+  async function resolveContentPage(request: { params: { pageLabel: string } }) {
+    const principal = await requirePrincipal(request as never);
+    requireHumanPrincipal(principal);
+    if (principal.user.role !== "owner" && principal.user.role !== "content_manager") throw new ForbiddenError("Owner access required");
+    const page = await getPageSummary(appContext, request.params.pageLabel);
+    if (!canAccessPage(principal, page.id)) {
+      throw new ForbiddenError("Page access denied");
+    }
+    return page;
+  }
+
   /** The window of the "Статистика" page: the last `days` UTC days to `to`. */
   function creatorStatsWindow(query: { days: number; to?: string | undefined }) {
     const todayDay = new Date().toISOString().slice(0, 10);
@@ -341,7 +356,7 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/pages/:pageLabel/stats/creator/content", {
     schema: routeSchemas.creatorStatsContent,
   }, async (request): Promise<CreatorStatsContentResponse> => {
-    const page = await resolveOwnerPage(request);
+    const page = await resolveContentPage(request);
     const window = creatorStatsWindow(request.query);
     const media = await readCreatorStatsContent(appContext.db, { pageId: page.id, fromDay: window.fromDay, toDay: window.toDay, limit: 200 });
     const walk = await readCreatorStatsMediaWalk(appContext.db, page.id);
@@ -375,7 +390,7 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/pages/:pageLabel/stats/creator/media/:mediaOfferId", {
     schema: routeSchemas.creatorStatsMedia,
   }, async (request): Promise<CreatorStatsMediaResponse> => {
-    const page = await resolveOwnerPage(request);
+    const page = await resolveContentPage(request);
     const window = creatorStatsWindow(request.query);
     const detail = await readCreatorStatsMediaDetail(appContext.db, {
       pageId: page.id, mediaOfferId: request.params.mediaOfferId, fromDay: window.fromDay, toDay: window.toDay,
@@ -747,7 +762,7 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/pages/:pageLabel/content/comments", {
     schema: routeSchemas.contentComments,
   }, async (request): Promise<ContentCommentsResponse> => {
-    const page = await resolveOwnerPage(request);
+    const page = await resolveContentPage(request);
     const window = parseWindow(request.query.from, request.query.to);
     const after = request.query.cursor === undefined
       ? undefined

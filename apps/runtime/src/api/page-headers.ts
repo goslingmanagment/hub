@@ -52,3 +52,40 @@ export function boardFrameHeaders(isProduction: boolean, devOrigins: readonly st
 export function boardFrameDevOrigins(value: string | undefined): string[] {
   return (value ?? "").split(/[\s,]+/).map((one) => one.trim()).filter((one) => one !== "");
 }
+
+/**
+ * «Публикации» and «Статистика» inside ContentOps (products plan §2.4, package C2): exactly these two paths of Hub —
+ * bare pages, one screen each, no console frame — may be framed, by ContentOps' public name alone, and carry no
+ * `x-frame-options`. The person acts in them with their own Hub session: the two names are one site, so the cookie
+ * goes with the frame's requests. Every other answer keeps `pageHeaders`; ContentOps keeps its own ban on being framed.
+ */
+export const CONTENT_SCREEN_PATHS = { publications: "/frame/publications", stats: "/frame/content-stats" } as const;
+
+/** Whether a request's path (its query and fragment aside) is one of the two content screens'. */
+export function isContentScreenPath(url: string): boolean {
+  const path = url.split(/[?#]/)[0] ?? "";
+  return (Object.values(CONTENT_SCREEN_PATHS) as string[]).includes(path);
+}
+
+/**
+ * The two paths' headers. `contentopsOrigin`: ContentOps' public name, from the one setting that names it to Hub (the
+ * sign-in client `contentops` of `WEB_SIGNIN_CLIENTS`, its callback's origin), so a stand names its own; null (no such
+ * client) frames them by nobody.
+ */
+export function contentScreenHeaders(isProduction: boolean, contentopsOrigin: string | null): Record<string, string> {
+  return {
+    "content-security-policy": `frame-ancestors ${contentopsOrigin ?? "'none'"}`,
+    ...(isProduction ? { "strict-transport-security": HSTS_HEADER } : {}),
+  };
+}
+
+/** ContentOps' origin from its sign-in callback (`https://contentops.…/auth/hub/callback`); null when none is named. */
+export function contentopsOriginOf(callback: string | undefined): string | null {
+  if (callback === undefined) return null;
+  try {
+    const url = new URL(callback);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
+  } catch {
+    return null;
+  }
+}

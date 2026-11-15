@@ -110,7 +110,7 @@ describe("a content manager", () => {
 
   it("reads nothing of the console or Workboard: every operation off its table is 403", async (context) => {
     if (!server || !session) return context.skip();
-    for (const path of ["/api/v1/overview", "/api/v1/team/shifts", "/api/v1/matters/waiting", "/api/v1/pages", "/api/v1/admin/users"]) {
+    for (const path of ["/api/v1/overview", "/api/v1/team/shifts", "/api/v1/matters/waiting", "/api/v1/admin/users"]) {
       expect((await request("GET", `${HUB}${path}`, { session })).statusCode, path).toBe(403);
     }
     expect((await request("GET", `${HUB}/api/v1/auth/me`, { session })).statusCode).toBe(200);

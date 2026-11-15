@@ -1214,6 +1214,16 @@ export async function listPublicationPages(db: Database): Promise<Array<{ id: nu
   return result.rows.map((row) => ({ id: num(row.id), label: String(row.label), platform: String(row.platform) }));
 }
 
+/** The pages of one model by Hub's slug (any case): «Публикации» inside ContentOps shows one model (products plan §2.4). */
+export async function listModelPageIds(db: Database, modelSlug: string): Promise<number[]> {
+  const result = await db.execute<Row>(sql`
+    select pg.id from pages pg join models m on m.id = pg.model_id
+     where lower(m.slug) = lower(${modelSlug})
+     order by pg.id
+  `);
+  return result.rows.map((row) => num(row.id));
+}
+
 // ---------------------------------------------------------------------------
 // Dispatches (0298): what Hub sent to a platform for a publication, once.
 // ---------------------------------------------------------------------------

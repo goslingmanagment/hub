@@ -297,13 +297,15 @@ export type PublicationDetail = z.infer<typeof publicationDetailSchema>;
 
 export const publicationListQuerySchema = z.object({
   pageLabel: z.string().min(1).optional(),
+  /** Only the pages of this model (Hub's slug): the screen inside ContentOps shows one model (products plan §2.4). */
+  modelSlug: z.string().min(1).max(100).optional(),
   status: publicationStatusSchema.optional(),
   /** Publish time window, `from` inclusive, `to` exclusive. */
   from: isoDateTime({ offset: true }).optional(),
   to: isoDateTime({ offset: true }).optional(),
   limit: z.coerce.number().int().min(1).max(1000).default(500),
 });
-export const agentPublicationListQuerySchema = publicationListQuerySchema.omit({ pageLabel: true });
+export const agentPublicationListQuerySchema = publicationListQuerySchema.omit({ pageLabel: true, modelSlug: true });
 
 export const publicationListResponseSchema = z.object({ publications: z.array(publicationSchema) });
 

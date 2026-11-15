@@ -212,7 +212,9 @@ describe("route auth declarations", () => {
         body?: unknown;
         tags: readonly string[];
       };
-      expect(schema.auth.kind, key).toBe("owner-session");
+      // «Статистика» inside ContentOps (products package C2): the comments of a page are read by its content manager too.
+      if (key === "contentComments") expect(schema.auth, key).toMatchObject({ kind: "any-session", roles: ["owner", "content_manager"] });
+      else expect(schema.auth.kind, key).toBe("owner-session");
       expect(schema.auth.scope, key).toBe("page");
       // A body on a read route is how a "read" quietly becomes a command.
       expect(schema.body, key).toBeUndefined();

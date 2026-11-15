@@ -50,6 +50,12 @@ import {
 // published one — the owner's «да» for that post is the agent's to hold.
 
 const owner = { kind: "owner-session" } as const;
+/**
+ * «Публикации» inside ContentOps (products plan §2.4): the owner, and a content manager on the pages of their models
+ * (Hub cuts every read and write to `pageScopeFor`; services/content-manager-operations.ts lists what they may call).
+ * Not a team lead, not a chatter. Deleting a live post, «Снять всё» on a page and the settings stay the owner's.
+ */
+const contentScreen = { kind: "any-session", roles: ["owner", "content_manager"] } as const;
 const ownerErrors = {
   400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema,
   // publication_version_conflict | publication_not_editable | publication_not_unknown
@@ -60,7 +66,7 @@ const agentErrors = { ...ownerErrors, 429: errorResponseSchema, 503: errorRespon
 
 export const publicationRouteSchemas = {
   adminPublicationList: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "Publications of every page (or one) by publish time, with their draft-check findings",
     querystring: publicationListQuerySchema,
     response: { 200: publicationListResponseSchema, ...ownerErrors },
@@ -72,7 +78,7 @@ export const publicationRouteSchemas = {
     response: { 200: publicationSchema, ...ownerErrors },
   },
   adminPublicationGet: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "One publication with its findings re-checked, its status journal and its approval",
     params: publicationIdParamsSchema,
     response: { 200: publicationDetailSchema, ...ownerErrors },
@@ -85,26 +91,26 @@ export const publicationRouteSchemas = {
     response: { 200: publicationSchema, ...ownerErrors },
   },
   adminPublicationApprove: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "Approve one or many drafts in order; each is checked again and refused on a blocking finding",
     body: publicationApproveBodySchema,
     response: { 200: publicationApproveResponseSchema, ...ownerErrors },
   },
   adminPublicationCancel: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "Cancel a draft or an approved publication before Hub sends it",
     params: publicationIdParamsSchema,
     response: { 200: publicationSchema, ...ownerErrors },
   },
   adminPublicationResolve: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "Answer an unknown outcome: it went out (the platform post), or it did not (a linked new draft)",
     params: publicationIdParamsSchema,
     body: publicationResolveBodySchema,
     response: { 200: publicationResolveResponseSchema, ...ownerErrors },
   },
   adminPublicationWithdraw: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "Withdraw a Hub post from OnlyFans' schedule: 15 minutes or more before its time, after a fresh complete"
       + " read shows it there; sent once, its own outcome. Works while publishing is off, not while the page is stopped",
     params: publicationIdParamsSchema,
@@ -125,25 +131,25 @@ export const publicationRouteSchemas = {
     response: { 200: publicationWithdrawResponseSchema, ...ownerErrors },
   },
   adminPublicationReplace: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "Draft a replacement of a withdrawn publication (only after a confirmed withdrawal); it is approved again",
     params: publicationIdParamsSchema,
     response: { 200: publicationSchema, ...ownerErrors },
   },
   adminPublicationQueueList: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "The latest read of every OnlyFans page's schedule: Hub's posts in it, the ones put there by hand, and"
       + " whether the read was complete and fresh",
     response: { 200: publicationQueueListResponseSchema, ...ownerErrors },
   },
   adminPublicationQueueRefresh: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "Read the page's OnlyFans schedule again within a minute (spends OnlyFansAPI credits)",
     body: publicationQueueRefreshBodySchema,
     response: { 200: publicationQueueRefreshResponseSchema, ...ownerErrors },
   },
   adminPublicationSettingsList: {
-    auth: owner, tags: ["admin"],
+    auth: contentScreen, tags: ["admin"],
     summary: "The global switch and every page's publishing settings (off by default)",
     response: { 200: publicationSettingsListResponseSchema, ...ownerErrors },
   },

@@ -1,6 +1,6 @@
 import { registerOfapiVendorRoutes } from "../modules/ofapi-vendor/index.ts";
 import { registerModelApplicationRoutes } from "../modules/model-applications/index.ts";
-import { boardFrameDevOrigins, boardFrameHeaders, isBoardFramePath, pageHeaders } from "./page-headers.ts";
+import { boardFrameDevOrigins, boardFrameHeaders, contentScreenHeaders, contentopsOriginOf, isBoardFramePath, isContentScreenPath, pageHeaders } from "./page-headers.ts";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -268,8 +268,10 @@ export async function buildApiServer(appContext: AppContext) {
   const headersOfPages = pageHeaders(appContext.config.isProduction);
   // The «Отчёт» board's frame (package R): framed by the extension's two sites only, never by anything else.
   const headersOfBoardFrame = boardFrameHeaders(appContext.config.isProduction, boardFrameDevOrigins(process.env.HUB_BOARD_FRAME_DEV_ORIGINS));
+  // «Публикации» and «Статистика» inside ContentOps (package C2): framed by ContentOps' public name alone.
+  const headersOfContentScreens = contentScreenHeaders(appContext.config.isProduction, contentopsOriginOf(signinNamesOf(appContext.config).clients.get("contentops")));
   server.addHook("onRequest", async (request, reply) => {
-    reply.headers(isBoardFramePath(request.url) ? headersOfBoardFrame : headersOfPages);
+    reply.headers(isBoardFramePath(request.url) ? headersOfBoardFrame : isContentScreenPath(request.url) ? headersOfContentScreens : headersOfPages);
   });
 
   server.addHook("onRequest", async (request) => {
@@ -830,6 +832,10 @@ export async function buildApiServer(appContext: AppContext) {
       if (dashboardDist && !req.url.startsWith("/api/") && !req.url.startsWith("/documentation")) {
         if (isMissingAsset("/assets/")) {
           return sendMissingAsset();
+        }
+        // The two content screens are entries of their own (apps/dashboard/frame/*.html): one screen, no console.
+        if (isContentScreenPath(req.url)) {
+          return reply.sendFile(`${path.replace(/^\//, "")}.html`, dashboardDist);
         }
         return reply.sendFile("index.html", dashboardDist);
       }

@@ -4,12 +4,13 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 import {
   getAgentKeyById,
   getPublication,
+  listModelPageIds,
   listPublicationPages,
   listPublicationPageTargets,
   requestPublicationQueueRefresh,
 } from "@agency_hub_core/db";
 
-import { auditCtx } from "../../api/request-auth.ts";
+import { auditCtx, pageScopeFor } from "../../api/request-auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { recordAudit } from "../../services/auth.ts";
 import { resolvePublishingStoppedIncident } from "../../services/notification-incidents.ts";
@@ -96,12 +97,48 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     return page;
   }
 
+  // «Публикации» inside ContentOps (products plan §2.4): the owner and a content manager call the same routes; each
+  // reads and changes the pages of its scope alone (`pageScopeFor`: a content manager the pages of their models, the
+  // owner every page of their realm). A page or a publication outside it is the same 404 as one that does not exist.
+  type Principal = Awaited<ReturnType<typeof requirePrincipal>>;
+  function scopeOf(principal: Principal): ReadonlySet<number> | null {
+    const scope = pageScopeFor(principal);
+    return scope === undefined ? null : new Set(scope);
+  }
+
+  async function scopedPageByLabel(principal: Principal, label: string) {
+    const page = await pageByLabel(label);
+    const scope = scopeOf(principal);
+    if (scope !== null && !scope.has(page.id)) throw new NotFoundError("Page not found");
+    return page;
+  }
+
+  /** The publication's page is in the person's scope, or the publication is not there for them. */
+  async function requirePublicationInScope(principal: Principal, id: number) {
+    const scope = scopeOf(principal);
+    if (scope === null) return;
+    const publication = await getPublication(db, id);
+    if (!publication || !scope.has(publication.pageId)) throw new NotFoundError("Publication not found");
+  }
+
+  /** The page labels of the person's scope among the publishing pages; null: every page. */
+  async function scopeLabels(principal: Principal): Promise<ReadonlySet<string> | null> {
+    const scope = scopeOf(principal);
+    if (scope === null) return null;
+    return new Set((await listPublicationPages(db)).filter((page) => scope.has(page.id)).map((page) => page.label));
+  }
+
   // --- The owner ---------------------------------------------------------
 
   server.get("/api/v1/admin/publications", { schema: routeSchemas.adminPublicationList }, async (request) => {
-    await requirePrincipal(request);
-    const { pageLabel, status, from, to, limit } = request.query;
-    const pageIds = pageLabel === undefined ? null : [(await pageByLabel(pageLabel)).id];
+    const principal = await requirePrincipal(request);
+    const { pageLabel, modelSlug, status, from, to, limit } = request.query;
+    const scope = scopeOf(principal);
+    const ofModel = modelSlug === undefined ? null : new Set(await listModelPageIds(db, modelSlug));
+    const pageIds = pageLabel !== undefined
+      ? [(await scopedPageByLabel(principal, pageLabel)).id]
+      : scope === null && ofModel === null ? null
+        : (scope === null ? [...ofModel!] : [...scope].filter((id) => ofModel === null || ofModel.has(id)));
     return { publications: await withOnlyfansAlbumRuns(appContext, await listPublicationsWire(db, { pageIds, status, from, to, limit })) };
   });
 
@@ -116,11 +153,12 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   // Static paths before `:id`, so "settings" and "approve" are never ids.
   server.get("/api/v1/admin/publications/settings", { schema: routeSchemas.adminPublicationSettingsList }, async (request) => {
-    await requirePrincipal(request);
+    const principal = await requirePrincipal(request);
     const effective = await loadEffectiveConfig(db, appContext.config);
+    const scope = scopeOf(principal);
     return {
       globalEnabled: effective.publishingEnabled === true,
-      pages: await listPublicationSettings(db, await listPublicationPages(db)),
+      pages: await listPublicationSettings(db, (await listPublicationPages(db)).filter((page) => scope === null || scope.has(page.id))),
     };
   });
 
@@ -145,13 +183,15 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   // The platforms' own schedules (OnlyFans plan PR 5b, Fansly PR 9) and
   // withdrawal. Static paths before `:id`.
   server.get("/api/v1/admin/publications/queue", { schema: routeSchemas.adminPublicationQueueList }, async (request) => {
-    await requirePrincipal(request);
-    return { pages: [...await listOnlyfansQueueWire(appContext), ...await listFanslyQueueWire(appContext)] };
+    const principal = await requirePrincipal(request);
+    const labels = await scopeLabels(principal);
+    const pages = [...await listOnlyfansQueueWire(appContext), ...await listFanslyQueueWire(appContext)];
+    return { pages: labels === null ? pages : pages.filter((page) => labels.has(page.pageLabel)) };
   });
 
   server.post("/api/v1/admin/publications/queue/refresh", { schema: routeSchemas.adminPublicationQueueRefresh }, async (request) => {
     const principal = await requirePrincipal(request);
-    const page = await pageByLabel(request.body.pageLabel);
+    const page = await scopedPageByLabel(principal, request.body.pageLabel);
     if (page.platform !== "onlyfans" && page.platform !== "fansly") throw new NotFoundError("Not a page with a schedule");
     // The minutely jobs read it: OnlyFans by an owner action, Fansly by the page's engine.
     await requestPublicationQueueRefresh(db, { pageId: page.id, userId: principal.user.id });
@@ -192,11 +232,13 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   server.post("/api/v1/admin/publications/approve", { schema: routeSchemas.adminPublicationApprove }, async (request) => {
     const principal = await requirePrincipal(request);
+    // Every item in the scope, or none is approved.
+    for (const item of request.body.items) await requirePublicationInScope(principal, item.id);
     return { results: await approvePublications(db, { items: request.body.items, userId: principal.user.id, vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) }) };
   });
 
   server.get("/api/v1/admin/publications/:id", { schema: routeSchemas.adminPublicationGet }, async (request) => {
-    await requirePrincipal(request);
+    await requirePublicationInScope(await requirePrincipal(request), request.params.id);
     const [detail] = await withOnlyfansAlbumRuns(appContext, [await getPublicationDetail(db, request.params.id, { vaultLinkMaxBytes: await vaultLinkMaxBytes(appContext) })]);
     return detail!;
   });
@@ -211,11 +253,13 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   server.post("/api/v1/admin/publications/:id/cancel", { schema: routeSchemas.adminPublicationCancel }, async (request) => {
     const principal = await requirePrincipal(request);
+    await requirePublicationInScope(principal, request.params.id);
     return cancelPublication(db, { id: request.params.id, userId: principal.user.id });
   });
 
   server.post("/api/v1/admin/publications/:id/withdraw", { schema: routeSchemas.adminPublicationWithdraw }, async (request) => {
     const principal = await requirePrincipal(request);
+    await requirePublicationInScope(principal, request.params.id);
     const target = await getPublication(db, request.params.id);
     const results = target?.platform === "fansly"
       ? await withdrawFanslyPublications(appContext, { ids: [request.params.id], userId: principal.user.id })
@@ -247,11 +291,13 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   server.post("/api/v1/admin/publications/:id/replace", { schema: routeSchemas.adminPublicationReplace }, async (request) => {
     const principal = await requirePrincipal(request);
+    await requirePublicationInScope(principal, request.params.id);
     return replaceWithdrawnPublication(db, { id: request.params.id, userId: principal.user.id });
   });
 
   server.post("/api/v1/admin/publications/:id/resolve", { schema: routeSchemas.adminPublicationResolve }, async (request) => {
     const principal = await requirePrincipal(request);
+    await requirePublicationInScope(principal, request.params.id);
     return resolveUnknownPublication(db, { id: request.params.id, userId: principal.user.id, answer: request.body });
   });
 
