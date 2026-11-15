@@ -53,6 +53,8 @@ const ASK_CLAIM_BASE = 8_100;
 const HUB_PAUSE_MS = 1_000;
 const GENGAR_PAUSE_MS = 4_000;
 const GENGAR_LATE_MS = 9_000;
+/** After «Скопировать пост», the post «arrives» in «Отчётность». */
+const POST_SEEN_MS = 8_000;
 
 const LEV = { userId: 7_101, name: "Лев" };
 const OLEG = { userId: 7_102, name: "Олег" };
@@ -205,6 +207,8 @@ interface State {
   found: boolean;
   /** The post in «Отчётность», as Hub would watch it (`post-copied` is not a demo operation yet: set by the scenario). */
   post: { copiedAt: string | null; seen: boolean; changedSinceCopy: boolean; late: boolean };
+  /** «Скопировать пост» pressed (real time): the post «arrives» in «Отчётность» a little later. */
+  copiedAtMs: number | null;
   /** A person without the board: read only. */
   preview: boolean;
   comment: string;
@@ -217,7 +221,7 @@ function fresh(): State {
     asks: new Map(), incoming: null, proposals: new Map(), gNote: null, lost: false, lostAdded: false, late: false, lateAdded: false, extra: [],
     pages: ["m2", "m3", "fr", "vip"], mode: "found", gengar: null, submittedAtMs: null, submittedMills: 0, submittedCount: 0, candidates: 0,
     wasMills: null, counted: false, countedAt: null, countedMills: 0, countedAtMs: null, gWait: false, snapshot: null, comment: "", offPlatform: [],
-    hubFinds: false, found: false, post: { copiedAt: null, seen: false, changedSinceCopy: false, late: false }, preview: false,
+    hubFinds: false, found: false, post: { copiedAt: null, seen: false, changedSinceCopy: false, late: false }, preview: false, copiedAtMs: null,
   };
 }
 
@@ -470,6 +474,7 @@ function handIn(state: State, nowMs: number) {
 
 /** The played answers: Hub after a second, Gengar after four; Gengar's late reading after «по проверке Hub». */
 function advance(state: State, nowMs: number) {
+  if (state.copiedAtMs !== null && !state.post.seen && nowMs - state.copiedAtMs >= POST_SEEN_MS) state.post = { ...state.post, seen: true };
   if (state.phase === "checking" && state.submittedAtMs !== null && nowMs - state.submittedAtMs >= GENGAR_PAUSE_MS) {
     gengarAnswers(state);
     if (state.wasMills === null) state.wasMills = state.submittedMills;
@@ -845,6 +850,12 @@ export const shiftReportBoardHandlers: DemoHandlers = {
       proposal.state = "proposed";
       setOwn(state, row, proposal.to);
     }
+    return null;
+  }) ?? noBoard(),
+  shiftReportPostCopied: (request) => write(request, shiftOf(request), (state) => {
+    if (!state.counted) return refused("Nothing counted to copy");
+    state.post = { ...state.post, copiedAt: request.now.toISOString(), seen: false, changedSinceCopy: false };
+    state.copiedAtMs = request.now.getTime();
     return null;
   }) ?? noBoard(),
   shiftReportSightingAdd: (request) => write(request, shiftOf(request), (state) => {

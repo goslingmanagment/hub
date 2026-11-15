@@ -1,7 +1,8 @@
 import { createContext, useContext } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { KernelClient } from "@kernel/sdk";
-import type { ShiftReportConfirmResponse, ShiftReportLineBody, ShiftReportOffPlatformBody, ShiftReportResponse } from "@agency_hub_core/contracts";
+import { shiftReportResponseSchema, type ShiftReportConfirmResponse, type ShiftReportLineBody, type ShiftReportOffPlatformBody, type ShiftReportResponse } from "@agency_hub_core/contracts";
+import { KernelApiError } from "@agency_hub_core/ui/hubClient";
 
 /**
  * The «Отчёт» board's data: one read (`shiftReport`, its `board`), the writes of the board, all on ONE API client the
@@ -10,8 +11,6 @@ import type { ShiftReportConfirmResponse, ShiftReportLineBody, ShiftReportOffPla
  */
 
 export const BoardKernel = createContext<KernelClient | null>(null);
-/** The same client's raw fetch, for an operation of Hub the SDK does not have yet (`post-copied`). */
-export const BoardFetch = createContext<typeof fetch | null>(null);
 
 function useKernel(): KernelClient {
   const kernel = useContext(BoardKernel);
@@ -78,7 +77,9 @@ export type Write =
   | { op: "sighting"; sightingId: number }
   | { op: "claim"; claimId: number; answer: "agree" | "disagree" }
   | { op: "offPlatformAdd"; body: ShiftReportOffPlatformBody }
-  | { op: "offPlatformWithdraw"; offPlatformId: number };
+  | { op: "offPlatformWithdraw"; offPlatformId: number }
+  /** «Скопировать пост»: Hub remembers the copy (a later version that changes a page sum then says «Пост изменился»). */
+  | { op: "postCopied" };
 
 function send(kernel: KernelClient, shiftId: number, write: Write): Promise<unknown> {
   const params = { shiftId };
@@ -97,6 +98,7 @@ function send(kernel: KernelClient, shiftId: number, write: Write): Promise<unkn
     case "claim": return kernel.saleClaimAnswer({ params: { claimId: write.claimId }, body: { answer: write.answer, note: null } });
     case "offPlatformAdd": return kernel.shiftReportOffPlatformAdd({ params, body: write.body });
     case "offPlatformWithdraw": return kernel.shiftReportOffPlatformWithdraw({ params: { shiftId, offPlatformId: write.offPlatformId } });
+    case "postCopied": return kernel.shiftReportPostCopied({ params });
   }
 }
 
@@ -116,26 +118,20 @@ export function useBoardWrite(shiftId: number) {
       else void queryClient.invalidateQueries({ queryKey: reportKey(shiftId), exact: true });
       void queryClient.invalidateQueries({ queryKey: ["my-shifts"] });
     },
-    onError: () => {
-      void queryClient.invalidateQueries({ queryKey: reportKey(shiftId), exact: true });
+    onError: (error) => {
+      // A change the phase does not take now (409) comes with the fresh board: it replaces the read, no second request.
+      const fresh = phaseConflictReport(error);
+      if (fresh !== null) queryClient.setQueryData(reportKey(shiftId), fresh);
+      else void queryClient.invalidateQueries({ queryKey: reportKey(shiftId), exact: true });
     },
   });
 }
 
-/**
- * «Скопировать пост» tells Hub the post was copied (`POST …/post-copied`): Hub then watches «Отчётность» for it. Not an
- * SDK operation yet: a raw request on the board's own client (the session, or the extension's port). Its failure
- * changes nothing the person sees.
- */
-export function usePostCopied(shiftId: number) {
-  const raw = useContext(BoardFetch);
-  const queryClient = useQueryClient();
-  return () => {
-    if (raw === null) return;
-    void raw(`/api/v1/shift-reports/${shiftId}/post-copied`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
-      .then((response) => {
-        if (response.ok) void queryClient.invalidateQueries({ queryKey: reportKey(shiftId), exact: true });
-      })
-      .catch(() => {});
-  };
+/** The fresh board a 409 «not in this phase» carries (`shiftReportPhaseConflictSchema`), checked against the contract; null — none. */
+export function phaseConflictReport(error: unknown): ShiftReportResponse | null {
+  if (!(error instanceof KernelApiError) || error.status !== 409) return null;
+  const report = (error.body as { report?: unknown } | null)?.report;
+  if (report === undefined) return null;
+  const parsed = shiftReportResponseSchema.safeParse(report);
+  return parsed.success ? parsed.data : null;
 }

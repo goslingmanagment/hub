@@ -4,7 +4,7 @@ import { createClient } from "@kernel/sdk";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { kernel as sessionKernel } from "@/shared/hub";
 import { ReportBoard, type Host } from "./Board";
-import { BoardFetch, BoardKernel, useCurrentReport, useReport } from "./data";
+import { BoardKernel, useCurrentReport, useReport } from "./data";
 import { frameState } from "./model";
 import { acceptPort, portTransport, takeFrameKey, type PortTransport } from "./transport";
 import type { ShiftReportResponse } from "@agency_hub_core/contracts";
@@ -94,19 +94,14 @@ export function ReportScreen() {
   }, []);
   return (
     <BoardKernel.Provider value={sessionKernel}>
-      <BoardFetch.Provider value={sessionFetch}>
       {params.shiftId !== undefined && shiftId === null
         ? <Gate><b>Такой смены нет</b>В адресе нет номера смены.</Gate>
         : shiftId === null
           ? <CurrentBoard host="tab" light={light} transport={null} />
           : <ShiftBoard key={shiftId} shiftId={shiftId} host="tab" light={light} transport={null} />}
-      </BoardFetch.Provider>
     </BoardKernel.Provider>
   );
 }
-
-/** A request outside the SDK's operations (a new one of Hub's before the SDK has it), on Workboard's session. */
-const sessionFetch: typeof fetch = (input, init) => fetch(input, { ...init, credentials: "same-origin" });
 
 /** `/frame/report[?shift=<id>]`: the board in the extension's frame, its requests over the extension's port (handshake v2). */
 export function FrameReportScreen() {
@@ -142,11 +137,9 @@ export function FrameReportScreen() {
   if (transport === null || kernel === null) return <Gate><b>Откройте отчёт из ChatGoose</b>Отчёт смены открывается кнопкой «Отчёт» в ChatGoose на Fansly или в ChatSpace.</Gate>;
   return (
     <BoardKernel.Provider value={kernel}>
-      <BoardFetch.Provider value={transport.fetch}>
-        {shiftId === null
-          ? <CurrentBoard host="frame" light={null} transport={transport} />
-          : <ShiftBoard key={shiftId} shiftId={shiftId} host="frame" light={null} transport={transport} />}
-      </BoardFetch.Provider>
+      {shiftId === null
+        ? <CurrentBoard host="frame" light={null} transport={transport} />
+        : <ShiftBoard key={shiftId} shiftId={shiftId} host="frame" light={null} transport={transport} />}
     </BoardKernel.Provider>
   );
 }

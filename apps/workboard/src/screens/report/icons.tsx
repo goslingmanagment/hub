@@ -16,9 +16,9 @@ const PATHS = {
 
 export type IconName = keyof typeof PATHS;
 
-export function Ico({ name, size = 16 }: { name: IconName; size?: number }) {
+export function Ico({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
   return (
-    <svg className="ico" width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <svg className={className ? `ico ${className}` : "ico"} width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {PATHS[name]}
     </svg>
   );

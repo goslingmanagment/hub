@@ -197,7 +197,8 @@ function serverChoices(row: Row, choices: NonNullable<Row["choices"]>): Choice[]
     const ask: Ask | null = one.asks === null ? null : {
       to: one.asks.to === "colleague" ? "colleague" : "owner",
       forms: one.asks.user?.forms ?? null,
-      words: one.asks.to === "decider" ? one.asks.words : null,
+      // The form's hint takes the server's words when a colleague hands in the old way (the decider answers instead).
+      words: one.asks.to === "decider" && one.asks.user !== null ? one.asks.words : null,
       statement: key === "me" ? "mine" : "share",
       shareWithUserId: key.startsWith("share:") ? Number(key.slice(6)) : null,
     };
@@ -209,7 +210,10 @@ function serverChoices(row: Row, choices: NonNullable<Row["choices"]>): Choice[]
 /** The menu «Чья продажа» of a row, in groups (a line between them). The current word is `currentKey`. */
 export function choicesOf(board: Board, row: Row): { groups: Choice[][]; currentKey: ChoiceKey | null } {
   const currentKeyOf = () => (row.ask !== null && askOpen(row) ? keyOfOwner(row.ask.want) : keyOfOwner(row.owner));
-  if (row.choices !== undefined) return { groups: serverChoices(row, row.choices), currentKey: currentKeyOf() };
+  if (row.choices !== undefined) {
+    const marked = row.choices.find((one) => one.current === true);
+    return { groups: serverChoices(row, row.choices), currentKey: marked ? keyOfOwner(marked.owner) : currentKeyOf() };
+  }
   const ruleKey = keyOfOwner(row.rule.owner);
   const granted = row.ask !== null && (row.ask.state === "agreed" || row.ask.state === "decided" || row.ask.state === "silence");
   const holder = row.rule.owner;

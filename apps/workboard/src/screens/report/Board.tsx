@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { SHIFT_REPORT_QUICK_WORDS, type ShiftReportResponse } from "@agency_hub_core/contracts";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { BoardBar } from "./BoardBar";
-import { useBoardWrite, usePostCopied, type Write } from "./data";
+import { phaseConflictReport, useBoardWrite, type Write } from "./data";
 import { Ico } from "./icons";
 import {
   agentNote,
@@ -84,10 +84,9 @@ export function ReportBoard({ report, host, transport, light }: {
   const board = report.board;
   const shiftId = report.shift.id;
   const own = report.access === "own";
-  // The preview: the flag when Hub sends it, until then the person's switch (`enabled`).
-  const preview = own && (board.preview ?? report.enabled === false);
+  // The preview: Hub's flag; from an older server, whether this shift is a board shift, else the person's switch.
+  const preview = own && (board.preview ?? (report.boardShift === false || report.enabled === false));
   const write = useBoardWrite(shiftId);
-  const postCopied = usePostCopied(shiftId);
   const [seenMills, setSeenMills] = useState<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
@@ -119,7 +118,8 @@ export function ReportBoard({ report, host, transport, light }: {
       return true;
     } catch (error) {
       const status = hubErrorStatus(error);
-      toast(status === 401 && host === "frame" ? "ChatGoose не вошёл в Hub: войдите в расширении"
+      toast(phaseConflictReport(error) !== null ? "Сейчас это не меняется: доска обновилась"
+        : status === 401 && host === "frame" ? "ChatGoose не вошёл в Hub: войдите в расширении"
         : status === null || status >= 500 ? "Hub не ответил: неизвестно, сохранилось ли" : "Не получилось. Hub вернул ошибку");
       return false;
     }
@@ -157,6 +157,11 @@ export function ReportBoard({ report, host, transport, light }: {
     setLit(rows.map((row) => row.key));
     pendingReveal.current = { key: rows[0]!.key, smooth: true };
   }, [board]);
+  // A link to a row (`?sale=`, a matter's link): opens its folded group if it is there, lights and scrolls to it.
+  useEffect(() => {
+    if (light) show(keyOfTransaction(light));
+    // Once, on the board the link opened.
+  }, []);
   useLayoutEffect(() => {
     const next = pendingReveal.current;
     if (next === null) return;
@@ -225,14 +230,15 @@ export function ReportBoard({ report, host, transport, light }: {
     }
     const ok = () => {
       toast("Пост скопирован, вставьте его в «Отчётность»");
-      postCopied();
+      // Hub remembers the copy; its failure changes nothing the person sees.
+      write.mutateAsync({ op: "postCopied" }).catch(() => {});
     };
     if (transport) {
       void transport.copy(text).then((done) => (done ? ok() : copyHere(text).then((here) => (here ? ok() : toast("Не получилось скопировать: браузер не дал доступ к буферу")))));
       return;
     }
     void copyHere(text).then((done) => (done ? ok() : toast("Не получилось скопировать: браузер не дал доступ к буферу")));
-  }, [report.posts, toast, transport, postCopied]);
+  }, [report.posts, toast, transport, write]);
 
   const collapse = useCallback(() => {
     void commitNote();
@@ -365,7 +371,7 @@ export function ReportBoard({ report, host, transport, light }: {
 
   const ownerHtml = (row: Row) => {
     const word = ownerWord(row);
-    if (canTick(row, board, preview)) {
+    if (canTick(row, board, preview) && (row.choices === undefined || row.choices.length > 0)) {
       const open = menu === row.key;
       return (
         <button type="button" className={`ow ${word.cls}`} data-menu={row.key} aria-haspopup="menu" aria-expanded={open} title="Чья продажа"
@@ -458,7 +464,10 @@ export function ReportBoard({ report, host, transport, light }: {
       const transactionId = row.transactionId;
       parts.push(
         <div className="u" key="asked">
-          <span className="t">{asked.to === "owner"
+          <span className="t">{asked.oldWay
+            // The colleague hands in the old way: the question went to the decider at once (the server's words).
+            ? <>Вы спросили: «{asked.note}». {upper(row.reasonWords)}.</>
+            : asked.to === "owner"
             ? <>Вы спросили владельца: «{asked.note}». До его ответа продажа в общаке.</>
             : <>Вы спросили {asked.toUser?.forms.acc ?? ""}: «{asked.note}». Согласится, продажа станет вашей.</>}</span>
           {own && <button type="button" className="lk" onClick={() => void run({ op: "unask", transactionId }, "Вопрос отменён")}>Отменить</button>}
@@ -595,7 +604,7 @@ export function ReportBoard({ report, host, transport, light }: {
         : null;
     } else if (row.canNote && !preview) {
       end = (
-        <button type="button" className={`cm${wantsNote(row) ? " is-ask" : ""}`} onClick={() => {
+        <button type="button" className={`cm${wantsNote(row) ? " is-ask" : ""}`} title="Комментарий" aria-label="Комментарий" onClick={() => {
           if (edit?.key === row.key) {
             void commitNote();
             return;
@@ -603,7 +612,7 @@ export function ReportBoard({ report, host, transport, light }: {
           void commitNote();
           openNote(row.key);
           setHl(row.key);
-        }}>Комментарий</button>
+        }}><Ico name="note" size={14} className="cm-i" /><span className="cm-w">Комментарий</span></button>
       );
     }
     const reason = row.reasonWords;

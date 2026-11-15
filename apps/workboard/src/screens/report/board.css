@@ -236,3 +236,13 @@
   .rb .toast{white-space:normal;max-width:calc(100% - 32px)}
   .rb .pnl{left:8px!important;right:8px;width:auto}
 }
+
+/* A narrow column (four at 1440): «Комментарий» becomes the note icon alone, so «чья» and the reason keep their room.
+   At the prototype's own width (about 500 px a column) nothing changes. */
+.rb .col{container-type:inline-size}
+.rb .cm .cm-i{display:none}
+@container (max-width:419px){
+  .rb .cm .cm-i{display:block}
+  .rb .cm .cm-w{display:none}
+  .rb .cm{padding-left:6px}
+}

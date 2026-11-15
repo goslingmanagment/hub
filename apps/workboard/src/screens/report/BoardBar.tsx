@@ -173,7 +173,7 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
     }
     if (post && post.copiedAt !== null && post.changedSinceCopy) {
       postLines.push(<span className="k is-amb" key="changed"><Ico name="pen" size={14} />Пост изменился. Исправьте прежний пост в «Отчётности», новый не пишите</span>);
-    } else if (post && post.copiedAt !== null && !post.seen) {
+    } else if (post && post.copiedAt !== null && post.seen === false) {
       postLines.push(<span className="k" key="unseen"><Ico name="clock" size={14} />Пост в «Отчётность» ещё не пришёл</span>);
     }
     status = postLines.length > 0 ? <>{postLines}</> : null;
