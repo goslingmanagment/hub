@@ -3365,7 +3365,7 @@ export async function listLinkStatSeriesHealth(db: Database): Promise<LinkStatSe
       order by r.pulled_at desc, r.id desc
       limit 1
     ) last_attempt on true
-    where p.platform = 'onlyfans' and p.status = 'active'
+    where p.platform = 'onlyfans' and p.status = 'active' and ${livePageSql(sql`p.id`)}
     order by p.id, kind.link_kind
   `);
   return result.rows.map((row) => ({

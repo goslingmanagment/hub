@@ -41,6 +41,7 @@ import {
   listLinkStatAttemptWindows,
   listLinkStatSeriesHealth,
   listNotificationIncidents,
+  listPagesByIds,
   recordLinkStatWindowMissed,
   type LinkStatKind,
   type LinkStatSeriesHealthRow,
@@ -366,11 +367,9 @@ export async function runOfapiLinkStatsSeriesMonitor(
       ? await listLinkStatSeriesHealth(app.db)
       : population;
 
-    const open = new Set(
-      (await listNotificationIncidents(app.db, { status: "open" }))
-        .filter((incident) => incident.kind === "ofapi_link_stats_reconcile_failed")
-        .map((incident) => incident.incidentKey),
-    );
+    const openLatches = (await listNotificationIncidents(app.db, { status: "open" }))
+      .filter((incident) => incident.kind === "ofapi_link_stats_reconcile_failed");
+    const open = new Set(openLatches.map((incident) => incident.incidentKey));
     const settle = async (
       page: { id: number; label: string },
       subKey: OfapiLinkStatsPageSubKey,
@@ -418,6 +417,20 @@ export async function runOfapiLinkStatsSeriesMonitor(
       )) {
         result.stalePages.push(pageId);
       }
+    }
+
+    // A latch of a page that left the fleet (deactivated, deleted, or a test model's page: the fleet is the live
+    // agency's) cannot recover by itself — nobody watches the page any more. It is resolved here, so nothing stays
+    // open, and nothing is counted, about a page outside the fleet.
+    const inFleet = new Set(health.map((row) => row.platformAccountId));
+    for (const latch of openLatches) {
+      const pageId = latch.platformAccountId;
+      if (pageId === null || inFleet.has(pageId)) continue;
+      const subKeys: readonly OfapiLinkStatsPageSubKey[] = [OFAPI_LINK_STATS_PAGE_UNMAPPED_SUBKEY, OFAPI_LINK_STATS_SERIES_STALE_SUBKEY];
+      const subKey = subKeys.find((one) => latch.incidentKey === ofapiLinkStatsPageIncidentKey({ subKey: one, pageId }));
+      if (subKey === undefined) continue;
+      const label = (await listPagesByIds(app.db, [pageId]))[0]?.label ?? `page ${pageId}`;
+      await resolveOfapiLinkStatsPageIncident(app, { subKey, pageId, pageLabel: `${label}, no longer watched`, recoveredAt: now });
     }
   } catch (error) {
     app.logger.warn({ err: error }, "OFAPI link-stats series monitor failed; continuing");
