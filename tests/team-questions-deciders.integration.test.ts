@@ -8,6 +8,7 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { assignPageToUser, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { runTeamQuestionsTick } from "../apps/runtime/src/services/team-questions-tick.ts";
 
 // Questions to whoever decides, after the third review (products package W):
 //   1. whoever COVERS an approved swap is told («Ждут вас») and reads the question; told again when it is taken back;
@@ -135,5 +136,50 @@ describe("questions after the third review", () => {
     expect(chatter.every((one) => one.rights.length === 0)).toBe(true);
     const lead = teamPeopleResponseSchema.parse((await as("lev", "GET", "/api/v1/team/people")).json()).people;
     expect(lead.find((one) => one.code === "carl")!.logins.map((login) => login.username)).toEqual(["carl"]);
+  });
+
+  it("gives a team's first lead the questions asked before they signed in: the tick re-addresses the open matter", async (context) => {
+    if (!testDb) return context.skip();
+    const app = createTestAppContext(testDb);
+    const db = app.db as Database;
+    const charlie = await createModel(db, { slug: "charlie", name: "Charlie" });
+    await createFanslyPage(db, { modelId: charlie.id, label: "charlie-1" });
+    const user = await createUserAccount(app, { username: "dina", role: "chatter" }, { source: "cli" });
+    await db.execute(sql`update users set password_hash = ${await argon2.hash(PASSWORD, { type: argon2.argon2id })} where id = ${user.id}`);
+    await assignPageToUser(app, { userId: user.id, pageLabel: "charlie-1" }, { source: "cli" });
+    const row = await insertPersonRow(db, {
+      code: "dina", displayName: "dina", kind: "human", role: "chatter", state: "working", leftOn: null, telegramUserId: null, telegramHandle: null,
+      reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
+    });
+    await insertPersonLogin(db, { personId: row.id, userId: user.id, linkedByUserId: null });
+    await testDb.pool.query("insert into person_working_pages (person_id, page_id, position) select $1, id, 0 from pages where label = 'charlie-1'", [row.id]);
+    cookies.dina = await login("dina");
+
+    // Charlie has no lead: the question is the owner's.
+    const asked = await as("dina", "POST", "/api/v1/team/questions", { pageLabel: "charlie-1", kind: "late", text: "Опоздаю на полчаса" });
+    expect(asked.statusCode, asked.body).toBe(200);
+    const id = teamQuestionWriteResponseSchema.parse(asked.json()).question.id;
+
+    // The owner invites Charlie's first lead with the team; the lead sets a password.
+    const invited = await as("olga", "POST", "/api/v1/admin/people", {
+      code: "rita", displayName: "rita", role: "team_lead", state: "invited", workingPageLabels: ["charlie-1"], leadModelSlugs: ["charlie"],
+      invite: { username: "rita", role: "team_lead", pageLabels: ["charlie-1"], expiresInHours: 72 },
+    });
+    expect(invited.statusCode, invited.body).toBe(200);
+    const token = (invited.json() as { invite: { link: { token: string } } }).invite.link.token;
+    const redeemed = await server!.inject({ method: "POST", url: "/api/v1/auth/links/redeem", payload: { token, password: PASSWORD } });
+    expect(redeemed.statusCode, redeemed.body).toBe(200);
+    cookies.rita = await login("rita");
+
+    await runTeamQuestionsTick(app);
+    const ritaMatters = mattersListResponseSchema.parse((await as("rita", "GET", "/api/v1/matters?state=open")).json()).matters;
+    expect(ritaMatters.filter((one) => one.mine && one.kind === "question.asked").map((one) => one.object?.id)).toEqual([String(id)]);
+    const ritaList = teamQuestionsResponseSchema.parse((await as("rita", "GET", "/api/v1/team/questions")).json()).questions;
+    expect(ritaList.find((one) => one.id === id)?.canAnswer).toBe(true);
+    // Re-addressed, not opened twice; the owner still sees the question in the common list.
+    const rows = await testDb.pool.query("select count(*)::int as n from matters where reason_key = $1", [`question.asked:${id}`]);
+    expect(rows.rows[0]!.n).toBe(1);
+    const owner = teamQuestionsResponseSchema.parse((await as("olga", "GET", "/api/v1/team/questions")).json()).questions;
+    expect(owner.some((one) => one.id === id)).toBe(true);
   });
 });

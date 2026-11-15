@@ -203,8 +203,8 @@ async function requireQuestionOfRealm(app: QuestionsApp, principal: AuthPrincipa
 /** The link of both matters: Workboard's «Ждут вас» with the question open. */
 const linkOf = (id: number) => `/workboard/waiting?question=${id}#asks`;
 
-async function openAsked(app: QuestionsApp, row: TeamQuestionRow, askerName: string, now: Date): Promise<void> {
-  await openMatter(app.db, {
+async function openAsked(app: QuestionsApp, row: TeamQuestionRow, askerName: string, decider: Decider, now: Date): Promise<string> {
+  const { transition } = await openMatter(app.db, {
     key: `${ASKED}:${row.id}`,
     kind: ASKED,
     source: "server",
@@ -213,12 +213,13 @@ async function openAsked(app: QuestionsApp, row: TeamQuestionRow, askerName: str
     pageIds: [row.pageId],
     // By role, so it follows the records (matters.ts): a team lead's role matter of the page waits for the lead of its
     // model now, and for the owner while the model has none; the owner's when the rule names the owner.
-    owner: row.deciderUserId === null ? { role: "owner" } : { role: "team_lead" },
+    owner: decider.kind === "owner" ? { role: "owner" } : { role: "team_lead" },
     money: false,
     // No words of the question here: they may name a fan, and the matter outlives a fan's erasure of the question.
     evidence: { questionId: row.id, kind: row.kind, askedAt: row.askedAt.toISOString() },
     link: linkOf(row.id),
   }, SYSTEM, now);
+  return transition;
 }
 
 export async function readTeamQuestions(app: QuestionsApp, principal: AuthPrincipal, query: { id?: number | undefined }, now: Date = new Date()): Promise<TeamQuestionsResponse> {
@@ -270,7 +271,7 @@ export async function askTeamQuestion(app: QuestionsApp, principal: AuthPrincipa
   });
   const row = (await findTeamQuestion(app.db, id))!;
   const [question] = await wireOf(app, facts, principal, [row]);
-  await openAsked(app, row, question!.asker.name, now);
+  await openAsked(app, row, question!.asker.name, deciderNow(facts, row), now);
   return { question: question!, savedAt: now.toISOString() };
 }
 
@@ -403,22 +404,31 @@ async function swapOfBody(
   return { date: body.date, pageIds, startMinute, endMinute, absentPersonId, coverPersonId: cover.id };
 }
 
-/** Two hours of one day overlap; an end at or before the start is past midnight. Pure. */
-export function swapHoursOverlap(a: { startMinute: number; endMinute: number }, b: { startMinute: number; endMinute: number }): boolean {
-  const span = (one: { startMinute: number; endMinute: number }) => [one.startMinute, one.endMinute > one.startMinute ? one.endMinute : one.endMinute + 1440] as const;
-  const [aFrom, aTo] = span(a);
-  const [bFrom, bTo] = span(b);
+/** A swap's real hours, minutes since the epoch of its Moscow day: an end at or before the start is the next day's. Pure. */
+function swapSpan(one: { date: string; startMinute: number; endMinute: number }): readonly [number, number] {
+  const day = Date.parse(`${one.date}T00:00:00Z`) / 60_000;
+  return [day + one.startMinute, day + (one.endMinute > one.startMinute ? one.endMinute : one.endMinute + 1440)];
+}
+
+/** Two swaps' hours overlap (touching is not overlapping), across midnight too. Pure. */
+export function swapHoursOverlap(a: { date: string; startMinute: number; endMinute: number }, b: { date: string; startMinute: number; endMinute: number }): boolean {
+  const [aFrom, aTo] = swapSpan(a);
+  const [bFrom, bTo] = swapSpan(b);
   return aFrom < bTo && bFrom < aTo;
 }
 
+/** The day before, the day and the day after a Moscow day. Pure. */
+const daysAround = (day: string) => [-1, 0, 1].map((shift) => new Date(Date.parse(`${day}T00:00:00Z`) + shift * 86_400_000).toISOString().slice(0, 10));
+
 /**
- * No swap stands twice over the same hours (on any of its pages, that day): the absent person off already (an approved
- * swap not taken back), or asked for already (an open swap question — at asking only; «Можно» checks what stands), or the
- * covering person off themselves in those hours. Refused with words a person reads.
+ * No swap stands twice over the same hours on any of its pages — real hours, so a swap past midnight meets the next
+ * day's: the absent person off already (an approved swap not taken back), or asked for already (an open swap question —
+ * at asking only; «Можно» checks what stands), or the covering person off themselves in those hours. Refused with words
+ * a person reads.
  */
 async function refuseSwapClash(db: QuestionsApp["db"], facts: TeamFacts, swap: TeamQuestionSwapRow, input: { asked: boolean }): Promise<void> {
-  const of = (personId: number) => listPersonDaySwaps(db, { personId, day: swap.date, pageIds: swap.pageIds });
-  const clashes = (hours: ReadonlyArray<{ startMinute: number; endMinute: number }>) => hours.some((one) => swapHoursOverlap(one, swap));
+  const of = (personId: number) => listPersonDaySwaps(db, { personId, days: daysAround(swap.date), pageIds: swap.pageIds });
+  const clashes = (hours: ReadonlyArray<{ date: string; startMinute: number; endMinute: number }>) => hours.some((one) => swapHoursOverlap(one, swap));
   const absent = await of(swap.absentPersonId);
   if (clashes(absent.off)) throw new ConflictError("На эти часы подмена уже стоит", { reason: "swap_taken" });
   if (input.asked && clashes(absent.asked)) throw new ConflictError("Подмену на эти часы уже спросили, ждёт ответа", { reason: "swap_asked" });
@@ -543,4 +553,25 @@ export async function closePassedCoverMatters(app: QuestionsApp, now: Date = new
     if (result.transition === "closed") closed += 1;
   }
   return { closed };
+}
+
+/**
+ * The open questions' «… спрашивает» matters, re-addressed to whom the rule names now (`deciderNow`): a team's first lead
+ * signing in takes the questions asked of the owner before; a lead gone, they go back to the owner. The same matter,
+ * updated in place — never reopened or doubled. Every ten minutes.
+ */
+export async function readdressAskedMatters(app: QuestionsApp, now: Date = new Date()): Promise<{ readdressed: number }> {
+  const open = await listOpenMattersOfKinds(app.db, [ASKED]);
+  if (open.length === 0) return { readdressed: 0 };
+  const facts = await teamFactsFor(app);
+  let readdressed = 0;
+  for (const matter of open) {
+    const id = Number(matter.object?.id ?? Number.NaN);
+    const row = Number.isFinite(id) ? await findTeamQuestion(app.db, id) : null;
+    if (row === null || row.state !== "open") continue;
+    // The same fields but the owner: the matter changes only when the rule's decider did (matters.ts compares them).
+    const names = await listHandinNames(app.db, [row.askerUserId]);
+    if (await openAsked(app, row, names.get(row.askerUserId) ?? `#${row.askerUserId}`, deciderNow(facts, row), now) === "updated") readdressed += 1;
+  }
+  return { readdressed };
 }

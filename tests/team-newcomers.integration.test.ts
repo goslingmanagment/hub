@@ -8,6 +8,8 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { assignPageToUser, createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
+import { teamAverage } from "../apps/runtime/src/services/account-shift-numbers.ts";
+import { refreshShiftNumbers } from "../apps/runtime/src/services/shift-numbers.ts";
 
 // «Команда → Новички» (products package W), who sees whom: a newcomer works models A and B; the lead of A reads the
 // newcomer's first week on A's pages only — no page, time or number of a shift worked on B, and of their teams A alone.
@@ -19,6 +21,8 @@ const HOUR_MS = 3_600_000;
 let testDb: StartedTestDatabase | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 const cookies: Record<string, string> = {};
+const persons: Record<string, number> = {};
+const models: Record<string, number> = {};
 const onA = Math.floor((Date.now() - 50 * HOUR_MS) / HOUR_MS) * HOUR_MS;
 const onB = Math.floor((Date.now() - 26 * HOUR_MS) / HOUR_MS) * HOUR_MS;
 
@@ -52,10 +56,11 @@ beforeAll(async () => {
   await createUserAccount(app, { username: "olga", role: "owner", password: PASSWORD }, { source: "cli" });
   const modelA = await createModel(db, { slug: "alfa", name: "Alfa" });
   const modelB = await createModel(db, { slug: "bravo", name: "Bravo" });
+  models.alfa = modelA.id;
+  models.bravo = modelB.id;
   const pageA = (await createFanslyPage(db, { modelId: modelA.id, label: "alfa-1" })).id;
   const pageB = (await createFanslyPage(db, { modelId: modelB.id, label: "bravo-1" })).id;
   const users: Record<string, number> = {};
-  const persons: Record<string, number> = {};
   for (const [name, pages] of [["nina", [pageA, pageB]], ["lena", [pageA]]] as const) {
     const user = await createUserAccount(app, { username: name, role: "chatter" }, { source: "cli" });
     await db.execute(sql`update users set password_hash = ${hash} where id = ${user.id}`);
@@ -102,5 +107,17 @@ describe("«Новички»: a newcomer of two teams", () => {
     const ownerNina = teamNewcomersResponseSchema.parse(owner.json()).newcomers.find((one) => one.code === "nina")!;
     expect(ownerNina.teams).toEqual(["Alfa", "Bravo"]);
     expect(ownerNina.shifts.map((shift) => shift.pages)).toEqual([["alfa-1"], ["bravo-1"]]);
+  });
+
+  it("takes the team's norm from the team's pages only: a shift on another model's page is not the norm of A", async (context) => {
+    if (!testDb) return context.skip();
+    const app = createTestAppContext(testDb);
+    const now = new Date();
+    await refreshShiftNumbers(app, { from: new Date(onA - 24 * HOUR_MS), now });
+    const norm = (from: number) => teamAverage(app, { personId: persons.nina!, test: false, from: new Date(from), to: now, now, models: new Set([models.alfa!]) });
+    // The period holds Nina's shift on B alone: A's norm has nothing.
+    expect(await norm(onB - HOUR_MS)).toBeNull();
+    // With her shift on A in it: the norm of A, one person.
+    expect(await norm(onA - HOUR_MS)).toMatchObject({ people: 1 });
   });
 });

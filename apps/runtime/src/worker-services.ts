@@ -491,10 +491,11 @@ export async function startWorkerServices(
     const tally = await runPeopleStartTick(app);
     if (tally.opened + tally.closed > 0) app.logger.info(tally, "People start pass complete");
   });
-  // «Подмена»: the covering persons' «Вы выходите вместо …» of a swap whose day has passed, closed.
+  // «Подмена»: the covering persons' «Вы выходите вместо …» of a swap whose day has passed, closed; the open questions'
+  // «… спрашивает» re-addressed to whom the rule names now.
   await boss.work(TEAM_QUESTIONS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const tally = await runTeamQuestionsTick(app);
-    if (tally.closed > 0) app.logger.info(tally, "Team questions pass complete");
+    if (tally.closed + tally.readdressed > 0) app.logger.info(tally, "Team questions pass complete");
   });
   // Сообщения людям: every kind's new events written once; held unless the bot token is set and the kind is on.
   await boss.work(PEOPLE_MESSAGES_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
