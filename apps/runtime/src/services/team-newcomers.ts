@@ -1,4 +1,4 @@
-import { listNotedShiftStarts, listPersonRows } from "@agency_hub_core/db";
+import { listMatterPageLabels, listNotedShiftStarts, listPersonRows } from "@agency_hub_core/db";
 import { shiftQualityOf, type TeamNewcomersResponse } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -7,7 +7,7 @@ import { requireSessionUser, type HumanAuthPrincipal } from "./auth.ts";
 import { numbersOf, shiftRowsOf, teamShiftJobs } from "./chatter-numbers.ts";
 import { ForbiddenError } from "./errors.ts";
 import { isNewcomerRow, loadStartFacts, personStart } from "./people/start.ts";
-import { personOfLogin, teamFactsFor, teamsOfPerson } from "./teams.ts";
+import { personOfLogin, readModelsOf, teamFactsFor, teamPagesFor, teamsOfPerson } from "./teams.ts";
 
 /**
  * «Команда → Новички» (products plan §2.3, §3; package W): each newcomer's first week in the teams the viewer leads — the
@@ -32,6 +32,22 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
   const realm = new Set(facts.models.filter((model) => model.test === test).map((model) => model.modelId));
   const led = owner ? realm : new Set(teamsOfPerson(facts, personOfLogin(facts, principal.user.id)).lead.filter((model) => realm.has(model)));
   if (!owner && led.size === 0) throw new ForbiddenError("«Новички» are the team lead's: lead a team to read them");
+  // THE cut of every team read (services/teams.ts): a lead's newcomers' shifts are the ones on the pages of the teams the
+  // lead reads, never a shift worked wholly on another model's pages; the names of the newcomer's teams likewise.
+  const pageScope = await teamPagesFor(app, principal);
+  const labels = (await listMatterPageLabels(app.db)).labelOf;
+  // The page labels the reader may see; null — every one (the owner of the live realm).
+  const seenLabels = pageScope === undefined ? null : new Set(pageScope.map((id) => labels.get(id)).filter((label): label is string => label !== undefined));
+  /** «Начало» as the reader may see it: the pages opened to the newcomer and where they first worked, of the reader's pages only. */
+  const startSeen = (start: ReturnType<typeof personStart>) => {
+    if (start === null || seenLabels === null) return start;
+    return {
+      ...start,
+      pages: start.pages.filter((page) => seenLabels.has(page.pageLabel)),
+      firstActivity: start.firstActivity !== null && seenLabels.has(start.firstActivity.pageLabel) ? start.firstActivity : null,
+    };
+  };
+  const seenModels = owner ? realm : new Set(readModelsOf(facts, teamsOfPerson(facts, personOfLogin(facts, principal.user.id)), test));
 
   const modelOfPage = new Map(facts.pages.map((page) => [page.pageId, page.modelId]));
   const modelsOf = (personId: number) => new Set(facts.working.filter((row) => row.personId === personId).flatMap((row) => {
@@ -60,7 +76,7 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
     if (first !== null && userIds.length > 0) {
       const from = first;
       const to = new Date(Math.min(now.getTime(), first.getTime() + FIRST_WEEK_MS + DAY_MS));
-      const found = await teamShiftJobs(app, { from, to, now, scope: "all", userIds });
+      const found = await teamShiftJobs(app, { from, to, now, scope: pageScope ?? "all", userIds });
       const jobs = [...found.jobs].sort((a, b) => a.shift.startedAt - b.shift.startedAt).slice(0, FIRST_SHIFTS);
       const rows = await shiftRowsOf(app, { jobs, openings: found.openings }, { fromTable: true, liveFallback: false });
       const noted = new Set((await listNotedShiftStarts(app.db, userIds)).map((one) => `${one.userId}:${one.startedAt.getTime()}`));
@@ -78,17 +94,18 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
         };
       });
     }
-    const teams = [...modelsOf(row.id)].filter((model) => realm.has(model))
+    const teams = [...modelsOf(row.id)].filter((model) => realm.has(model) && seenModels.has(model))
       .map((model) => facts.models.find((one) => one.modelId === model)?.name ?? "").filter((name) => name !== "").sort((a, b) => a.localeCompare(b, "ru"));
     answer.push({
       code: row.code,
       name: row.displayName,
       state: row.state === "invited" || row.state === "set_up" ? row.state : "working",
       teams,
-      start: mine ? personStart(row, mine, now) : null,
-      firstActiveAt: first?.toISOString() ?? null,
+      start: mine ? startSeen(personStart(row, mine, now)) : null,
+      // When they first worked: only when it was on a page the reader sees (else a moment of another team's page).
+      firstActiveAt: first !== null && (seenLabels === null || seenLabels.has(startFacts.get(row.id)?.firstActive?.pageLabel ?? "")) ? first.toISOString() : null,
       shifts,
-      team: teams.length === 0 ? null : await teamAverage(app, { personId: row.id, test, from: new Date(now.getTime() - NORM_DAYS * DAY_MS), to: now, now }),
+      team: teams.length === 0 ? null : await teamAverage(app, { personId: row.id, test, from: new Date(now.getTime() - NORM_DAYS * DAY_MS), to: now, now, models: seenModels }),
     });
   }
   answer.sort((a, b) => (b.firstActiveAt ?? "9").localeCompare(a.firstActiveAt ?? "9") || a.name.localeCompare(b.name, "ru"));

@@ -78,3 +78,31 @@ describe("the chat team: a content manager with working pages is not on it", () 
     expect(teams.flatMap((team) => team.people.map((one) => one.person.code)).sort()).toEqual(["anya", "lena"]);
   });
 });
+
+describe("«Сегодня» with a swap for part of a slot", () => {
+  const swapDay = "2026-11-16";
+  const line = (id: number, personId: number, start: number, end: number, kind: "cover" | "off"): PersonScheduleSlotRow => ({
+    id, personId, pageId: 100, pageLabel: null, startMinute: start * 60, endMinute: end * 60, weekdays: null,
+    validFrom: swapDay, validTo: swapDay, kind, questionId: 7,
+  });
+  const logins = [{ personId: 1, userId: 11 }, { personId: 2, userId: 12 }];
+  const window = { from: new Date(msk("2026-11-14", "00:00")), to: new Date(msk("2026-11-20", "00:00")) };
+
+  it("names whoever the swap's hours name: the absent person before them, the covering one inside them", () => {
+    // Аня 10:00–18:00; on the 16th Боря covers 14:00–18:00 on her page.
+    const swapRows = [...rows, line(10, 1, 14, 18, "off"), line(11, 2, 14, 18, "cover")];
+    const swapSlots = ruleSlotsOf({ slots: swapRows, logins, ...window });
+    const due = (time: string) => absentNow({ members, slots: swapSlots, rows: swapRows, going: new Set(), now: msk(swapDay, time) })
+      .map((one) => [one.member.name, one.start, one.end]);
+    expect(due("11:00")).toEqual([["Аня", "10:00", "18:00"]]);
+    expect(due("15:00")).toEqual([["Боря", "14:00", "18:00"]]);
+  });
+
+  it("opens a gap of exactly the hours an absent person was taken off when nobody covers them", () => {
+    const offRows = [...rows, line(10, 1, 14, 18, "off")];
+    const offSlots = ruleSlotsOf({ slots: offRows, logins, ...window });
+    expect(scheduleGaps({ members, slots: offSlots, now: msk("2026-11-15", "12:00") })).toContainEqual({ day: swapDay, start: "14:00", end: "18:00" });
+    expect(scheduleGaps({ members, slots: offSlots, now: msk("2026-11-15", "12:00") }).filter((gap) => gap.day === swapDay))
+      .toEqual([{ day: swapDay, start: "02:00", end: "10:00" }, { day: swapDay, start: "14:00", end: "18:00" }]);
+  });
+});

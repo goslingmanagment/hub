@@ -304,8 +304,10 @@ export function weekdayOfDay(day: string): RuleWeekday {
 
 /**
  * Whether a person's schedule slot on a page runs at an instant: a slot that began today or, crossing midnight, the
- * day before, among the person's lines of the day it began — their lines of that page valid that day if any, else
- * their every-page ones — and that runs on that day's weekday. Pure.
+ * day before, among the person's standing lines of the day it began — their lines of that page valid that day if any,
+ * else their every-page ones — and that runs on that day's weekday. An approved swap's one-day lines (0422) act on their
+ * OWN hours only: inside an `off` line's interval the person's standing lines do not run on that page, before and after
+ * it they do; a `cover` line runs inside its interval, on top. Both cross midnight as a standing slot does. Pure.
  */
 export function slotRuns(slots: readonly RuleSlot[], input: { personId: number; pageId: number | null; at: number }): boolean {
   const own = slots.filter((slot) => slot.personId === input.personId);
@@ -313,28 +315,30 @@ export function slotRuns(slots: readonly RuleSlot[], input: { personId: number; 
   const minute = Math.floor((input.at - Date.parse(`${day}T00:00:00+03:00`)) / 60_000);
   // Begun today; or the day before, `minute` past its midnight being a day more of minutes from its start.
   const begun = [{ on: day, minute }, { on: moscowDayOf(input.at - DAY_MS), minute: minute + MINUTES_OF_DAY }];
-  return begun.some(({ on, minute: sinceMidnight }) => {
+  const anyRuns = (lines: (on: string) => RuleSlot[]) => begun.some(({ on, minute: sinceMidnight }) => {
     const weekday = weekdayOfDay(on);
-    return linesOn(own, input.pageId, on).some((slot) => {
+    return lines(on).some((slot) => {
       const length = (slot.endMinute - slot.startMinute + MINUTES_OF_DAY) % MINUTES_OF_DAY;
       return length > 0 && sinceMidnight >= slot.startMinute && sinceMidnight - slot.startMinute < length
         && (slot.weekdays === null || slot.weekdays.includes(weekday));
     });
   });
+  if (anyRuns((on) => swapLinesOn(own, input.pageId, on, "cover"))) return true;
+  return anyRuns((on) => linesOn(own, input.pageId, on)) && !anyRuns((on) => swapLinesOn(own, input.pageId, on, "off"));
 }
 
-/**
- * A person's lines on a page for a Moscow day: the page's own standing lines valid that day, else the every-page ones
- * valid that day — none at all when a swap took the person off the page that day (`off`), and a swap's `cover` line of
- * the page that day on top.
- */
+const validOn = (slot: RuleSlot, on: string) => (slot.validFrom === null || slot.validFrom <= on) && (slot.validTo === null || on <= slot.validTo);
+
+/** A person's STANDING lines on a page for a Moscow day: the page's own valid that day, else the every-page ones valid that day. */
 function linesOn(own: readonly RuleSlot[], pageId: number | null, on: string): RuleSlot[] {
-  const valid = own.filter((slot) => (slot.validFrom === null || slot.validFrom <= on) && (slot.validTo === null || on <= slot.validTo));
-  const swaps = valid.filter((slot) => slot.day !== undefined && slot.pageId === pageId);
-  if (swaps.some((slot) => slot.day === "off")) return [];
-  const standing = valid.filter((slot) => slot.day === undefined);
+  const standing = own.filter((slot) => slot.day === undefined && validOn(slot, on));
   const ofPage = pageId === null ? [] : standing.filter((slot) => slot.pageId === pageId);
-  return [...(ofPage.length > 0 ? ofPage : standing.filter((slot) => slot.pageId === null)), ...swaps];
+  return ofPage.length > 0 ? ofPage : standing.filter((slot) => slot.pageId === null);
+}
+
+/** A swap's one-day lines of a kind on a page that began on a Moscow day (each acts on its own hours). */
+function swapLinesOn(own: readonly RuleSlot[], pageId: number | null, on: string, kind: "cover" | "off"): RuleSlot[] {
+  return own.filter((slot) => slot.day === kind && slot.pageId === pageId && validOn(slot, on));
 }
 
 const homeOf = (

@@ -68,12 +68,12 @@ export async function readAccountShiftNumbers(
  */
 export async function teamAverage(
   app: AppContext,
-  input: { personId: number; test: boolean; from: Date; to: Date; now: Date },
+  input: { personId: number; test: boolean; from: Date; to: Date; now: Date; /** Only these teams (the reader's: «Новички»). */ models?: ReadonlySet<number> },
 ): Promise<AccountShiftNumbersResponse["team"]> {
   const facts = await teamFactsFor(app);
   const teams = teamsOfPerson(facts, input.personId);
   const realmModels = new Set(facts.models.filter((model) => model.test === input.test).map((model) => model.modelId));
-  const pages = new Set(pagesOfModels(facts, teams.mine.filter((model) => realmModels.has(model))));
+  const pages = new Set(pagesOfModels(facts, teams.mine.filter((model) => realmModels.has(model) && (input.models === undefined || input.models.has(model)))));
   if (pages.size === 0) return null;
   // The chat team (chat-team.ts): a content manager working the pages is not on it; a shift of anyone counts below anyway.
   const chatTeam = new Set(facts.people.filter((person) => isChatTeamRole(person.role)).map((person) => person.personId));
