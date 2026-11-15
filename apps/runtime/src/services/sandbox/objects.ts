@@ -52,6 +52,9 @@ export const FIELD_OBJECTS: Readonly<Record<string, FieldObject>> = {
   userId: "login",
   shareWithUserId: "login",
   toUserId: "login",
+  // The decider's answer by the people it names (`saleDisputeDecide`): each share's `userId`; the sides the window showed.
+  shares: "nested",
+  seenSides: "login",
   personCode: "personCode",
   // «Подмена»: who is absent and who covers (a swap's `swap.*`).
   absentPersonCode: "personCode",
