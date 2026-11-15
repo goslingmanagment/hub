@@ -6,6 +6,7 @@ import { formatDay } from "@agency_hub_core/look/format";
 
 import { isDemoReply, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_USERS } from "../world.ts";
+import { demoAskMatters } from "./asks.ts";
 import { demoClaimMatters } from "./sale-claims.ts";
 import { teamQuestionsHandlers } from "./team-questions.ts";
 import { demoReportDays } from "./team-reports.ts";
@@ -85,6 +86,10 @@ function standing(request: DemoRequest): Seed[] {
   }
   // Заявки (package G): the owner's disputes, «мимо площадки», the week's nobody's sales; the chatter's claims to answer.
   seeds.push(...demoClaimMatters(request.now));
+  // Вопросы тому, кто решает: the lead's to answer, the chatter's answer to read.
+  for (const ask of demoAskMatters(now)) {
+    seeds.push({ ...ask, owner: ask.owner === "team_lead" ? LEAD_ROLE : { kind: "user", userId: ask.owner, username: "", displayName: null } });
+  }
   seeds.push({
     kind: "ledger.report_post", key: "ledger.report_post:8812", title: "Пост в «Отчётности» не разобран", pages: ["mia-1"], money: true,
     evidence: { postId: 8812, reportDate: isoAt(now - 3 * DAY).slice(0, 10), postedAt: isoAt(now - 2.2 * DAY), flags: ["unknown_author"], totalMills: 124_200, telegram: CHAT },
@@ -93,7 +98,7 @@ function standing(request: DemoRequest): Seed[] {
   seeds.push({
     kind: "ledger.paid_day_changed", key: "ledger.paid_day_changed:77", title: "Выплаченный день изменён: kate.v", money: true,
     evidence: { changeId: 77, day: isoAt(now - 11 * DAY).slice(0, 10), model: "Mia", person: "kate-v", postedMills: 38_000, newMills: 43_000 },
-    link: "/workboard/payouts?person=kate-v", agoMs: 1.3 * DAY,
+    link: "/workboard/money/debts?person=kate-v", agoMs: 1.3 * DAY,
   });
   const held = wbHeldHandlers.clientSendCustodyList?.({ ...ownerRequest, query: { state: "held", limit: "100", offset: "0" } });
   if (held && !isDemoReply(held)) {

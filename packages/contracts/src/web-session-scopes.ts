@@ -91,6 +91,10 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "teamSalesReplies",
   // «Продажи → Список продаж»: the team's sales, whose and why; the chain decides itself what it shows.
   "teamSalesList",
+  // Questions to whoever decides (products plan §4.6): the extension's fan panel asks and reads through these two.
+  "teamQuestions",
+  "teamQuestionAsk",
+  "teamQuestionClose",
   "teamEmptyHours",
   "teamGreetings",
   "teamWinBackResults",
@@ -140,6 +144,8 @@ export const NARROW_WEB_SESSION_PASSWORD_ONLY = [
   "reviewNoteAdd",
   // «Фаны» (products package M): a note on a fan's card.
   "createFanNote",
+  // A question's answer is a decision (products plan §4.6).
+  "teamQuestionAnswer",
 ] as const satisfies readonly KernelOperationKey[];
 
 /** Whether a narrow web session may call the route with this key. */

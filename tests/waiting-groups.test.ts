@@ -10,6 +10,7 @@ import {
   REPORT_POST_MATTER_KINDS,
   SALE_CLAIM_MATTER_KINDS,
   SHIFT_REPORT_MATTER_KINDS,
+  TEAM_QUESTION_MATTER_KINDS,
   WAITING_GROUPS,
   waitingGroupOf,
   waitingSinceOf,
@@ -30,6 +31,7 @@ const PACKAGE_KINDS: Readonly<Record<string, readonly string[]>> = {
   "posts to fix (K)": REPORT_POST_MATTER_KINDS,
   "custom checks (I)": CUSTOM_ORDER_CHECK_KINDS,
   "claims (G)": SALE_CLAIM_MATTER_KINDS,
+  "questions (W)": TEAM_QUESTION_MATTER_KINDS,
 };
 
 describe("«Ждут вас»: one table of groups", () => {

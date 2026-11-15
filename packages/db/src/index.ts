@@ -309,6 +309,7 @@ export * from "./repositories/media-looks.ts";
 export * from "./repositories/people.ts";
 export * from "./repositories/team-roles.ts";
 export * from "./repositories/workboard-today.ts";
+export * from "./repositories/team-questions.ts";
 // «Начало» of a newcomer (0402): the facts its steps close by, and where a person's payouts go.
 export * from "./repositories/person-start.ts";
 export * from "./repositories/publication-files.ts";

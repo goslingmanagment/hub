@@ -1,6 +1,7 @@
 import type { DemoHandlers } from "../core.ts";
 import { accountHandlers } from "./account.ts";
 import { costsAttentionHandlers } from "./costs-attention.ts";
+import { askHandlers } from "./asks.ts";
 import { mattersHandlers } from "./matters.ts";
 import { moneyHandlers } from "./money.ts";
 import { pageHandlers } from "./page.ts";
@@ -43,6 +44,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   people: peopleHandlers,
   // «Ждут вас» from matters (packages D and K); `hub-demo-scenario=matters-0|matters-6|matters-40` (matters.ts).
   matters: mattersHandlers,
+  // Вопросы тому, кто решает (products plan §4.6).
+  asks: askHandlers,
   // Workboard «Кастомы»: the board, an order and its steps, kept in memory (wb-customs.ts).
   customs: wbCustomsHandlers,
   // Отчёт смены: the demo chatter's shift rows, drafts and versions, kept in memory with every write (shift-reports.ts).
