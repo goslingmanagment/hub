@@ -26,11 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 84 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-<<<<<<< HEAD
-## Routes (541)
-=======
-## Routes (540)
->>>>>>> b76fd37b5 («Подмена» and «Предложить сетку» as questions; an approved swap is the registry's one-day lines the rule reads)
+## Routes (543)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |

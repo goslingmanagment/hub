@@ -32,7 +32,7 @@ const FACTS: TeamFacts = {
     { userId: 103, personId: 3, role: "content_manager" },
     { userId: 104, personId: 4, role: "chatter" },
   ],
-  people: [1, 2, 3, 4].map((personId) => ({ personId, name: `P${personId}`, test: false })),
+  people: [1, 2, 3, 4].map((personId) => ({ personId, name: `P${personId}`, test: false, role: "chatter" })),
 };
 
 const who = (leader: CustomLeader) => (leader.kind === "owner" ? "owner" : leader.userId);

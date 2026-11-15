@@ -16,7 +16,7 @@ function facts(roles: Array<{ personId: number; modelId: number; kind: "lead" | 
     working: [{ personId: 100, pageId: 11 }, { personId: 101, pageId: 11 }, { personId: 102, pageId: 11 }, { personId: 200, pageId: 21 }],
     roles: roles.map((role, index) => ({ id: index + 1, grantedByUserId: null, grantedAt: at, ...role })),
     logins: [{ userId: 1000, personId: 100 }, { userId: 1010, personId: 101 }, { userId: 1011, personId: 101 }, { userId: 1020, personId: 102 }, { userId: 2000, personId: 200 }],
-    people: [{ personId: 100, name: "Марта", test: false }, { personId: 101, name: "Олег", test: false }, { personId: 102, name: "Аня", test: false }, { personId: 200, name: "Боря", test: false }],
+    people: [{ personId: 100, name: "Марта", test: false, role: "chatter" }, { personId: 101, name: "Олег", test: false, role: "chatter" }, { personId: 102, name: "Аня", test: false, role: "chatter" }, { personId: 200, name: "Боря", test: false, role: "chatter" }],
   };
 }
 

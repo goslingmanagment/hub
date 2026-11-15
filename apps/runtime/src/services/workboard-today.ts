@@ -10,7 +10,7 @@ import {
   type TeamFacts,
   type TodayShiftRow,
 } from "@agency_hub_core/db";
-import { customOrderCode, type WorkboardTodayResponse } from "@agency_hub_core/contracts";
+import { customOrderCode, isChatTeamRole, type WorkboardTodayResponse } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireSessionUser, type HumanAuthPrincipal } from "./auth.ts";
@@ -125,12 +125,16 @@ export function scheduleGaps(input: { members: readonly TodayTeamMember[]; slots
   return gaps;
 }
 
-/** The members of a team: the people (not left) working a page of the model, with their logins. */
-function membersOf(facts: TeamFacts, modelId: number): TodayTeamMember[] {
+/**
+ * The members of a team: the chat team (`isChatTeamRole`: chatters and team leads, not left) working a page of the model,
+ * with their logins. A content manager with working pages is not on the chat team's schedule. Pure.
+ */
+export function membersOf(facts: TeamFacts, modelId: number): TodayTeamMember[] {
   const pages = new Set(pagesOfModels(facts, [modelId]));
+  const chatTeam = new Set(facts.people.filter((person) => isChatTeamRole(person.role)).map((person) => person.personId));
   const byPerson = new Map<number, Set<number>>();
   for (const row of facts.working) {
-    if (!pages.has(row.pageId)) continue;
+    if (!pages.has(row.pageId) || !chatTeam.has(row.personId)) continue;
     byPerson.set(row.personId, (byPerson.get(row.personId) ?? new Set()).add(row.pageId));
   }
   return [...byPerson.entries()].map(([personId, pageIds]) => ({

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import type { KernelOperationResponse } from "@agency_hub_core/contracts";
+import { teamsOf, type ScheduleSlot } from "./scheduleTeams";
 import { Button, Card, EmptyState, ErrorState, Person, PageLabels, SkeletonText } from "@agency_hub_core/ui";
 import { formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { slotWords } from "@agency_hub_core/ui/people/words";
@@ -23,8 +23,7 @@ import "./shifts.css";
  * and «Предложить сетку» (a lead, to the owner) are questions (products plan §4.6). Hub cuts the people to the teams.
  */
 
-type TeamPerson = KernelOperationResponse<"teamPeople">["people"][number];
-type Slot = NonNullable<TeamPerson["schedule"]>;
+type Slot = ScheduleSlot;
 
 const DAY_MINUTES = 1440;
 
@@ -41,36 +40,6 @@ function Strip({ slots }: { slots: readonly Slot[] }) {
       {bars.map((bar) => <span key={bar.key} className="sched-strip__bar" style={{ left: `${bar.left}%`, width: `${bar.width}%` }} />)}
     </span>
   );
-}
-
-interface Team {
-  slug: string;
-  name: string;
-  people: Array<{ person: TeamPerson; pages: string[]; slots: Slot[] }>;
-}
-
-/** The teams of the people the viewer reads: a person is in the team of each model of their working pages. */
-function teamsOf(people: readonly TeamPerson[]): Team[] {
-  const teams = new Map<string, Team>();
-  for (const person of people) {
-    if (person.kind !== "human" || person.state === "left") continue;
-    const models = new Map<string, { name: string; pages: string[] }>();
-    for (const page of person.workingPages) {
-      const model = models.get(page.modelSlug) ?? { name: page.modelName, pages: [] };
-      model.pages.push(page.pageLabel);
-      models.set(page.modelSlug, model);
-    }
-    for (const [slug, model] of models) {
-      const team = teams.get(slug) ?? { slug, name: model.name, people: [] };
-      // The person's every-page slot, and a page's own line of this team's pages where it differs.
-      const own = person.pageSchedules.filter((slot) => slot.pageLabel !== null && model.pages.includes(slot.pageLabel));
-      const slots = [...(person.schedule ? [person.schedule] : []), ...own];
-      team.people.push({ person, pages: model.pages, slots });
-      teams.set(slug, team);
-    }
-  }
-  return [...teams.values()].sort((a, b) => a.name.localeCompare(b.name, "ru"))
-    .map((team) => ({ ...team, people: team.people.sort((a, b) => (a.slots[0]?.startMinute ?? DAY_MINUTES) - (b.slots[0]?.startMinute ?? DAY_MINUTES)) }));
 }
 
 function SlotLine({ slot }: { slot: Slot }) {

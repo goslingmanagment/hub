@@ -34,6 +34,7 @@ import { useRowBackState } from "@/shared/links";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { ShiftsTabs } from "@/shared/ShiftsTabs";
 import { usePeriod } from "@/shared/usePeriod";
+import { useMe } from "@/shared/useMe";
 import {
   MY_SHIFTS_MAX_DAYS,
   factsOf,
@@ -224,10 +225,14 @@ function withNotes(columns: readonly Column<MyShiftRow>[], notes: ReadonlyMap<st
 
 // ───────────────────────────────────────────────────────────── The facts
 
-/** What of the reports did not come: all of them, or the posts alone (the drafts are shown). */
-type Unavailable = "reports" | "posts" | null;
+/**
+ * What of the reports did not come: all of them, or the posts alone (the drafts are shown); `test` — a person of the test
+ * team, whose reports the ledger never keeps (nothing is away, nothing to retry: what «Деньги» says to the test owner).
+ */
+type Unavailable = "reports" | "posts" | "test" | null;
 
 const UNAVAILABLE_HINT: Record<Exclude<Unavailable, null>, string> = {
+  test: "Отчёты в «Отчётности» и начисления считает ledger агентства, а тестовую команду он не знает. Отчёт смены, сданный доской, виден в строке смены.",
   reports: "Отчёты хранятся отдельно от Hub, и сейчас они не пришли. Смены видны и без них; суммы по отчётам появятся, когда отчёты снова откроются.",
   posts: "Отчёты, отправленные в Отчётность, сейчас не пришли: видны только черновики Генгара. Суммы по отчётам появятся, когда отправленные снова откроются.",
 };
@@ -245,7 +250,9 @@ function FactsLine({ facts, previous, versus, unavailable, onRetry, retrying }: 
     { label: "Смен", value: String(facts.shifts) },
     { label: "Отработано", value: <Duration minutes={facts.workedMinutes} /> },
   ];
-  if (unavailable !== null) {
+  if (unavailable === "test") {
+    items.push({ label: "По отчётам", value: <span className="ui-muted">в тестовой команде их нет</span>, title: UNAVAILABLE_HINT.test });
+  } else if (unavailable !== null) {
     items.push({
       label: "По отчётам",
       value: (
@@ -326,6 +333,7 @@ function NowRow({ shift }: { shift: StatsShift }) {
 // ───────────────────────────────────────────────────────────── The screen
 
 export function MyShiftsScreen() {
+  const { test } = useMe();
   const { spec, period, today } = usePeriod();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -353,7 +361,7 @@ export function MyShiftsScreen() {
     [rows, dayNotes],
   );
   const columns = useMemo(() => withNotes(money.columns, notes), [money.columns, notes]);
-  const unavailable: Unavailable = data === undefined ? null : !data.reportsRead ? "reports" : postsRead ? null : "posts";
+  const unavailable: Unavailable = data === undefined ? null : !data.reportsRead ? (test ? "test" : "reports") : postsRead ? null : "posts";
 
   // The shift going on is shown once: as the journal's first row when the period holds it, else above the journal
   // («Сейчас на смене», from the read of the last two days — a past period, or a night begun before its first day).

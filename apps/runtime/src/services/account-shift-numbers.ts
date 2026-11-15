@@ -1,4 +1,4 @@
-import { averageShiftQuality, shiftQualityOf, type AccountShiftNumbersResponse } from "@agency_hub_core/contracts";
+import { averageShiftQuality, isChatTeamRole, shiftQualityOf, type AccountShiftNumbersResponse } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireSessionUser, type AuthPrincipal } from "./auth.ts";
@@ -75,7 +75,9 @@ export async function teamAverage(
   const realmModels = new Set(facts.models.filter((model) => model.test === input.test).map((model) => model.modelId));
   const pages = new Set(pagesOfModels(facts, teams.mine.filter((model) => realmModels.has(model))));
   if (pages.size === 0) return null;
-  const people = [...new Set([input.personId, ...facts.working.filter((row) => pages.has(row.pageId)).map((row) => row.personId)])];
+  // The chat team (chat-team.ts): a content manager working the pages is not on it; a shift of anyone counts below anyway.
+  const chatTeam = new Set(facts.people.filter((person) => isChatTeamRole(person.role)).map((person) => person.personId));
+  const people = [...new Set([input.personId, ...facts.working.filter((row) => pages.has(row.pageId) && chatTeam.has(row.personId)).map((row) => row.personId)])];
   const logins = await loginsOfPeople(app.db, people);
   if (logins.length === 0) return null;
   const found = await teamShiftJobs(app, { from: input.from, to: input.to, now: input.now, scope: "all", userIds: logins });

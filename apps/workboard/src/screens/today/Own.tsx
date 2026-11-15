@@ -6,6 +6,7 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
 import { shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { perHourMills } from "@/shared/metrics";
+import { useMe } from "@/shared/useMe";
 import { MyMoneyBlock } from "../my-shifts/MyMoney";
 import { PeriodQualityLine } from "../my-shifts/MyQuality";
 import { rowsOf, type MyShiftRow } from "../my-shifts/model";
@@ -26,6 +27,7 @@ type Today = KernelOperationResponse<"workboardToday">;
 
 /** The report of the shift, in the words of the board (with the switch) or of the old way (the post). */
 function ReportState({ row }: { row: MyShiftRow }) {
+  const { test } = useMe();
   if (row.hub !== null) {
     const words = row.state === "handed" ? "Сдан" : row.state === "ongoing" ? "Смена идёт" : "Сдайте смену";
     return (
@@ -40,7 +42,8 @@ function ReportState({ row }: { row: MyShiftRow }) {
     draft: "Отчёт собран: проверьте его и отправьте пост",
     missing: "Отчёта нет: попросите в чате /smena",
     ongoing: "Смена идёт: отчёт соберут в конце",
-    unknown: "Отчёты сейчас не пришли",
+    // The test team's reports are none (the ledger does not know it), never «not come».
+    unknown: test ? "В тестовой команде отчёты сдают доской" : "Отчёты сейчас не пришли",
     other: row.report?.status ?? "",
     due: "Сдайте смену",
     handed: "Сдан",
