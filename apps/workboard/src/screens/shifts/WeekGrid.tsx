@@ -1,10 +1,11 @@
 import { useMemo } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { Delta, Menu, Money, Section, Table, Tooltip, type Column, type MenuEntry } from "@agency_hub_core/ui";
+import { Delta, Menu, Money, Person, Section, Table, Tooltip, type Column, type MenuEntry } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange, formatDuration, formatMills, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { withPeriod } from "@agency_hub_core/ui/period";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { PersonLink, personPath, shiftPath, useBackState, type BackTarget } from "@/shared/links";
+import { PersonLink, shiftPath, useBackState, type BackTarget } from "@/shared/links";
+import { useMe } from "@/shared/useMe";
 import { type GridCell, type GridColumn, type GridRow, type JournalShift, type ShiftsModel } from "./data.js";
 
 const WEEKDAY = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: "UTC" });
@@ -60,7 +61,7 @@ function ColumnHead({ column }: { column: GridColumn }) {
  * day. Nothing there: «—», a day ahead: empty, a day before Hub counted: «нет
  * данных».
  */
-function CellView({ row, cell, isOwner, back }: { row: GridRow; cell: GridCell; isOwner: boolean; back: BackTarget }) {
+function CellView({ row, cell, back }: { row: GridRow; cell: GridCell; back: BackTarget }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { column } = cell;
@@ -89,7 +90,8 @@ function CellView({ row, cell, isOwner, back }: { row: GridRow; cell: GridCell; 
     );
   }
 
-  const open = (shift: JournalShift) => (isOwner ? shiftPath(shift.userId, shift.startedAt, location.search) : personPath(shift.userId, location.search));
+  // The review is open to everyone who reads the team (products package T); the person's card is the owner's and a team lead's.
+  const open = (shift: JournalShift) => shiftPath(shift.userId, shift.startedAt, location.search);
   if (cell.list.length === 1) {
     const shift = cell.list[0]!;
     // D12: the shift's one label; a night says why it stands in this day's column.
@@ -188,9 +190,8 @@ function PerHourCell({ row, comparable, versus }: { row: GridRow; comparable: bo
  * longer period has a column per 7 days back from today (D4), which opens
  * those days. The chatter's name opens their card for the same period.
  */
-export function WeekGrid({ model, isOwner, versus, loading = false, refreshing = false, weekly, page, columns, mine = false }: {
+export function WeekGrid({ model, versus, loading = false, refreshing = false, weekly, page, columns, mine = false }: {
   model: ShiftsModel | undefined;
-  isOwner: boolean;
   /** «Сравнение с 26 окт. – 1 нояб.»: what a change compares with, on its hover. */
   versus: string;
   loading?: boolean;
@@ -208,6 +209,9 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
   const byChunk = shown[0]?.kind === "chunk";
   const comparable = model?.comparable ?? false;
   const working = useMemo(() => new Set(model?.journal.filter((shift) => shift.ongoing).map((shift) => shift.userId) ?? []), [model]);
+  // People's cards («Люди») are the owner's and a team lead's screens.
+  const { role } = useMe();
+  const cards = role === "owner" || role === "team_lead";
 
   const tableColumns: Column<GridRow>[] = [
     {
@@ -220,13 +224,22 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
           <span className="shifts-grid__team-hint">{madeOf(row.totals.shifts, row.totals.workedMinutes)}</span>
         </span>
       ) : (
-        <PersonLink
-          userId={row.userId}
-          name={row.username}
-          status={working.has(row.userId) ? "working" : "away"}
-          hint={row.gone ? "смен не было" : madeOf(row.totals.shifts, row.totals.workedMinutes)}
-          backLabel="Смены"
-        />
+        cards ? (
+          <PersonLink
+            userId={row.userId}
+            name={row.username}
+            status={working.has(row.userId) ? "working" : "away"}
+            hint={row.gone ? "смен не было" : madeOf(row.totals.shifts, row.totals.workedMinutes)}
+            backLabel="Смены"
+          />
+        ) : (
+          // A chatter reads the team's shifts, not people's cards: the name is no link (the cells open the reviews).
+          <Person
+            name={row.username}
+            status={working.has(row.userId) ? "working" : "away"}
+            hint={row.gone ? "смен не было" : madeOf(row.totals.shifts, row.totals.workedMinutes)}
+          />
+        )
       ),
     },
     ...shown.map((column): Column<GridRow> => ({
@@ -237,7 +250,7 @@ export function WeekGrid({ model, isOwner, versus, loading = false, refreshing =
       ...(column.future ? { width: FUTURE_COLUMN_WIDTH } : {}),
       cell: (row) => {
         const cell = row.cells.find((one) => one.column.key === column.key);
-        return cell ? <CellView row={row} cell={cell} isOwner={isOwner} back={back} /> : null;
+        return cell ? <CellView row={row} cell={cell} back={back} /> : null;
       },
     })),
     {
