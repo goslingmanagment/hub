@@ -1,4 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
+
+import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import { lockPageSyncStatesForPage } from "./page-sync.ts";
 
@@ -264,12 +266,13 @@ export interface OfapiBindingReconcilePage extends OfapiBindingPage {
   auth_status: string | null;
 }
 
+/** The live fleet: a test model's page (the test team on production) is never bound, read or watched. */
 export async function listOfapiBindingPages(db: Database): Promise<OfapiBindingReconcilePage[]> {
   const result = await db.execute<OfapiBindingReconcilePage>(sql`
     select p.id, p.label, p.ofapi_account_id as account_id, p.ofapi_binding_generation as generation,
       p.external_page_id as creator_id, p.metadata->>'onlyfansUserId' as metadata_creator_id,
       p.ofapi_auth_status as auth_status
-    from pages p where p.platform = 'onlyfans' and p.status = 'active' order by p.id
+    from pages p where p.platform = 'onlyfans' and p.status = 'active' and ${livePageSql(sql`p.id`)} order by p.id
   `);
   return result.rows.map(row => ({ ...row, id: Number(row.id), generation: Number(row.generation) }));
 }
