@@ -4,6 +4,7 @@ import {
   type TeamQuestionKind,
   type TeamQuestionsResponse,
   type TeamQuestionWriteResponse,
+  type TeamSwapsResponse,
 } from "@agency_hub_core/contracts";
 
 import { demoError, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
@@ -31,7 +32,13 @@ interface Kept {
   answeredBy: number | null;
   answeredAt: number | null;
   seen: boolean;
+  /** «Подмена»'s details (products package W); its «Можно» stands until taken back. */
+  swap: { date: string; pages: string[]; start: string; end: string; absent: { code: string; name: string }; cover: { code: string; name: string }; revoked: boolean } | null;
 }
+
+/** The demo's people by code (people.ts): the code a swap names, the name it shows. */
+const PEOPLE: Readonly<Record<string, string>> = { alex: "Алекс", kate: "Катя", olya: "Оля", den: "Денис", marta: "Марта" };
+const day = (now: number, ahead: number) => new Date(now + 3 * HOUR + ahead * 24 * HOUR).toISOString().slice(0, 10);
 
 let store: Kept[] | null = null;
 let nextId = 40;
@@ -44,12 +51,19 @@ function seeded(now: number): Kept[] {
     {
       id: 31, askerId: chatter.id, pageLabel: chatter.pages[0] ?? "mia-1", fanName: "Dominic", kind: "discount_over_50",
       text: "Фан просит 60 % на пак из трёх видео, тратит каждую неделю", deciderId: lead.id, askedAt: now - 0.7 * HOUR,
-      state: "open", answer: null, answerText: null, answeredBy: null, answeredAt: null, seen: false,
+      state: "open", answer: null, answerText: null, answeredBy: null, answeredAt: null, seen: false, swap: null,
     },
     {
-      id: 30, askerId: chatter.id, pageLabel: chatter.pages[0] ?? "mia-1", fanName: null, kind: "swap",
-      text: "Могу взять смену Кати в четверг вечером", deciderId: lead.id, askedAt: now - 20 * HOUR,
-      state: "answered", answer: "yes", answerText: "Да, я поправлю график", answeredBy: lead.id, answeredAt: now - 18 * HOUR, seen: false,
+      id: 32, askerId: 5, pageLabel: "mia-1", fanName: null, kind: "swap",
+      text: "Не смогу выйти, Алекс готов взять мой вечер", deciderId: lead.id, askedAt: now - 2 * HOUR,
+      state: "open", answer: null, answerText: null, answeredBy: null, answeredAt: null, seen: false,
+      swap: { date: day(now, 2), pages: ["mia-1"], start: "16:00", end: "00:00", absent: { code: "kate", name: "Катя" }, cover: { code: "alex", name: "Алекс" }, revoked: false },
+    },
+    {
+      id: 30, askerId: 7, pageLabel: "mia-of", fanName: null, kind: "swap",
+      text: "Оля просит подмену на завтра, Катя выйдет за неё", deciderId: lead.id, askedAt: now - 20 * HOUR,
+      state: "answered", answer: "yes", answerText: "Да", answeredBy: lead.id, answeredAt: now - 18 * HOUR, seen: false,
+      swap: { date: day(now, 1), pages: ["mia-of"], start: "12:00", end: "20:00", absent: { code: "olya", name: "Оля" }, cover: { code: "kate", name: "Катя" }, revoked: false },
     },
   ];
   return store;
@@ -78,6 +92,12 @@ function wire(kept: Kept, viewer: DemoUser, narrow: boolean): TeamQuestion {
     seen: kept.seen,
     canAnswer: kept.state === "open" && (owner || kept.deciderId === viewer.id),
     mine: kept.askerId === viewer.id,
+    swap: kept.swap === null ? null : {
+      date: kept.swap.date, pages: kept.swap.pages, start: kept.swap.start, end: kept.swap.end, absent: kept.swap.absent, cover: kept.swap.cover,
+      approved: kept.answer === "yes" && !kept.swap.revoked,
+      revoked: kept.answer === "yes" && kept.swap.revoked,
+      canRevoke: kept.answer === "yes" && !kept.swap.revoked && !narrow && (owner || kept.deciderId === viewer.id),
+    },
   };
 }
 
@@ -118,12 +138,21 @@ export const askHandlers: DemoHandlers = {
   },
   teamQuestionAsk: (request): TeamQuestionWriteResponse | DemoReply => {
     const viewer = viewerOf(request);
-    const body = request.body as { pageLabel: string; kind: TeamQuestionKind; text: string; fanName?: string };
+    const body = request.body as {
+      pageLabel: string; kind: TeamQuestionKind; text: string; fanName?: string;
+      swap?: { date: string; pageLabels: string[]; start: string; end: string; coverPersonCode: string; absentPersonCode?: string };
+    };
     const lead = demoUserByRole("team_lead");
+    const absentCode = body.swap?.absentPersonCode ?? Object.keys(PEOPLE).find((code) => PEOPLE[code] === viewer.name) ?? "alex";
     const kept: Kept = {
-      id: nextId++, askerId: viewer.id, pageLabel: body.pageLabel, fanName: body.fanName ?? null, kind: body.kind, text: body.text,
-      deciderId: viewer.id === lead.id ? null : lead.id, askedAt: request.now.getTime(), state: "open", answer: null, answerText: null,
+      id: nextId++, askerId: viewer.id, pageLabel: body.swap?.pageLabels[0] ?? body.pageLabel, fanName: body.fanName ?? null, kind: body.kind, text: body.text,
+      // «График» is the owner's; anything else the lead's, the owner's when the lead asks.
+      deciderId: body.kind === "schedule" || viewer.id === lead.id ? null : lead.id, askedAt: request.now.getTime(), state: "open", answer: null, answerText: null,
       answeredBy: null, answeredAt: null, seen: false,
+      swap: body.kind === "swap" && body.swap ? {
+        date: body.swap.date, pages: body.swap.pageLabels, start: body.swap.start, end: body.swap.end,
+        absent: { code: absentCode, name: PEOPLE[absentCode] ?? absentCode }, cover: { code: body.swap.coverPersonCode, name: PEOPLE[body.swap.coverPersonCode] ?? body.swap.coverPersonCode }, revoked: false,
+      } : null,
     };
     seeded(request.now.getTime()).unshift(kept);
     return { question: wire(kept, viewer, request.narrow === true), savedAt: request.now.toISOString() };
@@ -135,6 +164,24 @@ export const askHandlers: DemoHandlers = {
     if (!wire(kept, viewer, request.narrow === true).canAnswer) return demoError(403, "Forbidden", "Only whoever decides answers it");
     const body = request.body as { answer: "yes" | "no"; text?: string };
     Object.assign(kept, { state: "answered", answer: body.answer, answerText: body.text ?? null, answeredBy: viewer.id, answeredAt: request.now.getTime() });
+    return { question: wire(kept, viewer, false), savedAt: request.now.toISOString() };
+  },
+  teamSwaps: (request): TeamSwapsResponse => {
+    const viewer = viewerOf(request);
+    const narrow = request.narrow === true;
+    const now = request.now.getTime();
+    return {
+      swaps: seeded(now).filter((kept) => kept.swap !== null && kept.answer === "yes" && !kept.swap.revoked && kept.swap.date >= day(now, 0))
+        .map((kept) => ({ ...wire(kept, viewer, narrow).swap!, questionId: kept.id })),
+      serverNow: request.now.toISOString(),
+    };
+  },
+  teamSwapRevoke: (request): TeamQuestionWriteResponse | DemoReply => {
+    const viewer = viewerOf(request);
+    const kept = seeded(request.now.getTime()).find((one) => one.id === Number(request.params.id));
+    if (!kept || kept.swap === null) return notFound();
+    if (!wire(kept, viewer, request.narrow === true).swap?.canRevoke) return demoError(403, "Forbidden", "Only whoever decided it takes it back");
+    kept.swap.revoked = true;
     return { question: wire(kept, viewer, false), savedAt: request.now.toISOString() };
   },
   teamQuestionClose: (request): TeamQuestionWriteResponse | DemoReply => {

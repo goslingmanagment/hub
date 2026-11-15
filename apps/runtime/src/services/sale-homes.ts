@@ -3,6 +3,7 @@ import {
   listActiveSaleDecisions,
   listCurrentReportsOfSales,
   listPersonLoginRows,
+  listPersonDayLineRows,
   listPersonScheduleSlotRows,
   listSaleClaims,
   listShiftRows,
@@ -92,14 +93,20 @@ export function ruleSlotsOf(input: {
       weekdays: slot.weekdays === null ? null : slot.weekdays.filter((day): day is RuleWeekday => WEEKDAYS.has(day)),
       validFrom: slot.validFrom,
       validTo: slot.validTo,
+      ...(slot.kind === null ? {} : { day: slot.kind }),
     })));
 }
 
-/** The people registry's schedule slots, read through `db` in turn. */
+/**
+ * The people registry's schedule slots, read through `db` in turn: the standing lines and the swaps' one-day lines of the
+ * window (0420) — who is scheduled on a day is both.
+ */
 export function registrySlots(db: Database): SaleSlotProvider {
   return {
     slotsFor: async ({ from, to }) => {
-      const slots = await listPersonScheduleSlotRows(db);
+      const standing = await listPersonScheduleSlotRows(db);
+      const days = await listPersonDayLineRows(db, { from: moscowDayOf(from.getTime() - DAY_MS), to: moscowDayOf(to.getTime()) });
+      const slots = [...standing, ...days];
       if (slots.length === 0) return [];
       return ruleSlotsOf({ slots, logins: await listPersonLoginRows(db), from, to });
     },

@@ -45,6 +45,10 @@ export const SANDBOX_OWNER_OPERATIONS: ReadonlySet<string> = new Set([
   "teamQuestionAsk",
   "teamQuestionAnswer",
   "teamQuestionClose",
+  // «Подмена» (products package W): the test realm's swaps; a test swap writes lines of test pages only (the realm's
+  // trigger on the schedule table, 0414).
+  "teamSwaps",
+  "teamSwapRevoke",
   "teamAuthorship",
   "teamEmptyHours",
   "teamGreetings",

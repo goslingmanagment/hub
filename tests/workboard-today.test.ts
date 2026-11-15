@@ -10,7 +10,7 @@ import { absentNow, scheduleGaps, type TodayTeamMember } from "../apps/runtime/s
 const msk = (day: string, time: string) => Date.parse(`${day}T${time}:00+03:00`);
 
 function slot(id: number, personId: number, start: number, end: number, pageId: number | null = null): PersonScheduleSlotRow {
-  return { id, personId, pageId, pageLabel: null, startMinute: start * 60, endMinute: end * 60, weekdays: null, validFrom: "2026-11-01", validTo: null };
+  return { id, personId, pageId, pageLabel: null, startMinute: start * 60, endMinute: end * 60, weekdays: null, validFrom: "2026-11-01", validTo: null, kind: null, questionId: null };
 }
 
 const members: TodayTeamMember[] = [

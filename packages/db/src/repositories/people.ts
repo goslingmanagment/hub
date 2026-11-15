@@ -552,6 +552,14 @@ export interface PersonScheduleSlotRow {
   weekdays: string[] | null;
   validFrom: string | null;
   validTo: string | null;
+  /**
+   * null — a standing line. `cover` / `off` — a one-day line of an approved swap (0420, a question's «Можно»): the
+   * covering person's line on top of their own, and the absent person's «none of my lines runs on this page that day».
+   * Only `listPersonDayLineRows` returns them; every standing read leaves them out.
+   */
+  kind: "cover" | "off" | null;
+  /** The swap's question; null — a standing line. */
+  questionId: number | null;
 }
 
 function slotOf(row: Row): PersonScheduleSlotRow {
@@ -565,22 +573,68 @@ function slotOf(row: Row): PersonScheduleSlotRow {
     weekdays: Array.isArray(row.weekdays) ? (row.weekdays as string[]) : null,
     validFrom: nullableDay(row.valid_from),
     validTo: nullableDay(row.valid_to),
+    kind: row.kind === "cover" || row.kind === "off" ? row.kind : null,
+    questionId: nullableNumber(row.question_id),
   };
 }
 
 const SLOT_COLUMNS = sql`
   s.id, s.person_id, s.page_id, (select pg.label from pages pg where pg.id = s.page_id) as page_label, s.start_minute,
-  s.end_minute, s.weekdays, s.valid_from, s.valid_to`;
+  s.end_minute, s.weekdays, s.valid_from, s.valid_to, s.kind, s.question_id`;
 
-/** By person, then the line (every page first, then by page), oldest first: a slot with no known start comes first. */
+/**
+ * The STANDING schedule: by person, then the line (every page first, then by page), oldest first: a slot with no known
+ * start comes first. A swap's one-day lines (0420 `kind`) are not here, on purpose: the person's card, the standing grid,
+ * the agents' people door and a schedule change read the standing lines alone, and a swap is never a change of them.
+ * Who is scheduled on a day reads `listPersonDayLineRows` beside this (the sale rule's slots, «Сегодня»).
+ */
 export async function listPersonScheduleSlotRows(db: Database, personIds?: readonly number[]): Promise<PersonScheduleSlotRow[]> {
-  const where = personIds === undefined ? sql`` : sql`where s.person_id = any(${ids(personIds)})`;
+  const where = personIds === undefined ? sql`where s.kind is null` : sql`where s.kind is null and s.person_id = any(${ids(personIds)})`;
   const result = await db.execute<Row>(sql`
     select ${SLOT_COLUMNS}
       from person_schedule_slots s
       ${where}
      order by s.person_id, s.page_id nulls first, s.valid_from nulls first, s.id`);
   return result.rows.map(slotOf);
+}
+
+/** The swaps' one-day lines (0420) of the Moscow days `from`..`to` not taken back: who covers and who is off, by day. */
+export async function listPersonDayLineRows(db: Database, input: { from: string; to: string }): Promise<PersonScheduleSlotRow[]> {
+  const result = await db.execute<Row>(sql`
+    select ${SLOT_COLUMNS}
+      from person_schedule_slots s
+     where s.kind is not null and s.revoked_at is null and s.valid_from between ${input.from}::date and ${input.to}::date
+     order by s.valid_from, s.person_id, s.page_id, s.id`);
+  return result.rows.map(slotOf);
+}
+
+/**
+ * The ONE writer of a swap's lines (0420), beside the standing writer below: one line a page of a day, of its question.
+ * `cover` — the covering person's slot on top of their own; `off` — none of the absent person's lines runs on the page.
+ */
+export async function insertPersonDayLine(db: Database, input: {
+  personId: number;
+  pageId: number;
+  kind: "cover" | "off";
+  day: string;
+  startMinute: number;
+  endMinute: number;
+  questionId: number;
+  createdByUserId: number;
+}): Promise<void> {
+  await db.execute(sql`
+    insert into person_schedule_slots (person_id, page_id, start_minute, end_minute, weekdays, valid_from, valid_to, created_by_user_id, kind, question_id)
+    values (${input.personId}, ${input.pageId}, ${input.startMinute}, ${input.endMinute}, null, ${input.day}::date, ${input.day}::date,
+            ${input.createdByUserId}, ${input.kind}, ${input.questionId})`);
+}
+
+/** Takes a swap's lines back (kept, marked); the number taken back. */
+export async function revokePersonDayLines(db: Database, input: { questionId: number; byUserId: number; at: Date }): Promise<number> {
+  const result = await db.execute<Row>(sql`
+    update person_schedule_slots set revoked_at = ${input.at.toISOString()}::timestamptz, revoked_by_user_id = ${input.byUserId}
+     where question_id = ${input.questionId} and kind is not null and revoked_at is null
+     returning id`);
+  return result.rows.length;
 }
 
 export async function insertPersonScheduleSlot(db: Database, input: {

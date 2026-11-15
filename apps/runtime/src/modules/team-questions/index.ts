@@ -1,7 +1,7 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import { requireHumanPrincipal } from "../../services/auth.ts";
-import { answerQuestion, askTeamQuestion, closeQuestion, readTeamQuestions } from "../../services/team-questions.ts";
+import { answerQuestion, askTeamQuestion, closeQuestion, readTeamQuestions, readTeamSwaps, revokeSwap } from "../../services/team-questions.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -34,5 +34,18 @@ export function registerTeamQuestionRoutes(server: ApiServer, ctx: ApiModuleCont
     const principal = await requirePrincipal(request);
     requireHumanPrincipal(principal);
     return closeQuestion(appContext, principal, request.params.id, request.body);
+  });
+
+  // «Подмена» (products package W): the approved swaps on «График», and the decider's take-back before the day.
+  server.get("/api/v1/team/swaps", { schema: routeSchemas.teamSwaps }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireHumanPrincipal(principal);
+    return readTeamSwaps(appContext, principal);
+  });
+
+  server.post("/api/v1/team/questions/:id/swap/revoke", { schema: routeSchemas.teamSwapRevoke }, async (request) => {
+    const principal = await requirePrincipal(request);
+    requireHumanPrincipal(principal);
+    return revokeSwap(appContext, principal, request.params.id);
   });
 }

@@ -34,10 +34,36 @@ export interface TeamQuestionRow {
   answeredAt: Date | null;
   seenAt: Date | null;
   withdrawnAt: Date | null;
+  /** A swap's details (0420); null — any other kind. */
+  swap: TeamQuestionSwap | null;
+}
+
+/** A swap's details as the question keeps them (0420): the day, the pages, the hours (Moscow minutes), who and who for. */
+export interface TeamQuestionSwap {
+  date: string;
+  pageIds: number[];
+  startMinute: number;
+  endMinute: number;
+  absentPersonId: number;
+  coverPersonId: number;
+}
+
+function swapOf(value: unknown): TeamQuestionSwap | null {
+  const raw: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  if (raw === null || typeof raw !== "object") return null;
+  const swap = raw as Record<string, unknown>;
+  return {
+    date: String(swap.date),
+    pageIds: Array.isArray(swap.pageIds) ? swap.pageIds.map(Number) : [],
+    startMinute: Number(swap.startMinute),
+    endMinute: Number(swap.endMinute),
+    absentPersonId: Number(swap.absentPersonId),
+    coverPersonId: Number(swap.coverPersonId),
+  };
 }
 
 const SELECT = sql`select q.id, q.asker_user_id, q.page_id, p.label as page_label, q.model_id, q.fan_platform_user_id, q.fan_name, q.kind, q.text,
-  q.decider_user_id, q.door, q.asked_at, q.state, q.answer, q.answer_text, q.answered_by_user_id, q.answered_at, q.seen_at, q.withdrawn_at
+  q.decider_user_id, q.door, q.asked_at, q.state, q.answer, q.answer_text, q.answered_by_user_id, q.answered_at, q.seen_at, q.withdrawn_at, q.swap
   from team_questions q join pages p on p.id = q.page_id`;
 
 function questionOf(row: Row): TeamQuestionRow {
@@ -61,6 +87,7 @@ function questionOf(row: Row): TeamQuestionRow {
     answeredAt: nullableDate(row.answered_at),
     seenAt: nullableDate(row.seen_at),
     withdrawnAt: nullableDate(row.withdrawn_at),
+    swap: swapOf(row.swap),
   };
 }
 
@@ -69,12 +96,14 @@ export async function insertTeamQuestion(
   input: {
     askerUserId: number; pageId: number; modelId: number | null; fanRef: string | null; fanName: string | null;
     kind: string; text: string; deciderUserId: number | null; door: "workboard" | "extension"; at: Date;
+    swap?: TeamQuestionSwap | null;
   },
 ): Promise<number> {
   const result = await db.execute<Row>(sql`
-    insert into team_questions (asker_user_id, page_id, model_id, fan_platform_user_id, fan_name, kind, text, decider_user_id, door, asked_at)
+    insert into team_questions (asker_user_id, page_id, model_id, fan_platform_user_id, fan_name, kind, text, decider_user_id, door, asked_at, swap)
     values (${input.askerUserId}, ${input.pageId}, ${input.modelId}, ${input.fanRef}, ${input.fanName}, ${input.kind}, ${input.text},
-      ${input.deciderUserId}, ${input.door}, ${input.at.toISOString()}::timestamptz)
+      ${input.deciderUserId}, ${input.door}, ${input.at.toISOString()}::timestamptz,
+      ${input.swap ? JSON.stringify(input.swap) : null}::jsonb)
     returning id`);
   return num(result.rows[0]!.id);
 }
@@ -129,4 +158,25 @@ export async function withdrawTeamQuestion(db: Database, input: { id: number; at
 /** The asker read the answer (once). */
 export async function markTeamQuestionSeen(db: Database, input: { id: number; at: Date }): Promise<void> {
   await db.execute(sql`update team_questions set seen_at = coalesce(seen_at, ${input.at.toISOString()}::timestamptz) where id = ${input.id} and state = 'answered'`);
+}
+
+/**
+ * The approved swaps of days `from`..`to` (Moscow) whose lines are not taken back: «График» and its «Подмена». The day
+ * lines themselves are the registry's (`listPersonDayLineRows`); this names the question they came from.
+ */
+export async function listApprovedSwaps(db: Database, input: { from: string; to: string }): Promise<TeamQuestionRow[]> {
+  const result = await db.execute<Row>(sql`${SELECT}
+    where q.kind = 'swap' and q.answer = 'yes' and q.swap is not null
+      and (q.swap->>'date') between ${input.from} and ${input.to}
+      and exists (select 1 from person_schedule_slots s where s.question_id = q.id and s.revoked_at is null)
+    order by q.swap->>'date', q.id`);
+  return result.rows.map(questionOf);
+}
+
+/** Of these questions, the ones whose swap lines stand (written, not taken back). */
+export async function listStandingSwapQuestionIds(db: Database, questionIds: readonly number[]): Promise<Set<number>> {
+  if (questionIds.length === 0) return new Set();
+  const result = await db.execute<Row>(sql`select distinct question_id from person_schedule_slots
+    where question_id = any(${ids(questionIds)}) and revoked_at is null`);
+  return new Set(result.rows.map((row) => num(row.question_id)));
 }

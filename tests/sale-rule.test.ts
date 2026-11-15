@@ -352,6 +352,33 @@ describe("the owner's answers newer than ledger's Go", () => {
     expectHome(homeOfSale(ofLeft, [evening, night], slots, later), "shift", "ppv_sender_left", whole100(night, 8_000));
   });
 
+  it("reads an approved swap's day: the covering person's slot counts, the absent one's does not, other days and a revoked swap untouched", () => {
+    // 2026-11-12: the night chatter (102) cannot come on page-a; 103 covers 00:00–08:00 there (0420 day lines).
+    const day = { validFrom: "2026-11-12", validTo: "2026-11-12" };
+    const swap = [
+      slot(102, "00:00", "08:00", { pageId: PAGE_A, ...day, day: "off" }),
+      slot(103, "00:00", "08:00", { pageId: PAGE_A, ...day, day: "cover" }),
+    ];
+    const withSwap = [...slots, slot(103, "10:00", "18:00"), ...swap];
+    const evening = shift(101, "2026-11-11 18:00", "2026-11-12 02:10");
+    const night = shift(102, "2026-11-11 23:55", "2026-11-12 08:00");
+    const cover = shift(103, "2026-11-11 23:50", "2026-11-12 08:00");
+    const subscription = sale("subscription", "2026-11-12 01:46", 4_000, evening, night, cover);
+    // The swap's day: the covering person's slot runs on page-a, the absent one's does not.
+    expectHome(homeOfSale(subscription, [evening, night, cover], withSwap, later), "shift", "slot_owner", whole100(cover, 4_000));
+    // A revoked swap is no line any more (listPersonDayLineRows leaves it out): the night chatter's slot is back.
+    expectHome(homeOfSale(subscription, [evening, night, cover], [...slots, slot(103, "10:00", "18:00")], later), "shift", "slot_owner", whole100(night, 4_000));
+    // The day before and the day after: the standing schedule alone.
+    for (const at of ["2026-11-11 01:46", "2026-11-13 01:46"]) {
+      expect(slotRuns(withSwap, { personId: 102, pageId: PAGE_A, at: msk(at) })).toBe(true);
+      expect(slotRuns(withSwap, { personId: 103, pageId: PAGE_A, at: msk(at) })).toBe(false);
+    }
+    // The swap is about page-a only: elsewhere the absent person's slot still runs that night.
+    expect(slotRuns(withSwap, { personId: 102, pageId: 2, at: msk("2026-11-12 01:46") })).toBe(true);
+    // The covering person keeps their own standing lines that day on top of the cover line.
+    expect(slotRuns(withSwap, { personId: 103, pageId: PAGE_A, at: msk("2026-11-12 12:00") })).toBe(true);
+  });
+
   it("keeps the owner's split and the marks for a junction the slot does not settle", () => {
     const a = shift(101, "2026-11-05 09:00", "2026-11-05 13:00");
     const b = shift(102, "2026-11-05 10:30", "2026-11-05 14:00");
@@ -421,7 +448,7 @@ describe("the people registry's slots and leaving", () => {
 
   it("gives a person's slot to every login of theirs, and none to a person with no login", () => {
     const row = (id: number, personId: number, extra: Partial<PersonScheduleSlotRow> = {}): PersonScheduleSlotRow => ({
-      id, personId, pageId: null, pageLabel: null, startMinute: 1080, endMinute: 0, weekdays: null, validFrom: null, validTo: null, ...extra,
+      id, personId, pageId: null, pageLabel: null, startMinute: 1080, endMinute: 0, weekdays: null, validFrom: null, validTo: null, kind: null, questionId: null, ...extra,
     });
     const slots = [
       row(1, 7, { weekdays: ["mon", "sat"] }),

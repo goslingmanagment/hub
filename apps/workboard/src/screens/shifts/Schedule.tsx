@@ -1,20 +1,26 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { Link } from "react-router";
+import { useQuery } from "@tanstack/react-query";
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
-import { Card, EmptyState, ErrorState, Person, PageLabels, SkeletonText } from "@agency_hub_core/ui";
+import { Button, Card, EmptyState, ErrorState, Person, PageLabels, SkeletonText } from "@agency_hub_core/ui";
 import { formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { slotWords } from "@agency_hub_core/ui/people/words";
+import { kernel } from "@/shared/hub";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { ShiftsTabs } from "@/shared/ShiftsTabs";
 import { useMe } from "@/shared/useMe";
 import { useTeamPeople } from "../team/teamPeople";
 import { useToday } from "../today/data";
+import { AskModal, type AskStart } from "../waiting/Questions";
 import "./shifts.css";
 
 /**
  * «Смены → График» (products plan §2.3, package W): the standing schedule of the viewer's teams, read — each team
  * (a model) with its people, their slot by Moscow time and the pages it is for, on a day's strip; for whoever leads,
- * the hours of the next three days no slot covers (`workboardToday`). The schedule is the people registry's (the
- * «whose sale» rule reads the same slots); the owner changes it on the person's card. Hub cuts the people to the teams.
+ * the hours of the next three days no slot covers (`workboardToday`); the approved swaps of the days ahead («подмена:
+ * не выйдет Алекс, выйдет Оля», `teamSwaps`). The schedule is the people registry's (the «whose sale» rule reads the same slots); the
+ * owner changes the standing one on the person's card. «Попросить подмену» on one's own slot (a lead on any of the team's)
+ * and «Предложить сетку» (a lead, to the owner) are questions (products plan §4.6). Hub cuts the people to the teams.
  */
 
 type TeamPerson = KernelOperationResponse<"teamPeople">["people"][number];
@@ -80,7 +86,12 @@ function SlotLine({ slot }: { slot: Slot }) {
 export function ScheduleScreen() {
   const people = useTeamPeople();
   const today = useToday();
-  const { role } = useMe();
+  const { role, leadsTeam, isOwner, user } = useMe();
+  const swaps = useQuery({ queryKey: ["team-swaps"], queryFn: () => kernel.teamSwaps(), staleTime: 60_000 });
+  const [asking, setAsking] = useState<AskStart | null>(null);
+  const meCode = (people.data?.people ?? []).find((person) => person.logins.some((login) => login.userId === user?.id))?.code ?? null;
+  // A lead asks a swap for anyone of the team; anyone else for their own slot. The owner decides, he does not ask.
+  const mayAskFor = (code: string) => !isOwner && (code === meCode || leadsTeam);
   const teams = useMemo(() => teamsOf(people.data?.people ?? []), [people.data]);
   const gapsOf = (name: string) => today.data?.team?.teams.find((team) => team.name === name) ?? null;
 
@@ -96,8 +107,18 @@ export function ScheduleScreen() {
   } else {
     body = teams.map((team) => {
       const lead = gapsOf(team.name);
+      const teamPages = new Set(team.people.flatMap((one) => one.pages));
+      const ofTeam = (swaps.data?.swaps ?? []).filter((swap) => swap.pages.some((page) => teamPages.has(page)));
       return (
-        <Card key={team.slug} title={team.name} padding="none" className="sched-team">
+        <Card
+          key={team.slug}
+          title={team.name}
+          padding="none"
+          className="sched-team"
+          actions={leadsTeam && !isOwner ? (
+            <Button size="sm" variant="ghost" onClick={() => setAsking({ kind: "schedule", pageLabel: [...teamPages][0]! })}>Предложить сетку</Button>
+          ) : undefined}
+        >
           <ul className="sched-rows">
             <li className="sched-row sched-row--head" aria-hidden>
               <span />
@@ -109,11 +130,38 @@ export function ScheduleScreen() {
                 <span className="sched-row__who"><Person name={person.displayName} hint={<PageLabels labels={pages} />} /></span>
                 <span className="sched-row__slots">
                   {slots.length === 0 ? <span className="ui-muted">графика нет</span> : slots.map((slot) => <SlotLine key={slot.id} slot={slot} />)}
+                  {slots.length > 0 && mayAskFor(person.code) && (
+                    <button
+                      type="button"
+                      className="wt-link sched-row__ask"
+                      onClick={() => setAsking({
+                        kind: "swap",
+                        swap: {
+                          pageLabels: pages, start: slots[0]!.start, end: slots[0]!.end,
+                          ...(person.code === meCode ? {} : { absentPersonCode: person.code, absentName: person.displayName }),
+                        },
+                      })}
+                    >
+                      Попросить подмену
+                    </button>
+                  )}
                 </span>
                 <Strip slots={slots} />
               </li>
             ))}
           </ul>
+          {ofTeam.length > 0 && (
+            <ul className="sched-swaps">
+              {ofTeam.map((swap) => (
+                <li key={swap.questionId}>
+                  <Link className="wt-link" to={`/waiting?question=${swap.questionId}#asks`}>
+                    подмена: не выйдет {swap.absent.name}, выйдет {swap.cover.name}
+                  </Link>
+                  <span className="ui-muted"> · {formatWeekdayDay(`${swap.date}T12:00:00+03:00`)} {swap.start}–{swap.end} · {swap.pages.join(", ")}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           {lead !== null && !lead.noSchedule && (
             <p className="sched-gaps">
               {lead.gaps.length === 0 ? "Следующие три дня все часы закрыты."
@@ -132,6 +180,7 @@ export function ScheduleScreen() {
         <ShiftsTabs />
         {body}
       </div>
+      {asking && <AskModal start={asking} onClose={() => setAsking(null)} />}
     </>
   );
 }

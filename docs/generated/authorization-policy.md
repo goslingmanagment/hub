@@ -26,7 +26,11 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 84 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
+<<<<<<< HEAD
 ## Routes (541)
+=======
+## Routes (540)
+>>>>>>> b76fd37b5 («Подмена» and «Предложить сетку» as questions; an approved swap is the registry's one-day lines the rule reads)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -551,6 +555,7 @@ A full device token is not affected.
 | POST | `/api/v1/team/questions` | `teamQuestionAsk` | `any-session` | — | — | no |
 | POST | `/api/v1/team/questions/:id/answer` | `teamQuestionAnswer` | `any-session` | — | — | no |
 | POST | `/api/v1/team/questions/:id/close` | `teamQuestionClose` | `any-session` | — | — | no |
+| POST | `/api/v1/team/questions/:id/swap/revoke` | `teamSwapRevoke` | `any-session` | — | — | no |
 | GET | `/api/v1/team/review-notes` | `reviewNotes` | `any-session` | — | — | no |
 | POST | `/api/v1/team/review-notes` | `reviewNoteAdd` | `any-session` | — | — | no |
 | GET | `/api/v1/team/roles` | `teamRoles` | `any-session` | — | — | no |
@@ -561,6 +566,7 @@ A full device token is not affected.
 | GET | `/api/v1/team/shift-review` | `teamShiftReview` | `any-session` | — | — | no |
 | GET | `/api/v1/team/shift-sales` | `teamShiftSales` | `any-session` | — | — | no |
 | GET | `/api/v1/team/shifts` | `teamShifts` | `any-session` | — | — | no |
+| GET | `/api/v1/team/swaps` | `teamSwaps` | `any-session` | — | — | no |
 | GET | `/api/v1/team/win-back/approaches` | `teamWinBackApproaches` | `owner-session` | — | — | no |
 | POST | `/api/v1/team/win-back/approaches` | `teamWinBackApproachSave` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/win-back/results` | `teamWinBackResults` | `any-session` | — | — | no |
