@@ -7,7 +7,7 @@ import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN } from "../packages/ui/src/sites.ts
 
 /** Each product's menu from the one table (products plan §2.2–2.3): who sees which item, where it leads, what an address lights. */
 
-const items = (product: "hub" | "workboard", role: string, holds: { newcomer?: boolean; leads?: boolean; money?: boolean } = {}) => {
+const items = (product: "hub" | "workboard", role: string, holds: { newcomer?: boolean; leads?: boolean; money?: boolean; learn?: boolean } = {}) => {
   const menu = productMenu(product, role, holds);
   return [...menu.upper, ...menu.lower];
 };

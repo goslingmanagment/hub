@@ -95,6 +95,9 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "teamQuestions",
   "teamQuestionAsk",
   "teamQuestionClose",
+  // «Обучение» (products plan §2.3): the approved pages, read.
+  "learnPages",
+  "learnPage",
   "teamEmptyHours",
   "teamGreetings",
   "teamWinBackResults",
@@ -146,6 +149,8 @@ export const NARROW_WEB_SESSION_PASSWORD_ONLY = [
   "createFanNote",
   // A question's answer is a decision (products plan §4.6).
   "teamQuestionAnswer",
+  // «Обучение»: the owner's approval of a page for the team.
+  "learnPageApprove",
 ] as const satisfies readonly KernelOperationKey[];
 
 /** Whether a narrow web session may call the route with this key. */
