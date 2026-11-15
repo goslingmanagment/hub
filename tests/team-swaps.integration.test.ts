@@ -206,6 +206,32 @@ describe("«Подмена»: a question whose «Можно» writes the day's l
     expect(free.statusCode, free.body).toBe(200);
   });
 
+  it("compares real hours across midnight: the next day's hours inside a swap past midnight are refused, touching ones are not", async (context) => {
+    if (!testDb) return context.skip();
+    const first = moscowDay(Date.now() + 5 * DAY_MS);
+    const next = moscowDay(Date.now() + 6 * DAY_MS);
+    const ask = (who: string, body: object) => as(who, "POST", "/api/v1/team/questions", { pageLabel: "alfa-1", kind: "swap", text: "Не выйду", swap: body });
+    // Anna off 22:00–02:00 (Carl covers), approved.
+    const night = await ask("anna", { date: first, pageLabels: ["alfa-1"], start: "22:00", end: "02:00", coverPersonCode: "carl" });
+    expect(night.statusCode, night.body).toBe(200);
+    const nightId = teamQuestionWriteResponseSchema.parse(night.json()).question.id;
+    // An open ask of the next day inside its hours is refused too, before and after «Можно».
+    const asked = await ask("anna", { date: next, pageLabels: ["alfa-1"], start: "01:00", end: "03:00", coverPersonCode: "lena" });
+    expect(asked.statusCode, asked.body).toBe(409);
+    expect(asked.json()).toMatchObject({ reason: "swap_asked" });
+    expect((await as("lena", "POST", `/api/v1/team/questions/${nightId}/answer`, { answer: "yes" })).statusCode).toBe(200);
+    const taken = await ask("anna", { date: next, pageLabels: ["alfa-1"], start: "01:00", end: "03:00", coverPersonCode: "lena" });
+    expect(taken.statusCode, taken.body).toBe(409);
+    expect(taken.json()).toMatchObject({ reason: "swap_taken" });
+    // Anna is off until 02:00 of the next day: she covers nobody at 01:00 then.
+    const offCover = await ask("carl", { date: next, pageLabels: ["alfa-1"], start: "00:30", end: "01:30", coverPersonCode: "anna" });
+    expect(offCover.statusCode, offCover.body).toBe(409);
+    expect(offCover.json()).toMatchObject({ reason: "swap_cover_off" });
+    // Touching, not overlapping: from 02:00 the hours are free.
+    const touching = await ask("anna", { date: next, pageLabels: ["alfa-1"], start: "02:00", end: "06:00", coverPersonCode: "lena" });
+    expect(touching.statusCode, touching.body).toBe(200);
+  });
+
   it("sends a lead's «Предложить сетку» to the owner", async (context) => {
     if (!testDb) return context.skip();
     const asked = await as("lena", "POST", "/api/v1/team/questions", { pageLabel: "alfa-1", kind: "schedule", text: "Анна с понедельника 18:00–02:00" });
