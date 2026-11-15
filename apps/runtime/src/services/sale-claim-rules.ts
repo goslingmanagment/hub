@@ -120,7 +120,9 @@ export function deriveClaims(reports: readonly ReportView[]): DerivedClaim[] {
       const sides = new Map<number, number | null>();
       if (line.rule.toUserId !== null && line.rule.toUserId !== report.userId) sides.set(line.rule.toUserId, null);
       if (line.rule.home === "waiting" && line.rule.senderUserId !== null && line.rule.senderUserId !== report.userId) sides.set(line.rule.senderUserId, null);
-      for (const other of others) sides.set(other.report.userId, other.report.shiftId);
+      // A colleague whose report counts the sale; one who only claims it too (a disputed «моё», counting nothing) holds
+      // nothing to give: two takers are never asked of each other — one settlement per sale, with whoever holds it.
+      for (const other of others) if (other.line.amountMills > 0) sides.set(other.report.userId, other.report.shiftId);
       for (const [userId, known] of sides) {
         const shiftId = known ?? others.find((one) => one.report.userId === userId)?.report.shiftId ?? null;
         out.push({ ...base(report, line), kind: "claim", statement: "mine", shareWithUserId: null, sideUserId: userId, sideShiftId: shiftId });
@@ -139,8 +141,8 @@ export function deriveClaims(reports: readonly ReportView[]): DerivedClaim[] {
       for (let earlier = 0; earlier < later; earlier += 1) {
         const a = ordered[later]!;
         const b = ordered[earlier]!;
+        // Settled lines too: two settlements that each gave the whole sale count it twice (one per sale, sale-claims.ts).
         if (a.report.userId === b.report.userId || pairs.has(pairKey(sale, a.report.userId, b.report.userId))) continue;
-        if (a.line.settled !== undefined && b.line.settled !== undefined) continue;
         pairs.add(pairKey(sale, a.report.userId, b.report.userId));
         out.push({ ...base(a.report, a.line), kind: "double", statement: null, shareWithUserId: null, sideUserId: b.report.userId, sideShiftId: b.report.shiftId });
       }
@@ -191,6 +193,13 @@ export function ruleMarksOf(input: { reports: readonly ReportView[]; claims: rea
     marks.set(mark.userId, mark);
     bySale.set(sale, marks);
   };
+  // A question still open — asked of the other side, or waiting for the decider — decides nothing: the one who asked
+  // says «моё» / «делим», and until the answer or the decision that word is no confirmed mark (the owner's rule «спорная
+  // строка ждёт отдельно»; sale-rule.ts `RuleMark.confirmed`). Else a «стык смен» would go to the asker at once.
+  const open = new Set(input.claims
+    .filter((claim) => claim.kind === "claim" && claim.transactionId !== null && claim.claimantUserId !== null && (claim.state === "asked" || claim.state === "owner"))
+    .map((claim) => `${claim.transactionId}:${claim.claimantUserId}`));
+  const waits = (sale: number, userId: number) => open.has(`${sale}:${userId}`);
   // «Отдал Олегу» (R-board §3): the giver's «не моё» and the colleague's «моё», settled at once in his favour — the rule's
   // own marks, never around it — unless the colleague's own report says otherwise: his word, written after this pass of
   // gifts, wins («Олег не взял»: his «не моё», and the sale is nobody's). «В общак»: the giver's «не моё»; whether it
@@ -208,16 +217,20 @@ export function ruleMarksOf(input: { reports: readonly ReportView[]; claims: rea
         put(line.transactionId, { userId: report.userId, mark: "not_mine", shareWith: null, ownAmountMills: null, confirmed: true });
         continue;
       }
+      const claims = line.statement === "mine" || line.statement === "share";
       put(line.transactionId, {
-        userId: report.userId, mark: line.statement, shareWith: line.statement === "share" ? line.shareWithUserId : null, ownAmountMills: null, confirmed: true,
+        userId: report.userId, mark: line.statement, shareWith: line.statement === "share" ? line.shareWithUserId : null, ownAmountMills: null,
+        confirmed: !(claims && waits(line.transactionId, report.userId)),
       });
     }
   }
   for (const claim of input.claims) {
     if (claim.kind !== "claim" || claim.transactionId === null || claim.claimantUserId === null || claim.statement === null) continue;
-    if (claim.state === "withdrawn") continue;
+    if (claim.state === "withdrawn" || claim.state === "decided") continue;
+    // Open: the asker's word is there (from the draft too), unconfirmed — it decides nothing until answered or decided.
     put(claim.transactionId, {
-      userId: claim.claimantUserId, mark: claim.statement, shareWith: claim.statement === "share" ? claim.shareWithUserId : null, ownAmountMills: null, confirmed: true,
+      userId: claim.claimantUserId, mark: claim.statement, shareWith: claim.statement === "share" ? claim.shareWithUserId : null, ownAmountMills: null,
+      confirmed: claim.state === "agreed",
     });
     if (claim.answer === "agree" && claim.sideUserId !== null) {
       put(claim.transactionId, claim.statement === "share"

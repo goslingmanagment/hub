@@ -164,6 +164,40 @@ describe("the people's words and the owner's decisions as the rule's inputs", ()
     expect(marks.get(9)).toEqual([said(102, "not_mine")]);
   });
 
+  it("keeps an open question's word unconfirmed: a «стык смен» goes to nobody while it waits, to the asker once decided (third reader, 3)", () => {
+    const left = work(101, "2026-11-05 12:00", "2026-11-05 20:00");
+    const right = work(102, "2026-11-05 12:00", "2026-11-05 20:00");
+    const junction = sale("2026-11-05 16:00", 4_000, [left, right]);
+    const asked: ClaimView = { kind: "claim", transactionId: 7, claimantUserId: 101, claimantHandinId: 1, sideUserId: null, statement: "mine", shareWithUserId: null, state: "owner", answer: null };
+    // From the draft (no report yet) and from the version it was handed in with: the word decides nothing.
+    for (const reports of [[], [report(101, 1, "2026-11-05 22:00", [line(7, { statement: "mine", disputed: true })])]]) {
+      const marks = ruleMarksOf({ reports, claims: [asked] }).get(7) ?? [];
+      expect(marks).toEqual([{ ...said(101, "mine"), confirmed: false }]);
+      expect(homeOfSale({ ...junction, marks }, [left, right], [], later).kind).toBe("decide");
+    }
+    // Agreed, the word is the asker's.
+    expect(ruleMarksOf({ reports: [], claims: [{ ...asked, state: "agreed" }] }).get(7)).toEqual([said(101, "mine")]);
+  });
+
+  it("asks two people who take one sale of whoever holds it, never of each other (third reader, 4)", () => {
+    const taken = { statement: "mine" as const, amountMills: 0, disputed: true, claimedMills: 36_000, rule: { home: "shift", reason: "holder", shareMills: 0, toUserId: 103, senderUserId: null } };
+    const claims = deriveClaims([
+      report(103, 3, "2026-11-05 21:00", [line(9, { group: "mine", amountMills: 36_000, rule: { home: "shift", reason: "holder", shareMills: 36_000, toUserId: null, senderUserId: null } })]),
+      report(101, 1, "2026-11-05 22:00", [line(9, taken)]),
+      report(102, 2, "2026-11-05 23:00", [line(9, taken)]),
+    ]);
+    expect(claims.map((claim) => [claim.kind, claim.claimantUserId, claim.sideUserId])).toEqual([["claim", 101, 103], ["claim", 102, 103]]);
+  });
+
+  it("counts two settled lines that each give the whole sale as a double (third reader, 4)", () => {
+    const settled = { group: "mine" as const, amountMills: 36_000, settled: "agreed" as const, rule: { home: "shift", reason: "holder", shareMills: 0, toUserId: 103, senderUserId: null } };
+    const claims = deriveClaims([
+      report(101, 1, "2026-11-05 22:00", [line(9, settled)]),
+      report(102, 2, "2026-11-06 02:00", [line(9, settled)]),
+    ]);
+    expect(claims.map((claim) => [claim.kind, claim.claimantUserId, claim.sideUserId])).toEqual([["double", 102, 101]]);
+  });
+
   it("reads a whole sale given on a nobody's sale as the owner's claim, any other as his split", () => {
     expect(ruleDecisionOf({ kind: "split", shares: [{ userId: 101, percent: 100 }], pot: null, ruleHome: "nobody" })).toMatchObject({ claimedBy: 101, resolution: null });
     expect(ruleDecisionOf({ kind: "split", shares: [{ userId: 101, percent: 100 }], pot: null, ruleHome: "shift" })).toMatchObject({ claimedBy: null, resolution: [{ userId: 101, percent: 100 }] });

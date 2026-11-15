@@ -173,6 +173,13 @@ export async function runHubChecks(app: CheckApp, now: Date): Promise<number> {
   return touched;
 }
 
+/** Hub's check of one report's open candidate now (a read of its board in «Проверка»), as the pass does it. */
+export async function checkReportNow(app: CheckApp, input: { handinId: number; shiftId: number; catalog: PageCatalog }, now: Date): Promise<boolean> {
+  const candidate = (await listHandinCandidates(app.db, input.handinId)).filter((one) => one.supersededAt === null && one.hubCheckedAt === null).at(-1);
+  if (candidate === undefined) return false;
+  return checkCandidate(app, { candidateId: candidate.id, handinId: input.handinId, shiftId: input.shiftId, catalog: input.catalog }, now);
+}
+
 async function checkCandidate(app: CheckApp, input: { candidateId: number; handinId: number; shiftId: number; catalog: PageCatalog }, now: Date): Promise<boolean> {
   const { db } = app;
   const candidate = (await listHandinCandidates(db, input.handinId)).find((one) => one.id === input.candidateId);
@@ -335,17 +342,23 @@ export async function syncCheckMatters(app: CheckApp, now: Date): Promise<number
       evidence: { transactionId: one.transactionId, shiftId: one.shiftId, netMills: one.netMills }, link: `/workboard/waiting?dispute=${one.transactionId}#questions`,
     });
   }
+  const catalog = await pageCatalog(db);
   for (const one of await listHandinsPostCopiedBehind(db)) {
     const versions = await listHandinVersions(db, one.handinId);
     const copied = versions.find((version) => version.version === one.copied);
     const current = versions.at(-1);
-    if (copied === undefined || current === undefined || !postPagesDiffer(copied.pages, current.pages)) continue;
+    if (copied === undefined || current === undefined) continue;
+    // One model's post (0427): its own pages only; a copy kept before 0427 — the whole report's.
+    const ofModel = <T extends { pageLabel: string }>(list: readonly T[]) => (one.modelSlug === null ? [...list] : list.filter((page) => catalog.info.get(page.pageLabel)?.modelSlug === one.modelSlug));
+    if (!postPagesDiffer(ofModel(copied.pages), ofModel(current.pages))) continue;
+    const modelName = one.modelSlug === null ? null : [...catalog.info.values()].find((info) => info.modelSlug === one.modelSlug)?.modelName ?? one.modelSlug;
     await open({
-      key: `${POST_CHANGED_KIND}:${one.handinId}`, kind: POST_CHANGED_KIND, source: "server",
-      title: "Пост изменился. Исправьте прежний пост в «Отчётности», новый не пишите",
+      key: one.modelSlug === null ? `${POST_CHANGED_KIND}:${one.handinId}` : `${POST_CHANGED_KIND}:${one.handinId}:${one.modelSlug}`, kind: POST_CHANGED_KIND, source: "server",
+      title: `Пост${modelName === null ? "" : ` (${modelName})`} изменился. Исправьте прежний пост в «Отчётности», новый не пишите`,
       object: { type: "shift", id: String(one.shiftId) },
-      pageIds: current.pages.map((page) => pages.idOf.get(page.pageLabel)).filter((id): id is number => id !== undefined),
-      owner: { userId: one.userId }, money: false, evidence: { shiftId: one.shiftId, copied: one.copied, current: one.current }, link: `/workboard/report/${one.shiftId}`,
+      pageIds: ofModel(current.pages).map((page) => pages.idOf.get(page.pageLabel)).filter((id): id is number => id !== undefined),
+      owner: { userId: one.userId }, money: false, evidence: { shiftId: one.shiftId, copied: one.copied, current: one.current, modelSlug: one.modelSlug },
+      link: `/workboard/report/${one.shiftId}`,
     });
   }
   for (const matter of await listOpenMattersOfKinds(db, [SIGHTING_UNMATCHED_KIND, POT_OFFER_KIND, POST_CHANGED_KIND])) {

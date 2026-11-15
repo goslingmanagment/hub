@@ -31,6 +31,7 @@ import {
   listHandinOtherReports,
   listHandinRenewals,
   listHandinMarks,
+  listHandinPostCopies,
   listHandinNames,
   listHandinPeopleOfUsers,
   listHandinSaleFans,
@@ -83,9 +84,9 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import { ledgerGet, readLedgerPayouts } from "./ledger-payouts.ts";
 import { parseLedgerReportDays } from "./ledger-reports.ts";
 import { pagesWithLines, reportSums, settledShareOf } from "./sale-claim-rules.ts";
-import { claimsOfReport, runSaleClaims } from "./sale-claims.ts";
-import { syncCheckMatters } from "./shift-handin-check.ts";
-import { handInShiftReport, PhaseConflictError } from "./shift-report-board.ts";
+import { claimsOfReport, runSaleClaims, settleDueSilences } from "./sale-claims.ts";
+import { checkReportNow, syncCheckMatters } from "./shift-handin-check.ts";
+import { handInShiftReport, moveWhenDue, PhaseConflictError } from "./shift-report-board.ts";
 import { boardOn, phaseOf, readBoard } from "./shift-report-board-view.ts";
 import { SALE_RULE, slotRuns, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { computeSaleHomes, registrySlots, ruleWorksOf } from "./sale-homes.ts";
@@ -255,6 +256,11 @@ export interface DraftFacts {
   senders: Map<number, number>;
   /** What a sale the owner decided or the sides agreed on gives the person, by transaction (review R2-a). */
   settled: Map<number, { amountMills: number; settled: "owner" | "agreed" }>;
+  /**
+   * The person's own «моё» still open — asked of a colleague or waiting for the decider (a card of Gengar they said «Не
+   * согласен» to): the sale waits, counting nothing here until answered or decided («спорная строка ждёт отдельно»).
+   */
+  waiting?: Set<number>;
 }
 
 /** The shift's own work among the rule's works: the person's shift that ran with it the longest. */
@@ -437,6 +443,9 @@ export async function draftFacts(
   const saleIds = classified.map((one) => one.sale.transactionId);
   const decisions = await listActiveSaleDecisions(db, saleIds);
   const agreed = await listSaleClaims(db, { transactionIds: saleIds, states: ["agreed"] });
+  const waiting = new Set(handin === null ? [] : (await listSaleClaims(db, { transactionIds: saleIds, states: ["asked", "owner"] }))
+    .filter((claim) => claim.kind === "claim" && claim.claimantHandinId === handin.id && claim.statement === "mine" && claim.transactionId !== null)
+    .map((claim) => claim.transactionId!));
   const settled = new Map<number, { amountMills: number; settled: "owner" | "agreed" }>();
   for (const one of classified) {
     const id = one.sale.transactionId;
@@ -454,6 +463,7 @@ export async function draftFacts(
     works: new Map(works.map((work) => [work.ref, { userId: work.userId, kind: work.kind }])),
     senders,
     settled,
+    waiting,
   };
 }
 
@@ -557,7 +567,7 @@ async function lineDetails(db: Database, subject: Subject, facts: DraftFacts, ca
  * sides agreed on counts what that gives the person (`facts.settled`), settled and not disputed, whatever the word.
  * Pure.
  */
-export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & Partial<Pick<DraftFacts, "settled">>, marks: readonly HandinMarkRow[]): HandinVersionLine[] {
+export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & Partial<Pick<DraftFacts, "settled" | "waiting">>, marks: readonly HandinMarkRow[]): HandinVersionLine[] {
   const markOf = new Map(marks.map((mark) => [mark.transactionId, mark]));
   return facts.classified.map((one) => {
     const mark = markOf.get(one.sale.transactionId);
@@ -572,7 +582,10 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & P
     // person holding it still counts it there, not here.
     const given = facts.settled?.get(one.sale.transactionId) ?? null;
     const settled = given !== null && one.alreadyIn === null && (statement !== null || plain.amountMills > 0 || given.amountMills > 0) ? given : null;
-    const { amountMills, disputed } = settled === null ? plain : { amountMills: settled.amountMills, disputed: false };
+    // The person's own «моё» still open (`facts.waiting`): it waits, counting nothing, and says what it claims.
+    const waits = settled === null && plain.amountMills > 0 && facts.waiting?.has(one.sale.transactionId) === true;
+    if (waits) plain.claimedMills = plain.amountMills;
+    const { amountMills, disputed } = settled !== null ? { amountMills: settled.amountMills, disputed: false } : waits ? { amountMills: 0, disputed: true } : plain;
     return {
       transactionId: one.sale.transactionId,
       offPlatformId: null,
@@ -785,7 +798,7 @@ function versionSummary(version: HandinVersionRow, names: Map<number, string>, k
 
 /** The newest version as today's posts in «Отчётность». */
 function postsOf(version: HandinVersionRow, subject: Subject, handin: HandinRow, context: ViewContext): ShiftReportResponse["posts"] {
-  return modelPostsOf(version, subject, handin, context).map((post) => ({ modelName: post.modelName, text: post.text }));
+  return modelPostsOf(version, subject, handin, context).map((post) => ({ modelSlug: post.modelSlug, modelName: post.modelName, text: post.text }));
 }
 
 /**
@@ -854,11 +867,29 @@ export async function readHandinVersionPosts(
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
+/** What is due on a report by now, done before it is read; a failure is logged and the pass does it later. */
+async function dueNow(app: HandinApp, input: { handin: HandinRow; subject: Subject; catalog: PageCatalog }, now: Date): Promise<void> {
+  const { handin, subject, catalog } = input;
+  const logged = (what: string) => (error: unknown) => {
+    app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, `shift report: ${what} on read failed; the pass will`);
+    return false;
+  };
+  if (phaseOf(handin) === "checking") {
+    await checkReportNow(app, { handinId: handin.id, shiftId: subject.shift.id, catalog }, now).catch(logged("Hub's check"));
+    await moveWhenDue(app.db, { shiftId: subject.shift.id, catalog }, now).catch(logged("the move to «Подтвердите»"));
+  }
+  await settleDueSilences(app, { handinId: handin.id, userIds: subject.userIds }, now).catch(logged("a day of silence"));
+}
+
 export async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject, now: Date, options: { withPost?: boolean } = {}): Promise<ShiftReportResponse> {
   const { db } = app;
   const catalog = await pageCatalog(db);
   const access = accessOf(actor, subject, catalog);
-  const handin = await findHandinByShift(db, subject.shift.id);
+  // What is due by now happens before the board is drawn (the pass is only the backstop): Hub's check of a report in
+  // «Проверка», its move to «Подтвердите» when Gengar's 10 minutes are up, a day of silence on its questions.
+  const found = await findHandinByShift(db, subject.shift.id);
+  if (found !== null) await dueNow(app, { handin: found, subject, catalog }, now);
+  const handin = found === null ? null : await findHandinByShift(db, subject.shift.id);
   const versions = handin === null ? [] : await listHandinVersions(db, handin.id);
   const latest = versions.at(-1) ?? null;
   const own = access.access === "own";
@@ -882,6 +913,7 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
   const details = facts === null ? new Map<number, ShiftReportLineFacts>() : await lineDetails(db, subject, facts, catalog);
   const context: ViewContext = { details, catalog, names, fans };
   const keyNames = await listHandinAgentKeyNames(db, versions.flatMap((version) => (version.agentKeyId === null ? [] : [version.agentKeyId])));
+  const posts = own && latest !== null && handin !== null ? postsOf(latest, subject, handin, context) : [];
 
   let view: ShiftReportBody | null = null;
   if (own || (latest === null && access.draftPreview)) {
@@ -941,12 +973,14 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
     versions: [...versions].reverse().map((version) => versionSummary(version, names, keyNames, access.cutTo)),
     view,
     afterSubmission,
-    posts: own && latest !== null && handin !== null ? postsOf(latest, subject, handin, context) : [],
+    posts,
     colleagues,
     claims,
     boardShift: boardOn(subject),
     board: await readBoard({
       db, subject, catalog, cutTo: access.cutTo, draftPreview: access.draftPreview, handin, versions, draft, now,
+      posts: posts.map((post) => ({ modelSlug: post.modelSlug, modelName: post.modelName })),
+      postCopies: handin === null ? [] : await listHandinPostCopies(db, handin.id),
       // Asked only once the post was copied: before that there is nothing for the ledger to have seen.
       postSeen: options.withPost === true && own && latest !== null && handin?.postCopiedAt != null ? await postSeenOf(app, subject, versionReportDate(latest, handin)) : null,
       actor: { access: access.access, kind: actor.kind, enabled: subject.enabled },

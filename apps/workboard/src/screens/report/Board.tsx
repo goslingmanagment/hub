@@ -63,7 +63,8 @@ export interface BoardActions {
   show: (key: string) => void;
   commitNote: () => Promise<void>;
   openNote: (key: string, draft?: string) => void;
-  copyPost: () => void;
+  /** «Скопировать пост» of one model: only that model's text, never the posts joined («Отчётность» reads one model a post). */
+  copyPost: (modelSlug: string) => void;
   collapse: () => void;
   confirm: (candidateId: number) => Promise<void>;
 }
@@ -254,16 +255,17 @@ export function ReportBoard({ report, host, transport, light }: {
     setEdit({ key, draft: draft ?? (row.note?.text ?? agentNote(row) ?? "") });
   }, [board]);
 
-  const copyPost = useCallback(() => {
-    const text = report.posts.map((post) => post.text).join("\n\n");
-    if (text === "") {
+  const copyPost = useCallback((modelSlug: string) => {
+    const post = report.posts.find((one) => one.modelSlug === modelSlug) ?? null;
+    const text = post?.text ?? "";
+    if (post === null || text === "") {
       toast("Поста пока нет: он появится, когда отчёт учтён");
       return;
     }
     const ok = () => {
-      toast("Пост скопирован, вставьте его в «Отчётность»");
-      // Hub remembers the copy; its failure changes nothing the person sees.
-      write.mutateAsync({ op: "postCopied" }).catch(() => {});
+      toast(report.posts.length > 1 ? `Пост ${post.modelName} скопирован, вставьте его в «Отчётность»` : "Пост скопирован, вставьте его в «Отчётность»");
+      // Hub remembers the copy of this model's post; its failure changes nothing the person sees.
+      write.mutateAsync({ op: "postCopied", model: modelSlug }).catch(() => {});
     };
     if (transport) {
       void transport.copy(text).then((done) => (done ? ok() : copyHere(text).then((here) => (here ? ok() : toast("Не получилось скопировать: браузер не дал доступ к буферу")))));
@@ -351,7 +353,7 @@ export function ReportBoard({ report, host, transport, light }: {
     }
     const to = ask.choice.ask;
     const ok = await run({ op: "ask", transactionId: row.transactionId, statement: to.statement, shareWithUserId: to.shareWithUserId, note: text },
-      to.to === "owner" ? `Вопрос ушёл ${board.decider.kind === "team_lead" && board.decider.user ? board.decider.user.forms.dat : "владельцу"}` : `Вопрос ушёл ${to.forms?.dat ?? ""}`);
+      to.to === "owner" ? `Вопрос ушёл ${(row.decider ?? board.decider).kind === "team_lead" && (row.decider ?? board.decider).user ? (row.decider ?? board.decider).user!.forms.dat : "владельцу"}` : `Вопрос ушёл ${to.forms?.dat ?? ""}`);
     if (ok) setAsk(null);
   };
 
@@ -484,7 +486,7 @@ export function ReportBoard({ report, host, transport, light }: {
     if (miss !== null && miss.key === row.key) parts.push(<div className="miss" key="miss">{miss.words}</div>);
     if (ask?.key === row.key) {
       const to = ask.choice.ask;
-      const decider = board.decider.kind === "team_lead" && board.decider.user ? board.decider.user.forms : null;
+      const decider = (row.decider ?? board.decider).kind === "team_lead" && (row.decider ?? board.decider).user ? (row.decider ?? board.decider).user!.forms : null;
       const whom = to === null ? "" : to.to === "owner" ? decider?.acc ?? "владельца" : to.forms?.acc ?? "";
       // The server's own words when it sends the question straight to the decider («Олег сдаёт смену по-старому, решит владелец»).
       const hint = to === null ? "Спрашивать некого: продажа станет вашей сразу."
@@ -522,7 +524,7 @@ export function ReportBoard({ report, host, transport, light }: {
       const who = asked.toUser;
       parts.push(
         <div className="u" key="disputed">
-          <span className="t">{who ? `${who.forms.nom} не согласен. Спор решит ${board.decider.words}, до его ответа продажа ${who.forms.gen}.` : `Спор решит ${board.decider.words}.`}</span>
+          <span className="t">{who ? `${who.forms.nom} не согласен. Спор решит ${(row.decider ?? board.decider).words}, до его ответа продажа ${who.forms.gen}.` : `Спор решит ${(row.decider ?? board.decider).words}.`}</span>
         </div>,
       );
     }
@@ -539,14 +541,14 @@ export function ReportBoard({ report, host, transport, light }: {
                 <button type="button" className="btn btn--line btn--xs" disabled={write.isPending}
                   onClick={() => void run({ op: "claim", claimId, answer: "agree" }, claim.statement === "share" ? "Продажа теперь пополам" : `Продажа теперь ${claim.from.forms.gen}`)}>Согласен</button>
                 <button type="button" className="btn btn--line btn--xs" disabled={write.isPending}
-                  onClick={() => void run({ op: "claim", claimId, answer: "disagree" }, `Спор решит ${board.decider.words}`)}>Не согласен</button>
+                  onClick={() => void run({ op: "claim", claimId, answer: "disagree" }, `Спор решит ${(row.decider ?? board.decider).words}`)}>Не согласен</button>
               </span>
             )}
           </span>
         </div>
       ) : (
         <div className="u" key="incoming">
-          <span className="t">Вы не согласны с {claim.from.forms.ins}. Спор решит {board.decider.words}: продажа ждёт, остальное учтено.</span>
+          <span className="t">Вы не согласны с {claim.from.forms.ins}. Спор решит {(row.decider ?? board.decider).words}: продажа ждёт, остальное учтено.</span>
         </div>
       ));
     }
@@ -581,7 +583,7 @@ export function ReportBoard({ report, host, transport, light }: {
           <div className="gc is-no" key="card">
             <div className="gc-h"><b>{card.by}</b><span>предлагал «{to}»</span></div>
             <div className="gc-a">
-              <span className="grow">Вы не согласны: осталось «{from}», решит {board.decider.words}.</span>
+              <span className="grow">Вы не согласны: осталось «{from}», решит {(row.decider ?? board.decider).words}.</span>
               {own && <button type="button" className="lk is-clay" disabled={write.isPending} onClick={() => void run({ op: "proposal", proposalId, answer: "restore" })}>Вернуть правку</button>}
             </div>
           </div>,

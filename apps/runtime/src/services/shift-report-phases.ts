@@ -185,6 +185,10 @@ export function withSettlementsNow(lines: readonly HandinVersionLine[], draft: r
       delete held.claimedMills;
       return [held];
     }
+    // A line that waits now and did not then (the person's «Не согласен» with a card since: the decider decides).
+    if (fresh.settled === undefined && line.settled === undefined && fresh.disputed && !line.disputed && fresh.amountMills === 0) {
+      return [{ ...line, amountMills: 0, disputed: true, ...(fresh.claimedMills === undefined ? {} : { claimedMills: fresh.claimedMills }) }];
+    }
     if (fresh.settled === undefined && line.settled === undefined) return [line];
     const next: HandinVersionLine = { ...line, amountMills: fresh.amountMills, disputed: fresh.disputed };
     if (fresh.settled === undefined) delete next.settled;
