@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router";
+import { isContentScreen } from "@/lib/frameScope";
 import type { PublicationQueueSnapshotWire } from "@agency_hub_core/contracts";
 import { RowMenu, type RowMenuItem } from "@/components/ui/RowMenu";
 import { buildPageRoute, buildPageSectionRoute } from "@/lib/navigation";
@@ -35,12 +36,15 @@ export function PublicationsPagesStrip({ pages, picked, loading, failed, onRetry
   busy: boolean;
   refreshing: boolean;
   onPick: (pageLabel: string | null) => void;
-  onEdit: (pageLabel: string) => void;
+  /** The page's settings and «Убрать всё»: the owner's alone (absent on a content manager's screen). */
+  onEdit?: ((pageLabel: string) => void) | undefined;
   onOpenSettings: () => void;
   onRefresh: (page: StripPage) => void;
-  onWithdrawAll: (page: StripPage) => void;
+  onWithdrawAll?: ((page: StripPage) => void) | undefined;
 }) {
   const navigate = useNavigate();
+  // Inside ContentOps (lib/frameScope.ts) the console is not here: its screen opens beside, on Hub's own name.
+  const toConsole = (path: string) => (isContentScreen() ? window.open(path, "_blank", "noopener") : navigate(path));
   const settingsButton = <button type="button" className="btn btn-sm pub-strip-settings" onClick={onOpenSettings}>Настройки публикации</button>;
 
   if (loading) {
@@ -77,11 +81,11 @@ export function PublicationsPagesStrip({ pages, picked, loading, failed, onRetry
         const { state, queue } = page;
         const profile = buildProfileUrl(page.platform, page.username);
         const ofapiBlock = state.ofapiOff ? OFAPI_OFF_REASON : null;
-        const items: RowMenuItem[] = [
-          { label: `Настройки публикации ${page.pageLabel}`, onSelect: () => onEdit(page.pageLabel) },
-        ];
-        if (state.action === "login") {
-          items.push({ label: "Войти в Fansly", onSelect: () => navigate(buildPageSectionRoute(page.pageLabel, "browser-login")) });
+        const items: RowMenuItem[] = [];
+        if (onEdit) items.push({ label: `Настройки публикации ${page.pageLabel}`, onSelect: () => onEdit(page.pageLabel) });
+        // The console's own screens: the owner's; from the screen inside ContentOps, the console opens beside it.
+        if (onEdit && state.action === "login") {
+          items.push({ label: "Войти в Fansly", onSelect: () => toConsole(buildPageSectionRoute(page.pageLabel, "browser-login")) });
         }
         if (queue !== undefined) {
           const requested = queue.refreshRequestedAt !== null;
@@ -92,11 +96,11 @@ export function PublicationsPagesStrip({ pages, picked, loading, failed, onRetry
             onSelect: () => onRefresh(page),
           });
         }
-        items.push({ label: "Открыть на Главной", onSelect: () => navigate(buildPageRoute(page.pageLabel)) });
+        if (onEdit) items.push({ label: "Открыть на Главной", onSelect: () => toConsole(buildPageRoute(page.pageLabel)) });
         if (profile !== null) {
           items.push({ label: `Открыть страницу на ${platformName(page.platform)}`, onSelect: () => window.open(profile, "_blank", "noopener,noreferrer") });
         }
-        if (queue !== undefined) {
+        if (queue !== undefined && onWithdrawAll) {
           const block = ofapiBlock ?? (state.stopped ? "Публикация на странице остановлена: убрать нельзя, расписание на площадке осталось" : null);
           items.push({
             label: "Убрать из расписания всё, что поставил Hub",

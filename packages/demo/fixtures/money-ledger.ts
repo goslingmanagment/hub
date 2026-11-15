@@ -327,3 +327,8 @@ export function pageOr404(request: DemoRequest, label: string | undefined): Demo
 export function ownerOnly(request: DemoRequest): DemoReply | null {
   return request.role === "owner" ? null : demoError(403, "forbidden", "Доступно только владельцу");
 }
+
+/** «Статистика» inside ContentOps (products package C2): the owner, and a content manager on her pages (pageOr404). */
+export function contentScreenOnly(request: DemoRequest): DemoReply | null {
+  return request.role === "owner" || request.role === "content_manager" ? null : demoError(403, "forbidden", "Доступно владельцу и контент-менеджеру");
+}

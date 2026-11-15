@@ -2,6 +2,8 @@ import { useLayoutEffect } from "react";
 import { useLocation } from "react-router";
 import { workboardHere } from "@/lib/navigation";
 import { teamToWorkboard, WORKBOARD_HREF } from "@/lib/workboard";
+import { contentScreenOldAddress } from "@agency_hub_core/ui/old-addresses";
+import { CONTENTOPS_SIGNIN_HREF } from "@agency_hub_core/ui/sites";
 
 /**
  * Leaves the console for Workboard: `location.replace`, so the old address is
@@ -19,4 +21,11 @@ export function LeaveForWorkboard({ href, words = "Открываем Workboard�
 export function ToWorkboard() {
   const { pathname, search, hash } = useLocation();
   return <LeaveForWorkboard href={workboardHere(teamToWorkboard(`${pathname}${search}${hash}`) ?? WORKBOARD_HREF)} />;
+}
+
+/** An old address of «Публикации» or «Статистика контента»: the same place in ContentOps (packages/ui old-addresses.ts). */
+export function ToContentops() {
+  const { pathname, search, hash } = useLocation();
+  const href = contentScreenOldAddress(`${pathname}${search}`);
+  return <LeaveForWorkboard href={href === null ? CONTENTOPS_SIGNIN_HREF : `${href}${hash}`} words="Открываем ContentOps…" />;
 }

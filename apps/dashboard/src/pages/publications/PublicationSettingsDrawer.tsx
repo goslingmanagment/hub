@@ -362,7 +362,7 @@ function configValue(items: readonly ConfigItem[], key: string): string | null {
  * in one place. Every row writes only its own page; the filter's page is
  * only highlighted.
  */
-export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, config, configState, ofapiOff, focusPage, onRetrySettings, onRetryConfig, onEdit, onClose }: {
+export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, config, configState, ofapiOff, focusPage, onRetrySettings, onRetryConfig, onEdit, onClose, readOnly = false }: {
   rows: readonly SettingsPageRow[];
   settingsState: "loading" | "failed" | "ready";
   globalEnabled: boolean | null;
@@ -374,6 +374,8 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
   onRetryConfig: () => void;
   onEdit: (pageLabel: string) => void;
   onClose: () => void;
+  /** A content manager's screen: the settings are shown, the owner changes them (no switches, no «Изменить»). */
+  readOnly?: boolean;
 }) {
   const focused = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -438,7 +440,7 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
               }}
             />
           ) : placeholder("Публикация постов через Hub", globalEnabled)}
-          {onlyfansItem ? (
+          {readOnly ? null : onlyfansItem ? (
             <ConfigSwitchRow
               item={onlyfansItem}
               title="Публикация на OnlyFans"
@@ -459,7 +461,7 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
               })}
             />
           ) : placeholder("Публикация на OnlyFans", null)}
-          {albumsItem ? (
+          {readOnly ? null : albumsItem ? (
             <ConfigSwitchRow
               item={albumsItem}
               title="Альбомы медиатеки OnlyFans"
@@ -480,7 +482,7 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
               })}
             />
           ) : placeholder("Альбомы медиатеки OnlyFans", null)}
-          {albumCeilingItem && (
+          {!readOnly && albumCeilingItem && (
             <div className="pub-switch pub-album-ceiling">
               <div className="switch-text">
                 <span className="pub-switch-title">Потолок альбомов в сутки</span>
@@ -523,13 +525,14 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
                   row={row}
                   ref={row.settings.pageLabel === focusPage ? focused : undefined}
                   picked={row.settings.pageLabel === focusPage}
-                  onEdit={() => onEdit(row.settings.pageLabel)}
+                  onEdit={readOnly ? undefined : () => onEdit(row.settings.pageLabel)}
                 />
               ))}
             </div>
           )}
         </section>
 
+        {readOnly ? <p className="pub-muted">Настройки меняет владелец.</p> : (
         <Disclosure label="Подробнее">
           <dl className="pub-limits">
             <dt>Кредиты на публикации OnlyFans в сутки</dt><dd>{number(credits)}</dd>
@@ -538,12 +541,13 @@ export function PublicationSettingsDrawer({ rows, settingsState, globalEnabled, 
           </dl>
           <p className="mt-2"><Link className="link" to="/system/dev#config-publishingOnlyfansDailyCredits">Все параметры</Link></p>
         </Disclosure>
+        )}
       </div>
     </Drawer>
   );
 }
 
-function PageRow({ row, picked, onEdit, ref }: { row: SettingsPageRow; picked: boolean; onEdit: () => void; ref?: Ref<HTMLDivElement> | undefined }) {
+function PageRow({ row, picked, onEdit, ref }: { row: SettingsPageRow; picked: boolean; onEdit: (() => void) | undefined; ref?: Ref<HTMLDivElement> | undefined }) {
   const { settings, state, queue } = row;
   const lines: ReactNode[] = [
     <p key="limits">{pageLimitsLine(settings)}</p>,
@@ -574,7 +578,7 @@ function PageRow({ row, picked, onEdit, ref }: { row: SettingsPageRow; picked: b
           <span className="pub-muted">{platformName(settings.platform)}</span>
         </span>
         <StatusBadge status={state.badge} bare />
-        <button type="button" className="btn btn-sm" onClick={onEdit}>Изменить</button>
+        {onEdit && <button type="button" className="btn btn-sm" onClick={onEdit}>Изменить</button>}
       </div>
       <div className="pub-settings-lines">{lines}</div>
     </div>

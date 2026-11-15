@@ -6,7 +6,7 @@
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { between, demoError, hashString, hoursAgo, intBetween, isoDay, pick, queryNumber, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import type { DemoPage } from "../world.ts";
-import { DAY_MS, ledgerDay, ownerOnly, pageOr404, startOfDayMs, type LedgerTx, type LedgerType } from "./money-ledger.ts";
+import { DAY_MS, contentScreenOnly, ledgerDay, ownerOnly, pageOr404, startOfDayMs, type LedgerTx, type LedgerType } from "./money-ledger.ts";
 
 /** Fansly's surfaces: 0 For You, 1 Timeline, 2 Suggestions, 3 Search, 4 Other. */
 const SOURCES = [0, 1, 2, 3, 4] as const;
@@ -495,7 +495,7 @@ export function mediaDay(media: DemoMedia, ageDays: number, day: string): { fyp:
 }
 
 function creatorStatsContent(request: DemoRequest): KernelOperationResponse<"creatorStatsContent"> | DemoReply {
-  const page = ownerPage(request);
+  const page = contentScreenOnly(request) ?? pageOr404(request, request.params.pageLabel);
   if (isReply(page)) return page;
   const window = windowOf(request);
   if (isReply(window)) return window;
@@ -572,7 +572,7 @@ function creatorStatsContent(request: DemoRequest): KernelOperationResponse<"cre
 }
 
 function creatorStatsMedia(request: DemoRequest): KernelOperationResponse<"creatorStatsMedia"> | DemoReply {
-  const page = ownerPage(request);
+  const page = contentScreenOnly(request) ?? pageOr404(request, request.params.pageLabel);
   if (isReply(page)) return page;
   const window = windowOf(request);
   if (isReply(window)) return window;

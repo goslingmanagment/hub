@@ -109,7 +109,7 @@ export function demoPagesOfModel(slug: string): DemoPage[] {
 export interface DemoUser {
   id: number;
   username: string;
-  role: "owner" | "team_lead" | "chatter";
+  role: "owner" | "team_lead" | "chatter" | "content_manager";
   /** How the console shows the person. */
   name: string;
   pages: readonly string[];
@@ -128,6 +128,8 @@ export const DEMO_USERS: readonly DemoUser[] = [
   { id: 7, username: "olya.m", role: "chatter", name: "Оля", pages: ["mia-of", "mia-vip-of"], active: true },
   { id: 8, username: "ivan.p", role: "chatter", name: "Иван", pages: ["ivy-1", "ivy-2"], active: true },
   { id: 9, username: "lena.r", role: "chatter", name: "Лена", pages: ["mia-2", "nova-1"], active: false },
+  // The content manager of «Mia Hart» (products package C2): every page of her model, nothing else.
+  { id: 10, username: "km.ira", role: "content_manager", name: "Ира", pages: DEMO_PAGES.filter((item) => item.modelSlug === "mia-hart").map((item) => item.label), active: true },
 ];
 
 export function demoUserByRole(role: DemoUser["role"]): DemoUser {

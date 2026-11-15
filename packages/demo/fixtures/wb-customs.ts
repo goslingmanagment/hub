@@ -183,7 +183,8 @@ function storeOf(request: DemoRequest): DemoOrder[] {
 function viewerOf(request: DemoRequest): CustomViewer {
   const user = demoUserByRole(request.role);
   const pageIds = user.pages.map((label) => DEMO_DATA_PAGES.find((page) => page.label === label)?.id ?? 0);
-  return { userId: user.id, role: request.role, pageIds, lead: request.role === "chatter" && request.cookie?.("hub-demo-customs-as") === "lead" };
+  // A content manager has no Workboard: read as a chatter of her pages (the demo answers nothing more of hers here).
+  return { userId: user.id, role: request.role === "content_manager" ? "chatter" : request.role, pageIds, lead: request.role === "chatter" && request.cookie?.("hub-demo-customs-as") === "lead" };
 }
 
 const pageIdOf = (label: string | null) => (label === null ? null : DEMO_DATA_PAGES.find((page) => page.label === label)?.id ?? null);

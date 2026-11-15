@@ -78,14 +78,3 @@ export function contentScreenHeaders(isProduction: boolean, contentopsOrigin: st
     ...(isProduction ? { "strict-transport-security": HSTS_HEADER } : {}),
   };
 }
-
-/** ContentOps' origin from its sign-in callback (`https://contentops.…/auth/hub/callback`); null when none is named. */
-export function contentopsOriginOf(callback: string | undefined): string | null {
-  if (callback === undefined) return null;
-  try {
-    const url = new URL(callback);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.origin : null;
-  } catch {
-    return null;
-  }
-}

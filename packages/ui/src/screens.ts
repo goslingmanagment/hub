@@ -246,14 +246,6 @@ export const SCREENS: readonly Screen[] = [
     keywords: "аналитика обзор",
   },
   {
-    id: "stats-content", path: "/stats/content", label: "Контент", title: "Статистика Fansly: контент", section: "stats", product: "hub", ownerOnly: true,
-    why: "Какие медиа смотрят, покупают и комментируют.",
-    pageFilter: "one", onePageWay: "substitute", platforms: FANSLY,
-    platformsNote: "Статистику Hub собирает только для Fansly.", platformsShort: "только Fansly",
-    period: { class: "shared", options: STATS_PERIODS },
-    keywords: "аналитика медиа посты",
-  },
-  {
     id: "stats-audience", path: "/stats/audience", label: "Аудитория", title: "Статистика Fansly: аудитория", section: "stats", product: "hub", ownerOnly: true,
     why: "Откуда и когда смотрят, по каким тегам находят.",
     pageFilter: "one", onePageWay: "substitute", platforms: FANSLY,
@@ -270,15 +262,28 @@ export const SCREENS: readonly Screen[] = [
     keywords: "аналитика трафик",
   },
 
-  // ── Контент ────────────────────────────────────────────────────────────
-  // Публикации and Рассылки here; План, Приехало and Библиотека are ContentOps' (links of the section).
+  // ── ContentOps' screens that Hub draws ───────────────────────────────────
+  // «Публикации» and «Статистика» are ContentOps' (products plan §2.4, package C2): its menu, its address, its frame;
+  // the screen is drawn by the console's code on a bare page of Hub's (apps/dashboard/frame/*.html), framed by ContentOps
+  // on its whole working area. In no menu or search of Hub; Hub's old addresses (`/content/publications`, `/stats/content`)
+  // lead to ContentOps (old-addresses.ts `contentScreenOldAddress`). The owner and a content manager open them.
   {
-    id: "publications", path: "/content/publications", label: "Публикации", title: "Публикации", section: "content", product: "hub", ownerOnly: true,
+    id: "publications", path: "/frame/publications", label: "Публикации", title: "Публикации", section: "content", product: "hub",
+    roles: ["owner", "content_manager"], notSearched: true,
     why: "Что и когда выйдет на стенах страниц.",
     pageFilter: "any", platforms: REPORTED,
     platformsNote: "Hub не публикует в Telegram.",
     telegramNote: { title: "Hub не публикует в Telegram", text: "У страниц Telegram публикаций нет." },
     keywords: "посты стена расписание утвердить настройки публикации",
+  },
+  {
+    id: "stats-content", path: "/frame/content-stats", label: "Статистика", title: "Статистика", section: "content", product: "hub",
+    roles: ["owner", "content_manager"], notSearched: true,
+    why: "Какие медиа смотрят, покупают и комментируют.",
+    pageFilter: "one", onePageWay: "substitute", platforms: FANSLY,
+    platformsNote: "Статистику Hub собирает только для Fansly.", platformsShort: "только Fansly",
+    period: { class: "shared", options: STATS_PERIODS },
+    keywords: "аналитика медиа посты",
   },
   {
     // A page's mass messages (a tab of the page's card until 12.11).
@@ -844,24 +849,13 @@ export const SECTIONS: readonly Section[] = [
   {
     // The pages' Fansly statistics (it was «Статистика»; its screens and addresses are the same).
     id: "stats", label: "Страницы", title: "Страницы", icon: "ChartColumn", product: "hub", ownerOnly: true, nav: "tabs",
-    // «Контент» left the section for ContentOps (products plan §2.2): its address still opens until the content
-    // package moves it, and the search still finds it, but the section's row does not list it.
+    // «Контент» is ContentOps' «Статистика» now (products plan §2.4): not in the section.
     tabs: [
       tab("stats", "Главное", "stats"),
       tab("income", "Доход Fansly", "stats-income"),
       tab("audience", "Аудитория", "stats-audience"),
     ],
     outside: { site: "hub", links: [{ label: "Модели и страницы", to: "/settings/pages", title: "Модели и страницы в Настройках" }] },
-  },
-  {
-    // «Публикации» until 12.11: the content, the hub's part and ContentOps' (the model of the chosen page).
-    id: "content", label: "Контент", title: "Контент", icon: "Newspaper", product: "hub", ownerOnly: true, nav: "tabs",
-    tabs: [tab("publications", "Публикации", "publications")],
-    outside: { site: "contentops", label: "ContentOps", links: [
-      { label: "План", path: "plan" },
-      { label: "Приехало", path: "inbox" },
-      { label: "Библиотека", path: "library" },
-    ] },
   },
   {
     id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", product: "hub", ownerOnly: true, nav: "tabs",
@@ -964,7 +958,7 @@ export interface MenuItem {
 
 /**
  * A product's menu for a role, the items above the rule and under it, from the one table:
- * - Hub, the owner's alone: its sections (Главная · Ждут вас · Деньги · Фаны · Страницы · Контент · Трафик · Анкеты ·
+ * - Hub, the owner's alone: its sections (Главная · Ждут вас · Деньги · Страницы · Трафик · Анкеты ·
  *   Люди, then Настройки · Система under the rule); a section without a screen the owner may open is not there.
  * - Workboard, every role's: its screens the role opens, in the table's order, with their own icons (one menu, products
  *   plan §2.3: Сегодня · Ждут вас · Смены · Команда · Фаны · Кастомы · …; «Начало» first while a newcomer's step is

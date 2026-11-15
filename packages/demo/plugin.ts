@@ -36,7 +36,7 @@ const ROLE_COOKIE = "hub-demo-role";
 const NARROW_COOKIE = "hub-demo-narrow";
 /** A screen's other demo state (`hub-demo-scenario=healthy`): set by hand or by a screenshot tool. */
 const SCENARIO_COOKIE = "hub-demo-scenario";
-const ROLES: readonly DemoRole[] = ["owner", "team_lead", "chatter"];
+const ROLES: readonly DemoRole[] = ["owner", "team_lead", "chatter", "content_manager"];
 
 function compile(): Route[] {
   const routes = Object.entries(kernelOperations).map(([key, def]) => {
@@ -165,7 +165,8 @@ function signInHtml(next: string | null): string {
 
 /** The console's homes: /login for nobody, Hub's Главная for the owner, Workboard for a team lead and a chatter (Hub is the owner's). */
 function consoleHome(role: DemoRole | "anon"): string {
-  return role === "anon" ? "/login" : role === "owner" ? "/" : "/workboard/";
+  // A content manager has no console: the screen Hub draws inside ContentOps.
+  return role === "anon" ? "/login" : role === "owner" ? "/" : role === "content_manager" ? "/frame/publications" : "/workboard/";
 }
 
 /** The demo's two names (any port): the hand-off crosses only between them, as Hub's crosses only between its own. */

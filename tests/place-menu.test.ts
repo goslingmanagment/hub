@@ -22,9 +22,10 @@ describe("each screen's product", () => {
 });
 
 describe("Hub's menu", () => {
-  it("is the owner's: Главная · Ждут вас · Деньги · Страницы · Контент · Трафик · Анкеты · Люди, then Настройки · Система", () => {
+  // «Контент» is ContentOps' (products package C2): «Публикации» and «Статистика» are its screens.
+  it("is the owner's: Главная · Ждут вас · Деньги · Страницы · Трафик · Анкеты · Люди, then Настройки · Система", () => {
     const menu = productMenu("hub", "owner");
-    expect(menu.upper.map((item) => item.label)).toEqual(["Главная", "Ждут вас", "Деньги", "Страницы", "Контент", "Трафик", "Анкеты", "Люди"]);
+    expect(menu.upper.map((item) => item.label)).toEqual(["Главная", "Ждут вас", "Деньги", "Страницы", "Трафик", "Анкеты", "Люди"]);
     expect(menu.lower.map((item) => item.label)).toEqual(["Настройки", "Система"]);
   });
 

@@ -4,11 +4,13 @@ import type { ConfigUpdateBody } from "@agency_hub_core/contracts";
 import { kernel } from "./sdk.js";
 export { usePages as useConfigPages } from "./pages.js";
 
-export function useAdminConfig() {
+/** `enabled: false` — a person whose screen shows no switches (a content manager's «Публикации»): nothing is asked. */
+export function useAdminConfig(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ["admin", "config"],
     queryFn: () => kernel.adminConfig(),
     refetchInterval: 30_000,
+    enabled: options.enabled ?? true,
   });
 }
 

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  HSTS_HEADER, boardFrameDevOrigins, boardFrameHeaders, isBoardFramePath, pageHeaders,
+  HSTS_HEADER, boardFrameDevOrigins, boardFrameHeaders, contentScreenHeaders, isBoardFramePath, isContentScreenPath, pageHeaders,
 } from "../apps/runtime/src/api/page-headers.ts";
+import { contentopsOriginOf, signinNamesOf } from "../apps/runtime/src/services/signin-handoff.ts";
 
 // Hub's pages are never framed by another site, and production asks for HTTPS only (ecosystem R9).
 describe("the headers of every answer", () => {
@@ -42,5 +43,22 @@ describe("the headers of every answer", () => {
       "frame-ancestors https://fansly.com https://chat.onlymonster.ai http://127.0.0.1:5390 http://localhost:8080",
     );
     expect(boardFrameHeaders(true, origins)["content-security-policy"]).toBe("frame-ancestors https://fansly.com https://chat.onlymonster.ai");
+  });
+
+  // «Публикации» and «Статистика» inside ContentOps (package C2): two paths, one ancestor, named by one setting.
+  it("lets ContentOps' public name alone frame the two content screens' paths", () => {
+    const production = signinNamesOf({ isProduction: true } as Parameters<typeof signinNamesOf>[0]);
+    expect(contentopsOriginOf(production)).toBe("https://contentops.gosling-agency.ru");
+    expect(contentScreenHeaders(true, contentopsOriginOf(production))).toEqual({
+      "content-security-policy": "frame-ancestors https://contentops.gosling-agency.ru",
+      "strict-transport-security": HSTS_HEADER,
+    });
+    const stand = signinNamesOf({ isProduction: false, webSigninClients: { contentops: "http://127.0.0.1:6180/auth/hub/callback" } } as Parameters<typeof signinNamesOf>[0]);
+    expect(contentScreenHeaders(false, contentopsOriginOf(stand))).toEqual({ "content-security-policy": "frame-ancestors http://127.0.0.1:6180" });
+    expect(contentScreenHeaders(true, null)).toMatchObject({ "content-security-policy": "frame-ancestors 'none'" });
+    for (const path of ["/frame/publications", "/frame/publications?model=lora&page=lora-1", "/frame/content-stats?period=30d"]) expect(isContentScreenPath(path), path).toBe(true);
+    for (const path of ["/frame/publications/x", "/frame/publications.html", "/frame/other", "/content/publications", "/stats/content", "/api/v1/frame/publications"]) {
+      expect(isContentScreenPath(path), path).toBe(false);
+    }
   });
 });

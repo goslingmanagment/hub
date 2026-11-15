@@ -1,5 +1,5 @@
 import { demoError, queryNumber, queryString, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
-import { demoPage, type DemoPage } from "../world.ts";
+import { DEMO_PAGES, demoPage, demoUserByRole, type DemoPage } from "../world.ts";
 import { ofPageById } from "./publish-of-common.ts";
 import {
   exportInventory,
@@ -24,6 +24,15 @@ function mappedPage(request: DemoRequest): DemoPage | DemoReply {
   return ofPageById(queryNumber(request, "pageId", 0)) ?? demoError(404, "Not Found", "Mapped page not found");
 }
 
+/** The pages a request reaches: the role's (a content manager's model), and one model's when asked. */
+function demoReach(request: DemoRequest, modelSlug: string | undefined): ReadonlySet<string> {
+  const user = demoUserByRole(request.role);
+  return new Set(DEMO_PAGES
+    .filter((page) => user.pages.includes(page.label))
+    .filter((page) => modelSlug === undefined || page.modelSlug.toLowerCase() === modelSlug.toLowerCase())
+    .map((page) => page.label));
+}
+
 function isPage(value: DemoPage | DemoReply): value is DemoPage {
   return "label" in value;
 }
@@ -34,6 +43,8 @@ export const publishOfHandlers: DemoHandlers = {
     if (pageLabel !== undefined && demoPage(pageLabel) === undefined) {
       return demoError(404, "Not Found", `Page ${pageLabel} not found`);
     }
+    // As Hub cuts it (products package C2): a content manager's pages alone, and one model's when asked.
+    const reach = demoReach(request, queryString(request, "modelSlug"));
     const status = queryString(request, "status");
     const from = queryString(request, "from");
     const to = queryString(request, "to");
@@ -43,6 +54,7 @@ export const publishOfHandlers: DemoHandlers = {
     const publications = demoPublications(request.now)
       .map((item) => item.publication)
       .filter((item) => pageLabel === undefined || item.pageLabel === pageLabel)
+      .filter((item) => reach.has(item.pageLabel))
       .filter((item) => status === undefined || item.status === status)
       .filter((item) => fromMs === null || Date.parse(item.publishAt) >= fromMs)
       .filter((item) => toMs === null || Date.parse(item.publishAt) < toMs)
@@ -57,7 +69,11 @@ export const publishOfHandlers: DemoHandlers = {
     return { ...found.publication, events: found.events, revision: found.revision };
   },
 
-  adminPublicationSettingsList: (request) => publicationSettings(request.now),
+  adminPublicationSettingsList: (request) => {
+    const settings = publicationSettings(request.now);
+    const reach = demoReach(request, undefined);
+    return { ...settings, pages: settings.pages.filter((page) => reach.has(page.pageLabel)) };
+  },
 
   // Two writes answer in the demo, so the reports of the screen can be seen;
   // nothing is saved and every other write still answers 403.
@@ -96,8 +112,11 @@ export const publishOfHandlers: DemoHandlers = {
     };
   },
 
-  adminPublicationQueueList: (request) =>
-    publicationQueues(request.now, demoPublications(request.now).map((item) => item.publication)),
+  adminPublicationQueueList: (request) => {
+    const queues = publicationQueues(request.now, demoPublications(request.now).map((item) => item.publication));
+    const reach = demoReach(request, undefined);
+    return { pages: queues.pages.filter((page) => reach.has(page.pageLabel)) };
+  },
 
   ofLinksGet: (request) => {
     const raw = queryString(request, "pageId");

@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { keepPreviousData, queryOptions, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PublicationStatus } from "@agency_hub_core/shared";
 
+import { frameModel } from "@/lib/frameScope";
 import { kernel } from "./sdk.js";
 
 /**
@@ -21,7 +22,10 @@ export interface PublicationListParams {
   limit: number;
 }
 
-export function publicationsQueryOptions(params: PublicationListParams) {
+export function publicationsQueryOptions(listed: PublicationListParams) {
+  // Inside ContentOps the screen is one model's (lib/frameScope.ts): every list without a page asks for that model's.
+  const model = frameModel();
+  const params = model !== null && listed.pageLabel === undefined ? { ...listed, modelSlug: model } : listed;
   return queryOptions({
     queryKey: [...PUBLICATIONS_KEY, "list", params] as const,
     queryFn: () => kernel.adminPublicationList({ query: params }),

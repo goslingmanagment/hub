@@ -43,6 +43,7 @@ import { readTeamLedgerQuestions } from "./ledger-questions.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
 import { matterMirrorPeriodMs, matterWeight } from "./matters.ts";
 import { listPublicationsWire } from "./publications.ts";
+import { contentopsOriginOf, signinNamesOf } from "./signin-handoff.ts";
 import { getSyncBlocksOverview } from "./sync-blocks.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
@@ -99,6 +100,7 @@ const DAY_MS = 86_400_000;
 export function publicationItems(
   kind: "publication.draft" | "publication.unknown",
   publications: ReadonlyArray<{ id: number; pageLabel: string; kind: string; publishAt: string; version: number }>,
+  contentops: string | null = null,
 ): MirrorItem[] {
   const status = kind === "publication.draft" ? "draft" : "unknown";
   return publications.map((publication) => ({
@@ -108,8 +110,23 @@ export function publicationItems(
     pageLabels: [publication.pageLabel],
     money: false,
     evidence: { publicationId: publication.id, kind: publication.kind, publishAt: publication.publishAt, version: publication.version },
-    link: `/content/publications?status=${status}&window=all&page=all`,
+    link: publicationLink(contentops, publication, status),
   }));
+}
+
+/**
+ * Where a publication's matter opens: «Публикации» in ContentOps on that publication (products plan §2.4, package C2;
+ * ContentOps' `/hub/publications` finds the page's model and opens its screen with the card). Without ContentOps'
+ * name (no sign-in client), Hub's old address, which leads there too.
+ */
+export function publicationLink(contentops: string | null, publication: { id: number; pageLabel: string }, status: "draft" | "unknown"): string {
+  const query = new URLSearchParams({ page: publication.pageLabel, status, window: "all", publication: String(publication.id) }).toString();
+  return contentops === null ? `/content/publications?${query}` : `${contentops}/hub/publications?${query}`;
+}
+
+/** ContentOps' public name for a matter's link; null without a config (a test's bare context). */
+function contentopsOf(app: Pick<AppContext, "config">): string | null {
+  return app.config ? contentopsOriginOf(signinNamesOf(app.config)) : null;
 }
 
 /** Held sends («Зависшие отправки»): who sent and when, never the fan or the text. */
@@ -509,12 +526,12 @@ export async function runMattersMirror(
   };
 
   await read(["publication.draft"], async () => {
-    const items = publicationItems("publication.draft", await listPublicationsWire(app.db, { pageIds: null, status: "draft", limit: PUBLICATIONS_LIMIT }));
+    const items = publicationItems("publication.draft", await listPublicationsWire(app.db, { pageIds: null, status: "draft", limit: PUBLICATIONS_LIMIT }), contentopsOf(app));
     return [{ kind: "publication.draft", items, capped: items.length === PUBLICATIONS_LIMIT }];
   });
   await read(["publication.unknown"], async () => [{
     kind: "publication.unknown",
-    items: publicationItems("publication.unknown", await listPublicationsWire(app.db, { pageIds: null, status: "unknown", limit: PUBLICATIONS_LIMIT })),
+    items: publicationItems("publication.unknown", await listPublicationsWire(app.db, { pageIds: null, status: "unknown", limit: PUBLICATIONS_LIMIT }), contentopsOf(app)),
   }]);
   await read(["send.held"], async () => {
     const list = await listClientSendCustody(app.db, { state: "held", pages: "all", limit: HELD_LIMIT, offset: 0 });

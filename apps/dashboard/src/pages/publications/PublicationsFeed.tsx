@@ -68,7 +68,8 @@ export interface RowActions {
   onCancel: (publication: PublicationWire) => void;
   onResolve: (publication: PublicationWire) => void;
   onWithdraw: (publication: PublicationWire) => void;
-  onDeletePost: (publication: PublicationWire) => void;
+  /** «Удалить со стены»: the owner's alone (a content manager's screen has none). */
+  onDeletePost?: ((publication: PublicationWire) => void) | undefined;
   onReplace: (publication: PublicationWire) => void;
 }
 
@@ -101,8 +102,9 @@ function menuItems(publication: PublicationWire, actions: RowActions): RowMenuIt
   if (publication.status === "published" && link) {
     items.push({ label: link.label, onSelect: () => window.open(link.url, "_blank", "noopener,noreferrer") });
   }
-  if (deletion !== undefined) {
-    items.push({ label: "Удалить со стены", danger: true, disabled: actions.busy || deletion !== null, hint: deletion ?? undefined, onSelect: () => actions.onDeletePost(publication) });
+  const onDeletePost = actions.onDeletePost;
+  if (deletion !== undefined && onDeletePost) {
+    items.push({ label: "Удалить со стены", danger: true, disabled: actions.busy || deletion !== null, hint: deletion ?? undefined, onSelect: () => onDeletePost(publication) });
   }
   if (withdrawal !== undefined) {
     items.push({ label: "Убрать из расписания", danger: true, disabled: actions.busy || withdrawal !== null, hint: withdrawal ?? undefined, onSelect: () => actions.onWithdraw(publication) });

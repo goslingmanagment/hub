@@ -111,7 +111,7 @@ function standing(request: DemoRequest): Seed[] {
     }
   }
   seeds.push(
-    { kind: "publication.draft", key: "publication.draft:5101", title: "Пост на утверждение: mia-1", pages: ["mia-1"], link: "/content/publications?status=draft&window=all&page=all", agoMs: 5 * HOUR },
+    { kind: "publication.draft", key: "publication.draft:5101", title: "Пост на утверждение: mia-1", pages: ["mia-1"], link: "https://contentops.gosling-agency.ru/hub/publications?status=draft&window=all&page=all", agoMs: 5 * HOUR },
     { kind: "people.login_unlinked", key: "people.login_unlinked:12", title: "Вход без человека: tester.q", evidence: { userId: 12, username: "tester.q", namesake: { person: "tester-q", name: "Тестер", state: "left", leftOn: isoAt(now - 40 * DAY).slice(0, 10) } }, link: "/people/12/logins", agoMs: 6 * DAY },
     { kind: "people.page_without_access", key: "people.page_without_access:olya-m", title: "Работает без доступа: Оля, mia-of", pages: ["mia-of"], evidence: { person: "olya-m", pages: ["mia-of"], logins: ["olya.m"] }, link: "/people/olya-m/pages", agoMs: 20 * HOUR },
     {
@@ -151,7 +151,7 @@ function filler(count: number): Seed[] {
   for (let index = 0; index < count; index += 1) {
     const page = pages[index % pages.length]!;
     const pick = index % 5;
-    if (pick === 0) out.push({ kind: "publication.draft", key: `publication.draft:${6000 + index}`, title: `Пост на утверждение: ${page}`, pages: [page], link: "/content/publications?status=draft&window=all&page=all", agoMs: (index + 1) * 47 * MIN });
+    if (pick === 0) out.push({ kind: "publication.draft", key: `publication.draft:${6000 + index}`, title: `Пост на утверждение: ${page}`, pages: [page], link: "https://contentops.gosling-agency.ru/hub/publications?status=draft&window=all&page=all", agoMs: (index + 1) * 47 * MIN });
     else if (pick === 1) out.push({ kind: "incident.open", key: `incident.open:${1000 + index}`, title: `Сбой: Сбор подписчиков ${page} не отвечает`, pages: [page], link: "/system/failures?page=all", agoMs: (index + 2) * 31 * MIN });
     else if (pick === 2) out.push({ kind: "people.agent_key_expiring", key: `people.agent_key_expiring:${30 + index}`, title: `Ключ агента истекает ${String(13 + (index % 6)).padStart(2, "0")}.11: агент-${index}`, link: "/system/agent-keys", agoMs: (index + 1) * 2 * HOUR });
     else if (pick === 3) out.push({ kind: "ledger.off_platform", key: `ledger.off_platform:${400 + index}`, title: `Мимо площадки, ${8 + (index % 5)} дней не в отчёте: ${page}`, pages: [page], money: true, evidence: { decisionId: 400 + index, netMills: 50_000 + index * 1000, saidBy: "alex.k", telegram: CHAT }, agoMs: (8 + (index % 5)) * DAY });

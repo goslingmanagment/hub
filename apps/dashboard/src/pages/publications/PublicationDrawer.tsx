@@ -282,9 +282,10 @@ export function PublicationDrawer({ id, row, todayKey, pageState, username, acti
     if (withdrawal) reasons.push(withdrawal);
     footer.push(<button key="withdraw" type="button" className="btn btn-danger-outline" disabled={actions.busy || withdrawal !== null} onClick={() => actions.onWithdraw(shown)}>Убрать из расписания</button>);
   }
-  if (deletion !== undefined) {
+  const onDeletePost = actions.onDeletePost;
+  if (deletion !== undefined && onDeletePost) {
     if (deletion) reasons.push(deletion);
-    footer.push(<button key="delete" type="button" className="btn btn-danger-outline" disabled={actions.busy || deletion !== null} onClick={() => actions.onDeletePost(shown)}>Удалить со стены</button>);
+    footer.push(<button key="delete" type="button" className="btn btn-danger-outline" disabled={actions.busy || deletion !== null} onClick={() => onDeletePost(shown)}>Удалить со стены</button>);
   }
   if (shown.status === "published" && link !== null) {
     footer.push(<a key="open" className="btn" href={link.url} target="_blank" rel="noopener noreferrer">{link.label}</a>);

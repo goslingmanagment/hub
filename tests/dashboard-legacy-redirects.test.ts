@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveLegacyUrl } from "../apps/dashboard/src/lib/redirects.ts";
+import { contentScreenOldAddress } from "../packages/ui/src/old-addresses.ts";
 import { matchScreen, SCREENS, SECTIONS, screenById } from "../packages/ui/src/screens.ts";
 
 // A promise to the owner (design/ia.md §8.2): every old address keeps working
@@ -148,6 +149,8 @@ describe("old addresses (design/ia.md §8.2)", () => {
     for (const [row, , to] of REDIRECTS) {
       const pathname = new URL(to, "https://hub.invalid").pathname;
       if (pathname.startsWith("/workboard/")) continue;
+      // «Публикации» and «Статистика контента» are ContentOps' (package C2): the console leads them there.
+      if (contentScreenOldAddress(to) !== null) continue;
       expect(matchScreen(pathname), `row ${row}: ${to}`).not.toBeNull();
     }
   });
@@ -165,8 +168,8 @@ describe("the table of screens", () => {
         }
       }
     }
-    // «Статистика → Контент» left the menu for ContentOps (products plan §2.2); its address opens until it moves.
-    const addressOnly = new Set(["stats-content"]);
+    // «Публикации» and «Статистика контента» are ContentOps' screens Hub draws on bare pages (products plan §2.4).
+    const addressOnly = new Set(["publications", "stats-content"]);
     const orphans = SCREENS.filter((screen) => !seen.has(screen.id) && !addressOnly.has(screen.id)).map((screen) => screen.id);
     expect(orphans).toEqual([]);
   });

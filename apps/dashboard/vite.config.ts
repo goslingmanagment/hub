@@ -54,12 +54,36 @@ function manualChunks(id: string): string | undefined {
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:3000";
 
+/**
+ * «Публикации» and «Статистика» inside ContentOps (products plan §2.4): two bare pages of their own (frame/*.html,
+ * src/frame/), each one screen without the console. Hub's server answers `/frame/publications` with
+ * `frame/publications.html` (api/server.ts); the dev servers do the same here.
+ */
+const CONTENT_SCREENS: Readonly<Record<string, string>> = {
+  "/frame/publications": "/frame/publications.html",
+  "/frame/content-stats": "/frame/content-stats.html",
+};
+
+function contentScreens(): PluginOption {
+  return {
+    name: "content-screens",
+    configureServer(server) {
+      server.middlewares.use((request, _response, next) => {
+        const [path, query] = (request.url ?? "").split("?", 2);
+        const page = path === undefined ? undefined : CONTENT_SCREENS[path];
+        if (page !== undefined) request.url = query === undefined ? page : `${page}?${query}`;
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   // `vite --mode demo` (pnpm dev:demo): the console with invented data and no
   // hub behind it — see packages/demo/core.ts (one harness and one set of
   // fixtures with Workboard). Imported lazily so no other mode loads it.
   const demo = mode === "demo";
-  const plugins: PluginOption[] = [react(), tailwindcss()];
+  const plugins: PluginOption[] = [react(), tailwindcss(), contentScreens()];
   // «Команда» is Workboard at /workboard/ on the console's host (Hub serves both in
   // production). Here it is Workboard's own dev server, behind the same origin:
   // `pnpm dev:workboard:demo` (5190) beside `pnpm dev:demo`, `pnpm dev:workboard` (5191) beside this one.
@@ -80,7 +104,16 @@ export default defineConfig(({ mode }) => {
         "@agency_hub_core/look": resolve(__dirname, "../../packages/look/src"),
       },
     },
-    build: { rollupOptions: { output: { manualChunks } } },
+    build: {
+      rollupOptions: {
+        input: {
+          main: resolve(__dirname, "index.html"),
+          publications: resolve(__dirname, "frame/publications.html"),
+          contentStats: resolve(__dirname, "frame/content-stats.html"),
+        },
+        output: { manualChunks },
+      },
+    },
     server: {
       port: 5173,
       proxy: demo

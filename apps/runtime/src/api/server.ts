@@ -1,6 +1,6 @@
 import { registerOfapiVendorRoutes } from "../modules/ofapi-vendor/index.ts";
 import { registerModelApplicationRoutes } from "../modules/model-applications/index.ts";
-import { boardFrameDevOrigins, boardFrameHeaders, contentScreenHeaders, contentopsOriginOf, isBoardFramePath, isContentScreenPath, pageHeaders } from "./page-headers.ts";
+import { boardFrameDevOrigins, boardFrameHeaders, contentScreenHeaders, isBoardFramePath, isContentScreenPath, pageHeaders } from "./page-headers.ts";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,7 +65,7 @@ import { createRequestAuth, unauthorizedFor } from "./request-auth.ts";
 import { crossOriginRefusal } from "./origin-check.ts";
 import { narrowWebSessionRefusal } from "../services/narrow-web-session.ts";
 import { asFanReader, FAN_READ_OPERATIONS } from "../services/fan-reads.ts";
-import { signinNamesOf, workboardOnConsoleRedirect } from "../services/signin-handoff.ts";
+import { contentopsOriginOf, signinNamesOf, workboardOnConsoleRedirect } from "../services/signin-handoff.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
 import { registerAudienceRoutes } from "../modules/audience/index.ts";
@@ -269,7 +269,7 @@ export async function buildApiServer(appContext: AppContext) {
   // The «Отчёт» board's frame (package R): framed by the extension's two sites only, never by anything else.
   const headersOfBoardFrame = boardFrameHeaders(appContext.config.isProduction, boardFrameDevOrigins(process.env.HUB_BOARD_FRAME_DEV_ORIGINS));
   // «Публикации» and «Статистика» inside ContentOps (package C2): framed by ContentOps' public name alone.
-  const headersOfContentScreens = contentScreenHeaders(appContext.config.isProduction, contentopsOriginOf(signinNamesOf(appContext.config).clients.get("contentops")));
+  const headersOfContentScreens = contentScreenHeaders(appContext.config.isProduction, contentopsOriginOf(signinNamesOf(appContext.config)));
   server.addHook("onRequest", async (request, reply) => {
     reply.headers(isBoardFramePath(request.url) ? headersOfBoardFrame : isContentScreenPath(request.url) ? headersOfContentScreens : headersOfPages);
   });

@@ -14,7 +14,8 @@
  */
 import type { KernelOperationKey, KernelOperationResponse } from "@agency_hub_core/contracts";
 
-export type DemoRole = "owner" | "team_lead" | "chatter";
+/** `content_manager`: the screens Hub draws inside ContentOps (`/frame/publications`, `/frame/content-stats`). */
+export type DemoRole = "owner" | "team_lead" | "chatter" | "content_manager";
 
 export interface DemoRequest {
   /** Path parameters, decoded. */

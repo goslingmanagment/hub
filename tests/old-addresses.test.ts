@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { resolveLegacyUrl } from "../apps/dashboard/src/lib/redirects.ts";
 import { teamPeopleInHub, teamToWorkboard } from "../apps/dashboard/src/lib/workboard.ts";
 import { signinNamesOf, workboardOnConsoleRedirect } from "../apps/runtime/src/services/signin-handoff.ts";
-import { OLD_ADDRESSES, WORKBOARD_OLD_PATHS, registryTabLanding, workboardOldAddress } from "../packages/ui/src/old-addresses.ts";
+import { OLD_ADDRESSES, WORKBOARD_OLD_PATHS, contentScreenOldAddress, registryTabLanding, workboardOldAddress } from "../packages/ui/src/old-addresses.ts";
 import { matchScreen } from "../packages/ui/src/screens.ts";
 import { hubEntryHref, workboardEntryHref } from "../packages/ui/src/sites.ts";
 
@@ -14,6 +15,7 @@ const NAMES = signinNamesOf({ isProduction: true } as Parameters<typeof signinNa
 const HUB = NAMES.console;
 const TEAM = NAMES.team;
 const BASE = "/workboard";
+const CONTENTOPS = "https://contentops.gosling-agency.ru";
 
 /** The hand-off's address (`/api/v1/auth/sso?to=…&next=…`) on `origin`: where it leads, signed in. */
 function handOff(origin: string, href: string): URL {
@@ -46,6 +48,15 @@ function follow(start: string, owner = true): { at: string; steps: string[] } {
         steps.push("server");
         continue;
       }
+      // «Публикации» and «Статистика контента» are ContentOps' (App.tsx `ToContentops`).
+      const content = contentScreenOldAddress(path);
+      if (content !== null) {
+        const next = new URL(content);
+        next.hash = url.hash;
+        url = next;
+        steps.push("console");
+        continue;
+      }
       // The console's old «Команда → Люди»: the registry, Hub «Люди» (App.tsx `TeamPeopleToHub`).
       const people = teamPeopleInHub(path);
       if (people !== null) {
@@ -59,6 +70,15 @@ function follow(start: string, owner = true): { at: string; steps: string[] } {
         const parsed = new URL(team, HUB);
         url = new URL(handOff(HUB, workboardEntryHref(HUB, `${parsed.pathname}${parsed.search}`)));
         url.hash = parsed.hash;
+        steps.push("console");
+        continue;
+      }
+      // The console's older addresses (lib/redirects.ts): their new place in the console, after the routes above it (App.tsx).
+      const legacy = resolveLegacyUrl(path);
+      if (legacy !== null) {
+        const next = new URL(legacy, HUB);
+        next.hash = url.hash;
+        url = next;
         steps.push("console");
         continue;
       }
@@ -108,6 +128,9 @@ describe("old addresses", () => {
     if (url.origin === TEAM) {
       const route = url.pathname.slice(BASE.length) || "/";
       expect(WORKBOARD_ROUTES.some((pattern) => matchesRoute(pattern, route)), at).toBe(true);
+    } else if (url.origin === CONTENTOPS) {
+      // ContentOps' entry of the two screens Hub draws (its route `/hub/$screen`).
+      expect(["/hub/publications", "/hub/stats"], at).toContain(url.pathname);
     } else {
       expect(matchScreen(url.pathname)?.screen.product, at).toBe("hub");
     }

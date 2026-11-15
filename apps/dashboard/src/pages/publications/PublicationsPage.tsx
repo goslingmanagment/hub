@@ -31,6 +31,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
 import { formatWindowRange } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
+import { isContentScreen } from "@/lib/frameScope";
 import { seedValue } from "@/pages/settings/ConfigurationEditors";
 import {
   ApprovalReport,
@@ -124,6 +125,10 @@ export function PublicationsPage() {
   const { pages: catalog } = useDashboardShell();
   const { data: auth } = useAuthMe();
   const role = auth?.user.role ?? "owner";
+  // A content manager (inside ContentOps, products plan §2.4) works the posts of their models' pages: approve, cancel,
+  // withdraw, replace, answer «Исход неизвестен». Deleting a live post, «Убрать всё», the settings and the switches stay
+  // the owner's (Hub refuses them too: services/content-manager-operations.ts).
+  const owner = role === "owner";
   const ofapi = useOfapiStatus(role);
   const loginPages = useFanslyLoginPages(role);
   const todayKey = useTodayKey();
@@ -158,7 +163,7 @@ export function PublicationsPage() {
   const weekNotOut = usePublicationsNotOut(lastWeek, null, PUBLICATIONS_WAITING_LIMIT);
   const settings = usePublicationSettings();
   const queues = usePublicationQueues();
-  const config = useAdminConfig();
+  const config = useAdminConfig({ enabled: owner });
 
   // ── writes: the mutations as they were, each called with its row's own target ──
   const approve = useApprovePublications();
@@ -198,14 +203,21 @@ export function PublicationsPage() {
   const onlyfansItem = configItems?.find((item) => item.key === "publishingOnlyfansEnabled");
   const onlyfansSwitch = onlyfansItem === undefined ? null : seedValue(onlyfansItem) === "true";
   const places = useMemo(() => new Map<string, PagePlace>(catalog.map((page) => [page.label, { modelName: page.modelName, username: page.username }])), [catalog]);
-  const queueByPage = useMemo(() => new Map((queues.data?.pages ?? []).map((queue) => [queue.pageLabel, queue])), [queues.data]);
+  // Inside ContentOps the screen is one model's (lib/frameScope.ts): the catalog holds its pages, and so does every list.
+  const onePageSet = isContentScreen() ? places : null;
+  const queuePages = useMemo(
+    () => (queues.data?.pages ?? []).filter((queue) => onePageSet === null || onePageSet.has(queue.pageLabel)),
+    [queues.data, onePageSet],
+  );
+  const queueByPage = useMemo(() => new Map(queuePages.map((queue) => [queue.pageLabel, queue])), [queuePages]);
   const settingsPages = useMemo(() => {
     const order = new Map(catalog.map((page, index) => [page.label, index]));
     // Hub does not publish in Telegram: its page answers like any other and is left out here.
     return (settings.data?.pages ?? [])
       .filter((page) => page.platform === "fansly" || page.platform === "onlyfans")
+      .filter((page) => onePageSet === null || onePageSet.has(page.pageLabel))
       .sort((a, b) => (order.get(a.pageLabel) ?? 999) - (order.get(b.pageLabel) ?? 999));
-  }, [settings.data, catalog]);
+  }, [settings.data, catalog, onePageSet]);
   const pageStates = useMemo(() => {
     const login = new Set(loginPages);
     return new Map<string, PagePublishing>(settingsPages.map((page) => [page.pageLabel, pagePublishing({
@@ -237,8 +249,8 @@ export function PublicationsPage() {
   // ── the feed ──
   const publications = useMemo(() => list.data?.publications ?? [], [list.data]);
   const manual = useMemo(
-    () => manualFeedRows(queues.data?.pages ?? [], { pageLabel, status: view.status, window: view.window }, range, ofapi === "off"),
-    [queues.data, pageLabel, view.status, view.window, range, ofapi],
+    () => manualFeedRows(queuePages, { pageLabel, status: view.status, window: view.window }, range, ofapi === "off"),
+    [queuePages, pageLabel, view.status, view.window, range, ofapi],
   );
   const days = useMemo(() => feedDays(publications, manual, todayKey), [publications, manual, todayKey]);
   const shownInOrder = useMemo(() => days.flatMap((day) => day.rows.flatMap((row) => (row.kind === "post" ? [row.publication] : []))), [days]);
@@ -274,7 +286,7 @@ export function PublicationsPage() {
     onCancel: setCancelling,
     onResolve: setResolving,
     onWithdraw: setWithdrawing,
-    onDeletePost: setDeleting,
+    onDeletePost: owner ? setDeleting : undefined,
     onReplace: (publication) => replace.mutate(publication.id, {
       onSuccess: () => toast.success("Замена создана черновиком: утвердите её"),
       onError: (error) => toast.error(actionFailure(error), actionFailureToast(error)),
@@ -401,10 +413,10 @@ export function PublicationsPage() {
         busy={busy}
         refreshing={refreshQueue.isPending}
         onPick={(label) => filter.select(label)}
-        onEdit={(label) => { setEditing(label); change({ panel: "settings", publication: null }, true); }}
+        onEdit={owner ? (label) => { setEditing(label); change({ panel: "settings", publication: null }, true); } : undefined}
         onOpenSettings={() => change({ panel: "settings", publication: null }, true)}
         onRefresh={(page) => (page.platform === "onlyfans" ? setRefreshingOf(page) : refresh(page))}
-        onWithdrawAll={setWithdrawingPage}
+        onWithdrawAll={owner ? setWithdrawingPage : undefined}
       />
 
       <div className="table-toolbar pub-toolbar">
@@ -570,7 +582,8 @@ export function PublicationsPage() {
           settingsState={settings.data ? "ready" : settings.isLoading ? "loading" : "failed"}
           globalEnabled={settings.data?.globalEnabled ?? null}
           config={configItems}
-          configState={config.data ? "ready" : config.isLoading ? "loading" : "failed"}
+          configState={!owner || config.data ? "ready" : config.isLoading ? "loading" : "failed"}
+          readOnly={!owner}
           ofapiOff={ofapi === "off"}
           focusPage={pageLabel}
           onRetrySettings={() => void settings.refetch()}
@@ -684,7 +697,7 @@ export function PublicationsPage() {
           onClose={() => setResolving(null)}
         />
       )}
-      {editingSettings !== undefined && settings.data !== undefined && (
+      {owner && editingSettings !== undefined && settings.data !== undefined && (
         <SettingsDialog
           key={editingSettings.pageLabel}
           settings={editingSettings}

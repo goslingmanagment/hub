@@ -8,7 +8,7 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { between, demoError, hashString, intBetween, isoDay, pick, queryNumber, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { demoFans, type DemoPage } from "../world.ts";
 import { TAGS, demoMedia, mediaDay, mediaSales, reachOf, soldInMessages, type DemoMedia } from "./money-creator-stats.ts";
-import { DAY_MS, ledgerDay, ownerOnly, pageOr404, startOfDayMs, type LedgerType } from "./money-ledger.ts";
+import { DAY_MS, contentScreenOnly, ledgerDay, ownerOnly, pageOr404, startOfDayMs, type LedgerType } from "./money-ledger.ts";
 
 type CoverageRow = KernelOperationResponse<"statsCoverage">["planes"][number];
 
@@ -370,7 +370,7 @@ const COMMENTS = [
 ];
 
 function contentComments(request: DemoRequest): KernelOperationResponse<"contentComments"> | DemoReply {
-  const page = ownerPage(request);
+  const page = contentScreenOnly(request) ?? pageOr404(request, request.params.pageLabel);
   if (isReply(page)) return page;
   const window = instantWindow(request);
   if (isReply(window)) return window;

@@ -74,6 +74,22 @@ export function registryTabLanding(at: RouterAddress, owner: boolean): { hub: st
   return owner ? { hub: `/people/${tab[1]}/logins` } : { workboard: { pathname: `/team/${tab[1]}`, search: at.search, hash: "" } };
 }
 
+/**
+ * «Публикации» and «Статистика контента» are ContentOps' screens (products plan §2.4, package C2): Hub's old addresses
+ * of them (`/content/publications…`, `/stats/content…`, and the older ones the console leads there) land in ContentOps
+ * with everything they carried. ContentOps' `/hub/<screen>` finds the model of the page named in `?page=` (else the
+ * person's own) and opens its screen there, framing Hub's bare page with the same query. Null for any other address.
+ * Applied by the console's router (apps/dashboard/src/App.tsx), whoever opens it: ContentOps checks the sign-in. The
+ * bare pages themselves stay on Hub's name (`/frame/publications`): they open when ContentOps does not.
+ */
+export function contentScreenOldAddress(pathAndQuery: string, contentops: string = CONTENTOPS): string | null {
+  const [path = "", query = ""] = pathAndQuery.split("?", 2);
+  const clean = path.replace(/\/+$/, "");
+  const screen = clean === "/content/publications" ? "publications" : clean === "/stats/content" ? "stats" : null;
+  if (screen === null) return null;
+  return `${contentops}/hub/${screen}${query ? `?${query}` : ""}`;
+}
+
 /** Workboard's router paths of its old addresses (routes.tsx registers `OldAddress` on each). */
 export const WORKBOARD_OLD_PATHS: readonly string[] = [
   "decisions", "my/shifts", "my/shifts/:shiftId", "shifts/report/:shiftId", "my/reports", "sales", "people", "people/:ref", "people/:ref/:tab", "access", "payouts",
@@ -89,6 +105,7 @@ export interface OldAddressRow {
 
 const HUB = "https://hub.gosling-agency.ru";
 const TEAM = "https://chatgoose.gosling-agency.ru";
+const CONTENTOPS = "https://contentops.gosling-agency.ru";
 
 /** Every address opened today that must keep working, and where it lands now (an address of a person's access: the owner's landing). */
 export const OLD_ADDRESSES: readonly OldAddressRow[] = [
@@ -125,6 +142,17 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "owner's bookmark, «Операции»", from: `${HUB}/fans/mia-1/fansly/7409?period=all`, to: `${TEAM}/workboard/fans/mia-1/fansly/7409?period=all` },
   { who: "owner's bookmark", from: `${HUB}/fans/by-spend/600-plus?page=mia-1#copy`, to: `${TEAM}/workboard/fans/by-spend/600-plus?page=mia-1#copy` },
   { who: "console's «Контент»", from: `${HUB}/content/mass-messages?page=mia-1`, to: `${TEAM}/workboard/sales/mass?page=mia-1` },
+  // «Публикации» and «Статистика контента» are ContentOps' screens (package C2): the owner's bookmarks, the matters Hub
+  // wrote before, the console's own links (Сбои, Настройки ИИ) and the older addresses the console leads there.
+  { who: "owner's bookmark, matter", from: `${HUB}/content/publications?status=draft&window=all&page=all`, to: `${CONTENTOPS}/hub/publications?status=draft&window=all&page=all` },
+  { who: "owner's bookmark", from: `${HUB}/content/publications?page=mia-1&status=draft&window=all&publication=55`, to: `${CONTENTOPS}/hub/publications?page=mia-1&status=draft&window=all&publication=55` },
+  { who: "console's «Сбои»", from: `${HUB}/content/publications?page=mia-1&panel=settings`, to: `${CONTENTOPS}/hub/publications?page=mia-1&panel=settings` },
+  { who: "owner's bookmark", from: `${HUB}/publications?page=mia-1`, to: `${CONTENTOPS}/hub/publications?page=mia-1` },
+  { who: "owner's bookmark", from: `${HUB}/publication-settings`, to: `${CONTENTOPS}/hub/publications?panel=settings` },
+  { who: "owner's bookmark", from: `${HUB}/stats/content?page=mia-1&period=30d&media=77`, to: `${CONTENTOPS}/hub/stats?page=mia-1&period=30d&media=77` },
+  { who: "owner's bookmark", from: `${HUB}/stats?tab=content&days=7&page=mia-1`, to: `${CONTENTOPS}/hub/stats?page=mia-1&period=7d` },
+  // Matters about a publication name ContentOps' address (matters-mirror.ts `publicationLink`).
+  { who: "matter", from: `${CONTENTOPS}/hub/publications?page=mia-1&status=draft&window=all&publication=55`, to: `${CONTENTOPS}/hub/publications?page=mia-1&status=draft&window=all&publication=55` },
   // Links Hub's server wrote (matters: a path on whichever name shows it; people's messages: the team's name).
   { who: "matter before the rename", from: `${TEAM}/workboard/decisions?dispute=5#questions`, to: `${TEAM}/workboard/waiting?dispute=5#questions` },
   { who: "matter on Hub's Главная", from: `${HUB}/workboard/waiting#customs`, to: `${TEAM}/workboard/waiting#customs` },

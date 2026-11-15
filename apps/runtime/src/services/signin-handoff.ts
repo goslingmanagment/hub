@@ -103,6 +103,22 @@ export function signinNamesOf(config: AppContext["config"]): SigninNames {
   };
 }
 
+/**
+ * ContentOps' public name, as Hub knows it: the origin of its sign-in client's callback (`WEB_SIGNIN_CLIENTS`
+ * `contentops=https://contentops.…/auth/hub/callback`), so a stand names its own. Null when no such client is named.
+ * The two screens Hub draws inside it may be framed by this name alone (api/page-headers.ts), and matters about
+ * publications link there (matters-mirror.ts).
+ */
+export function contentopsOriginOf(names: Pick<SigninNames, "clients">): string | null {
+  const callback = names.clients.get("contentops");
+  if (callback === undefined) return null;
+  try {
+    return new URL(callback).origin;
+  } catch {
+    return null;
+  }
+}
+
 /** Where a name leads when nobody said: the team's place for the team's name, the root elsewhere. */
 export function defaultLandingOf(origin: string, names: SigninNames): string {
   return origin === names.team ? `${origin}/workboard/` : `${origin}/`;
