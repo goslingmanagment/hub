@@ -33,6 +33,8 @@ const cookies: Record<string, string> = {};
 let pageOne = 0;
 const users: Record<string, number> = {};
 let refs = 0;
+/** The sale «Оставить по правилу» closed in round 3 (1): a decided question stays on it for (2). */
+let ruledSale = 0;
 
 const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
 const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
@@ -229,6 +231,7 @@ describe("the decider's window of a disputed sale", () => {
   it("leaves the reports as the rule has them after «Оставить по правилу» of a sale a silence had settled (round 3, 1)", async (context) => {
     if (!testDb) return context.skip();
     const ruled = await sale(29.5 * 60);
+    ruledSale = ruled;
     const coras = Number((await q("select id from shifts where user_id = $1 order by started_at limit 1", [users.cora])).rows[0].id);
     const annas = await shiftRow("anna", 29.8, 29.2);
     await ask("anna", annas, ruled);
@@ -269,7 +272,8 @@ describe("the decider's window of a disputed sale", () => {
   // Round 3 (2): a sale with a decided question and a new one — the window's button is the decision's.
   it("accepts the window's button on a sale with an earlier decided question and a new one (round 3, 2)", async (context) => {
     if (!testDb) return context.skip();
-    const ruled = Number((await q("select transaction_id from sale_claims where state = 'decided' and claimant_user_id = $1 order by id limit 1", [users.anna])).rows[0].transaction_id);
+    const ruled = ruledSale;
+    expect((await q("select state from sale_claims where transaction_id = $1 and claimant_user_id = $2", [ruled, users.anna])).rows[0].state).toBe("decided");
     const bellas = await shiftRow("bella", 29.9, 29.1);
     await ask("bella", bellas, ruled);
     const claimId = Number((await q("select id from sale_claims where transaction_id = $1 and claimant_user_id = $2", [ruled, users.bella])).rows[0].id);
