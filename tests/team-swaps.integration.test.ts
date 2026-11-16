@@ -265,6 +265,39 @@ describe("«Подмена»: a question whose «Можно» writes the day's l
     expect(await runs("ira", at(date, "12:00"), pageA)).toBe(false);
   });
 
+  it("leaves out a page whose own line does not run that weekday, as the rule does (its own line replaces the every-page one)", async (context) => {
+    if (!testDb) return context.skip();
+    const app = createTestAppContext(testDb);
+    // Zoe works alfa-1 and alfa-3 on a slot of every page, 10:00–18:00 every day; alfa-3 has its own line, Mondays only.
+    // By the rule (sale-rule.ts linesOn) alfa-3's own line replaces the every-page one there: she works alfa-3 on Mondays
+    // only. A swap on another weekday takes alfa-1 alone.
+    const alfa = Number((await testDb.pool.query("select model_id from pages where label = 'alfa-1'")).rows[0]!.model_id);
+    const third = (await createFanslyPage(db, { modelId: alfa, label: "alfa-3" })).id;
+    const user = await createUserAccount(app, { username: "zoe", role: "chatter" }, { source: "cli" });
+    await db.execute(sql`update users set password_hash = ${await argon2.hash(PASSWORD, { type: argon2.argon2id })} where id = ${user.id}`);
+    for (const label of ["alfa-1", "alfa-3"]) await assignPageToUser(app, { userId: user.id, pageLabel: label }, { source: "cli" });
+    const row = await insertPersonRow(db, {
+      code: "zoe", displayName: "zoe", kind: "human", role: "chatter", state: "working", leftOn: null, telegramUserId: null,
+      telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner", createdByUserId: null,
+    });
+    await insertPersonLogin(db, { personId: row.id, userId: user.id, linkedByUserId: null });
+    await db.execute(sql`insert into person_working_pages (person_id, page_id, position) values (${row.id}, ${pageA}, 0), (${row.id}, ${third}, 1)`);
+    await db.execute(sql`insert into person_schedule_slots (person_id, page_id, start_minute, end_minute, weekdays, valid_from) values
+      (${row.id}, null, 600, 1080, null, '2026-01-01'), (${row.id}, ${third}, 600, 1080, '{mon}', '2026-01-01')`);
+    cookies.zoe = await login("zoe");
+
+    // A day a week or more ahead that is not a Monday.
+    let when = Date.now() + 8 * DAY_MS;
+    while (new Date(when + 3 * 3_600_000).getUTCDay() === 1) when += DAY_MS;
+    const date = moscowDay(when);
+    const asked = await as("zoe", "POST", "/api/v1/team/questions", {
+      pageLabel: "alfa-1", kind: "swap", text: "Не выйду", swap: { date, pageLabels: ["alfa-1"], start: "11:00", end: "13:00", coverPersonCode: "carl" },
+    });
+    expect(asked.statusCode, asked.body).toBe(200);
+    const question = teamQuestionWriteResponseSchema.parse(asked.json()).question;
+    expect(question.swap!.pages).toEqual(["alfa-1"]);
+  });
+
   it("keeps the covering person's matter until the swap's END, and closes a swap question nobody decided before its hours ended", async (context) => {
     if (!testDb) return context.skip();
     const app = createTestAppContext(testDb);
