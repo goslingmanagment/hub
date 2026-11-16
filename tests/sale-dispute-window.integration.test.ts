@@ -33,8 +33,6 @@ const cookies: Record<string, string> = {};
 let pageOne = 0;
 const users: Record<string, number> = {};
 let refs = 0;
-/** The sale «Оставить по правилу» closed in round 3 (1): a decided question stays on it for (2). */
-let ruledSale = 0;
 
 const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
 const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
@@ -231,7 +229,6 @@ describe("the decider's window of a disputed sale", () => {
   it("leaves the reports as the rule has them after «Оставить по правилу» of a sale a silence had settled (round 3, 1)", async (context) => {
     if (!testDb) return context.skip();
     const ruled = await sale(29.5 * 60);
-    ruledSale = ruled;
     const coras = Number((await q("select id from shifts where user_id = $1 order by started_at limit 1", [users.cora])).rows[0].id);
     const annas = await shiftRow("anna", 29.8, 29.2);
     await ask("anna", annas, ruled);
@@ -269,20 +266,33 @@ describe("the decider's window of a disputed sale", () => {
     expect((await q("select state from sale_claims where id = $1", [claimId])).rows[0].state).toBe("decided");
   });
 
-  // Round 3 (2): a sale with a decided question and a new one — the window's button is the decision's.
+  // Round 3 (2): a sale with a decided question and a new one — the window's button is the decision's. The earlier asker
+  // was decided against (her report counts nothing): the window still names her, by her decided question.
   it("accepts the window's button on a sale with an earlier decided question and a new one (round 3, 2)", async (context) => {
     if (!testDb) return context.skip();
-    const ruled = ruledSale;
-    expect((await q("select state from sale_claims where transaction_id = $1 and claimant_user_id = $2", [ruled, users.anna])).rows[0].state).toBe("decided");
+    const contested = await sale(29.6 * 60);
+    const annas = Number((await q("select id from shifts where user_id = $1 and started_at < now() - interval '29 hours' order by started_at desc limit 1", [users.anna])).rows[0].id);
+    const coras = Number((await q("select id from shifts where user_id = $1 order by started_at limit 1", [users.cora])).rows[0].id);
+    await ask("anna", annas, contested);
+    await handInAndConfirm(asSession, "anna", annas);
+    await handInAndConfirm(asSession, "cora", coras);
+    await runSaleClaims(app);
+    const annasClaim = Number((await q("select id from sale_claims where transaction_id = $1 and claimant_user_id = $2", [contested, users.anna])).rows[0].id);
+    expect((await rawSession("cora", "POST", `/api/v1/sale-claims/${annasClaim}/answer`, { answer: "disagree", note: "мой фан" })).statusCode).toBe(200);
+    const first = await windowOf(contested);
+    await press(contested, first, first.outcomes.find((one) => one.label === "cora: целиком")!);
+    expect(await counted(annas, contested)).toBe(0);
+    // A third person asks now.
     const bellas = await shiftRow("bella", 29.9, 29.1);
-    await ask("bella", bellas, ruled);
-    const claimId = Number((await q("select id from sale_claims where transaction_id = $1 and claimant_user_id = $2", [ruled, users.bella])).rows[0].id);
-    expect((await rawSession("cora", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree", note: "мой фан" })).statusCode).toBe(200);
-    const shown = await windowOf(ruled);
+    await ask("bella", bellas, contested);
+    const bellasClaim = Number((await q("select id from sale_claims where transaction_id = $1 and claimant_user_id = $2", [contested, users.bella])).rows[0].id);
+    expect((await rawSession("cora", "POST", `/api/v1/sale-claims/${bellasClaim}/answer`, { answer: "disagree", note: "мой фан" })).statusCode).toBe(200);
+    const shown = await windowOf(contested);
+    expect(shown.parties.map((one) => one.userId)).toContain(users.anna);
     const bellasButton = shown.outcomes.find((one) => one.label === "bella: целиком");
     expect(bellasButton).toBeDefined();
-    await press(ruled, shown, bellasButton!);
-    expect((await decisionOf(ruled))?.shares).toEqual([{ userId: users.bella, percent: 100 }]);
+    await press(contested, shown, bellasButton!);
+    expect((await decisionOf(contested))?.shares).toEqual([{ userId: users.bella, percent: 100 }]);
   });
 });
 
