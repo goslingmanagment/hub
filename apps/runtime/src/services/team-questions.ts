@@ -453,7 +453,9 @@ async function refuseSwapClash(db: QuestionsApp["db"], facts: TeamFacts, swap: T
 
 /**
  * The absent person's pages (of the team) on which their standing slot runs in a swap's hours: on each page, its own
- * lines valid that day, else the every-page ones (as the rule's `linesOn`), begun that day or the day before.
+ * lines valid that day, else the every-page ones — chosen by the dates alone, the weekday read after (the rule's
+ * `linesOn` and `slotRuns`: a page's own line for Mondays leaves that page out on a Tuesday) — begun that day or the
+ * day before.
  */
 async function slotPagesOf(
   app: QuestionsApp,
@@ -465,11 +467,11 @@ async function slotPagesOf(
   for (const pageId of input.pages) {
     if (!input.modelPages.has(pageId)) continue;
     const runs = daysAround(input.date).slice(0, 2).some((day) => {
-      const valid = standing.filter((line) => (line.validFrom === null || line.validFrom <= day) && (line.validTo === null || day <= line.validTo)
-        && (line.weekdays === null || line.weekdays.includes(weekdayOfDay(day))));
+      const valid = standing.filter((line) => (line.validFrom === null || line.validFrom <= day) && (line.validTo === null || day <= line.validTo));
       const own = valid.filter((line) => line.pageId === pageId);
       return (own.length > 0 ? own : valid.filter((line) => line.pageId === null))
-        .some((line) => line.startMinute !== line.endMinute && swapHoursOverlap({ date: day, startMinute: line.startMinute, endMinute: line.endMinute }, swap));
+        .some((line) => (line.weekdays === null || line.weekdays.includes(weekdayOfDay(day))) && line.startMinute !== line.endMinute
+          && swapHoursOverlap({ date: day, startMinute: line.startMinute, endMinute: line.endMinute }, swap));
     });
     if (runs) found.push(pageId);
   }
