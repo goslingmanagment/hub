@@ -53,7 +53,7 @@ import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { clientCaptureProducer } from "./ingest-observations.ts";
 import { SALE_RULE } from "./sale-rule.ts";
 import { disputeDecider, phaseOf, postPagesDiffer } from "./shift-report-board-view.ts";
-import { draftFacts, draftLines, linesPageSums, pageCatalog, subjectOf, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { draftFacts, draftLines, linesPageSums, pageCatalog, postPagesOf, subjectOf, type PageCatalog, type Subject } from "./shift-handins.ts";
 
 /**
  * «Hub сверяет суммы» and «Нет в Hub» (products plan 2026-11-13, package R §5, brief R1b): Hub's own check of every page
@@ -370,9 +370,12 @@ export async function syncCheckMatters(app: CheckApp, now: Date): Promise<number
   for (const one of await listHandinsWithPostCopies(db)) {
     if (now.getTime() - one.firstCopiedAt.getTime() < POST_MISSING_AFTER_MS) continue;
     const current = (await listHandinVersions(db, one.handinId)).at(-1);
-    if (current === undefined) continue;
+    const subject = current === undefined ? null : await subjectOf(db, one.shiftId).catch(() => null);
+    if (current === undefined || subject === null) continue;
+    // The models of the version's posts (`postPagesOf`, what the copy offers): a model whose page the version names only
+    // for a $0 line nearby has no post to copy — no reminder; one opened before closes below (review round 3, 3).
     const models = new Map<string, string>();
-    for (const page of current.pages) {
+    for (const page of postPagesOf(current, subject)) {
       const info = catalog.info.get(page.pageLabel);
       if (info !== undefined) models.set(info.modelSlug, info.modelName);
     }

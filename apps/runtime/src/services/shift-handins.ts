@@ -773,6 +773,7 @@ export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: st
     case "half": return "решение владельца: пополам";
     case "nobody": return "решение владельца: никому";
     case "pot": return "решение владельца: в общак";
+    case "rule": return "решение: по правилу";
     default: return null;
   }
 }
@@ -814,17 +815,24 @@ export function versionReportDate(version: Pick<HandinVersionRow, "reportDate">,
   return version.reportDate ?? handin.reportDate;
 }
 
+/**
+ * The pages a version's posts list — the one place it is decided, for the posts, their copy and the reminder to copy
+ * them: the shift's own pages and those where something is counted. A page the version names only for a line of
+ * «Рядом» that counts nothing (`reportSums`) is not an account of the person's post. Pure.
+ */
+export function postPagesOf(version: Pick<HandinVersionRow, "pages" | "lines">, subject: Pick<Subject, "shift">): HandinVersionRow["pages"] {
+  const held = new Set(subject.shift.pages.filter((page) => page.salesFrom !== null).map((page) => page.pageLabel));
+  const counted = new Set(version.lines.flatMap((line) => (line.pageLabel !== null && line.group === "mine" ? [line.pageLabel] : [])));
+  return version.pages.filter((page) => page.amountMills !== 0 || held.has(page.pageLabel) || counted.has(page.pageLabel));
+}
+
 /** The version's posts, one per model, with the model's slug (the copy to «Отчётность» goes by it). */
 export function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "shift" | "person">, handin: Pick<HandinRow, "reportDate">, context: Pick<ViewContext, "catalog" | "names" | "fans">) {
   const tag = subject.person?.reportTag ?? `#${subject.person?.code ?? context.names.get(subject.shift.userId) ?? "чаттер"}`;
-  // The post lists the accounts it always did: the shift's own pages and those where something is counted. A page the
-  // version names only for a line of «Рядом» that counts nothing (`reportSums`) is not an account of the person's post.
-  const held = new Set(subject.shift.pages.filter((page) => page.salesFrom !== null).map((page) => page.pageLabel));
-  const counted = new Set(version.lines.flatMap((line) => (line.pageLabel !== null && line.group === "mine" ? [line.pageLabel] : [])));
   return postTexts({
     reportDate: versionReportDate(version, handin),
     tag,
-    pages: version.pages.filter((page) => page.amountMills !== 0 || held.has(page.pageLabel) || counted.has(page.pageLabel)).map((page) => {
+    pages: postPagesOf(version, subject).map((page) => {
       const info = context.catalog.info.get(page.pageLabel);
       return { pageLabel: page.pageLabel, platform: info?.platform ?? "fansly", modelSlug: info?.modelSlug ?? page.pageLabel, modelName: info?.modelName ?? page.pageLabel, amountMills: page.amountMills };
     }),
