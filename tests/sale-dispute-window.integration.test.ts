@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { saleDisputeResponseSchema, type SaleDisputeResponse } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel } from "@agency_hub_core/db";
+import { saleDisputeResponseSchema, shiftReportResponseSchema, type SaleDisputeResponse } from "@agency_hub_core/contracts";
+import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
+import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import { runSaleClaims } from "../apps/runtime/src/services/sale-claims.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -293,6 +294,44 @@ describe("the decider's window of a disputed sale", () => {
     expect(bellasButton).toBeDefined();
     await press(contested, shown, bellasButton!);
     expect((await decisionOf(contested))?.shares).toEqual([{ userId: users.bella, percent: 100 }]);
+  });
+
+  // Round 3 (1), the other order: the person said «Не согласен» to Gengar's card, her line waited and was counted at $0;
+  // «Оставить по правилу» gives her what the rule gives — the sale whole — in her counted report. (Last: a reviewing key
+  // makes every later hand-in wait for its check.)
+  it("gives the person her sale back in her counted report after «Оставить по правилу» of a card she disagreed with (round 3, 1)", async (context) => {
+    if (!testDb) return context.skip();
+    const reviewer = `${AGENT_KEY_TOKEN_PREFIX}window-gengar-key`;
+    await insertAgentKey(testDb.db, {
+      name: "window-gengar", keyPrefix: reviewer.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(reviewer),
+      capabilities: ["review:shift_reports"] as never, pageIds: [pageOne], expiresAt: new Date(Date.now() + 30 * 86_400_000), createdBy: users.boss!,
+    });
+    const own = await sale(28.5 * 60);
+    const coras = Number((await q("select id from shifts where user_id = $1 order by started_at limit 1", [users.cora])).rows[0].id);
+    expect((await rawSession("cora", "POST", `/api/v1/shift-reports/${coras}/reopen`)).statusCode).toBe(200);
+    const handed = await rawSession("cora", "POST", `/api/v1/shift-reports/${coras}/submit`);
+    expect(handed.statusCode, handed.body).toBe(200);
+    const candidateId = shiftReportResponseSchema.parse(handed.json()).board!.candidate!.id;
+    const card = await server!.inject({
+      method: "POST", url: `/api/v1/agent/shift-reports/checks/${candidateId}`, headers: { authorization: `Bearer ${reviewer}` },
+      payload: { proposals: [{ transactionId: own, kind: "owner_change", to: { word: "give", userId: users.anna }, why: "Фан писал anna." }] },
+    });
+    expect(card.statusCode, card.body).toBe(200);
+    const proposal = Number((await q("select id from shift_handin_proposals where candidate_id = $1", [candidateId])).rows[0].id);
+    expect((await rawSession("cora", "POST", `/api/v1/shift-reports/${coras}/proposals/${proposal}/answer`, { answer: "decline", note: "это мой фан" })).statusCode).toBe(200);
+    const board = shiftReportResponseSchema.parse((await rawSession("cora", "GET", `/api/v1/shift-reports/${coras}`)).json()).board!;
+    expect(board.phase).toBe("confirm");
+    const confirmed = await rawSession("cora", "POST", `/api/v1/shift-reports/${coras}/confirm`, { candidateId, seenTotalMills: board.totals.nowMills, seenCount: board.totals.count });
+    expect(confirmed.statusCode, confirmed.body).toBe(200);
+    expect(await counted(coras, own)).toBe(0);
+    // The decider: «Оставить по правилу» — the rule gives it to cora whole.
+    const shown = await windowOf(own);
+    const rule = shown.outcomes.find((one) => one.label === "Оставить по правилу");
+    expect(rule).toBeDefined();
+    expect(rule!.gives.find((one) => one.userId === users.cora)?.mills).toBe(NET);
+    await press(own, shown, rule!);
+    expect(await counted(coras, own)).toBe(NET);
+    expect((await q("select state from sale_claims where transaction_id = $1 and claimant_user_id = $2", [own, users.cora])).rows.map((row) => row.state)).toEqual(["decided"]);
   });
 });
 
