@@ -223,4 +223,62 @@ describe("the decider's window of a disputed sale", () => {
     await press(taken, shown, annasButton!);
     expect([await counted(annas, taken), await counted(bellas, taken), await counted(coras, taken)]).toEqual([NET, 0, 0]);
   });
+
+  // Round 3 (1): «Оставить по правилу» after a settlement — the claim was settled by a day of silence, the side said «Не
+  // согласен» — puts every report holding the sale back to what the rule gives its person, once.
+  it("leaves the reports as the rule has them after «Оставить по правилу» of a sale a silence had settled (round 3, 1)", async (context) => {
+    if (!testDb) return context.skip();
+    const ruled = await sale(29.5 * 60);
+    const coras = Number((await q("select id from shifts where user_id = $1 order by started_at limit 1", [users.cora])).rows[0].id);
+    const annas = await shiftRow("anna", 29.8, 29.2);
+    await ask("anna", annas, ruled);
+    await handInAndConfirm(asSession, "anna", annas);
+    await handInAndConfirm(asSession, "cora", coras);
+    await runSaleClaims(app);
+    await runSaleClaims(app, new Date(Date.now() + 25 * HOUR_MS));
+    expect([await counted(annas, ruled), await counted(coras, ruled)]).toEqual([NET, 0]);
+    const claimId = Number((await q("select id from sale_claims where transaction_id = $1 and claimant_user_id = $2", [ruled, users.anna])).rows[0].id);
+    const disagreed = await rawSession("cora", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree", note: "мой фан" });
+    expect(disagreed.statusCode, disagreed.body).toBe(200);
+    const shown = await windowOf(ruled);
+    const rule = shown.outcomes.find((one) => one.label === "Оставить по правилу");
+    expect(rule).toBeDefined();
+    await press(ruled, shown, rule!);
+    // The rule gives it to cora whole: her report counts it, anna's nothing — and cora's next hand-in does not double it.
+    expect([await counted(annas, ruled), await counted(coras, ruled)]).toEqual([0, NET]);
+    await handInAndConfirm(asSession, "cora", coras);
+    expect(await counted(annas, ruled) + await counted(coras, ruled)).toBe(NET);
+  });
+
+  it("only closes the questions by «Оставить по правилу» when no report was settled (round 3, 1)", async (context) => {
+    if (!testDb) return context.skip();
+    const plain = await sale(29.3 * 60);
+    const annas = Number((await q("select id from shifts where user_id = $1 and started_at < now() - interval '29 hours' order by started_at desc limit 1", [users.anna])).rows[0].id);
+    expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${annas}/reopen`)).statusCode).toBe(200);
+    await ask("anna", annas, plain);
+    const claimId = Number((await q("select id from sale_claims where transaction_id = $1", [plain])).rows[0].id);
+    expect((await rawSession("cora", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree", note: "мой фан" })).statusCode).toBe(200);
+    const versions = async () => Number((await q("select count(*)::int as n from shift_handin_versions")).rows[0].n);
+    const before = await versions();
+    const shown = await windowOf(plain);
+    await press(plain, shown, shown.outcomes.find((one) => one.label === "Оставить по правилу")!);
+    expect(await versions()).toBe(before);
+    expect((await q("select state from sale_claims where id = $1", [claimId])).rows[0].state).toBe("decided");
+  });
+
+  // Round 3 (2): a sale with a decided question and a new one — the window's button is the decision's.
+  it("accepts the window's button on a sale with an earlier decided question and a new one (round 3, 2)", async (context) => {
+    if (!testDb) return context.skip();
+    const ruled = Number((await q("select transaction_id from sale_claims where state = 'decided' and claimant_user_id = $1 order by id limit 1", [users.anna])).rows[0].transaction_id);
+    const bellas = await shiftRow("bella", 29.9, 29.1);
+    await ask("bella", bellas, ruled);
+    const claimId = Number((await q("select id from sale_claims where transaction_id = $1 and claimant_user_id = $2", [ruled, users.bella])).rows[0].id);
+    expect((await rawSession("cora", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree", note: "мой фан" })).statusCode).toBe(200);
+    const shown = await windowOf(ruled);
+    const bellasButton = shown.outcomes.find((one) => one.label === "bella: целиком");
+    expect(bellasButton).toBeDefined();
+    await press(ruled, shown, bellasButton!);
+    expect((await decisionOf(ruled))?.shares).toEqual([{ userId: users.bella, percent: 100 }]);
+  });
 });
+

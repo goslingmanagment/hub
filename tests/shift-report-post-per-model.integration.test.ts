@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { shiftReportResponseSchema } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel } from "@agency_hub_core/db";
+import { assignUserToPage, createFanslyPage, createModel, ensureHandin, insertHandinVersion, type HandinVersionLine } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -177,4 +177,37 @@ describe("«Скопировать пост» on a shift of two models", () => {
     await syncCheckMatters(app, new Date());
     expect((await q("select count(*)::int as n from matters where kind = 'shift.report.post_missing' and state = 'open'")).rows[0].n).toBe(0);
   });
+
+  // Round 3 (3): a page the version names only for a $0 «Рядом» line has no post — no reminder to copy it.
+  it("never reminds to copy the post of a model the report has no post of (round 3, 3)", async (context) => {
+    if (!testDb) return context.skip();
+    const startedAt = new Date(Date.now() - 0.45 * HOUR_MS);
+    const only = Number((await q(
+      `insert into shifts (user_id, state, started_at, ended_at, worked_minutes, messages, report_date, pages)
+       values ($1, 'closed', $2::timestamptz, now() - interval '20 minutes', 25, 10, $3::date, $4::jsonb) returning id`,
+      [anna, startedAt.toISOString(), new Date(startedAt.getTime() + 3 * HOUR_MS).toISOString().slice(0, 10),
+        JSON.stringify([{ pageLabel: "ari-1", activeMinutes: 25, messages: 10, salesFrom: startedAt.toISOString() }])],
+    )).rows[0].id);
+    const own = await sale("ari-1", 50_000, 26);
+    const near = await sale("lilly-1", 30_000, 25);
+    const handin = await ensureHandin(app.db, { shiftId: only, userId: anna, personId: null, reportDate: startedAt.toISOString().slice(0, 10) });
+    const line = (transactionId: number, pageLabel: string, group: "mine" | "near", amountMills: number, netMills: number): HandinVersionLine => ({
+      transactionId, offPlatformId: null, group, pageLabel, kind: "tip", occurredAt: new Date().toISOString(), netMills,
+      rule: { home: group === "mine" ? "shift" : "nobody", reason: group === "mine" ? "holder" : "no_holder", shareMills: amountMills, toUserId: null, senderUserId: null },
+      alreadyIn: null, statement: null, shareWithUserId: null, note: null, amountMills, added: false, disputed: false,
+    });
+    // The version names lilly-1 only for a colleague's sale nearby, at $0: ari's post alone.
+    await insertHandinVersion(app.db, {
+      handin, door: "workboard", actorUserId: anna, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null, totalMills: 50_000,
+      pages: [{ pageLabel: "ari-1", amountMills: 50_000 }, { pageLabel: "lilly-1", amountMills: 0 }],
+      lines: [line(own, "ari-1", "mine", 50_000, 50_000), line(near, "lilly-1", "near", 0, 30_000)],
+      offPlatform: [], comment: "", dayPaid: null, ruleVersion: "test", reportDate: startedAt.toISOString().slice(0, 10), at: new Date(),
+    });
+    expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${only}/post-copied?model=ari`)).statusCode).toBe(200);
+    expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${only}/post-copied?model=lilly`)).statusCode).toBe(400);
+    await q("update shift_handin_post_copies set copied_at = now() - interval '2 hours' where handin_id = $1", [handin.id]);
+    await syncCheckMatters(app, new Date());
+    expect((await q("select count(*)::int as n from matters where kind = 'shift.report.post_missing' and state = 'open' and reason_key like $1", [`%:${handin.id}:%`])).rows[0].n).toBe(0);
+  });
 });
+
