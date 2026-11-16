@@ -36,6 +36,15 @@ describe("a message with two reports", () => {
     expect((items[0]!.evidence as { flags: string[] }).flags).toEqual(["sum_mismatch", "second_report"]);
   });
 
+  it("closes once the author sent the second report as its own message (the ledger's own rule: a later post of the day)", () => {
+    const resent = { ...post(806, []), postedAt: "2026-11-11T03:40:00.000Z" };
+    expect(reportPostFixItems(reports([post(805, ["second_report"]), resent]), payouts, loginOf)).toEqual([]);
+    // An earlier post of the day, or another person's, is no resend.
+    const earlier = { ...post(807, []), postedAt: "2026-11-11T02:00:00.000Z" };
+    const other = { ...post(808, []), postedAt: "2026-11-11T03:40:00.000Z", person: { slug: "bob", name: "Bob" } };
+    expect(reportPostFixItems(reports([post(805, ["second_report"]), earlier, other]), payouts, loginOf).map((one) => one.key)).toEqual(["report.post_fix:805"]);
+  });
+
   it("waits, like every post's matter, for the day the reports accrue from", () => {
     expect(reportPostFixItems(reports([post(804, ["second_report"])]), { reportsFrom: null } as unknown as Payouts, loginOf)).toEqual([]);
   });
