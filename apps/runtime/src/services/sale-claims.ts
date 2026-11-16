@@ -989,8 +989,10 @@ export async function decideSaleDispute(
   }
   if (input.outcome === "rule") {
     // «По правилу»: the questions are closed and the sale is as the rule has it — no decision is recorded, so a later fact
-    // still moves it by the rule. A report an agreement or a silence had settled holds what the rule gives its person now,
-    // by the path a cancelled decision takes (review round 3, 1): in the settlements' turn, the paid days asked before.
+    // still moves it by the rule. Every handed-in report holding the sale holds what the rule gives its person now — one an
+    // agreement or a silence had settled, one whose line waited for this answer (a card the person disagreed with) — by
+    // the path a cancelled decision takes (review round 3, 1): in the settlements' turn, the paid days asked before. A line
+    // that already counts what the rule gives is left as it is (`settleReport` makes no version then).
     if (now_.pot || (now_.sale?.home?.shares.length ?? 0) === 0) throw new BadRequestError("The rule gives this sale to nobody: decide it", { reason: "no_rule_owner" });
     const paid = await paidDaysOf(app, await listCurrentReportsOfSales(db, [transactionId]));
     const made: MadeVersion[] = [];
@@ -1002,7 +1004,7 @@ export async function decideSaleDispute(
       for (const claim of closing) await updateSaleClaim(txDb, claim.id, { state: "decided", closedAt: now }, now);
       await refreshHomeWithin(txDb, now_.sale?.occurredAt ?? null, now);
       const settled = (await listCurrentReportsOfSales(txDb, [transactionId]))
-        .filter((report) => report.lines.some((line) => line.transactionId === transactionId && line.settled !== undefined));
+        .filter((report) => report.lines.some((line) => line.transactionId === transactionId));
       // Every report first, then every line, then the versions: each draft reads the others as they stand before any changes.
       for (const report of settled) await findHandinByShift(txDb, report.shiftId, { lock: true });
       const lines: Array<HandinVersionLine | null> = [];
