@@ -326,7 +326,11 @@ export function reportPostFixItems(
     const flags = REPORT_POST_FIXABLE_FLAGS.filter((flag) => post.flags.includes(flag));
     // Two reports pasted into one message (the ledger's `second_report`): the first counts, the second is read by
     // nobody until its author sends it as its own message. Not a flag that keeps the post out of the pay, so its own words.
-    const second = post.flags.includes(SECOND_REPORT_FLAG);
+    // The second report sent since as its own message ends it — the ledger's own rule (its check `second_reports`): a
+    // later post of the same person and day without the flag.
+    const resent = (one: typeof post) => one.id !== post.id && !one.flags.includes(SECOND_REPORT_FLAG) && one.person.slug !== null
+      && one.person.slug === post.person.slug && post.reportDate !== null && one.reportDate === post.reportDate && one.postedAt > post.postedAt;
+    const second = post.flags.includes(SECOND_REPORT_FLAG) && !reports.posts.some(resent);
     const day = post.reportDate ?? moscowDay(post.postedAt);
     if ((flags.length === 0 && !second) || day === null || day < from) continue;
     const userId = post.person.slug === null ? undefined : loginOf.get(post.person.slug);
