@@ -18,7 +18,7 @@ import type { Result, Send } from "../apps/page-browser/src/rpc/protocol.ts";
 import { describeFanslyPart, describeFanslyWrite, fanslyPartFingerprint, fanslyWriteFingerprint, type FanslyWireId } from "../packages/fansly/src/index.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { makeLog, monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
-import { FakeCdpPort, FakeHubEngine, HubChrome, quiet, tempDir, until, type HubScript } from "./helpers/page-browser-fakes.ts";
+import { FakeCdpPort, FakeHubEngine, HubChrome, quiet, tempDir, TestClock, until, type HubScript } from "./helpers/page-browser-fakes.ts";
 
 // Hub's requests through the page's browser (Project Browser plan §4.2,
 // §4.7; spec §6.1, §9; stage 1, §3–§5): the engine's `send` runs in the
@@ -76,9 +76,11 @@ interface World {
   lines: string[];
   exit: { open: boolean };
   ready: { why: string | null };
+  /** The operator's monotonic clock here (the gate's and the requests'). */
+  now: () => number;
 }
 
-async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; slotLimitMs?: number; capBytes?: number; noSession?: boolean; dir?: string; passive?: boolean; quiet?: () => PageQuiet; siteHold?: HubDeps["siteHold"] } = {}): Promise<World> {
+async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; slotLimitMs?: number; capBytes?: number; noSession?: boolean; dir?: string; passive?: boolean; quiet?: () => PageQuiet; siteHold?: HubDeps["siteHold"]; clock?: TestClock } = {}): Promise<World> {
   let dir = options.dir;
   if (dir === undefined) {
     const temp = tempDir("pb-hub-");
@@ -88,7 +90,8 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
   const lines: string[] = [];
   setLogSink((line) => lines.push(line));
   const cdp = new FakeCdpPort();
-  const gate = new ApiGate({ ...(options.gateNoResponseMs ? { noResponseMs: options.gateNoResponseMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.passive ? { passive: true } : {}) });
+  const now = options.clock?.now ?? monoMs;
+  const gate = new ApiGate({ now, ...(options.gateNoResponseMs ? { noResponseMs: options.gateNoResponseMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.passive ? { passive: true } : {}) });
   const chrome = new HubChrome(cdp, gate);
   gate.cut = () => chrome.cut("api");
   gate.cutHeld = () => 0;
@@ -136,6 +139,7 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
     timings: { pauseWaitMs: 1000, checkWaitMs: 1000, opLimitMs: 2000, mainWaitMs: 1000, ...options.timings },
     ...(options.quiet ? { quiet: options.quiet } : {}),
     ...(options.siteHold ? { siteHold: options.siteHold } : {}),
+    now,
     log: makeLog("hub"),
   });
   hub = created;
@@ -147,13 +151,13 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
     chrome.siteRequest(ME, siteHeaders());
     await until(() => created.session.fingerprint !== null, 2000, "the live session");
   }
-  return { dir, cdp, chrome, gate, engine, hub: created, buffer, outcomes, alarms, lines, exit, ready };
+  return { dir, cdp, chrome, gate, engine, hub: created, buffer, outcomes, alarms, lines, exit, ready, now };
 }
 
 let nextId = 1000;
 
 function send(w: World, overrides: Partial<Send> = {}, script?: HubScript): Send {
-  const now = monoMs();
+  const now = w.now();
   const message: Send = {
     type: "send",
     ownerGeneration: w.engine.generation,
@@ -288,12 +292,25 @@ describe("a Hub request (plan §4.2)", () => {
   });
 
   it("one admitted request of the page at a time: a second admission while the first is unfinished — its admission ran out unsent, Chrome still holds it — is not released (not sent, \"pace\"); nothing goes late; once the first ended, the next goes", async () => {
-    const w = await world();
+    // The operator's clock is the test's: the first's admission cannot run
+    // out before its release (a buffer's fsync comes between them), only by
+    // the gate's deadline once it is open. The operator's own limit (21 s),
+    // not the world's short one: the first's end is Chrome's, when the test
+    // gives it.
+    const clock = new TestClock();
+    const w = await world({ clock, timings: { opLimitMs: 21_000 } });
     let deadlineMs = 150;
-    w.engine.answer = (check) => ({ type: "checkResult", ownerGeneration: 1, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + deadlineMs });
-    // The first: released, its records written only after its deadline.
-    const first = send(w, {}, { sendDelayMs: 400 });
+    w.engine.answer = (check) => ({ type: "checkResult", ownerGeneration: 1, attemptId: check.attemptId, admit: true, deadlineMono: clock.now() + deadlineMs });
+    // The first: released, and held by Chrome on no connection until the
+    // test lets its records go.
+    let writeFirst = (): void => undefined;
+    const first = send(w, {}, { writeWhen: new Promise<void>((resolve) => (writeFirst = resolve)) });
     await until(() => w.cdp.sent("Fetch.continueRequest").length === 1, 3000, "the first released");
+    // Its admission runs out unsent (the gate's deadline): the gate cuts the
+    // API tunnels, none of them the first's — Chrome still holds it.
+    await until(() => w.gate.state.window === null, 3000, "the first's admission to run out");
+    clock.advance(deadlineMs);
+    expect(w.gate.slotOwner).toBe(`hub:${first.attemptId}`);
     // An engine that admits the next one meanwhile.
     deadlineMs = 15_000;
     const second = send(w);
@@ -302,9 +319,14 @@ describe("a Hub request (plan §4.2)", () => {
     // Failed in its pause with the gate's reason (the journal's line), not
     // as an attempt that merely ended.
     expect(w.cdp.sent("Fetch.failRequest").at(-1)?.params.errorReason).toBe("Failed");
-    // The first never goes: not in its window, not in another's.
+    // Chrome writes the first's records now, late: the gate holds them.
+    writeFirst();
+    await until(() => w.chrome.requestsOf(first.attemptId).some((request) => request.tunnel !== null), 3000, "the first's late records");
+    expect(w.chrome.wire).toEqual([]);
+    // Its tunnel cut, Chrome ends it: the first never went — not in its
+    // window, not in another's.
+    expect(w.chrome.cut("api")).toBe(1);
     expect(await outcomeOf(w, first.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "send_deadline_passed" });
-    await new Promise((resolve) => setTimeout(resolve, 500));
     expect(w.chrome.wire).toEqual([]);
     // Its end known, the next one goes.
     const third = send(w);
@@ -843,7 +865,7 @@ describe("an upload's part and its status read (wall posts PR 8; minor 9)", () =
   const admitAs = (w: World, fingerprint: () => string | undefined, forMs = 15_000) => {
     w.engine.answer = (check) => {
       const named = fingerprint();
-      return { type: "checkResult", ownerGeneration: w.engine.generation, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + forMs, ...(named === undefined ? {} : { writeFingerprint: named }) };
+      return { type: "checkResult", ownerGeneration: w.engine.generation, attemptId: check.attemptId, admit: true, deadlineMono: w.now() + forMs, ...(named === undefined ? {} : { writeFingerprint: named }) };
     };
   };
   /** A part's send, with the bytes that came before it (null: none whole). */
@@ -861,8 +883,8 @@ describe("an upload's part and its status read (wall posts PR 8; minor 9)", () =
       headers: {},
       kind: "part",
       maxBodyBytes: MEDIA_BODY_LIMIT,
-      sendDeadlineMono: monoMs() + 15_000,
-      requestDeadlineMono: monoMs() + 120_000,
+      sendDeadlineMono: w.now() + 15_000,
+      requestDeadlineMono: w.now() + 120_000,
       writeFingerprint: partFingerprint({ host: url.hostname, path: url.pathname, partSha256: sha }),
       bodyRef: { bodyId: "00000000-0000-4000-8000-0000000000c1", decodedBytes: bytes?.length ?? 5, sha256: sha },
       ...overrides,
@@ -1002,14 +1024,19 @@ describe("an upload's part and its status read (wall posts PR 8; minor 9)", () =
   });
 
   it("a part's limit is its request deadline, not the 21 s of an API request — and so is its slot's bound", async () => {
-    const w = await world({ timings: { opLimitMs: 300 }, slotLimitMs: 200 });
+    // The operator's clock is the test's: the 300 ms of the send and of the
+    // admission cannot run out before the release (a buffer's fsync comes
+    // between them); the limit's and the bound's timers are armed by it all
+    // the same, and run on real time.
+    const clock = new TestClock();
+    const w = await world({ clock, timings: { opLimitMs: 300 }, slotLimitMs: 200 });
     let unended = 0;
     w.gate.onUnended = () => (unended += 1);
     w.hub.setPublishing({ create: true, withdraw: false });
     let named: string | undefined = undefined;
     // Admitted for 300 ms: the slot's bound would pass 500 ms on.
     admitAs(w, () => named, 300);
-    const slow = partSend(w, bytesOf(100), { sendDeadlineMono: monoMs() + 300 }, { sendDelayMs: 900 });
+    const slow = partSend(w, bytesOf(100), { sendDeadlineMono: clock.now() + 300 }, { sendDelayMs: 900 });
     named = slow.writeFingerprint;
     expect(await outcomeOf(w, slow.attemptId)).toMatchObject({ kind: "response", status: 200 });
     expect(unended).toBe(0);

@@ -189,40 +189,67 @@ function readsOf(table: Server["routePolicyTable"]): Read[] {
 
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
-function normalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalize);
+/** An answer as compared: its status, its body without the clock fields, and the moment it was taken. */
+interface Answer { status: number; body: unknown; at: number }
+
+function withoutClockFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutClockFields);
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, inner] of Object.entries(value as Record<string, unknown>)) {
       if (VOLATILE_KEYS.has(key)) continue;
-      out[key] = normalize(inner);
+      out[key] = withoutClockFields(inner);
     }
     return out;
-  }
-  // A moment of this run (an answer's own clock, or a window counted back from it by whole hours): set aside.
-  if (typeof value === "string" && ISO.test(value)) {
-    const at = Date.parse(value);
-    if (at >= runStartedAt - 1_000) return "<now>";
-    const back = (Date.now() - at) % 3_600_000;
-    if (back < 120_000 || back > 3_600_000 - 120_000) return "<clock>";
   }
   return value;
 }
 
-async function answer(read: Read, caller: Caller): Promise<string> {
+/** A moment of this run as the answer taken at `at` names it: the run's own clock, or a window counted back from
+ *  that answer's clock by whole hours. */
+function clockOf(value: string, at: number): boolean {
+  if (!ISO.test(value)) return false;
+  const moment = Date.parse(value);
+  if (moment >= runStartedAt - 1_000) return true;
+  const back = (at - moment) % 3_600_000;
+  return back < 120_000 || back > 3_600_000 - 120_000;
+}
+
+/** The same answer: equal values, or two moments each of which is its own answer's clock. Decided for the pair: one
+ *  instant on a whole hour (a Moscow day's start) is never a clock in one answer and data in the other because the
+ *  two were taken either side of a minute that is two from a whole hour. */
+function same(left: unknown, right: unknown, leftAt: number, rightAt: number): boolean {
+  if (left === right) return true;
+  if (typeof left === "string" && typeof right === "string") return clockOf(left, leftAt) && clockOf(right, rightAt);
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
+      && left.every((item, index) => same(item, right[index], leftAt, rightAt));
+  }
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+  const leftObject = left as Record<string, unknown>;
+  const rightObject = right as Record<string, unknown>;
+  const keys = Object.keys(leftObject);
+  return keys.length === Object.keys(rightObject).length
+    && keys.every((key) => Object.hasOwn(rightObject, key) && same(leftObject[key], rightObject[key], leftAt, rightAt));
+}
+
+const shown = (value: Answer | undefined) => value === undefined ? undefined : `${value.status} ${JSON.stringify(value.body)}`;
+
+async function answer(read: Read, caller: Caller): Promise<Answer> {
   const response = await server!.inject({
     method: read.method,
     url: read.url,
     headers: { ...caller.headers, ...(read.method === "POST" ? { "content-type": "application/json" } : {}) },
     ...(read.body === undefined ? {} : { payload: read.body }),
   });
+  const at = Date.now();
   let body: unknown = response.body;
-  try { body = normalize(JSON.parse(response.body)); } catch { /* not JSON: compared as it is */ }
-  return `${response.statusCode} ${JSON.stringify(body)}`;
+  try { body = withoutClockFields(JSON.parse(response.body)); } catch { /* not JSON: compared as it is */ }
+  return { status: response.statusCode, body, at };
 }
 
-async function snapshot(reads: readonly Read[]): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+async function snapshot(reads: readonly Read[]): Promise<Map<string, Answer>> {
+  const out = new Map<string, Answer>();
   for (const caller of callers) {
     for (const read of reads) out.set(`${caller.name} ${read.method} ${read.url}`, await answer(read, caller));
   }
@@ -230,14 +257,14 @@ async function snapshot(reads: readonly Read[]): Promise<Map<string, string>> {
 }
 
 /** The reads whose answers differ (their keys; with SANDBOX_WALL_DIFF_FILE set, both answers are written there). */
-function differences(before: Map<string, string>, after: Map<string, string>, stage: string): string[] {
+function differences(before: Map<string, Answer>, after: Map<string, Answer>, stage: string): string[] {
   const out: string[] = [];
-  const full: Array<{ key: string; before: string; after: string | undefined }> = [];
+  const full: Array<{ key: string; before: string | undefined; after: string | undefined }> = [];
   for (const [key, value] of before) {
     const other = after.get(key);
-    if (other === value) continue;
+    if (other !== undefined && other.status === value.status && same(value.body, other.body, value.at, other.at)) continue;
     out.push(key);
-    full.push({ key, before: value, after: other });
+    full.push({ key, before: shown(value), after: shown(other) });
   }
   const file = process.env.SANDBOX_WALL_DIFF_FILE;
   if (file && full.length > 0) appendFileSync(file, `${JSON.stringify({ stage, full })}\n`);
@@ -367,13 +394,13 @@ describe("the wall of the test realm", () => {
 
     const statuses = new Map<string, number>();
     for (const value of before.values()) {
-      const status = value.slice(0, 3);
+      const status = String(value.status);
       statuses.set(status, (statuses.get(status) ?? 0) + 1);
     }
     // How much of it proves anything: an answer that is a refusal both times is equal but shows no data.
     const summary = process.env.SANDBOX_WALL_SUMMARY_FILE;
     if (summary) {
-      const notProven = [...before].filter(([, value]) => !value.startsWith("200")).map(([key, value]) => `${key} ${value.slice(0, 3)}`);
+      const notProven = [...before].filter(([, value]) => value.status !== 200).map(([key, value]) => `${key} ${value.status}`);
       appendFileSync(summary, `${JSON.stringify({ compared: before.size, statuses: Object.fromEntries(statuses), notProven })}\n`);
     }
   }, 900_000);

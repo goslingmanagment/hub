@@ -469,9 +469,15 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
     await until(() => s.model.navigations.length > loads && s.operator.page.step === "site_loaded", WAIT_MS, "the site loaded anew");
     // The new document's own first API read (as the site's load makes it):
     // Hub's headers are learned from it, not from the document before.
-    const loadedEndsA = s.engine.of("siteDone").length;
+    // Its own end is waited for, by its id: the earlier document's read
+    // (paused in the manual login) may have been admitted just before the
+    // reload ended it, and that end can reach the engine only now — a Hub
+    // request sent on it would meet this read still in flight and be refused
+    // for the pace (one request of the page at a time).
+    const readFromMono = monoMs();
     siteRead(s, token, SITE_CLIENT);
-    await until(() => s.engine.of("siteDone").length > loadedEndsA, WAIT_MS, "the new document's read ended");
+    const newRead = await s.engine.waitFor("siteAdmit", (message) => Number(message.pausedMono) >= readFromMono, WAIT_MS);
+    await s.engine.waitFor("siteDone", (message) => message.siteRequestId === newRead.siteRequestId, WAIT_MS);
     s.model.hubBody = Buffer.from(JSON.stringify({ success: true, response: { account: { id: "123456789" } } }));
     s.engine.send({ type: "send", ownerGeneration: 1, attemptId: 9701, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: fingerprint, method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", headers: {}, kind: "api", maxBodyBytes: 32 * 1024 * 1024, sendDeadlineMono: monoMs() + 15_000, requestDeadlineMono: monoMs() + 20_000 });
     await until(() => s.operator.page.step === "ready", WAIT_MS, "the page ready");
