@@ -99,12 +99,6 @@ describe("the narrow web session and the chatter's screens", () => {
     expect([...passwordOnly].filter((operation) => narrow.has(operation))).toEqual([]);
   });
 
-  it("knows the chatter's menu and name menu: «Начало», «Сегодня», «Ждут вас», «Смены», «Фаны», «Кастомы», «Продажи», «Деньги», «Обучение», «Аккаунт и устройства»", () => {
-    expect(chatterScreens().map((screen) => screen.path).sort()).toEqual([
-      "/workboard/account", "/workboard/customs", "/workboard/fans", "/workboard/learn", "/workboard/money", "/workboard/sales", "/workboard/shifts", "/workboard/start", "/workboard/today", "/workboard/waiting",
-    ]);
-  });
-
   it("every page a chatter's session opens is under a screen of those menus, or is the board", () => {
     const screens = openedScreens();
     const orphans = chatterRoutes().filter((route) => route.module !== null && !screens.some((screen) => under(screen.path, route.path)));

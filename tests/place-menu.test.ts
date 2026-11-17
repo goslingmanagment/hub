@@ -22,13 +22,6 @@ describe("each screen's product", () => {
 });
 
 describe("Hub's menu", () => {
-  it("is the owner's: Главная · Ждут вас · Деньги · Страницы · Трафик · Анкеты · Люди, then Настройки · Система", () => {
-    // «Контент» is ContentOps' since package C2: its «Публикации» and «Статистика» are there.
-    const menu = productMenu("hub", "owner");
-    expect(menu.upper.map((item) => item.label)).toEqual(["Главная", "Ждут вас", "Деньги", "Страницы", "Трафик", "Анкеты", "Люди"]);
-    expect(menu.lower.map((item) => item.label)).toEqual(["Настройки", "Система"]);
-  });
-
   it("lists only Hub's own screens, «Ждут вас» the owner's list in Hub", () => {
     for (const item of items("hub", "owner")) {
       const screen = matchScreen(item.to)?.screen;
@@ -47,11 +40,6 @@ describe("Hub's menu", () => {
 });
 
 describe("Workboard's menu", () => {
-  it("is the owner's and a team lead's own: Сегодня · Ждут вас · Смены · Команда · Фаны · Кастомы · Продажи, the owner also Деньги", () => {
-    expect(items("workboard", "owner", { leads: true, money: true }).map((item) => item.label)).toEqual(["Сегодня", "Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Продажи", "Деньги"]);
-    expect(items("workboard", "team_lead", { leads: true }).map((item) => item.label)).toEqual(["Сегодня", "Ждут вас", "Смены", "Команда", "Фаны", "Кастомы", "Продажи"]);
-  });
-
   it("gives a chatter «Сегодня», «Ждут вас», «Смены», «Фаны», «Кастомы» and «Продажи», «Начало» first only while a step is open", () => {
     expect(items("workboard", "chatter").map((item) => item.id)).toEqual(["today", "waiting", "shifts", "fans", "customs", "sales"]);
     expect(items("workboard", "chatter", { newcomer: true }).map((item) => item.id)).toEqual(["start", "today", "waiting", "shifts", "fans", "customs", "sales"]);

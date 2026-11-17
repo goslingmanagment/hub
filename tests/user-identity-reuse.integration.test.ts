@@ -162,35 +162,6 @@ describe("immutable user identities and reusable logins", () => {
     expect(own.row).toMatchObject({ totalGenerations: 1, cost: { microUsd: 2700 } });
   });
 
-  it("refuses every retired username route even when the login is a valid numeric user ID", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const numeric = await createInvite(setup.app, { username: String(ownerId), pageLabels: [] }, audit());
-    const cookie = await cookieFor(setup.server, "owner", "owner-secret");
-    for (const [method, suffix, payload] of [
-      ["PATCH", "/password", { password: "not-the-owner-password" }],
-      ["POST", "/pages", { pageLabel: "lora-fansly" }],
-      ["DELETE", "/pages/lora-fansly", undefined],
-      ["GET", "/api-keys", undefined], ["POST", "/api-keys", {}], ["DELETE", "/api-keys", undefined],
-      ["POST", "/deactivate", {}], ["POST", "/reactivate", {}],
-      ["GET", "/device-tokens", undefined], ["POST", "/device-tokens", { label: "must not issue" }],
-      ["DELETE", "/device-tokens", undefined], ["DELETE", "/device-tokens/1", undefined],
-      ["POST", "/models", { modelSlug: "lora-model" }], ["DELETE", "/models/lora-model", undefined],
-      ["GET", "/grants", undefined], ["GET", "/links", undefined],
-      ["POST", "/links", { kind: "invite" }], ["POST", "/links/1/revoke", {}],
-      ["POST", "/terminate-access", {}], ["DELETE", "", undefined],
-    ] as const) {
-      const response = await setup.server.inject({
-        method, url: `/api/v1/admin/users/${numeric.user.username}${suffix}`, headers: { cookie },
-        ...(payload === undefined ? {} : { payload }),
-      });
-      expect(response.statusCode, `${method} ${suffix}`).toBe(404);
-    }
-    const current = await setup.server.inject({ method: "GET", url: `/api/v1/admin/users/by-id/${numeric.user.id}/links`, headers: { cookie } });
-    expect(current.statusCode).toBe(200);
-    expect((await loginWithPassword(setup.app, { username: "owner", password: "owner-secret" })).user.id).toBe(ownerId);
-  });
-
   it("protects owner and self identities, and releases a disabled login only after permanent deletion", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;

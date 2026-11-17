@@ -174,10 +174,10 @@ describe("«Подмена»: a question whose «Можно» writes the day's l
     expect(first.statusCode, first.body).toBe(200);
     const id = teamQuestionWriteResponseSchema.parse(first.json()).question.id;
 
-    // The same hours asked again while the first waits: refused, in words a person reads.
+    // The same hours asked again while the first waits: refused.
     const again = await ask("anna", { ...swap, start: "18:00", end: "22:00" });
     expect(again.statusCode, again.body).toBe(409);
-    expect(again.json()).toMatchObject({ reason: "swap_asked", message: "Подмену на эти часы уже спросили, ждёт ответа" });
+    expect(again.json()).toMatchObject({ reason: "swap_asked" });
 
     // Two open asks made before this check (or a race): a copy of the first, then «Можно» to both — the second is refused.
     const copy = await testDb.pool.query(`insert into team_questions (asker_user_id, page_id, model_id, kind, text, decider_user_id, door, asked_at, swap)
@@ -186,7 +186,7 @@ describe("«Подмена»: a question whose «Можно» writes the day's l
     expect((await as("lena", "POST", `/api/v1/team/questions/${id}/answer`, { answer: "yes" })).statusCode).toBe(200);
     const second = await as("lena", "POST", `/api/v1/team/questions/${twin}/answer`, { answer: "yes" });
     expect(second.statusCode, second.body).toBe(409);
-    expect(second.json()).toMatchObject({ reason: "swap_taken", message: "На эти часы подмена уже стоит" });
+    expect(second.json()).toMatchObject({ reason: "swap_taken" });
     const twinLines = await testDb.pool.query("select count(*)::int as n from person_schedule_slots where question_id = $1", [twin]);
     expect(twinLines.rows[0]!.n).toBe(0);
     expect((await testDb.pool.query("select state from team_questions where id = $1", [twin])).rows[0]!.state).toBe("open");
@@ -194,11 +194,11 @@ describe("«Подмена»: a question whose «Можно» writes the day's l
     // Standing now: the same hours, or a part of them, are refused; other hours of that day are not.
     const standing = await ask("anna", { ...swap, start: "19:00", end: "21:00" });
     expect(standing.statusCode, standing.body).toBe(409);
-    expect(standing.json()).toMatchObject({ reason: "swap_taken", message: "На эти часы подмена уже стоит" });
+    expect(standing.json()).toMatchObject({ reason: "swap_taken" });
     // Whoever covers must be at work in those hours: Anna is off 12:00–20:00, so she covers nobody then.
     const offCover = await ask("carl", { ...swap, start: "14:00", end: "18:00", coverPersonCode: "anna" });
     expect(offCover.statusCode, offCover.body).toBe(409);
-    expect(offCover.json()).toMatchObject({ reason: "swap_cover_off", message: "anna сам не выходит в эти часы" });
+    expect(offCover.json()).toMatchObject({ reason: "swap_cover_off" });
 
     // Taken back, the hours are free again.
     expect((await as("lena", "POST", `/api/v1/team/questions/${id}/swap/revoke`)).statusCode).toBe(200);

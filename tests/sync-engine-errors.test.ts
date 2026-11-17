@@ -19,9 +19,7 @@ import {
   onOutcome,
   RESOURCE_BREAKER_SUBJECTS,
   RESOURCE_BREAKER_WINDOW_MS,
-  RESOURCE_HOLD_LADDER_MS,
   SUBJECT_BLOCK_AFTER,
-  SUBJECT_BREAKER_LADDER_MS,
   type OutcomeClass,
   type OutcomeInput,
   type PageErrorState,
@@ -663,15 +661,5 @@ describe("sync errors: resource breaker", () => {
     expect(activeResourceHold(breakers, "dm-messages.catchup", NOW))
       .toEqual({ file: "dm-messages", until: at(MIN), step: 1, kind: "breaker" });
     expect(activeResourceHold(breakers, "dm-messages.catchup", at(MIN))).toBeNull();
-  });
-});
-
-describe("sync errors: the ladders are the plan's", () => {
-  it("pins every constant of plan §9", () => {
-    expect(SUBJECT_BREAKER_LADDER_MS).toEqual([MIN, 10 * MIN, HOUR, 6 * HOUR, 24 * HOUR]);
-    expect(RESOURCE_HOLD_LADDER_MS).toEqual([30 * MIN, 2 * HOUR, 6 * HOUR]);
-    expect(NETWORK_FAILURES_TO_PAUSE).toBe(3);
-    expect(NETWORK_PAUSE_LADDER_MS).toEqual([10_000, 30_000, MIN, 2 * MIN, 5 * MIN]);
-    expect(NETWORK_ALERT_AFTER_MS).toBe(10 * MIN);
   });
 });

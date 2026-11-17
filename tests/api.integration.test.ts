@@ -2006,7 +2006,7 @@ describe("api integration", () => {
     });
   });
 
-  it("refuses cross-page fan detail to a team lead (Hub's for now) and exposes full scope for owners", async (context) => {
+  it("cuts cross-page fan detail to a team lead's own pages and exposes full scope for owners", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -2029,9 +2029,9 @@ describe("api integration", () => {
         cookie: leadCookie,
       },
     });
-    // Hub is the owner's: «Фаны» are the console's for now, refused to a team lead (team-lead-reads.ts); when they move
-    // to Workboard the lead's page scope (one of two pages here) is checked again.
-    expect(leadFan.statusCode).toBe(403);
+    // «Фаны» are Workboard's (fan-reads.ts): a team lead reads the fan on the pages of their teams, here `lana` alone.
+    expect(leadFan.statusCode).toBe(200);
+    expect(leadFan.json().pages.map((page: { pageLabel: string }) => page.pageLabel)).toEqual(["lana"]);
 
     const deniedPage = await server.inject({
       method: "GET",

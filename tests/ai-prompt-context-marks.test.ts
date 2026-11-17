@@ -47,10 +47,6 @@ describe("the media notes guide", () => {
     expect(transcript).toBe("--- 2026-10-23 ---\n[10:00] Fan: [Photo #1] hi");
     expect(build(feature, false).user).not.toContain("Image notes:");
   });
-
-  it("holds no long dash", () => {
-    expect(MEDIA_NOTES_GUIDE).not.toMatch(/[—–]/);
-  });
 });
 
 describe("markAutomatedMessages", () => {

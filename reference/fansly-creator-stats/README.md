@@ -707,8 +707,7 @@ and names the nearest existing source for each.
   decision.
 - **Pins a new route moves.** Every wire spec must name a `legacyOperation` that
   `FANSLY_LEGACY_OPERATION_ROUTES` maps back to it, and `tests/sync-route-policy.test.ts` freezes
-  that map to the operations of the deleted legacy senders "and no other"; the same test pins
-  `ROUTE_POLICY_HASH`, which changes with every added route. `tests/fansly-wire-specs.test.ts`
+  that map to the operations of the deleted legacy senders "and no other". `tests/fansly-wire-specs.test.ts`
   freezes the request of each API spec against what the legacy adapter sent (46 entries). These
   routes have no legacy twin, so adding them is a change to those invariants, not only new rows.
   Each new observation kind also needs an entry in `services/observation-kinds.ts` (a canonicalizer
