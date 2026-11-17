@@ -1,7 +1,7 @@
 import { pathSegment } from "@agency_hub_core/ui/path";
 import { isSafeInAppPath, withQuery } from "@agency_hub_core/ui/fanLinks";
 export { buildFanProfileNavigation, buildFansRoute, buildPageSpenderAutoListRoute, decodeRouteSegment, isSafeInAppPath, resolveFanProfileBackTarget, type FanProfileNavigationState } from "@agency_hub_core/ui/fanLinks";
-import { NO_SILENT_SIGNIN, contentopsEntryHref, isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref, silentSignInHref, workboardEntryHref } from "./sites.js";
+import { NO_SILENT_SIGNIN, contentopsEntryHref, isChatterSite, isConsoleSite, peerSiteOrigin, signInHopHref, silentSignInHref, silentSignInNames, workboardEntryHref } from "./sites.js";
 import type { Period, PeriodOption } from "../stores/periodStore.js";
 
 /**
@@ -97,19 +97,23 @@ export const SIGNED_OUT_LOGIN = `/login?${new URLSearchParams({ [NO_SILENT_SIGNI
 
 /**
  * The silent try of a sign-in page arrived at without a session (ecosystem plan
- * §3.2, «вошёл в одном месте — вошёл везде»): one round trip asks the other of
- * the two names; signed in there (a full session) → signed in here too, on this
- * same page, which then leads on as for anyone signed in; nobody → this page
- * again with the marker, which shows the form. Null — no other name (a local
- * build on one name, a test), or the marker is already here: no try.
+ * §3.2, «вошёл в одном месте — вошёл везде»): one round trip asks another name
+ * (`silentSignInNames`, in order: on the team's name the chatters' site first,
+ * then the console); signed in there (a full session) → signed in here too, on
+ * this same page, which then leads on as for anyone signed in; nobody → this
+ * page again, marked with how many names were asked, which asks the next one or,
+ * after the last, shows the form. Null — no other name (a local build on one
+ * name, a test), or the marker says all were asked: no try.
  */
 export function silentSignInTry(search: URLSearchParams, returnTo: string): string | null {
-  if (search.get(NO_SILENT_SIGNIN.param) === NO_SILENT_SIGNIN.value) return null;
-  const other = peerSiteOrigin();
-  if (other === null || typeof window === "undefined") return null;
+  const marker = search.get(NO_SILENT_SIGNIN.param);
+  if (marker === NO_SILENT_SIGNIN.value || typeof window === "undefined") return null;
+  const names = silentSignInNames();
+  const asked = marker === null ? 0 : Number(marker);
+  if (!Number.isInteger(asked) || asked < 0 || asked >= names.length) return null;
   const back = new URLSearchParams(returnTo === "/" ? {} : { next: returnTo });
-  back.set(NO_SILENT_SIGNIN.param, NO_SILENT_SIGNIN.value);
-  return silentSignInHref(other, `${window.location.origin}/login?${back.toString()}`);
+  back.set(NO_SILENT_SIGNIN.param, asked + 1 < names.length ? String(asked + 1) : NO_SILENT_SIGNIN.value);
+  return silentSignInHref(names[asked]!, `${window.location.origin}/login?${back.toString()}`);
 }
 
 export function buildLoginRoute(returnTo: string): string {

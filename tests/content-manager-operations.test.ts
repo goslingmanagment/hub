@@ -49,8 +49,8 @@ describe("a content manager's operations", () => {
 });
 
 describe("a content manager's link", () => {
-  it("opens ContentOps' own page; every other login's opens the chatters' site", () => {
+  it("opens ContentOps' own page; every other login's opens Workboard's name", () => {
     expect(buildJoinLink("https://hub.gosling-agency.ru", "s3cret", "content_manager")).toBe("https://contentops.gosling-agency.ru/join#s3cret");
-    expect(buildJoinLink("https://hub.gosling-agency.ru", "s3cret", "chatter")).toBe("https://chatgoose.gosling-agency.ru/join#s3cret");
+    expect(buildJoinLink("https://hub.gosling-agency.ru", "s3cret", "chatter")).toBe("https://workboard.gosling-agency.ru/join#s3cret");
   });
 });

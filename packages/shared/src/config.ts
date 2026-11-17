@@ -136,7 +136,7 @@ const envSchema = z.object({
   // planted), and the other services' servers that redeem a code themselves
   // (`name=callback URL`; each with its own key and `signin:<name>` capability).
   WEB_CONSOLE_ORIGIN: z.string().url().default("https://hub.gosling-agency.ru"),
-  WEB_TEAM_ORIGIN: z.string().url().default("https://chatgoose.gosling-agency.ru"),
+  WEB_TEAM_ORIGIN: z.string().url().default("https://workboard.gosling-agency.ru"),
   WEB_SIGNIN_CLIENTS: z.string().default(
     "contentops=https://contentops.gosling-agency.ru/auth/hub/callback,"
       + "taskindex=https://tasks.gosling-agency.ru/auth/hub/callback,"
@@ -508,7 +508,7 @@ export interface AppConfig {
   ledgerPayoutsKey?: string | null;
   /** WEB_CONSOLE_ORIGIN: the console's name (the owner's place); absent — the production name. */
   webConsoleOrigin?: string;
-  /** WEB_TEAM_ORIGIN: the team's name (chatgoose., Workboard for the team); absent — the production name. */
+  /** WEB_TEAM_ORIGIN: the team's name (workboard., Workboard for the team); absent — the production name. */
   webTeamOrigin?: string;
   /** WEB_SIGNIN_CLIENTS: other services' servers that redeem a code themselves, name → callback URL; absent — ContentOps, TaskIndex, server-monitor. */
   webSigninClients?: Readonly<Record<string, string>>;

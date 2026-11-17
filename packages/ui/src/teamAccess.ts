@@ -1,5 +1,5 @@
 import { joinLink, opensContentopsOnly } from "@agency_hub_core/contracts";
-import { chatterSiteOriginFor } from "./sites.js";
+import { joinOriginFor } from "./sites.js";
 
 /**
  * The people's access, without React: who is in what state, the one-time join
@@ -42,12 +42,12 @@ export function daysToHours(days: number): number {
   return days * 24;
 }
 
-/** The chatters' site (/join opens there) and the one that goes with a console's origin: ./sites.ts. */
-export { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "./sites.js";
+/** Workboard's name (/join opens there) and the one that goes with a console's origin: ./sites.ts. */
+export { WORKBOARD_ORIGIN, joinOriginFor } from "./sites.js";
 
 /** The link of a fresh secret as Hub «Люди» shows it: the one rule, `joinLink` (contracts join-links.ts). */
 export function buildJoinLink(consoleOrigin: string, secret: string, role?: string | null): string {
-  return joinLink(secret, role, chatterSiteOriginFor(consoleOrigin));
+  return joinLink(secret, role, joinOriginFor(consoleOrigin));
 }
 
 export { opensContentopsOnly } from "@agency_hub_core/contracts";

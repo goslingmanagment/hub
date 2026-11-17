@@ -12,6 +12,7 @@ import {
   SSO_STATE_TTL_SECONDS,
   acceptHandoffCode,
   bareOriginOf,
+  carryNarrowSession,
   checkServerGrant,
   defaultLandingOf,
   isClientState,
@@ -108,7 +109,7 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const names = signinNamesOf(appContext.config);
     const here = requestOriginOf(request);
     if (here === null || !names.hubOrigins.has(here)) {
-      throw new BadRequestError("A sign-in code is minted only on the console's or the team's name");
+      throw new BadRequestError("A sign-in code is minted only on the console's or the team's names");
     }
     const { to, state } = request.query;
     const silent = request.query.silent === "1";
@@ -158,6 +159,10 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
       throw new BadRequestError("`state` is not a state digest");
     }
     if (!session) {
+      // A Workboard page leaving a former name of the team (workboardOnFormerTeamRedirect) with the extension's narrow
+      // session here: a narrow one of the same device on the team's name.
+      const narrow = silent ? await carryNarrowSession(appContext, { here, target, next, sessionToken: request.cookies[SESSION_COOKIE_NAME] }) : null;
+      if (narrow !== null) return reply.redirect(narrow, 302);
       // A silent try (the other name asking whether someone is signed in here):
       // nobody → back where it came from, which shows its own sign-in page.
       // Its `next` carries the marker that stops a second try (LoginPage).
@@ -187,7 +192,7 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     }
     const from = bareOriginOf(request.query.from);
     if (from === null || !names.hubOrigins.has(from)) {
-      throw new BadRequestError("`from` is not the console's or the team's name");
+      throw new BadRequestError("`from` is not the console's or the team's names");
     }
     const next = resolveBrowserNext(request.query.next, here, names);
     if (next === null) {
@@ -243,7 +248,7 @@ export function registerSigninRoutes(server: ApiServer, ctx: ApiModuleContext) {
     reply.header("cache-control", "no-store");
     const token = request.cookies[SESSION_COOKIE_NAME];
     const identity = isBearerRequest(request) || !token ? null : await readSessionIdentity(appContext, token);
-    // The names behind nginx (the static reports on chatgoose., the other services' pages) hold real data: a test
+    // The names behind nginx (the static reports on the chatters' site, the other services' pages) hold real data: a test
     // person is nobody there (sandbox/realm.ts).
     if (identity === null || await userIsTest(appContext, identity.user.id)) {
       return reply.code(401).send({ error: "unauthorized", message: "Not signed in", statusCode: 401 });

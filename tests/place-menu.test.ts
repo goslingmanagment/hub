@@ -3,7 +3,7 @@ import { PRODUCTS, productsOf } from "../packages/contracts/src/products.ts";
 import { screenCommands, searchCommands } from "../packages/ui/src/palette.ts";
 import { carriedHref, crossHref, productLinks } from "../packages/ui/src/place.ts";
 import { SCREENS, addressApp, appOf, matchScreen, menuItemAt, productMenu, screenVisible } from "../packages/ui/src/screens.ts";
-import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN } from "../packages/ui/src/sites.ts";
+import { CHATTER_SITE_ORIGIN, CONSOLE_ORIGIN, WORKBOARD_ORIGIN } from "../packages/ui/src/sites.ts";
 
 /** Each product's menu from the one table (products plan §2.2–2.3): who sees which item, where it leads, what an address lights. */
 
@@ -116,8 +116,11 @@ describe("a link to the other product", () => {
 
   it("goes to the product's own name through the one-time hand-off, and stays on one name locally", () => {
     const hop = (target: string, next: string) => `/api/v1/auth/sso?${new URLSearchParams({ to: target, next }).toString()}`;
-    expect(crossHref("workboard", "/workboard/waiting", CONSOLE_ORIGIN)).toBe(hop(CHATTER_SITE_ORIGIN, `${CHATTER_SITE_ORIGIN}/workboard/waiting`));
+    expect(crossHref("workboard", "/workboard/waiting", CONSOLE_ORIGIN)).toBe(hop(WORKBOARD_ORIGIN, `${WORKBOARD_ORIGIN}/workboard/waiting`));
+    expect(crossHref("console", "/", WORKBOARD_ORIGIN)).toBe(hop(CONSOLE_ORIGIN, `${CONSOLE_ORIGIN}/`));
+    // The chatters' site was Workboard's name: its pages cross to the console and to Workboard's own name alike.
     expect(crossHref("console", "/", CHATTER_SITE_ORIGIN)).toBe(hop(CONSOLE_ORIGIN, `${CONSOLE_ORIGIN}/`));
+    expect(crossHref("workboard", "/workboard/waiting", CHATTER_SITE_ORIGIN)).toBe(hop(WORKBOARD_ORIGIN, `${WORKBOARD_ORIGIN}/workboard/waiting`));
     expect(crossHref("workboard", "/workboard/waiting", "http://localhost:5180")).toBe("/workboard/waiting");
   });
 });
@@ -127,7 +130,7 @@ describe("the products' switcher", () => {
     expect(productsOf({ role: "owner", narrow: false })).toEqual([...PRODUCTS]);
     for (const [role, narrow] of [["owner", true], ["team_lead", false], ["chatter", false]] as const) {
       expect(productsOf({ role, narrow })).toEqual(["workboard"]);
-      expect(productLinks(productsOf({ role, narrow }), "workboard", CHATTER_SITE_ORIGIN)).toEqual([]);
+      expect(productLinks(productsOf({ role, narrow }), "workboard", WORKBOARD_ORIGIN)).toEqual([]);
     }
   });
 
@@ -141,7 +144,7 @@ describe("the products' switcher", () => {
   });
 
   it("ticks the product it is drawn in and crosses to the others in one step", () => {
-    const fromWorkboard = productLinks(productsOf({ role: "owner", narrow: false }), "workboard", CHATTER_SITE_ORIGIN);
+    const fromWorkboard = productLinks(productsOf({ role: "owner", narrow: false }), "workboard", WORKBOARD_ORIGIN);
     expect(fromWorkboard.map((link) => [link.id, link.current, link.quiet])).toEqual([
       ["hub", false, false], ["workboard", true, false], ["contentops", false, false], ["tasks", false, true], ["monitor", false, true],
     ]);
@@ -150,6 +153,6 @@ describe("the products' switcher", () => {
     expect(fromWorkboard.find((link) => link.id === "contentops")!.href).toBe("https://contentops.gosling-agency.ru/auth/hub/start");
     const fromHub = productLinks(productsOf({ role: "owner", narrow: false }), "hub", CONSOLE_ORIGIN);
     expect(fromHub.find((link) => link.id === "hub")!.href).toBe("/");
-    expect(fromHub.find((link) => link.id === "workboard")!.href).toContain(encodeURIComponent(`${CHATTER_SITE_ORIGIN}/workboard/`));
+    expect(fromHub.find((link) => link.id === "workboard")!.href).toContain(encodeURIComponent(`${WORKBOARD_ORIGIN}/workboard/`));
   });
 });

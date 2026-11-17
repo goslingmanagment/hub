@@ -5,8 +5,8 @@ import { isLoopbackOrigin } from "../services/signin-handoff.ts";
  * The `Origin` check of a change made with a cookie (ecosystem plan §3.2 p.1).
  *
  * SameSite does not separate the agency's names: `tasks.`, `ext.`, the public
- * site and every other `*.gosling-agency.ru` are the SAME site as `hub.` and
- * `chatgoose.`, so a page on any of them could send a simple POST (a form, a
+ * site and every other `*.gosling-agency.ru` are the SAME site as `hub.`,
+ * `workboard.` and `chatgoose.`, so a page on any of them could send a simple POST (a form, a
  * `text/plain` fetch: no preflight) that carries the console's Lax cookie.
  * Every state-changing request that a cookie authenticates must therefore come
  * from a page of one of Hub's own web names.

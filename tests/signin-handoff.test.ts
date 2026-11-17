@@ -27,6 +27,16 @@ import {
 
 const production = signinNamesOf({ isProduction: true } as never);
 
+describe("the names in production", () => {
+  it("has Workboard's own name as the team's and keeps its former name, the chatters' site, one of Hub's names", () => {
+    expect(production.team).toBe("https://workboard.gosling-agency.ru");
+    expect([...production.formerTeams]).toEqual(["https://chatgoose.gosling-agency.ru"]);
+    expect([...production.hubOrigins].sort()).toEqual(["https://chatgoose.gosling-agency.ru", "https://hub.gosling-agency.ru", "https://workboard.gosling-agency.ru"]);
+    // Put back as the team's (WEB_TEAM_ORIGIN, the way back), the old name is no former one.
+    expect(signinNamesOf({ isProduction: true, webTeamOrigin: "https://chatgoose.gosling-agency.ru" } as never).formerTeams.size).toBe(0);
+  });
+});
+
 describe("where an accept may lead (`next`)", () => {
   const team = "https://chatgoose.gosling-agency.ru";
 
@@ -197,24 +207,39 @@ describe("the silent try of a sign-in page", () => {
     vi.unstubAllGlobals();
   });
 
-  it("asks the other name once, coming back to the same page with the marker", () => {
-    vi.stubGlobal("window", { location: { origin: "https://chatgoose.gosling-agency.ru" } });
-    const href = silentSignInTry(new URLSearchParams("next=/workboard/"), "/workboard/")!;
-    const url = new URL(href, "https://chatgoose.gosling-agency.ru");
-    expect(url.pathname).toBe("/api/v1/auth/sso/begin");
-    expect(url.searchParams.get("from")).toBe("https://hub.gosling-agency.ru");
-    expect(url.searchParams.get("silent")).toBe("1");
-    const back = new URL(url.searchParams.get("next")!);
-    expect(`${back.origin}${back.pathname}`).toBe("https://chatgoose.gosling-agency.ru/login");
-    expect(Object.fromEntries(back.searchParams)).toEqual({ next: "/workboard/", sso: "none" });
-    // Back on the page with the marker: no second try.
-    expect(silentSignInTry(back.searchParams, "/workboard/")).toBeNull();
+  it("asks the team's former name, then the console, once each, coming back to the same page with the marker", () => {
+    const team = "https://workboard.gosling-agency.ru";
+    vi.stubGlobal("window", { location: { origin: team } });
+    const asked: string[] = [];
+    let search = new URLSearchParams("next=/workboard/");
+    for (let step = 0; step < 3; step += 1) {
+      const href = silentSignInTry(search, "/workboard/");
+      if (href === null) break;
+      const url = new URL(href, team);
+      expect(url.pathname).toBe("/api/v1/auth/sso/begin");
+      expect(url.searchParams.get("silent")).toBe("1");
+      asked.push(url.searchParams.get("from")!);
+      const back = new URL(url.searchParams.get("next")!);
+      expect(`${back.origin}${back.pathname}`).toBe(`${team}/login`);
+      expect(back.searchParams.get("next")).toBe("/workboard/");
+      search = back.searchParams;
+    }
+    expect(asked).toEqual(["https://chatgoose.gosling-agency.ru", "https://hub.gosling-agency.ru"]);
+    // Back on the page with the last marker: no further try.
+    expect(search.get("sso")).toBe("none");
+    expect(silentSignInTry(search, "/workboard/")).toBeNull();
   });
 
-  it("works from the console's name to the team's, and not at all on a one-name build", () => {
+  it("asks Workboard's name from the chatters' site and from the console, and nothing on a one-name build", () => {
+    vi.stubGlobal("window", { location: { origin: "https://chatgoose.gosling-agency.ru" } });
+    expect(new URL(silentSignInTry(new URLSearchParams(), "/")!, "https://chatgoose.gosling-agency.ru").searchParams.get("from"))
+      .toBe("https://workboard.gosling-agency.ru");
     vi.stubGlobal("window", { location: { origin: "https://hub.gosling-agency.ru" } });
-    expect(new URL(silentSignInTry(new URLSearchParams(), "/")!, "https://hub.gosling-agency.ru").searchParams.get("from"))
-      .toBe("https://chatgoose.gosling-agency.ru");
+    const fromHub = new URL(silentSignInTry(new URLSearchParams(), "/")!, "https://hub.gosling-agency.ru");
+    expect(fromHub.searchParams.get("from")).toBe("https://workboard.gosling-agency.ru");
+    expect(new URL(fromHub.searchParams.get("next")!).searchParams.get("sso")).toBe("none");
+    // After a sign-out the marker stops every try.
+    expect(silentSignInTry(new URLSearchParams("sso=none"), "/")).toBeNull();
     vi.stubGlobal("window", { location: { origin: "http://localhost:5173" } });
     expect(silentSignInTry(new URLSearchParams(), "/")).toBeNull();
   });
