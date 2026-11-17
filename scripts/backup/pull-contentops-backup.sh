@@ -6,7 +6,7 @@
 # ContentOps runs in a VM on the owner's PC (`ssh contentops-vm`: compose project /opt/contentops,
 # Postgres 18 in its `db` service). Its media (the blobs, 275 GB) are not part of this copy: that
 # needs bought space. Launchd runs the copy of this file in ~/Backups/contentops
-# (install-backup-launchd.sh); after a change here, re-run the installer.
+# (install-backup-launchd.sh); after a change here or in keep-copies.sh, re-run the installer.
 #   bash scripts/backup/pull-contentops-backup.sh
 #
 # Nothing is written on the VM. One read-only psql session there exports a snapshot and counts the
@@ -17,12 +17,16 @@
 # Mac has no PostgreSQL 18, and a PostgreSQL 16 pg_restore cannot read a 18 archive), every main
 # table has its data in it and the core ones are not empty.
 #
-# Nothing is ever deleted here except this run's own .incoming-<UTC>/ when it fails: every copy
-# stays until a person removes it. The JSON line it prints says how many there are and their size.
+# The newest CONTENTOPS_BACKUP_KEEP copies stay (14 by default, the owner's call; a copy is ~240 MB).
+# Older ones are removed, oldest first (keep-copies.sh), only once this run's copy has its dated name:
+# a run that fails removes nothing but its own .incoming-<UTC>/. The JSON line it prints says how many
+# copies there are, their size and how many it removed.
 set -Eeuo pipefail
 umask 077
+here=$(cd "$(dirname "$0")" && pwd)
 host=${CONTENTOPS_BACKUP_HOST:-contentops-vm}
 base=${CONTENTOPS_BACKUP_DIR:-$HOME/Backups/contentops}
+keep=${CONTENTOPS_BACKUP_KEEP:-14}
 project_dir=/opt/contentops
 database=contentops
 # A dump with the schema only is well under 1 MB; the real one is hundreds of MB.
@@ -38,13 +42,15 @@ core_tables=(models accounts principals content_items assets asset_versions item
 other_tables=(surfaces principal_grants api_tokens policy_settings sources source_objects inbox_groups
   review_cases posting_plan_rows custom_order_messages hub_posts)
 
+[[ -f $here/keep-copies.sh ]] || { printf 'Missing keep-copies.sh next to %s\n' "$0" >&2; exit 1; }
+[[ $keep =~ ^[1-9][0-9]*$ ]] || { printf 'CONTENTOPS_BACKUP_KEEP must be a whole number of copies, at least 1 (got %s)\n' "$keep" >&2; exit 1; }
 mkdir -p "$base"
-# Nothing here deletes an old copy (how many to keep is the owner's call), so this guard is what
-# keeps a forgotten Mac from filling up: below the floor the run refuses and says so.
+# Copies are capped at $keep, and this floor guards the Mac's last free space: below it the run
+# refuses and says so. It never removes a copy to make room.
 min_free_gb=${CONTENTOPS_BACKUP_MIN_FREE_GB:-30}
 free_kb=$(df -Pk "$base" | awk 'NR == 2 { print $4 }')
 [[ ${free_kb:-0} -ge $((min_free_gb * 1024 * 1024)) ]] || {
-  printf 'Only %s GB free under %s, need %s: not copying. Old copies are never deleted here.\n' \
+  printf 'Only %s GB free under %s, need %s: not copying (old copies are removed only after a good one).\n' \
     "$(( ${free_kb:-0} / 1024 / 1024 ))" "$base" "$min_free_gb" >&2
   exit 1
 }
@@ -171,16 +177,18 @@ jq -n --arg createdAt "$stamp" --arg host "$host" --arg container "$container" -
 # Only a checked copy gets a dated name: the drill reads dated ones only.
 mv "$incoming" "$target"
 incoming=""
+# With this copy in place, the ones beyond the newest $keep go.
+removed=$(bash "$here/keep-copies.sh" "$base" "$keep" "$target")
 copies=0 total=0
 for dir in "$base"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z; do
   [[ -d $dir ]] || continue
   copies=$((copies + 1))
   total=$((total + $(find "$dir" -type f -exec stat -f %z {} + | awk '{ s += $1 } END { print s + 0 }')))
 done
-jq -c --arg path "$target" --argjson copies "$copies" --argjson copiesBytes "$total" \
+jq -c --arg path "$target" --argjson copies "$copies" --argjson copiesBytes "$total" --argjson removed "$removed" \
   '{ok: true, path: $path, bytes, tables, tablesWithData, actionLogRows: .rows.action_log,
     contentItems: .rows.content_items, contentopsVersion, postgresVersion, durationSeconds,
-    copies: $copies, copiesBytes: $copiesBytes}' "$target/manifest.json"
+    copies: $copies, copiesBytes: $copiesBytes, removed: $removed}' "$target/manifest.json"
 
 # Tell ContentOps that its database has a copy, so its «Состояние» can say when (it cannot read Hub's system state:
 # that is the owner's session only). Optional: without the env file nothing is sent. The file is the owner's, outside
