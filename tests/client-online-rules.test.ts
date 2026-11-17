@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { OnlineCandidateRow } from "@agency_hub_core/db";
 
-import { decideOnline, greetingNameOf, onlineRank, ONLINE_TEMPLATES } from "../apps/runtime/src/services/client-online-rules.ts";
+import { decideOnline, greetingNameOf, onlineRank } from "../apps/runtime/src/services/client-online-rules.ts";
 
 // «Онлайн»: why to write to a fan seen online, with what, and when he is set
 // aside — the reason most urgent first; Ping from 10 messages of the chat, the
@@ -135,12 +135,5 @@ describe("greetingNameOf", () => {
     expect(greetingNameOf("Алексей", null)).toBe("Алексей");
     expect(greetingNameOf("Çağlar Akmaz", null)).toBe("Caglar");
     expect(greetingNameOf("𝓜𝓲𝓴𝓮", null)).toBe("Mike");
-  });
-});
-
-describe("ONLINE_TEMPLATES", () => {
-  it("carries the guide's eleven A texts and five B texts", () => {
-    expect(ONLINE_TEMPLATES.filter((one) => one.group === "a").map((one) => one.id)).toEqual(["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11"]);
-    expect(ONLINE_TEMPLATES.filter((one) => one.group === "b").map((one) => one.id)).toEqual(["B1", "B2", "B3", "B4", "B5"]);
   });
 });

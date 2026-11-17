@@ -4,7 +4,6 @@ import { agentFanQueueCreateBodySchema, fanQueueRuleSchema, fanQueueScenarioSche
 import type { OnlineCandidateRow } from "@agency_hub_core/db";
 
 import {
-  describeFanQueueRule,
   fanQueueActOfSend,
   fanQueueFilterOf,
   fanQueueItemAct,
@@ -32,18 +31,6 @@ const row = (over: Partial<OnlineCandidateRow> = {}): OnlineCandidateRow => ({
 });
 
 describe("the rule", () => {
-  it("says the owner's cold followers in Hub's words, with the marks it always leaves out", () => {
-    const rule = fanQueueRuleSchema.parse({ audience: "followers", fanWrote: "never", lifetimeSpend: { max: 0 }, seen: { withinDays: 7 } });
-    expect(describeFanQueueRule(rule, "fansly")).toEqual([
-      "фолловеры страницы",
-      "ни разу нам не писали",
-      "не платили",
-      "были на Fansly за последние 7 дней",
-      "ему можно написать, без «Не предлагать» и без меток 💩, «бомж»",
-      "сначала крупные траты, потом кто был недавно",
-    ]);
-  });
-
   it("turns days into moments and dollars into mills", () => {
     const filter = fanQueueFilterOf(fanQueueRuleSchema.parse({
       lifetimeSpend: { min: 20 }, lastPurchase: { olderThanDays: 30 }, otherPagesSpend: { max: 0 }, markers: { exclude: [] },

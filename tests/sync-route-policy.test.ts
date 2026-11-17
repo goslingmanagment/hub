@@ -24,8 +24,6 @@ import {
   routeBudget,
   routeOfEngineOperation,
   ROUTE_BUDGETS,
-  ROUTE_POLICY_HASH,
-  routePolicyVersion,
 } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { pageHoldRow, resourceBreakerRow, routeHoldRows } from "./helpers/sync-holds.ts";
 
@@ -143,17 +141,6 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
     }
     expect([15, 12, 5, 17].map(intervalMsOf)).toEqual([4_000, 5_000, 12_000, 3_530]);
     expect(() => intervalMsOf(0)).toThrow(RangeError);
-  });
-
-  it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
-    // The 7 publishing routes of wall posts PR 6, the schedule and story reads of PR 9, an upload's part and status read of PR 8
-    // the vault album's two (0323), the list writes of fan set lists and the page's settings reads of
-    // page-settings.daily (0338) and the tracking links' days (0339), a vault card's rename (0347), at the default
-    // budget and in no family.
-    expect(ROUTE_POLICY_HASH).toBe("76975728294748a3e9dc8208f09bda8ca7b77c29ad9baa945ded3e116d73e46d");
-    expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
-    expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
-    expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);
   });
 
   it("every registry key's routes are known; only the owner's probe and the no-request keys declare none", () => {

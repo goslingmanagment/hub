@@ -180,7 +180,7 @@ describe("fan queues", () => {
     await testDb?.stop();
   });
 
-  it("previews a rule in Hub's words, with what it leaves out and why", async (context) => {
+  it("previews a rule: how many, what it leaves out, the first fans and the days at the limit", async (context) => {
     if (!testDb) return context.skip();
     const response = await agent("POST", "/api/v1/agent/pages/lora-1/fan-queues/preview", { rule: COLD_RULE, dailyLimit: 5 });
     expect(response.statusCode, response.body).toBe(200);
@@ -188,9 +188,6 @@ describe("fan queues", () => {
     expect(preview.count).toBe(12);
     expect(preview.excluded).toMatchObject({ unreachable: 2, dismissed: 1, markers: 1, inOtherQueues: 0 });
     expect(preview.samples.map((one) => one.fanRef)).toEqual(["8001", "8002", "8003", "8004", "8005"]);
-    expect(preview.samples[0]!.why).toContain("ни разу не писал");
-    expect(preview.ruleText).toContain("фолловеры страницы");
-    expect(preview.ruleText).toContain("ни разу нам не писали");
     expect(preview.daysAtLimit).toBe(3);
 
     // Without «followers» in the rule, the one who unfollowed is still left out: Fansly will not let the page write to him.

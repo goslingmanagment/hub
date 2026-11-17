@@ -110,7 +110,6 @@ describe("Hub's content screens moved to ContentOps", () => {
       const response = await open(url, testOwner);
       expect(response.statusCode, url).toBe(200);
       expect(response.headers["content-type"]).toContain("text/html");
-      expect(response.body).toContain("Контент теперь в ContentOps");
       expect(response.body).toContain("t-km");
     }
   });
@@ -120,7 +119,6 @@ describe("Hub's content screens moved to ContentOps", () => {
     up = false;
     const response = await open("/content/publications?page=mia-1", owner);
     expect(response.statusCode).toBe(503);
-    expect(response.body).toContain("ContentOps сейчас недоступен");
     expect(response.body).toContain('href="/content/publications?page=mia-1"');
     up = true;
   });

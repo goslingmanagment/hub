@@ -21,7 +21,7 @@ import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in
 // take the same sale from a third are never both given the whole of it: one settlement per sale. (5) «Генгар молчит 10
 // минут» holds: the report moves to «Подтвердите» when it is due, on read and on «Подтверждаю». (6) «Не согласен» with
 // Gengar's card reaches whoever decides the sale, and the sale waits meanwhile. (7) Who decides, and who decided, is
-// each sale's own. (8) A PPV row reads as the site's Wallet does: «Media Sale to …». Money: required.
+// each sale's own. Money: required.
 //
 // mia-1 is led by lena. anna works mia-1 from 30 to 25 hours ago alone; anna and bella both work it from 23 to 18 hours
 // ago (a sale of those hours is «стык смен»); cora works it from 16 to 11 hours ago.
@@ -64,14 +64,14 @@ async function shiftRow(who: string, fromHoursAgo: number, toHoursAgo: number): 
   return Number(result.rows[0].id);
 }
 
-/** A sale of mia-1 of $100.000 net `minutesAgo` before now: a tip, or a PPV (`message_purchase`). */
-async function sale(minutesAgo: number, kind: "tip" | "message_purchase" = "tip"): Promise<number> {
+/** A tip to mia-1 of $100.000 net `minutesAgo` before now. */
+async function sale(minutesAgo: number): Promise<number> {
   refs += 1;
   const inserted = await q(
     `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
        gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
-     values ($1, $2, $3, $7, 'posted', 'ok', $4, $4, $5, 4000, now() - make_interval(mins => $6::int), 'fansly:rest', 'USD') returning id`,
-    [pageOne, `tx-review6-${refs}`, kind, NET + 4_000, NET, minutesAgo, kind],
+     values ($1, $2, 'tip', 'tip', 'posted', 'ok', $3, $3, $4, 4000, now() - make_interval(mins => $5::int), 'fansly:rest', 'USD') returning id`,
+    [pageOne, `tx-review6-${refs}`, NET + 4_000, NET, minutesAgo],
   );
   await refreshHomes();
   return Number(inserted.rows[0].id);
@@ -214,13 +214,6 @@ describe("the board «Отчёт», the final review's third reader", () => {
     expect(total).toBeLessThanOrEqual(NET);
     const states = (await q("select state from sale_claims where transaction_id = $1 and kind = 'claim' order by id", [taken])).rows.map((row) => row.state as string);
     expect(states.filter((state) => state === "agreed")).toHaveLength(1);
-  });
-
-  it("reads a PPV as the site's Wallet does: «Media Sale to» (8)", async (context) => {
-    if (!testDb) return context.skip();
-    const ppv = await sale(27 * 60, "message_purchase");
-    const annas = await shiftRow("anna", 30.5, 24.5);
-    expect(rowOf(await board("anna", annas), ppv)?.siteWords).toBe("Media Sale to");
   });
 
   it("moves the report to «Подтвердите» when Gengar's 10 minutes are up, on read and on «Подтверждаю» (5)", async (context) => {

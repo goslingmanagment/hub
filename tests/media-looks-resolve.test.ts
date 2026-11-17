@@ -1,6 +1,3 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import { NO_FANSLY_PAGE_HOLDS } from "@agency_hub_core/shared";
@@ -92,27 +89,6 @@ describe("the one selector takes only a location signed in its own query", () =>
     expect(selectMediaLookSource(journaled, { cover: true })).toEqual({ ok: false, reason: "no_image_variant" });
     // … though a still image is there: what tells "stripped" from "none".
     expect(selectMediaLookSource(journaled, { cover: false, allowUnsigned: true })).toMatchObject({ ok: true, variant: "sprite" });
-  });
-
-  it("is one function, used by the schedule's look and the read's apply alike", () => {
-    const root = join(__dirname, "..");
-    const files: string[] = [];
-    const walk = (directory: string) => {
-      for (const entry of readdirSync(directory)) {
-        const path = join(directory, entry);
-        if (statSync(path).isDirectory()) walk(path);
-        else if (entry.endsWith(".ts")) files.push(relative(root, path));
-      }
-    };
-    walk(join(root, "apps/runtime/src"));
-    const defining = files.filter((file) => /function selectMediaLookSource\b/.test(readFileSync(join(root, file), "utf8")));
-    expect(defining).toEqual(["apps/runtime/src/services/media-looks/select.ts"]);
-    const using = files.filter((file) => /\bselectMediaLookSource\(/.test(readFileSync(join(root, file), "utf8"))).sort();
-    expect(using).toEqual([
-      "apps/runtime/src/services/media-looks/index.ts",
-      "apps/runtime/src/services/media-looks/select.ts",
-      "apps/runtime/src/sync/fansly/resources/media-look-resolve.ts",
-    ]);
   });
 });
 

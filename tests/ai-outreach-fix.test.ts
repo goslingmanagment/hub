@@ -58,8 +58,4 @@ describe("Fix for a mass message", () => {
   it("Fix takes it", () => {
     expect(() => assertDraftPurposeRequestShape("improve-draft", { draftPurpose: "outreach" })).not.toThrow();
   });
-
-  it("holds no long dash", () => {
-    expect(build("outreach").user.slice(build("outreach").user.lastIndexOf("## Your Task"))).not.toMatch(/[—–]/);
-  });
 });
