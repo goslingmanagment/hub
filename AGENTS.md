@@ -156,9 +156,10 @@ the owner's machine (outside this repository); a change that moves a home or add
 - Lists in CHECK constraints (agent-key capabilities, person rights) are rewritten whole by every migration that
   widens them: at rebase take the union with main's. A migration's number must be above main's highest: the runner
   refuses a lower one once a higher one is applied.
-- Copies of the data: `docs/runbooks/business-backup.md`. Do not deploy while the nightly dump runs (05:20 Moscow,
-  about 13 minutes): a migration would wait behind it. Each deploy answers 502 to chatters' extensions for 2–3
-  seconds: batch merged work into one deploy rather than deploying every PR.
+- Copies of the data: none since 2026-11-17 (the owner turned the Mac's copies off and they were deleted), so a
+  destructive change or a lost server disk has no rollback; turning them back on: `docs/runbooks/business-backup.md`.
+  Each deploy answers 502 to chatters' extensions for 2–3 seconds: batch merged work into one deploy rather than
+  deploying every PR.
 
 ## Good to know
 - What AI money went to (Hub's ledger, by feature/model/effort/window/chatter/page/key/branch, unit costs, dearest calls,
