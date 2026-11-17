@@ -36,6 +36,19 @@ export async function until(predicate: () => boolean, timeoutMs = 5000, what = "
   }
 }
 
+/** A monotonic clock (ms) that moves only when the test moves it, for the
+ *  code that takes its clock (`now`): a deadline handed to that code never
+ *  passes by itself, so a loaded machine's stall between two steps — a
+ *  buffer's fsync before a release — cannot run it out. The code's timers
+ *  still run on real time, armed for what is left by this clock. */
+export class TestClock {
+  #ms = monoMs();
+  readonly now = (): number => this.#ms;
+  advance(ms: number): void {
+    this.#ms += ms;
+  }
+}
+
 export function tempDir(prefix = "pb-"): { dir: string; remove: () => void } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   return { dir, remove: () => rmSync(dir, { recursive: true, force: true }) };
@@ -1146,6 +1159,10 @@ export interface HubScript {
   newTunnel?: boolean;
   /** After its release, this long before its records are written. */
   sendDelayMs?: number;
+  /** After its release, its records wait for this instead: until then
+   *  Chrome holds the request on no connection, and a cut of the tunnels
+   *  does not end it. */
+  writeWhen?: Promise<void>;
   /** What happens after the release. */
   then?: "answer" | "hang_before_send" | "hang_after_send" | "fail_before_send" | "fail_after_send" | "cancel_after_send" | "body_fails" | "retry" | "never_pauses";
   /** A chunk whose data is shorter than its dataLength. */
@@ -1185,6 +1202,8 @@ interface HubModelRequest {
   interceptResponse: boolean;
   ended: boolean;
   tunnel: number | null;
+  /** Released and held by Chrome before it took a connection (`writeWhen`). */
+  holding: boolean;
   sendCount: number;
 }
 
@@ -1259,7 +1278,7 @@ export class HubChrome {
   cut(cls: "api" | "cdn"): number {
     let cut = 0;
     for (const request of this.#requests) {
-      if (request.cls !== cls || !request.continued || request.ended) continue;
+      if (request.cls !== cls || !request.continued || request.ended || request.holding) continue;
       cut += 1;
       this.#end(request, "net::ERR_CONNECTION_CLOSED", false);
     }
@@ -1310,7 +1329,7 @@ export class HubChrome {
     const cls = kind === "api" || kind === "part" ? "api" : "cdn";
     // Not through the gate's records: the upload API's, and a part's storage.
     const direct = new URL(bare!).hostname.startsWith("mediav2.") || kind === "part";
-    const main: HubModelRequest = { attemptId, role: "main", interceptionId: `I-${n}`, networkId: `R-${n}`, url: bare!, method, headers: Object.fromEntries(headers), cls, direct, body, partLength, stage: "request", continued: false, interceptResponse: false, ended: false, tunnel: null, sendCount: 0 };
+    const main: HubModelRequest = { attemptId, role: "main", interceptionId: `I-${n}`, networkId: `R-${n}`, url: bare!, method, headers: Object.fromEntries(headers), cls, direct, body, partLength, stage: "request", continued: false, interceptResponse: false, ended: false, tunnel: null, holding: false, sendCount: 0 };
     this.#requests.push(main);
     this.cdp.emit("Network.requestWillBeSent", { requestId: main.networkId, request: { url: main.url, urlFragment: `#${fragment}`, method }, initiator: { type: "script" } }, this.session);
     const script = this.#script(attemptId);
@@ -1350,7 +1369,14 @@ export class HubChrome {
     request.interceptResponse = command.params.interceptResponse === true;
     if (typeof command.params.url === "string") request.url = command.params.url;
     if (typeof command.params.postData === "string") this.handed.set(request.attemptId, Buffer.from(command.params.postData, "base64"));
-    setTimeout(() => this.#afterRelease(request), this.#script(request.attemptId).sendDelayMs ?? 0);
+    const script = this.#script(request.attemptId);
+    if (script.writeWhen !== undefined) {
+      request.holding = true;
+      void script.writeWhen.then(() => {
+        request.holding = false;
+        this.#afterRelease(request);
+      });
+    } else setTimeout(() => this.#afterRelease(request), script.sendDelayMs ?? 0);
     return {};
   }
 
