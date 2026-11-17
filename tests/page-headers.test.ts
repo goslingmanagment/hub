@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  HSTS_HEADER, boardFrameDevOrigins, boardFrameHeaders, isBoardFramePath, isTeamFrameRequest, pageHeaders,
+  HSTS_HEADER, boardFrameDevOrigins, boardFrameHeaders, isBoardFramePath, isBoardFrameRequest, pageHeaders,
 } from "../apps/runtime/src/api/page-headers.ts";
 
 // Hub's pages are never framed by another site, and production asks for HTTPS only (ecosystem R9).
@@ -40,17 +40,20 @@ describe("the headers of every answer", () => {
     expect(isBoardFramePath("/api/v1/workboard/frame/report")).toBe(false);
   });
 
-  // The final review (package R5): the exception is the team's name only; hub. keeps «never framed».
-  it("lifts the frame screens on the team's name only in production, any name outside it", () => {
+  // The final review (package R5): hub. keeps «never framed». Since 2026-11-17 the API's root name serves the frames
+  // too: the extension's proxy router sees only names the extension may reach.
+  it("lifts the frame screens on the team's and the API's names in production, never the console's; any name outside it", () => {
     const team = "https://chatgoose.gosling-agency.ru";
-    const ask = (hostname: string, isProduction: boolean, url = "/workboard/frame/custom") => isTeamFrameRequest({ url, hostname, isProduction, teamOrigin: team });
+    const ask = (hostname: string, isProduction: boolean, url = "/workboard/frame/custom") => isBoardFrameRequest({ url, hostname, isProduction, teamOrigin: team });
     expect(ask("chatgoose.gosling-agency.ru", true)).toBe(true);
     expect(ask("ChatGoose.gosling-agency.ru", true)).toBe(true);
+    expect(ask("gosling-agency.ru", true, "/workboard/frame/report")).toBe(true);
     expect(ask("hub.gosling-agency.ru", true)).toBe(false);
-    expect(ask("gosling-agency.ru", true)).toBe(false);
+    expect(ask("www.gosling-agency.ru", true)).toBe(false);
+    expect(ask("gosling-agency.ru", true, "/workboard/customs")).toBe(false);
     expect(ask("chatgoose.gosling-agency.ru", true, "/workboard/customs")).toBe(false);
     expect(ask("localhost", false)).toBe(true);
-    expect(isTeamFrameRequest({ url: "/workboard/frame/report", hostname: "chatgoose.gosling-agency.ru", isProduction: true, teamOrigin: "not a url" })).toBe(false);
+    expect(isBoardFrameRequest({ url: "/workboard/frame/report", hostname: "chatgoose.gosling-agency.ru", isProduction: true, teamOrigin: "not a url" })).toBe(false);
   });
 
   it("adds the local stand's origins outside production only", () => {
