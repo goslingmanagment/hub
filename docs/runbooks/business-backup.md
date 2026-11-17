@@ -9,11 +9,16 @@
 | Gengar's workspace | Mac `~/.openclaw/workspace-chat` | agency-de `/var/backups/agency-mac/<UTC>/openclaw-workspace-chat/` | daily 06:05 Moscow, `ru.gosling-agency.mac-backup-push` | `rsync -a` the snapshot back ([below](#what-lives-only-on-the-mac)) | the excluded files (list below); OpenClaw's config and sessions outside the workspace |
 | Bobr's workspace | Mac `~/.openclaw/workspace` | agency-de `/var/backups/agency-mac/<UTC>/openclaw-workspace/` | same run | same | same |
 | traffic-control | Mac `~/code/3-traffic/traffic-control/data/`: `control.sqlite` and its own daily `backups/` | agency-de `/var/backups/agency-mac/<UTC>/traffic-control/data/` | same run | copy `control.sqlite` back while traffic-control is not running | — |
-| ledger, TaskIndex | agency-de | Mac `~/Backups/ledger/` (every 6 h), `~/Backups/taskindex/` (daily 04:30) | their own launchd agents, from their repos | their repos' `deploy/` | unchanged by this; unlike the copies above they keep only the last 120 / 30 copies |
+| ledger, TaskIndex | agency-de | Mac `~/Backups/ledger/` (every 6 h), `~/Backups/taskindex/` (daily 04:30) | their own launchd agents, from their repos | their repos' `deploy/` | unchanged by this; they keep the last 120 / 30 copies |
 
-Nothing above deletes an old copy or snapshot (ledger and TaskIndex aside): how many to keep is the
-owner's call. Each run refuses below a free-space floor instead: 30 GB on the Mac for the two pulls,
-20 GB on agency-de's `/var` for the push.
+How many copies the Mac keeps is the owner's call: the newest one of the hub (`HUB_BACKUP_KEEP`,
+~3.6 GB a copy) and the newest 14 of ContentOps (`CONTENTOPS_BACKUP_KEEP`, ~240 MB each), chosen
+2026-11-17 when the hub's copies had reached 22 GB in six days. With one hub copy, damage noticed
+after the next night's copy cannot be rolled back from the Mac. A pull removes the older ones, oldest first
+(`scripts/backup/keep-copies.sh`), only after its own copy has passed its checks and has its dated
+name, so a failed run removes nothing. Nothing deletes a snapshot on agency-de. Each run also
+refuses below a free-space floor: 30 GB on the Mac for the two pulls, 20 GB on agency-de's `/var`
+for the push.
 
 ## Hub business data
 
@@ -28,7 +33,7 @@ file of the same copy. A full copy of the raw capture needs bought space and is 
 | The dump | `~/Backups/agency-hub/<UTC>/hub-business.dump` (`pg_dump -Fc`, PostgreSQL 16) |
 | Raw inputs of unfinished work | `~/Backups/agency-hub/<UTC>/hub-unfinished-inputs.sql` (psql script of `COPY` blocks) and the selection that chose them, `unfinished-inputs.sql` |
 | What it is | `~/Backups/agency-hub/<UTC>/manifest.json`: bytes, tables, tables with data, snapshot time, unfinished work by state, hub revision (the API image's source revision), `/api/v1/health` contract hash, duration |
-| How many | every copy is kept: nothing deletes a copy (deleting backups is the owner's call). Each run prints how many copies there are and their total size, and refuses to start when less than 30 GB is free on the Mac's disk (`HUB_BACKUP_MIN_FREE_GB`) |
+| How many | the newest one (`HUB_BACKUP_KEEP`, default 1): once a copy has its dated name, older ones are removed; a failed run removes nothing, so the last good copy stays. Each run prints how many copies there are, their total size and how many it removed, and refuses to start when less than 30 GB is free on the Mac's disk (`HUB_BACKUP_MIN_FREE_GB`) |
 | When | daily 05:20 Moscow (02:20 UTC), launchd agent `ru.gosling-agency.hub-backup`, logs in `~/Backups/agency-hub/logs/` |
 
 ### How it works
@@ -123,6 +128,8 @@ the content plan, the journal. `scripts/backup/pull-contentops-backup.sh` (Mac) 
   (models, pages, people, catalog, blobs, orders, migrations, journal) are not empty.
 - `manifest.json`: bytes, sha256, tables, the main tables' row counts in the dump's snapshot,
   ContentOps version, last schema migration, PostgreSQL version, duration. One JSON line on stdout.
+- The newest 14 copies stay (`CONTENTOPS_BACKUP_KEEP`); older ones are removed, oldest first, once
+  this run's copy has its dated name.
 - The media are not copied: 275 GB of blobs on the PC's C: and 86 GB of derived files on E:. That
   needs bought space (the owner's list).
 

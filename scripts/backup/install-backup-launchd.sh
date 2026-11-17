@@ -2,8 +2,10 @@
 # Installs the daily copies on this Mac as launchd agents. Each runs a copy of its scripts kept in
 # its own directory (low priority, logs in <directory>/logs/):
 #   hub         ru.gosling-agency.hub-backup         05:20 Moscow  pull-backup.sh, business-dump.sh,
-#                                                                  unfinished-inputs.sql → ~/Backups/agency-hub
-#   contentops  ru.gosling-agency.contentops-backup  05:45 Moscow  pull-contentops-backup.sh → ~/Backups/contentops
+#                                                                  unfinished-inputs.sql, keep-copies.sh
+#                                                                  → ~/Backups/agency-hub
+#   contentops  ru.gosling-agency.contentops-backup  05:45 Moscow  pull-contentops-backup.sh, keep-copies.sh
+#                                                                  → ~/Backups/contentops
 #   mac-push    ru.gosling-agency.mac-backup-push    06:05 Moscow  push-mac-backups.sh → ~/Backups/agency-mac
 # With no job named, all three. Re-running it replaces the copied scripts and the agents. --uninstall
 # removes the agents named (all three by default) and their copied scripts; the copies of the data
@@ -18,11 +20,11 @@ job() {
   case $1 in
     hub)
       label=ru.gosling-agency.hub-backup dest=${HUB_BACKUP_DIR:-$HOME/Backups/agency-hub} dest_var=HUB_BACKUP_DIR
-      run=pull-backup.sh files=(pull-backup.sh business-dump.sh unfinished-inputs.sql)
+      run=pull-backup.sh files=(pull-backup.sh business-dump.sh unfinished-inputs.sql keep-copies.sh)
       utc_hour=2 utc_minute=20 moscow=05:20 ;;
     contentops)
       label=ru.gosling-agency.contentops-backup dest=${CONTENTOPS_BACKUP_DIR:-$HOME/Backups/contentops}
-      dest_var=CONTENTOPS_BACKUP_DIR run=pull-contentops-backup.sh files=(pull-contentops-backup.sh)
+      dest_var=CONTENTOPS_BACKUP_DIR run=pull-contentops-backup.sh files=(pull-contentops-backup.sh keep-copies.sh)
       utc_hour=2 utc_minute=45 moscow=05:45 ;;
     mac-push)
       label=ru.gosling-agency.mac-backup-push dest=${MAC_BACKUP_DIR:-$HOME/Backups/agency-mac} dest_var=MAC_BACKUP_DIR

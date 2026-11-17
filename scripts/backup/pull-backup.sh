@@ -5,7 +5,7 @@
 #   ~/Backups/agency-hub/<UTC>/unfinished-inputs.sql       the selection that chose them
 #   ~/Backups/agency-hub/<UTC>/manifest.json               bytes, tables, hub revision, duration, ...
 # Launchd runs the copy of this file in ~/Backups/agency-hub (install-backup-launchd.sh); after a
-# change here or in business-dump.sh or unfinished-inputs.sql, re-run the installer.
+# change here or in business-dump.sh, unfinished-inputs.sql or keep-copies.sh, re-run the installer.
 #   bash scripts/backup/pull-backup.sh
 #
 # Both files come from ONE snapshot: a psql session on production exports it and stays open while
@@ -13,13 +13,17 @@
 # and the session ends. Everything streams over ssh into .incoming-<UTC>/, and the directory gets
 # its dated name only after the checks, so a dated directory is always a verified copy.
 #
-# Nothing is ever deleted here except this run's own .incoming-<UTC>/ when it fails: every copy
-# stays until a person removes it. The JSON line it prints says how many there are and their size.
+# The newest HUB_BACKUP_KEEP copies stay: 1 by default, the owner's call (a copy is ~3.6 GB), so a
+# problem noticed after the next night's copy cannot be rolled back from here. Older ones are
+# removed, oldest first (keep-copies.sh), only once this run's copy has its dated name: a run that
+# fails removes nothing but its own .incoming-<UTC>/, and the last good copy stays. The JSON line it
+# prints says how many copies there are, their size and how many it removed.
 set -Eeuo pipefail
 umask 077
 here=$(cd "$(dirname "$0")" && pwd)
 host=${HUB_BACKUP_HOST:-root@152.53.191.242}
 base=${HUB_BACKUP_DIR:-$HOME/Backups/agency-hub}
+keep=${HUB_BACKUP_KEEP:-1}
 # A dump without business data is a few MB of schema; the real one is gigabytes.
 min_bytes=${HUB_BACKUP_MIN_BYTES:-268435456}
 pg_bin=${HUB_PG_BIN:-/opt/homebrew/opt/postgresql@16/bin}
@@ -29,16 +33,17 @@ psql -X -q -At -v ON_ERROR_STOP=1 -U postgres -d agency_hub_core"
 end_marker='-- end of unfinished-work inputs'
 
 [[ -x $pg_bin/pg_restore ]] || { printf 'No pg_restore in %s (brew install postgresql@16)\n' "$pg_bin" >&2; exit 1; }
-for f in business-dump.sh unfinished-inputs.sql; do
+for f in business-dump.sh unfinished-inputs.sql keep-copies.sh; do
   [[ -f $here/$f ]] || { printf 'Missing %s next to %s\n' "$f" "$0" >&2; exit 1; }
 done
+[[ $keep =~ ^[1-9][0-9]*$ ]] || { printf 'HUB_BACKUP_KEEP must be a whole number of copies, at least 1 (got %s)\n' "$keep" >&2; exit 1; }
 mkdir -p "$base"
-# Nothing here deletes an old copy (how many to keep is the owner's call), so this guard is what
-# keeps a forgotten Mac from filling up: below the floor the run refuses and says so.
+# Copies are capped at $keep, and this floor guards the Mac's last free space: below it the run
+# refuses and says so. It never removes a copy to make room.
 min_free_gb=${HUB_BACKUP_MIN_FREE_GB:-30}
 free_kb=$(df -Pk "$base" | awk 'NR == 2 { print $4 }')
 [[ ${free_kb:-0} -ge $((min_free_gb * 1024 * 1024)) ]] || {
-  printf 'Only %s GB free under %s, need %s: not copying. Old copies are never deleted here.\n' \
+  printf 'Only %s GB free under %s, need %s: not copying (old copies are removed only after a good one).\n' \
     "$(( ${free_kb:-0} / 1024 / 1024 ))" "$base" "$min_free_gb" >&2
   exit 1
 }
@@ -183,13 +188,15 @@ jq -n --arg createdAt "$stamp" --arg host "$host" --arg snapshotAt "$as_of" --ar
 # Only a checked copy gets a dated name: the drill reads dated ones only.
 mv "$incoming" "$target"
 incoming=""
+# With this copy in place, the ones beyond the newest $keep go.
+removed=$(bash "$here/keep-copies.sh" "$base" "$keep" "$target")
 copies=0 total=0
 for dir in "$base"/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z; do
   [[ -d $dir ]] || continue
   copies=$((copies + 1))
   total=$((total + $(find "$dir" -type f -exec stat -f %z {} + | awk '{ s += $1 } END { print s + 0 }')))
 done
-jq -c --arg path "$target" --argjson copies "$copies" --argjson copiesBytes "$total" \
+jq -c --arg path "$target" --argjson copies "$copies" --argjson copiesBytes "$total" --argjson removed "$removed" \
   '{ok: true, path: $path, bytes, tables, tablesWithData, inputsBytes: .unfinishedInputs.bytes,
     unfinishedRows: ([.unfinishedInputs.work[].rows] | add // 0), hubRevision, durationSeconds,
-    copies: $copies, copiesBytes: $copiesBytes}' "$target/manifest.json"
+    copies: $copies, copiesBytes: $copiesBytes, removed: $removed}' "$target/manifest.json"
