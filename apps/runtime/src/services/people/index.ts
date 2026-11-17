@@ -976,6 +976,7 @@ export async function readAgentPeople(
       schedule: current ? slotView(current) : null,
       scheduleSlots: slots.map(slotView),
       rights: (parts.rights.get(row.id) ?? []).map((right) => right.right),
+      rightGrants: (parts.rights.get(row.id) ?? []).map((right) => ({ right: right.right, grantedAt: right.grantedAt.toISOString() })),
       updatedAt: new Date(Math.max(...stamps)).toISOString(),
     };
     if (terms) person.payTerms = terms.get(row.id) ?? [];

@@ -440,6 +440,9 @@ export const agentPersonSchema = z.object({
    *  line outside the key's grant is left out. */
   scheduleSlots: z.array(personScheduleSlotSchema),
   rights: z.array(personRightEnum),
+  /** The same rights with when each was granted (a right granted again has a new time). `submits_shift` holds for the
+   *  shifts begun at or after its `grantedAt`: the ledger reads it to tell the days a person hands in on the board. */
+  rightGrants: z.array(personRightSchema),
   /** The latest change of the person's record or anything that hangs off it. */
   updatedAt: isoTimestamp,
   /** Only for a key with read:pay_terms. */
