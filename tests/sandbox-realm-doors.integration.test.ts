@@ -255,12 +255,12 @@ describe("the doors of the test realm", () => {
 });
 
 describe("sandbox:seed --print-invite [code]", () => {
-  it("mints a link of a test login where Hub «Люди» would send it: ContentOps for t-km, the chatters' site for t-new", async (context) => {
+  it("mints a link of a test login where Hub «Люди» would send it: ContentOps for t-km, Workboard's name for t-new", async (context) => {
     if (!app) return context.skip();
     const km = await seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "t-km" });
     expect(km.invite).toMatch(/^https:\/\/contentops\.gosling-agency\.ru\/join#.+/);
     const fresh = await seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: true });
-    expect(fresh.invite).toMatch(/^https:\/\/chatgoose\.gosling-agency\.ru\/join#.+/);
+    expect(fresh.invite).toMatch(/^https:\/\/workboard\.gosling-agency\.ru\/join#.+/);
     // A login with a password gets a new password's link, as «Сбросить пароль ссылкой» gives.
     await seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "t-chat-1" });
     const kinds = await (app.db as Database).execute<{ username: string; kind: string }>(sql`
