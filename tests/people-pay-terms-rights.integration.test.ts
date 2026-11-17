@@ -145,6 +145,15 @@ describe("people registry: pay terms reach the owner only", () => {
     expect(withTerms.payTermsIncluded).toBe(true);
     expect(withTerms.people.find((person) => person.code === "chat")!.payTerms).toEqual([expect.objectContaining({ shareBasisPoints: SHARE, fixPerShiftMills: FIX })]);
 
+    // The board's switch comes with its time: the ledger tells the days a person hands in on the board by it.
+    const granted = await asSession("boss", "PATCH", "/api/v1/admin/people/chat", { rights: ["submits_shift"] });
+    expect(granted.statusCode, granted.body).toBe(200);
+    const chat = agentPeopleResponseSchema.parse((await asKey("terms", "GET", "/api/v1/agent/people")).json()).people.find((person) => person.code === "chat")!;
+    expect(chat.rights).toEqual(["submits_shift"]);
+    expect(chat.rightGrants).toEqual([{ right: "submits_shift", grantedAt: expect.any(String) }]);
+    expect(Date.parse(chat.rightGrants[0]!.grantedAt)).toBeLessThanOrEqual(Date.parse(chat.updatedAt));
+    expect((await asSession("boss", "PATCH", "/api/v1/admin/people/chat", { rights: [] })).statusCode).toBe(200);
+
     expect((await asKey("none", "GET", "/api/v1/agent/people")).statusCode).toBe(403);
     // Neither key reaches the owner's card, nor proposes without propose:people.
     expect((await asKey("terms", "GET", "/api/v1/admin/people/chat")).statusCode).toBe(403);

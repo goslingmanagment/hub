@@ -162217,6 +162217,31 @@
                               ]
                             }
                           },
+                          "rightGrants": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "right": {
+                                  "type": "string",
+                                  "enum": [
+                                    "customs_lead",
+                                    "records_customs",
+                                    "submits_shift",
+                                    "sees_own_pay"
+                                  ]
+                                },
+                                "grantedAt": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "right",
+                                "grantedAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "updatedAt": {
                             "type": "string"
                           },
@@ -162301,6 +162326,7 @@
                           "schedule",
                           "scheduleSlots",
                           "rights",
+                          "rightGrants",
                           "updatedAt"
                         ],
                         "additionalProperties": false
