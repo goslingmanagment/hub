@@ -1,17 +1,26 @@
-# Daily copies: the hub, ContentOps, what lives only on the Mac
+# Copies: the hub, ContentOps, what lives only on the Mac
 
 ## All copies
 
 | What | From | To | When | How to restore | Not covered |
 |---|---|---|---|---|---|
-| Hub business data | agency-de, `agency-hub-postgres-1` (PostgreSQL 16) | Mac `~/Backups/agency-hub/<UTC>/` | daily 05:20 Moscow, `ru.gosling-agency.hub-backup` | `scripts/backup/restore-drill.sh`; for real: [below](#restoring-for-real) | raw capture and event stream (schema only, a full copy needs bought space), pg-boss backlog; the copy is on the Mac only |
-| ContentOps database | VM `contentops-vm` on the owner's PC, compose `db` service (`contentops-db-1`, PostgreSQL 18.6) | Mac `~/Backups/contentops/<UTC>/contentops.dump` + `manifest.json` | daily 05:45 Moscow, `ru.gosling-agency.contentops-backup` | `scripts/backup/restore-drill-contentops.sh`; for real: [ContentOps](#contentops-database) | the media: 275 GB of blobs and 86 GB of derived files (needs bought space); the copy is on the Mac only |
+| Hub business data | agency-de, `agency-hub-postgres-1` (PostgreSQL 16) | Mac `~/Backups/agency-hub/<UTC>/` | **off since 2026-11-17** (owner), the copies deleted; when on: daily 05:20 Moscow, `ru.gosling-agency.hub-backup` | `scripts/backup/restore-drill.sh`; for real: [below](#restoring-for-real) | raw capture and event stream (schema only, a full copy needs bought space), pg-boss backlog; the copy is on the Mac only |
+| ContentOps database | VM `contentops-vm` on the owner's PC, compose `db` service (`contentops-db-1`, PostgreSQL 18.6) | Mac `~/Backups/contentops/<UTC>/contentops.dump` + `manifest.json` | **off since 2026-11-17** (owner), the copies deleted; when on: daily 05:45 Moscow, `ru.gosling-agency.contentops-backup` | `scripts/backup/restore-drill-contentops.sh`; for real: [ContentOps](#contentops-database) | the media: 275 GB of blobs and 86 GB of derived files (needs bought space); the copy is on the Mac only |
 | Gengar's workspace | Mac `~/.openclaw/workspace-chat` | agency-de `/var/backups/agency-mac/<UTC>/openclaw-workspace-chat/` | daily 06:05 Moscow, `ru.gosling-agency.mac-backup-push` | `rsync -a` the snapshot back ([below](#what-lives-only-on-the-mac)) | the excluded files (list below); OpenClaw's config and sessions outside the workspace |
 | Bobr's workspace | Mac `~/.openclaw/workspace` | agency-de `/var/backups/agency-mac/<UTC>/openclaw-workspace/` | same run | same | same |
 | traffic-control | Mac `~/code/3-traffic/traffic-control/data/`: `control.sqlite` and its own daily `backups/` | agency-de `/var/backups/agency-mac/<UTC>/traffic-control/data/` | same run | copy `control.sqlite` back while traffic-control is not running | — |
-| ledger, TaskIndex | agency-de | Mac `~/Backups/ledger/` (every 6 h), `~/Backups/taskindex/` (daily 04:30) | their own launchd agents, from their repos | their repos' `deploy/` | unchanged by this; they keep the last 120 / 30 copies |
+| ledger, TaskIndex | agency-de | Mac `~/Backups/ledger/`, `~/Backups/taskindex/` | only before and after each release (their repos' `deploy/release.sh`); their scheduled copies (every 6 h, daily 04:30) are **off since 2026-11-17** (owner), the copies deleted | their repos' `deploy/` | between releases only Litestream, on the same server volume; they keep the last 120 / 30 copies |
 
-How many copies the Mac keeps is the owner's call: the newest one of the hub (`HUB_BACKUP_KEEP`,
+On 2026-11-17 the owner turned off the hub's and ContentOps' pulls and the scheduled copies of
+ledger and TaskIndex, and the copies on the Mac were deleted. So the hub's production database has
+no copy anywhere: a destructive change or a lost agency-de disk has no rollback. ContentOps'
+database has no copy either. ledger and TaskIndex keep only Litestream on the same server volume,
+plus the copies their `deploy/release.sh` takes before and after each release. The push of what
+lives only on the Mac still runs. The scripts stay:
+`bash scripts/backup/install-backup-launchd.sh hub contentops` turns the two pulls back on
+([below](#install-update-remove)); for ledger's and TaskIndex's, see their repos' `deploy/README.md`.
+
+When the pulls are on, how many copies the Mac keeps is the owner's call: the newest one of the hub (`HUB_BACKUP_KEEP`,
 ~3.6 GB a copy) and the newest 14 of ContentOps (`CONTENTOPS_BACKUP_KEEP`, ~240 MB each), chosen
 2026-11-17 when the hub's copies had reached 22 GB in six days. With one hub copy, damage noticed
 after the next night's copy cannot be rolled back from the Mac. A pull removes the older ones, oldest first
@@ -22,7 +31,8 @@ for the push.
 
 ## Hub business data
 
-The hub's production database has no other copy. Once a day the owner's Mac pulls a `pg_dump` of
+The hub's production database has no other copy, and since 2026-11-17 not this one either: the pull is off
+([All copies](#all-copies)). When on, once a day the owner's Mac pulls a `pg_dump` of
 everything a person or money depends on; the raw capture and the engine's own tables are copied
 as schema only (about 67 of the 80 GB, see the list and the reason for each table in
 `scripts/backup/business-dump.sh`). The raw rows that unfinished work still needs go into a second
@@ -33,8 +43,8 @@ file of the same copy. A full copy of the raw capture needs bought space and is 
 | The dump | `~/Backups/agency-hub/<UTC>/hub-business.dump` (`pg_dump -Fc`, PostgreSQL 16) |
 | Raw inputs of unfinished work | `~/Backups/agency-hub/<UTC>/hub-unfinished-inputs.sql` (psql script of `COPY` blocks) and the selection that chose them, `unfinished-inputs.sql` |
 | What it is | `~/Backups/agency-hub/<UTC>/manifest.json`: bytes, tables, tables with data, snapshot time, unfinished work by state, hub revision (the API image's source revision), `/api/v1/health` contract hash, duration |
-| How many | the newest one (`HUB_BACKUP_KEEP`, default 1): once a copy has its dated name, older ones are removed; a failed run removes nothing, so the last good copy stays. Each run prints how many copies there are, their total size and how many it removed, and refuses to start when less than 30 GB is free on the Mac's disk (`HUB_BACKUP_MIN_FREE_GB`) |
-| When | daily 05:20 Moscow (02:20 UTC), launchd agent `ru.gosling-agency.hub-backup`, logs in `~/Backups/agency-hub/logs/` |
+| How many | none: off since 2026-11-17, the copies deleted. When on, the newest one (`HUB_BACKUP_KEEP`, default 1): once a copy has its dated name, older ones are removed; a failed run removes nothing, so the last good copy stays. Each run prints how many copies there are, their total size and how many it removed, and refuses to start when less than 30 GB is free on the Mac's disk (`HUB_BACKUP_MIN_FREE_GB`) |
+| When | off since 2026-11-17 by the owner's decision (`bash scripts/backup/install-backup-launchd.sh hub` turns it back on). When on: daily 05:20 Moscow (02:20 UTC), launchd agent `ru.gosling-agency.hub-backup`, logs in `~/Backups/agency-hub/logs/` |
 
 ### How it works
 
@@ -128,8 +138,10 @@ the content plan, the journal. `scripts/backup/pull-contentops-backup.sh` (Mac) 
   (models, pages, people, catalog, blobs, orders, migrations, journal) are not empty.
 - `manifest.json`: bytes, sha256, tables, the main tables' row counts in the dump's snapshot,
   ContentOps version, last schema migration, PostgreSQL version, duration. One JSON line on stdout.
-- The newest 14 copies stay (`CONTENTOPS_BACKUP_KEEP`); older ones are removed, oldest first, once
-  this run's copy has its dated name.
+- Off since 2026-11-17 by the owner's decision, and its copies on the Mac were deleted: ContentOps'
+  database has no copy. `bash scripts/backup/install-backup-launchd.sh contentops` turns it back on.
+  When on, the newest 14 copies stay (`CONTENTOPS_BACKUP_KEEP`); older ones are removed, oldest first,
+  once this run's copy has its dated name.
 - The media are not copied: 275 GB of blobs on the PC's C: and 86 GB of derived files on E:. That
   needs bought space (the owner's list).
 

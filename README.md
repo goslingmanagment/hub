@@ -12,7 +12,7 @@ For v1.0 production:
 - the operator screen's read at `/api/v1/ops/live` (sync's sent requests, each page's holds and why its work waits, process heartbeats, the job queue, open incidents — every page, nothing that identifies a fan) takes the same token, or the owner's dashboard session only
 - Swagger/OpenAPI docs at `/documentation` and `/api/v1/openapi.json` require an owner dashboard session
 
-A daily copy of the business data (without the raw capture) goes to the owner's Mac, with a restore drill: `docs/runbooks/business-backup.md`.
+Production data has no copy since 2026-11-17: the owner turned off the daily copy to the Mac and the copies were deleted. The scripts and the restore drill stay, to turn it back on: `docs/runbooks/business-backup.md`.
 
 ## Production Prerequisites
 
@@ -297,7 +297,7 @@ and archive its log first:
 
 ## Backups
 
-The owner's Mac pulls a daily `pg_dump` of the business data, with the raw capture and engine tables as schema only, plus the raw rows unfinished work still needs, and keeps every copy (`scripts/backup/`, runbook `docs/runbooks/business-backup.md`). A copy of the raw capture history is not made: losing the VPS loses it.
+No backups since 2026-11-17: the owner turned off the Mac's daily `pg_dump` of the business data and the copies were deleted, so a destructive change or a lost VPS disk has no rollback. The scripts stay, to turn it back on (`scripts/backup/`, runbook `docs/runbooks/business-backup.md`); a copy of the raw capture history was never made.
 
 ## Monitoring
 
