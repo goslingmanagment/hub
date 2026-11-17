@@ -47,8 +47,10 @@ concurrency:
 # its hosted runners over billing. A fork's PR never picks them here, yet it can
 # edit this file, so the real fence is the repository's setting: a PR from an
 # outside contributor runs nothing until someone approves it. Unset CI_POOL to
-# go back. On GitHub the gates run on ubuntu-slim, the static parts on
-# ubuntu-24.04 (4 vCPUs each), the integration shards on ubuntu-24.04-arm.
+# go back. On GitHub the gates and the static parts run on ubuntu-24.04 (4 vCPUs
+# each), the integration shards on ubuntu-24.04-arm. (The gates were on ubuntu-slim
+# until 2026-11-17, when GitHub stopped acquiring its jobs: «The job was not acquired
+# by Runner of type hosted even after multiple attempts».)
 #
 # Layout of a full run (measured 20.10, ~2.5 min wall): Gate fingerprint
 # (~15 s) → five static parts side by side — typecheck, lint, unit 1/2,
@@ -66,8 +68,8 @@ jobs:
   fingerprint:
     name: Gate fingerprint
     if: (github.event.action != 'edited' || github.event.changes.title || github.event.changes.base) && (github.event.action != 'labeled' || github.event.label.name == 'ci:full')
-    # ubuntu-slim ships Node.js; these scripts import nothing outside Node.
-    runs-on: ${{ vars.CI_POOL == 'pc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-slim' }}
+    # The runner ships Node.js; these scripts import nothing outside Node.
+    runs-on: ${{ vars.CI_POOL == 'pc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04' }}
     timeout-minutes: 5
     # Artifact lookup and producer validation need actions:read; no writes.
     permissions:
@@ -524,7 +526,7 @@ jobs:
   #
   quality:
     name: Quality Gate
-    runs-on: ${{ vars.CI_POOL == 'pc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-slim' }}
+    runs-on: ${{ vars.CI_POOL == 'pc' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04' }}
     needs: [fingerprint, static, integration]
     if: always()
     # The mirror's wait for a real run on the same head plus setup; the
