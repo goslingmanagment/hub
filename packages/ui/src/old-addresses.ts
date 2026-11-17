@@ -3,8 +3,9 @@
  * today that lands somewhere else now — the released extension 3.29.1, the agents' skills, the owner's bookmarks, the
  * links Hub's server wrote into matters and messages — and Workboard's own rule for its old paths. A moved address
  * gets a row and a redirect, never a second screen. `tests/old-addresses.test.ts` walks every row through the layers
- * that answer it: Hub's server (a Workboard address on the console's name goes to the team's name through the
- * one-time hand-off, `signin-handoff.ts workboardOnConsoleRedirect`), the console (`/team/*`,
+ * that answer it: Hub's server (a Workboard address on the console's name, or on the team's former name `chatgoose.`,
+ * goes to the team's name through the one-time hand-off, `signin-handoff.ts workboardOnConsoleRedirect` and
+ * `workboardOnFormerTeamRedirect`), the console (`/team/*`,
  * `apps/dashboard/src/lib/workboard.ts`), and Workboard's router (`workboardOldAddress` below). The browser keeps an
  * address's `#…` across a server's redirects.
  */
@@ -88,19 +89,28 @@ export interface OldAddressRow {
 }
 
 const HUB = "https://hub.gosling-agency.ru";
-const TEAM = "https://chatgoose.gosling-agency.ru";
+/** Workboard's own name since 2026-11-17 (owner's word). */
+const TEAM = "https://workboard.gosling-agency.ru";
+/** Workboard's name until 2026-11-17, the chatters' site: what the released extension, messages and bookmarks open. */
+const CHATGOOSE = "https://chatgoose.gosling-agency.ru";
 /** ContentOps' entry for Hub's addresses, reached signed in through its sign-in by Hub (products package C2). */
 const CONTENTOPS = "https://contentops.gosling-agency.ru";
 
 /** Every address opened today that must keep working, and where it lands now (an address of a person's access: the owner's landing). */
 export const OLD_ADDRESSES: readonly OldAddressRow[] = [
+  // Workboard's own name (2026-11-17): every Workboard page on the old name, with its query and anchor, signed in on the
+  // way (signin-handoff.ts workboardOnFormerTeamRedirect). The board's frames stay where the released extension frames them.
+  { who: "extension 3.30, «Отчёт» frame", from: `${CHATGOOSE}/workboard/frame/report`, to: `${CHATGOOSE}/workboard/frame/report` },
+  { who: "extension 3.30, popup «Workboard»", from: `${CHATGOOSE}/workboard/`, to: `${TEAM}/workboard/` },
+  { who: "Telegram message, matter", from: `${CHATGOOSE}/workboard/report/812?sale=9&from=2026-11-10#lines`, to: `${TEAM}/workboard/report/812?sale=9&from=2026-11-10#lines` },
+  { who: "bookmark", from: `${CHATGOOSE}/workboard/money/debts?week=2026-11-09`, to: `${TEAM}/workboard/money/debts?week=2026-11-09` },
   // The released extension 3.29.1: «Мои смены» by its one-time link, Workboard's plain address, the shift to hand in.
-  { who: "extension 3.29.1", from: `${TEAM}/workboard/my/shifts`, to: `${TEAM}/workboard/shifts/mine` },
-  { who: "extension 3.29.1", from: `${TEAM}/workboard/`, to: `${TEAM}/workboard/` },
-  { who: "extension 3.29.1, matter", from: `${TEAM}/workboard/my/shifts/812`, to: `${TEAM}/workboard/report/812` },
-  { who: "extension, matter", from: `${TEAM}/workboard/report/812`, to: `${TEAM}/workboard/report/812` },
+  { who: "extension 3.29.1", from: `${CHATGOOSE}/workboard/my/shifts`, to: `${TEAM}/workboard/shifts/mine` },
+  { who: "extension 3.29.1", from: `${CHATGOOSE}/workboard/`, to: `${TEAM}/workboard/` },
+  { who: "extension 3.29.1, matter", from: `${CHATGOOSE}/workboard/my/shifts/812`, to: `${TEAM}/workboard/report/812` },
+  { who: "extension, matter", from: `${CHATGOOSE}/workboard/report/812`, to: `${TEAM}/workboard/report/812` },
   // The agents' skills.
-  { who: "agents' skills", from: `${TEAM}/workboard/customs`, to: `${TEAM}/workboard/customs` },
+  { who: "agents' skills", from: `${CHATGOOSE}/workboard/customs`, to: `${TEAM}/workboard/customs` },
   { who: "agents' skills", from: `${HUB}/workboard/customs`, to: `${TEAM}/workboard/customs` },
   { who: "agents' skills", from: `${HUB}/team/applications/2`, to: `${HUB}/team/applications/2` },
   // The owner's bookmarks on the console's name: the same screen on the team's name, signed in.
@@ -109,14 +119,14 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "owner's bookmark", from: `${HUB}/workboard/people/alex/schedule?days=7`, to: `${TEAM}/workboard/team/alex/schedule?days=7` },
   { who: "owner's bookmark", from: `${HUB}/workboard/people/7/access`, to: `${HUB}/people/7/logins` },
   { who: "owner's bookmark", from: `${HUB}/workboard/payouts?view=reports`, to: `${TEAM}/workboard/money/reports` },
-  { who: "owner's bookmark", from: `${TEAM}/workboard/payouts?week=2026-11-02`, to: `${TEAM}/workboard/money/debts?week=2026-11-02` },
-  { who: "matter, before «Деньги»", from: `${TEAM}/workboard/payouts?person=kate-v`, to: `${TEAM}/workboard/money/debts?person=kate-v` },
+  { who: "owner's bookmark", from: `${CHATGOOSE}/workboard/payouts?week=2026-11-02`, to: `${TEAM}/workboard/money/debts?week=2026-11-02` },
+  { who: "matter, before «Деньги»", from: `${CHATGOOSE}/workboard/payouts?person=kate-v`, to: `${TEAM}/workboard/money/debts?person=kate-v` },
   // «Решения» on the console's name is the owner's whole «Ждут вас» in Hub (a window's parameter: Workboard's).
   { who: "owner's bookmark", from: `${HUB}/workboard/decisions`, to: `${HUB}/waiting` },
   { who: "owner's bookmark", from: `${HUB}/workboard/decisions#held`, to: `${HUB}/waiting#held` },
   { who: "owner's bookmark", from: `${HUB}/workboard/decisions?send=a1#held`, to: `${TEAM}/workboard/waiting?send=a1#held` },
   { who: "owner's bookmark", from: `${HUB}/workboard/my/shifts`, to: `${TEAM}/workboard/shifts/mine` },
-  { who: "matter, a post to fix", from: `${TEAM}/workboard/my/shifts?week=2026-11-09&report=2026-11-10`, to: `${TEAM}/workboard/shifts/mine?week=2026-11-09&report=2026-11-10` },
+  { who: "matter, a post to fix", from: `${CHATGOOSE}/workboard/my/shifts?week=2026-11-09&report=2026-11-10`, to: `${TEAM}/workboard/shifts/mine?week=2026-11-09&report=2026-11-10` },
   // The console's old «Команда» (apps/dashboard/src/lib/workboard.ts).
   { who: "console's old «Команда»", from: `${HUB}/team/shifts?period=30d`, to: `${TEAM}/workboard/shifts?days=30` },
   { who: "console's old «Команда»", from: `${HUB}/team/payouts#disputes`, to: `${TEAM}/workboard/waiting#reports` },
@@ -128,13 +138,13 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "owner's bookmark", from: `${HUB}/fans/by-spend/600-plus?page=mia-1#copy`, to: `${TEAM}/workboard/fans/by-spend/600-plus?page=mia-1#copy` },
   { who: "console's «Контент»", from: `${HUB}/content/mass-messages?page=mia-1`, to: `${TEAM}/workboard/sales/mass?page=mia-1` },
   // Links Hub's server wrote (matters: a path on whichever name shows it; people's messages: the team's name).
-  { who: "matter before the rename", from: `${TEAM}/workboard/decisions?dispute=5#questions`, to: `${TEAM}/workboard/waiting?dispute=5#questions` },
+  { who: "matter before the rename", from: `${CHATGOOSE}/workboard/decisions?dispute=5#questions`, to: `${TEAM}/workboard/waiting?dispute=5#questions` },
   { who: "matter on Hub's Главная", from: `${HUB}/workboard/waiting#customs`, to: `${TEAM}/workboard/waiting#customs` },
-  { who: "matter, sale's chain", from: `${TEAM}/workboard/shifts/report/77?sale=9`, to: `${TEAM}/workboard/report/77?sale=9` },
-  { who: "matter", from: `${TEAM}/workboard/people/7/access`, to: `${HUB}/people/7/logins` },
-  { who: "matter", from: `${TEAM}/workboard/people/alex`, to: `${TEAM}/workboard/team/alex` },
-  { who: "matter", from: `${TEAM}/workboard/people`, to: `${TEAM}/workboard/team` },
-  { who: "people's message", from: `${TEAM}/workboard/customs/K-14`, to: `${TEAM}/workboard/customs/K-14` },
+  { who: "matter, sale's chain", from: `${CHATGOOSE}/workboard/shifts/report/77?sale=9`, to: `${TEAM}/workboard/report/77?sale=9` },
+  { who: "matter", from: `${CHATGOOSE}/workboard/people/7/access`, to: `${HUB}/people/7/logins` },
+  { who: "matter", from: `${CHATGOOSE}/workboard/people/alex`, to: `${TEAM}/workboard/team/alex` },
+  { who: "matter", from: `${CHATGOOSE}/workboard/people`, to: `${TEAM}/workboard/team` },
+  { who: "people's message", from: `${CHATGOOSE}/workboard/customs/K-14`, to: `${TEAM}/workboard/customs/K-14` },
   // «Публикации» and «Статистика → Контент» are ContentOps' screens (products package C2): Hub's server sends their
   // addresses on (apps/runtime/src/services/content-screens-moved.ts) through ContentOps' sign-in by Hub to its
   // `/hub/<screen>`, with Hub's model of the page or post; ContentOps opens that model's screen (its HubEntryRedirect).
@@ -148,9 +158,9 @@ export const OLD_ADDRESSES: readonly OldAddressRow[] = [
   { who: "owner's bookmark", from: `${HUB}/stats/content?page=mia-1&period=7d&media=851203394123456789`, to: `${CONTENTOPS}/hub/stats?model=mia&page=mia-1&days=7&media=%22851203394123456789%22` },
   { who: "owner's bookmark, before 12.11", from: `${HUB}/stats?tab=content&days=30`, to: `${CONTENTOPS}/hub/stats?days=30` },
   // Workboard's own older addresses.
-  { who: "Workboard, old", from: `${TEAM}/workboard/my/reports?days=14`, to: `${TEAM}/workboard/shifts/mine?days=14` },
-  { who: "Workboard, old", from: `${TEAM}/workboard/access?person=7`, to: `${HUB}/people/7/logins` },
-  { who: "Workboard, old", from: `${TEAM}/workboard/sales`, to: `${TEAM}/workboard/sales/price` },
-  { who: "Workboard, old", from: `${TEAM}/workboard/people/7/shifts`, to: `${TEAM}/workboard/team/7` },
-  { who: "Workboard, old", from: `${TEAM}/workboard/people/7/sales?days=14`, to: `${TEAM}/workboard/team/7/sales?days=14` },
+  { who: "Workboard, old", from: `${CHATGOOSE}/workboard/my/reports?days=14`, to: `${TEAM}/workboard/shifts/mine?days=14` },
+  { who: "Workboard, old", from: `${CHATGOOSE}/workboard/access?person=7`, to: `${HUB}/people/7/logins` },
+  { who: "Workboard, old", from: `${CHATGOOSE}/workboard/sales`, to: `${TEAM}/workboard/sales/price` },
+  { who: "Workboard, old", from: `${CHATGOOSE}/workboard/people/7/shifts`, to: `${TEAM}/workboard/team/7` },
+  { who: "Workboard, old", from: `${CHATGOOSE}/workboard/people/7/sales?days=14`, to: `${TEAM}/workboard/team/7/sales?days=14` },
 ];

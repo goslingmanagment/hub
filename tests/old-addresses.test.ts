@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { teamPeopleInHub, teamToWorkboard } from "../apps/dashboard/src/lib/workboard.ts";
-import { signinNamesOf, workboardOnConsoleRedirect } from "../apps/runtime/src/services/signin-handoff.ts";
+import { signinNamesOf, workboardOnConsoleRedirect, workboardOnFormerTeamRedirect } from "../apps/runtime/src/services/signin-handoff.ts";
 import { contentopsAddress, contentScreenOf, pageOf, postOf } from "../apps/runtime/src/services/content-screens-moved.ts";
 import { OLD_ADDRESSES, WORKBOARD_OLD_PATHS, registryTabLanding, workboardOldAddress } from "../packages/ui/src/old-addresses.ts";
 import { matchScreen } from "../packages/ui/src/screens.ts";
@@ -80,6 +80,19 @@ function follow(start: string, owner = true): { at: string; steps: string[] } {
       }
       return { at: url.href, steps };
     }
+    if (NAMES.formerTeams.has(url.origin)) {
+      // Hub's server on the team's former name (nginx there says Workboard moved): a Workboard page goes to the team's
+      // name through the hand-off; the board's frames stay.
+      const server = workboardOnFormerTeamRedirect({ here: url.origin, method: "GET", url: path, moved: true }, NAMES);
+      if (server !== null) {
+        const next = handOff(url.origin, server);
+        next.hash = url.hash;
+        url = next;
+        steps.push("server");
+        continue;
+      }
+      return { at: url.href, steps };
+    }
     if (url.origin === CONTENTOPS && url.pathname === "/auth/hub/start") {
       // ContentOps' sign-in by Hub: signed in to Hub, it lands on `next`.
       url = new URL(url.searchParams.get("next")!, CONTENTOPS);
@@ -133,6 +146,9 @@ describe("old addresses", () => {
     } else if (url.origin === TEAM) {
       const route = url.pathname.slice(BASE.length) || "/";
       expect(WORKBOARD_ROUTES.some((pattern) => matchesRoute(pattern, route)), at).toBe(true);
+    } else if (NAMES.formerTeams.has(url.origin)) {
+      // Only the board's frames stay on the team's former name.
+      expect(url.pathname.startsWith(`${BASE}/frame/`), at).toBe(true);
     } else {
       expect(matchScreen(url.pathname)?.screen.product, at).toBe("hub");
     }
@@ -156,6 +172,32 @@ describe("old addresses", () => {
     for (const route of WORKBOARD_ROUTES) {
       const sample = route.replace(/:[a-zA-Z]+\??/g, "7");
       expect(workboardOldAddress({ pathname: sample, search: "", hash: "" }), route).toBeNull();
+    }
+  });
+
+  it("sends a Workboard page on the team's former name on with nothing lost once nginx says it moved, and leaves everything else alone", () => {
+    const [former] = [...NAMES.formerTeams];
+    expect(former).toBe("https://chatgoose.gosling-agency.ru");
+    const to = workboardOnFormerTeamRedirect({ here: former!, method: "GET", url: "/workboard/report/812?sale=9&from=2026-11-10", moved: true }, NAMES)!;
+    const hop = new URL(to, former);
+    expect(hop.pathname).toBe("/api/v1/auth/sso");
+    expect(hop.searchParams.get("to")).toBe(TEAM);
+    expect(hop.searchParams.get("next")).toBe(`${TEAM}/workboard/report/812?sale=9&from=2026-11-10`);
+    expect(hop.searchParams.get("silent")).toBe("1");
+    for (const [here, method, url, moved] of [
+      [former!, "GET", "/workboard/report/812", false],
+      [former!, "GET", "/workboard/frame/report", true],
+      [former!, "GET", "/workboard/frame/custom?fan=1", true],
+      [former!, "GET", "/workboard/assets/index-1.js", true],
+      [former!, "POST", "/workboard/shifts", true],
+      [former!, "GET", "/login", true],
+      [former!, "GET", "/customs/", true],
+      [former!, "GET", "/api/v1/auth/me", true],
+      [former!, "GET", "/workboard//evil.example/x", true],
+      [TEAM, "GET", "/workboard/shifts", true],
+      [HUB, "GET", "/workboard/shifts", true],
+    ] as const) {
+      expect(workboardOnFormerTeamRedirect({ here, method, url, moved }, NAMES), `${here} ${method} ${url} ${moved}`).toBeNull();
     }
   });
 

@@ -1,6 +1,6 @@
 /**
  * The agency's products a person crosses between with the switcher at the top of a product's frame (products plan
- * §2.1): Hub (the owner's place, `hub.`), Workboard (the chat team's, `chatgoose.…/workboard/`), ContentOps, and the
+ * §2.1): Hub (the owner's place, `hub.`), Workboard (the chat team's, `workboard.…/workboard/`), ContentOps, and the
  * owner's two outside tools. `auth/me` names the ones this person has; the frames draw the list from it.
  */
 export const PRODUCTS = ["hub", "workboard", "contentops", "tasks", "monitor"] as const;

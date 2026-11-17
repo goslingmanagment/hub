@@ -2,15 +2,16 @@
 // host-only cookie on each name; a sign-in on one is planted on the other by a
 // one-time code. The names and the console → chatters' site rule are one copy
 // with Workboard: packages/ui/src/sites.ts.
-import { peerOriginOf, siteOf } from "@agency_hub_core/ui/sites";
+import { peerOriginOf, siteOf, silentSignInNamesOf } from "@agency_hub_core/ui/sites";
 
-export { CHATTER_SITE_ORIGIN, NO_SILENT_SIGNIN, contentopsEntryHref, peerOriginOf, signInHopHref, silentSignInHref, workboardEntryHref } from "@agency_hub_core/ui/sites";
+export { CHATTER_SITE_ORIGIN, NO_SILENT_SIGNIN, WORKBOARD_ORIGIN, contentopsEntryHref, peerOriginOf, signInHopHref, silentSignInHref, workboardEntryHref } from "@agency_hub_core/ui/sites";
 
 /** What the browser tab is called there (sign-in, the invitation, the password link): the product the person opens, Workboard. */
 export const CHATTER_SITE_TITLE = "Workboard";
 
-/** Guarded: the settings tree also renders server-side in tests, where there
- *  is no window. Locally `chatgoose.localhost` plays the chatters' site. */
+/** On the team's name (Workboard's, or the chatters' site that was it).
+ *  Guarded: the settings tree also renders server-side in tests, where there
+ *  is no window. Locally `chatgoose.localhost` plays the team's name. */
 export function isChatterSite(): boolean {
   return typeof window !== "undefined" && siteOf(window.location.origin) === "team";
 }
@@ -25,6 +26,11 @@ export function isConsoleSite(): boolean {
 /** The other of the two names, from this page; null on a local build on one name or a test. */
 export function peerSiteOrigin(): string | null {
   return typeof window === "undefined" ? null : peerOriginOf(window.location.origin);
+}
+
+/** The names this page's sign-in asks silently, in order (packages/ui sites.ts `silentSignInNamesOf`); none on a local build on one name. */
+export function silentSignInNames(): string[] {
+  return typeof window === "undefined" ? [] : silentSignInNamesOf(window.location.origin);
 }
 
 /** index.html ships one title, the console's, to every name. */

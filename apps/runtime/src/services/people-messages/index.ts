@@ -18,6 +18,7 @@ import {
   type PeopleMessagesResponse,
   type PeopleMessageSwitchBody,
   type PeopleMessageSwitchResponse,
+  WORKBOARD_ORIGIN,
 } from "@agency_hub_core/contracts";
 import {
   ConfigOverrideVersionConflictError,
@@ -159,7 +160,7 @@ async function pagesByLabel(app: MessagesApp): Promise<Map<string, { modelSlug: 
   return new Map(pages.map((page) => [page.label, { modelSlug: page.modelSlug ?? page.label, modelName: page.modelName ?? page.label }]));
 }
 
-const teamLink = (app: Pick<AppContext, "config">, path: string) => `${(app.config.webTeamOrigin ?? "https://chatgoose.gosling-agency.ru").replace(/\/+$/u, "")}${path}`;
+const teamLink = (app: Pick<AppContext, "config">, path: string) => `${(app.config.webTeamOrigin ?? WORKBOARD_ORIGIN).replace(/\/+$/u, "")}${path}`;
 
 // ── What fires each kind ─────────────────────────────────────────────────────
 

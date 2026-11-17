@@ -14,8 +14,10 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
   (typed by the contracts, checked by `pnpm typecheck`). A new screen or API field gets its fixture there.
 - Two products, two frames (`packages/ui` Place.tsx; menus from `packages/ui/src/screens.ts` by each row's `product`):
   Hub = the console (`apps/dashboard`, the owner's alone, `hub.`), Workboard = `apps/workboard` (every role, ONE address:
-  `chatgoose.…/workboard/`; Hub's server sends `hub.…/workboard/*` there through the sign-in hand-off). The product's
-  name opens the switcher (`auth/me` `products`). Old addresses: one table, `packages/ui/src/old-addresses.ts`.
+  `workboard.…/workboard/` since 2026-11-17; Hub's server sends `hub.…/workboard/*`, and `chatgoose.…/workboard/*` while
+  nginx there sets `X-Workboard-Moved`, there through the sign-in hand-off). `chatgoose.` stays one of Hub's names: the
+  released extension frames the board from `chatgoose.…/workboard/frame/*`, and its `/login` serves the static reports.
+  The product's name opens the switcher (`auth/me` `products`). Old addresses: one table, `packages/ui/src/old-addresses.ts`.
   ContentOps (the content managers' product) is its own repository, `~/code/4-content/contentops`, with its own
   entrance: a content manager signs in on ContentOps' form, its server asks Hub (`services/contentops-signin.ts`,
   `sso/password|link|password-change|logout`, key `signin:contentops`; an owner's login is refused there), and her

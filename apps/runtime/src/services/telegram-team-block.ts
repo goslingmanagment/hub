@@ -51,7 +51,7 @@ function escapeHtml(text: string) {
 /** The block's lines (Telegram HTML); empty when there is nothing to say. Pure. */
 /**
  * The block's lines name where each thing is done (products plan §2.3): the chat team's work is Workboard's, on the
- * team's name (`chatgoose.…/workboard/…`), whatever product the owner reads the morning in. Without the name (a test,
+ * team's name (`workboard.…/workboard/…`), whatever product the owner reads the morning in. Without the name (a test,
  * a stand of one name) the lines are plain text.
  */
 export function renderTeamBlock(facts: TeamBlockFacts, now: Date, links: { team?: string } = {}): string[] {

@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
 
-import { SIGNIN_CODE_TTL_SECONDS, isSigninClient, type SigninClient } from "@agency_hub_core/contracts";
+import { CHATTER_SITE_ORIGIN, SIGNIN_CODE_TTL_SECONDS, WORKBOARD_ORIGIN, isSigninClient, type SigninClient } from "@agency_hub_core/contracts";
 import {
   findDeviceTokenForUser,
   findHandoffGrant,
@@ -65,7 +65,14 @@ export function ssoStateCookieName(app: Pick<AppContext, "config">): string {
 }
 
 const PRODUCTION_CONSOLE_ORIGIN = "https://hub.gosling-agency.ru";
-const PRODUCTION_TEAM_ORIGIN = "https://chatgoose.gosling-agency.ru";
+const PRODUCTION_TEAM_ORIGIN = WORKBOARD_ORIGIN;
+/**
+ * The team's names before its own (Workboard was `chatgoose.…/workboard/` until 2026-11-17): the chatters' site. It
+ * stays one of Hub's names — the released extension frames the board from it, the static reports sign in there, a tab
+ * opened before the move keeps working — and a Workboard page asked there leaves for the team's name, signed in
+ * (`workboardOnFormerTeamRedirect`). A name configured as the team's or the console's is not a former one.
+ */
+const FORMER_TEAM_ORIGINS: readonly string[] = [CHATTER_SITE_ORIGIN];
 const PRODUCTION_SIGNIN_CLIENTS: Readonly<Record<string, string>> = {
   contentops: "https://contentops.gosling-agency.ru/auth/hub/callback",
   taskindex: "https://tasks.gosling-agency.ru/auth/hub/callback",
@@ -75,8 +82,10 @@ const PRODUCTION_SIGNIN_CLIENTS: Readonly<Record<string, string>> = {
 export interface SigninNames {
   /** The owner's place. */
   console: string;
-  /** The team's place (Workboard on chatgoose.). */
+  /** The team's place (Workboard on workboard.). */
   team: string;
+  /** The team's names before its own (FORMER_TEAM_ORIGINS): Hub's names still, their Workboard pages lead to `team`. */
+  formerTeams: ReadonlySet<string>;
   /**
    * Hub's own web apps: the names a code is minted and accepted on (the session
    * itself is planted only here), an accept may lead to, and a cookie change is
@@ -96,18 +105,20 @@ export function signinNamesOf(config: AppContext["config"]): SigninNames {
   for (const [name, callback] of Object.entries(config.webSigninClients ?? PRODUCTION_SIGNIN_CLIENTS)) {
     if (isSigninClient(name)) clients.set(name, callback);
   }
+  const formerTeams = new Set(FORMER_TEAM_ORIGINS.filter((origin) => origin !== teamOrigin && origin !== consoleOrigin));
   return {
     console: consoleOrigin,
     team: teamOrigin,
-    hubOrigins: new Set([consoleOrigin, teamOrigin]),
+    formerTeams,
+    hubOrigins: new Set([consoleOrigin, teamOrigin, ...formerTeams]),
     clients,
     allowLoopback: !config.isProduction,
   };
 }
 
-/** Where a name leads when nobody said: the team's place for the team's name, the root elsewhere. */
+/** Where a name leads when nobody said: the team's place for the team's names, the root elsewhere. */
 export function defaultLandingOf(origin: string, names: SigninNames): string {
-  return origin === names.team ? `${origin}/workboard/` : `${origin}/`;
+  return origin === names.team || names.formerTeams.has(origin) ? `${origin}/workboard/` : `${origin}/`;
 }
 
 /** Workboard's address on a name (apps/workboard/src/base.ts). */
@@ -124,15 +135,21 @@ const WORKBOARD_PATH = "/workboard";
 /** The parameters of «Ждут вас» that open one of Workboard's windows in place. */
 const WORKBOARD_WINDOW_PARAMS = ["send", "dispute", "claim", "offPlatform", "nobody", "unlinked"] as const;
 
+/**
+ * Whether a request's path is one of Workboard's pages: under `/workboard`, but not its built files (a page already
+ * open may still ask for them) and not the «Отчёт» board's frames for the extension (`/workboard/frame/*`, a bare page
+ * wherever it is asked for: no redirect, no sign-in, never `me`; page-headers.ts BOARD_FRAME_PATHS).
+ */
+function isWorkboardPagePath(path: string): boolean {
+  if (path !== WORKBOARD_PATH && !path.startsWith(`${WORKBOARD_PATH}/`)) return false;
+  return !path.startsWith(`${WORKBOARD_PATH}/assets/`) && !path.startsWith(`${WORKBOARD_PATH}/frame/`);
+}
+
 export function workboardOnConsoleRedirect(input: { here: string | null; method: string; url: string }, names: SigninNames): string | null {
   if (input.here === null || input.here !== names.console || names.console === names.team) return null;
   if (input.method !== "GET" && input.method !== "HEAD") return null;
   const path = input.url.split(/[?#]/, 1)[0]!;
-  if (path !== WORKBOARD_PATH && !path.startsWith(`${WORKBOARD_PATH}/`)) return null;
-  if (path.startsWith(`${WORKBOARD_PATH}/assets/`)) return null;
-  // The «Отчёт» board's frame for the extension (`/workboard/frame/*`) is a bare page wherever it is asked for: no
-  // redirect, no sign-in, never `me` (page-headers.ts BOARD_FRAME_PATH).
-  if (path.startsWith(`${WORKBOARD_PATH}/frame/`)) return null;
+  if (!isWorkboardPagePath(path)) return null;
   // The old «Решения» on the console's name is the owner's «Ждут вас» in Hub now (products plan §2.2), unless the
   // address opens one of Workboard's windows (a dispute, a held send…): those are Workboard's, on the team's name.
   if (path === `${WORKBOARD_PATH}/decisions` || path === `${WORKBOARD_PATH}/decisions/`) {
@@ -142,6 +159,32 @@ export function workboardOnConsoleRedirect(input: { here: string | null; method:
       return `/waiting${search ? `?${search}` : ""}`;
     }
   }
+  const next = resolveBrowserNext(input.url, names.team, names);
+  if (next === null) return null;
+  return `/api/v1/auth/sso?${new URLSearchParams({ to: names.team, next, silent: "1" }).toString()}`;
+}
+
+/**
+ * The header nginx sets on a former name of the team once Workboard's pages there leave for the team's name
+ * (agency-site deploy/server-nginx.sh, the chatgoose step): the switch is nginx's, so the new name is checked live
+ * before any old address leads to it, and one reload of nginx puts it back. A request that sends the header itself
+ * only takes itself to the team's name.
+ */
+export const WORKBOARD_MOVED_HEADER = "x-workboard-moved";
+
+/**
+ * A Workboard page asked for on a former name of the team (`chatgoose.…/workboard/report/812?sale=9`: the released
+ * extension's «Мои смены» and «Отчёт», Telegram messages, bookmarks, an agent's link): the same path and query on the
+ * team's name, through the one-time hand-off, so whoever is signed in on the old name arrives signed in — a full
+ * session as itself, a narrow one (the extension's, no password) as a narrow one of its device (`carryNarrowSession`);
+ * nobody signed in there → straight on (`silent`), where the team's name asks for the sign-in. The browser keeps the
+ * address's `#…` across the redirects. Only while nginx says Workboard moved (`moved`, WORKBOARD_MOVED_HEADER); never
+ * the board's frames or Workboard's built files. Null: not such a request.
+ */
+export function workboardOnFormerTeamRedirect(input: { here: string | null; method: string; url: string; moved: boolean }, names: SigninNames): string | null {
+  if (!input.moved || input.here === null || !names.formerTeams.has(input.here)) return null;
+  if (input.method !== "GET" && input.method !== "HEAD") return null;
+  if (!isWorkboardPagePath(input.url.split(/[?#]/, 1)[0]!)) return null;
   const next = resolveBrowserNext(input.url, names.team, names);
   if (next === null) return null;
   return `/api/v1/auth/sso?${new URLSearchParams({ to: names.team, next, silent: "1" }).toString()}`;
@@ -401,6 +444,47 @@ export async function issueWebLink(app: AppContext, input: {
     expiresAt,
   });
   return { url: `${names.team}/api/v1/auth/sso/accept?${new URLSearchParams({ code }).toString()}`, expiresAt: expiresAt.toISOString() };
+}
+
+/**
+ * A narrow session (the extension's one-time link, no password: `issueWebLink`) on a former name of the team, asked to
+ * lead on to a Workboard page on the team's name (`workboardOnFormerTeamRedirect`): a narrow code of the same device
+ * for the team's name, the same kind `issueWebLink` mints — the narrow session lives in the team's place, and that
+ * place has moved. The address of its accept, or null: not that case (another name or target, not a Workboard page, no
+ * live narrow session here), and the caller goes on as for nobody signed in. The device and its person are checked
+ * again at the accept.
+ */
+export async function carryNarrowSession(app: AppContext, input: {
+  here: string;
+  target: string;
+  next: string;
+  sessionToken: string | undefined;
+}): Promise<string | null> {
+  const names = signinNamesOf(app.config);
+  if (!input.sessionToken || !names.formerTeams.has(input.here) || input.target !== names.team) return null;
+  let next: URL;
+  try {
+    next = new URL(input.next);
+  } catch {
+    return null;
+  }
+  if (next.origin !== names.team || !isWorkboardPagePath(next.pathname)) return null;
+  const session = await findLiveSession(app, input.sessionToken);
+  if (!session || session.narrowDeviceTokenId === null) return null;
+  const { code, digest } = newCode();
+  await insertHandoffCode(app.db, {
+    codeDigest: digest,
+    kind: "narrow",
+    target: names.team,
+    userId: session.userId,
+    sessionId: null,
+    deviceTokenId: session.narrowDeviceTokenId,
+    stateDigest: null,
+    sealedSession: null,
+    next: input.next,
+    expiresAt: codeExpiry(),
+  });
+  return `${names.team}/api/v1/auth/sso/accept?${new URLSearchParams({ code }).toString()}`;
 }
 
 // --- Accepting on a name ----------------------------------------------------

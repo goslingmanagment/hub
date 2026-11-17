@@ -3,8 +3,7 @@ import { useLocation } from "react-router";
 import { PLACES } from "@agency_hub_core/look";
 import { useInspectAccountLink, useRedeemAccountLink } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { WORKBOARD_HOME } from "@/lib/navigation";
-import { CHATTER_SITE_ORIGIN } from "@/lib/sites";
+import { WORKBOARD_HOME, workboardHere } from "@/lib/navigation";
 import {
   LINK_UNUSABLE_MESSAGE,
   PASSWORD_HINT,
@@ -128,7 +127,7 @@ export function JoinPage() {
           </>
         )}
         <div className="entry-after">
-          <a href={`${CHATTER_SITE_ORIGIN}${WORKBOARD_HOME}`} className="btn entry-submit">Открыть «Мои смены»</a>
+          <a href={workboardHere(WORKBOARD_HOME)} className="btn entry-submit">Открыть «Мои смены»</a>
           <p className="entry-hint">Здесь ваши смены и отчёты по ним.</p>
         </div>
         <p className="entry-text mt-6">

@@ -67,7 +67,7 @@ import { createRequestAuth, unauthorizedFor } from "./request-auth.ts";
 import { crossOriginRefusal } from "./origin-check.ts";
 import { narrowWebSessionRefusal } from "../services/narrow-web-session.ts";
 import { asFanReader, FAN_READ_OPERATIONS } from "../services/fan-reads.ts";
-import { signinNamesOf, workboardOnConsoleRedirect } from "../services/signin-handoff.ts";
+import { WORKBOARD_MOVED_HEADER, signinNamesOf, workboardOnConsoleRedirect, workboardOnFormerTeamRedirect } from "../services/signin-handoff.ts";
 import { contentopsAddress, contentopsDownPage, contentScreenOf, createContentopsProbe, pageOf, postOf, testOwnerPage } from "../services/content-screens-moved.ts";
 import type { ApiModuleContext } from "../modules/context.ts";
 import { registerAgentReadRoutes } from "../modules/agent-read/index.ts";
@@ -109,7 +109,7 @@ import {
   ensureSyncQueues,
   reconcileQueueRetention,
 } from "../services/sync-queue.ts";
-import { clientTokenAllowlistApplies } from "@agency_hub_core/contracts";
+import { CHATTER_SITE_ORIGIN, clientTokenAllowlistApplies } from "@agency_hub_core/contracts";
 import { clientTokenRouteRefusal } from "../services/client-token-profile.ts";
 import { recordClientVersionObservation } from "../services/client-versions.ts";
 import { ensureOfapiQueues } from "../services/ofapi-events.ts";
@@ -272,7 +272,8 @@ export async function buildApiServer(appContext: AppContext) {
   const headersOfPages = pageHeaders(appContext.config.isProduction);
   // Workboard's frame screens (packages R, R5): framed by the extension's two sites only, on the team's and the API's names.
   const headersOfBoardFrame = boardFrameHeaders(appContext.config.isProduction, boardFrameDevOrigins(process.env.HUB_BOARD_FRAME_DEV_ORIGINS));
-  const teamOrigin = appContext.config.webTeamOrigin ?? "https://chatgoose.gosling-agency.ru";
+  // The released extension frames them from the chatters' site, Workboard's name until 2026-11-17 (signin-handoff.ts).
+  const teamOrigin = CHATTER_SITE_ORIGIN;
   server.addHook("onRequest", async (request, reply) => {
     const frame = isBoardFrameRequest({ url: request.url, hostname: request.hostname, isProduction: appContext.config.isProduction, teamOrigin });
     reply.headers(frame ? headersOfBoardFrame : headersOfPages);
@@ -398,10 +399,13 @@ export async function buildApiServer(appContext: AppContext) {
   // The pages a change signed in by a cookie is taken from: Hub's own web names (origin-check.ts).
   const signinNames = signinNamesOf(appContext.config);
 
-  // Workboard has one address, the team's name: a Workboard page asked for on the console's name leaves for the same
-  // path there through the one-time hand-off (signin-handoff.ts), before any file or app shell is served.
+  // Workboard has one address, the team's name: a Workboard page asked for on the console's name, or on the team's
+  // former name once nginx there says Workboard moved, leaves for the same path there through the one-time hand-off
+  // (signin-handoff.ts), before any file or app shell is served.
   server.addHook("onRequest", async (request, reply) => {
-    const to = workboardOnConsoleRedirect({ here: requestOriginOf(request), method: request.method, url: request.url }, signinNames);
+    const asked = { here: requestOriginOf(request), method: request.method, url: request.url };
+    const to = workboardOnConsoleRedirect(asked, signinNames)
+      ?? workboardOnFormerTeamRedirect({ ...asked, moved: request.headers[WORKBOARD_MOVED_HEADER] === "1" }, signinNames);
     if (to === null) return;
     reply.header("cache-control", "no-store");
     return reply.redirect(to, 302);
