@@ -43,7 +43,7 @@ revoked links are kept as facts, never deleted.
 ### The login already exists
 
 The invite form checks the whole team, including disabled participants, using
-the same case-insensitive login rule as the kernel. `Nikita` and `nikita` are
+the same case-insensitive login rule as the kernel. `ChatterA` and `chattera` are
 one login among accounts that have not been deleted. A duplicate opens the existing participant's card rather than
 creating or restoring an account automatically. A stale list is refreshed
 after a failed invite; the form keeps its inputs and gives an inline recovery
