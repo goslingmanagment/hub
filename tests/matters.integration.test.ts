@@ -244,9 +244,9 @@ describe("matters", () => {
     // The ledger is not connected, and the checks of package K never ran here (their pass is runMatterChecks):
     // «не проверено», never a zero.
     expect(owner.groups.filter((group) => !group.checked).map((group) => [group.id, group.count])).toEqual([
-      ["questions", 0], ["reports", 0], ["people", 0], ["ledger", 0],
+      ["questions", 0], ["reports", 0], ["people", 0], ["traffic", 0], ["ledger", 0],
     ]);
-    expect(owner.failed).toEqual(["questions", "reports", "people", "ledger"]);
+    expect(owner.failed).toEqual(["questions", "reports", "people", "traffic", "ledger"]);
     expect(owner.total).toBe(owner.groups.reduce((sum, group) => sum + group.count, 0));
     // A team lead's «Ждут вас»: their own and their role's on their pages, by the list's groups — the role's matter on
     // lora-1 of the rights test in «Другие дела»; held sends answered and are empty, no custom order waits; nothing failed.
