@@ -66,12 +66,12 @@ import { nameToWhom } from "@agency_hub_core/look";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { auditCtx } from "../../api/request-auth.ts";
 import { recordAudit, type HumanAuthPrincipal } from "../auth.ts";
 import { cardTextOf } from "../custom-orders/index.ts";
 import { loadEffectiveConfigField } from "../effective-config.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.ts";
 import { applyLiveConfigPatches } from "../live-config.ts";
+import { auditCtx } from "../page-scope.ts";
 import { shiftWords } from "../shift-handin-rules.ts";
 import { readHandinVersionPosts, SHIFT_REPORT_MISSING_KIND } from "../shift-handins.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";

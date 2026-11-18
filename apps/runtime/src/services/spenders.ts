@@ -57,15 +57,14 @@ import {
   type SpenderRetentionStatus,
 } from "@agency_hub_core/shared";
 
-import { platformRollupScopeFor } from "../api/request-auth.ts";
 import type { AppContext } from "../bootstrap.ts";
 import {
   canAccessPage,
-  isAgentPrincipal,
   requireHumanPrincipal,
   type AuthPrincipal,
 } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
+import { pageScopeFor, platformRollupScopeFor } from "./page-scope.ts";
 
 // Keep the service's subsets aligned with the validated request contracts.
 type ScopeFields = Pick<SpenderListQuery, "scope" | "pageLabel" | "modelSlug" | "platform">;
@@ -110,17 +109,6 @@ type FanLike = {
   displayName: string | null;
   createdAtExternal: Date | null;
 };
-
-function visiblePageIdsForPrincipal(principal: AuthPrincipal) {
-  // Same law as pageScopeFor: `undefined` means "no page filter at all", so an
-  // agent key resolves to its explicit grant, never to the unfiltered owner view.
-  if (isAgentPrincipal(principal)) {
-    return principal.pageIds;
-  }
-  return principal.user.role === "owner" ? undefined : principal.assignedPageIds;
-}
-
-
 
 function serializeTimestamp(value: Date | string | null | undefined) {
   if (!value) {
@@ -347,7 +335,7 @@ async function resolveSpenderScope(
   // of cookie-session-vs-bearer, a distinction an agent key does not have. It is
   // refused here rather than silently sorted into the bearer branch.
   requireHumanPrincipal(principal);
-  const scopedPageIds = visiblePageIdsForPrincipal(principal);
+  const scopedPageIds = pageScopeFor(principal);
 
   // Bearer principals never get cross-page aggregates. This used to test
   // `authMethod === "api_key"`, which let a DEVICE TOKEN through: device tokens

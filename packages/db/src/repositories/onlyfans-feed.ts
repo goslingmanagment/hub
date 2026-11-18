@@ -391,16 +391,26 @@ export async function readOnlyfansFeedPollPasses(
   return { subscribersPassedAt: at(row.subscribers_passed_at), failedAt: at(row.failed_at) };
 }
 
-/** The page's new subscribers the feed journaled since a time that are not events yet (the canonicalizer's queue). */
+/**
+ * The page's new subscribers the feed journaled since a time that are not events yet (the canonicalizer's queue).
+ * One bounded probe per version below the floor off observations_health_floor_idx, the way its webhook sibling
+ * (`countClientAudiencePendingNotifications`) reads: a caught-up page is an empty index range, never a walk of the
+ * page's journal. A parse version is never negative (`insertObservation` refuses one).
+ */
 export async function countOnlyfansFeedPendingSubscribers(
   db: Database,
   input: { pageId: number; since: Date; belowParseVersion: number },
 ): Promise<number> {
+  if (input.belowParseVersion <= 0) return 0;
   const result = await db.execute<{ n: number }>(sql`
-    select count(*)::int as n from observations
-    where source = 'client_capture' and kind = 'client.onlyfans_feed.v1' and account_id = ${input.pageId}
-      and received_at >= ${input.since} and parse_version < ${input.belowParseVersion}
-      and payload -> 'record' ->> 'kind' = 'subscriber'
+    select count(*)::int as n
+    from generate_series(0, ${input.belowParseVersion - 1}::integer) as below_floor(parse_version)
+    cross join lateral (
+      select 1 from observations o
+      where o.parse_version = below_floor.parse_version and o.source = 'client_capture' and o.kind = 'client.onlyfans_feed.v1'
+        and o.account_id = ${input.pageId} and o.received_at >= ${input.since}
+        and o.payload -> 'record' ->> 'kind' = 'subscriber'
+    ) pending
   `);
   return Number(result.rows[0]?.n ?? 0);
 }

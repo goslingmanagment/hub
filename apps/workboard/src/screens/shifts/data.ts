@@ -20,8 +20,8 @@
  *   - `shiftReportNotes` { days, until?, pageLabel? } — what stands between a day's shifts and the report it is paid by,
  *     per person and day, for the note under a day's last shift alone (shared/reportNotes.ts); an error is no line,
  *     never a state.
- * Query keys start with "shifts". Polls only while the tab is visible (queryClient's default):
- * a minute for «now» and a current period, never for a closed one.
+ * Query keys start with "shifts", except the shared reads of src/shared/reads.ts. Polls only while the tab is visible
+ * (queryClient's default): a minute for «now» and a current period, never for a closed one.
  */
 import { shiftIdleText, shiftIdleTitle } from "@agency_hub_core/ui/shiftLive";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -33,7 +33,7 @@ import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { LOGINS_ONLY, type PeopleIndex } from "@agency_hub_core/ui/people";
 import { loginsByPerson } from "./byPerson.js";
 import { kernel } from "@/shared/hub";
-import { shiftSalesQuery } from "@/shared/reads";
+import { chatterNumbersQuery, numbersWindow, shiftSalesQuery } from "@/shared/reads";
 import { perHourMills, qualityOfChatterNumbers, type ShiftQuality } from "@/shared/metrics";
 
 type SalesResponse = KernelOperationResponse<"teamShiftSales">;
@@ -419,6 +419,8 @@ export function buildModel(sales: SalesResponse, numbers: NumbersResponse | unde
 
 export interface ShiftsParams {
   window: ShiftsWindow;
+  /** The period the window is of: without a page filter its numbers are Команда's entry (`numbersWindow`). */
+  period: ResolvedPeriod;
   page: string | null;
   /** The period is still going: its numbers move. */
   current: boolean;
@@ -437,20 +439,27 @@ function shiftsSalesQuery(window: ShiftsWindow, page: string | null) {
  * The period: shifts with money (`teamShiftSales`), then their quality
  * (`teamChatterNumbers`, slower: the journal fills those columns when it answers).
  */
-export function useShiftsPeriod({ window, page, current }: ShiftsParams) {
+export function useShiftsPeriod({ window, period, page, current }: ShiftsParams) {
   const sales = useQuery({
     ...shiftsSalesQuery(window, page),
     placeholderData: keepPreviousData,
     refetchInterval: current ? MINUTE : false,
   });
-  // The numbers read shifts by their start: a night shift that began the evening before the first day belongs to
-  // it. Hub reads at most SHIFTS_MAX_DAYS: a window that long starts at its first midnight.
+  // Hub keeps the shifts whose middle falls in [from, to) — the very shifts `teamShiftSales` puts on the window's days —
+  // and a `to` still to come reads what no `to` does: without a page filter the numbers are the entry Команда reads
+  // for the same period. A page's piece of a shift takes the numbers of the whole shift that overlaps it most
+  // (`numbersFor`), whose middle may lie before the first day (a night shift begun the evening before): with a page
+  // filter the numbers start 12 h early. A period longer than Hub reads (Команда has no entry for it) is clipped to
+  // SHIFTS_MAX_DAYS and asks here too; a window that long starts at its first midnight.
+  const shared = page === null ? numbersWindow(period) : null;
   const lead = window.days < SHIFTS_MAX_DAYS ? 12 * HOUR : 0;
   const numbersFrom = new Date(Date.parse(moscowDayStart(window.from)) - lead).toISOString();
   const numbersTo = current ? undefined : moscowDayEnd(window.to);
-  const numbers = useQuery({
-    queryKey: ["shifts", "numbers", numbersFrom, numbersTo ?? "now"] as const,
-    queryFn: () => kernel.teamChatterNumbers({ query: numbersTo === undefined ? { from: numbersFrom } : { from: numbersFrom, to: numbersTo } }),
+  const numbers = useQuery<NumbersResponse, Error, NumbersResponse, readonly unknown[]>({
+    ...(shared === null ? {
+      queryKey: ["shifts", "numbers", numbersFrom, numbersTo ?? "now"],
+      queryFn: () => kernel.teamChatterNumbers({ query: numbersTo === undefined ? { from: numbersFrom } : { from: numbersFrom, to: numbersTo } }),
+    } : chatterNumbersQuery(shared)),
     staleTime: 5 * MINUTE,
     refetchInterval: current ? 5 * MINUTE : false,
   });
