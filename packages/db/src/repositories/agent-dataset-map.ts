@@ -1407,8 +1407,12 @@ function creatorStatsMediaCounters(alias: string): string {
          ${alias}.watch_pct_sum::text as f_watch_pct_sum, ${alias}.replays as f_replays`;
 }
 
+// The window column is the day's UTC midnight written out, not `v.day::timestamptz`
+// (the same instant under the server's UTC time zone): that cast is STABLE and no
+// index can hold it, so every window read scanned the whole table. Written this
+// way it is IMMUTABLE and the expression of the (page_id, …) index of 0431.
 const CREATOR_STATS_MEDIA_DAILY = `
-  ${creatorStatsHead("v", "v.media_offer_id || ':' || v.media_id || ':' || v.source::text || ':' || v.day::text", "v.day::timestamptz")},
+  ${creatorStatsHead("v", "v.media_offer_id || ':' || v.media_id || ':' || v.source::text || ':' || v.day::text", "(v.day::timestamp at time zone 'UTC')")},
          v.media_offer_id as f_media_offer_id, v.media_id as f_media_id, v.media_type as f_media_type,
          v.source as f_source, ${creatorStatsSourceLabelSql("v.source")} as f_source_label, v.day::text as f_day,
          ${creatorStatsMediaCounters("v")}, v.unique_viewers as f_unique_viewers, v.duration_ms as f_duration_ms
