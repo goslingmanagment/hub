@@ -195,8 +195,24 @@
     .ts-quiet { padding-left: 0; }
     .ts-rest-line { --ts-name: 150px; --ts-gap: 16px; }
   }
+  /* A phone: the name above its chart, the two weeks on the whole width, the day as «пн» over «9». */
   @container ts-sheet (max-width: 560px) {
-    .ts-grid { --ts-name: 112px; --ts-total: 48px; --ts-gap: 12px; }
+    .ts-grid { --ts-name: 0px; --ts-total: 46px; --ts-gap: 8px; }
+    .ts-source .ts-grid {
+      min-width: 0;
+      grid-template-columns: minmax(0, 1fr) var(--ts-total);
+      grid-template-areas: "name name" "plot total";
+    }
+    .ts-source .ts-name { grid-area: name; position: static; display: block; box-shadow: none; padding-top: 10px; font-size: 14px; }
+    .ts-days .ts-name { display: none; }
+    .ts-source .ts-plot { grid-area: plot; }
+    .ts-source .ts-total { grid-area: total; }
+    .ts-days { grid-template-areas: "plot total"; }
+    .ts-day { font-size: 12px; line-height: 15px; white-space: normal; }
+    .ts-day-weekday { display: block; }
+    .ts-caption { white-space: normal; text-align: right; font-size: 12px; line-height: 15px; }
+    .ts-week-sums span { padding-left: 4px; }
+    .ts-value { font-size: 12px; }
     .ts-source-money { margin-left: 0; flex-basis: 100%; }
     .ts-rest-line { grid-template-columns: 1fr; }
     .ts-rest-figures { justify-content: flex-start; text-align: left; }

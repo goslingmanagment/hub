@@ -120,7 +120,10 @@ function Source({ source, slots, since }: { source: SourceView; slots: readonly 
               {source.weeks.map((week, index) => <WeekSum key={index} week={week} />)}
             </div>
             <div className="ts-day-row" aria-hidden="true">
-              {slots.map((slot) => <span key={slot.date} className={`ts-day ts-day-${slot.when}`}>{slot.label}</span>)}
+              {slots.map((slot) => {
+                const [weekday, day] = slot.label.split(" ");
+                return <span key={slot.date} className={`ts-day ts-day-${slot.when}`}><span className="ts-day-weekday">{weekday}</span> {day}</span>;
+              })}
             </div>
           </div>
           <span className="ts-total ts-caption">{since}</span>
