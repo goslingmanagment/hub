@@ -1,6 +1,6 @@
 import type { OfLink, OfLinkHistoryResponse } from "@agency_hub_core/contracts";
 import { addDays, mondayOf, moscowDayOf, type MoscowDay } from "@agency_hub_core/ui/moscow";
-import { formatDayRange, formatMills } from "@/lib/format";
+import { formatDayRange, formatMills, formatWeekdayDay } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { linkStateView } from "@/pages/marketing/ofLinksView";
 import { arrivalOf, clicksWord, dayHint, dayMonth, daySlots, fansWord, sumKnown, type DaySlot } from "./trafficDays.js";
@@ -28,7 +28,7 @@ export interface LinkWeek {
 
 export interface LinkDayRow {
   date: MoscowDay;
-  /** «вт 17 ноября». */
+  /** «вт, 17 нояб.». */
   label: string;
   clicks: string;
   fans: string;
@@ -74,13 +74,15 @@ export function linkChartView(history: OfLinkHistoryResponse, metric: LinkMetric
       running: part.some((slot) => slot.when === "today"),
     };
   });
+  // The table starts on the day the link was made: before it there is nothing to read.
+  const madeOn = history.linkCreatedAt === null ? null : moscowDayOf(history.linkCreatedAt);
   const table = slots
     .map((slot, index) => ({ slot, day: figures[index]! }))
-    .filter(({ slot }) => slot.when !== "future")
+    .filter(({ slot }) => slot.when !== "future" && (madeOn === null || slot.date >= madeOn))
     .reverse()
     .map(({ slot, day }) => ({
       date: slot.date,
-      label: slot.long,
+      label: formatWeekdayDay(slot.date),
       clicks: day.clicks === null ? "—" : day.clicks.toLocaleString("ru-RU"),
       fans: day.fans === null ? "—" : day.fans.toLocaleString("ru-RU"),
       money: day.money === null ? "—" : formatMills(day.money),

@@ -267,4 +267,7 @@
   .tl-section .table-wrap { max-width: 760px; }
   .tl-days td { font-variant-numeric: tabular-nums; }
   .tl-days .tl-missing { color: var(--color-text-muted); }
+  @container ts-sheet (max-width: 560px) {
+    .tl-days th, .tl-days td { padding-left: 8px; padding-right: 8px; white-space: nowrap; }
+  }
 }
