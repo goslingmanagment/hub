@@ -25,8 +25,8 @@
  * would close an import cycle and hit the TDZ of a `const` still being
  * evaluated (a boot-time ReferenceError). The literals are pinned against the
  * real exported constants by `tests/queue-retention.test.ts` (static source
- * read) and by `tests/queue-retention.integration.test.ts`, which asserts that
- * every name here belongs to a queue the real `ensure*Queues` functions create.
+ * read): the table names exactly the declared `*_QUEUE` constants, so a new
+ * queue cannot quietly run on library defaults.
  */
 
 /** 24h — a heartbeat tick older than a day is worthless to replay. */
@@ -132,7 +132,8 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
 
   // ---- Class B: real work queues (14d / 7d, pinned defaults) -------------
   { queue: "sync.page.execute", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
-  { queue: "ofapi.events.process.v2", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
+  // A processed event is recorded in `ofapi_webhook_events`; its finished job row is kept a day.
+  { queue: "ofapi.events.process.v2", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "ofapi.link-stats.retry", retentionClass: "work", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
 
   // ---- Class C: daily/hourly business crons (14d / 7d, floor 7d) ---------
@@ -151,6 +152,9 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "capture.payload.parity.verify", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "publications.files.retention", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ai.provider-reports.sync", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
+  { queue: "ai.balance.watch", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
+  { queue: "team.shift-numbers", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
+  { queue: "team.shift-numbers.check", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   // Frequent business crons (every 1/5/15 min): the 14d retention floor stays for
   // a tick that has not run yet, but a finished tick is kept a day like the
   // heartbeats' — nothing reads their finished rows, the lanes keep their own run
@@ -158,6 +162,7 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "ofapi.binding.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "chat-memory.history.top-up", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   { queue: "chat-memory.fan-facts", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
+  { queue: "people-messages.sweep", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
 
   // ---- Class E: pg-boss's cron dispatcher (14d / 24h) ----------------------
   { queue: PG_BOSS_SEND_IT_QUEUE, retentionClass: "cron-dispatch", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
