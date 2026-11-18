@@ -18,3 +18,20 @@ export function useOfLinks(pageId?: number | undefined, options: { enabled?: boo
     meta: { suppressGlobalError: true },
   });
 }
+
+/** Link totals by channel (source) over Moscow days `from`…`to` (both left out:
+ * all the series has), with every segment's days when `days` is set. */
+export function useOfLinkChannels(range: { from?: string; to?: string; days?: boolean }) {
+  const query = {
+    ...(range.from === undefined ? {} : { from: range.from }),
+    ...(range.to === undefined ? {} : { to: range.to }),
+    ...(range.days ? { days: true } : {}),
+  };
+  return useQuery({
+    queryKey: ["admin", "of-links", "channels", query],
+    queryFn: () => kernel.ofLinksChannelsGet({ query }),
+    refetchInterval: OF_LINKS_REFRESH_MS,
+    placeholderData: keepPreviousData,
+    meta: { suppressGlobalError: true },
+  });
+}

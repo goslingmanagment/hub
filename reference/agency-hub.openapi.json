@@ -20149,6 +20149,14 @@
             "in": "query",
             "name": "pageId",
             "required": false
+          },
+          {
+            "schema": {
+              "type": "boolean"
+            },
+            "in": "query",
+            "name": "days",
+            "required": false
           }
         ],
         "security": [
@@ -20513,6 +20521,83 @@
                                       "assumed_contractor_start"
                                     ]
                                   }
+                                },
+                                "days": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "businessDate": {
+                                            "type": "string",
+                                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                          },
+                                          "clicks": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "fans": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "vendorNetMills": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "flags": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "enum": [
+                                                "no_baseline",
+                                                "vendor_recalculated",
+                                                "binding_changed",
+                                                "money_unknown",
+                                                "assumed_binding_start",
+                                                "assumed_contractor_start"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "businessDate",
+                                          "clicks",
+                                          "fans",
+                                          "vendorNetMills",
+                                          "flags"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -20532,7 +20617,8 @@
                                 "subscribers",
                                 "fans",
                                 "vendorNetMills",
-                                "flags"
+                                "flags",
+                                "days"
                               ],
                               "additionalProperties": false
                             }
@@ -20819,6 +20905,83 @@
                                       "assumed_contractor_start"
                                     ]
                                   }
+                                },
+                                "days": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "businessDate": {
+                                            "type": "string",
+                                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                          },
+                                          "clicks": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "fans": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "vendorNetMills": {
+                                            "anyOf": [
+                                              {
+                                                "type": "integer",
+                                                "minimum": -9007199254740991,
+                                                "maximum": 9007199254740991
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "flags": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "enum": [
+                                                "no_baseline",
+                                                "vendor_recalculated",
+                                                "binding_changed",
+                                                "money_unknown",
+                                                "assumed_binding_start",
+                                                "assumed_contractor_start"
+                                              ]
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "businessDate",
+                                          "clicks",
+                                          "fans",
+                                          "vendorNetMills",
+                                          "flags"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -20838,7 +21001,8 @@
                                 "subscribers",
                                 "fans",
                                 "vendorNetMills",
-                                "flags"
+                                "flags",
+                                "days"
                               ],
                               "additionalProperties": false
                             }

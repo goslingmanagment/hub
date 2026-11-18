@@ -402,6 +402,19 @@ export const ofLinkTotalsSchema = z.object({
   hubMoney: ofLinkHubMoneyTotalSchema,
 });
 
+/** One business day of a segment: the delta over the part of the day inside
+ * the segment. Every figure null: no snapshot by the part's end, so no delta;
+ * flag no_baseline: nothing was read before the part's start, so the value is
+ * all the link had accumulated, not the day's arrivals. */
+export const ofLinkSegmentDaySchema = z.object({
+  businessDate,
+  clicks: z.number().int().nullable(),
+  fans: z.number().int().nullable(),
+  vendorNetMills: mills.nullable(),
+  flags: z.array(ofLinkDeltaFlagSchema),
+});
+export type OfLinkSegmentDay = z.infer<typeof ofLinkSegmentDaySchema>;
+
 /** One link over one stretch of time: the value at the end minus the value
  * at the start. A channel's segments are cut by the link's bindings only
  * (`contractorKey` null); a contractor's segments are cut by the bindings and
@@ -426,6 +439,10 @@ export const ofLinkSegmentSchema = z.object({
   fans: z.number().int().nullable(),
   vendorNetMills: mills.nullable(),
   flags: z.array(ofLinkDeltaFlagSchema),
+  /** Asked with `days`: one row per business day of the range that overlaps
+   * [startAt, endAt), oldest first, each the delta over the day cut by the
+   * segment's bounds. Null: not asked. */
+  days: z.array(ofLinkSegmentDaySchema).nullable(),
 });
 
 export const ofLinkChannelSchema = z.object({

@@ -17,6 +17,7 @@ import {
   type OfLinkHubMoney,
   type OfLinkHubMoneyTotal,
   type OfLinkMoneyComparison,
+  type OfLinkSegmentDay,
   type OfLinksResponse,
 } from "@agency_hub_core/contracts";
 import {
@@ -901,10 +902,39 @@ function totalsOut(segments: readonly LinkSegment[], hubMoney: OfLinkHubMoneyTot
 const compareKeys = (left: string | null, right: string | null) =>
   left === right ? 0 : left === null ? 1 : right === null ? -1 : left < right ? -1 : 1;
 
+/** A segment's business days: one row per day of the range that overlaps
+ * [startAt, endAt), the delta over the day cut by the segment's own bounds —
+ * the same `linkDeltaBetween` per day as a link's history. Pure. */
+export function segmentDays(segment: LinkSegment, range: { from: string; to: string }): OfLinkSegmentDay[] {
+  const days: OfLinkSegmentDay[] = [];
+  const startMs = segment.startAt.getTime();
+  const endMs = segment.endAt.getTime();
+  for (let day = range.from; day <= range.to; day = nextBusinessDate(day)) {
+    const dayStartMs = businessDateToUtcStart(day, MOSCOW_TIME_ZONE).getTime();
+    if (dayStartMs >= endMs) {
+      break;
+    }
+    const nextStartMs = businessDateToUtcStart(nextBusinessDate(day), MOSCOW_TIME_ZONE).getTime();
+    if (nextStartMs <= startMs) {
+      continue;
+    }
+    const delta = linkDeltaBetween(segment.series, new Date(Math.max(dayStartMs, startMs)), new Date(Math.min(nextStartMs, endMs)));
+    days.push({
+      businessDate: day,
+      clicks: delta?.clicks ?? null,
+      fans: delta?.fans ?? null,
+      vendorNetMills: delta === null ? null : millsOrNull(delta.netMills),
+      flags: delta?.flags ?? [],
+    });
+  }
+  return days;
+}
+
 export async function getOfLinkChannels(db: Database, input: {
   from?: string | undefined;
   to?: string | undefined;
   pageId?: number | undefined;
+  days?: boolean | undefined;
   now: Date;
 }): Promise<OfLinkChannelsResponse> {
   const { now } = input;
@@ -979,6 +1009,7 @@ export async function getOfLinkChannels(db: Database, input: {
     fans: segment.delta.fans,
     vendorNetMills: millsOrNull(segment.delta.netMills),
     flags: segment.delta.flags,
+    days: input.days === true ? segmentDays(segment, range) : null,
   });
 
   const groupBy = <T>(items: readonly T[], keyOf: (item: T) => string | null) => {

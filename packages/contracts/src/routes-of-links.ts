@@ -6,7 +6,7 @@ import {
   ofLinkKindSchema,
   ofLinksResponseSchema,
 } from "./of-links.ts";
-import { businessDate, errorResponseSchema } from "./primitives.ts";
+import { businessDate, errorResponseSchema, queryBooleanSchema } from "./primitives.ts";
 
 const errors = { 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema };
 const pageId = z.coerce.number().int().positive();
@@ -48,6 +48,8 @@ export const ofLinksRouteSchemas = {
       to: businessDate.optional(),
       /** Only this page's links; default all pages. */
       pageId: pageId.optional(),
+      /** Every segment carries its business days (`days`); default not (`days` null). */
+      days: queryBooleanSchema.optional(),
     }),
     response: { 200: ofLinkChannelsResponseSchema, ...errors },
   },

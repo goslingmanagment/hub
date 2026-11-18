@@ -276,6 +276,13 @@ export const SCREENS: readonly Screen[] = [
   },
 
   // ── Трафик ─────────────────────────────────────────────────────────────
+  {
+    // The OnlyFans links by source: which source brings fans, day by day, over two weeks (ofLinksChannelsGet).
+    id: "traffic-sources", path: "/traffic/sources", label: "Источники", title: "Трафик: источники", section: "traffic", product: "hub", ownerOnly: true,
+    why: "Какие источники приводят фанов и в какие дни: по каждой ссылке за две недели.",
+    pageFilter: "none",
+    keywords: "трафик источники ссылки фаны график по дням onlyfans каналы подрядчики",
+  },
   // The traffic routine stays on the owner's Mac; its daily summary comes here as an agent's report (package O).
   {
     id: "traffic", path: "/traffic", label: "Сводка", title: "Трафик: сводка", section: "traffic", product: "hub", ownerOnly: true,
@@ -853,7 +860,7 @@ export const SECTIONS: readonly Section[] = [
   },
   {
     id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", product: "hub", ownerOnly: true, nav: "tabs",
-    tabs: [tab("summary", "Сводка", "traffic"), tab("promo", "Продвижение", "traffic-promo")],
+    tabs: [tab("sources", "Источники", "traffic-sources"), tab("summary", "Сводка", "traffic"), tab("promo", "Продвижение", "traffic-promo")],
   },
   {
     id: "applications", label: "Анкеты", title: "Анкеты моделей", icon: "ClipboardList", product: "hub", ownerOnly: true, nav: "none",
