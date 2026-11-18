@@ -3,7 +3,7 @@
 You are an agent with a key to the Agent Read Plane. This page is how to use it
 without fooling yourself.
 
-The plane exists because of one incident. Someone asked whether a fan named Rick
+The plane exists because of one incident. Someone asked whether a fan
 had spent money in January. A tool answered with an empty list. The empty list was
 true and the conclusion drawn from it was false: the money existed, the store's
 record of that conversation simply started in July. Everything below is built so
@@ -1189,7 +1189,7 @@ The path of one queue:
    72 hours, bought within 7 days, spent within 30 days, by person; skips and
    drops by reason; fresh windows are still counting), `hub queue-edit --id <id>
    --requested-by <username> --status paused|active|done`, `--per-person`,
-   `--daily-limit`, `--add-person`, `--move-from vanya --move-to max|pool`,
+   `--daily-limit`, `--add-person`, `--move-from <username> --move-to <username>|pool`,
    `hub queue-add --id <id> --rule '{…}'` (more fans, already queued ones left out).
 
 What Hub does at each take, so you can explain it: a fan who wrote, bought or
@@ -1400,7 +1400,7 @@ hub capabilities --pretty
 Find the fan without knowing which key you have:
 
 ```
-hub resolve --input "https://fansly.com/rickd" --pretty
+hub resolve --input "https://fansly.com/<username>" --pretty
 ```
 
 Ask the capture question before the data question, when the answer will hinge on

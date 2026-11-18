@@ -14,15 +14,14 @@ People write to fans; Hub never does.
 What the team's chats (Lora Чат, Ari Чат, Обучалка) and production showed on 2026-10-23:
 
 - What the team knows about a fan lives in heads and screenshots. A shift is handed over with
-  «кого оставить?» and screenshots (about 12 times a month in Ari Чат alone). Dani was sold the
-  same video on two pages ("я думал все это помнят"). Ваня sexted a fan marked ❌💵 on lora-1.
+  «кого оставить?» and screenshots (about 12 times a month in Ari Чат alone). A fan was sold the
+  same video on two pages. Chatter B sexted a fan marked ❌💵 on lora-1.
 - Whose sale it is gets settled by hand every shift: «долёт» appears 23 times a month in Lora Чат,
   and pay is counted from screenshots of payouts.
 - Hub knows who the fan is and what he bought, but not which chatter sent a message. A shift
   audit cannot split two chatters on one page, and Hub's facts never reach the chatter in the extension.
-- Promises and customs get lost: «бабки на шубу взяли… и в отчёте нихуя»; Evan waited 41 days
-  for a custom.
-- Fans wait: Evan 10 hours while he wanted to buy; 98 fans waiting at the end of one shift.
+- Promises and customs get lost: a fan waited 41 days for a custom.
+- Fans wait: a fan waited 10 hours while he wanted to buy; 98 fans waiting at the end of one shift.
 - Revenue for the last 30 days: Fansly 80 %, OnlyFans 20 %; ari-1 is the top page.
   OnlyMonster, Infloww and CreatorHero count chatter metrics for OnlyFans only, so nothing
   ready-made covers Fansly.
@@ -35,13 +34,13 @@ The team works in one client: chat-extension (ChatGoose) on fansly.com and in Ch
 Without these four, none of the features below work.
 
 1. **The author of every message.** The extension already sees every request the page sends,
-   including text typed by hand. It reports «this message left from Никита's browser», and Hub
+   including text typed by hand. It reports «this message left from chatter A's browser», and Hub
    keeps the author next to the archived message. Rule for the team: work in a browser with the
    extension, under your own login. Messages from a phone, another browser or OnlyMonster's own
    mass mailings stay without an author.
 2. **One record per fan across pages.** On Fansly the same fan has one account on every page, so
    lora-1, lora-2 and ari-1 join on their own. OnlyFans and new accounts of the same person
-   (Rick with a new nick) are linked when Hub suggests and a chatter confirms. The record holds
+   (a fan with a new nick) are linked when Hub suggests and a chatter confirms. The record holds
    his purchases on every page.
 3. **Facts from the chat, written by AI.** After each conversation AI writes what the fan told
    about himself, what was promised and what was agreed. Every fact links to the message it came
@@ -75,8 +74,8 @@ Two rules hold everywhere:
    The list of approaches is the owner's and changes as tests show.
 3. **Draft shift report.** At the end of a shift Hub lists the shift's sales. For each sale it shows
    who sent the PPV and who else wrote to this fan in the last 48 hours, and how much. Example:
-   «Никита — 40 messages over 2 days, Ваня — 3 messages and the PPV». The chatter marks «делим с
-   Никитой» or «не моё», fixes what is wrong and confirms. The other chatter sees it. Pay is
+   «Chatter A — 40 messages over 2 days, chatter B — 3 messages and the PPV». The chatter marks
+   «делим с …» or «не моё», fixes what is wrong and confirms. The other chatter sees it. Pay is
    counted from confirmed reports only; the owner settles disputes.
 4. **Customs.** A custom lives in the fan's record from payment to «отдали». Hub sees the payment
    and the video sent to the fan; the chatter confirms it is that order. Open customs are visible
@@ -121,7 +120,7 @@ Two rules hold everywhere:
   before writing to a fan someone else is talking to.
 - In parallel: close capture gaps the memory depends on: full history for active threads on every
   Fansly page (most are partial now), OnlyFans thread history, lilly-1 transactions (none since 17.09).
-- Done when: Никита's and Ваня's evening on ari-1 splits exactly; at least 95 % of outgoing
+- Done when: chatter A's and chatter B's evening on ari-1 splits exactly; at least 95 % of outgoing
   messages from team browsers have an author.
 
 **Week 2, 02.11–08.11: the fan record**
@@ -131,8 +130,8 @@ Two rules hold everywhere:
 - Facts from the chat after each conversation (when the 15-minute mark drops), with links;
   correction in the card.
 - The card in the extension; Reply, Ping, Coach, Recap and Генгар read it.
-- Done when: on ari-1 the card shows the ❌💵 history from lora-1; Rick's new nick is suggested
-  as Rick.
+- Done when: on ari-1 the card shows the ❌💵 history from lora-1; a fan's new nick is suggested
+  as the same fan.
 
 **Week 3, 09.11–15.11: the queue and the handoff**
 - The queue in the extension for the pages the chatter works: «Waiting» and «Win back».

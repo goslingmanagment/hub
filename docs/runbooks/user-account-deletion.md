@@ -116,7 +116,7 @@ owner-authorized production operation.
   owner/self refusal, audit rollback and ten deterministic row-lock races.
 - Actual dashboard browser QA against a disposable local HTTP fixture: cancel
   emitted no deletion; confirm emitted only `DELETE .../by-id/17`; a subsequent
-  Nikita invitation created ID 29; the still-open ID 17 card showed
+  invitation created ID 29; the still-open ID 17 card showed
   "Участник больше недоступен". The new card required explicit selection.
 - Independent backend and UI review completed. No production account, server,
   installed client or release artifact was changed by this local work.
