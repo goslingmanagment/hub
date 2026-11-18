@@ -9,10 +9,8 @@ import {
   markPageBrowserCommandSent,
   takeProfileCommand,
   type PageBrowserCommandRow,
-  browserProfileRouteHoldDetail,
   closeUnfinishedBrowserProfileSends,
   completeFanslySendAttempt,
-  countBrowserProfileSendsSince,
   endPageBrowserOnboarding,
   findOnboardingProfile,
   insertObservation,
@@ -60,18 +58,10 @@ import {
 import { errorName, type SyncLogger } from "../engine/commit.ts";
 import { FLOOR_LOOKBACK_MS, Pacer, REQUEST_TIMEOUT_MS, TAKEOVER_FACTOR, type Admission, type PacerDeps } from "../engine/pacer.ts";
 import { cryptoRng, noopMetrics, systemClock, type Clock, type Metrics, type PauseSource, type Rng } from "../engine/ports.ts";
-import { EMPTY_ROUTE_STATE, routeAdmissionView, RouteClocks, routeJournalLookbackMs, type RouteState } from "../engine/route-policy.ts";
-import {
-  classifySiteRequest,
-  decideSite,
-  SITE_END_WAIT_MS,
-  SITE_WAIT_MS,
-  siteAnswerEffect,
-  transportOutcomeOfSite,
-} from "../engine/site-admission.ts";
+import { EMPTY_ROUTE_STATE, RouteClocks, routeJournalLookbackMs, type RouteState } from "../engine/route-policy.ts";
 import { routeOfEngineOperation, routeOfLegacyOperation, type FanslyRoute } from "./routes.ts";
 import { browserStands } from "./browser-control.ts";
-import { BrowserSiteAdmission, protocolRefusalOf, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
+import { protocolRefusalOf, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
 import { browserTransitionRow } from "./browser-intake.ts";
 import { stateTelemetry } from "./browser-record.ts";
 import { siteResponseObservation } from "./browser-site-capture.ts";
@@ -94,27 +84,12 @@ import { accountOf } from "./identity-answer.ts";
 //   fenced off here (`lockOnboardingLink` before every write and every grant).
 // - The owner's login (`login`): the operator into the manual login and the
 //   browser started (`setMode`, `restartBrowser`), as PR 15's driver does for
-//   a page. The site's requests are admitted by the profile key (plan §3.2,
-//   step 2): the login operations and the reads its interface makes only
-//   (`loginOnly`: everything else, and every socket, refused at once); the
-//   owner's pause S × (1 + u) between any two sends of the profile, one in
-//   flight (the engine's pacer, its floor 1.2 × S after the profile's last
-//   send — the journal's, and the operator's `quiesced`); the route and
-//   family budgets a page's sends keep (`engine/route-policy.ts`), the hour's
-//   ceiling and a 429's hold of its route, by the site decision a page's
-//   requests take (`decideSite`) — the clocks read from the profile's journal
-//   on every slot, so a new link (a restart) is held as the one before was
-//   (Astra's review of PR 16, item 4); each journaled in `fansly_send_log`
-//   without a page (source `onboarding`, the profile and the attempt), as
-//   today's check without a page is. Only while the onboarding is the
-//   owner's login in the generation the request was admitted in, checked
-//   under the profile's row lock — the journal's entry under one, the grant
-//   itself under another (Astra's review of PR 16, item 3): a move (given
-//   up, the login closed) or a binding that commits first refuses the grant,
-//   one that comes after waits for it.
+//   a page. The login's site traffic is the operator's own (variant Б: it
+//   lets the site's requests go and observes them); nobody here admits or
+//   journals it — a profile with no page has no actor to take its
+//   observations. The identity read below is the link's only send.
 // - The login closed (`open`): the operator back in the automation (it checks
-//   the exit IP and loads the site anew); the site's own requests are then
-//   refused (`mode`), nothing of it runs but its documents.
+//   the exit IP and loads the site anew).
 // - The identity check (plan §3.2, step 3): one `GET /account/me` through the
 //   browser — a Hub request under the same pacer, journaled without a page
 //   under the request's source (`onboarding`, `credentials_verify`) — and its
@@ -155,8 +130,6 @@ export interface BrowserOnboardingTiming {
   unreachableEndMs: number;
   /** A start asked of a browser that stands is asked again after this. */
   restartEveryMs: number;
-  /** The site loop's wait while nothing of the site waits. */
-  siteIdleMs: number;
   /** The operator's state is recorded at most this often (and on a change). */
   stateRecordMs: number;
   /** A lock held elsewhere, or lost, is tried again after this. */
@@ -177,7 +150,6 @@ export const BROWSER_ONBOARDING_TIMING: Readonly<BrowserOnboardingTiming> = Obje
   commandWaitMs: 15_000,
   unreachableEndMs: 15_000,
   restartEveryMs: 30_000,
-  siteIdleMs: 50,
   stateRecordMs: 1_000,
   lockRetryMs: 5_000,
   identityWaitMs: 45_000,
@@ -194,9 +166,6 @@ export interface BrowserOnboardingOverrides {
   rpcTiming?: Partial<PageBrowserRpcTiming>;
   timing?: Partial<BrowserOnboardingTiming>;
   pacerFactory?: (deps: PacerDeps) => Pacer;
-  /** Awaited between a site request's journal entry and its grant (a test
-   *  moves the onboarding there). */
-  beforeGrant?: (siteRequestId: string) => Promise<void>;
   /** Awaited right before an account read's grant is written, under the
    *  profile's row lock (a test moves the onboarding there). */
   beforeCheckAnswer?: (attemptId: number) => Promise<void>;
@@ -210,9 +179,6 @@ export interface BrowserOnboardingOverrides {
 /** A route hold an answer puts on the profile is kept at most this long
  *  (the journal is read back as far for it). */
 const ROUTE_HOLD_MAX_MS = 3_600_000;
-/** The site loop's longest wait for a route that opens later: a request of
- *  another route asked meanwhile waits no longer. */
-const ROUTE_WAIT_STEP_MS = 250;
 
 /** A profile's journal operation as the route clocks read it: the site's
  *  and the login's (`site:<route>`, `login:<route>`) by their route, the
@@ -393,7 +359,6 @@ export class OnboardingLink {
   readonly profileId: string;
   readonly generation: bigint;
   readonly client: PageBrowserRpcClient;
-  readonly site: BrowserSiteAdmission;
   readonly pacer: Pacer;
   readonly #o: BrowserOnboardingOptions;
   readonly #t: BrowserOnboardingTiming;
@@ -408,7 +373,6 @@ export class OnboardingLink {
   #stopped: Promise<void> | null = null;
   #driveTimer: ReturnType<typeof setInterval> | null = null;
   #driving: Promise<void> | null = null;
-  #siteLoop: Promise<void> | null = null;
   #slot: Promise<void> = Promise.resolve();
   #lastStartMono = Number.NEGATIVE_INFINITY;
   #unreachableSince: number | null = null;
@@ -446,7 +410,6 @@ export class OnboardingLink {
       logger: options.logger,
       ...(overrides.rpcTiming === undefined ? {} : { timing: overrides.rpcTiming }),
     });
-    this.site = new BrowserSiteAdmission({ client: this.client, bridge: this.#bridge, monoNow: () => this.#clock.monoNow(), metrics: this.#metrics, loginOnly: true });
     const pacerDeps: PacerDeps = {
       clock: this.#clock,
       rng: options.rng ?? cryptoRng,
@@ -501,16 +464,14 @@ export class OnboardingLink {
       this.#subscribed = null;
       if (refused.reason !== "unavailable") this.#subscribe(refused.bufferId, refused.reason === "foreign_buffer" ? 0 : null);
     });
-    // Ends and results of earlier links nobody waits for: acknowledged (their
-    // sends were closed as unknown at this link's start).
-    this.client.onUnclaimedOutcome((end) => this.client.resultAck(end.attemptId));
+    // Results of earlier links nobody waits for: acknowledged (their sends
+    // were closed as unknown at this link's start).
     this.client.onUnclaimedResult((delivered) => {
       if (delivered.bodyProblem === null) this.client.resultAck(delivered.result.attemptId);
     });
     this.client.start();
     this.#driveTimer = setInterval(() => void this.drive(), this.#t.driveEveryMs);
     this.#driveTimer.unref?.();
-    this.#siteLoop = this.#runSite();
   }
 
   async stop(why: string): Promise<void> {
@@ -520,14 +481,11 @@ export class OnboardingLink {
       if (this.#driveTimer !== null) clearInterval(this.#driveTimer);
       this.#driveTimer = null;
       await this.#driving?.catch(() => undefined);
-      this.site.close();
-      await this.#siteLoop?.catch(() => undefined);
       await this.#identity?.catch(() => undefined);
       await this.#intake.catch(() => undefined);
       for (const unlisten of this.#unlisten.splice(0)) unlisten();
       this.client.onEvents(null);
       this.client.onEventsRefused(null);
-      this.client.onUnclaimedOutcome(null);
       this.client.onUnclaimedResult(null);
       await this.client.close();
       this.#o.logger.info({ profileId: this.profileId, generation: this.generation.toString(), why }, "Fansly sync browser onboarding: the link closed");
@@ -761,29 +719,14 @@ export class OnboardingLink {
     }).catch(() => undefined);
   }
 
-  // ── one send at a time: the site's and the identity check's ────────────
+  // ── one send at a time: the identity check's ───────────────────────────
 
   /** The slot: one admission of the profile at a time (the pacer's I2 says
-   *  so too; this orders the two loops that ask for it). */
+   *  so too; this orders the identity checks that ask for it). */
   #inSlot<T>(body: () => Promise<T>): Promise<T> {
     const run = this.#slot.then(body, body);
     this.#slot = run.then(() => undefined, () => undefined);
     return run;
-  }
-
-  async #runSite(): Promise<void> {
-    const signal = this.#stop.signal;
-    while (!signal.aborted) {
-      try {
-        const waitMs = await this.#siteStep(signal);
-        if (waitMs > 0) await this.#clock.sleep(waitMs, signal);
-      } catch (error) {
-        if (signal.aborted) return;
-        if (error instanceof OnboardingLinkLostError) return;
-        this.#o.logger.warn({ profileId: this.profileId, err: errorName(error) }, "Fansly sync browser onboarding: a site request's admission failed");
-        await this.#clock.sleep(this.#t.driveEveryMs, signal).catch(() => undefined);
-      }
-    }
   }
 
   /** The profile's route clocks now: its journal's sends and the holds its
@@ -805,135 +748,9 @@ export class OnboardingLink {
     return new RouteClocks({ sends: read.sends.map((send) => routeSendOf(send.operation, send.lastAt)), state: { routes }, ...options });
   }
 
-  /** Refuse what cannot pass; admit the oldest that can. 0: one went (or
-   *  was refused at its grant); else how long to wait before looking again. */
-  async #siteStep(signal: AbortSignal): Promise<number> {
-    const idle = this.#t.siteIdleMs;
-    if (this.#refuseExpired() === 0) return idle;
-    return this.#inSlot(async () => {
-      if (this.#refuseExpired() === 0) return idle;
-      const grant = await this.pacer.waitForSlot(signal);
-      // At the slot: what still waits, and may pass now — by the decision a
-      // page's site requests take: the hour's ceiling, the route and family
-      // budgets and holds (the manual login's own exemptions; the profile
-      // has no pause or hold of a page).
-      if (this.#refuseExpired() === 0) return idle;
-      const now = this.#clock.wallNow();
-      const view = routeAdmissionView(await this.#routeClocks(), [], now);
-      const sendsLastHour = await countBrowserProfileSendsSince(this.#o.db, { profileId: this.profileId, since: new Date(now.getTime() - 3_600_000) });
-      const decision = decideSite(this.site.pending(), {
-        nowMono: this.#clock.monoNow(),
-        now,
-        pausedAll: false,
-        pageHeld: null,
-        checksOnly: false,
-        routeOpensAt: (route) => {
-          const closure = view.routeOpensAt(route);
-          return closure === null ? null : { at: closure.at };
-        },
-        sendsLastHour,
-      });
-      for (const refusal of decision.refuse) this.site.refuse(refusal.id, refusal.reason);
-      const admit = decision.admit;
-      if (admit === null) {
-        // Looked at again when the first closed route opens (or sooner).
-        let opensInMs = Number.POSITIVE_INFINITY;
-        for (const request of this.site.pending()) {
-          const classified = classifySiteRequest(request);
-          if ("refuse" in classified) continue;
-          const at = view.routeOpensAt(classified.route)?.at.getTime();
-          if (at !== undefined) opensInMs = Math.min(opensInMs, at - now.getTime());
-        }
-        return Math.max(idle, Math.min(ROUTE_WAIT_STEP_MS, opensInMs));
-      }
-      const chosen = { id: admit.request.id, route: admit.route, origin: admit.origin, manualLogin: admit.exempt };
-      const attemptId = await nextBrowserAttemptId(this.#o.db);
-      const token = randomUUID();
-      const issuedMono = this.#clock.monoNow();
-      // Journaled only while the owner's login is open: what it was admitted
-      // in is what its grant is checked against.
-      const generation = await this.#fenced(async (tx, profile) => {
-        if (profile.onboarding !== "login") return null;
-        await journalBrowserProfileSend(tx, {
-          token,
-          source: "onboarding",
-          operation: `${chosen.origin}:${chosen.route}`,
-          holder: this.#o.holder,
-          profileId: this.profileId,
-          attemptId,
-          settingMs: grant.settingMs,
-          jitterU: grant.jitterU,
-          pauseMs: grant.pauseMs,
-        });
-        return profile.onboardingGeneration;
-      });
-      if (generation === null) {
-        // The login is no longer open: nothing of the site passes.
-        for (const request of this.site.pending()) this.site.refuse(request.id, "mode");
-        return idle;
-      }
-      const admission = this.pacer.arm(grant, attemptId, issuedMono);
-      const refusal = this.pacer.checkRemoteGrant(admission);
-      if (refusal !== null) {
-        this.site.refuse(chosen.id, "lease");
-        await this.#complete(admission, token, { kind: "aborted_before_send", refusal: refusal.reason }, null);
-        return 0;
-      }
-      await this.#o.overrides?.beforeGrant?.(chosen.id);
-      // The grant under the profile's row lock, the login still open in that
-      // generation: the owner's move and the binding wait for it, and none
-      // goes once either committed.
-      let granted = false;
-      try {
-        await this.#fenced(async (_tx, profile) => {
-          if (profile.onboarding !== "login" || profile.onboardingGeneration !== generation) return;
-          this.site.grant(chosen.id, { attemptId, sendWithinMs: Math.max(0, admission.sendDeadlineMono - this.#clock.monoNow()) });
-          granted = true;
-        });
-      } catch (error) {
-        // A failure after the grant went (its commit) changes nothing of it.
-        if (!granted) this.#o.logger.warn({ profileId: this.profileId, err: errorName(error) }, "Fansly sync browser onboarding: a site request's grant could not be checked; refused");
-      }
-      if (!granted) {
-        this.site.refuse(chosen.id, "mode");
-        await this.#complete(admission, token, { kind: "aborted_before_send", refusal: "lease_inactive" }, null);
-        this.#metrics.increment("sync_browser_onboarding_site", { origin: chosen.origin, outcome: "refused_at_grant" });
-        return 0;
-      }
-      let end: Awaited<ReturnType<BrowserSiteAdmission["end"]>>;
-      try {
-        end = await this.site.end(chosen.id, AbortSignal.any([signal, AbortSignal.timeout(SITE_END_WAIT_MS)]));
-      } catch {
-        // No end heard: it may have gone (the safe upper bound).
-        end = { kind: "transport_error", sent: true, message: "no end of the site request was heard" };
-      }
-      const outcome = transportOutcomeOfSite(end);
-      // A 429 (or a 5xx naming its deadline) holds the route that answered:
-      // recorded with the send's completion, read back by every slot.
-      const effect = siteAnswerEffect(end, chosen.manualLogin);
-      const hold = effect.kind === "route_limited" ? browserProfileRouteHoldDetail(Math.min(ROUTE_HOLD_MAX_MS, effect.retryAfterMs ?? 60_000)) : null;
-      await this.#complete(admission, token, outcome, end.kind === "response" ? end.status : null, hold);
-      this.site.settled(chosen.id, attemptId);
-      this.#metrics.increment("sync_browser_onboarding_site", { origin: chosen.origin, outcome: outcome.kind });
-      return 0;
-    });
-  }
-
-  /** The requests whose wait is over, refused; how many still wait. */
-  #refuseExpired(): number {
-    const now = this.#clock.monoNow();
-    let waiting = 0;
-    for (const request of this.site.pending()) {
-      const leftMs = Math.min(SITE_WAIT_MS - (now - request.askedMono), (request.waitDeadlineMono ?? Number.POSITIVE_INFINITY) - now);
-      if (leftMs <= 0) this.site.refuse(request.id, "waited_too_long");
-      else waiting += 1;
-    }
-    return waiting;
-  }
-
   /** The pacer's completion and the journal's: the send instant as the
    *  browser reported it, on the wall clock. */
-  async #complete(admission: Admission, token: string, outcome: FanslyWireOutcome, httpStatus: number | null, responseDetail: string | null = null): Promise<void> {
+  async #complete(admission: Admission, token: string, outcome: FanslyWireOutcome, httpStatus: number | null): Promise<void> {
     this.pacer.complete(admission, outcome);
     const sentAt = admission.sentWall;
     await completeFanslySendAttempt(this.#o.db, {
@@ -941,7 +758,7 @@ export class OnboardingLink {
       token,
       nextU: 0,
       outcome: outcome.kind,
-      outcomeDetail: outcome.kind === "aborted_before_send" ? outcome.refusal : outcome.kind === "response" ? responseDetail : redactSensitiveText(outcome.message).slice(0, 200),
+      outcomeDetail: outcome.kind === "aborted_before_send" ? outcome.refusal : outcome.kind === "response" ? null : redactSensitiveText(outcome.message).slice(0, 200),
       httpStatus,
       sentAt,
       sendOffsetMs: admission.sentMono === null ? null : Math.max(0, Math.ceil(admission.sentMono - admission.issuedMono)),

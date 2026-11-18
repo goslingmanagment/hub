@@ -79,7 +79,6 @@ describe("a page's browser that holds Hub's requests", () => {
       close: async () => undefined,
       onLink: () => () => undefined,
       onUnclaimedResult: () => undefined,
-      onUnclaimedOutcome: () => undefined,
       register: touched,
       send: touched,
     };
