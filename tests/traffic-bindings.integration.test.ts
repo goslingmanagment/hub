@@ -9,11 +9,13 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  createUser,
   TrafficBindingsConflictError,
+  TrafficLinkAlreadyBoundError,
   type TrafficBindingsChangeSet,
 } from "@agency_hub_core/db";
 
-import { TRAFFIC_BINDINGS_FILE_FORMAT } from "../apps/runtime/src/services/traffic-bindings.ts";
+import { bindNewTrafficLink, TRAFFIC_BINDINGS_FILE_FORMAT } from "../apps/runtime/src/services/traffic-bindings.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -263,5 +265,35 @@ describe("two writers at once (П9.6)", () => {
     expect((rejected[0]!.reason as TrafficBindingsConflictError).conflicts).toEqual([expect.stringMatching(/overlaps/)]);
     expect(await count("traffic_link_bindings where platform_link_id = '11577238'")).toBe(1);
     expect(await count("audit_events where event_type = 'admin.traffic_link_binding_created'")).toBe(1);
+  });
+});
+
+describe("the console's first binding (ofLinkSourcePut)", () => {
+  it("binds a link that never had a source, as the owner; refuses a link with a binding at any time, writing nothing", async () => {
+    const file = await bindingsFile(seed);
+    expect((await runCli(["traffic:bindings:import", "--file", file, "--write"])).exitCode).toBe(0);
+    const owner = await createUser(testDb!.db, { username: "boss", role: "owner" });
+    const first = { page: "lora-vip-of", kind: "tracking" as const, channel: "lora.porntoki", actor: "dashboard:boss", actorUserId: owner.id };
+    const validFrom = new Date("2026-11-10T09:00:00Z");
+
+    const written = await bindNewTrafficLink(testDb!.db, { ...first, link: "22000001", validFrom });
+    expect(written.written).toBe(true);
+    const stored = await testDb!.pool.query(`
+      select b.valid_from, b.valid_to, b.valid_from_basis from traffic_link_bindings b where b.platform_link_id = '22000001'`);
+    expect(stored.rows).toEqual([{ valid_from: validFrom, valid_to: null, valid_from_basis: "confirmed" }]);
+    const audit = await testDb!.pool.query(`
+      select source, actor_user_id::int as actor, metadata->>'actor' as who from audit_events
+       where event_type = 'admin.traffic_link_binding_created' and metadata->'link'->>'linkId' = '22000001'`);
+    expect(audit.rows).toEqual([{ source: "dashboard", actor: owner.id, who: "dashboard:boss" }]);
+
+    const before = await tableCounts();
+    const auditBefore = await trafficAuditCount();
+    // The link it just bound, an open binding from the import, a closed one: each is refused.
+    for (const [kind, link] of [["tracking", "22000001"], ["trial", "11170786"], ["trial", "11213035"]] as const) {
+      const refused = bindNewTrafficLink(testDb!.db, { ...first, kind, link, channel: "lora.insta-farm", validFrom });
+      await expect(refused).rejects.toBeInstanceOf(TrafficLinkAlreadyBoundError);
+    }
+    expect(await tableCounts()).toEqual(before);
+    expect(await trafficAuditCount()).toBe(auditBefore);
   });
 });

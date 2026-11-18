@@ -30,6 +30,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { ServiceUnavailableError } from "./errors.ts";
 import { ledgerGet, list, micros, millsOf, type LedgerReadApp } from "./ledger-payouts.ts";
 import { reconcileMatters, type MirrorItem } from "./matters-mirror.ts";
+import { readLinkUnboundItems } from "./traffic-link-matters.ts";
 
 /**
  * Проверки (ecosystem plan §6, package K): the checks Hub's server keeps as
@@ -48,6 +49,8 @@ import { reconcileMatters, type MirrorItem } from "./matters-mirror.ts";
  *    ledger's own sentence: money, the owner's alone), its notice of payout
  *    tabs with no column for tomorrow (one matter listing them), and
  *    off-platform sales still not in a report after N days.
+ *  - Traffic, from the OnlyFans link series and the bindings: a new link,
+ *    or one that brings fans, without a source (traffic-link-matters.ts).
  *
  * Every matter closes itself when its cause goes away (`cause_gone`). A source
  * that does not answer leaves its kinds' matters as they are and the kinds
@@ -74,6 +77,7 @@ const SOURCE: Record<MatterCheckKind, MatterSource> = {
   "ledger.check": "ledger",
   "ledger.sheet_column": "ledger",
   "ledger.off_platform": "ledger",
+  "traffic.link_unbound": "server",
 };
 
 /** How often a kind's source is asked. */
@@ -633,6 +637,14 @@ export async function runMatterChecks(
       await apply("ledger.off_platform", offPlatformItems(await readLedgerOpenDecisions(app, fetchOptions), now));
     } catch (error) {
       await failed(["ledger.off_platform"], error);
+    }
+  }
+
+  if (due("traffic.link_unbound")) {
+    try {
+      await apply("traffic.link_unbound", await readLinkUnboundItems(app.db, now));
+    } catch (error) {
+      await failed(["traffic.link_unbound"], error);
     }
   }
 

@@ -8,6 +8,7 @@ import { ofapiReadCollectionsRouteSchemas } from "./routes-ofapi-read-collection
 import { ofapiExportRouteSchemas } from "./routes-ofapi-exports.ts";
 import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import { ofLinksRouteSchemas } from "./routes-of-links.ts";
+import { ofLinkFansRouteSchemas } from "./routes-of-link-fans.ts";
 import { pageBrowserRouteSchemas } from "./routes-page-browser.ts";
 import { publicationRouteSchemas } from "./routes-publications.ts";
 import {
@@ -6201,6 +6202,7 @@ const baseRouteSchemas = {
   ...ofapiMediaRouteSchemas,
   ...ofapiCollectionRouteSchemas,
   ...ofLinksRouteSchemas,
+  ...ofLinkFansRouteSchemas,
   ...pageBrowserRouteSchemas,
   ...publicationRouteSchemas,
   ...mediaLookRouteSchemas,

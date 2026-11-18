@@ -291,6 +291,28 @@ export async function runTrafficBindingsSet(
   return describeTrafficBindingsResult(result);
 }
 
+/**
+ * The console's first binding of a link (ofLinkSourcePut): `set`'s own writer
+ * — the link's lock, the overlap check, an audit row — for a link with no
+ * binding at any time (else TrafficLinkAlreadyBoundError), from `validFrom`,
+ * basis confirmed: the owner chose the source himself.
+ */
+export async function bindNewTrafficLink(
+  db: Database,
+  input: { page: string; kind: TrafficLinkKind; link: string; channel: string; validFrom: Date; actor: string; actorUserId: number },
+) {
+  const result = await rehangTrafficLink(db, {
+    pageLabel: input.page,
+    linkKind: input.kind,
+    linkId: linkId(input.link, "link"),
+    channelKey: text(input.channel, "channel", TRAFFIC_CHANNEL_KEY_PATTERN),
+    validFrom: input.validFrom,
+    validFromBasis: "confirmed",
+    firstOnly: true,
+  }, { write: true, actor: input.actor, actorUserId: input.actorUserId, auditSource: "dashboard" });
+  return describeTrafficBindingsResult(result);
+}
+
 export async function runTrafficBindingsList(
   db: Database,
   filter: { page?: string; channel?: string },

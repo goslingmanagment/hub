@@ -104,10 +104,23 @@ export interface LinkFigure {
   word: string;
 }
 
+/** The link's source in its line of facts: a link to the source's page, or none yet. */
+export type LinkSourceFact =
+  | { kind: "bound"; channelKey: string; title: string; /** «Maple Media с 6 ноября». */ contractor: string | null }
+  | { kind: "none" };
+
+/** The page of one source (Трафик → Источники → a source). */
+export function sourcePath(channelKey: string): string {
+  return `/traffic/source/${encodeURIComponent(channelKey)}`;
+}
+
 export interface LinkHead {
   name: string;
-  /** «пробная на 360 дней», «трекинг-ссылка», the page, the source, the date it was made, its state. */
-  facts: string[];
+  /** «пробная на 360 дней» or «трекинг-ссылка», and the page: before the source. */
+  before: string[];
+  source: LinkSourceFact;
+  /** The date it was made, its state: after the source. */
+  after: string[];
   /** All-time of the link: fans, who pays, the money. */
   figures: LinkFigure[];
   /** «28 кликов». */
@@ -120,18 +133,27 @@ function trialWords(days: number): string {
 
 export function linkHead(link: OfLink, pageLabel: string | null): LinkHead {
   const binding = link.binding;
-  const source = binding === null
-    ? "без источника"
-    : `источник ${binding.channelTitle}${binding.contractor ? `, ${binding.contractor.contractorTitle} с ${dayMonth(moscowDayOf(binding.contractor.validFrom), moscowDayOf(link.observedAt))}` : ""}`;
+  const source: LinkSourceFact = binding === null
+    ? { kind: "none" }
+    : {
+      kind: "bound",
+      channelKey: binding.channelKey,
+      title: binding.channelTitle,
+      contractor: binding.contractor
+        ? `${binding.contractor.contractorTitle} с ${dayMonth(moscowDayOf(binding.contractor.validFrom), moscowDayOf(link.observedAt))}`
+        : null,
+    };
   const state = linkStateView(link);
   const fans = link.fans;
   const spenders = link.spenders;
   return {
     name: link.name ?? `Ссылка ${link.linkRef}`,
-    facts: [
+    before: [
       link.linkKind === "trial" ? (link.trialDays === null ? "пробная ссылка" : trialWords(link.trialDays)) : "трекинг-ссылка",
       ...(pageLabel ? [pageLabel] : []),
-      source,
+    ],
+    source,
+    after: [
       ...(link.linkCreatedAt ? [`создана ${dayMonth(moscowDayOf(link.linkCreatedAt), moscowDayOf(link.observedAt))}`] : []),
       `${state.label.toLowerCase()}${state.detail ? ` ${state.detail}` : ""}`,
     ],
