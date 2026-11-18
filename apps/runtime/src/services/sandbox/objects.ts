@@ -179,16 +179,18 @@ async function realmsOf(db: Database, kind: RealmObjectKind, values: readonly st
   return new Map(result.rows.map((row) => [String(row.key), row.test === true]));
 }
 
-/** Whether an object is of the test realm; null — no such object (the handler answers that itself). */
-export async function objectIsTest(db: Database, kind: RealmObjectKind, value: string): Promise<boolean | null> {
-  return (await realmsOf(db, kind, [value])).get(value) ?? null;
-}
-
 /** A named value: where it sits (to be replaced in place), its kind and its text. */
 interface NamedValue { holder: Record<string, unknown> | unknown[]; at: string | number; kind: RealmObjectKind; value: string }
 
+/** A page label the API's page check already proved of the principal's realm (the route's `:pageLabel`): not asked again. */
+interface CheckedValue { holder: object; field: string }
+
 /** Every value the request names, in place: classified fields of params, query and body, and of declared containers. */
-function namedValues(routeKey: string, parts: ReadonlyArray<Record<string, unknown> | null | undefined>): NamedValue[] {
+function namedValues(
+  routeKey: string,
+  parts: ReadonlyArray<Record<string, unknown> | null | undefined>,
+  checked?: CheckedValue,
+): NamedValue[] {
   const out: NamedValue[] = [];
   const named = (value: unknown) => typeof value === "number" || (typeof value === "string" && value.length > 0);
   const walk = (part: unknown, depth: number) => {
@@ -202,6 +204,7 @@ function namedValues(routeKey: string, parts: ReadonlyArray<Record<string, unkno
     const record = part as Record<string, unknown>;
     for (const [field, raw] of Object.entries(record)) {
       const kind = fieldObject(routeKey, field);
+      if (kind === "pageLabel" && checked !== undefined && checked.holder === record && checked.field === field) continue;
       if (kind === "nested") walk(raw, depth + 1);
       if (kind === undefined || kind === "none" || kind === "nested") continue;
       if (Array.isArray(raw)) {
@@ -227,8 +230,9 @@ function isPlainContainer(value: unknown): value is Record<string, unknown> | un
 export function requestObjects(
   routeKey: string,
   parts: ReadonlyArray<Record<string, unknown> | null | undefined>,
+  checked?: CheckedValue,
 ): Array<{ kind: RealmObjectKind; value: string }> {
-  return namedValues(routeKey, parts).map(({ kind, value }) => ({ kind, value }));
+  return namedValues(routeKey, parts, checked).map(({ kind, value }) => ({ kind, value }));
 }
 
 /**
@@ -259,10 +263,11 @@ export async function hideObjectsOfOtherRealm(
   principal: AuthPrincipal | null | undefined,
   routeKey: string,
   parts: ReadonlyArray<Record<string, unknown> | null | undefined>,
+  checked?: CheckedValue,
 ): Promise<number> {
   const test = principalIsTest(principal);
   if (test === null) return 0;
-  const values = namedValues(routeKey, parts);
+  const values = namedValues(routeKey, parts, checked);
   const byKind = new Map<RealmObjectKind, NamedValue[]>();
   for (const one of values) byKind.set(one.kind, [...(byKind.get(one.kind) ?? []), one]);
   const echoes: Array<{ sentinel: string; original: string }> = [];
@@ -288,12 +293,11 @@ function principalIsTest(principal: AuthPrincipal | null | undefined): boolean |
   return principal.kind === "agent" && !test ? null : test;
 }
 
-/** Whether a page (named by a route's `:pageLabel`) is of the other realm than the principal's: answered as missing. */
-export async function pageOfOtherRealm(app: { db: Database }, principal: AuthPrincipal | null | undefined, pageId: number): Promise<boolean> {
+/** Whether an object whose realm is known (`objectTest`: a route's `:pageLabel` page) is of the other realm than the
+ *  principal's: answered as missing. */
+export function ofOtherRealm(principal: AuthPrincipal | null | undefined, objectTest: boolean): boolean {
   const test = principalIsTest(principal);
-  if (test === null) return false;
-  const objectTest = await objectIsTest(app.db, "page", String(pageId));
-  return objectTest !== null && objectTest !== test;
+  return test !== null && objectTest !== test;
 }
 
 /** The answer with every hidden value of the request put back where the sentinel stands (a JSON or text answer). */
