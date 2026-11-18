@@ -9,7 +9,7 @@ const SOURCES: TrafficSourceCandidate[] = [
   { key: "mia.twitter", title: "X (Twitter)", linkNames: ["X · ссылка в био", "Закреп в профиле"] },
   { key: "mia.reddit", title: "Reddit", linkNames: ["Reddit · основной профиль", "Пробные 7 дней · Reddit"] },
   { key: "mia.tubes", title: "Видеоплощадки", linkNames: ["Pornhub · профиль", "Xfree · профиль", "Redgifs клипы"] },
-  { key: "mia.porntoki", title: "Порнтоки", linkNames: [] },
+  { key: "mia.shorts", title: "Шортсы", linkNames: [] },
 ];
 
 describe("proposeTrafficSource", () => {
@@ -22,7 +22,7 @@ describe("proposeTrafficSource", () => {
   it("reads one alphabet as the other", () => {
     expect(proposeTrafficSource("Реддит, новая ветка", SOURCES)).toBe("mia.reddit");
     expect(proposeTrafficSource("Твиттер 2", SOURCES)).toBe("mia.twitter");
-    expect(proposeTrafficSource("PornToki ноябрь", SOURCES)).toBe("mia.porntoki");
+    expect(proposeTrafficSource("Shortsy ноябрь", SOURCES)).toBe("mia.shorts");
   });
 
   it("takes two words of a source's links' names, never one", () => {
