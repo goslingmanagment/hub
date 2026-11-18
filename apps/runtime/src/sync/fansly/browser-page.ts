@@ -36,8 +36,8 @@ import { createFanslyWsReceiptRouter } from "./ws/route-receipt.ts";
 // operator and, over it:
 // - the browser transport (`browser-transport.ts`, PR 12), the actor's
 //   `PageTransport`;
-// - the site path (`browser-site.ts`): the site's own requests and its
-//   socket's CONNECT under the engine's admission (PR 8's port);
+// - the site path (`browser-site.ts`): what the operator observed of the
+//   site's own requests (variant Б), to the actor;
 // - the site socket's connection rows (`ws/browser-source.ts`), the page's
 //   socket owner;
 // - the buffer's intake (`browser-intake.ts`, PR 13) — frames to the live
@@ -48,7 +48,7 @@ import { createFanslyWsReceiptRouter } from "./ws/route-receipt.ts";
 //
 // The hand-over (plan §4.7): the operator answers this owner's hello with
 // `quiesced` once the earlier owners' requests are over. Until then nothing
-// of this owner goes (the transport and the site path wait for it); then
+// of this owner goes (the transport waits for it); then
 // its generation is recorded on the profile (`page_browsers.handover_*`,
 // which `sync ownership confirm-stopped` waits for) and the pacer's
 // takeover floor is raised to 1.2 × S after the last send the operator
@@ -158,7 +158,7 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
   const { db, logger, metrics, pageId, generation } = deps;
   const { profileId, client, bridge } = await openBrowserLink(deps);
   const overrides = deps.overrides ?? {};
-  const site = new BrowserSiteAdmission({ client, bridge, monoNow: () => deps.clock.monoNow(), metrics, logger: deps.logger });
+  const site = new BrowserSiteAdmission({ client, bridge, monoNow: () => deps.clock.monoNow(), metrics });
   let transport: PageTransport;
   try {
     transport = await createBrowserPageTransport({ db, config: deps.config }, { pageId }, {

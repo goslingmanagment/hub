@@ -14,18 +14,18 @@ import { openBrowserPage, type BrowserPage } from "../apps/runtime/src/sync/fans
 import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { FakeOperator, OPERATOR_TOKEN, SESSION_A, SESSION_B } from "./helpers/page-browser-operator.ts";
+import { FakeOperator, OPERATOR_TOKEN, SESSION_A } from "./helpers/page-browser-operator.ts";
 import { HARNESS_OWN_REF, harnessConfig, seedHarnessPage, until, type HarnessPage } from "./helpers/sync-engine.ts";
-import { FakeOwnershipSession, makeTestActor, quietLogger, RecordingMetrics, testSpec } from "./helpers/sync-engine-host.ts";
+import { makeTestActor, quietLogger, RecordingMetrics, testSpec } from "./helpers/sync-engine-host.ts";
 
 // A browser page's slot (Project Browser plan §3.2, §4.3, §4.7, §4.13; stage
 // 3 PR 14) on a live page's actor against a fake operator — the operator's
 // own RPC server:
-// - the site path: the operator's `siteAdmit` and `wsAdmit` are PR 8's
-//   pending requests; admitted through the pacer and the journal (origin
-//   site, class site), answered on the link, their ends committed by the
-//   engine's rules and acknowledged after that commit; what the engine
-//   refuses goes back in the protocol's words;
+// - the site's admission messages an operator's image still knows
+//   (`siteAdmit`, `wsAdmit`, `admissionCancel`, `siteDone`, `wsDone`): parsed
+//   and taken by nobody — the link stays up, nothing is journaled, the
+//   engine's own work goes on (A10-04 step 6: the parser keeps their cases
+//   while an operator with the old site path may run);
 // - the hand-over: nothing of this owner goes before the operator's
 //   `quiesced`; the takeover pause counts from the last send it names; the
 //   owner it answered is recorded on the profile.
@@ -103,7 +103,7 @@ async function rig(): Promise<Rig> {
 
 async function actorOn(
   r: Rig,
-  options: { settingMs?: number; floorSettingMs?: number; withRead?: boolean; ownership?: FakeOwnershipSession } = {},
+  options: { settingMs?: number; floorSettingMs?: number; withRead?: boolean } = {},
 ) {
   let browser: BrowserPage | null = null;
   const made = await makeTestActor({
@@ -113,7 +113,6 @@ async function actorOn(
     settingMs: options.settingMs ?? 40,
     ownRef: HARNESS_OWN_REF,
     metrics: new RecordingMetrics(),
-    ...(options.ownership === undefined ? {} : { ownership: options.ownership }),
     build: async ({ generation, pacer }) => {
       browser = await openBrowserPage({
         db: db(),
@@ -168,96 +167,40 @@ async function attempts(pageId: number): Promise<AttemptRow[]> {
   return result.rows;
 }
 
-describe("the site path over the operator's RPC", () => {
-  it("a withdrawal while the actor pings ownership removes the request before admission; a live successor is served", async () => {
+describe("the site's admission messages, taken by nobody", () => {
+  it("an operator's siteAdmit, wsAdmit, admissionCancel, siteDone and a wsDone of unknown fate keep the link up, journal nothing, and the engine's next attempt completes", async () => {
     const r = await rig();
-    const ownership = new FakeOwnershipSession();
-    let release: () => void = () => undefined;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    let pinging = false;
-    ownership.ping = async () => { pinging = true; await gate; return "ok"; };
-    const { browser } = await actorOn(r, { ownership });
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const dead = r.operator.siteAdmit({ path: "/api/v1/account/me" });
-    try {
-      await until(async () => pinging, 3_000, "the choice waiting at ownership");
-      r.operator.server.send({ type: "admissionCancel", kind: "site", id: dead.siteRequestId, reason: "document_replaced" });
-      await until(async () => browser.site.pending().length === 0, 3_000, "the withdrawal consumed");
-    } finally { release(); }
-    const live = r.operator.siteAdmit({ path: "/api/v1/account/me" });
-    await until(async () => r.operator.siteAnswers.some((a) => a.siteRequestId === live.siteRequestId && a.admit), 4_000, "the live successor's grant");
-    const answer = r.operator.siteAnswers.find((a) => a.siteRequestId === live.siteRequestId)!;
-    if (!answer.admit) throw new Error("successor refused");
-    r.operator.siteDone(answer);
-    await until(async () => r.operator.acks.includes(answer.attemptId), 3_000, "the successor committed");
-    expect(r.operator.siteAnswers.some((a) => a.siteRequestId === dead.siteRequestId)).toBe(false);
-    expect((await attempts(r.page.pageId)).some((row) => row.browserRequestId === dead.siteRequestId)).toBe(false);
-  });
+    await actorOn(r, { withRead: true });
+    await until(async () => (await attempts(r.page.pageId)).some((row) => row.outcome === "response"), 10_000, "the engine's own reads");
+    const links = r.operator.links.length;
+    const hellos = r.operator.hellos.length;
 
-  it("a site request and the site socket's CONNECT are admitted through the pacer and journaled; their ends are committed, then acknowledged", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { made } = await actorOn(r);
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-
-    const ended = new Set<number>();
-    const asked = r.operator.siteAdmit({ path: "/api/v1/messaging/groups", query: "?limit=25", route: "messaging.groups" });
-    await until(async () => {
-      const answer = r.operator.siteAnswers.find((a) => a.siteRequestId === asked.siteRequestId);
-      if (answer?.admit === true && !ended.has(answer.attemptId)) {
-        ended.add(answer.attemptId);
-        r.operator.siteDone(answer, { status: 200 });
-      }
-      const rows = await attempts(r.page.pageId);
-      return answer?.admit === true && rows.some((row) => row.id === answer.attemptId && row.outcome === "response")
-        && r.operator.acks.includes(answer.attemptId);
-    }, 20_000, "the site request admitted, ended, committed and acknowledged");
-    const siteAnswer = r.operator.siteAnswers.find((a) => a.siteRequestId === asked.siteRequestId)!;
-    expect(siteAnswer).toMatchObject({ admit: true, ownerGeneration: Number(made.generation) });
-    // The deadline is on the operator's clock, in the send window.
-    if (siteAnswer.admit) expect(siteAnswer.deadlineMono - monoMs()).toBeLessThanOrEqual(15_000);
-    const siteRow = (await attempts(r.page.pageId)).find((row) => siteAnswer.admit && row.id === siteAnswer.attemptId)!;
-    expect(siteRow).toMatchObject({ origin: "site", class: "site", operation: "messaging.groups", outcome: "response", sendMark: "transport_reported", browserRequestId: asked.siteRequestId, httpStatus: 200 });
-    // Committed, then acknowledged: the operator keeps nothing of it.
-    expect(r.operator.heldEnds.size).toBe(0);
-
+    const asked = r.operator.siteAdmit({ path: "/api/v1/account/me", route: "account.me" });
     const socket = r.operator.wsAdmit();
-    await until(async () => {
-      const answer = r.operator.wsAnswers.find((a) => a.connectionId === socket.connectionId);
-      if (answer?.admit === true && !ended.has(answer.attemptId)) {
-        ended.add(answer.attemptId);
-        r.operator.wsDone(answer, { status: 101 });
-      }
-      return answer?.admit === true && r.operator.acks.includes(answer.attemptId);
-    }, 20_000, "the socket admitted, opened, committed and acknowledged");
-    const wsAnswer = r.operator.wsAnswers.find((a) => a.connectionId === socket.connectionId)!;
-    const wsRow = (await attempts(r.page.pageId)).find((row) => wsAnswer.admit && row.id === wsAnswer.attemptId)!;
-    expect(wsRow).toMatchObject({ origin: "site", class: "urgent", operation: "ws.upgrade", outcome: "response", browserRequestId: socket.connectionId, httpStatus: 101 });
-    // Asked again (the operator repeats it after a reconnect): nothing twice.
-    r.operator.siteAdmit({ siteRequestId: asked.siteRequestId, path: "/api/v1/messaging/groups" });
-    await sleep(500);
-    expect(r.operator.siteAnswers.filter((a) => a.siteRequestId === asked.siteRequestId)).toHaveLength(1);
-  }, 60_000);
+    r.operator.server.send({ type: "admissionCancel", kind: "site", id: asked.siteRequestId, reason: "wait_expired" });
+    r.operator.server.send({
+      type: "siteDone", siteRequestId: asked.siteRequestId, attemptId: 999_991, sent: true, sentMono: monoMs(), sentWall: Date.now(),
+      connectionReused: false, status: 200, retryAfter: null, error: null, body: "buffered",
+    });
+    // The operator's start-up sweep of a socket an older engine admitted.
+    r.operator.server.send({
+      type: "wsDone", connectionId: randomUUID(), attemptId: 999_992, sent: false, sentMono: null, status: null,
+      error: "the handshake's fate is unknown: the operator started again", fate: "unknown",
+    });
+    // An attempt admitted after them: its check comes on the same link, after them.
+    const before = Math.max(...(await attempts(r.page.pageId)).map((row) => row.id));
+    await until(async () => (await attempts(r.page.pageId)).some((row) => row.id > before && row.outcome === "response"), 10_000, "the engine's next attempt");
 
-  it("what the engine refuses goes back in the protocol's words: a write, another session, the second socket, a paused page", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await actorOn(r);
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const write = r.operator.siteAdmit({ method: "POST", path: "/api/v1/message" });
-    const foreign = r.operator.siteAdmit({ path: "/api/v1/messaging/groups", sessionFingerprint: SESSION_B });
-    const chat = r.operator.wsAdmit({ url: "wss://chatws.fansly.com/" });
-    await until(async () => r.operator.siteAnswers.length >= 2 && r.operator.wsAnswers.length >= 1, 10_000, "the refusals");
-    expect(r.operator.siteAnswers.find((a) => a.siteRequestId === write.siteRequestId)).toMatchObject({ admit: false, reason: "mode" });
-    expect(r.operator.siteAnswers.find((a) => a.siteRequestId === foreign.siteRequestId)).toMatchObject({ admit: false, reason: "session_mismatch" });
-    expect(r.operator.wsAnswers.find((a) => a.connectionId === chat.connectionId)).toMatchObject({ admit: false, reason: "mode" });
-
-    await testDb.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
-    const paused = r.operator.siteAdmit({ path: "/api/v1/messaging/groups" });
-    await until(async () => r.operator.siteAnswers.some((a) => a.siteRequestId === paused.siteRequestId), 10_000, "the paused page's refusal");
-    expect(r.operator.siteAnswers.find((a) => a.siteRequestId === paused.siteRequestId)).toMatchObject({ admit: false, reason: "paused" });
-    expect((await attempts(r.page.pageId)).filter((row) => row.origin === "site")).toEqual([]);
-  }, 60_000);
+    // The link never dropped (a message it could not parse closes it).
+    expect(r.operator.links.slice(links)).toEqual([]);
+    expect(r.operator.hellos).toHaveLength(hellos);
+    // Nothing of them is journaled, answered or acknowledged.
+    const rows = await attempts(r.page.pageId);
+    expect(rows.filter((row) => row.origin === "site" || row.browserRequestId === asked.siteRequestId || row.browserRequestId === socket.connectionId || row.id >= 999_991)).toEqual([]);
+    expect(r.operator.siteAnswers).toEqual([]);
+    expect(r.operator.wsAnswers).toEqual([]);
+    expect(r.operator.acks.filter((id) => id >= 999_991)).toEqual([]);
+  }, 30_000);
 });
 
 describe("the hand-over: the operator's quiesced", () => {
@@ -272,30 +215,15 @@ describe("the hand-over: the operator's quiesced", () => {
     const floorSettingMs = 1_000;
     const { made } = await actorOn(r, { settingMs: 40, floorSettingMs, withRead: true });
     await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const asked = r.operator.siteAdmit({ path: "/api/v1/messaging/groups" });
-    // Before quiesced: no send of the engine, no answer to the site.
+    // Before quiesced: no send of the engine.
     await sleep(400);
     expect(r.operator.sends).toEqual([]);
-    expect(r.operator.siteAnswers).toEqual([]);
     expect((await findPageBrowser(db(), r.profileId))!.handoverGeneration).toBeNull();
 
     release();
-    let ended = false;
-    await until(async () => {
-      const admitted = r.operator.siteAnswers.find((a) => a.siteRequestId === asked.siteRequestId);
-      if (admitted?.admit === true && !ended) {
-        ended = true;
-        r.operator.siteDone(admitted, { status: 200 });
-      }
-      return r.operator.physical.length >= 1 && ended;
-    }, 20_000, "the first requests after quiesced");
-    // 1.2 × S after the browser's last send (the guard adds 1 ms): the
-    // site's grant and the engine's first check alike.
+    await until(async () => r.operator.physical.length >= 1, 20_000, "the first request after quiesced");
+    // 1.2 × S after the browser's last send (the guard adds 1 ms).
     expect(r.operator.physical[0]!.checkedMono - lastSend).toBeGreaterThanOrEqual(1.2 * floorSettingMs);
-    const granted = r.operator.siteAnswers.find((a) => a.siteRequestId === asked.siteRequestId);
-    if (granted?.admit === true) expect(granted.deadlineMono - 15_000 - lastSend).toBeGreaterThanOrEqual(1.2 * floorSettingMs - 50);
-    const answer = r.operator.siteAnswers.find((a) => a.siteRequestId === asked.siteRequestId);
-    expect(answer?.admit).toBe(true);
     await until(async () => (await findPageBrowser(db(), r.profileId))!.handoverGeneration === made.generation, 5_000, "the hand-over recorded");
     expect((await findPageBrowser(db(), r.profileId))!.handoverQuiescedAt).toBeInstanceOf(Date);
   }, 60_000);

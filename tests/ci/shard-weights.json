@@ -150,7 +150,6 @@
     "tests/sync-resources-money.integration.test.ts": 4.3,
     "tests/sync-route-budgets.integration.test.ts": 2.9,
     "tests/sync-route-holds.integration.test.ts": 6,
-    "tests/sync-site-admission.integration.test.ts": 4,
     "tests/sync-step-failures.integration.test.ts": 15.2,
     "tests/sync-urgent.integration.test.ts": 2,
     "tests/sync-ws-route-receipt.integration.test.ts": 1.1,
