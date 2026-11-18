@@ -37,8 +37,6 @@ export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 // ofapi.commands.sweep / ofapi.commands.execute: the desktop's OFAPI command
 //   gateway, removed 2026-11-10 with the retired desktop client. The
 //   ofapi_commands table and its rows stay (the client claim path reads them).
-// ofapi.events.process: the v1 OFAPI event queue, replaced by ofapi.events.process.v2.
-// sync.thread.backfill: the legacy targeted thread backfill, removed at step 4 (S4-15, #450).
 export const RETIRED_SCHEDULES = [
   "projections.debt.sweep",
   "retention-tiering",
@@ -51,8 +49,6 @@ export const RETIRED_QUEUES = [
   "ofapi.dm-analytics.rebuild",
   "ofapi.commands.sweep",
   "ofapi.commands.execute",
-  "ofapi.events.process",
-  "sync.thread.backfill",
 ] as const;
 
 // work() options of a queue only its cron fills, once a minute or rarer.
