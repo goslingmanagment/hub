@@ -6,6 +6,7 @@ import {
   getSyncAttemptSummaries,
   getSyncWork,
   getWorkForStatus,
+  getWorkStatusFields,
   insertAuditEvent,
   latestClosedWorkForKey,
   listBrowserPageHandovers,
@@ -163,7 +164,7 @@ export async function readSyncPageStatus(
   settingMsRead?: number,
 ): Promise<PageStatus> {
   const settingMs = settingMsRead ?? await readPauseSettingMs(db, rawConfig);
-  const works = await getWorkForStatus(db, {
+  const works = await getWorkStatusFields(db, {
     pageId: page.pageId,
     states: ["open", "running", "quarantined"],
     limit: 1_000,
