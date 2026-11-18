@@ -47,12 +47,10 @@ const OFAPI_FANS_PAGE_LIMIT = 20;
 export const OFAPI_TRIAL_LINK_SUBSCRIBERS_PAGE_LIMIT = 20;
 
 /** GETs/HEADs documented as free: they skip the accounting-readiness gate
- * (a pending receipt must not block a request that cannot charge). The media
- * probe is the redirect lookup of the desktop media resolve service. */
+ * (a pending receipt must not block a request that cannot charge). */
 const OFAPI_FREE_READ_OPERATIONS: ReadonlySet<string> = new Set([
   "ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog",
   "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_export_inventory",
-  "ofapi_media_probe",
 ]);
 
 // The only place the OFAPI host may appear in runtime code (D1 of
@@ -173,12 +171,6 @@ export interface OfapiListPage {
   rawBody?: unknown;
 }
 
-export interface OfapiRawResponse {
-  status: number;
-  body: unknown;
-  headers: Record<string, string>;
-}
-
 export interface OfapiGovernedRawResponse {
   status: number;
   bodyBytes: Buffer;
@@ -293,7 +285,6 @@ export interface OfapiCreditSpendObservation {
   actorUserId: number | null;
   budgetScope?: "audience" | "backfill" | "link_stats" | null;
   receivedAt?: string;
-  ledgerContext?: "media";
 }
 
 export type OfapiCreditSpendSink = ((
@@ -835,10 +826,6 @@ export function createOfapiClient(input: {
     attemptNumber: number;
     fallbackCredits?: number;
     fallbackEstimated?: boolean;
-    /** Ephemeral free operations (typing) must not create one permanent
-     * ledger row per UI beacon. A provider-reported non-zero charge still
-     * reaches the sink and is never hidden. */
-    suppressZeroCredits?: boolean;
     actorUserId?: number | null;
     budgetScope?: "audience" | "backfill" | "link_stats" | null;
   }) {
@@ -858,9 +845,6 @@ export function createOfapiClient(input: {
       }
       : resolveOfapiCreditSpend({ httpStatus: report.httpStatus, meta });
     if (!spend) {
-      return null;
-    }
-    if (report.suppressZeroCredits === true && spend.credits === 0) {
       return null;
     }
 
@@ -1423,7 +1407,7 @@ export function createOfapiClient(input: {
         requestId: `${operation}:${randomUUID()}`,
         pageId: context?.pageId ?? null,
         attemptNumber: 1,
-        ...(["ofapi_balance_ping", "ofapi_credential_preflight", "ofapi_webhook_inventory", "ofapi_webhook_event_catalog", "ofapi_admin_accounts", "ofapi_vendor_usage", "ofapi_webhook_deliveries", "ofapi_webhook_redelivery", "ofapi_export_inventory"].includes(operation)
+        ...(OFAPI_FREE_READ_OPERATIONS.has(operation) || operation === "ofapi_webhook_redelivery"
           ? { fallbackCredits: 0, fallbackEstimated: false } : {}),
       });
 
