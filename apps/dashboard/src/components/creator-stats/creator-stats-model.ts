@@ -356,11 +356,6 @@ export function averageWatch(stats: CreatorStats): number | null {
   return averageWatchPercent(sum, videos);
 }
 
-/** A part of a whole in percent; null without a whole. */
-export function share(part: number | null, whole: number | null): number | null {
-  return part === null || whole === null || whole === 0 ? null : (part / whole) * 100;
-}
-
 /** A sentence ends once: «… 4 нояб.» takes no second dot. */
 export function sentence(text: string): string {
   return text.endsWith(".") ? text : `${text}.`;

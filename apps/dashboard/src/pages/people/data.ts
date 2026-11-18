@@ -1,6 +1,8 @@
-import { queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import type { AdminCreateInviteBody, KernelOperationResponse } from "@agency_hub_core/contracts";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
+import { adminPagesQuery } from "@/api/adminPages";
+import { USERS_KEY, usersQuery } from "@/api/adminUsers";
 import { kernel } from "@/api/sdk";
 
 /**
@@ -13,7 +15,6 @@ import { kernel } from "@/api/sdk";
  *
  * Writes — each the console's request with the console's body
  * (apps/dashboard/src/api/adminUsers.ts):
- *   - invite: `adminCreateInvite` { username, role, pageLabels, expiresInHours } — one call (:55-66);
  *   - a new link: `adminCreateAccountLink` { params: { userId }, body: { kind } } (:76-91);
  *   - revoke a link: `adminRevokeAccountLink` { userId, linkId } (:93-105);
  *   - end one device sign-in: `adminRevokeDeviceToken` { userId, tokenId } (:116-131);
@@ -24,7 +25,8 @@ import { kernel } from "@/api/sdk";
  *   - open / remove a page: `adminAssignPage` { userId } { pageLabel } / `adminUnassignPage` { userId, pageLabel } (:247-267).
  * A minted link lives only in its mutation's result (gcTime 0) until the window
  * showing it closes and resets it: never in a query cache, a log or a URL path.
- * Query keys start with "access".
+ * Query keys start with "access", but for the logins and the page catalog: one cache entry each with the console's
+ * other screens (`usersQuery` of api/adminUsers.ts, `adminPagesQuery` of api/adminPages.ts).
  */
 
 export type AdminUser = KernelOperationResponse<"adminListUsers">[number];
@@ -34,14 +36,8 @@ export type DeviceItem = KernelOperationResponse<"adminListDeviceTokens">[number
 export type LinkItem = KernelOperationResponse<"adminListAccountLinks">[number];
 type AiLimits = KernelOperationResponse<"adminAiChatterLimits">;
 
-/** `adminListUsers` (the owner's): every login, read by the card's access and the invitation. */
-const usersQuery = queryOptions({
-  queryKey: ["team", "users"] as const,
-  queryFn: () => kernel.adminListUsers(),
-});
-
-/** A write here refreshes every reader of the logins. */
-export const USERS_KEY = usersQuery.queryKey;
+/** A write here refreshes every reader of the logins (the key is api/adminUsers.ts'). */
+export { USERS_KEY };
 const PAGES_KEY = ["access", "pages"] as const;
 const devicesKey = (userId: number) => ["access", "user", userId, "devices"] as const;
 const linksKey = (userId: number) => ["access", "user", userId, "links"] as const;
@@ -51,7 +47,7 @@ export function useAccessUsers(enabled = true) {
 }
 
 export function useAccessPages(enabled = true) {
-  return useQuery({ queryKey: PAGES_KEY, queryFn: () => kernel.adminPages(), enabled, staleTime: 5 * 60_000 });
+  return useQuery({ ...adminPagesQuery, enabled, staleTime: 5 * 60_000 });
 }
 
 /**
@@ -60,7 +56,7 @@ export function useAccessPages(enabled = true) {
  */
 export function useFormPages(fullOwner: boolean) {
   return useQuery({
-    queryKey: [...PAGES_KEY, fullOwner ? "catalog" : "own"] as const,
+    queryKey: fullOwner ? adminPagesQuery.queryKey : ([...PAGES_KEY, "own"] as const),
     queryFn: () => (fullOwner ? kernel.adminPages() : kernel.pages()),
     staleTime: 5 * 60_000,
   });
@@ -92,17 +88,6 @@ function refreshPerson(qc: QueryClient, userId: number, also: { devices?: boolea
   if (also.devices) work.push(qc.invalidateQueries({ queryKey: devicesKey(userId) }));
   if (also.links) work.push(qc.invalidateQueries({ queryKey: linksKey(userId) }));
   return Promise.all(work);
-}
-
-/** One call creates the account, assigns every page and mints the link (adminUsers.ts:55-66). */
-export function useCreateInvite() {
-  const qc = useQueryClient();
-  return useMutation({
-    gcTime: 0,
-    meta: { suppressGlobalError: true },
-    mutationFn: (body: AdminCreateInviteBody) => kernel.adminCreateInvite({ body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: USERS_KEY, exact: true }),
-  });
 }
 
 /** A new invite or password-reset link (adminUsers.ts:76-91); it supersedes the one before. */

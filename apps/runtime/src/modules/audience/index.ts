@@ -17,9 +17,7 @@ import {
   getPageDeletedFansReport,
   getPageFanDetailReport,
   getPageFansReport,
-  getPageFollowersDailyReport,
   getPageFollowersReport,
-  getPageSubscribersDailyReport,
   getPageSubscribersReport,
   getPageSummary,
 } from "../../services/reporting.ts";
@@ -60,21 +58,6 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
     return getPageSubscribersReport(appContext, request.params.pageLabel, request.query);
   });
 
-  server.get("/api/v1/pages/:pageLabel/subscribers/daily", {
-    schema: routeSchemas.pageSubscribersDaily,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const query = request.query;
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
-    return getPageSubscribersDailyReport(appContext, request.params.pageLabel, {
-      period: query.period,
-      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
-    });
-  });
-
   server.get("/api/v1/pages/:pageLabel/followers", {
     schema: routeSchemas.pageFollowers,
   }, async (request) => {
@@ -84,21 +67,6 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       throw new ForbiddenError("Page access denied");
     }
     return getPageFollowersReport(appContext, request.params.pageLabel, request.query);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/followers/daily", {
-    schema: routeSchemas.pageFollowersDaily,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const query = request.query;
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
-    return getPageFollowersDailyReport(appContext, request.params.pageLabel, {
-      period: query.period,
-      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
-    });
   });
 
   server.get("/api/v1/pages/:pageLabel/fans", {

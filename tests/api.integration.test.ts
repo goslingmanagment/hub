@@ -1478,7 +1478,6 @@ describe("api integration", () => {
 
     const gatedUrls = [
       "/api/v1/pages/lana/revenue?period=7d",
-      "/api/v1/pages/lana/transactions?limit=10&offset=0",
       "/api/v1/pages/lana/revenue/daily?period=30d",
       "/api/v1/pages/lana/fans/fan-001/transactions?limit=10&offset=0",
     ];
@@ -1875,7 +1874,7 @@ describe("api integration", () => {
     });
   });
 
-  it("uses occurred_at instead of transactions.created_at in revenue and page transaction reporting", async (context) => {
+  it("uses occurred_at instead of transactions.created_at in revenue and transaction reporting", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -1980,7 +1979,7 @@ describe("api integration", () => {
 
     const transactions = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/created-at-check/transactions?limit=10&offset=0",
+      url: "/api/v1/transactions?pageLabel=created-at-check&limit=10&offset=0",
       headers: {
         cookie,
       },
