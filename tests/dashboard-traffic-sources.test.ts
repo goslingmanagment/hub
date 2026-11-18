@@ -137,7 +137,7 @@ describe("Трафик → Источники: the attention note", () => {
 describe("Трафик → Источники: whose money «принесли» is", () => {
   it("is the open term's on this source, two weeks and all time, never the earlier contractor's", () => {
     const recent = one([segment("a", [1, 0, 0, 0, 0, 0, 0, 0, 0, 0])], {
-      contractors: [term("new", "2026-11-05T21:00:00.000Z", null, 139_200)],
+      contractors: [term("new", "2026-11-05T21:00:00.000Z", null, 150_000)],
       totals: totals({ vendorNetMills: 900_000 }),
     });
     const allTime = one([segment("a", [1, 0, 0, 0, 0, 0, 0, 0, 0, 0])], {
@@ -148,7 +148,7 @@ describe("Трафик → Источники: whose money «принесли» 
       totals: totals({ vendorNetMills: 16_200_000 }),
     });
     const source = sourcesView(recent, allTime).sources[0]!;
-    expect(source.money).toEqual({ recentMills: 139_200, allMills: 200_000, partial: true });
+    expect(source.money).toEqual({ recentMills: 150_000, allMills: 200_000, partial: true });
     expect(source.contractor).toContain("new");
   });
 

@@ -75,7 +75,7 @@ export interface DayFigures {
   money: number | null;
 }
 
-/** The hover hint of a day: «вт 17 ноября: 14 фанов, 19 кликов, $139.20». Null for a day to come. */
+/** The hover hint of a day: «вт 17 ноября: 4 фана, 9 кликов, $12.50». Null for a day to come. */
 export function dayHint(slot: DaySlot, figures: DayFigures): string | null {
   if (slot.when === "future") return null;
   if (figures.fans === null) {
