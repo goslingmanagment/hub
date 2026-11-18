@@ -17,6 +17,15 @@
 //                    knowing it (a computing vendor value is unknown, not
 //                    zero) makes the money delta unknown (money_unknown);
 //                    an earlier known value never stands in for it.
+//   business day     a link's day is not midnight to midnight: the series is
+//                    read at 00:45, 06:45, 12:45 and 18:45 Moscow, and the
+//                    00:45 read closes the day before. A boundary is cut, on
+//                    each link's series, just after the first snapshot read
+//                    within four hours of it (that window with its retries),
+//                    else at the boundary itself; a day is the delta between
+//                    its two cuts. A day with no snapshot inside has no
+//                    figures, and neither has the first read after unread
+//                    days: its change belongs to the stretch, not to the day.
 //   segment          one link over one stretch of the range: a channel's
 //                    segments are cut by the link's bindings only, a
 //                    contractor's by the bindings and the channel's
@@ -202,6 +211,65 @@ export function linkDeltaBetween(series: LinkSeries, startAt: Date, endAt: Date)
     netMills,
     flags: sortDeltaFlags(flags),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Business days.
+
+/** The read that closes a business day comes in the first window after its
+ * end (00:45 Moscow) or that window's retries: all within four hours. */
+export const LINK_DAY_CLOSING_READ_WITHIN_MS = 4 * 60 * 60 * 1000;
+
+/** Where a business-day boundary is cut on a link's series: just after the
+ * first snapshot read in [boundary, boundary + 4 h) — the read that closes
+ * the day before — else at the boundary itself. Pure. */
+export function linkDayCut(points: readonly LinkSeriesPoint[], boundary: Date): Date {
+  const point = points[lastIndexBefore(points, boundary) + 1];
+  if (point !== undefined && point.observedAt.getTime() < boundary.getTime() + LINK_DAY_CLOSING_READ_WITHIN_MS) {
+    return new Date(point.observedAt.getTime() + 1);
+  }
+  return boundary;
+}
+
+/** One business day of a link: the stretch its figures cover, and the delta. */
+export interface LinkDayDelta {
+  startAt: Date;
+  endAt: Date;
+  /** null: the day has no figures — no snapshot was read inside its stretch
+   * (a collection outage; today before its first read), or the day's first
+   * read comes after unread days, so its change is of several days. */
+  delta: LinkDelta | null;
+}
+
+/** A business day of a link, given the UTC instants of the day's start, the
+ * previous day's start and the next day's: the delta between the day's two
+ * cuts (`linkDayCut`), the stretch clipped to [clipFrom, clipTo) — a
+ * segment's bounds, the range's end. Null when nothing of the day is left
+ * inside the clip. Pure. */
+export function linkDayDelta(
+  series: LinkSeries,
+  day: { previousStartAt: Date; startAt: Date; nextStartAt: Date },
+  clip: { from: Date | null; to: Date },
+): LinkDayDelta | null {
+  const points = series.points;
+  const startCut = linkDayCut(points, day.startAt);
+  const endCut = linkDayCut(points, day.nextStartAt);
+  const startAt = clip.from !== null && clip.from.getTime() > startCut.getTime() ? clip.from : startCut;
+  const endAt = clip.to.getTime() < endCut.getTime() ? clip.to : endCut;
+  if (startAt.getTime() >= endAt.getTime()) {
+    return null;
+  }
+  const firstInside = points[lastIndexBefore(points, startAt) + 1];
+  if (firstInside === undefined || firstInside.observedAt.getTime() >= endAt.getTime()) {
+    return { startAt, endAt, delta: null };
+  }
+  const delta = linkDeltaBetween(series, startAt, endAt);
+  // The snapshot the day starts from was read before the previous day began:
+  // the days between were not read, and the change is theirs as well.
+  if (delta?.startPoint && delta.startPoint.observedAt.getTime() < linkDayCut(points, day.previousStartAt).getTime()) {
+    return { startAt, endAt, delta: null };
+  }
+  return { startAt, endAt, delta };
 }
 
 // ---------------------------------------------------------------------------

@@ -11,7 +11,11 @@ import { businessDate, isoTimestamp, mills } from "./primitives.ts";
 //   - "fans" are claims on a trial link and subscribers on a tracking link;
 //     `fansMetric` says which one a figure holds.
 //   - Business days are Europe/Moscow from 00:00; every business date travels
-//     with the UTC instants it stands for.
+//     with the UTC instants it stands for. A link's figures of a day are cut
+//     at the day's closing read instead: the series is read at 00:45, 06:45,
+//     12:45 and 18:45 Moscow, and a boundary is cut just after the first
+//     snapshot read within four hours of it (the 00:45 window with its
+//     retries), else at the boundary itself.
 //   - Money is integer mills. Every money figure is the creator's NET after the
 //     OnlyFans fee (vendor revenue.total, refunds and chargebacks already out):
 //     `revenueBasis` names it on every block.
@@ -346,10 +350,15 @@ export const ofLinkDaySchema = z.object({
   businessDate,
   dayStartAt: isoTimestamp,
   dayEndAt: isoTimestamp,
-  /** The last snapshots before the day's start and end; the delta is their
+  /** The snapshots the day's vendor figures rest on: the last ones before the
+   * day's two cuts (its closing reads, see above); the delta is their
    * difference. Null start: nothing before the day — zero for a link created
-   * that day, else flag no_baseline; null end: nothing by the day's end, so
-   * no delta. */
+   * that day, else flag no_baseline. Null end, and every vendor figure null:
+   * the day has no figures — no snapshot was read between its cuts (a
+   * collection outage, or today before its first read), or the day's first
+   * read comes after unread days: that change belongs to a stretch of
+   * several days, not to the day. `hub` and `missedWindows` follow the day
+   * itself, 00:00 to 00:00. */
   startObservedAt: isoTimestamp.nullable(),
   endObservedAt: isoTimestamp.nullable(),
   clicks: z.number().int().nullable(),
@@ -402,10 +411,15 @@ export const ofLinkTotalsSchema = z.object({
   hubMoney: ofLinkHubMoneyTotalSchema,
 });
 
-/** One business day of a segment: the delta over the part of the day inside
- * the segment. Every figure null: no snapshot by the part's end, so no delta;
- * flag no_baseline: nothing was read before the part's start, so the value is
- * all the link had accumulated, not the day's arrivals. */
+/** One business day of a segment: the delta between the day's two cuts (its
+ * closing reads, see above), clipped by the segment's bounds. Every figure
+ * null: the day has no figures — no snapshot was read inside that stretch (a
+ * collection outage, or today before its first read), or the day's first read
+ * comes after unread days, so the change belongs to a stretch of several days,
+ * not to the day (never a zero); flag no_baseline: nothing was read before the
+ * part's start, so the value is all the link had accumulated, not the day's
+ * arrivals. A segment's own totals stay cut at its bounds, so its days need
+ * not add up to them. */
 export const ofLinkSegmentDaySchema = z.object({
   businessDate,
   clicks: z.number().int().nullable(),
@@ -443,18 +457,26 @@ export const ofLinkSegmentSchema = z.object({
   fans: z.number().int().nullable(),
   vendorNetMills: mills.nullable(),
   flags: z.array(ofLinkDeltaFlagSchema),
-  /** Asked with `days`: one row per business day of the range that overlaps
-   * [startAt, endAt), oldest first, each the delta over the day cut by the
-   * segment's bounds. Null: not asked. */
+  /** Asked with `days`: one row per business day of the range whose stretch
+   * between its cuts overlaps [startAt, endAt), oldest first. Null: not asked. */
   days: z.array(ofLinkSegmentDaySchema).nullable(),
+});
+
+/** A contractor term of a channel, with what the term brought on THIS channel
+ * over the range: the contractor-cut segments of the channel inside the term
+ * (the earlier contractors' and the unbound stretches' figures are not here). */
+export const ofLinkChannelContractorSchema = ofLinkContractorTermSchema.extend({
+  totals: ofLinkTotalsSchema,
+  /** Union of those segments' flags. */
+  flags: z.array(ofLinkDeltaFlagSchema),
 });
 
 export const ofLinkChannelSchema = z.object({
   /** null: the «без канала» row — links, or stretches of time, with no binding. */
   channelKey: z.string().nullable(),
   channelTitle: z.string().nullable(),
-  /** The channel's contractor terms that overlap the range. */
-  contractors: z.array(ofLinkContractorTermSchema),
+  /** The channel's contractor terms that overlap the range, each with its own figures. */
+  contractors: z.array(ofLinkChannelContractorSchema),
   totals: ofLinkTotalsSchema,
   /** Union of the segments' flags. */
   flags: z.array(ofLinkDeltaFlagSchema),

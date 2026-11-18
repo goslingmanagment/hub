@@ -293,6 +293,8 @@ export function ofLinkChannels(request: DemoRequest): Channels | ReturnType<type
         validFrom: termFrom,
         validTo: null,
         validFromBasis: "confirmed",
+        totals: totalsOf(own),
+        flags: flagsOf(own),
       }],
       totals: totalsOf(own),
       flags: flagsOf(own),

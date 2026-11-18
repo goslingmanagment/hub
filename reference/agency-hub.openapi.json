@@ -20262,6 +20262,138 @@
                                     "confirmed",
                                     "assumed_link_created"
                                   ]
+                                },
+                                "totals": {
+                                  "type": "object",
+                                  "properties": {
+                                    "linkCount": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "clicks": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "claims": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "subscribers": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "fans": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "vendorNetMills": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "hubMoney": {
+                                      "type": "object",
+                                      "properties": {
+                                        "state": {
+                                          "type": "string",
+                                          "enum": [
+                                            "no_data",
+                                            "available",
+                                            "partial"
+                                          ]
+                                        },
+                                        "reason": {
+                                          "anyOf": [
+                                            {
+                                              "type": "string",
+                                              "enum": [
+                                                "not_computed",
+                                                "no_completed_walk",
+                                                "before_floor"
+                                              ]
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "revenueBasis": {
+                                          "type": "string",
+                                          "enum": [
+                                            "creator_net_after_platform_fee"
+                                          ]
+                                        },
+                                        "attributionRule": {
+                                          "type": "string",
+                                          "enum": [
+                                            "ofapi_subscription_period_equal_split.v1"
+                                          ]
+                                        },
+                                        "netMills": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "pendingMills": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "state",
+                                        "reason",
+                                        "revenueBasis",
+                                        "attributionRule",
+                                        "netMills",
+                                        "pendingMills"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "required": [
+                                    "linkCount",
+                                    "clicks",
+                                    "claims",
+                                    "subscribers",
+                                    "fans",
+                                    "vendorNetMills",
+                                    "hubMoney"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "flags": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "enum": [
+                                      "no_baseline",
+                                      "vendor_recalculated",
+                                      "binding_changed",
+                                      "money_unknown",
+                                      "assumed_binding_start",
+                                      "assumed_contractor_start"
+                                    ]
+                                  }
                                 }
                               },
                               "required": [
@@ -20269,7 +20401,9 @@
                                 "contractorTitle",
                                 "validFrom",
                                 "validTo",
-                                "validFromBasis"
+                                "validFromBasis",
+                                "totals",
+                                "flags"
                               ],
                               "additionalProperties": false
                             }
