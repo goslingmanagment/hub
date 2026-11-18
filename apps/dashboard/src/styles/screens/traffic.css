@@ -1,0 +1,273 @@
+/* Трафик → Источники and the page of one link. Every chart of a sheet sits on
+   one grid: the name, the plot of day slots, the total. Only these screens
+   edit this file, and every rule goes inside @layer components
+   (design/build-rules.md). */
+@layer components {
+  .ts-screen { display: grid; gap: 16px; min-width: 0; }
+  .ts-sheet {
+    --ts-name: 196px;
+    --ts-total: 80px;
+    --ts-gap: 24px;
+    --ts-slot-min: 44px;
+    --ts-data: var(--color-chart-blue);
+    --ts-band: color-mix(in srgb, var(--color-hover) 75%, transparent);
+    container: ts-sheet / inline-size;
+    padding: 8px 32px 24px;
+    min-width: 0;
+  }
+
+  /* ── The one grid ───────────────────────────────────────────────────── */
+  .ts-scroll { min-width: 0; }
+  .ts-grid {
+    display: grid;
+    grid-template-columns: var(--ts-name) minmax(0, 1fr) var(--ts-total);
+    column-gap: var(--ts-gap);
+    align-items: center;
+  }
+  /* The plot: today's soft band and a hairline between the weeks, on every row
+     of a source. --ts-slots days, --ts-today the index of today (-1: none). */
+  .ts-plot {
+    position: relative;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    background-image:
+      linear-gradient(to right,
+        transparent calc(100% * var(--ts-today) / var(--ts-slots)), var(--ts-band) calc(100% * var(--ts-today) / var(--ts-slots)),
+        var(--ts-band) calc(100% * (var(--ts-today) + 1) / var(--ts-slots)), transparent calc(100% * (var(--ts-today) + 1) / var(--ts-slots))),
+      repeating-linear-gradient(to right,
+        transparent 0 calc(100% * 7 / (var(--ts-slots) - 7) - 1px),
+        var(--color-border) 0 calc(100% * 7 / (var(--ts-slots) - 7)));
+    background-size: 100% 100%, calc(100% * (var(--ts-slots) - 7) / var(--ts-slots) + 0.5px) 100%;
+    background-repeat: no-repeat;
+  }
+  .ts-name {
+    min-width: 0;
+    font-size: 15px;
+    line-height: 20px;
+    color: var(--color-text-secondary);
+    overflow-wrap: anywhere;
+  }
+  .ts-name-page { display: block; font-size: 13px; line-height: 18px; color: var(--color-text-muted); }
+  .ts-total {
+    text-align: right;
+    font-size: 15px;
+    line-height: 20px;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-text-secondary);
+  }
+
+  /* ── Once at the top ────────────────────────────────────────────────── */
+  .ts-top {
+    padding: 12px 0;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--color-text-muted);
+  }
+  .ts-top-label { color: var(--color-text-secondary); font-weight: 500; }
+  .ts-weeks { display: grid; grid-template-columns: 1fr 1fr; }
+  .ts-weeks span { padding-left: 8px; }
+  .ts-weeks b { font-weight: 500; color: var(--color-text-secondary); }
+
+  /* ── A source ───────────────────────────────────────────────────────── */
+  .ts-source { padding-top: 28px; border-bottom: 1px solid var(--color-border); }
+  .ts-source-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 14px;
+    padding-bottom: 4px;
+  }
+  .ts-source-title { font-size: 17px; line-height: 24px; font-weight: 600; color: var(--color-text-primary); }
+  .ts-source-contractor { font-size: 15px; line-height: 22px; color: var(--color-text-muted); }
+  .ts-source-attention { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--color-warning-text); }
+  .ts-source-money {
+    margin-left: auto;
+    font-size: 15px;
+    line-height: 22px;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .ts-source-money b { font-weight: 600; color: var(--color-text-primary); }
+  .ts-source-partial { font-size: 13px; }
+
+  .ts-days { border-bottom: 1px solid var(--color-border); align-items: end; }
+  .ts-day-labels { flex-direction: column; align-items: stretch; justify-content: flex-end; padding-top: 6px; }
+  .ts-week-sums {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+  .ts-week-sums span { padding-left: 10px; }
+  .ts-week-sums b { font-weight: 600; color: var(--color-text-primary); }
+  .ts-day-row { display: grid; grid-template-columns: repeat(var(--ts-slots), minmax(0, 1fr)); padding: 4px 0 6px; }
+  .ts-day {
+    text-align: center;
+    font-size: 13px;
+    line-height: 18px;
+    white-space: nowrap;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .ts-day-today { font-weight: 600; color: var(--color-text-primary); }
+  .ts-day-future { opacity: 0.55; }
+  .ts-caption { font-size: 13px; line-height: 18px; color: var(--color-text-muted); white-space: nowrap; padding-bottom: 6px; }
+
+  .ts-row { border-bottom: 1px solid var(--color-border-light); color: inherit; text-decoration: none; }
+  .ts-row:last-child { border-bottom: 0; }
+  .ts-row-link { cursor: pointer; }
+  .ts-row-link:hover .ts-name { color: var(--color-text-primary); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--color-border); }
+  .ts-row-link:focus-visible { outline: 2px solid var(--color-focus, var(--ts-data)); outline-offset: -2px; border-radius: 4px; }
+  .ts-row-large .ts-name { font-weight: 600; color: var(--color-text-primary); }
+  .ts-row-large .ts-total { font-size: 20px; line-height: 28px; font-weight: 600; color: var(--color-text-primary); }
+
+  /* ── The line ───────────────────────────────────────────────────────── */
+  .ts-chart { display: block; overflow: visible; }
+  .ts-line { fill: none; stroke: var(--ts-data); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .ts-area { fill: var(--ts-data); fill-opacity: 0.08; }
+  .ts-dot { fill: var(--ts-data); }
+  .ts-dot-today { fill: var(--color-card); stroke: var(--ts-data); stroke-width: 2; }
+  .ts-value {
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    fill: var(--color-text-primary);
+  }
+  .ts-row-large .ts-value { font-size: 14px; font-weight: 500; }
+  .ts-value-zero { fill: var(--color-text-muted); font-weight: 400; }
+  /* A day's details on hover: one hit area per slot over the row. */
+  .ts-hits { position: absolute; inset: 0; display: grid; }
+  .ts-hit { width: 100%; height: 100%; }
+  .ts-hit:hover { background: color-mix(in srgb, var(--ts-data) 7%, transparent); }
+
+  .ts-quiet {
+    display: grid;
+    gap: 2px;
+    padding: 8px 0 14px calc(var(--ts-name) + var(--ts-gap));
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--color-text-muted);
+  }
+  .ts-source > .ts-scroll { padding-bottom: 4px; }
+
+  /* ── What is not a source on the chart ──────────────────────────────── */
+  .ts-rest { display: grid; }
+  .ts-rest-block { padding: 18px 0 6px; border-bottom: 1px solid var(--color-border-light); }
+  .ts-rest-block:last-child { border-bottom: 0; }
+  .ts-rest-title { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--color-text-primary); padding-bottom: 4px; }
+  .ts-rest-attention { color: var(--color-warning-text); }
+  .ts-rest-line {
+    display: grid;
+    grid-template-columns: var(--ts-name) minmax(0, 1fr) auto;
+    column-gap: var(--ts-gap);
+    padding: 5px 0;
+    font-size: 15px;
+    line-height: 22px;
+    color: var(--color-text-muted);
+  }
+  .ts-rest-name { color: var(--color-text-secondary); overflow-wrap: anywhere; }
+  .ts-rest-figures { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 14px; text-align: right; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+
+  /* ── A narrow sheet (a rule on the sheet, not the window): the plot never
+        has less than --ts-slot-min a day; below that it scrolls sideways
+        inside its source, the name staying in view ── */
+  @container ts-sheet (max-width: 899px) {
+    .ts-grid { --ts-name: 150px; --ts-total: 64px; --ts-gap: 16px; }
+    .ts-source .ts-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+    .ts-source .ts-grid { min-width: calc(var(--ts-name) + var(--ts-total) + 2 * var(--ts-gap) + var(--ts-slots) * var(--ts-slot-min)); }
+    .ts-source .ts-name {
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      background: var(--color-card);
+      box-shadow: 6px 0 6px -6px light-dark(rgb(28 25 23 / 0.12), rgb(0 0 0 / 0.5));
+      font-size: 14px;
+    }
+    .ts-top { display: flex; flex-wrap: wrap; gap: 2px 12px; }
+    .ts-weeks { display: flex; flex-wrap: wrap; gap: 0 12px; }
+    .ts-weeks span { padding-left: 0; }
+    .ts-quiet { padding-left: 0; }
+    .ts-rest-line { --ts-name: 150px; --ts-gap: 16px; }
+  }
+  /* Narrower still: the name goes above its chart, so the plot has the whole
+     width (still at least 36 px a day), the day as «пн» over «9». */
+  @container ts-sheet (max-width: 720px) {
+    .ts-sheet, .ts-grid { --ts-slot-min: 36px; }
+    .ts-grid { --ts-name: 0px; --ts-total: 46px; --ts-gap: 8px; }
+    .ts-source .ts-grid {
+      min-width: calc(var(--ts-total) + var(--ts-gap) + var(--ts-slots) * var(--ts-slot-min));
+      grid-template-columns: minmax(0, 1fr) var(--ts-total);
+      grid-template-areas: "name name" "plot total";
+    }
+    .ts-source .ts-name { grid-area: name; justify-self: start; display: block; box-shadow: none; padding: 10px 8px 0 0; }
+    .ts-days .ts-name { display: none; }
+    .ts-source .ts-plot { grid-area: plot; }
+    .ts-source .ts-total { grid-area: total; }
+    .ts-days { grid-template-areas: "plot total"; }
+    .ts-day { font-size: 12px; line-height: 15px; white-space: normal; }
+    .ts-day-weekday { display: block; }
+    .ts-caption { white-space: normal; text-align: right; font-size: 12px; line-height: 15px; }
+    .ts-week-sums span { padding-left: 4px; }
+    .ts-value { font-size: 12px; }
+  }
+  @container ts-sheet (max-width: 560px) {
+    .ts-source-money { margin-left: 0; flex-basis: 100%; }
+    .ts-rest-line { grid-template-columns: 1fr; }
+    .ts-rest-figures { justify-content: flex-start; text-align: left; }
+  }
+  @media (max-width: 640px) {
+    .ts-sheet { padding: 4px 16px 16px; }
+  }
+}
+
+/* ── The page of one link ─────────────────────────────────────────────── */
+@layer components {
+  .tl-facts { color: var(--color-text-muted); }
+  .tl-sheet { display: grid; grid-template-columns: minmax(0, 1fr); padding-top: 20px; }
+  .tl-sheet > * { min-width: 0; }
+  .tl-url {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    font-size: 14px;
+    line-height: 20px;
+    overflow-wrap: anywhere;
+  }
+  .tl-copy { display: inline-flex; align-items: center; gap: 6px; }
+  .tl-figures { padding: 20px 0 24px; border-bottom: 1px solid var(--color-border); }
+  .tl-figure-row { display: flex; flex-wrap: wrap; gap: 8px 40px; }
+  .tl-figure { font-size: 17px; line-height: 28px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .tl-figure b { font-size: 26px; line-height: 32px; font-weight: 600; color: var(--color-text-primary); margin-right: 2px; }
+  .tl-figure-unknown { color: var(--color-text-muted); }
+  .tl-clicks { padding-top: 4px; font-size: 15px; line-height: 22px; color: var(--color-text-muted); }
+
+  .tl-section { padding: 24px 0 8px; border-bottom: 1px solid var(--color-border); }
+  .tl-section:last-child { border-bottom: 0; }
+  .tl-section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding-bottom: 12px; }
+  .tl-section-title { font-size: 17px; line-height: 24px; font-weight: 600; color: var(--color-text-primary); padding-bottom: 8px; }
+  .tl-section-head .tl-section-title { padding-bottom: 0; }
+
+  .tl-chart-scroll { min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
+  .tl-chart { min-width: calc(var(--ts-slots) * 15px); }
+  .tl-chart .ts-plot { border-bottom: 1px solid var(--color-border); }
+  .tl-weeks.ts-plot { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); border-bottom: 0; background-image: none; }
+  .tl-week { display: grid; padding: 8px 0 4px 8px; font-variant-numeric: tabular-nums; }
+  .tl-week-sum { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--color-text-primary); white-space: nowrap; }
+  .tl-week-dates { font-size: 13px; line-height: 18px; color: var(--color-text-muted); }
+  .tl-week-running .tl-week-dates { color: var(--color-text-secondary); }
+
+  .tl-section .table-wrap { max-width: 760px; }
+  .tl-days td { font-variant-numeric: tabular-nums; }
+  .tl-days .tl-missing { color: var(--color-text-muted); }
+  @container ts-sheet (max-width: 560px) {
+    .tl-days th, .tl-days td { padding-left: 8px; padding-right: 8px; white-space: nowrap; }
+  }
+}

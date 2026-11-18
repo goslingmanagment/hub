@@ -17,11 +17,13 @@ import {
   type OfLinkHubMoney,
   type OfLinkHubMoneyTotal,
   type OfLinkMoneyComparison,
+  type OfLinkSegmentDay,
   type OfLinksResponse,
 } from "@agency_hub_core/contracts";
 import {
   hubLinkKey,
   lastIndexBefore,
+  linkDayDelta,
   linkDeltaBetween,
   linkSegments,
   listLastLinkRecalculations,
@@ -813,7 +815,13 @@ export async function getOfLinkHistory(db: Database, input: {
     }
     const nextStart = businessDateToUtcStart(nextBusinessDate(day), MOSCOW_TIME_ZONE);
     const dayEnd = nextStart.getTime() < range.toAt.getTime() ? nextStart : range.toAt;
-    const delta = linkDeltaBetween(series, dayStart, dayEnd);
+    // The vendor figures run between the day's cuts (its closing reads), Hub's
+    // own money and the schedule's windows by the day itself.
+    const delta = linkDayDelta(series, {
+      previousStartAt: businessDateToUtcStart(previousBusinessDate(day), MOSCOW_TIME_ZONE),
+      startAt: dayStart,
+      nextStartAt: nextStart,
+    }, { from: null, to: range.toAt })?.delta ?? null;
     // Every window of the schedule the pair was expected in that day and that
     // has closed, attempted or not, counts as missed without a usable
     // result. A day before the pair was expected at all has no answer.
@@ -901,10 +909,43 @@ function totalsOut(segments: readonly LinkSegment[], hubMoney: OfLinkHubMoneyTot
 const compareKeys = (left: string | null, right: string | null) =>
   left === right ? 0 : left === null ? 1 : right === null ? -1 : left < right ? -1 : 1;
 
+/** A segment's business days: one row per day of the range whose stretch
+ * between its cuts overlaps [startAt, endAt), the delta over that stretch
+ * clipped by the segment's own bounds — the same `linkDayDelta` per day as a
+ * link's history. Pure. */
+export function segmentDays(segment: LinkSegment, range: { from: string; to: string }): OfLinkSegmentDay[] {
+  const days: OfLinkSegmentDay[] = [];
+  const clip = { from: segment.startAt, to: segment.endAt };
+  for (let day = range.from; day <= range.to; day = nextBusinessDate(day)) {
+    const startAt = businessDateToUtcStart(day, MOSCOW_TIME_ZONE);
+    if (startAt.getTime() >= segment.endAt.getTime()) {
+      break;
+    }
+    const cut = linkDayDelta(segment.series, {
+      previousStartAt: businessDateToUtcStart(previousBusinessDate(day), MOSCOW_TIME_ZONE),
+      startAt,
+      nextStartAt: businessDateToUtcStart(nextBusinessDate(day), MOSCOW_TIME_ZONE),
+    }, clip);
+    if (cut === null) {
+      continue;
+    }
+    const delta = cut.delta;
+    days.push({
+      businessDate: day,
+      clicks: delta?.clicks ?? null,
+      fans: delta?.fans ?? null,
+      vendorNetMills: delta === null ? null : millsOrNull(delta.netMills),
+      flags: delta?.flags ?? [],
+    });
+  }
+  return days;
+}
+
 export async function getOfLinkChannels(db: Database, input: {
   from?: string | undefined;
   to?: string | undefined;
   pageId?: number | undefined;
+  days?: boolean | undefined;
   now: Date;
 }): Promise<OfLinkChannelsResponse> {
   const { now } = input;
@@ -967,6 +1008,7 @@ export async function getOfLinkChannels(db: Database, input: {
     linkKind: segment.series.linkKind,
     linkRef: segment.series.linkRef,
     name: names.get(linkKey(segment.series.pageId, segment.series.linkKind, segment.series.linkRef)) ?? null,
+    linkCreatedAt: isoOrNull(linkCreatedAt.get(linkKey(segment.series.pageId, segment.series.linkKind, segment.series.linkRef)) ?? null),
     channelKey: segment.channelKey,
     contractorKey: segment.contractorKey,
     startAt: iso(segment.startAt),
@@ -979,6 +1021,7 @@ export async function getOfLinkChannels(db: Database, input: {
     fans: segment.delta.fans,
     vendorNetMills: millsOrNull(segment.delta.netMills),
     flags: segment.delta.flags,
+    days: input.days === true ? segmentDays(segment, range) : null,
   });
 
   const groupBy = <T>(items: readonly T[], keyOf: (item: T) => string | null) => {
@@ -1017,7 +1060,21 @@ export async function getOfLinkChannels(db: Database, input: {
             .filter((term) =>
               term.validFrom.getTime() < range.toAt.getTime()
               && (term.validTo === null || term.validTo.getTime() > range.fromAt.getTime()))
-            .map((term) => contractorTermOut(term, index.contractorTitles)),
+            .map((term) => {
+              // The term's own figures on this channel: the contractor-cut
+              // segments and Hub's pieces of this channel inside the term.
+              const inTerm = (item: { channelKey: string | null; contractorKey: string | null; startAt: Date }) =>
+                item.channelKey === channelKey
+                && item.contractorKey === term.contractorKey
+                && item.startAt.getTime() >= term.validFrom.getTime()
+                && (term.validTo === null || item.startAt.getTime() < term.validTo.getTime());
+              const termSegments = contractorSegments.filter(inTerm);
+              const termPieces = contractorPieces.filter(inTerm);
+              return {
+                ...contractorTermOut(term, index.contractorTitles),
+                ...totalsOut(termSegments, hubMoneyTotalOf(attribution, termPieces), hubPieceFlags(termPieces, termSegments, linkCreatedAt)),
+              };
+            }),
         ...totalsOut(
           segments,
           hubMoneyTotalOf(attribution, channelHub.get(channelKey) ?? []),

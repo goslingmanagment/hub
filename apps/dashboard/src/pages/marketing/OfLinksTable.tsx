@@ -1,6 +1,8 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
+import { Link } from "react-router";
 import type { OfLink } from "@agency_hub_core/contracts";
+import { linkPagePath } from "@/pages/traffic/trafficDays";
 
 import {
   agoText,
@@ -60,8 +62,9 @@ function ChannelCell({ link }: { link: OfLink }) {
   </>;
 }
 
-/** The opened row: what OnlyFans counted, its recalculation, the difference, when, the number. */
-function LinkDetails({ link, now }: { link: OfLink; now: number }) {
+/** The opened row: what OnlyFans counted, its recalculation, the difference, when, the number.
+ *  On the page of one link (`withHub`): Hub's own figure too, and no number (the page has the link). */
+export function LinkDetails({ link, now, withHub = false }: { link: OfLink; now: number; withHub?: boolean }) {
   const vendor = vendorMoneyView(link);
   const difference = differenceView(link);
   return (
@@ -71,6 +74,10 @@ function LinkDetails({ link, now }: { link: OfLink; now: number }) {
         <span className={vendor.amount === null ? "text-text-muted" : undefined}>{vendor.amount ?? "нет данных"}</span>
         <Sub>{vendor.note}</Sub>
       </dd>
+      {withHub && <>
+        <dt>Доход по Hub</dt>
+        <dd><HubCell link={link} /></dd>
+      </>}
       <dt>Пересчёт</dt>
       <dd>
         {vendor.recalculation ? <>
@@ -87,8 +94,10 @@ function LinkDetails({ link, now }: { link: OfLink; now: number }) {
       </dd>
       <dt>Данные на</dt>
       <dd>{moscowDateTime(link.observedAt)}, {agoText(link.observedAt, now)}</dd>
-      <dt>Номер ссылки</dt>
-      <dd>{link.url ? <a className="link" href={link.url} target="_blank" rel="noreferrer">{link.linkRef}</a> : link.linkRef}</dd>
+      {!withHub && <>
+        <dt>Номер ссылки</dt>
+        <dd>{link.url ? <a className="link" href={link.url} target="_blank" rel="noreferrer">{link.linkRef}</a> : link.linkRef}</dd>
+      </>}
     </dl>
   );
 }
@@ -122,10 +131,13 @@ export function OfLinksTable({ links, now }: { links: readonly OfLink[]; now: nu
             return <Fragment key={key}>
               <tr data-of-link={link.linkRef} className="cursor-pointer" onClick={() => toggle(key)}>
                 <td>
-                  <button type="button" className="of-link-toggle" aria-expanded={expanded} onClick={(event) => { event.stopPropagation(); toggle(key); }}>
-                    <ChevronRight size={16} aria-hidden="true" className={expanded ? "rotate-90" : undefined} />
-                    <span>{link.name ?? `Ссылка ${link.linkRef}`}</span>
-                  </button>
+                  <span className="of-link-toggle">
+                    <button type="button" className="of-link-chevron" aria-expanded={expanded} aria-label="Подробнее о деньгах" onClick={(event) => { event.stopPropagation(); toggle(key); }}>
+                      <ChevronRight size={16} aria-hidden="true" className={expanded ? "rotate-90" : undefined} />
+                    </button>
+                    {/* The name opens the page of the link. */}
+                    <Link className="of-link-name" to={linkPagePath(link)} onClick={(event) => event.stopPropagation()}>{link.name ?? `Ссылка ${link.linkRef}`}</Link>
+                  </span>
                   <span className="fan-cell-sub block of-link-indent">{kindLine(link)}</span>
                 </td>
                 <td className="status-col"><StateCell link={link} /></td>
@@ -150,7 +162,7 @@ export function OfLinksTable({ links, now }: { links: readonly OfLink[]; now: nu
         return <li key={keyOf(link)} data-of-link={link.linkRef}>
           <div className="of-link-card-head">
             <div className="min-w-0">
-              <span className="font-medium">{link.name ?? `Ссылка ${link.linkRef}`}</span>
+              <Link className="font-medium of-link-name" to={linkPagePath(link)}>{link.name ?? `Ссылка ${link.linkRef}`}</Link>
               <Sub>{kindLine(link)}</Sub>
             </div>
             <div className="shrink-0 text-right"><StateCell link={link} /></div>

@@ -17,6 +17,7 @@
 @import "./styles/screens/team.css";
 @import "./styles/screens/settings.css";
 @import "./styles/screens/system.css";
+@import "./styles/screens/traffic.css";
 
 /*
  * The console's tokens (colours, the type scale, radii, the two shadows) are
