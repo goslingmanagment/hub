@@ -300,9 +300,6 @@
   }
   /* Another product's places at the row's end (Контент: ContentOps). */
   .section-outside { display: inline-flex; align-items: center; gap: 16px; margin-left: auto; padding-left: 24px; flex-shrink: 0; }
-  .section-outside-label { font-size: 14px; line-height: 20px; color: var(--color-text-muted); white-space: nowrap; }
-  .section-tab-outside { gap: 4px; }
-  .section-tab-outside svg { color: var(--color-text-muted); }
   /* The second row inside a tab: quieter, so two rows do not read as equals. */
   .section-subnav {
     display: flex;
@@ -692,28 +689,7 @@
   .data-table tbody tr.row-group:first-child td { border-top: 0; }
   .row-group .meta { margin-left: 8px; font-size: 14px; font-weight: 400; color: var(--color-text-muted); }
   .row-total td { border-top: 1px solid var(--color-border-strong); font-weight: 600; }
-  .row-day td {
-    padding-block: 8px;
-    background: var(--color-hover-alt);
-    border-top: 1px solid var(--color-border);
-    font-size: 14px;
-    font-weight: 500;
-    line-height: 20px;
-    color: var(--color-text-secondary);
-  }
-  .data-table tbody tr.row-day:first-child td { border-top: 0; }
   .data-table tbody tr.is-selected td { background: var(--color-accent-soft); }
-  .select-bar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 16px;
-    padding: 12px 24px;
-    border-bottom: 1px solid var(--color-accent-border);
-    border-radius: var(--radius-card) var(--radius-card) 0 0;
-    background: var(--color-accent-soft);
-  }
-  .select-bar-text { flex: 1 1 auto; min-width: 0; font-weight: 500; }
   .table-toolbar {
     display: flex;
     flex-wrap: wrap;
@@ -723,8 +699,6 @@
     margin-bottom: 16px;
   }
   .table-toolbar-note { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .post-text { font-weight: 500; line-height: 22px; }
-  .post-sub { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
   input[type="checkbox"] { accent-color: var(--color-text-primary); }
   /* A status column: the badge's fill hangs out, so dots and words line up. */
   td.status-col .badge:not(.badge-success, .badge-info, .badge-bare) { margin-left: -8px; }
@@ -897,7 +871,6 @@
   .input:disabled,
   .select:disabled,
   .textarea:disabled { opacity: 0.6; cursor: not-allowed; }
-  .input-invalid { border-color: var(--color-danger); }
 
   /* ── Label and value ─────────────────────────────────────────────────── */
   .kv {
