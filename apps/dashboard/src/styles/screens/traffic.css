@@ -171,8 +171,9 @@
   .ts-rest-name { color: var(--color-text-secondary); overflow-wrap: anywhere; }
   .ts-rest-figures { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 14px; text-align: right; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
 
-  /* ── A narrow sheet: the plot keeps 40 px a day and scrolls sideways
-        inside its source, the name stays (a rule on the sheet, not the window) ── */
+  /* ── A narrow sheet (a rule on the sheet, not the window): the plot never
+        has less than --ts-slot-min a day; below that it scrolls sideways
+        inside its source, the name staying in view ── */
   @container ts-sheet (max-width: 899px) {
     .ts-grid { --ts-name: 150px; --ts-total: 64px; --ts-gap: 16px; }
     .ts-source .ts-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
@@ -195,15 +196,17 @@
     .ts-quiet { padding-left: 0; }
     .ts-rest-line { --ts-name: 150px; --ts-gap: 16px; }
   }
-  /* A phone: the name above its chart, the two weeks on the whole width, the day as «пн» over «9». */
-  @container ts-sheet (max-width: 560px) {
+  /* Narrower still: the name goes above its chart, so the plot has the whole
+     width (still at least 36 px a day), the day as «пн» over «9». */
+  @container ts-sheet (max-width: 720px) {
+    .ts-sheet, .ts-grid { --ts-slot-min: 36px; }
     .ts-grid { --ts-name: 0px; --ts-total: 46px; --ts-gap: 8px; }
     .ts-source .ts-grid {
-      min-width: 0;
+      min-width: calc(var(--ts-total) + var(--ts-gap) + var(--ts-slots) * var(--ts-slot-min));
       grid-template-columns: minmax(0, 1fr) var(--ts-total);
       grid-template-areas: "name name" "plot total";
     }
-    .ts-source .ts-name { grid-area: name; position: static; display: block; box-shadow: none; padding-top: 10px; font-size: 14px; }
+    .ts-source .ts-name { grid-area: name; justify-self: start; display: block; box-shadow: none; padding: 10px 8px 0 0; }
     .ts-days .ts-name { display: none; }
     .ts-source .ts-plot { grid-area: plot; }
     .ts-source .ts-total { grid-area: total; }
@@ -213,6 +216,8 @@
     .ts-caption { white-space: normal; text-align: right; font-size: 12px; line-height: 15px; }
     .ts-week-sums span { padding-left: 4px; }
     .ts-value { font-size: 12px; }
+  }
+  @container ts-sheet (max-width: 560px) {
     .ts-source-money { margin-left: 0; flex-basis: 100%; }
     .ts-rest-line { grid-template-columns: 1fr; }
     .ts-rest-figures { justify-content: flex-start; text-align: left; }
