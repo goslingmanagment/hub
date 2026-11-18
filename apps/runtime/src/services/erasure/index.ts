@@ -1256,6 +1256,7 @@ export const FAN_TEXT_ERASURE_COLUMNS: readonly FanTextErasureColumn[] = [
   // Shift reports (0400).
   { column: "shift_handins.state", stance: "no_words", why: ENUM },
   { column: "shift_handins.comment", stance: "unlinked", why: "the shift's comment for the next shift and the owner: about the whole shift, tied to no sale and no fan" },
+  { column: "shift_handins.model_comments", stance: "unlinked", why: "each model's own comment for the next shift (0432), as shift_handins.comment: about the shift on that model's pages, tied to no sale and no fan" },
   { column: "shift_handin_marks.statement", stance: "no_words", why: ENUM },
   { column: "shift_handin_marks.note", stance: "cleared", target: "shift_handin_marks", why: "the person's note on the fan's sale" },
   { column: "shift_handin_versions.door", stance: "no_words", why: ENUM },
@@ -1264,6 +1265,7 @@ export const FAN_TEXT_ERASURE_COLUMNS: readonly FanTextErasureColumn[] = [
   { column: "shift_handin_versions.lines", stance: "cleared", target: "shift_handin_versions", why: "the note of a line on the fan's sale, the one change the version's trigger lets the erasure make (`SHIFT_HANDIN_LINES_ERASURE`)" },
   { column: "shift_handin_versions.off_platform", stance: "unlinked", why: OFF_PLATFORM_UNLINKED },
   { column: "shift_handin_versions.comment", stance: "unlinked", why: "as shift_handins.comment, frozen in the version" },
+  { column: "shift_handin_versions.model_comments", stance: "unlinked", why: "as shift_handins.model_comments, frozen in the version" },
   { column: "shift_handin_versions.rule_version", stance: "no_words", why: "the rule's version" },
   { column: "shift_handin_versions.made_for", stance: "no_words", why: "why the system made it: a kind, ids and an outcome" },
   // The «Отчёт» board (0412).
@@ -1276,6 +1278,7 @@ export const FAN_TEXT_ERASURE_COLUMNS: readonly FanTextErasureColumn[] = [
   { column: "shift_handin_candidates.lines", stance: "cleared", target: "shift_handin_candidates", why: "the note of a line on the fan's sale, as a version's (`SHIFT_HANDIN_LINES_ERASURE`: the candidate's trigger lets the same change through)" },
   { column: "shift_handin_candidates.off_platform", stance: "unlinked", why: OFF_PLATFORM_UNLINKED },
   { column: "shift_handin_candidates.comment", stance: "unlinked", why: "as shift_handins.comment, frozen in the candidate" },
+  { column: "shift_handin_candidates.model_comments", stance: "unlinked", why: "as shift_handins.model_comments, frozen in the candidate" },
   { column: "shift_handin_candidates.rule_version", stance: "no_words", why: "the rule's version" },
   { column: "shift_handin_candidates.hub_check", stance: "no_words", why: "Hub's check per page: labels, states, counts and sums" },
   { column: "shift_handin_proposals.kind", stance: "no_words", why: ENUM },

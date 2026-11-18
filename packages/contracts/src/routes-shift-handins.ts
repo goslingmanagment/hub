@@ -129,6 +129,12 @@ export const shiftReportLineSchema = z.object({
   facts: shiftReportLineFactsSchema.nullable(),
 });
 
+/**
+ * The comment of each model of a report (0432), in the posts' order: the model's own when written (an empty one too),
+ * else the general `comment`. The models whose pages the reader sees and that make a post.
+ */
+export const shiftReportModelCommentsSchema = z.array(z.object({ modelSlug: z.string(), modelName: z.string(), comment: z.string() }));
+
 export const shiftReportOffPlatformSchema = z.object({
   id: intId,
   amountMills: mills,
@@ -150,7 +156,10 @@ export const shiftReportBodySchema = z.object({
   /** «Ваши продажи» then «Рядом», each oldest first. */
   lines: z.array(shiftReportLineSchema),
   offPlatform: z.array(shiftReportOffPlatformSchema),
+  /** The general comment: what a write without a model sets, and the comment of a model without its own. */
   comment: z.string(),
+  /** Each model's comment, as its post carries it (one per post, the posts' order); empty — the report has no page yet. */
+  comments: shiftReportModelCommentsSchema.default([]),
   /** The shift's pages first, a page of a «долёт» after; a page at zero too. */
   pages: z.array(z.object({ pageLabel: z.string(), platform: z.string(), amountMills: mills })),
   totalMills: mills,
@@ -238,6 +247,11 @@ export const shiftReportLineBodySchema = z.object({
 
 export const shiftReportCommentBodySchema = z.object({
   comment: z.string().max(SHIFT_REPORT_COMMENT_MAX),
+  /**
+   * The model whose post the comment is for (its slug, as the report's `comments` and `posts` name it): only its own is
+   * set. Absent — the one comment of every post (each model's own is dropped). A model none of the report's pages is: 400.
+   */
+  modelSlug: z.string().trim().min(1).max(100).optional(),
 });
 
 export const shiftReportOffPlatformBodySchema = z.object({
@@ -426,7 +440,9 @@ export const agentShiftReportCheckSchema = z.object({
     amountMills: mills,
     ruleWords: z.string(),
   })),
+  /** The general comment; each model's, as its post carries it, in `comments`. */
   comment: z.string(),
+  comments: shiftReportModelCommentsSchema.default([]),
   /** The people a proposal may name. */
   colleagues: z.array(z.object({ userId: intId, name: z.string() })),
 });
@@ -592,6 +608,10 @@ export const agentShiftReportsFeedItemSchema = z.object({
   })),
   /** «Мимо площадки»: never in `totalMills` until the owner confirms it; a confirmed one counts in its page's sum (`pageLabel`). */
   offPlatform: z.array(shiftReportOffPlatformSchema),
+  /**
+   * The comment as one text: the general one while no model has its own; else each model's (0432) — one text when they
+   * are the same, otherwise a line «Model»: text per model.
+   */
   comment: z.string(),
   /** Whether the ledger said the report date was paid when this version was made; null — not known. */
   dayPaid: z.boolean().nullable(),

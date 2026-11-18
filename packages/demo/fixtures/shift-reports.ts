@@ -30,6 +30,8 @@ interface Version { version: number; submittedAt: string; door: "workboard" | "t
 interface Kept {
   words: Map<number, Word>;
   comment: string;
+  /** The model's own comment (Hub 0432): these shifts are one model's, Mia's, one post. */
+  modelComments: Record<string, string>;
   offPlatform: Array<{ id: number; amountMills: number; fromWhom: string; whatFor: string; state: "pending" | "confirmed" | "rejected"; pageLabel: string | null }>;
   versions: Version[];
 }
@@ -61,7 +63,7 @@ function salesOf(shift: DemoShift, back: number, user: DemoUser): DemoSale[] {
 function keptOf(id: number): Kept {
   let one = kept.get(id);
   if (!one) {
-    one = { words: new Map(), comment: "", offPlatform: [], versions: [] };
+    one = { words: new Map(), comment: "", modelComments: {}, offPlatform: [], versions: [] };
     kept.set(id, one);
   }
   return one;
@@ -191,8 +193,9 @@ function bodyOf(shift: DemoShift, back: number, user: DemoUser, id: number, now:
     amountMills: toCent(lines.filter((row) => row.pageLabel === pageLabel).reduce((sum, row) => sum + row.amountMills, 0)
       + offPlatform.filter((row) => row.state === "confirmed" && row.pageLabel === pageLabel).reduce((sum, row) => sum + row.amountMills, 0)),
   }));
+  const comments = pages.length === 0 ? [] : [{ modelSlug: "mia", modelName: "Mia", comment: Object.hasOwn(one.modelComments, "mia") ? one.modelComments.mia! : one.comment }];
   return {
-    source: "draft", version: null, submittedAt: null, door: null, lines, offPlatform, comment: one.comment, pages,
+    source: "draft", version: null, submittedAt: null, door: null, lines, offPlatform, comment: one.comment, comments, pages,
     totalMills: pages.reduce((sum, page) => sum + page.amountMills, 0), cut: false, computedAt: now.toISOString(),
   };
 }
@@ -210,7 +213,8 @@ function postOf(body: ShiftReportBody, shift: DemoShift, user: DemoUser): Report
     lines.push(`https://fansly.com/${row.fan.username ?? "fan"}/posts - ${row.kind === "message_purchase" ? "ppv" : row.kind === "tip" ? "tip" : "sub"} ${money(row.amountMills)}${row.note ? `. ${row.note}` : ""}`);
   }
   lines.push("", "📝 Комментарий:");
-  if (body.comment) lines.push(body.comment);
+  const comment = body.comments[0]?.comment ?? body.comment;
+  if (comment) lines.push(comment);
   return [{ modelSlug: "mia", modelName: "Mia", text: lines.join("\n") }];
 }
 
@@ -445,7 +449,15 @@ export const shiftReportHandlers: DemoHandlers = {
     if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
-    keptOf(found.id).comment = String((request.body as { comment: string }).comment);
+    const body = request.body as { comment: string; modelSlug?: string };
+    const one = keptOf(found.id);
+    if (body.modelSlug === undefined) {
+      one.comment = String(body.comment);
+      one.modelComments = {};
+    } else {
+      if (body.modelSlug !== "mia") return demoError(400, "Bad Request", "This model is not one of the report's pages");
+      one.modelComments = { ...one.modelComments, mia: String(body.comment) };
+    }
     return { savedAt: request.now.toISOString() };
   },
   shiftReportOffPlatformAdd: (request) => {

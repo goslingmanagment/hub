@@ -82,7 +82,9 @@ itself. A question about whose a sale is goes to the person in words, and only t
   (with `--note`, one line of why) goes on «Рядом» or adds a sale from `claimable`; `rule` takes the word back.
   A «не моё» stays on its line, among «Ваши продажи» and counting nothing, in every later version until `rule`
   takes it back — also when the word itself made the sale nobody's (everyone of its home said it).
-- `hub shift-report comment --shift <id> --text "…"`: the comment, the person's text word for word.
+- `hub shift-report comment --shift <id> --text "…" [--model <slug>]`: the comment, the person's text word for word.
+  A shift on two models' pages is two posts, each with its model's comment: `--model` (a slug of the report's
+  `view.comments`) sets that model's alone; without it the one text goes into every post.
 - `hub shift-report off-platform --shift <id> --amount <dollars> --from-whom … --what-for …`: «мимо площадки». It
   waits for the owner and is never in the sums before the owner confirms it.
 - `hub shift-report submit --shift <id> --sender <id> --message <link>`: hands the shift in as its next version,

@@ -2588,12 +2588,15 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
     operation: "agentShiftReportCommentSet",
     summary:
       "Set the draft's comment (for the next shift and the owner) to the person's own text, word for word; --text \"\""
-      + ` empties it. Up to ${SHIFT_REPORT_COMMENT_MAX} characters, saved at once. Exit 0 — saved; 4 — refused (403: their switch`
-      + " is off; 409 sender_not_person) or no answer. Needs write:shift_reports.",
+      + " empties it. A shift on two models' pages is two posts: --model <slug> (as the report's `comments` name it) sets that"
+      + " model's comment alone; without it the one text goes into every post. Up to"
+      + ` ${SHIFT_REPORT_COMMENT_MAX} characters, saved at once. Exit 0 — saved; 4 — refused (400: not a model of the report;`
+      + " 403: their switch is off; 409 sender_not_person) or no answer. Needs write:shift_reports.",
     example: 'hub shift-report comment --shift 4512 --text "фан ждёт видео к пятнице" --sender 700000111 --message https://t.me/c/2600000001/2002',
     options: {
       shift: SHIFT_REPORT_SHIFT_OPTION,
       text: { kind: "string", describe: "The comment, the person's words (required)" },
+      model: { kind: "string", describe: "The model's slug whose post the comment is for; absent — every post" },
       sender: SHIFT_REPORT_SENDER_OPTION,
       message: SHIFT_REPORT_MESSAGE_OPTION,
     },
@@ -2602,7 +2605,7 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
       const comment = readString(values, "text");
       if (comment === undefined) throw new HubUsageError("--text is required: the person's comment (\"\" empties it)");
       return client.agentShiftReportCommentSet({
-        body: checkedDraft(agentShiftReportCommentBodySchema, { shiftId: requireId(values, "shift"), comment, ...shiftReportWords(values, false) }),
+        body: checkedDraft(agentShiftReportCommentBodySchema, defined({ shiftId: requireId(values, "shift"), comment, modelSlug: readString(values, "model"), ...shiftReportWords(values, false) })),
       });
     },
   },

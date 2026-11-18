@@ -95,7 +95,9 @@ import {
   HANDIN_LOOKBACK_DAYS,
   claimedSale,
   classifySale,
+  commentText,
   lineAmount,
+  modelComment,
   postTexts,
   reasonWords,
   slotWindowOf,
@@ -103,6 +105,7 @@ import {
   type ClassifiedSale,
   type DraftSale,
   type DraftShare,
+  type ReportComments,
   type Statement,
 } from "./shift-handin-rules.ts";
 
@@ -213,6 +216,39 @@ export async function pageCatalog(db: Database): Promise<PageCatalog> {
 }
 
 const shiftPageLabels = (shift: HandinShift) => shift.pages.map((page) => page.pageLabel);
+
+/**
+ * The model a page's post and its comment go by (0432): the page's model; the page itself when it has none or is not
+ * active. The one key of both, so a post and its comment never disagree on it.
+ */
+export function pageModelOf(catalog: Pick<PageCatalog, "info">, pageLabel: string): { modelSlug: string; modelName: string } {
+  const info = catalog.info.get(pageLabel);
+  return { modelSlug: info?.modelSlug ?? pageLabel, modelName: info?.modelName ?? pageLabel };
+}
+
+/** The models of pages (`pageModelOf`), each once, in the pages' order. */
+export function modelsOfPages(catalog: Pick<PageCatalog, "info">, pageLabels: readonly string[]): Array<{ slug: string; name: string }> {
+  const models: Array<{ slug: string; name: string }> = [];
+  for (const label of pageLabels) {
+    const model = pageModelOf(catalog, label);
+    if (!models.some((one) => one.slug === model.modelSlug)) models.push({ slug: model.modelSlug, name: model.modelName });
+  }
+  return models;
+}
+
+/**
+ * Each model's comment of a report (`modelComment`), in the posts' order: the models of the pages its posts list
+ * (`postPagesOf`) that the reader sees (`cutTo`; null — every page). Pure.
+ */
+export function commentsOf(
+  report: ReportComments & Pick<HandinVersionRow, "pages" | "lines">,
+  subject: Pick<Subject, "shift">,
+  catalog: Pick<PageCatalog, "info">,
+  cutTo: Set<string> | null,
+): ShiftReportBody["comments"] {
+  const pages = postPagesOf(report, subject).map((page) => page.pageLabel).filter((label) => cutTo === null || cutTo.has(label));
+  return modelsOfPages(catalog, pages).map((model) => ({ modelSlug: model.slug, modelName: model.name, comment: modelComment(report, model.slug) }));
+}
 
 /** How the reader may see the subject: own, the owner's, a reader on shared pages (cut to them), or not at all. */
 export function accessOf(actor: HandinActor, subject: Subject, catalog: PageCatalog): { access: "own" | "read"; cutTo: Set<string> | null; draftPreview: boolean } {
@@ -722,15 +758,20 @@ function versionTotalFor(version: HandinVersionRow, cutTo: Set<string> | null): 
 function bodyOf(input: {
   source: "draft" | "version";
   version: HandinVersionRow | null;
+  subject: Pick<Subject, "shift">;
   lines: readonly HandinVersionLine[];
   offPlatform: readonly HandinVersionOffPlatform[];
   comment: string;
+  modelComments: Readonly<Record<string, string>>;
   shiftPages: readonly string[];
   cutTo: Set<string> | null;
   computedAt: Date;
   context: ViewContext;
 }): ShiftReportBody {
   const seen = projectionOf(input);
+  // The models of the posts the report makes (a draft's as a hand-in now would make them), cut to the reader's pages.
+  const whole = input.version ?? { pages: reportSums(input.lines, input.shiftPages, input.offPlatform).pages, lines: [...input.lines] };
+  const comments = commentsOf({ ...whole, comment: input.comment, modelComments: input.modelComments }, input.subject, input.context.catalog, input.cutTo);
   return {
     source: input.source,
     version: input.version?.version ?? null,
@@ -739,6 +780,7 @@ function bodyOf(input: {
     lines: seen.lines.map((line) => wireLine(line, input.context)).filter((line): line is ShiftReportLine => line !== null),
     offPlatform: seen.offPlatform.map(offPlatformWire),
     comment: input.comment,
+    comments,
     pages: seen.sums.pages.map((page) => ({ ...page, platform: input.context.catalog.info.get(page.pageLabel)?.platform ?? "fansly" })),
     totalMills: seen.sums.totalMills,
     cut: seen.cut,
@@ -822,7 +864,7 @@ export function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "
     tag,
     pages: postPagesOf(version, subject).map((page) => {
       const info = context.catalog.info.get(page.pageLabel);
-      return { pageLabel: page.pageLabel, platform: info?.platform ?? "fansly", modelSlug: info?.modelSlug ?? page.pageLabel, modelName: info?.modelName ?? page.pageLabel, amountMills: page.amountMills };
+      return { pageLabel: page.pageLabel, platform: info?.platform ?? "fansly", ...pageModelOf(context.catalog, page.pageLabel), amountMills: page.amountMills };
     }),
     lines: version.lines.flatMap((line) => (line.transactionId === null ? [] : [{
       pageLabel: line.pageLabel,
@@ -834,6 +876,7 @@ export function modelPostsOf(version: HandinVersionRow, subject: Pick<Subject, "
       note: line.note,
     }])),
     comment: version.comment,
+    modelComments: version.modelComments,
     offPlatform: version.offPlatform.filter((line) => line.state === "pending" || line.state === "confirmed"),
     // «Отчёт № N» last, as the board's post has it. No «не в смене» lines: a page the shift did not hold is never among the
     // post's accounts (review 12.11 round 2, (8)).
@@ -918,13 +961,14 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
   let view: ShiftReportBody | null = null;
   if (own || (latest === null && access.draftPreview)) {
     view = bodyOf({
-      source: "draft", version: null, lines: draft ?? [], offPlatform, comment: handin?.comment ?? "", shiftPages,
-      cutTo: access.cutTo, computedAt: now, context,
+      source: "draft", version: null, subject, lines: draft ?? [], offPlatform, comment: handin?.comment ?? "", modelComments: handin?.modelComments ?? {},
+      shiftPages, cutTo: access.cutTo, computedAt: now, context,
     });
   } else if (latest !== null) {
     view = bodyOf({
-      source: "version", version: latest, lines: latest.lines, offPlatform: latest.offPlatform.map((line) => ({ ...line })),
-      comment: latest.comment, shiftPages: latest.pages.map((page) => page.pageLabel), cutTo: access.cutTo, computedAt: latest.submittedAt, context,
+      source: "version", version: latest, subject, lines: latest.lines, offPlatform: latest.offPlatform.map((line) => ({ ...line })),
+      comment: latest.comment, modelComments: latest.modelComments, shiftPages: latest.pages.map((page) => page.pageLabel), cutTo: access.cutTo,
+      computedAt: latest.submittedAt, context,
     });
   }
 
@@ -1311,15 +1355,47 @@ export async function readShiftReportClaimable(app: HandinApp, actor: HandinActo
   return { sales, serverNow: now.toISOString() };
 }
 
-/** `shiftReportCommentSet`: the draft's comment. */
-export async function setShiftReportComment(app: HandinApp, actor: HandinActor, input: { shiftId: number; comment: string }, now: Date = new Date()) {
-  const { subject } = await writableSubject(app, actor, input.shiftId);
+/**
+ * `shiftReportCommentSet`: the draft's comment. With a model: that model's own (0432), for its post and the next shift
+ * on its pages; the model must be one of the report's. Without: the one comment of every post.
+ */
+export async function setShiftReportComment(
+  app: HandinApp,
+  actor: HandinActor,
+  input: { shiftId: number; comment: string; modelSlug?: string | undefined },
+  now: Date = new Date(),
+) {
+  const { subject, catalog } = await writableSubject(app, actor, input.shiftId);
+  const modelSlug = input.modelSlug ?? null;
+  if (modelSlug !== null && !(await isReportModel(app.db, { subject, catalog, modelSlug }, now))) {
+    throw new BadRequestError("This model is not one of the report's pages", { reason: "model_not_in_report" });
+  }
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     const handin = await handinFor(db, subject);
-    await setHandinComment(db, { handinId: handin.id, comment: input.comment, at: now });
+    await setHandinComment(db, { handinId: handin.id, comment: input.comment, modelSlug, at: now });
   });
   return { savedAt: now.toISOString() };
+}
+
+/**
+ * Whether a model is one of the report's: of the shift's pages or its counted version's, else of the posts the draft
+ * would make now (the models its `comments` offer: a page of a «долёт» too).
+ */
+async function isReportModel(db: Database, input: { subject: Subject; catalog: PageCatalog; modelSlug: string }, now: Date): Promise<boolean> {
+  const { subject, catalog, modelSlug } = input;
+  const ofPages = (labels: readonly string[]) => labels.some((label) => pageModelOf(catalog, label).modelSlug === modelSlug);
+  if (ofPages(shiftPageLabels(subject.shift))) return true;
+  const handin = await findHandinByShift(db, subject.shift.id);
+  if (handin === null) return false;
+  const latest = (await listCurrentHandinVersions(db, [handin.id])).get(handin.id);
+  if (latest !== undefined && ofPages(latest.pages.map((page) => page.pageLabel))) return true;
+  const marks = await listHandinMarks(db, handin.id);
+  const facts = await draftFacts(db, subject, handin, catalog, now, marks);
+  const lines = draftLines(facts, marks);
+  const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
+  const draft = { pages: reportSums(lines, facts.pages, offPlatform).pages, lines, comment: handin.comment, modelComments: handin.modelComments };
+  return commentsOf(draft, subject, catalog, null).some((one) => one.modelSlug === modelSlug);
 }
 
 /** `shiftReportOffPlatformAdd`: «мимо площадки», waiting for the owner. */
@@ -1513,6 +1589,10 @@ export async function readShiftReportsFeed(
     await holdHandinFeedVersions(app.db, { agentKeyId: input.agentKeyId, versionIds: read.held.map((one) => one.id) });
     held = await listHandinFeedHeld(app.db, { agentKeyId: input.agentKeyId, pageIds: input.pageIds });
   }
+  // The feed keeps one comment (0432): the models' own as one text, by the models of the version's pages.
+  const catalog = read.served.some((row) => Object.keys(row.modelComments).length > 0) ? await pageCatalog(app.db) : null;
+  const feedComment = (row: (typeof read.served)[number]) => (catalog === null ? row.comment
+    : commentText(row, modelsOfPages(catalog, row.pages.map((page) => page.pageLabel)), { line: (name, text) => `«${name}»: ${text}`, separator: "\n" }));
   return {
     reports: read.served.map((row) => ({
       id: row.id,
@@ -1531,7 +1611,7 @@ export async function readShiftReportsFeed(
         .map((pageLabel) => row.pages.find((page) => page.pageLabel === pageLabel) ?? { pageLabel, amountMills: 0 }),
       lines: row.lines.flatMap(feedLineOf),
       offPlatform: row.offPlatform.filter((line) => line.state !== "withdrawn").map((line) => offPlatformWire(line)),
-      comment: row.comment,
+      comment: feedComment(row),
       dayPaid: row.dayPaid,
       ruleVersion: row.ruleVersion,
       madeFor: row.madeFor === null ? null : {

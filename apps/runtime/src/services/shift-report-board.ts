@@ -75,6 +75,7 @@ import { boardOn, hubPending, oldWayGives, phaseOf, signableOf } from "./shift-r
 import {
   accessOf,
   afterPersonVersion,
+  commentsOf,
   draftFacts,
   draftLines,
   handinActorOf,
@@ -182,7 +183,7 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
     const made = await insertCandidateWithin(db, {
       handinId: handin.id, door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
       telegramMessageRef: actor.kind === "agent" ? actor.sourceRef : null, telegramSenderId: actor.kind === "agent" ? actor.telegramUserId : null,
-      cutoffAt: now, totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: handin.comment, ruleVersion: SALE_RULE.version,
+      cutoffAt: now, totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: handin.comment, modelComments: handin.modelComments, ruleVersion: SALE_RULE.version,
       hubCheck, at: now,
     });
     const next = checkLetsConfirm({ handedInAt: now, now, hubPending: hubWaits, gengarPending: reviewed }) ? "confirm" : "checking";
@@ -248,7 +249,7 @@ export async function confirmShiftReport(
     }
     const made = await insertHandinVersion(db, {
       handin: locked, door: actor.door, actorUserId: actor.userId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
-      totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: candidate.comment, dayPaid, ruleVersion: candidate.ruleVersion,
+      totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: candidate.comment, modelComments: candidate.modelComments, dayPaid, ruleVersion: candidate.ruleVersion,
       reportDate: subject.shift.reportDate, at: now,
     });
     await setCandidateConfirmed(db, { candidateId: candidate.id, version: made.version, at: now });
@@ -433,7 +434,7 @@ export async function resendShiftReport(
     const sums = reportSums(lines, latest.pages.map((page) => page.pageLabel), latest.offPlatform);
     const version = await insertHandinVersion(db, {
       handin: locked, door: actor.door, actorUserId: actor.userId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
-      totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform: latest.offPlatform, comment: latest.comment, dayPaid, ruleVersion: SALE_RULE.version,
+      totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform: latest.offPlatform, comment: latest.comment, modelComments: latest.modelComments, dayPaid, ruleVersion: SALE_RULE.version,
       reportDate: subject.shift.reportDate, at: now,
     });
     if (!(await setHandinPhase(db, { handinId: locked.id, phase: "counted", at: now, from: [locked.phase] }))) throw new PhaseConflictError(subject.shift.id, phaseOf(locked));
@@ -702,6 +703,7 @@ export async function readShiftReportChecks(app: BoardApp, input: { pageIds: rea
         ruleWords: ruleWordsOfLine(line, names),
       }])),
       comment: one.comment,
+      comments: commentsOf(one, subject, catalog, null),
       colleagues: await listHandinColleagues(app.db, { pageIds, exceptUserIds: subject.userIds }),
     });
   }

@@ -253,7 +253,7 @@ async function remakeAt(db: Database, input: { subject: Subject; catalog: PageCa
       handinId: handin.id, door: input.previous.door, actorUserId: input.previous.actorUserId, agentKeyId: input.previous.agentKeyId,
       telegramMessageRef: input.previous.telegramMessageRef, telegramSenderId: input.previous.telegramSenderId, cutoffAt: input.previous.cutoffAt,
       totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform: input.previous.offPlatform, comment: handin.comment,
-      ruleVersion: SALE_RULE.version, hubCheck: input.previous.hubCheck, at: input.now,
+      modelComments: handin.modelComments, ruleVersion: SALE_RULE.version, hubCheck: input.previous.hubCheck, at: input.now,
     });
   });
 }
@@ -427,7 +427,7 @@ async function moveToMerged(db: Database, input: { handinId: number; from: numbe
     const counts = latest !== undefined && versionCountsMoney(latest);
     const system = (outcome: "merged" | "moved") => ({
       door: latest!.door === "telegram" ? "workboard" as const : latest!.door, actorUserId: latest!.actorUserId ?? handin.userId, agentKeyId: null,
-      telegramMessageRef: null, telegramSenderId: null, comment: latest!.comment, dayPaid: null, ruleVersion: latest!.ruleVersion,
+      telegramMessageRef: null, telegramSenderId: null, comment: latest!.comment, modelComments: latest!.modelComments, dayPaid: null, ruleVersion: latest!.ruleVersion,
       madeFor: { kind: "decision" as const, decisionId: null, transactionId: null, outcome }, reportDate: latest!.reportDate ?? handin.reportDate, at: now,
     });
     if (counts) {
@@ -470,7 +470,7 @@ export async function settleGoneShifts(app: CheckApp, now: Date): Promise<number
         await insertHandinVersion(txDb, {
           handin, door: latest.door === "telegram" ? "workboard" : latest.door, actorUserId: latest.actorUserId ?? one.userId, agentKeyId: null,
           telegramMessageRef: null, telegramSenderId: null, totalMills: 0, pages: latest.pages.map((page) => ({ pageLabel: page.pageLabel, amountMills: 0 })),
-          lines: [], offPlatform: [], comment: latest.comment, dayPaid: null, ruleVersion: SALE_RULE.version,
+          lines: [], offPlatform: [], comment: latest.comment, modelComments: latest.modelComments, dayPaid: null, ruleVersion: SALE_RULE.version,
           madeFor: { kind: "decision", decisionId: null, transactionId: null, outcome: "cancelled" }, reportDate: latest.reportDate ?? handin.reportDate, at: now,
         });
         await setHandinPhase(txDb, { handinId: one.handinId, phase: "counted", at: now });

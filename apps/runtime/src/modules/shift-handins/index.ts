@@ -96,7 +96,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
   });
 
   server.put("/api/v1/shift-reports/:shiftId/comment", { schema: routeSchemas.shiftReportCommentSet }, async (request) => {
-    return setShiftReportComment(appContext, await person(request), { shiftId: request.params.shiftId, comment: request.body.comment });
+    return setShiftReportComment(appContext, await person(request), { shiftId: request.params.shiftId, comment: request.body.comment, modelSlug: request.body.modelSlug });
   });
 
   server.post("/api/v1/shift-reports/:shiftId/off-platform", { schema: routeSchemas.shiftReportOffPlatformAdd }, async (request) => {
@@ -226,7 +226,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportCommentSet", ["write:shift_reports"]);
     return settled(scope, async () => {
       const saved = await setShiftReportComment(appContext, handinAgentActorOf(principal, pageIds, request.body), {
-        shiftId: request.body.shiftId, comment: request.body.comment,
+        shiftId: request.body.shiftId, comment: request.body.comment, modelSlug: request.body.modelSlug,
       });
       await audit(principal, "agentShiftReportCommentSet", { shiftId: request.body.shiftId });
       return saved;

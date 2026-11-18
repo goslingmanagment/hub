@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import type { HandinDoor, HandinPhase, HandinVersionLine, HandinVersionOffPlatform, HandinVersionPage } from "./shift-handins.ts";
+import { modelCommentsOf, type HandinDoor, type HandinPhase, type HandinVersionLine, type HandinVersionOffPlatform, type HandinVersionPage } from "./shift-handins.ts";
 
 // The «Отчёт» board (0412; products plan 2026-11-13, package R): a report's phase, the candidates «Сдать смену»
 // records, Gengar's proposals on them, and «нет в Hub» sightings. Raw SQL: the tables are the migration's alone. A
@@ -82,6 +82,8 @@ export interface CandidateRow {
   lines: HandinVersionLine[];
   offPlatform: HandinVersionOffPlatform[];
   comment: string;
+  /** Each model's own comment, as the draft had it (0432). */
+  modelComments: Record<string, string>;
   ruleVersion: string;
   hubCheck: CandidateHubPage[];
   hubCheckedAt: Date | null;
@@ -94,7 +96,7 @@ export interface CandidateRow {
 }
 
 const CANDIDATE_COLUMNS = sql`c.id, c.handin_id, c.number, c.made_at, c.door, c.actor_user_id, c.agent_key_id, c.telegram_message_ref,
-  c.telegram_sender_id, c.cutoff_at, c.total_mills, c.pages, c.lines, c.off_platform, c.comment, c.rule_version, c.hub_check,
+  c.telegram_sender_id, c.cutoff_at, c.total_mills, c.pages, c.lines, c.off_platform, c.comment, c.model_comments, c.rule_version, c.hub_check,
   c.hub_checked_at, c.gengar_answered_at, c.gengar_clean, c.superseded_at, c.superseded_by, c.confirmed_version, c.confirmed_at`;
 
 function candidateOf(row: Row): CandidateRow {
@@ -114,6 +116,7 @@ function candidateOf(row: Row): CandidateRow {
     lines: jsonArray<HandinVersionLine>(row.lines),
     offPlatform: jsonArray<HandinVersionOffPlatform>(row.off_platform),
     comment: String(row.comment ?? ""),
+    modelComments: modelCommentsOf(row.model_comments),
     ruleVersion: String(row.rule_version),
     hubCheck: jsonArray<CandidateHubPage>(row.hub_check),
     hubCheckedAt: nullableDate(row.hub_checked_at),
@@ -145,6 +148,7 @@ export async function insertHandinCandidate(
     lines: readonly HandinVersionLine[];
     offPlatform: readonly HandinVersionOffPlatform[];
     comment: string;
+    modelComments: Readonly<Record<string, string>>;
     ruleVersion: string;
     hubCheck: readonly CandidateHubPage[];
     at: Date;
@@ -153,12 +157,13 @@ export async function insertHandinCandidate(
   const at = input.at.toISOString();
   const result = await db.execute<Row>(sql`
     insert into shift_handin_candidates (handin_id, number, made_at, door, actor_user_id, agent_key_id, telegram_message_ref, telegram_sender_id,
-      cutoff_at, total_mills, pages, lines, off_platform, comment, rule_version, hub_check)
+      cutoff_at, total_mills, pages, lines, off_platform, comment, model_comments, rule_version, hub_check)
     values (${input.handinId},
       (select coalesce(max(number), 0) + 1 from shift_handin_candidates where handin_id = ${input.handinId}),
       ${at}::timestamptz, ${input.door}, ${input.actorUserId}, ${input.agentKeyId}, ${input.telegramMessageRef}, ${input.telegramSenderId},
       ${input.cutoffAt.toISOString()}::timestamptz, ${input.totalMills}, ${JSON.stringify(input.pages)}::jsonb, ${JSON.stringify(input.lines)}::jsonb,
-      ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment}, ${input.ruleVersion}, ${JSON.stringify(input.hubCheck)}::jsonb)
+      ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment}, ${JSON.stringify(input.modelComments)}::jsonb, ${input.ruleVersion},
+      ${JSON.stringify(input.hubCheck)}::jsonb)
     returning ${sql.raw(CANDIDATE_COLUMNS_RAW)}`);
   const made = candidateOf(result.rows[0]!);
   await db.execute(sql`
@@ -168,7 +173,7 @@ export async function insertHandinCandidate(
 }
 
 const CANDIDATE_COLUMNS_RAW = `id, handin_id, number, made_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-  telegram_sender_id, cutoff_at, total_mills, pages, lines, off_platform, comment, rule_version, hub_check,
+  telegram_sender_id, cutoff_at, total_mills, pages, lines, off_platform, comment, model_comments, rule_version, hub_check,
   hub_checked_at, gengar_answered_at, gengar_clean, superseded_at, superseded_by, confirmed_version, confirmed_at`;
 
 /** Every candidate of a report, oldest first. */

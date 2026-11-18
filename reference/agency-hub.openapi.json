@@ -190376,6 +190376,30 @@
                           "comment": {
                             "type": "string"
                           },
+                          "comments": {
+                            "default": [],
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "modelSlug": {
+                                  "type": "string"
+                                },
+                                "modelName": {
+                                  "type": "string"
+                                },
+                                "comment": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "modelSlug",
+                                "modelName",
+                                "comment"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "colleagues": {
                             "type": "array",
                             "items": {
@@ -190411,6 +190435,7 @@
                           "pages",
                           "lines",
                           "comment",
+                          "comments",
                           "colleagues"
                         ],
                         "additionalProperties": false
@@ -191425,6 +191450,11 @@
                   "comment": {
                     "type": "string",
                     "maxLength": 2000
+                  },
+                  "modelSlug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "shiftId": {
                     "type": "integer",
@@ -192448,6 +192478,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -192493,6 +192547,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -197521,6 +197576,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -197566,6 +197645,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -310396,6 +310476,30 @@
                                     "comment": {
                                       "type": "string"
                                     },
+                                    "comments": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "comment": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "comment"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
                                     "pages": {
                                       "type": "array",
                                       "items": {
@@ -310441,6 +310545,7 @@
                                     "lines",
                                     "offPlatform",
                                     "comment",
+                                    "comments",
                                     "pages",
                                     "totalMills",
                                     "cut",
@@ -314776,6 +314881,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -314821,6 +314950,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -319169,6 +319299,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -319214,6 +319368,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -323470,6 +323625,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -323515,6 +323694,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -327660,6 +327840,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -327705,6 +327909,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -331961,6 +332166,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -332006,6 +332235,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -335719,6 +335949,11 @@
                   "comment": {
                     "type": "string",
                     "maxLength": 2000
+                  },
+                  "modelSlug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
                   }
                 },
                 "required": [
@@ -336739,6 +336974,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -336784,6 +337043,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -341350,6 +341610,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -341395,6 +341679,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -346078,6 +346363,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -346123,6 +346432,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -350469,6 +350779,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -350514,6 +350848,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -354816,6 +355151,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -354861,6 +355220,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -359163,6 +359523,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -359208,6 +359592,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -363535,6 +363920,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -363580,6 +363989,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -367892,6 +368302,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -367937,6 +368371,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -372193,6 +372628,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -372238,6 +372697,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -376373,6 +376833,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -376418,6 +376902,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
