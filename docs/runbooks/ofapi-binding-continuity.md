@@ -41,9 +41,9 @@ that expired — and does not apply to this flow.)
 
 ## When the id changes anyway
 
-The reconciler (`ofapi.binding.reconcile`, every five minutes, flag
-`ofapiBindingReconcileEnabled`, roster read is free) matches accounts to pages
-by the creator's OnlyFans id, which never changes:
+The reconciler (`ofapi.binding.reconcile`, every five minutes, roster read is
+free) matches accounts to pages by the creator's OnlyFans id, which never
+changes:
 
 | Situation | What it does |
 |---|---|
@@ -56,23 +56,6 @@ by the creator's OnlyFans id, which never changes:
 
 Custody never moves between pages; that stays an operator action
 (`docs/runbooks/ofapi-refresh-release1.md`).
-
-## Rollout
-
-1. Deploy; the job is registered but off.
-2. Report first, from the api container:
-
-```bash
-docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js ofapi:bindings:reconcile
-```
-
-   Expect on the two Lora pages: `seed_identity` for 518588958 (page 8) and
-   514788334 (page 9), no `rebind`, no mismatch.
-3. Apply once by hand: the same command with `--execute`; check
-   `select id,label,ofapi_account_id,external_page_id from pages where platform='onlyfans'`.
-4. Flip `ofapiBindingReconcileEnabled` in the panel (staged group #382),
-   restart the worker. Silent runs log nothing; any action, wait, mismatch or
-   duplicate logs `OFAPI binding reconcile complete` with the full result.
 
 ## Reading a rotation afterwards
 
