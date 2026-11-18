@@ -142,7 +142,7 @@ function Chart({ history, metric }: { history: NonNullable<ReturnType<typeof use
         <div className="ts-plot tl-weeks">
           {view.weeks.map((week) => (
             <div key={week.label} className={week.running ? "tl-week tl-week-running" : "tl-week"}>
-              <span className="tl-week-sum">{week.sum}{week.running ? ", идёт" : ""}</span>
+              <span className="tl-week-sum">{week.sum}</span>
               <span className="tl-week-dates">{week.label}</span>
             </div>
           ))}
@@ -164,6 +164,7 @@ function DaysTable({ history }: { history: NonNullable<ReturnType<typeof useOfLi
               <th scope="col">День</th>
               <th scope="col" className="num">Клики</th>
               <th scope="col" className="num">Фаны</th>
+              <th scope="col" className="num">Новые платящие</th>
               <th scope="col" className="num">Доход</th>
             </tr>
           </thead>
@@ -172,10 +173,11 @@ function DaysTable({ history }: { history: NonNullable<ReturnType<typeof useOfLi
               <tr key={row.date}>
                 <td>{row.label}</td>
                 {row.missing
-                  ? <td className="num tl-missing" colSpan={3}>{row.missing}</td>
+                  ? <td className="num tl-missing" colSpan={4}>{row.missing}</td>
                   : <>
                     <td className="num">{row.clicks}</td>
                     <td className="num">{row.fans}</td>
+                    <td className="num">{row.spenders}</td>
                     <td className="num">{row.money}</td>
                   </>}
               </tr>

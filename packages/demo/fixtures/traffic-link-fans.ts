@@ -42,7 +42,8 @@ function newLinkDay(day: string, made: string): { fans: number; clicks: number; 
   if (day < made) return null;
   const random = rng(`traffic-link-fans:new:${day}`);
   const fans = Math.round(between(random, 0.5, 4.4));
-  return { fans, clicks: Math.round(fans * between(random, 1.6, 3) + between(random, 0, 4)), money: mills(fans * between(random, 2, 7)) };
+  const clicks = Math.round(fans * between(random, 1.6, 3) + between(random, 0, 4));
+  return { fans, clicks, money: mills(fans * between(random, 2, 7)) };
 }
 
 function newLinkMadeAt(now: Date): number {
@@ -127,6 +128,7 @@ export function historyWithNewLinks(base: DemoHandler<"ofLinksHistoryGet">): Dem
         claims: null,
         subscribers: figures?.fans ?? null,
         fans: figures?.fans ?? null,
+        spenders: figures === null ? null : 0,
         vendorNetMills: figures?.money ?? null,
         missedWindows: 0,
         flags: [],
@@ -245,7 +247,7 @@ function linkFans(link: OfLink, now: Date): { fans: Fan[]; walkedAt: string | nu
     const start = made !== null && made > floor ? made : own() < 0.35 ? null : floor;
     const subscribedAt = start === null ? null : start + own() * Math.max(HOUR_MS, walkedAt - start);
     const paidMills = link.linkKind === "trial" ? null
-      : position < payers ? Math.max(1000, Math.round((brought * weights[position]!) / weightSum / 1000) * 1000)
+      : position < payers ? Math.max(mills(1), mills(Math.floor((brought * weights[position]!) / weightSum / mills(1))))
         : own() < 0.8 ? 0 : null;
     return {
       fanId: 50_000 + index,
