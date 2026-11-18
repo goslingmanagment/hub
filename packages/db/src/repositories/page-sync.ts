@@ -2309,40 +2309,18 @@ export async function resetPageSync(
   });
 }
 
-/** A settle-only B1 wake skips the AI media accelerator step that the other
- * event wakes rely on. A plain event wake takes its place while it is queued,
- * or queues behind it while it runs, instead of being dropped. */
-function supersedesSettleOnlyWake(current: PageSyncState, payload: Record<string, unknown> | null | undefined) {
-  return current.requestSource === "event" && current.requestPayload.fanslyWsHintSettleOnly === true
-    && payload?.fanslyWsHintSettleOnly !== true && (current.status === "pending" || current.status === "running");
-}
-
 export async function requestPageSync(
   db: Database,
   input: {
     pageId: number;
     streams: SyncStream[];
     source: SyncRequestSource;
-    requestPayloadByStream?: Partial<Record<SyncStream, Record<string, unknown> | null>>;
     now?: Date;
-    /** Diagnostic receipt from the same locked row; omitted for ordinary callers. */
-    includeQueueState?: boolean;
-    /**
-     * Fold this request into an outstanding revision instead of bumping it.
-     * For intent-free repeats only: a bump would discard the in-flight
-     * cursor, its restart bound and any backoff of the outstanding work.
-     */
-    coalesceOutstanding?: boolean;
   },
 ) {
   const now = input.now ?? new Date();
   const requestedStreams = normalizePageSyncRequestStreams(input.streams);
-  const results: Array<{
-    stream: SyncStream;
-    requestedSeq: number;
-    coalesced?: true;
-    queueBefore?: { requestedSeq: number; appliedSeq: number };
-  }> = [];
+  const results: Array<{ stream: SyncStream; requestedSeq: number }> = [];
 
   await ensurePageSyncStates(db, {
     pageId: input.pageId,
@@ -2376,35 +2354,8 @@ export async function requestPageSync(
         throw new Error(`Sync stream "${stream}" does not exist for page ${input.pageId}`);
       }
 
-      // B1 can wake an idle DM stream for one budgeted target. Never replace
-      // queued ordinary work with an event-only request; the ordinary chunk
-      // can consume the same durable subject queue itself.
-      if (input.source === "event" && !(stream === "dm_messages" && (current.requestSeq > current.appliedSeq
-        ? supersedesSettleOnlyWake(current, input.requestPayloadByStream?.[stream])
-        : current.status === "idle"))) continue;
-
-      // The outstanding revision already carries this request. Leave the row
-      // untouched, so its lease, backoff and cursor revision stay valid.
-      if (input.coalesceOutstanding && current.requestSeq > current.appliedSeq) {
-        results.push({
-          stream,
-          requestedSeq: current.requestSeq,
-          coalesced: true,
-          ...(input.includeQueueState ? {
-            queueBefore: { requestedSeq: current.requestSeq, appliedSeq: current.appliedSeq },
-          } : {}),
-        });
-        continue;
-      }
-
       const nextRequestSeq = current.requestSeq + 1;
-      // An event request is always hint-only; it may narrow that further.
-      const rawRequestPayload = input.source === "event"
-        ? { ...input.requestPayloadByStream?.[stream], fanslyWsHintOnly: true }
-        : input.requestPayloadByStream?.[stream] ?? {};
-      const requestPayload = Object.keys(rawRequestPayload).length > 0
-        ? { ...rawRequestPayload, revision: nextRequestSeq }
-        : rawRequestPayload;
+      const requestPayload: Record<string, unknown> = {};
       const leaseExpired = leaseExpiredByStream.get(stream);
       if (leaseExpired === undefined) {
         throw new Error(`Sync stream "${stream}" disappeared while requesting page ${input.pageId}`);
@@ -2459,13 +2410,7 @@ export async function requestPageSync(
         updatedAt: now,
       });
 
-      results.push({
-        stream,
-        requestedSeq: nextRequestSeq,
-        ...(input.includeQueueState ? {
-          queueBefore: { requestedSeq: current.requestSeq, appliedSeq: current.appliedSeq },
-        } : {}),
-      });
+      results.push({ stream, requestedSeq: nextRequestSeq });
     }
 
     await refreshLockedPageSyncDependencies(
