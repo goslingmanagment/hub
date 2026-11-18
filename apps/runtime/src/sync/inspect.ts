@@ -139,6 +139,21 @@ export async function readSyncPageStatuses(
   return statuses;
 }
 
+/** Of each page's status only what says whether it needs a login: the label, the
+ *  mode and the browser, as `readSyncPageStatuses` gives them, without the engine
+ *  reads beside them (the matters mirror's, every minute). */
+export async function readSyncPageLoginViews(
+  db: Database,
+  pages: readonly SyncPageRow[],
+): Promise<Array<Pick<PageStatus, "pageLabel" | "mode" | "browser">>> {
+  if (pages.length === 0) return [];
+  const browsers = await readPageBrowserStatuses(db, pages);
+  return pages.map((page) => {
+    const browser = browsers.get(page.pageId);
+    return browser === undefined ? { pageLabel: page.pageLabel, mode: page.mode } : { pageLabel: page.pageLabel, mode: page.mode, browser };
+  });
+}
+
 /** The page status (design §3.9) from the database. */
 export async function readSyncPageStatus(
   db: Database,

@@ -188,22 +188,31 @@ export async function listReplyDelayCounts(
       where not r.mine or (coalesce(r.message_type, 1) <> 2 and not exists (
         select 1 from bursts b where b.page_id = r.page_id and b.shape = r.shape and b.hour = date_trunc('hour', r.at)))
     ),
-    -- g: the page's personal messages so far in the chat; the fan's messages after the k-th one wait for the (k+1)-th.
+    -- g: the page's personal messages so far in the chat; the fan's messages of group k−1 (after the (k−1)-th personal
+    -- message) wait for the k-th; the row before a personal message carries its group's first fan message.
     ordered as (
       select *, count(*) filter (where mine) over (
         partition by page_id, conv order by at, message_ref rows between unbounded preceding and current row) as g
       from msgs
     ),
-    waits as (
-      select page_id, conv, g, min(at) as waited_from, max(fan_native_id) as fan_ref
-      from ordered where not mine
-      group by 1, 2, 3
+    grouped as (
+      select *,
+        min(at) filter (where not mine) over (partition by page_id, conv, g) as group_waited_from,
+        max(fan_native_id) filter (where not mine) over (partition by page_id, conv, g) as group_fan_ref
+      from ordered
+    ),
+    chained as (
+      select *,
+        lag(g) over (partition by page_id, conv order by at, message_ref) as prev_g,
+        lag(group_waited_from) over (partition by page_id, conv order by at, message_ref) as waited_from,
+        lag(group_fan_ref) over (partition by page_id, conv order by at, message_ref) as fan_ref
+      from grouped
     ),
     replies as (
-      select r.page_id, r.platform, r.message_ref, r.at, w.waited_from, w.fan_ref
-      from ordered r
-      join waits w on w.page_id = r.page_id and w.conv = r.conv and w.g = r.g - 1
-      where r.mine and r.at >= ${from} and w.waited_from > r.at - interval '3 days'
+      select r.page_id, r.platform, r.message_ref, r.at, r.waited_from, r.fan_ref
+      from chained r
+      where r.mine and r.prev_g = r.g - 1 and r.waited_from is not null
+        and r.at >= ${from} and r.waited_from > r.at - interval '3 days'
     ),
     facts as (
       select x.page_id, x.platform, a.user_id,

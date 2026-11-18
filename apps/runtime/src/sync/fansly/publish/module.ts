@@ -445,10 +445,10 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       if (command.requestFingerprint !== input.writeFingerprint) return "fingerprint_mismatch";
       const facts = command.request?.facts as Partial<WriteDerivedFacts> | undefined;
       const withdraw = FANSLY_WITHDRAW_STEPS.includes(command.step);
-      const [publication, page, config] = await Promise.all([
+      const [publication, page, enabled] = await Promise.all([
         command.publicationId === null ? Promise.resolve(null) : store.readPublication(db, command.publicationId),
         store.readPageSettings(db, command.pageId),
-        input.settings === undefined ? Promise.resolve(null) : input.settings.read(),
+        input.settings === undefined ? Promise.resolve(undefined) : input.settings.field("publishingEnabled"),
       ]);
       if (command.publicationId === null) {
         // A post with no publication (0369): a cancel or a delete of its own post.
@@ -462,7 +462,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       if (page.autostopReason !== null) return `page_stopped:${page.autostopReason}`;
       if (!withdraw && !page.enabled) return "page_publishing_off";
       // Fail closed: no live settings, no publishing.
-      if (!withdraw && config?.publishingEnabled !== true) return "publishing_off";
+      if (!withdraw && enabled !== true) return "publishing_off";
       return null;
     },
 
