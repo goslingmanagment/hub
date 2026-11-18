@@ -27,7 +27,6 @@ export const OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION = "ofapi-capture-v2";
 export const OFAPI_CAPTURE_PARSER_VERSION = "ofapi-capture-parser-v2";
 export const OFAPI_CAPTURE_PROOF_POLICY_VERSION = "ofapi-proof-v1";
 export const OFAPI_CAPTURE_POLICY_VERSION = "ofapi-admission-v2";
-export const OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS = 30_000;
 
 const OFAPI_BUDGET_RECHECK_MS = 15 * 60 * 1000;
 const OFAPI_PAUSE_RECHECK_MS = 24 * 60 * 60 * 1000;
@@ -451,48 +450,6 @@ export async function findOfapiCollectionCaptureJob(
   return result.rows[0] ? mapCaptureJob(result.rows[0]) : null;
 }
 
-export interface CreateOfapiInteractiveRequestInput {
-  id?: string;
-  pageId: number;
-  ofapiAccountId: string;
-  principalUserId: number;
-  operation: string;
-  surface: string;
-  target: Record<string, unknown>;
-  policyVersion?: string;
-  now?: Date;
-}
-
-export async function createOfapiInteractiveRequest(
-  db: Database,
-  input: CreateOfapiInteractiveRequestInput,
-) {
-  const now = input.now ?? new Date();
-  const id = input.id ?? randomUUID();
-  const requestFingerprint = hashOfapiCaptureValue(input.target);
-  await db.execute(sql`
-    insert into ofapi_interactive_requests (
-      id, page_id, ofapi_account_id, principal_user_id,
-      operation, surface, target, request_fingerprint, state,
-      policy_version, created_at, updated_at
-    ) values (
-      ${id}::uuid,
-      ${input.pageId},
-      ${input.ofapiAccountId},
-      ${input.principalUserId},
-      ${input.operation},
-      ${input.surface},
-      ${JSON.stringify(input.target)}::jsonb,
-      ${requestFingerprint},
-      'created',
-      ${input.policyVersion ?? OFAPI_CAPTURE_POLICY_VERSION},
-      ${now},
-      ${now}
-    )
-  `);
-  return { id, requestFingerprint };
-}
-
 /** The typed-export profiles as SQL literals (`'profile_visitors','fans',…`): their jobs
  * belong to the typed-export lane, not to the generic capture lane. */
 const TYPED_EXPORT_PROFILES_SQL = sql.raw(OFAPI_TYPED_EXPORT_PROFILES.map((profile) => `'${profile}'`).join(","));
@@ -753,7 +710,7 @@ export type OfapiBudgetDenialReason =
 
 export interface ReserveOfapiRequestAttemptInput {
   attemptId?: string;
-  ownerKind: "capture_job" | "interactive_request";
+  ownerKind: "capture_job";
   ownerId: string;
   pageId: number;
   ofapiAccountId: string;
@@ -947,32 +904,19 @@ async function parkDeniedOwner(
   retryAt: Date | null,
   now: Date,
 ) {
-  if (input.ownerKind === "capture_job") {
-    await db.execute(sql`
-      update ofapi_capture_jobs
-      set state = ${retryAt ? "retry_wait" : "blocked"},
-          next_attempt_at = coalesce(${retryAt}, next_attempt_at),
-          reason_code = ${reason},
-          reason_message = ${`Admission denied: ${reason}`},
-          lease_owner = null,
-          lease_token = null,
-          lease_until = null,
-          row_version = row_version + 1,
-          updated_at = ${now}
-      where id = ${input.ownerId}::uuid
-    `);
-  } else {
-    await db.execute(sql`
-      update ofapi_interactive_requests
-      set state = 'failed',
-          error_code = ${`admission_${reason}`},
-          completed_at = ${now},
-          row_version = row_version + 1,
-          updated_at = ${now}
-      where id = ${input.ownerId}::uuid
-        and state = 'created'
-    `);
-  }
+  await db.execute(sql`
+    update ofapi_capture_jobs
+    set state = ${retryAt ? "retry_wait" : "blocked"},
+        next_attempt_at = coalesce(${retryAt}, next_attempt_at),
+        reason_code = ${reason},
+        reason_message = ${`Admission denied: ${reason}`},
+        lease_owner = null,
+        lease_token = null,
+        lease_until = null,
+        row_version = row_version + 1,
+        updated_at = ${now}
+    where id = ${input.ownerId}::uuid
+  `);
 }
 
 export async function reserveOfapiRequestAttempt(
@@ -1078,60 +1022,28 @@ export async function reserveOfapiRequestAttempt(
       }
     }
 
-    let job: OfapiCaptureJobRecord | null = null;
-    if (input.ownerKind === "capture_job") {
-      const jobResult = await database.execute<Record<string, unknown>>(sql`
-        select * from ofapi_capture_jobs where id = ${input.ownerId}::uuid for update
-      `);
-      if (!jobResult.rows[0]) {
-        throw new OfapiCaptureInvariantError(`Capture job ${input.ownerId} not found`);
-      }
-      job = mapCaptureJob(jobResult.rows[0]);
-      if (input.now === undefined) {
-        now = new Date();
-        day = utcDay(now);
-      }
-      if (
-        job.pageId !== input.pageId ||
-        job.ofapiAccountId !== input.ofapiAccountId ||
-        job.budgetScope !== input.budgetScope ||
-        job.originPrincipalId !== principalId ||
-        job.state !== "leased" ||
-        job.leaseToken !== (input.jobLeaseToken ?? null) ||
-        !job.leaseUntil ||
-        job.leaseUntil.getTime() <= now.getTime()
-      ) {
-        throw new OfapiCaptureInvariantError("Capture job ownership or lease changed before admission");
-      }
-    } else {
-      const request = await database.execute<{
-        page_id: unknown;
-        ofapi_account_id: string;
-        principal_user_id: unknown;
-        operation: string;
-        state: string;
-      }>(sql`
-        select page_id, ofapi_account_id, principal_user_id, operation, state
-        from ofapi_interactive_requests
-        where id = ${input.ownerId}::uuid
-        for update
-      `);
-      const row = request.rows[0];
-      if (input.now === undefined) {
-        now = new Date();
-        day = utcDay(now);
-      }
-      if (
-        !row ||
-        asNumber(row.page_id, "page_id") !== input.pageId ||
-        row.ofapi_account_id !== input.ofapiAccountId ||
-        asNumber(row.principal_user_id, "principal_user_id") !== principalId ||
-        row.operation !== input.operation ||
-        row.state !== "created" ||
-        input.budgetScope !== "interactive"
-      ) {
-        throw new OfapiCaptureInvariantError("Interactive request ownership changed before admission");
-      }
+    const jobResult = await database.execute<Record<string, unknown>>(sql`
+      select * from ofapi_capture_jobs where id = ${input.ownerId}::uuid for update
+    `);
+    if (!jobResult.rows[0]) {
+      throw new OfapiCaptureInvariantError(`Capture job ${input.ownerId} not found`);
+    }
+    const job = mapCaptureJob(jobResult.rows[0]);
+    if (input.now === undefined) {
+      now = new Date();
+      day = utcDay(now);
+    }
+    if (
+      job.pageId !== input.pageId ||
+      job.ofapiAccountId !== input.ofapiAccountId ||
+      job.budgetScope !== input.budgetScope ||
+      job.originPrincipalId !== principalId ||
+      job.state !== "leased" ||
+      job.leaseToken !== (input.jobLeaseToken ?? null) ||
+      !job.leaseUntil ||
+      job.leaseUntil.getTime() <= now.getTime()
+    ) {
+      throw new OfapiCaptureInvariantError("Capture job ownership or lease changed before admission");
     }
 
     principalWindow = principalId === null ? null : utcDayWindow(now);
@@ -1225,9 +1137,9 @@ export async function reserveOfapiRequestAttempt(
       denial = "principal_call_cap";
     } else if (!separateAccount && principalUsedCredits + estimate > principalCreditCap) {
       denial = "principal_credit_cap";
-    } else if (job?.maxCalls !== null && job && job.attemptCount + 1 > job.maxCalls) {
+    } else if (job.maxCalls !== null && job.attemptCount + 1 > job.maxCalls) {
       denial = "job_cap";
-    } else if (job?.maxCredits !== null && job && job.spentCredits + estimate > job.maxCredits) {
+    } else if (job.maxCredits !== null && job.spentCredits + estimate > job.maxCredits) {
       denial = "job_cap";
     } else if (!registeredFree && balanceUnavailable && !floorProbeEligible) {
       denial = "balance_stale";
@@ -1374,8 +1286,8 @@ export async function reserveOfapiRequestAttempt(
         ${attemptId}::uuid,
         ${input.ownerKind},
         ${input.ownerId}::uuid,
-        ${input.ownerKind === "capture_job" ? input.ownerId : null}::uuid,
-        ${input.ownerKind === "interactive_request" ? input.ownerId : null}::uuid,
+        ${input.ownerId}::uuid,
+        null,
         ${ownerAttemptNo},
         ${input.pageId},
         ${input.ofapiAccountId},
@@ -1409,25 +1321,15 @@ export async function reserveOfapiRequestAttempt(
       )
     `);
 
-    if (input.ownerKind === "capture_job") {
-      await database.execute(sql`
-        update ofapi_capture_jobs
-        set attempt_count = attempt_count + 1,
-            reason_code = null,
-            reason_message = null,
-            row_version = row_version + 1,
-            updated_at = ${now}
-        where id = ${input.ownerId}::uuid
-      `);
-    } else {
-      await database.execute(sql`
-        update ofapi_interactive_requests
-        set state = 'attempt_reserved',
-            row_version = row_version + 1,
-            updated_at = ${now}
-        where id = ${input.ownerId}::uuid
-      `);
-    }
+    await database.execute(sql`
+      update ofapi_capture_jobs
+      set attempt_count = attempt_count + 1,
+          reason_code = null,
+          reason_message = null,
+          row_version = row_version + 1,
+          updated_at = ${now}
+      where id = ${input.ownerId}::uuid
+    `);
 
     return {
       admitted: true,
@@ -1469,29 +1371,16 @@ export async function markOfapiAttemptDispatching(
             ('operation:' || attempt.operation)
           )
       )
-      and (
-        (
-          attempt.owner_kind = 'interactive_request'
-          and attempt.interactive_request_id = attempt.owner_id
-          and exists (
-            select 1
-            from ofapi_interactive_requests request
-            where request.id = attempt.interactive_request_id
-              and request.state = 'attempt_reserved'
-          )
-        ) or (
-          attempt.owner_kind = 'capture_job'
-          and attempt.capture_job_id = attempt.owner_id
-          and attempt.job_lease_token = ${input.jobLeaseToken ?? null}::uuid
-          and exists (
-            select 1
-            from ofapi_capture_jobs job
-            where job.id = attempt.capture_job_id
-              and job.state = 'leased'
-              and job.lease_token = attempt.job_lease_token
-              and job.lease_until > ${now}
-          )
-        )
+      and attempt.owner_kind = 'capture_job'
+      and attempt.capture_job_id = attempt.owner_id
+      and attempt.job_lease_token = ${input.jobLeaseToken ?? null}::uuid
+      and exists (
+        select 1
+        from ofapi_capture_jobs job
+        where job.id = attempt.capture_job_id
+          and job.state = 'leased'
+          and job.lease_token = attempt.job_lease_token
+          and job.lease_until > ${now}
       )
     returning attempt.id::text as id
   `);
@@ -1621,6 +1510,34 @@ async function lockAttempt(db: Database, attemptId: string) {
   return result.rows[0] ?? null;
 }
 
+/**
+ * The global lock order of admission and settlement: the credit state, then
+ * the attempt's principal (when it has one), then the attempt. A writer that
+ * takes them in another order deadlocks against admission.
+ */
+async function lockAttemptInSettlementOrder(
+  db: Database,
+  attemptId: string,
+): Promise<{ principalId: number | null; attempt: AttemptControlRow | null }> {
+  await db.execute(sql`select id from ofapi_credit_state where id = 1 for update`);
+  const preflight = await db.execute<{ origin_principal_id: unknown }>(sql`
+    select origin_principal_id from ofapi_request_attempts
+    where id = ${attemptId}::uuid
+  `);
+  const principalId = asNullableNumber(
+    preflight.rows[0]?.origin_principal_id,
+    "origin_principal_id",
+  );
+  if (principalId !== null) {
+    await db.execute(sql`
+      select principal_user_id from ofapi_principal_budget_state
+      where principal_user_id = ${principalId}
+      for update
+    `);
+  }
+  return { principalId, attempt: await lockAttempt(db, attemptId) };
+}
+
 export async function releaseOfapiAttemptPreDispatch(
   db: Database,
   input: {
@@ -1634,29 +1551,7 @@ export async function releaseOfapiAttemptPreDispatch(
   const now = input.now ?? new Date();
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
-    // Preserve the global lock order used by admission and settlement.
-    await database.execute(sql`select id from ofapi_credit_state where id = 1 for update`);
-    const preflight = await database.execute<{
-      origin_principal_id: unknown;
-      principal_window_started_at: string | Date | null;
-    }>(sql`
-      select origin_principal_id, principal_window_started_at
-      from ofapi_request_attempts
-      where id = ${input.attemptId}::uuid
-    `);
-    const principalId = asNullableNumber(
-      preflight.rows[0]?.origin_principal_id,
-      "origin_principal_id",
-    );
-    if (principalId !== null) {
-      await database.execute(sql`
-        select principal_user_id
-        from ofapi_principal_budget_state
-        where principal_user_id = ${principalId}
-        for update
-      `);
-    }
-    const attempt = await lockAttempt(database, input.attemptId);
+    const { principalId, attempt } = await lockAttemptInSettlementOrder(database, input.attemptId);
     if (!attempt || attempt.fence_token !== input.fenceToken || attempt.state !== "reserved") {
       return false;
     }
@@ -1711,16 +1606,6 @@ export async function releaseOfapiAttemptPreDispatch(
             lease_owner = null,
             lease_token = null,
             lease_until = null,
-            row_version = row_version + 1,
-            updated_at = ${now}
-        where id = ${attempt.owner_id}::uuid
-      `);
-    } else {
-      await database.execute(sql`
-        update ofapi_interactive_requests
-        set state = 'failed',
-            error_code = ${input.reasonCode},
-            completed_at = ${now},
             row_version = row_version + 1,
             updated_at = ${now}
         where id = ${attempt.owner_id}::uuid
@@ -1869,16 +1754,6 @@ export async function markOfapiAttemptIndeterminate(
             updated_at = ${now}
         where id = ${attempt.owner_id}::uuid
       `);
-    } else {
-      await database.execute(sql`
-        update ofapi_interactive_requests
-        set state = 'indeterminate',
-            error_code = ${input.outcome},
-            completed_at = ${now},
-            row_version = row_version + 1,
-            updated_at = ${now}
-        where id = ${attempt.owner_id}::uuid
-      `);
     }
     return true;
   });
@@ -1975,31 +1850,22 @@ export async function recoverStaleOfapiCaptureWork(
     id: string;
     fence_token: string;
     state: "reserved" | "dispatching";
-    owner_kind: "capture_job" | "interactive_request";
     is_floor_probe: boolean;
     request_semantics: "safe_read" | "stateful";
   }>(sql`
     select attempt.id::text as id,
            attempt.fence_token::text as fence_token,
            attempt.state,
-           attempt.owner_kind,
            attempt.is_floor_probe,
            attempt.request_semantics
     from ofapi_request_attempts attempt
-    left join ofapi_capture_jobs job
+    join ofapi_capture_jobs job
       on job.id = attempt.capture_job_id
-    where (
-        (
-          attempt.owner_kind = 'capture_job'
-          and job.state = 'leased'
-          and job.lease_until <= ${now}
-        ) or (
-          attempt.owner_kind = 'interactive_request'
-          and attempt.deadline_at <= ${now}
-        )
-      )
+    where attempt.owner_kind = 'capture_job'
+      and job.state = 'leased'
+      and job.lease_until <= ${now}
       and attempt.state in ('reserved', 'dispatching')
-    order by coalesce(job.lease_until, attempt.deadline_at), attempt.id
+    order by job.lease_until, attempt.id
     limit ${limit}
   `);
 
@@ -2021,21 +1887,16 @@ export async function recoverStaleOfapiCaptureWork(
       // mid-dispatch — a deploy, most often) is the same uncertainty as a
       // transport failure on that read, and takes the same bounded retry
       // instead of waiting for an operator who has nothing to check. Stateful
-      // attempts, and interactive reads other than the floor probe, still park
-      // for owner certainty resolution.
-      const safelyResolveFloorProbe = attempt.request_semantics === "safe_read" &&
-        (attempt.is_floor_probe || attempt.owner_kind === "capture_job");
+      // attempts still park for owner certainty resolution.
       if (await markOfapiAttemptIndeterminate(db, {
         attemptId: attempt.id,
         fenceToken: attempt.fence_token,
         outcome: "transport",
         details: {
-          recovery: attempt.owner_kind === "capture_job"
-            ? "expired_job_lease"
-            : "expired_interactive_deadline",
+          recovery: "expired_job_lease",
           floorProbe: attempt.is_floor_probe,
         },
-        ...(safelyResolveFloorProbe
+        ...(attempt.request_semantics === "safe_read"
           ? { retrySafeReadAt: new Date(now.getTime() + OFAPI_DEADLINE_RECHECK_MS) }
           : {}),
         now,
@@ -2165,27 +2026,7 @@ export async function captureOfapiAttemptResponse(
       }
     }
 
-    await database.execute(sql`select id from ofapi_credit_state where id = 1 for update`);
-    const preflight = await database.execute<{
-      origin_principal_id: unknown;
-    }>(sql`
-      select origin_principal_id
-      from ofapi_request_attempts
-      where id = ${input.attemptId}::uuid
-    `);
-    const principalId = asNullableNumber(
-      preflight.rows[0]?.origin_principal_id,
-      "origin_principal_id",
-    );
-    if (principalId !== null) {
-      await database.execute(sql`
-        select principal_user_id
-        from ofapi_principal_budget_state
-        where principal_user_id = ${principalId}
-        for update
-      `);
-    }
-    const attempt = await lockAttempt(database, input.attemptId);
+    const { principalId, attempt } = await lockAttemptInSettlementOrder(database, input.attemptId);
     if (!attempt || attempt.fence_token !== input.fenceToken) {
       throw new OfapiCaptureInvariantError("Attempt fence changed before response capture");
     }
@@ -2335,17 +2176,6 @@ export async function captureOfapiAttemptResponse(
             updated_at = ${now}
         where id = ${attempt.owner_id}::uuid
       `);
-    } else {
-      await database.execute(sql`
-        update ofapi_interactive_requests
-        set state = 'response_captured',
-            response_observation_id = ${observation.observationId},
-            response_observation_received_at = ${observation.receivedAt},
-            http_outcome = ${input.httpOutcome},
-            row_version = row_version + 1,
-            updated_at = ${now}
-        where id = ${attempt.owner_id}::uuid
-      `);
     }
 
     return {
@@ -2375,25 +2205,7 @@ export async function reconcileOfapiCapturedAttemptCredit(
   const actualCredits = normalizeCredits(input.actualCredits);
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
-    await database.execute(sql`select id from ofapi_credit_state where id = 1 for update`);
-    const preflight = await database.execute<{ origin_principal_id: unknown }>(sql`
-      select origin_principal_id
-      from ofapi_request_attempts
-      where id = ${input.attemptId}::uuid
-    `);
-    const principalId = asNullableNumber(
-      preflight.rows[0]?.origin_principal_id,
-      "origin_principal_id",
-    );
-    if (principalId !== null) {
-      await database.execute(sql`
-        select principal_user_id
-        from ofapi_principal_budget_state
-        where principal_user_id = ${principalId}
-        for update
-      `);
-    }
-    const attempt = await lockAttempt(database, input.attemptId);
+    const { principalId, attempt } = await lockAttemptInSettlementOrder(database, input.attemptId);
     if (
       !attempt ||
       attempt.state !== "response_captured" ||
@@ -2843,60 +2655,6 @@ export async function settleOfapiCaptureParse(
   });
 }
 
-export async function completeOfapiInteractiveRequest(
-  db: Database,
-  input: {
-    requestId: string;
-    attemptId: string;
-    outcome: "served" | "failed";
-    parserOutcome: OfapiParserOutcome;
-    errorCode?: string | null;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  const result = await db.execute<{ id: string }>(sql`
-    with eligible as materialized (
-      select request.id as request_id,
-             attempt.id as attempt_id,
-             attempt.response_observation_id,
-             attempt.response_observation_received_at
-      from ofapi_interactive_requests request
-      join ofapi_request_attempts attempt
-        on attempt.interactive_request_id = request.id
-      where request.id = ${input.requestId}::uuid
-        and request.state = 'response_captured'
-        and attempt.id = ${input.attemptId}::uuid
-        and attempt.state = 'response_captured'
-        and attempt.parser_outcome = 'pending'
-        and request.response_observation_id = attempt.response_observation_id
-        and request.response_observation_received_at = attempt.response_observation_received_at
-      for update of request, attempt
-    ), attempt as (
-      update ofapi_request_attempts target
-      set parser_outcome = ${input.parserOutcome},
-          updated_at = ${now}
-      from eligible
-      where target.id = eligible.attempt_id
-      returning eligible.request_id,
-                eligible.response_observation_id,
-                eligible.response_observation_received_at
-    )
-    update ofapi_interactive_requests request
-    set state = ${input.outcome},
-        error_code = ${input.errorCode ?? null},
-        completed_at = ${now},
-        row_version = row_version + 1,
-        updated_at = ${now}
-    from attempt
-    where request.id = attempt.request_id
-      and request.response_observation_id = attempt.response_observation_id
-      and request.response_observation_received_at = attempt.response_observation_received_at
-    returning request.id::text as id
-  `);
-  return result.rows.length === 1;
-}
-
 export async function resolveOfapiIndeterminateAttempt(
   db: Database,
   input: {
@@ -2912,23 +2670,7 @@ export async function resolveOfapiIndeterminateAttempt(
   const now = input.now ?? new Date();
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
-    await database.execute(sql`select id from ofapi_credit_state where id = 1 for update`);
-    const preflight = await database.execute<{ origin_principal_id: unknown }>(sql`
-      select origin_principal_id from ofapi_request_attempts
-      where id = ${input.attemptId}::uuid
-    `);
-    const principalId = asNullableNumber(
-      preflight.rows[0]?.origin_principal_id,
-      "origin_principal_id",
-    );
-    if (principalId !== null) {
-      await database.execute(sql`
-        select principal_user_id from ofapi_principal_budget_state
-        where principal_user_id = ${principalId}
-        for update
-      `);
-    }
-    const attempt = await lockAttempt(database, input.attemptId);
+    const { principalId, attempt } = await lockAttemptInSettlementOrder(database, input.attemptId);
     if (
       !attempt ||
       attempt.state !== (input.expectedState ?? "indeterminate") ||
@@ -3797,12 +3539,8 @@ export async function getOfapiCaptureOperatorAttempt(db: Database, attemptId: st
 
 export async function getOfapiCaptureOperatorStatus(
   db: Database,
-  input?: { jobSampleLimit?: number; attemptSampleLimit?: number; now?: Date },
+  input?: { jobSampleLimit?: number; attemptSampleLimit?: number },
 ) {
-  const now = input?.now ?? new Date();
-  const interactiveRecoveryEligibleBefore = new Date(
-    now.getTime() - OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS,
-  );
   const jobSampleLimit = Math.max(1, Math.min(50, Math.trunc(input?.jobSampleLimit ?? 20)));
   const attemptSampleLimit = Math.max(
     1,
@@ -3814,7 +3552,6 @@ export async function getOfapiCaptureOperatorStatus(
     jobSamples,
     indeterminateSummary,
     attempts,
-    strandedInteractiveSummary,
     storage,
   ] =
     await Promise.all([
@@ -3853,27 +3590,12 @@ export async function getOfapiCaptureOperatorStatus(
         limit ${attemptSampleLimit}
       `),
       db.execute<Record<string, unknown>>(sql`
-        select count(*)::bigint as count,
-               min(attempt.response_captured_at) as oldest_at
-        from ofapi_interactive_requests request
-        join ofapi_request_attempts attempt
-          on attempt.interactive_request_id = request.id
-         and attempt.owner_kind = 'interactive_request'
-        where request.state = 'response_captured'
-          and attempt.state = 'response_captured'
-          and attempt.parser_outcome = 'pending'
-          and attempt.deadline_at <= ${interactiveRecoveryEligibleBefore}
-          and request.response_observation_id = attempt.response_observation_id
-          and request.response_observation_received_at = attempt.response_observation_received_at
-      `),
-      db.execute<Record<string, unknown>>(sql`
         select healthy, breached, checked_at, used_bytes, free_bytes, total_bytes, error
         from ofapi_storage_health_state
         where id = 1
       `),
     ]);
   const summary = indeterminateSummary.rows[0];
-  const strandedSummary = strandedInteractiveSummary.rows[0];
   const storageRow = storage.rows[0];
   return {
     controls: controls.rows.map((row) => ({
@@ -3908,14 +3630,9 @@ export async function getOfapiCaptureOperatorStatus(
         : null,
       samples: attempts.rows.map(mapOperatorAttempt),
     },
-    strandedInteractive: {
-      count: strandedSummary
-        ? asNumber(strandedSummary.count, "stranded_interactive.count")
-        : 0,
-      oldestAt: strandedSummary
-        ? asNullableDate(strandedSummary.oldest_at, "stranded_interactive.oldest_at")
-        : null,
-    },
+    // The retired interactive lane can strand no response any more: nothing
+    // creates an interactive request. The field stays for the route's shape.
+    strandedInteractive: { count: 0, oldestAt: null as Date | null },
     storageHealth: storageRow
       ? {
         healthy: Boolean(storageRow.healthy),
