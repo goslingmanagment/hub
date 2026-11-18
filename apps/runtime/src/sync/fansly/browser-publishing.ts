@@ -145,7 +145,7 @@ export class BrowserPublishing {
     // An operator that takes no writes is never told (it would refuse the
     // command as unknown); nothing before its hand-over to this owner.
     if (!client.writes || client.quiesced === null) return;
-    const [read, config] = await Promise.all([getPagePublishingSettings(db, pageId), settings === undefined ? Promise.resolve(null) : settings.read()]);
+    const [read, enabled] = await Promise.all([getPagePublishingSettings(db, pageId), settings === undefined ? Promise.resolve(undefined) : settings.field("publishingEnabled")]);
     let page = read;
     const state = client.state;
     if (state === null || !client.writes || this.#stopped) return;
@@ -159,7 +159,7 @@ export class BrowserPublishing {
     }
     await this.#tell(page);
     // Fail closed: no live settings, no creating.
-    const want = pagePublishingPermissions({ publishingEnabled: config?.publishingEnabled === true, page });
+    const want = pagePublishingPermissions({ publishingEnabled: enabled === true, page });
     const have = state.publishing ?? { create: false, withdraw: false };
     // The stop is named back once the database holds it (or the page never
     // published: nothing to hold).

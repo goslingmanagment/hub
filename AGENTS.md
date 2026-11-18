@@ -37,6 +37,8 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
   test Postgres when Docker is up; `HUB_TEST_POSTGRES=off pnpm exec vitest run <unit files>` skips it.
 - Open the PR ready + `gh pr merge --auto --squash`; wait for CI with one background command
   (`gh pr checks <n> --watch`). Integration runs on a PR by itself when DB/sync/network is touched; main runs everything.
+- Rebase on main with `scripts/rebase-main.sh`: the generated contract files are regenerated, never merged. A new export
+  in `packages/db/src/index.ts` or `packages/contracts/src/index.ts` goes in its place by path (CI checks the order).
 - CI runs only on GitHub-hosted runners (the repo is public: free, and never on the owner's PC); a full run
   is ~2.5 min. Never use `[skip ci]`: every main commit must have a Quality Gate, without it the deploy refuses.
 - Tests check behavior. Do not pin the text of CI, compose, deploy scripts, docs or migration SQL with tests.

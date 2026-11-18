@@ -1,7 +1,7 @@
 import { OFAPI_CONTENT_KINDS, canonicalizeOfapiContentObservation } from "./ofapi-content-events.ts";
 import { canParseFanslyWsObservation } from "./fansly-ws.ts";
 import { FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
-import { canonicalizeOfapiReadObservation, canParseOfapiReadObservation } from "./ofapi-read-collections.ts";
+import { canonicalizeOfapiReadObservation, canParseOfapiReadObservation, classifyOfapiReadQuarantine } from "./ofapi-read-collections.ts";
 // Canonicalizer registry. The driver job and the parse_version
 // sweep dispatch on observation.source through this table; a family's
 // `kinds` (null = every kind of that source, filtered inside the function)
@@ -198,7 +198,7 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     // canParseFanslyWsObservation accepts.
     stampOnly: { exceptKinds: [] },
   },
-  { source:"ofapi_capture", lane:"read_collections", kinds:["ofapi.collection_read_response.v1"], version:1, canonicalize:canonicalizeOfapiReadObservation, canParse:canParseOfapiReadObservation, projectionOnly:true },
+  { source:"ofapi_capture", lane:"read_collections", kinds:["ofapi.collection_read_response.v1"], version:1, canonicalize:canonicalizeOfapiReadObservation, canParse:canParseOfapiReadObservation, quarantine:classifyOfapiReadQuarantine, projectionOnly:true },
   {
     source: "ofapi_capture", lane: "ofapi-posts", kinds: ["ofapi.posts_page.v1"],
     version: ONLYFANS_POSTS_CANONICALIZER_VERSION, minimumParseVersion: 7,
