@@ -52,6 +52,7 @@ import {
 import { getModelRevenueReport, getPageRevenueReport } from "../apps/runtime/src/services/reporting.ts";
 import { ensureSyncQueues } from "../apps/runtime/src/services/sync-queue.ts";
 import { getSyncMonitorSnapshot } from "../apps/runtime/src/services/sync-monitor.ts";
+import { getStatusDetail, listStatus } from "../apps/runtime/src/services/sync.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -897,201 +898,6 @@ async function seedOnlyFansMonitorPages(
     pageLabel: "lana-of",
   }, { source: "cli" });
   return { lanaOf, lilyOf };
-}
-
-async function seedSyncRequestsScenario(
-  testDb: StartedTestDatabase,
-  input: {
-    lanaPageId: number;
-    lilyPageId: number;
-    now?: Date;
-  },
-) {
-  const now = input.now ?? new Date();
-  const secondsAgo = (seconds: number) => new Date(now.getTime() - seconds * 1_000);
-
-  const lanaStartedAt = secondsAgo(3);
-  const lilySharedAt = secondsAgo(4);
-  const lilyGhostAt = secondsAgo(5);
-  const lanaRetryAt = secondsAgo(8);
-  const lanaFailedAt = secondsAgo(14);
-  const oldAttemptAt = secondsAgo(75);
-
-  await upsertPageDmConversation(testDb.db, {
-    platformAccountId: input.lanaPageId,
-    fanId: null,
-    platformConversationId: "group-live-1",
-    partnerPlatformUserId: "fan-live-1",
-    partnerUsername: "fan_live",
-    partnerDisplayName: "Fan Live",
-    conversationFlags: 0,
-    unreadCount: 0,
-    subscriptionTierId: null,
-    lastMessageId: "dm-live-001",
-    lastUnreadMessageId: null,
-    lastMessageAt: lanaStartedAt,
-    lastMessageSenderId: "fan-live-1",
-    lastMessageSenderRole: "fan",
-    lastMessagePreview: "hello there",
-    lastFanMessageAt: lanaStartedAt,
-    lastModelMessageAt: null,
-    isVisible: true,
-    lastSeenGeneration: 1,
-    metadata: {},
-  });
-
-  const lanaMessagesRun = await seedMonitorRunningRun(testDb, {
-    pageId: input.lanaPageId,
-    stream: "dm_messages",
-    startedAt: secondsAgo(6),
-  });
-  const lilyFollowersRun = await seedMonitorCompletedRun(testDb, {
-    pageId: input.lilyPageId,
-    stream: "followers",
-    status: "success",
-    startedAt: secondsAgo(10),
-    finishedAt: secondsAgo(2),
-  });
-  const lilyGhostMessagesRun = await seedMonitorCompletedRun(testDb, {
-    pageId: input.lilyPageId,
-    stream: "dm_messages",
-    status: "success",
-    startedAt: secondsAgo(9),
-    finishedAt: secondsAgo(4),
-  });
-  const lanaTransactionsRun = await seedMonitorCompletedRun(testDb, {
-    pageId: input.lanaPageId,
-    stream: "transactions",
-    status: "partial",
-    startedAt: secondsAgo(12),
-    finishedAt: secondsAgo(7),
-  });
-  const lanaFollowersRun = await seedMonitorCompletedRun(testDb, {
-    pageId: input.lanaPageId,
-    stream: "followers",
-    status: "failed",
-    startedAt: secondsAgo(20),
-    finishedAt: secondsAgo(13),
-  });
-  const lilyOldRun = await seedMonitorCompletedRun(testDb, {
-    pageId: input.lilyPageId,
-    stream: "light",
-    status: "success",
-    startedAt: secondsAgo(90),
-    finishedAt: secondsAgo(70),
-  });
-
-  await seedMonitorAttempt(testDb, {
-    runId: lanaMessagesRun.id,
-    pageId: input.lanaPageId,
-    stream: "dm_messages",
-    operation: "messages",
-    startedAt: lanaStartedAt,
-    state: "started",
-    requestShape: {
-      endpointTemplate: "/message",
-      method: "GET",
-      rateLimitWaitMs: 1_200,
-      groupId: "group-live-1",
-      egressKey: "proxy-a",
-    },
-  });
-  await seedMonitorAttempt(testDb, {
-    runId: lilyFollowersRun.id,
-    pageId: input.lilyPageId,
-    stream: "followers",
-    operation: "followers",
-    startedAt: lilySharedAt,
-    finishedAt: new Date(lilySharedAt.getTime() + 240),
-    state: "success",
-    httpStatus: 200,
-    requestShape: {
-      endpointTemplate: "/account/:accountId/followersnew",
-      method: "GET",
-      egressKey: "proxy-a",
-    },
-  });
-  await seedMonitorAttempt(testDb, {
-    runId: lilyGhostMessagesRun.id,
-    pageId: input.lilyPageId,
-    stream: "dm_messages",
-    operation: "messages",
-    startedAt: lilyGhostAt,
-    finishedAt: new Date(lilyGhostAt.getTime() + 320),
-    state: "success",
-    httpStatus: 200,
-    requestShape: {
-      endpointTemplate: "/message",
-      method: "GET",
-      groupId: "group-ghost-1",
-      egressKey: "proxy-b",
-    },
-    responseShape: {
-      returnedItems: 2,
-      done: true,
-    },
-  });
-  await seedMonitorAttempt(testDb, {
-    runId: lanaTransactionsRun.id,
-    pageId: input.lanaPageId,
-    stream: "transactions",
-    operation: "earnings_transactions",
-    attemptNumber: 2,
-    startedAt: lanaRetryAt,
-    finishedAt: new Date(lanaRetryAt.getTime() + 650),
-    state: "retry",
-    httpStatus: 429,
-    failureKind: "http",
-    errorMessage: "Rate limited",
-    requestShape: {
-      endpointTemplate: "/account/wallets/earnings/transactions",
-      method: "GET",
-      rateLimitWaitMs: 2_500,
-      egressKey: "proxy-a",
-    },
-  });
-  await seedMonitorAttempt(testDb, {
-    runId: lanaFollowersRun.id,
-    pageId: input.lanaPageId,
-    stream: "followers",
-    operation: "followers",
-    startedAt: lanaFailedAt,
-    finishedAt: new Date(lanaFailedAt.getTime() + 900),
-    state: "failed",
-    httpStatus: 500,
-    failureKind: "http",
-    errorMessage: "Provider error",
-    requestShape: {
-      endpointTemplate: "/account/:accountId/followersnew",
-      method: "GET",
-      egressKey: "proxy-c",
-    },
-  });
-  await seedMonitorAttempt(testDb, {
-    runId: lilyOldRun.id,
-    pageId: input.lilyPageId,
-    stream: "light",
-    operation: "account_me",
-    startedAt: oldAttemptAt,
-    finishedAt: new Date(oldAttemptAt.getTime() + 180),
-    state: "success",
-    httpStatus: 200,
-    requestShape: {
-      endpointTemplate: "/account/me",
-      method: "GET",
-      egressKey: "proxy-old",
-    },
-  });
-
-  return {
-    now,
-    lanaStartedAt,
-    lilySharedAt,
-    lilyGhostAt,
-    lanaRetryAt,
-    lanaFailedAt,
-    oldAttemptAt,
-  };
 }
 
 describe("api integration", () => {
@@ -1990,16 +1796,16 @@ describe("api integration", () => {
       "tx-older-occurred",
     ]);
 
-    const fans = await server.inject({
+    const fanDetail = await server.inject({
       method: "GET",
-      url: "/api/v1/pages/created-at-check/fans?limit=10&offset=0",
+      url: "/api/v1/pages/created-at-check/fans/fan-created-at",
       headers: {
         cookie,
       },
     });
-    expect(fans.statusCode).toBe(200);
-    expect(fans.json().items[0]).toMatchObject({
-      platformUserId: "fan-created-at",
+    expect(fanDetail.statusCode).toBe(200);
+    expect(fanDetail.json().fan.platformUserId).toBe("fan-created-at");
+    expect(fanDetail.json().page).toMatchObject({
       totalCreatorNetMills: 3000,
       lastTransactionAt: "2026-03-05T12:00:00.000Z",
     });
@@ -2990,7 +2796,7 @@ describe("api integration", () => {
     expect(JSON.stringify(lanaConnection)).not.toContain("proxy-pass");
   });
 
-  it("returns sync runs as a bare array for admin clients [sync-critical]", async (context) => {
+  it("lists recent sync runs and a run's request attempts for the CLI status [sync-critical]", async (context) => {
     if (!testDb || !server || !fixture) {
       context.skip();
       return;
@@ -3001,35 +2807,52 @@ describe("api integration", () => {
       stream: "light",
       trigger: "worker",
     });
+    const attemptAt = new Date();
+    await seedMonitorAttempt(testDb, {
+      runId: run.id,
+      pageId: fixture.lanaPage.id,
+      stream: "light",
+      operation: "account_me",
+      startedAt: attemptAt,
+      finishedAt: new Date(attemptAt.getTime() + 240),
+      state: "success",
+      httpStatus: 200,
+      requestShape: { endpointTemplate: "/account/me", method: "GET" },
+      responseShape: { returnedItems: 1 },
+    });
     await finishSyncRun(testDb.db, run.id, {
       status: "success",
       stats: { synced: 1 },
     });
 
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: {
-        username: "dima",
-        password: "owner-secret",
-      },
-    });
-    const cookie = sessionCookieFrom(login);
-
-    const response = await server.inject({
-      method: "GET",
-      url: "/api/v1/admin/sync/runs?limit=1",
-      headers: { cookie },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual([
+    const app = createTestAppContext(testDb);
+    expect(await listStatus(app, { limit: 1 })).toEqual([
       expect.objectContaining({
         runId: run.id,
         pageLabel: "lana",
         stream: "light",
       }),
     ]);
+    const detail = await getStatusDetail(app, run.id);
+    expect(detail.attempts).toEqual([
+      expect.objectContaining({
+        runId: run.id,
+        platformAccountId: fixture.lanaPage.id,
+        pageLabel: "lana",
+        provider: "fansly",
+        stream: "light",
+        operation: "account_me",
+        attemptNumber: 1,
+        state: "success",
+        httpStatus: 200,
+        durationMs: 240,
+        requestShape: { endpointTemplate: "/account/me", method: "GET" },
+        responseShape: { returnedItems: 1 },
+        startedAt: attemptAt,
+        finishedAt: new Date(attemptAt.getTime() + 240),
+      }),
+    ]);
+    expect(typeof detail.attempts[0]?.attemptId).toBe("number");
   });
 
   it("verifies a page through its engine actor and resolves its incidents when owners admin verify it [sync-critical]", async (context) => {
@@ -3663,19 +3486,6 @@ describe("api integration", () => {
       [fixture.lanaPage.id],
     );
 
-    const listed = await server.inject({
-      method: "GET",
-      url: "/api/v1/archive/conversations/conv-arch-1/messages",
-      headers: { cookie: ownerCookie },
-    });
-    expect(listed.statusCode, listed.body).toBe(200);
-    expect(listed.json()).toHaveLength(1);
-    expect(listed.json()[0]).toMatchObject({
-      messageRef: "am-1",
-      platform: "fansly",
-      textPlain: "archived hello world",
-    });
-
     const searched = await server.inject({
       method: "GET",
       url: "/api/v1/archive/search?q=hello%20world",
@@ -3683,8 +3493,13 @@ describe("api integration", () => {
     });
     expect(searched.statusCode, searched.body).toBe(200);
     expect(searched.json()).toHaveLength(1);
+    expect(searched.json()[0]).toMatchObject({
+      messageRef: "am-1",
+      platform: "fansly",
+      textPlain: "archived hello world",
+    });
 
-    // Chatter bearer keys are not a dashboard surface — 403 on both.
+    // Chatter bearer keys are not a dashboard surface — 403.
     const appContext = createTestAppContext(testDb);
     const chatterKey = await issueChatterDeviceToken(appContext, {
       username: "anton",
@@ -3696,12 +3511,6 @@ describe("api integration", () => {
       headers: { authorization: `Bearer ${chatterKey.key}` },
     });
     expect(chatterSearch.statusCode).toBe(403);
-    const chatterList = await server.inject({
-      method: "GET",
-      url: "/api/v1/archive/conversations/conv-arch-1/messages",
-      headers: { authorization: `Bearer ${chatterKey.key}` },
-    });
-    expect(chatterList.statusCode).toBe(403);
   });
 
   it("soft-deletes pages: tombstone keeps facts, RESTRICT blocks raw DELETE (Stage 13) [sync-critical]", async (context) => {
@@ -3856,206 +3665,4 @@ describe("api integration", () => {
     });
     expect(pageRevenue.statusCode).toBe(404);
   });
-
-  it("lists recent sync requests with field mapping, scope-aware proxy gaps, and since filtering [sync-critical]", async (context) => {
-    if (!testDb || !server || !fixture) {
-      context.skip();
-      return;
-    }
-
-    const currentTestDb = testDb!;
-    const currentFixture = fixture!;
-    const now = new Date();
-    const seeded = await seedSyncRequestsScenario(currentTestDb, {
-      lanaPageId: currentFixture.lanaPage.id,
-      lilyPageId: currentFixture.lilyPage.id,
-      now,
-    });
-
-    const ownerLogin = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "dima", password: "owner-secret" },
-    });
-    const ownerCookie = sessionCookieFrom(ownerLogin);
-
-    const ownerResponse = await server.inject({
-      method: "GET",
-      url: "/api/v1/sync/requests?limit=10",
-      headers: { cookie: ownerCookie },
-    });
-
-    expect(ownerResponse.statusCode).toBe(200);
-    const ownerBody = ownerResponse.json();
-    expect(ownerBody).toHaveLength(5);
-    expect(ownerBody.map((item: { timestamp: string }) => item.timestamp)).toEqual([
-      seeded.lanaStartedAt.toISOString(),
-      seeded.lilySharedAt.toISOString(),
-      seeded.lilyGhostAt.toISOString(),
-      seeded.lanaRetryAt.toISOString(),
-      seeded.lanaFailedAt.toISOString(),
-    ]);
-    expect(ownerBody[0]).toMatchObject({
-      timestamp: seeded.lanaStartedAt.toISOString(),
-      pageLabel: "lana",
-      platform: "fansly",
-      stream: "dm_messages",
-      operation: "messages",
-      endpoint: "/message",
-      method: "GET",
-      attemptNumber: 1,
-      status: "started",
-      httpStatusCode: null,
-      durationMs: null,
-      rateLimitWaitMs: 1200,
-      groupId: "group-live-1",
-      partnerUsername: "fan_live",
-      returnedItems: null,
-      syncDone: null,
-      proxyGapMs: null,
-    });
-    expect(ownerBody[1]).toMatchObject({
-      timestamp: seeded.lilySharedAt.toISOString(),
-      pageLabel: "lily1",
-      platform: "fansly",
-      stream: "followers",
-      operation: "followers",
-      endpoint: "/account/:accountId/followersnew",
-      method: "GET",
-      attemptNumber: 1,
-      status: "success",
-      httpStatusCode: 200,
-      durationMs: 240,
-      rateLimitWaitMs: null,
-      groupId: null,
-      proxyGapMs: 1000,
-    });
-    expect(ownerBody[2]).toMatchObject({
-      timestamp: seeded.lilyGhostAt.toISOString(),
-      pageLabel: "lily1",
-      platform: "fansly",
-      stream: "dm_messages",
-      operation: "messages",
-      endpoint: "/message",
-      method: "GET",
-      attemptNumber: 1,
-      status: "success",
-      httpStatusCode: 200,
-      durationMs: 320,
-      rateLimitWaitMs: null,
-      groupId: "group-ghost-1",
-      partnerUsername: null,
-      returnedItems: 2,
-      syncDone: true,
-      proxyGapMs: null,
-    });
-    expect(ownerBody[3]).toMatchObject({
-      timestamp: seeded.lanaRetryAt.toISOString(),
-      pageLabel: "lana",
-      platform: "fansly",
-      stream: "transactions",
-      operation: "earnings_transactions",
-      endpoint: "/account/wallets/earnings/transactions",
-      method: "GET",
-      attemptNumber: 2,
-      status: "retry",
-      httpStatusCode: 429,
-      durationMs: 650,
-      rateLimitWaitMs: 2500,
-      groupId: null,
-      proxyGapMs: 4000,
-    });
-    expect(ownerBody[4]).toMatchObject({
-      timestamp: seeded.lanaFailedAt.toISOString(),
-      pageLabel: "lana",
-      stream: "followers",
-      status: "failed",
-      httpStatusCode: 500,
-      durationMs: 900,
-      proxyGapMs: null,
-    });
-
-    const withOlderSince = await server.inject({
-      method: "GET",
-      url: `/api/v1/sync/requests?since=${encodeURIComponent(new Date(now.getTime() - 120_000).toISOString())}&limit=10`,
-      headers: { cookie: ownerCookie },
-    });
-    expect(withOlderSince.statusCode).toBe(200);
-    expect(withOlderSince.json()).toHaveLength(6);
-    expect(withOlderSince.json().at(-1)).toMatchObject({
-      timestamp: seeded.oldAttemptAt.toISOString(),
-      endpoint: "/account/me",
-      method: "GET",
-      status: "success",
-    });
-
-    const leadLogin = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "lead", password: "lead-secret" },
-    });
-    const leadCookie = sessionCookieFrom(leadLogin);
-    const leadResponse = await server.inject({
-      method: "GET",
-      url: "/api/v1/sync/requests?limit=10",
-      headers: { cookie: leadCookie },
-    });
-
-    // Hub is the owner's: «Сбор данных» is the console's alone, refused to a team lead (team-lead-reads.ts).
-    expect(leadResponse.statusCode).toBe(403);
-  }, 15_000);
-
-  it("clamps sync request limits to 500 rows [sync-critical]", async (context) => {
-    if (!testDb || !server || !fixture) {
-      context.skip();
-      return;
-    }
-
-    const currentTestDb = testDb!;
-    const currentFixture = fixture!;
-    const now = new Date();
-    const bulkRun = await seedMonitorRunningRun(currentTestDb, {
-      pageId: currentFixture.lanaPage.id,
-      stream: "light",
-      startedAt: new Date(now.getTime() - 10_000),
-    });
-
-    await Promise.all(
-      Array.from({ length: 510 }, (_, index) => seedMonitorAttempt(currentTestDb, {
-        runId: bulkRun.id,
-        pageId: currentFixture.lanaPage.id,
-        stream: "light",
-        operation: "account_me",
-        startedAt: new Date(now.getTime() - index),
-        state: "started",
-        requestShape: {
-          endpointTemplate: "/account/me",
-          method: "GET",
-          egressKey: "bulk-proxy",
-        },
-      })),
-    );
-
-    const ownerLogin = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "dima", password: "owner-secret" },
-    });
-    const ownerCookie = sessionCookieFrom(ownerLogin);
-
-    const response = await server.inject({
-      method: "GET",
-      url: `/api/v1/sync/requests?since=${encodeURIComponent(new Date(now.getTime() - 120_000).toISOString())}&limit=999`,
-      headers: { cookie: ownerCookie },
-    });
-
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body).toHaveLength(500);
-    expect(body[0]).toMatchObject({
-      timestamp: now.toISOString(),
-      endpoint: "/account/me",
-    });
-    expect(body.at(-1)?.timestamp).toBe(new Date(now.getTime() - 499).toISOString());
-  }, 30_000);
 });

@@ -147,12 +147,6 @@ type SyncBlockPageResponse = {
   page: SyncBlocksPageItem;
 };
 
-type SyncMessagesBlockResponse = {
-  generatedAt: string;
-  page: Omit<SyncBlocksPageItem, "blocks">;
-  block: SyncBlockStatus;
-};
-
 const ONLYFANS_HISTORY_RETIRED_MESSAGE =
   "OnlyFans legacy message-history crawler is permanently retired; durable OF mirror jobs own history acquisition";
 const PERMANENTLY_RETIRED_SYNC_BLOCKS = new Set<`${Platform}:${SyncBlockKey}`>([
@@ -399,31 +393,6 @@ export async function getPageSyncBlocks(
   return {
     generatedAt: snapshot.generatedAt,
     page: toBlocksPage(page),
-  };
-}
-
-export async function getPageMessagesSyncBlock(
-  app: AppContext,
-  input: {
-    pageLabel: string;
-    pageIds?: number[];
-    now?: Date;
-  },
-): Promise<SyncMessagesBlockResponse> {
-  const blocks = await getPageSyncBlocks(app, input);
-  return {
-    generatedAt: blocks.generatedAt,
-    page: {
-      pageId: blocks.page.pageId,
-      pageLabel: blocks.page.pageLabel,
-      platform: blocks.page.platform,
-      modelSlug: blocks.page.modelSlug,
-      modelName: blocks.page.modelName,
-      username: blocks.page.username,
-      displayName: blocks.page.displayName,
-      diagnosis: blocks.page.diagnosis,
-    },
-    block: blocks.page.blocks.messages_history,
   };
 }
 
