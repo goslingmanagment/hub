@@ -3,7 +3,6 @@ import { sql } from "drizzle-orm";
 
 import {
   createPlatformPage,
-  findPageSummaryByLabel,
   findPersonRowByCode,
   findUserByUsername,
   insertPersonLogin,
@@ -677,10 +676,4 @@ async function mintCheckerKey(app: AppContext, checker: { personId: number }): P
     pageLabels: SANDBOX_PAGES.map((page) => page.label), expiresInDays: 90,
   }, { source: "cli" });
   return issued.token;
-}
-
-/** The page ids of the test realm, for a caller that has only the labels. */
-export async function sandboxPageIds(db: Database): Promise<number[]> {
-  const found = await Promise.all(SANDBOX_PAGES.map((spec) => findPageSummaryByLabel(db, spec.label)));
-  return found.filter((page) => page !== null).map((page) => page!.id);
 }

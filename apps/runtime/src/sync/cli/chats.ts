@@ -1,11 +1,9 @@
-import { hostname } from "node:os";
-
 import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 
 import { noteUnavailableChat, readUnavailableChats, type UnavailableChatView } from "../chats.ts";
 import { createSyncContext, type SyncContext } from "../context.ts";
-import { json } from "./args.ts";
+import { cliActor, json, withSyncContext as withContext } from "./args.ts";
 
 // The owner's CLI of the chats Fansly does not serve to a page (arena
 // "vanished chat", plan §4; `sync/chats.ts`):
@@ -24,10 +22,6 @@ const defaultDeps: SyncChatsCliDeps = {
   print: (line) => console.log(line),
 };
 
-function cliActor(): string {
-  return `cli@${hostname()} pid ${process.pid}`;
-}
-
 function parseGroupId(value: string): string {
   if (!/^[0-9]{1,30}$/.test(value)) throw new InvalidArgumentError(`Expected a Fansly group id (digits), received "${value}"`);
   return value;
@@ -37,15 +31,6 @@ function parseInstant(value: string): Date {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) throw new InvalidArgumentError(`Expected an ISO timestamp, received "${value}"`);
   return parsed;
-}
-
-async function withContext<T>(deps: SyncChatsCliDeps, body: (ctx: Pick<SyncContext, "db">) => Promise<T>): Promise<T> {
-  const ctx = await deps.openContext();
-  try {
-    return await body(ctx);
-  } finally {
-    await ctx.close();
-  }
 }
 
 const COLUMNS = [

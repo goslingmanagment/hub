@@ -21,7 +21,7 @@ import {
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { isFanslyCdnUrl, MEDIA_DOWNLOAD_MAX_BYTES, MEDIA_DOWNLOAD_TIMEOUT_MS } from "../../services/egress/media-download.ts";
-import type { Check, Send, SiteDone, State, WsDone } from "../../services/egress/page-browser-protocol.ts";
+import type { Check, Send, State } from "../../services/egress/page-browser-protocol.ts";
 import {
   systemMonoBridge,
   type CheckReply,
@@ -42,13 +42,12 @@ import {
   type PageTransport,
   type SendAdmission,
   type SendHooks,
-  type SiteRequestEnd,
   type TransportOutcome,
 } from "../engine/ports.ts";
 import type { RequestPlan } from "../engine/resource.ts";
 import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 import { openPublicationFile } from "../../services/publication-files.ts";
-import { protocolRefusalOf, SEND_REPORT_GUARD_MS, siteRequestEndOf } from "./browser-site.ts";
+import { protocolRefusalOf, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
 
 // The browser page transport (Project Browser, plan §3.2, §4.2; stage 3 PR
 // 12): the engine's `PageTransport` — `prepare`, `send` (at most one physical
@@ -75,8 +74,8 @@ import { protocolRefusalOf, SEND_REPORT_GUARD_MS, siteRequestEndOf } from "./bro
 //   the live session's in at the moment of the request, plan §4.7): the
 //   registry's routes need no header of their own, so none goes. A CDN hop's
 //   URL is the work's secret, as for undici. The socket's Upgrade is the
-//   site's own on a browser page (its admission rides the site path): never
-//   prepared here.
+//   site's own on a browser page (the operator lets it go): never prepared
+//   here.
 // - One credentials generation across the engine's fields (plan §3.2): the
 //   digest of the page, its account, the browser's session fingerprint (the
 //   operator's `state`) and the proxy. `prepare` puts it on the request
@@ -151,8 +150,8 @@ import { protocolRefusalOf, SEND_REPORT_GUARD_MS, siteRequestEndOf } from "./bro
 //   again, and it says which never left (`not_sent`); between steps, the
 //   outcomes it delivered that no request waits for (after a restart, an
 //   answer of another session, a reply whose apply a lost COMMIT
-//   acknowledgement left undone) and the ends of the site path nobody claims
-//   go to the actor as late. Each becomes, for its attempt's row, what
+//   acknowledgement left undone) go to the actor as late. Each becomes, for
+//   its attempt's row, what
 //   `send` would have returned; the actor commits it and acknowledges it.
 //   Nothing is ever sent again from it.
 
@@ -853,9 +852,7 @@ export async function createBrowserPageTransport(
     void client.recover(chunk).then((answer) => {
       for (const attemptId of chunk) {
         const result = answer.results.get(attemptId);
-        const end = answer.ends.get(attemptId);
         if (result !== undefined && result.bodyProblem === null) late.set(attemptId, heldRequest(result));
-        else if (end !== undefined) late.set(attemptId, heldEnd(end));
         else if (answer.states.get(attemptId) === "outcome_resent") {
           unresolved = true;
           continue;
@@ -869,12 +866,6 @@ export async function createBrowserPageTransport(
       asking = false;
       askNotBefore = unresolved ? monoNow() + PENDING_RETRY_MS : Number.NEGATIVE_INFINITY;
     });
-  }
-
-  /** The wall-clock instant of a CLOCK_MONOTONIC reading of the operator. */
-  function wallOfKernel(kernelMono: number | null): Date | null {
-    if (kernelMono === null) return null;
-    return new Date(Date.now() - Math.max(0, monoNow() - bridge.fromKernel(kernelMono)));
   }
 
   /** A held result of an engine request, resolved against its attempt's row:
@@ -918,19 +909,11 @@ export async function createBrowserPageTransport(
     };
   }
 
-  /** A site request's or a site socket's end, as the site path takes it. */
-  function heldEnd(end: SiteDone | WsDone): HeldAnswer {
-    if (end.type === "wsDone" && end.fate === "unknown") return { kind: "unknown", attemptId: end.attemptId, held: true };
-    const siteEnd: SiteRequestEnd = siteRequestEndOf(end, bridge);
-    return { kind: "site", attemptId: end.attemptId, end: siteEnd, sentWall: end.sent ? wallOfKernel(end.sentMono) : null };
-  }
-
   client.onUnclaimedResult((delivered) => {
     // A body that did not arrive whole is asked for again.
     if (delivered.bodyProblem !== null) askAgain(delivered.result.attemptId);
     else keepLate(heldRequest(delivered));
   });
-  client.onUnclaimedOutcome((end) => keepLate(heldEnd(end)));
 
   const held: HeldOutcomeSource = {
     async recover(attemptIds, waitMs) {
@@ -964,11 +947,9 @@ export async function createBrowserPageTransport(
       const answers = new Map<number, HeldAnswer>();
       for (const attemptId of attemptIds) {
         const result = answer.results.get(attemptId);
-        const end = answer.ends.get(attemptId);
         // An outcome resent whole is the attempt's; one whose body did not
         // arrive whole is not known (the operator keeps it).
         if (result !== undefined && result.bodyProblem === null) answers.set(attemptId, heldRequest(result));
-        else if (end !== undefined) answers.set(attemptId, heldEnd(end));
         else if (answer.states.get(attemptId) === "not_sent") answers.set(attemptId, { kind: "not_sent", attemptId });
         else answers.set(attemptId, { kind: "unknown", attemptId });
         late.delete(attemptId);
@@ -1006,7 +987,6 @@ export async function createBrowserPageTransport(
     // An operator of minor 10 takes a few parts at once beside the page's
     // managed request (its own bound, and the engine's).
     parallelParts: () => client.parallelParts,
-    needsSiteBootstrap: () => client.state?.sessionFingerprint == null,
     needsSessionConfirmation: () => {
       const state = client.state;
       return state !== null && state.step === "site_loaded" && state.sessionFingerprint !== null && state.accountId === null;
@@ -1042,7 +1022,7 @@ export async function createBrowserPageTransport(
           throw new UnsendableRequestError("storage_not_a_part", { failure: "storage_not_a_part", httpStatus: null });
         case "ws":
           // The site opens its own socket on a browser page; its Upgrade is
-          // admitted on the site path (plan §3.2 «Кадры сокета»).
+          // the site's own (plan §3.2 «Кадры сокета»).
           throw new UnsendableRequestError("browser_socket_is_the_sites", { failure: "browser_socket_is_the_sites", httpStatus: null });
         case "api":
           await ensureHelloCurrent();

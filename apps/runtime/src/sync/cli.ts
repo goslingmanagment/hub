@@ -45,6 +45,7 @@ import {
   SYNC_BROWSER_COMMAND_TTL_MS,
 } from "./browser-levers.ts";
 import { raiseSyncRoute } from "./route-raise.ts";
+import { cliActor, withSyncContext as withContext } from "./cli/args.ts";
 
 // The owner's CLI of the Fansly Sync Engine (design §7.6), under `pnpm cli
 // sync …`. `sync status` stays the legacy sync monitor until step 4, so the
@@ -184,19 +185,6 @@ function parseWorkState(value: string): (typeof WORK_STATES)[number] {
     throw new InvalidArgumentError(`Expected one of ${WORK_STATES.join(", ")}, received "${value}"`);
   }
   return value as (typeof WORK_STATES)[number];
-}
-
-function cliActor(): string {
-  return `cli@${hostname()} pid ${process.pid}`;
-}
-
-async function withContext<T>(deps: SyncCliDeps, body: (ctx: Pick<SyncContext, "db" | "rawConfig">) => Promise<T>): Promise<T> {
-  const ctx = await deps.openContext();
-  try {
-    return await body(ctx);
-  } finally {
-    await ctx.close();
-  }
 }
 
 /** Add the engine's commands to the `sync` command group. */

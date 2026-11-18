@@ -86,8 +86,8 @@ sync/
                              the outcomes it keeps (`held`)
     browser-intake.ts        a browser page's operator buffer into the engine (PR 13): the event stream, frames by
                              event id, gaps, the site's answers (`browser-site-capture.ts`); built by the slot
-    browser-site.ts          the site path over the operator's RPC (PR 14): `siteAdmit`/`wsAdmit` as PR 8's pending
-                             requests, the answers on the link they were asked on, `siteDone`/`wsDone` as their ends
+    browser-site.ts          the site path over the operator's RPC: what the operator observed of the site's own
+                             traffic (variant Б: `siteSent`/`siteEnded`/`siteIdentity`), keyed and acknowledged
     browser-page.ts          a page's slot (PR 14): the link, the transport, the site path, the socket rows,
                              the intake; the operator's `quiesced`
     identity-answer.ts       the account a `/account/me` answer names (the browser's check of a profile no page has)
@@ -371,7 +371,7 @@ Since step 4 S4-11 this is the only path from a socket deletion to the stores: t
 the receipts it applied stay as records that the archive shadow rebuild re-applies.
 
 **A live page's socket** is the site's own, in the page's browser (the engine's own socket source is deleted,
-2026-10-25): its CONNECT is admitted through the site path (route `ws.upgrade`), its frames come through the operator's
+2026-10-25): its CONNECT is the site's own (the operator lets it go, variant Б), its frames come through the operator's
 buffer to the intake (`fansly/browser-intake.ts`), are captured, applied and acked by the slot's applier with the
 post-ack hook (what it leaves, the worker timer acks — and routes). A verified connection raises `repair.ws-gap`; a
 socket down for two minutes raises `dm-conversations.ws-down` once (`fansly/ws/browser-guard.ts`).
@@ -911,7 +911,7 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only one verify per changed digest passes (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
 | I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and nothing gives a page back to it. The platform set is a required argument of every query that picks work — the one fence in them since S4-21, with the Fansly rows parked `retired` (0239) beside it — and the planner and the executor assert it before a wake-up or a run; `services/sync/` holds no Fansly handler, error class or Fansly HTTP import (S4-19). | `onlyfans/boundary.ts` (`legacyExecutorPlatforms`, `assertLegacyExecutorPage`) over `platforms/registry.ts` + `repositories/page-sync.ts` (`PageSyncPlatformScope`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`); tests/sync-onlyfans-boundary.test.ts, tests/sync-legacy-fence.test.ts |
-| I22 | The engine opens no Fansly WebSocket (the Node socket source is deleted, 2026-10-25); no worker, lane or script opens one. A page's socket is the site's own, opened in its browser, its tunnel waiting for the engine's admission (`wsAdmit`, the site path, route `ws.upgrade`); the page's source (`fansly/ws/browser-source.ts`) only takes the operator's events and sends nothing. The engine's one socket is its RPC to the page's operator (`ws:` on pb-control, never Fansly). | `fansly/ws/browser-source.ts`; tests/fansly-send-guard-boundary.test.ts |
+| I22 | The engine opens no Fansly WebSocket (the Node socket source is deleted, 2026-10-25); no worker, lane or script opens one. A page's socket is the site's own, opened in its browser and let go by its operator (variant Б: observed, never admitted); the page's source (`fansly/ws/browser-source.ts`) only takes the operator's events and sends nothing. The engine's one socket is its RPC to the page's operator (`ws:` on pb-control, never Fansly). | `fansly/ws/browser-source.ts`; tests/fansly-send-guard-boundary.test.ts |
 | I23 | The Sync Engine writes no `page_dm_messages` row: a live page's messages go to `message_archive`; the engine only marks the deletion of rows legacy stored (`markFanslyWsHotDeletion`, sticky). | `fansly/resources/dm-messages.ts` + `fansly/resources/dm-live.ts`, pinned by `tests/page-dm-messages-boundary.test.ts` |
 | I24 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. The rows are a page's whole hold state: the page row has no hold column — the old ones were dropped, so the one rollback target is the release before the drop, and the deploy refused the drop under an image older than it until the drop was applied (step 4, owner decision №26; S4-33). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers); tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-old-hold-columns.test.ts, tests/deploy-old-hold-columns-gate.test.ts |
 | I26 | One sender per page: its own browser (`sync_pages.transport` is `browser` for every row, 0315; the Node sender is deleted, 2026-10-25). The host builds the browser slot only; a new owner of the page sends nothing before the operator's `quiesced`, and its first request goes under I5. The deploy refuses a rollback to an image that does not know the page transport — read from the image's own label `agency-hub.sync-page-transport`, never from the schema's history: such an image would send every page through Node. | `engine/host.ts` (`#acquire`) + `fansly/browser-page.ts` + `scripts/deploy-production.sh` (`verify_rollback_target_runs_no_browser_page`); tests/sync-browser-host.integration.test.ts, tests/sync-live-gate.integration.test.ts, tests/deploy-browser-rollback-gate.test.ts |
@@ -948,15 +948,14 @@ deleted on 2026-10-25 (owner); Hub stores no session it sends with.
   every connect) and over it the browser transport, the site path, the socket rows and the buffer's intake (its frames
   to the live overlay). The hand-over (plan §4.7): the operator answers the new owner's
   hello with `quiesced` once the earlier owners' requests are over; until then nothing of the new owner goes (the
-  transport refuses, the site path holds nothing pending, the kept outcomes are not asked about); then the owner is
+  transport refuses, the kept outcomes are not asked about); then the owner is
   recorded on the profile (`page_browsers.handover_*`, which `confirm-stopped` waits for) and the pacer's floor is
   raised to 1.2 × S after the last send the operator names (I5). A shutdown or a deploy leaves the browser running.
-- **The site path** (`fansly/browser-site.ts`): the operator's `siteAdmit` and `wsAdmit` are PR 8's pending
-  requests (a socket's CONNECT is a GET of the socket host, route `ws.upgrade`); the answers go only on the
-  connection they were asked on (a grant that cannot be written there ends not sent); a request under another session
-  than the live one, an unknown host and the second socket (`chatws`) are refused; an id asked again is never admitted
-  twice; `siteDone`/`wsDone` settle the end the slot waits for, acknowledged (`resultAck`) only after the actor
-  committed it.
+- **The site path** (`fansly/browser-site.ts`): what the operator observed of the site's own traffic goes to the
+  actor (variant Б, below). The engine admits nothing of the site. The admission messages the protocol still carries
+  (`siteAdmit`, `wsAdmit`, `admissionCancel`, `siteDone`, `wsDone` — an operator whose image keeps the old site path
+  may still withdraw a request or end a socket an older engine admitted) are parsed — a type the parser does not
+  know closes the link — and taken by nobody (a debug line; the operator's own wait fails closed what nobody admits).
 - **What the operator says, and the owner's levers** (PR 17, `fansly/browser-record.ts`, `fansly/browser-control.ts`,
   `browser-levers.ts`, `browser-status.ts`; 0281): over the link of the page's owner (its slot) the
   operator's `state` goes on its profile's row — at once when it moved, else every 15 s, only a state it said — its
@@ -998,13 +997,6 @@ deleted on 2026-10-25 (owner); Hub stores no session it sends with.
   the whole pause himself (`setPagePause`), the model of the login's pause (PR 15); `start` lifts only a pause still
   the stop's. A stop during an open login takes over the login's pause (its end lifts nothing), and a `start` during
   one gives the stop's pause back to the login. The journals stay on the page's volume: `scripts/deploy-page-browser.sh log` reads them on the server.
-- **The site's own requests** (PR 8, `engine/site-admission.ts`, `engine/site-slot.ts`, `fansly/route-match.ts`): the
-  browser holds each request of the site paused and asks; the engine admits it through the same pacer, route budgets
-  and holds as its own sends, and journals it in `sync_attempts` (`origin` `site` or `login`, class `site` for API
-  reads/login and `urgent` for the site's WS Upgrade; the operator's id in `browser_request_id`). The socket takes
-  the next eligible shared slot ahead of API FIFO and outside its hour ceiling (legacy WS rows excluded too),
-  without consuming the HTTP site's turn or moving the engine's cycle. Page/identity/route gates and the common
-  send pause still hold; a CONNECT whose short deadline cannot fit that pause is refused.
 - **The site's own requests, observed** (variant Б, protocol minor 4; delivered for sure from minor 6,
   `engine/actor.ts`, `engine/site-slot.ts`, `fansly/browser-site.ts`, 0289): the browser lets the site's requests go
   and tells the engine what left (`siteSent`) and how it ended (`siteEnded`); the pacer counts the send at once, the
@@ -1111,17 +1103,13 @@ deleted on 2026-10-25 (owner); Hub stores no session it sends with.
   expected account; every take raises `link_generation`, the hello's owner generation and the fence of every write
   and grant — and follows the onboarding as a page's login is followed: the manual login and the browser started
   (`login`), the automation back (`open`), the browser stopped (`closing`, then `off`); a browser halted for another
-  exit IP starts again only once the owner pins the IP again. The site's login operations and the reads its interface
-  makes are admitted by the profile key (`loginOnly`; the rest of the site and its socket refused): one in flight,
-  the owner's pause S × (1 + u) from the reported send through the engine's own `Pacer`, its floor 1.2 × S after the
-  profile's last send (the journal's and the operator's `quiesced`), and a page's site decision (`decideSite`): the
-  route and family budgets of `route-policy.ts`, the hour's ceiling and a 429's route hold, all read from the
-  profile's journal on every slot (a hold as `route_hold_ms=` on its send), so a restart keeps them — each
-  journaled in `fansly_send_log` without a page (source `onboarding`, `browser_profile_id`, `browser_attempt_id` from
-  `sync_attempts`' sequence, so the operator never sees an id twice) — only while the onboarding is the owner's
-  login, checked under the profile's row lock at the journal entry and again, in the same generation, at the grant
-  itself (the owner's moves and the binding take that lock: one that commits first refuses the grant). The identity check is one `GET /account/me`
-  through the browser under the same pacer, journaled so under the request's source, its answer in `observations`
+  exit IP starts again only once the owner pins the IP again. The login's site traffic is the operator's own (variant
+  Б): nothing of it is admitted or journaled here. The identity check is the link's one send: one `GET /account/me`
+  through the browser, one in flight, the owner's pause S × (1 + u) from the reported send through the engine's own
+  `Pacer`, its floor 1.2 × S after the profile's last send (the journal's and the operator's `quiesced`), its route's
+  budget read from the profile's journal, so a restart keeps it; journaled in `fansly_send_log` without a page under
+  the request's source (`browser_profile_id`, `browser_attempt_id` from `sync_attempts`' sequence, so the operator
+  never sees an id twice), its answer in `observations`
   (`pull`, no page, the account as its native ref) with `identity_result` in one transaction. It proves the account
   only with the operator's own `sent` (without it the instant is unknown and proves nothing — PR 15's rule), sent
   after the boundary of the owner's login: every change of `onboarding` raises `onboarding_generation` and voids the

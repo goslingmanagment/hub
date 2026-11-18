@@ -5,7 +5,7 @@
  * rule and its report's one number. Here: the period's window (what to ask for), each row's one label of a shift, and
  * the line of facts over the rows. Sales only — nothing here is pay.
  */
-import type { ChatterStats, OwnShiftRow, OwnShiftRowState } from "@agency_hub_core/contracts";
+import type { ChatterStats, OwnShiftRow } from "@agency_hub_core/contracts";
 import { addDays, daysInRange, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
@@ -72,13 +72,6 @@ export function myShiftsWindow(period: ResolvedPeriod): MyShiftsWindow {
 
 // ──────────────────────────────────────────────────────────────── The rows
 
-/**
- * The state of a row, in words on the screen: `posted` «Пост отправлен», `draft` «Собран» (check it and send it),
- * `missing` «Отчёта нет», `ongoing` «Идёт», `unknown` (nothing said per row), `other` (the ledger's own word); with the
- * person's switch «сдаёт смену в системе» on: `due` «Сдайте смену», `handed` «Сдан».
- */
-export type RowState = OwnShiftRowState;
-
 /** A row as Hub paired it, with its one label of a shift (D12) and its pages. */
 export interface MyShiftRow extends OwnShiftRow {
   /** The shift's own label; a report alone — its window's, or its day alone. */
@@ -86,9 +79,6 @@ export interface MyShiftRow extends OwnShiftRow {
   /** Where the shift worked (Hub); a report alone — the report's pages. */
   pages: string[];
 }
-
-/** Hub's report of a shift row (`shiftReportsList`). */
-export type HubShiftReport = NonNullable<OwnShiftRow["hub"]>;
 
 /** Hub's rows, each with its label. Pure. */
 export function rowsOf(rows: readonly OwnShiftRow[]): MyShiftRow[] {

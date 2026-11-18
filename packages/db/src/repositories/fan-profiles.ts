@@ -80,15 +80,6 @@ export async function appendFanProfileVersion(
   });
 }
 
-/** The dossier version the write left as the fan's latest: the new one, or the
- * one a rule of appendFanProfileVersion kept. */
-export async function appendFanProfile(
-  db: Database,
-  input: AppendFanProfileInput,
-) {
-  return (await appendFanProfileVersion(db, input)).profile;
-}
-
 export async function getLatestFanProfile(
   db: Database,
   input: {

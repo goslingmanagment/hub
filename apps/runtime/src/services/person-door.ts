@@ -92,9 +92,6 @@ export type PersonDoorOperation = keyof typeof PERSON_DOOR_OPERATIONS;
 export const PERSON_DOOR_CLIENT = "contentops";
 const CAPABILITY = "signin:contentops";
 
-/** The grant is over (signed out, revoked, expired, closed): ContentOps ends its own session or asks again. */
-export const GRANT_OVER_REASON = "grant_inactive";
-
 /**
  * The person a door request acts as, or the refusal: the key must be ContentOps' (`signin:contentops`), the grant live,
  * the operation on the table and open to the person's role; the test owner keeps to his own table.
