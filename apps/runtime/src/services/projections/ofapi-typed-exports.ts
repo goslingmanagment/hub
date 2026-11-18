@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { appendProjectionOnlyDomainEventsInTransaction, getProjectionWatermark, hashOfapiCaptureValue, insertOfapiTypedExportRow, listEventAccounts, listEventsSince, setProjectionWatermark, upsertOfapiProfileVisitorsDaily, type Database, type OfapiVisitorMetrics } from "@agency_hub_core/db";
+import { appendProjectionOnlyDomainEventsInTransaction, getProjectionWatermark, hashOfapiCaptureValue, insertOfapiTypedExportRow, listEventsSince, listProjectionWork, setProjectionWatermark, upsertOfapiProfileVisitorsDaily, type Database, type OfapiVisitorMetrics } from "@agency_hub_core/db";
 import type { OfapiTypedExportProfile } from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
 export const OFAPI_TYPED_EXPORT_PROJECTION = "ofapi_typed_exports";
@@ -27,8 +27,10 @@ export async function recordOfapiTypedFacts(db: Database, pageId: number, facts:
 }
 export async function runOfapiTypedExportsProjection(app: Pick<AppContext, "db" | "logger">, input?: { accountId?: number | null }) {
   let applied = 0; let eventsSeen = 0;
-  const accounts = input?.accountId != null ? [input.accountId] : await listEventAccounts(app.db);
+  const work = input?.accountId != null ? { accounts: [input.accountId], idle: new Set<number>() } : await listProjectionWork(app.db, OFAPI_TYPED_EXPORT_PROJECTION);
+  const accounts = work.accounts;
   for (const accountId of accounts) {
+    if (work.idle.has(accountId)) continue;
     let watermark = await getProjectionWatermark(app.db, OFAPI_TYPED_EXPORT_PROJECTION, accountId);
     for (;;) {
       const events = await listEventsSince(app.db, { accountId, afterSeq: watermark, limit: 500 });

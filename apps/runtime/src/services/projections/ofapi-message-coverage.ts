@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import {
   applyOfapiMessageCoverageEvents,
   getProjectionWatermark,
-  listEventAccounts,
   listEventsSince,
+  listProjectionWork,
   OFAPI_MESSAGE_COVERAGE_PROJECTION,
   setProjectionWatermark,
   type DomainEventRow,
@@ -224,9 +224,13 @@ export async function runOfapiMessageCoverageProjection(
   input?: { accountId?: number | null },
 ): Promise<OfapiMessageCoverageProjectionResult> {
   const totals = { accounts: 0, eventsSeen: 0, projected: 0 };
-  const accounts = input?.accountId != null ? [input.accountId] : await listEventAccounts(app.db);
+  const work = input?.accountId != null
+    ? { accounts: [input.accountId], idle: new Set<number>() }
+    : await listProjectionWork(app.db, OFAPI_MESSAGE_COVERAGE_PROJECTION);
+  const accounts = work.accounts;
   for (const accountId of accounts) {
     totals.accounts += 1;
+    if (work.idle.has(accountId)) continue;
     let watermark = await getProjectionWatermark(
       app.db,
       OFAPI_MESSAGE_COVERAGE_PROJECTION,

@@ -8,8 +8,8 @@ import {
   backfillArchiveFromDmMessageArchive,
   backfillArchiveFromHotTable,
   getProjectionWatermark,
-  listEventAccounts,
   listEventsSince,
+  listProjectionWork,
   MESSAGE_ARCHIVE_PROJECTION,
   resetMessageArchiveProjection,
   setProjectionWatermark,
@@ -92,12 +92,14 @@ export async function runMessageArchiveProjection(
     purchases: { hotPurchasedMarked: 0, messageArchiveOpened: 0, dmArchiveOpened: 0 },
   };
   const platformCache = new Map<number, string | null>();
-  const accounts = input?.accountId != null
-    ? [input.accountId]
-    : await listEventAccounts(app.db);
+  const work = input?.accountId != null
+    ? { accounts: [input.accountId], idle: new Set<number>() }
+    : await listProjectionWork(app.db, MESSAGE_ARCHIVE_PROJECTION);
+  const accounts = work.accounts;
 
   for (const accountId of accounts) {
     totals.accounts += 1;
+    if (work.idle.has(accountId)) continue;
     const platform = await platformForAccount(app, platformCache, accountId);
     if (platform === null) {
       // Events for an account the catalog no longer resolves — leave the
