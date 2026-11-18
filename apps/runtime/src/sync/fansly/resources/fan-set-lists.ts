@@ -18,7 +18,6 @@ import {
   crossSpendersListFor,
   crossSpendersListKey,
   millsFromInteger,
-  type AppConfig,
   type CrossSpendersListSetting,
 } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
@@ -30,6 +29,7 @@ import {
 } from "../../../services/cross-page-spenders.ts";
 import type { OutcomeDecision } from "../../engine/errors.ts";
 import { ApplyQuarantine, requestOfAttempt } from "../../engine/commit.ts";
+import type { SettingsSource } from "../../engine/ports.ts";
 import type {
   ApplyInput,
   ApplyResult,
@@ -420,10 +420,9 @@ function canWrite(ctx: Pick<PlanContext, "transportWrites">, spec: FanslyWireId)
   return ctx.transportWrites?.(fanslyWritePermission(spec), spec) === true;
 }
 
-async function liveSetting(settings: { read(): Promise<AppConfig> } | undefined, pageLabel: string | null): Promise<CrossSpendersListSetting | null> {
+async function liveSetting(settings: SettingsSource | undefined, pageLabel: string | null): Promise<CrossSpendersListSetting | null> {
   // Fail closed: no live settings, no list.
-  const config = settings === undefined ? null : await settings.read();
-  return config === null ? null : crossSpendersListFor(config.crossSpendersLists, pageLabel);
+  return settings === undefined ? null : crossSpendersListFor(await settings.field("crossSpendersLists"), pageLabel);
 }
 
 export function fanSetListsModule(store: FanSetListStore = databaseFanSetListStore): ResourceModule {

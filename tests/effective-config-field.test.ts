@@ -87,3 +87,38 @@ describe("loadEffectiveConfigField(fanslyDefaultDelayMs) equals loadEffectiveCon
     await expect(loadEffectiveConfigField(db, config, "fanslyDefaultDelayMs")).rejects.toThrow("connection terminated");
   });
 });
+
+// The sync engine's live settings (`SettingsSource.field`): each read through
+// its own row gives what the whole read gives for that key.
+type SettingKey = "publishingEnabled" | "fanslyRepliesRewalkCycleDays" | "fanslyVaultHeadWalkPages" | "crossSpendersLists";
+const BOOT = Symbol("the boot value");
+
+async function bothReadsOf(key: SettingKey): Promise<{ whole: unknown; field: unknown }> {
+  return {
+    whole: (await loadEffectiveConfig(db, config))[key],
+    field: await loadEffectiveConfigField(db, config, key),
+  };
+}
+
+describe("loadEffectiveConfigField equals loadEffectiveConfig for the sync engine's settings", () => {
+  // [the stored value, what both reads give]; BOOT: the row is rejected.
+  const rows: Record<SettingKey, ReadonlyArray<readonly [unknown, unknown]>> = {
+    publishingEnabled: [[true, true], [false, false], ["true", BOOT], [1, BOOT], [null, BOOT]],
+    fanslyRepliesRewalkCycleDays: [[9, 9], [365, 365], [0, 1], [1000, 365], ["9", BOOT], [2.5, BOOT], [null, BOOT]],
+    fanslyVaultHeadWalkPages: [["lora-1", "lora-1"], [" lora-1,ari-1 ", "lora-1,ari-1"], ["", BOOT], [5, BOOT], [null, BOOT]],
+    crossSpendersLists: [['{"lora-1":{}}', '{"lora-1":{}}'], ["{}", "{}"], ["not json", BOOT], ["", BOOT], [5, BOOT]],
+  };
+
+  for (const key of Object.keys(rows) as SettingKey[]) {
+    it(`${key}: no row, a valid row, a rejected row`, async () => {
+      store.rows.delete(key);
+      const boot = config[key];
+      expect(await bothReadsOf(key), "no row").toEqual({ whole: boot, field: boot });
+      for (const [value, gives] of rows[key]) {
+        store.rows.set(key, { value, version: 3 });
+        const want = gives === BOOT ? boot : gives;
+        expect(await bothReadsOf(key), JSON.stringify(value)).toEqual({ whole: want, field: want });
+      }
+    });
+  }
+});
