@@ -1,7 +1,7 @@
 import {
   getProjectionWatermark,
-  listEventAccounts,
   listEventsSince,
+  listProjectionWork,
   setProjectionWatermark,
   saveOfapiChatQueueState,
   type Database,
@@ -13,12 +13,14 @@ export async function runOfapiContentProjection(
   app: Pick<AppContext, "db" | "logger">,
   input?: { accountId?: number | null },
 ) {
-  const accounts =
+  const work =
     input?.accountId != null
-      ? [input.accountId]
-      : await listEventAccounts(app.db);
+      ? { accounts: [input.accountId], idle: new Set<number>() }
+      : await listProjectionWork(app.db, OFAPI_CONTENT_PROJECTION);
+  const accounts = work.accounts;
   const result = { accounts: accounts.length, eventsSeen: 0, applied: 0 };
   for (const accountId of accounts) {
+    if (work.idle.has(accountId)) continue;
     let watermark = await getProjectionWatermark(
       app.db,
       OFAPI_CONTENT_PROJECTION,

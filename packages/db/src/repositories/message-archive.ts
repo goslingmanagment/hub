@@ -686,6 +686,27 @@ export async function listEventAccounts(db: Database): Promise<number[]> {
   return result.rows.map((row) => Number(row.account_id));
 }
 
+/** listEventAccounts (same rows, same order) plus the accounts already at this
+ *  projection's watermark. Gapless head: `domain_event_seq.next_seq` is taken
+ *  `for update` and moved in the appending transaction, so an idle account's
+ *  delta read is provably empty and the tick may skip it. */
+export async function listProjectionWork(
+  db: Database,
+  projection: string,
+): Promise<{ accounts: number[]; idle: Set<number> }> {
+  const result = await db.execute<{ account_id: string; behind: boolean }>(sql`
+    select s.account_id::text as account_id,
+           (s.next_seq - 1 > coalesce(w.high_seq, 0)) as behind
+    from domain_event_seq s
+    left join projection_seq_watermarks w
+      on w.projection = ${projection} and w.account_id = s.account_id
+    order by s.account_id::text
+  `);
+  const accounts = result.rows.map((row) => Number(row.account_id));
+  const idle = new Set(result.rows.filter((row) => !row.behind).map((row) => Number(row.account_id)));
+  return { accounts, idle };
+}
+
 /** Rebuild support: truncate the projection's scope + reset its watermark. */
 export async function resetMessageArchiveProjection(
   db: Database,
@@ -848,16 +869,12 @@ function quotedRelation(schema: string, name: string) {
   return sql.raw(`"${schema.replaceAll("\"", "\"\"")}"."${name.replaceAll("\"", "\"\"")}"`);
 }
 
-/**
- * Detached-partition census (pg_inherits vs the tiering bookkeeping): every
- * domain_events partition that listEventsSince can NOT see — parked in
- * tiered_pending_drop by tiering, or detached-in-public (the 0077
- * leftovers). The replay watermark advances past their seqs silently, which
- * is exactly why the shadow replay hard-refuses when one holds account rows.
- */
-export async function listDomainEventPartitionCensus(db: Database): Promise<{
+/** The census's two catalog reads: the attached partitions' names and the
+ *  detached relations, without counting their rows (the append gate needs
+ *  names only). */
+async function listDomainEventPartitionRelations(db: Database): Promise<{
   attached: string[];
-  detached: DetachedDomainEventPartition[];
+  detached: Array<{ schema: string; name: string }>;
 }> {
   const attached = await db.execute<{ name: string }>(sql`
     select c.relname as name
@@ -883,8 +900,23 @@ export async function listDomainEventPartitionCensus(db: Database): Promise<{
       )
     order by n.nspname, c.relname
   `);
+  return { attached: attached.rows.map((row) => row.name), detached: detachedRelations.rows };
+}
+
+/**
+ * Detached-partition census (pg_inherits vs the tiering bookkeeping): every
+ * domain_events partition that listEventsSince can NOT see — parked in
+ * tiered_pending_drop by tiering, or detached-in-public (the 0077
+ * leftovers). The replay watermark advances past their seqs silently, which
+ * is exactly why the shadow replay hard-refuses when one holds account rows.
+ */
+export async function listDomainEventPartitionCensus(db: Database): Promise<{
+  attached: string[];
+  detached: DetachedDomainEventPartition[];
+}> {
+  const relations = await listDomainEventPartitionRelations(db);
   const detached: DetachedDomainEventPartition[] = [];
-  for (const relation of detachedRelations.rows) {
+  for (const relation of relations.detached) {
     const count = await db.execute<{ n: string }>(sql`
       select count(*)::text as n from ${quotedRelation(relation.schema, relation.name)}
     `);
@@ -894,7 +926,7 @@ export async function listDomainEventPartitionCensus(db: Database): Promise<{
       totalRows: Number(count.rows[0]?.n ?? 0),
     });
   }
-  return { attached: attached.rows.map((row) => row.name), detached };
+  return { attached: relations.attached, detached };
 }
 
 /** The HARD gate's question: which detached partitions hold events for THIS
@@ -982,7 +1014,7 @@ export interface DomainEventPartitionCoverage {
 export async function loadDomainEventPartitionCoverage(
   db: Database,
 ): Promise<DomainEventPartitionCoverage> {
-  const census = await listDomainEventPartitionCensus(db);
+  const census = await listDomainEventPartitionRelations(db);
   const attachedMonths = new Set<string>();
   for (const name of census.attached) {
     const match = DOMAIN_EVENT_MONTHLY_PARTITION_PATTERN.exec(name);

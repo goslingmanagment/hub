@@ -11,6 +11,7 @@ import { BrowserPublishing } from "../apps/runtime/src/sync/fansly/browser-publi
 import { createBrowserPageTransport } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { FakeOperator, OPERATOR_TOKEN } from "./helpers/page-browser-operator.ts";
 import { until } from "./helpers/page-browser-fakes.ts";
+import { fakeSettings } from "./helpers/sync-fakes.ts";
 
 // Hub's writes through a page's browser, as the two are rolled out apart
 // (wall posts PR 7; protocol minor 8): the operator's own RPC server answers
@@ -108,7 +109,7 @@ async function rig(options: { protocolMinor?: number } = {}) {
     clock: { monoNow: () => performance.now() } as never,
     logger: { info: () => undefined, warn: () => undefined, debug: () => undefined, error: () => undefined } as never,
     metrics: { increment: () => undefined },
-    settings: { read: async () => live as unknown as AppConfig },
+    settings: fakeSettings(() => live),
     notify: async (input) => {
       told.push({ reason: input.reason, ...(input.note === undefined ? {} : { note: input.note }) });
       return true;
