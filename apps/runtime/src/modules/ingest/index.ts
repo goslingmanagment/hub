@@ -12,6 +12,7 @@ import { ServiceUnavailableError } from "../../services/errors.ts";
 import { refreshOfapiBinding } from "../../services/ofapi-binding-refresh.ts";
 import { routeSchemas } from "@agency_hub_core/contracts";
 
+import { pageScopeFor } from "../../api/request-auth.ts";
 import {
   ingestClientObservations,
   InvalidIngestEventError,
@@ -54,9 +55,10 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     try {
       return await ingestClientObservations(appContext, {
         principalUserId: principal.user.id,
-        // Page scope mirrors canAccessPage: owner keys are unrestricted,
-        // everyone else attributes only to their assigned pages.
-        allowedPageIds: principal.user.role === "owner" ? null : principal.assignedPageIds,
+        // The principal's page scope (pageScopeFor), like canAccessPage: an owner
+        // is unrestricted (null) but for the test realm's wall, everyone else
+        // attributes only to their assigned pages.
+        allowedPageIds: pageScopeFor(principal) ?? null,
         clientVersion: normalizedClientVersion,
         clientProfile: principal.clientProfile ?? null,
         events: request.body.events,
