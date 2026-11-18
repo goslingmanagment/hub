@@ -5,8 +5,8 @@
 
 import {
   getProjectionWatermark,
-  listEventAccounts,
   listEventsSince,
+  listProjectionWork,
   setProjectionWatermark,
   upsertFanEarningsStat,
   upsertFans,
@@ -31,12 +31,14 @@ export async function runFanEarningsProjection(
   input?: { accountId?: number | null },
 ): Promise<FanEarningsProjectionResult> {
   const totals: FanEarningsProjectionResult = { accounts: 0, eventsSeen: 0, upserted: 0 };
-  const accounts = input?.accountId != null
-    ? [input.accountId]
-    : await listEventAccounts(app.db);
+  const work = input?.accountId != null
+    ? { accounts: [input.accountId], idle: new Set<number>() }
+    : await listProjectionWork(app.db, FAN_EARNINGS_PROJECTION);
+  const accounts = work.accounts;
 
   for (const accountId of accounts) {
     totals.accounts += 1;
+    if (work.idle.has(accountId)) continue;
     let watermark = await getProjectionWatermark(app.db, FAN_EARNINGS_PROJECTION, accountId);
     for (;;) {
       const events = await listEventsSince(app.db, {

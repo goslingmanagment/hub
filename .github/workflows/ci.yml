@@ -153,7 +153,7 @@ jobs:
   # is invisible to the gate (see the fingerprint job) does.
   #
   # Five parts side by side, each on a 4-vCPU runner of its own:
-  #   typecheck  contracts freshness + tsc;
+  #   typecheck  barrel order + contracts freshness + tsc;
   #   lint       ESLint (family standard + architecture walls);
   #   unit k/2   half of the reliable unit tests (vitest --shard; no test
   #              Postgres);
@@ -204,6 +204,12 @@ jobs:
       - name: Install dependencies
         if: matrix.part != 'image'
         run: pnpm install --frozen-lockfile
+
+      # The db and contracts barrels keep their `export … from` lines sorted by
+      # path, so PRs that each add a module do not all append to the same line.
+      - name: Barrels are sorted (packages/db and packages/contracts index.ts)
+        if: matrix.part == 'typecheck'
+        run: node scripts/check-barrel-order.mjs
 
       # routes.ts freshness: the sdk determinism test pins openapi↔sdk↔hash
       # consistency, but editing routes.ts without `pnpm contracts:generate`
