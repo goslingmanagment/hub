@@ -24,20 +24,6 @@
     font-variant-numeric: normal;
   }
 
-  .people-idle {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px 24px;
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-15);
-    line-height: var(--ui-lh-15);
-  }
-
-  .people-idle__label {
-    color: var(--ui-text-2);
-  }
-
   .people-folded {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -187,14 +173,6 @@
     display: flex;
     flex-direction: column;
     gap: 24px;
-  }
-
-  .access-invite__check {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin: 0;
   }
 
   .access-invite__pages {
