@@ -50,7 +50,8 @@ docker exec -it agency-hub-postgres-1 psql -X -v ON_ERROR_STOP=1 -U postgres -d 
 
 ## PR4 — readthrough reconcile (`ofapiDmReadthroughReconcileEnabled`)
 
-- **Always on** since 2026-10-21 (its switch was retired).
+- **Removed 2026-11-10** (#1146) with the desktop read gateway: its switch was retired
+  2026-10-21, then the projector itself was deleted. Nothing below runs; the bullets are history.
 - **What it does when ON:** chat-open readthroughs journal the widened v2 observation
   (`ofapi_gateway_chat_messages_v2`) + immediate best-effort projection; the minutely
   readthrough sweep (rides canonicalize.sweep) is the retry. When OFF, capture keeps
