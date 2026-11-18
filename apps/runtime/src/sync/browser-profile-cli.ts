@@ -1,5 +1,3 @@
-import { hostname } from "node:os";
-
 import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 
@@ -29,6 +27,7 @@ import { nonGlobalAddressReason } from "@agency_hub_core/shared";
 
 import { sealPageBrowserSecrets } from "../services/egress/page-browser-link.ts";
 import { awaitPageBrowserCommand, SYNC_BROWSER_COMMAND_TTL_MS } from "./browser-levers.ts";
+import { cliActor, withSyncContext } from "./cli/args.ts";
 import type { SyncContext } from "./context.ts";
 import { SyncOwnerLeverError } from "./inspect.ts";
 
@@ -89,10 +88,6 @@ export interface BrowserProfileCliDeps {
   /** TESTS ONLY: addresses taken as public (a test's SOCKS5 listens on
    *  loopback). */
   allowAddresses?: (ip: string) => boolean;
-}
-
-function cliActor(): string {
-  return `cli@${hostname()} pid ${process.pid}`;
 }
 
 async function readProcessStdin(): Promise<string> {
@@ -380,14 +375,7 @@ export async function showBrowserProfile(db: Database, profileId: string) {
 
 export function registerSyncBrowserProfileCommands(sync: Command, deps: BrowserProfileCliDeps): void {
   const group = sync.command("browser-profile").description("Project Browser: the page browsers' profiles in Hub (scripts/deploy-page-browser.sh add-profile, remove-profile)");
-  const withContext = async <T>(body: (ctx: Pick<SyncContext, "db" | "rawConfig">) => Promise<T>): Promise<T> => {
-    const ctx = await deps.openContext();
-    try {
-      return await body(ctx);
-    } finally {
-      await ctx.close();
-    }
-  };
+  const withContext = <T>(body: (ctx: Pick<SyncContext, "db" | "rawConfig">) => Promise<T>): Promise<T> => withSyncContext(deps, body);
   const print = (value: unknown) => deps.print(JSON.stringify(value, null, 2));
 
   group
