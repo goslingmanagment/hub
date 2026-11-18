@@ -38,6 +38,7 @@ import type { Platform } from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../../services/auth.ts";
 import { POSTS_CANONICALIZER_VERSION } from "../../services/canonicalize/posts.ts";
+import { loadEffectiveConfigField } from "../../services/effective-config.ts";
 import { toSafeNumber, toSafeNumberOr } from "./errors.ts";
 import { buildAgentEvidence } from "./epistemics.ts";
 import { IDENTITY_PLANES, MESSAGE_PLANES, MONEY_PLANES, CRM_PLANES, planesNotRead } from "./planes.ts";
@@ -227,16 +228,17 @@ export async function handleAgentCapabilities(
     operation: "agentCapabilities",
   });
   try {
-    const [key, usage, agent] = await Promise.all([
+    const [key, usage, agent, agentSearchBackend] = await Promise.all([
       getAgentKeyById(scope.db, principal.agentKeyId),
       getAgentKeyUsage(scope.db, { agentKeyId: principal.agentKeyId }),
       findAgentKeyPerson(scope.db, principal.agentKeyId),
+      loadEffectiveConfigField(scope.db, appContext.config, "agentSearchBackend"),
     ]);
 
     // What #7 WILL RUN, not what the flag says. `fts_trgm` names a query this
     // deployment does not have; advertising it here and returning plain FTS there
     // is the same lie in two places.
-    const configuredBackend = scope.config.agentSearchBackend ?? "fts";
+    const configuredBackend = agentSearchBackend ?? "fts";
     const searchBackend = configuredBackend === "off" ? "off" : AGENT_SEARCH_BACKEND_IN_USE;
 
     // The degenerate envelope of a control operation, normative per §17.15.5: the
