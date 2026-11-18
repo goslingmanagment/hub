@@ -29,7 +29,6 @@ const runtimeExternal = [
   "argon2",
   "commander",
   "dotenv",
-  "drizzle-orm",
   "fastify",
   "fastify-type-provider-zod",
   "pg",

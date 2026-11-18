@@ -153,7 +153,7 @@ jobs:
   # is invisible to the gate (see the fingerprint job) does.
   #
   # Five parts side by side, each on a 4-vCPU runner of its own:
-  #   typecheck  contracts freshness + tsc;
+  #   typecheck  barrel order + contracts freshness + vendor compile + tsc;
   #   lint       ESLint (family standard + architecture walls);
   #   unit k/2   half of the reliable unit tests (vitest --shard; no test
   #              Postgres);
@@ -205,6 +205,12 @@ jobs:
         if: matrix.part != 'image'
         run: pnpm install --frozen-lockfile
 
+      # The db and contracts barrels keep their `export … from` lines sorted by
+      # path, so PRs that each add a module do not all append to the same line.
+      - name: Barrels are sorted (packages/db and packages/contracts index.ts)
+        if: matrix.part == 'typecheck'
+        run: node scripts/check-barrel-order.mjs
+
       # routes.ts freshness: the sdk determinism test pins openapi↔sdk↔hash
       # consistency, but editing routes.ts without `pnpm contracts:generate`
       # kept the committed artifacts mutually consistent yet stale. The
@@ -240,6 +246,19 @@ jobs:
             echo "::error::Token CSS is stale: run node --import tsx/esm packages/look/generate.ts and commit both copies."
             exit 1
           fi
+
+      # The clients' copies (chat-extension's kernel SDK, ContentOps' look,
+      # the hotkeys) are compiled by these scripts with declarations on.
+      # `pnpm typecheck` emits nothing, so a declaration error (TS7056) or a
+      # shared module the SDK staging list lacks shows up only here. The
+      # output is thrown away; --allow-dirty only stamps its manifest.
+      - name: Client vendor compiles (SDK, look, hotkeys)
+        if: matrix.part == 'typecheck'
+        run: |
+          out="$RUNNER_TEMP/vendor"
+          node scripts/vendor-sdk.mjs "$out/kernel-sdk" --allow-dirty
+          node scripts/vendor-look.mjs "$out/look" --allow-dirty
+          node scripts/vendor-hotkeys.mjs "$out/hotkeys" --allow-dirty
 
       # Check backend types once. Docker explicitly consumes this successful
       # check; direct Docker builds still check.

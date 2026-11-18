@@ -36,9 +36,8 @@ import { formatDay, incidentKindWord } from "@agency_hub_core/look";
 import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { readSyncPageStatuses } from "../sync/inspect.ts";
-import { toSyncPageStatusWire } from "../sync/requests/wire.ts";
-import { getClientHealthView } from "./client-health-view.ts";
+import { readSyncPageLoginViews } from "../sync/inspect.ts";
+import { readClientHealthCounters } from "./client-health-view.ts";
 import { readLedgerPayouts } from "./ledger-payouts.ts";
 import { readTeamLedgerQuestions } from "./ledger-questions.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
@@ -150,7 +149,10 @@ const ENGINE_BLOCK_KEYS = ["connection", "financials", "audience", "messages_liv
  * `fanslyPagesNeedingLogin` of apps/dashboard/src/api/waiting.ts with the
  * first two checks of `enginePageStatus`.
  */
-export function loginPageLabels(blocks: readonly SyncBlocksPage[], engine: SyncPagesResponse["pages"]): string[] {
+export function loginPageLabels(
+  blocks: readonly SyncBlocksPage[],
+  engine: ReadonlyArray<Pick<SyncPagesResponse["pages"][number], "pageLabel" | "mode" | "browser">>,
+): string[] {
   return blocks
     .filter((page) => page.platform === "fansly")
     .filter((page) => {
@@ -168,9 +170,9 @@ export function loginPageLabels(blocks: readonly SyncBlocksPage[], engine: SyncP
 export async function fanslyLoginPageLabels(app: AppContext, now = new Date()): Promise<string[]> {
   const [overview, statuses] = await Promise.all([
     getSyncBlocksOverview(app, { now }),
-    readSyncPageStatuses(app.db, app.config, await listSyncPages(app.db)),
+    readSyncPageLoginViews(app.db, await listSyncPages(app.db)),
   ]);
-  return loginPageLabels(overview.pages, statuses.map(toSyncPageStatusWire));
+  return loginPageLabels(overview.pages, statuses);
 }
 
 export function loginItems(labels: readonly string[]): MirrorItem[] {
@@ -578,8 +580,8 @@ export async function runMattersMirror(
   });
   await read(["extension.critical"], async () => {
     const range = { from: new Date(Date.parse(`${today}T00:00:00Z`) - 6 * DAY_MS).toISOString().slice(0, 10), to: today };
-    const view = await getClientHealthView(app, { ...range, clientName: "chat-extension" }, now);
-    return [{ kind: "extension.critical", items: extensionItems(view.counters, range) }];
+    const counters = await readClientHealthCounters(app, { ...range, clientName: "chat-extension" });
+    return [{ kind: "extension.critical", items: extensionItems(counters, range) }];
   });
   // Fansly's history requests go by themselves and OnlyFans' cannot be approved while its API is off: the row stays away.
   await read(["history.request"], async () => {

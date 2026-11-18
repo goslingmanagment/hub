@@ -100,3 +100,16 @@ export const POST_ATTACHMENTS_DATASET = `
     ) role
     left join creator_raw_media f on f.page_id = m.account_id and f.media_ref = role.media_ref
 `;
+
+// The capture floor of POST_ATTACHMENTS_DATASET without expanding it: every
+// attachment slot there yields at least one row (the bundle, member, offer and
+// file joins are left joins, the role lateral's 'main' arm is unconditional)
+// with k_occurred_at = published_at, so the per-page minimum is the minimum
+// published_at over the posts that have a slot. Keep the slot expression equal
+// to the dataset's `jsonb_array_elements` argument above.
+export const POST_ATTACHMENTS_CAPTURE_FLOOR = `
+  select cp.account_id as k_page_id, cp.published_at as floor_at
+    from creator_posts cp
+   where jsonb_array_length(coalesce(cp.attachment_refs,
+           case when cp.attachment_count > 0 then '[{}]'::jsonb else '[]'::jsonb end)) > 0
+`;

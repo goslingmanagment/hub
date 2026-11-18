@@ -79,9 +79,12 @@ export function changeDirection(mills: MillsLike | null | undefined): "up" | "do
   return value > 0n ? "up" : value < 0n ? "down" : "flat";
 }
 
+// The formatters below are built once: building one costs 7–30 µs, a screen formats hundreds of values.
+const COUNT = new Intl.NumberFormat("ru-RU");
+
 /** «1 420», «9 840», a real zero «0», no data «—». */
 export function formatCount(value: number | null | undefined): string {
-  return value === null || value === undefined ? "—" : value.toLocaleString("ru-RU");
+  return value === null || value === undefined ? "—" : COUNT.format(value);
 }
 
 /** The AI's money: «$39.88», «< $0.01», «$0.00», «−$1.20». */
@@ -98,17 +101,44 @@ export function formatAiUnitPrice(microUsd: number): string {
   return realMinus(AI_UNIT_PRICE.format(microUsdFromDbInt(microUsd) / 1_000_000));
 }
 
+const DATE = new Intl.DateTimeFormat("ru-RU", {
+  month: "short",
+  day: "numeric",
+  year: undefined,
+  timeZone: MOSCOW_ZONE,
+});
+const DATE_WITH_YEAR = new Intl.DateTimeFormat("ru-RU", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: MOSCOW_ZONE,
+});
+
 export function formatDate(iso: string, options?: { includeYear?: boolean }): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("ru-RU", {
-    month: "short",
-    day: "numeric",
-    year: options?.includeYear ? "numeric" : undefined,
-    timeZone: MOSCOW_ZONE,
-  });
+  return (options?.includeYear ? DATE_WITH_YEAR : DATE).format(d);
 }
+
+const DATE_TIME = new Intl.DateTimeFormat("ru-RU", {
+  month: "short",
+  day: "numeric",
+  year: undefined,
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  timeZone: MOSCOW_ZONE,
+});
+const DATE_TIME_WITH_YEAR = new Intl.DateTimeFormat("ru-RU", {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  timeZone: MOSCOW_ZONE,
+});
 
 /** "4 окт., 12:01". `yearUnlessCurrent`: an instant of another year carries it
  *  ("30 авг. 2025 г., 11:59") — a date without one reads as this year's. */
@@ -117,15 +147,7 @@ export function formatDateTime(iso: string, options?: { yearUnlessCurrent?: bool
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   const withYear = options?.yearUnlessCurrent === true && MOSCOW_YEAR.format(d) !== MOSCOW_YEAR.format(new Date());
-  return d.toLocaleDateString("ru-RU", {
-    month: "short",
-    day: "numeric",
-    year: withYear ? "numeric" : undefined,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: MOSCOW_ZONE,
-  });
+  return (withYear ? DATE_TIME_WITH_YEAR : DATE_TIME).format(d);
 }
 
 /** «только что», «5 мин назад», «2 ч назад», «3 дня назад»: only next to the exact time. */

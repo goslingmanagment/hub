@@ -25,10 +25,9 @@ import {
   type AgentThreadCoverageRow,
   type Database,
 } from "@agency_hub_core/db";
-import { SYNCED_PLATFORMS, type AppConfig, type Platform } from "@agency_hub_core/shared";
+import { SYNCED_PLATFORMS, type Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import type { AgentAuthPrincipal } from "../../services/auth.ts";
 import { agentScopeFor } from "../../api/request-auth.ts";
 import type { AgentCursorSigning } from "./cursors.ts";
@@ -358,7 +357,6 @@ export interface AgentRequestOptions {
 
 export interface AgentRequestScope {
   principal: AgentAuthPrincipal;
-  config: AppConfig;
   planeMode: AgentPlaneMode;
   db: Database;
   /** The key's grant, resolved. NEVER `undefined` — that value means "everything". */
@@ -445,7 +443,6 @@ export async function beginAgentRequest(
   requestedPageIds?: readonly number[],
 ): Promise<AgentRequestScope> {
   const db = appContext.db;
-  const config = await loadEffectiveConfig(db, appContext.config);
   const planeMode: AgentPlaneMode = AGENT_PLANE_MODE;
   const granted = new Set(principal.capabilities);
   for (const capability of options.requiredCapabilities ?? []) {
@@ -482,7 +479,6 @@ export async function beginAgentRequest(
 
   return {
     principal,
-    config,
     planeMode,
     db,
     pageIds,

@@ -138,6 +138,15 @@ export async function isTestPageLabel(db: Database, label: string): Promise<bool
   return row === undefined ? null : row.test === true;
 }
 
+/** An active page by its label and whether it is a test page, in one statement: the API's page check (api/server.ts) —
+ *  the rows of `findPageSummaryByLabel` (active, with its model) and the test of `testPageSql`. */
+export async function findActivePageRealmByLabel(db: Database, label: string): Promise<{ id: number; test: boolean } | null> {
+  const result = await db.execute(sql`select p.id, ${testPageSql(sql`p.id`)} as test
+    from pages p join models m on m.id = p.model_id where p.label = ${label} and p.status = 'active' limit 1`);
+  const row = result.rows[0] as { id: number | string; test?: boolean } | undefined;
+  return row === undefined ? null : { id: Number(row.id), test: row.test === true };
+}
+
 /** The test team's owner by name (the decider of a test shift's dispute): a test person of the owner's role with a login. */
 export async function findTestOwnerLogin(db: Database): Promise<{ userId: number; name: string } | null> {
   const result = await db.execute(sql`select pl.user_id, pe.display_name from person_logins pl join people pe on pe.id = pl.person_id

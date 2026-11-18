@@ -1242,6 +1242,31 @@ export async function nextOpenWorkDueAt(
   return toDate(result.rows[0]?.dueAt);
 }
 
+/** Whether the page has an open row due now, past its breaker and outside
+ *  these exclusions: the actor's one question before its class pickers.
+ *  Every picker (`pickUrgent`, `pickPlanned`, `pickRequests`) asks
+ *  `runnablePredicate` — this predicate plus a class and further conditions —
+ *  with exclusions that contain these, so false means each of them finds
+ *  nothing. */
+export async function hasRunnableWork(
+  db: Database,
+  input: Pick<SyncWorkPickFilter, "pageId" | "excludeResources" | "excludeFiles" | "excludeClasses">,
+): Promise<boolean> {
+  const result = await db.execute<{ runnable: boolean }>(sql`
+    select exists (
+      select 1
+        from sync_work w
+       where w.page_id = ${input.pageId}
+         and not w.shadow
+         and w.state = 'open'
+         and w.due_at <= clock_timestamp()
+         and (w.breaker_until is null or w.breaker_until <= clock_timestamp())
+         and ${exclusionPredicate(input)}
+    ) as runnable
+  `);
+  return result.rows[0]?.runnable === true;
+}
+
 /** Which of these subjects (absent: any) have an open (or running) row of
  *  `resource` — plain read, no lock. */
 export async function listOpenWorkSubjects(
@@ -1421,30 +1446,36 @@ export async function lockWorkRows(db: Database, ids: readonly number[]): Promis
 
 // ── status ────────────────────────────────────────────────────────────────────
 
-/** Work rows of a page for `sync status` / `sync why` (newest first). */
-export async function getWorkForStatus(
-  db: Database,
-  input: {
-    pageId: number;
-    resource?: string;
-    subject?: string;
-    states?: readonly SyncWorkState[];
-    limit?: number;
-    offset?: number;
-  },
-): Promise<SyncWorkRow[]> {
+/** Which work rows of a page a status reader asks for. */
+interface StatusWorkInput {
+  pageId: number;
+  resource?: string;
+  subject?: string;
+  states?: readonly SyncWorkState[];
+  limit?: number;
+  offset?: number;
+}
+
+/** The rows of `input` (newest first) with `columns`: the one statement of
+ *  both readers below, so the two answer with the same rows in the same order. */
+function statusWorkSelect(columns: SQL, input: StatusWorkInput): SQL {
   const filters: SQL[] = [sql`w.page_id = ${input.pageId}`, sql`not w.shadow`];
   if (input.resource !== undefined) filters.push(sql`w.resource = ${input.resource}`);
   if (input.subject !== undefined) filters.push(sql`w.subject = ${input.subject}`);
   if (input.states !== undefined) filters.push(sql`w.state = any(${textArrayParam(input.states)})`);
-  const result = await db.execute<WorkSqlRow>(sql`
-    select ${workColumns}
+  return sql`
+    select ${columns}
       from sync_work w
      where ${sql.join(filters, sql` and `)}
      order by w.id desc
      limit ${Math.max(1, Math.min(1_000, input.limit ?? 100))}
     offset ${Math.max(0, input.offset ?? 0)}
-  `);
+  `;
+}
+
+/** Work rows of a page for `sync status` / `sync why` (newest first). */
+export async function getWorkForStatus(db: Database, input: StatusWorkInput): Promise<SyncWorkRow[]> {
+  const result = await db.execute<WorkSqlRow>(statusWorkSelect(workColumns, input));
   return result.rows.map(normalizeWorkRow);
 }
 
@@ -1455,6 +1486,53 @@ export type SyncWorkStatusFields = Pick<
   | "id" | "pageId" | "resource" | "subject" | "class" | "state" | "dueAt"
   | "breakerUntil" | "blockedByVendorAt" | "waitingReason" | "waitingUntil"
 >;
+
+type StatusSqlRow = Pick<
+  WorkSqlRow,
+  | "id" | "pageId" | "resource" | "subject" | "class" | "state" | "dueAt"
+  | "breakerUntil" | "blockedByVendorAt" | "waitingReason" | "waitingUntil"
+>;
+
+/** The columns of `SyncWorkStatusFields`: none of the row's jsonb. */
+const statusColumns = sql`w.id::text as id,
+           w.page_id::text as "pageId",
+           w.resource,
+           w.subject,
+           w.class,
+           w.state,
+           w.due_at as "dueAt",
+           w.breaker_until as "breakerUntil",
+           w.blocked_by_vendor_at as "blockedByVendorAt",
+           w.waiting_reason as "waitingReason",
+           w.waiting_until as "waitingUntil"`;
+
+/** `statusColumns` converted as `normalizeWorkRow` converts them. */
+function statusFieldsOf(row: StatusSqlRow): SyncWorkStatusFields {
+  return {
+    id: Number(row.id),
+    pageId: Number(row.pageId),
+    resource: row.resource,
+    subject: row.subject,
+    class: row.class,
+    state: row.state,
+    dueAt: toRequiredDate(row.dueAt),
+    breakerUntil: toDate(row.breakerUntil),
+    blockedByVendorAt: toDate(row.blockedByVendorAt),
+    waitingReason: row.waitingReason,
+    waitingUntil: toDate(row.waitingUntil),
+  };
+}
+
+/**
+ * The rows `getWorkForStatus` gives for the same input, with only the fields
+ * the status reads: for the readers that count and explain open work (the page
+ * status, the Settings blocks). An open row's jsonb (a cursor reaches 191 KB)
+ * is most of what the full read ships, and none of it is read there.
+ */
+export async function getWorkStatusFields(db: Database, input: StatusWorkInput): Promise<SyncWorkStatusFields[]> {
+  const result = await db.execute<StatusSqlRow>(statusWorkSelect(statusColumns, input));
+  return result.rows.map(statusFieldsOf);
+}
 
 /**
  * Every page's open, running and quarantined work in one statement: what the
@@ -1469,39 +1547,13 @@ export type SyncWorkStatusFields = Pick<
  * without saying so.
  */
 export async function listOpenWorkOfAllPages(db: Database): Promise<SyncWorkStatusFields[]> {
-  const result = await db.execute<Pick<
-    WorkSqlRow,
-    | "id" | "pageId" | "resource" | "subject" | "class" | "state" | "dueAt"
-    | "breakerUntil" | "blockedByVendorAt" | "waitingReason" | "waitingUntil"
-  >>(sql`
-    select w.id::text as id,
-           w.page_id::text as "pageId",
-           w.resource,
-           w.subject,
-           w.class,
-           w.state,
-           w.due_at as "dueAt",
-           w.breaker_until as "breakerUntil",
-           w.blocked_by_vendor_at as "blockedByVendorAt",
-           w.waiting_reason as "waitingReason",
-           w.waiting_until as "waitingUntil"
+  const result = await db.execute<StatusSqlRow>(sql`
+    select ${statusColumns}
       from sync_work w
      where w.state = any (array['open', 'running', 'quarantined'])
        and not w.shadow
   `);
-  return result.rows.map((row) => ({
-    id: Number(row.id),
-    pageId: Number(row.pageId),
-    resource: row.resource,
-    subject: row.subject,
-    class: row.class,
-    state: row.state,
-    dueAt: toRequiredDate(row.dueAt),
-    breakerUntil: toDate(row.breakerUntil),
-    blockedByVendorAt: toDate(row.blockedByVendorAt),
-    waitingReason: row.waitingReason,
-    waitingUntil: toDate(row.waitingUntil),
-  }));
+  return result.rows.map(statusFieldsOf);
 }
 
 /** The newest closed row of a key (breaker carry-forward, status of closed
@@ -1646,7 +1698,7 @@ export const SYNC_LAST_APPLIED_ACTIVE_ROWS = 3;
  *
  *  - its `SYNC_LAST_APPLIED_RECENT_ROWS` newest rows whatever their subject (a
  *    trigger's row closes when it is served, so the newest attempts sit on the
- *    newest rows): the key's range of `sync_work_key_recent`, ids only;
+ *    newest rows): the key's range of `sync_work_key_newest`, ids only;
  *  - its `SYNC_LAST_APPLIED_ACTIVE_ROWS` active rows attempted last (a goal's
  *    row stays open for hours, and a request's rows take turns): the key's
  *    range of `sync_work_open_uniq`.
@@ -1678,20 +1730,18 @@ export async function lastLiveAppliedAtOverSubjects(
        and a.applied_at is not null
      order by a.id desc
      limit 1`;
-  // `offset 0` keeps the key's rows a scan of their own index range: flattened,
-  // "order by id desc limit" invites a walk of the whole table backwards along
-  // its primary key, which never ends for a key the page has no rows of.
+  // The key's newest rows are the head of its range of `sync_work_key_newest`
+  // (page_id, resource, id desc): the scan stops at the limit, with no sort,
+  // and a key the page has no rows of is an empty range.
   const result = await db.execute<{ resource: string; appliedAt: Date | string | null }>(sql`
     select k.resource,
            (select max(recent.applied_at)
               from ((select a.applied_at
-                       from (select s.id
-                               from (select w.id
-                                       from sync_work w
-                                      where w.page_id = ${input.pageId}
-                                        and w.resource = k.resource
-                                     offset 0) s
-                              order by s.id desc
+                       from (select w.id
+                               from sync_work w
+                              where w.page_id = ${input.pageId}
+                                and w.resource = k.resource
+                              order by w.id desc
                               limit ${sql.raw(String(SYNC_LAST_APPLIED_RECENT_ROWS))}) w
                       cross join lateral (${newestApplied}) a)
                     union all

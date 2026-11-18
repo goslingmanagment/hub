@@ -1,7 +1,7 @@
 import {
   countActiveLiveWorkByResource,
   countUnavailableChats,
-  getWorkForStatus,
+  getWorkStatusFields,
   lastLiveAppliedAtByResource,
   lastLiveAppliedAtOverSubjects,
   listSyncPages,
@@ -9,7 +9,7 @@ import {
   type SyncPageRow,
   type SyncStream,
   type SyncWorkResourceCounts,
-  type SyncWorkRow,
+  type SyncWorkStatusFields,
 } from "@agency_hub_core/db";
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import { isIndefinite } from "@agency_hub_core/shared";
@@ -70,7 +70,7 @@ export interface EngineStatusFacts {
   /** Active live work per key (any subject). */
   counts: ReadonlyMap<string, SyncWorkResourceCounts>;
   /** The page-level (subject '') rows that are open, running or quarantined. */
-  pageRows: readonly SyncWorkRow[];
+  pageRows: readonly SyncWorkStatusFields[];
   /** When each key was last applied live: a page-level key, and a lever key
    *  that works per subject (a chat, a fan) over all its subjects. */
   appliedAt: ReadonlyMap<string, Date>;
@@ -143,7 +143,7 @@ export async function readEngineStatusFacts(
   const counts = await countActiveLiveWorkByResource(db, { pageIds: pages.map((page) => page.pageId) });
   const chats = await countUnavailableChats(db, { pageIds: pages.map((page) => page.pageId) });
   for (const page of pages) {
-    const pageRows = await getWorkForStatus(db, {
+    const pageRows = await getWorkStatusFields(db, {
       pageId: page.pageId,
       subject: "",
       states: ["open", "running", "quarantined"],

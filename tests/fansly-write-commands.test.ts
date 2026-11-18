@@ -14,6 +14,7 @@ import { FANSLY_WRITE_OPERATIONS, nextWriteStep, writeAnswerVerdict, writeOutcom
 import { deriveFanslyPostCommand, deriveFanslyWrite, FANSLY_SCHEDULE_LEAD_MS, FANSLY_WITHDRAW_LEAD_MS, fanslyPartRange, parseApprovedForm, postWallIds, type ApprovedForm, type WriteDeriveInput } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
 import { writeGuard, type WriteGuardInput } from "../apps/runtime/src/sync/fansly/publish/guard.ts";
 import { fanslyWriteModule, WriteAdmissionRefusedError, type WriteDeriveContext, type WriteModuleStore } from "../apps/runtime/src/sync/fansly/publish/module.ts";
+import { fakeSettings } from "./helpers/sync-fakes.ts";
 
 // Wall posts PR 6: the page actor's write commands. One attempt (a command
 // is sent only from `queued`; after it may have gone it is never sent again),
@@ -832,7 +833,7 @@ function planContext(overrides: Partial<PlanContext> = {}): PlanContext {
     now: NOW,
     page: {} as SyncPageRow,
     registry: {} as never,
-    settings: { read: async () => ({ publishingEnabled: true }) as never },
+    settings: fakeSettings(() => ({ publishingEnabled: true })),
     transportWrites: () => true,
     ...overrides,
   };
@@ -941,8 +942,8 @@ describe("the module: a refused admission is not tried lap after lap", () => {
 });
 
 describe("the module: the page's browser asks again at its pause (PR 7)", () => {
-  const settingsOn = { read: async () => ({ publishingEnabled: true }) as never };
-  const settingsOff = { read: async () => ({ publishingEnabled: false }) as never };
+  const settingsOn = fakeSettings(() => ({ publishingEnabled: true }));
+  const settingsOff = fakeSettings(() => ({ publishingEnabled: false }));
 
   it("confirms only the command in flight under its attempt and fingerprint, its approval in force, the page's publishing and the switch on", async () => {
     const state = fresh();
@@ -1013,7 +1014,7 @@ describe("the module: a published post's delete (0312)", () => {
     const asked: string[] = [];
     const state = deleting();
     const module = fanslyWriteModule(deleteStore(state));
-    const off = { read: async () => ({ publishingEnabled: false }) as never };
+    const off = fakeSettings(() => ({ publishingEnabled: false }));
     state.page = { enabled: false, autostopReason: null };
     const plan = await module.plan(WORK, planContext({ settings: off, transportWrites: (permission) => (asked.push(permission), permission === "withdraw") }));
     expect(asked).toEqual(["withdraw"]);
@@ -1102,7 +1103,7 @@ describe("a post with no Hub publication (an agent's cancel or delete, 0369)", (
       },
     };
     const module = fanslyWriteModule(store);
-    const off = { read: async () => ({ publishingEnabled: false }) as never };
+    const off = fakeSettings(() => ({ publishingEnabled: false }));
     state.page = { enabled: false, autostopReason: null };
     // The read predates the command: it waits — and gives up after a while, never sent.
     expect(await module.plan(WORK, planContext({ settings: off }))).toMatchObject({ kind: "wait", reason: "dependency" });

@@ -35,6 +35,7 @@ import type { Platform } from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../../services/auth.ts";
 import { POSTS_CANONICALIZER_VERSION } from "../../services/canonicalize/posts.ts";
+import { loadEffectiveConfigField } from "../../services/effective-config.ts";
 import {
   buildAgentEvidence,
   gapBeforeCaptureFloor,
@@ -1092,7 +1093,7 @@ export async function handleAgentSearchMessages(
     // The EFFECTIVE config, not the boot one: the backend flag is `runtimeApply:
     // live`, and reading `appContext.config` meant a dashboard flip did nothing
     // until the process restarted.
-    const configured = scope.config.agentSearchBackend ?? "fts";
+    const configured = (await loadEffectiveConfigField(scope.db, appContext.config, "agentSearchBackend")) ?? "fts";
     if (configured === "off") {
       throw new AgentPlaneDisabledError("agent message search is disabled");
     }

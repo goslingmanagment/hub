@@ -75,7 +75,19 @@ export function parsePeriod(value: string): Period {
   );
 }
 
-function getDateParts(date: Date, timeZone: string): DateParts {
+// Building an Intl formatter costs 10–30 µs, formatting with a built one ~1 µs:
+// one formatter per zone. A caller may pass a client-supplied (validated) zone,
+// so the cache is capped. An invalid zone throws from the constructor before
+// anything is stored, exactly as without the cache.
+const DATE_PARTS_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+const DATE_PARTS_FORMATTERS_CAP = 64;
+
+function datePartsFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = DATE_PARTS_FORMATTERS.get(timeZone);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone,
     year: "numeric",
@@ -86,6 +98,15 @@ function getDateParts(date: Date, timeZone: string): DateParts {
     second: "2-digit",
     hour12: false,
   });
+  if (DATE_PARTS_FORMATTERS.size >= DATE_PARTS_FORMATTERS_CAP) {
+    DATE_PARTS_FORMATTERS.clear();
+  }
+  DATE_PARTS_FORMATTERS.set(timeZone, formatter);
+  return formatter;
+}
+
+function getDateParts(date: Date, timeZone: string): DateParts {
+  const formatter = datePartsFormatter(timeZone);
   const parts = formatter.formatToParts(date);
   const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
 

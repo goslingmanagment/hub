@@ -27,7 +27,11 @@
 // this module builds for `sourceLabel`, `typeLabel` and the notification labels
 // are GENERATED from these frozen constants, so a second copy of a code→label
 // map cannot drift away from the first.
-import { POST_ATTACHMENTS_DATASET, RAW_MEDIA_DATASET } from "./agent-content-media-sql.ts";
+import {
+  POST_ATTACHMENTS_CAPTURE_FLOOR,
+  POST_ATTACHMENTS_DATASET,
+  RAW_MEDIA_DATASET,
+} from "./agent-content-media-sql.ts";
 import { CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES } from "./client-audience-new.ts";
 import { HUB_LINK_ALLOCATIONS_SQL, HUB_LINK_FLOORS_SQL } from "./link-attribution.ts";
 import { linkStatRunUsableResultSql } from "./ofapi.ts";
@@ -70,6 +74,14 @@ export interface AgentDatasetSqlMapping {
   /** The one temporal plane whose unbounded per-page minimum establishes this
    * dataset's capture floor. Inventory datasets omit it and stay `unknown`. */
   readonly captureFloorPlane?: string;
+  /**
+   * Optional cheaper SQL for that floor. Fixed SQL (no request value) returning
+   * rows `(k_page_id, floor_at)`; its contract: the per-page minimum of
+   * `floor_at` EQUALS the per-page minimum of `windowColumn` over `source`.
+   * Without it the floor is that minimum taken over the whole `source`. Write
+   * it without a WITH, or PostgreSQL will not take the min from an index.
+   */
+  readonly captureFloorSource?: string;
   /**
    * Optional boolean source column limiting rows that may be served or
    * aggregated. It deliberately does NOT constrain `captureFloorPlane`: the
@@ -1395,8 +1407,12 @@ function creatorStatsMediaCounters(alias: string): string {
          ${alias}.watch_pct_sum::text as f_watch_pct_sum, ${alias}.replays as f_replays`;
 }
 
+// The window column is the day's UTC midnight written out, not `v.day::timestamptz`
+// (the same instant under the server's UTC time zone): that cast is STABLE and no
+// index can hold it, so every window read scanned the whole table. Written this
+// way it is IMMUTABLE and the expression of the (page_id, …) index of 0431.
 const CREATOR_STATS_MEDIA_DAILY = `
-  ${creatorStatsHead("v", "v.media_offer_id || ':' || v.media_id || ':' || v.source::text || ':' || v.day::text", "v.day::timestamptz")},
+  ${creatorStatsHead("v", "v.media_offer_id || ':' || v.media_id || ':' || v.source::text || ':' || v.day::text", "(v.day::timestamp at time zone 'UTC')")},
          v.media_offer_id as f_media_offer_id, v.media_id as f_media_id, v.media_type as f_media_type,
          v.source as f_source, ${creatorStatsSourceLabelSql("v.source")} as f_source_label, v.day::text as f_day,
          ${creatorStatsMediaCounters("v")}, v.unique_viewers as f_unique_viewers, v.duration_ms as f_duration_ms
@@ -2508,6 +2524,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     readPlanes: ["creator_posts", "creator_media", "creator_media_bundles", "creator_raw_media"],
     captureFloorPlane: "creator_posts",
+    captureFloorSource: POST_ATTACHMENTS_CAPTURE_FLOOR,
     internalCaptureGap: { column: "k_link_complete", plane: "creator_raw_media" },
     provenanceColumns: { observationRef: "k_observation_ref", ingestPath: "k_ingest_path", convergence: "k_convergence" },
   },
