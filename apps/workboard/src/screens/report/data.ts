@@ -65,7 +65,8 @@ export function useClaimable(shiftId: number, enabled: boolean) {
 /** One write of the board. Its answer, when it is the board, replaces the read; otherwise the board is read again. */
 export type Write =
   | { op: "line"; transactionId: number; body: ShiftReportLineBody }
-  | { op: "comment"; comment: string }
+  /** With a model: that model's comment alone (its post's); without — the one comment of every post. */
+  | { op: "comment"; comment: string; modelSlug?: string }
   | { op: "ask"; transactionId: number; statement: "mine" | "share"; shareWithUserId: number | null; note: string }
   | { op: "unask"; transactionId: number }
   | { op: "submit" }
@@ -85,7 +86,7 @@ function send(kernel: KernelClient, shiftId: number, write: Write): Promise<unkn
   const params = { shiftId };
   switch (write.op) {
     case "line": return kernel.shiftReportLineSet({ params: { shiftId, transactionId: write.transactionId }, body: write.body });
-    case "comment": return kernel.shiftReportCommentSet({ params, body: { comment: write.comment } });
+    case "comment": return kernel.shiftReportCommentSet({ params, body: write.modelSlug === undefined ? { comment: write.comment } : { comment: write.comment, modelSlug: write.modelSlug } });
     case "ask": return kernel.shiftReportAsk({ params, body: { transactionId: write.transactionId, statement: write.statement, shareWithUserId: write.shareWithUserId, note: write.note } });
     case "unask": return kernel.shiftReportAskWithdraw({ params: { shiftId, transactionId: write.transactionId } });
     case "submit": return kernel.shiftReportSubmit({ params });

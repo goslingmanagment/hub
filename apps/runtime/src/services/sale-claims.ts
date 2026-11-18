@@ -638,6 +638,7 @@ async function settleReport(
     lines: made.lines,
     offPlatform: current.offPlatform,
     comment: current.comment,
+    modelComments: current.modelComments,
     dayPaid,
     ruleVersion: SALE_RULE.version,
     madeFor: input.madeFor,
@@ -1314,7 +1315,7 @@ export async function decideOffPlatformLine(
     const sums = reportSums(current.lines, reportPages, offPlatform);
     const version = await insertHandinVersion(txDb, {
       handin, door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
-      totalMills: sums.totalMills, pages: sums.pages, lines: current.lines, offPlatform, comment: current.comment, dayPaid,
+      totalMills: sums.totalMills, pages: sums.pages, lines: current.lines, offPlatform, comment: current.comment, modelComments: current.modelComments, dayPaid,
       ruleVersion: SALE_RULE.version, madeFor: { kind: "off_platform", offPlatformId: row.id, decision: state },
       // The report's own date, the one the ledger was asked about above: only the person's hand-in dates a report.
       reportDate: handin.reportDate, at: now,

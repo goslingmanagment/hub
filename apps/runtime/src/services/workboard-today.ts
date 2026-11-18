@@ -18,6 +18,8 @@ import { moscowDayOf } from "./chatter-shifts.ts";
 import { awaitingGivingOf, waitsSince } from "./custom-orders/readers.ts";
 import { ruleSlotsOf } from "./sale-homes.ts";
 import { slotRuns, type RuleSlot } from "./sale-rule.ts";
+import { commentText } from "./shift-handin-rules.ts";
+import { modelsOfPages, pageCatalog } from "./shift-handins.ts";
 import { pagesOfModels, personOfLogin, teamFactsFor, teamsOfPerson } from "./teams.ts";
 
 /**
@@ -173,13 +175,22 @@ export async function readWorkboardToday(app: TodayApp, principal: HumanAuthPrin
     principal.assignedPageIds.length === 0 ? Promise.resolve([]) : awaitingGivingOf(app, { pageIds: principal.assignedPageIds, limit: 200 }),
   ]);
 
+  // Each model's own comment (0432): the reader reads those of the models of their pages the shift held, as one text
+  // (as the board's «От прошлой смены»); a report with nothing for them is left out.
+  const catalog = handover.some((row) => Object.keys(row.modelComments).length > 0) ? await pageCatalog(app.db) : null;
+  const handoverOf = (row: (typeof handover)[number]) => {
+    const pages = row.shift.pageLabels.filter((label) => myLabels.has(label));
+    const models = catalog === null ? [] : modelsOfPages(catalog, pages);
+    return { row, pages, comment: commentText(row, models, { line: (name, text) => `${name}: ${text}`, separator: " · " }).trim() };
+  };
+
   return {
-    handover: handover.map((row) => ({
+    handover: handover.map(handoverOf).filter((one) => one.comment !== "").map(({ row, pages, comment }) => ({
       shiftId: row.shift.id,
       person: { userId: row.shift.userId, name: nameOfLogin(facts, row.shift.userId, row.shift.username) },
-      pages: row.shift.pageLabels.filter((label) => myLabels.has(label)),
+      pages,
       endedAt: row.shift.endedAt.toISOString(),
-      comment: row.comment.trim(),
+      comment,
     })),
     customsToGive: orders.filter((order) => order.state === "shot").map((order) => ({
       code: customOrderCode(order.id),

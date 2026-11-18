@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { modelCommentsOf } from "./shift-handins.ts";
 
 // The «Отчёт» board's check after a hand-in and «нет в Hub» (products plan 2026-11-13, package R §5): what the sync
 // machinery and ChatSpace's feed already record, read — never a request of their own — and the sightings' matching,
@@ -158,17 +159,24 @@ export async function listHandinsPostCopiedBehind(db: Database): Promise<Array<{
   }));
 }
 
-/** The comment of the latest shift before this one on any of its pages (a draft's too): who, what, when. */
-export async function findPreviousShiftComment(db: Database, input: { shiftId: number; pageLabels: readonly string[]; before: Date }): Promise<{ userId: number; comment: string; at: Date } | null> {
-  if (input.pageLabels.length === 0) return null;
+/**
+ * The comments of the latest shifts before this one on any of its pages (a draft's too), the newest first and at most
+ * `limit`, each with a comment that is not empty — the general one or a model's own (0432): who, both, when. Which of
+ * them speaks to this shift's models is the caller's to pick (`modelComment`).
+ */
+export async function listPreviousShiftComments(
+  db: Database,
+  input: { shiftId: number; pageLabels: readonly string[]; before: Date; limit: number },
+): Promise<Array<{ userId: number; comment: string; modelComments: Record<string, string>; at: Date }>> {
+  if (input.pageLabels.length === 0) return [];
   const result = await db.execute<Row>(sql`
-    select h.user_id, h.comment, coalesce(h.draft_updated_at, h.submitted_at, h.updated_at) as at
+    select h.user_id, h.comment, h.model_comments, coalesce(h.draft_updated_at, h.submitted_at, h.updated_at) as at
     from shift_handins h join shifts s on s.id = h.shift_id
-    where s.id <> ${input.shiftId} and s.started_at < ${input.before.toISOString()}::timestamptz and btrim(h.comment) <> ''
+    where s.id <> ${input.shiftId} and s.started_at < ${input.before.toISOString()}::timestamptz
+      and (btrim(h.comment) <> '' or exists (select 1 from jsonb_each_text(h.model_comments) as own where btrim(own.value) <> ''))
       and exists (select 1 from jsonb_array_elements(s.pages) as page where page ->> 'pageLabel' = any(${sql.param([...input.pageLabels])}::text[]))
-    order by s.started_at desc limit 1`);
-  const row = result.rows[0];
-  return row === undefined ? null : { userId: num(row.user_id), comment: String(row.comment), at: date(row.at) };
+    order by s.started_at desc limit ${input.limit}`);
+  return result.rows.map((row) => ({ userId: num(row.user_id), comment: String(row.comment), modelComments: modelCommentsOf(row.model_comments), at: date(row.at) }));
 }
 
 /** The notes people wrote on sales in their reports (the newest of each sale): the folded «До 18:00» rows carry them. */
