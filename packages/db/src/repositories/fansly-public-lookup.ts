@@ -443,24 +443,38 @@ function demandSql(input: { recheckBefore: Date; renewedMissBefore: Date }) {
       union all
       -- The legacy deleted mark on a fan a page sees again, with an answer newer
       -- than his latest check: only a found answer takes the mark off.
+      -- The page side is a probe per marked fan (offset 0 keeps the lateral
+      -- unflattened): as a plain join it was priced as a seq scan of every
+      -- page_fans row (~30 ms a poll, prod 2026-11-18). Same pairs, same filters.
       select pf.fan_id, 'marked_seen', 4, pf.account_probe_at, false
         from fans f
-        join page_fans pf on pf.fan_id = f.id
+        cross join lateral (
+          select pf.fan_id, pf.account_probe_at
+            from page_fans pf
+           where pf.fan_id = f.id
+             and pf.account_probe_resolved is true
+             and (f.public_checked_at is null or pf.account_probe_at > f.public_checked_at)
+          offset 0
+        ) pf
        where f.platform = 'fansly'
          and f.deleted_detected_at is not null
-         and pf.account_probe_resolved is true
-         and (f.public_checked_at is null or pf.account_probe_at > f.public_checked_at)
     ), due as (
+      -- The fan is read by a correlated subquery (a primary-key probe per demand
+      -- row; no row → null → dropped, as the inner join dropped it): as a join
+      -- the planner hash-joined every Fansly fan (~55 ms a poll, prod 2026-11-18).
       select d.fan_id, min(d.priority) as priority, min(d.since) as since,
              array_agg(distinct d.demand order by d.demand) as demands
         from demand d
-        join fans f on f.id = d.fan_id
-       where f.platform = 'fansly'
-         and (
-           not d.aged
-           or f.public_checked_at is null
-           or f.public_checked_at < ${input.recheckBefore}::timestamptz
-         )
+       where (
+         select f.platform = 'fansly'
+            and (
+              not d.aged
+              or f.public_checked_at is null
+              or f.public_checked_at < ${input.recheckBefore}::timestamptz
+            )
+           from fans f
+          where f.id = d.fan_id
+       )
        group by d.fan_id
     )
     select f.id::text as "fanId", f.platform_user_id as "platformUserId", f.username,
