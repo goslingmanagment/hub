@@ -120,6 +120,11 @@ the owner's machine (outside this repository); a change that moves a home or add
 - **People's pay**: the ledger's. Hub only reads it (`ledgerGet`: a person's days, the payout calculation, checks,
   report days, the month card) and shows it; `payMillsOf` (`services/ledger-payouts.ts`) is the one conversion. No
   pay number is computed in Hub, and none reaches a session that does not see it today.
+- **A traffic source**: Hub's (tables `traffic_channels`, `traffic_contractors`, `traffic_channel_contractors`,
+  `traffic_link_bindings`; one writer, `packages/db/src/repositories/traffic-bindings.ts`, the owner's CLI
+  `traffic:*`): its contractor terms and link bindings with dates. What was paid to a contractor is the ledger's journal,
+  read by the contractor's `ledger_names` (`services/traffic-payments.ts`), never stored or computed anew in Hub. A source
+  without links is measured by its page's subscriber counter (`counter_page_id`, `daily_subscribers`).
 - **What the server says to people in Telegram**: `services/people-messages/` (outbox `people_messages`). Two locks:
   the env token and the enabled kinds; a kind is a row in `packages/contracts/src/people-message-kinds.ts`. No other
   code sends a person a message; nothing about a fan goes into a personal message.

@@ -115,6 +115,8 @@ import {
   runTrafficBindingsImport,
   runTrafficBindingsList,
   runTrafficBindingsSet,
+  runTrafficChannelCounterPage,
+  runTrafficContractorLedgerNames,
   TrafficBindingsFileError,
 } from "./services/traffic-bindings.ts";
 import { runTransactionTipContextsBackfill } from "./services/transaction-tip-contexts-backfill.ts";
@@ -2248,13 +2250,64 @@ export function buildProgram() {
 
   program
     .command("traffic:bindings:list")
-    .description("contractors, channels with their contractor terms, and link bindings with dates and start basis (JSON)")
+    .description("contractors with their journal names, channels with their contractor terms and counter page, and link bindings with dates and start basis (JSON)")
     .option("--page <label>", "only this page's link bindings")
     .option("--channel <key>", "only this channel")
     .action(async (options: { page?: string; channel?: string }) => {
       const app = await createAppContext();
       try {
         console.log(JSON.stringify(await runTrafficBindingsList(app.db, options), null, 2));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("traffic:contractors:ledger-names <contractor>")
+    .description(
+      "the contractor's names as the ledger's journal writes them in «Кому/Откуда» (what was paid is read by them); "
+        + "replaces the list, --none empties it",
+    )
+    .option("--name <name>", "a name as in the journal (repeat for several)", (value: string, previous: string[]) => [...previous, value], [] as string[])
+    .option("--none", "no names", false)
+    .option("--dry-run", "show the change, write nothing", false)
+    .action(async (contractor: string, options: { name: string[]; none: boolean; dryRun: boolean }) => {
+      if (options.none === (options.name.length > 0)) {
+        console.error("give --name (one or more) or --none");
+        process.exitCode = 1;
+        return;
+      }
+      const app = await createAppContext();
+      try {
+        const result = await runTrafficContractorLedgerNames(app.db, { contractor, names: options.none ? [] : options.name, write: !options.dryRun });
+        console.log(JSON.stringify(result, null, 2));
+      } catch (error) {
+        printTrafficBindingsFailure(error);
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("traffic:channels:counter-page <channel>")
+    .description(
+      "a source that works past links: its arrivals are this page's counter of new subscribers; --none: measured by its links",
+    )
+    .option("--page <label>", "the page whose subscriber counter measures the source")
+    .option("--none", "no counter page", false)
+    .option("--dry-run", "show the change, write nothing", false)
+    .action(async (channel: string, options: { page?: string; none: boolean; dryRun: boolean }) => {
+      if (options.none === (options.page !== undefined)) {
+        console.error("give --page <label> or --none");
+        process.exitCode = 1;
+        return;
+      }
+      const app = await createAppContext();
+      try {
+        const result = await runTrafficChannelCounterPage(app.db, { channel, page: options.none ? null : options.page!, write: !options.dryRun });
+        console.log(JSON.stringify(result, null, 2));
+      } catch (error) {
+        printTrafficBindingsFailure(error);
       } finally {
         await app.close();
       }

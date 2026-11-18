@@ -3,6 +3,7 @@ import { ofLinksRouteSchemas } from "@agency_hub_core/contracts";
 import { requireOwner } from "../../services/auth.ts";
 import { BadRequestError, NotFoundError } from "../../services/errors.ts";
 import { getOfLinkChannels, getOfLinkHistory, getOfLinks, OfLinksRequestError } from "../../services/of-links.ts";
+import { ledgerPaymentsReader } from "../../services/traffic-payments.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 async function answered<T>(read: () => Promise<T>): Promise<T> {
@@ -30,6 +31,9 @@ export function registerOfLinksRoutes(server: ApiServer, ctx: ApiModuleContext) 
   });
   server.get("/api/v1/admin/of-links/channels", { schema: ofLinksRouteSchemas.ofLinksChannelsGet }, async (request) => {
     requireOwner(await requirePrincipal(request));
-    return answered(() => getOfLinkChannels(app.db, { ...request.query, now: new Date() }));
+    const query = request.query;
+    // The ledger is asked only for what was paid (`paid`, `payments`).
+    const readPayments = query.paid === true || query.payments === true ? ledgerPaymentsReader(app) : undefined;
+    return answered(() => getOfLinkChannels(app.db, { ...query, readPayments, now: new Date() }));
   });
 }

@@ -68,14 +68,20 @@ export function arrivalOf(value: number | null, flags: readonly string[], madeIn
   return flags.includes("no_baseline") && !madeInside && value !== 0 ? null : value;
 }
 
+export const subscribersWord = (count: number) => `${count.toLocaleString("ru-RU")} ${ruPlural(count, "подписчик", "подписчика", "подписчиков")}`;
+const payersWord = (count: number) => `${count.toLocaleString("ru-RU")} ${ruPlural(count, "новый платящий", "новых платящих", "новых платящих")}`;
+const daysWord = (count: number) => `${count} ${ruPlural(count, "день", "дня", "дней")}`;
+
 export interface DayFigures {
   fans: number | null;
   clicks: number | null;
   /** Mills; null: unknown. */
   money: number | null;
+  /** New paying fans; null or absent: unknown. */
+  spenders?: number | null;
 }
 
-/** The hover hint of a day: «вт 17 ноября: 4 фана, 9 кликов, $12.50». Null for a day to come. */
+/** The hover hint of a day: «вт 17 ноября: 4 фана, 9 кликов, $12.50, 1 новый платящий». Null for a day to come. */
 export function dayHint(slot: DaySlot, figures: DayFigures): string | null {
   if (slot.when === "future") return null;
   if (figures.fans === null) {
@@ -84,13 +90,54 @@ export function dayHint(slot: DaySlot, figures: DayFigures): string | null {
   const parts = [fansWord(figures.fans)];
   if (figures.clicks !== null) parts.push(clicksWord(figures.clicks));
   if (figures.money !== null) parts.push(formatMills(figures.money));
+  if ((figures.spenders ?? 0) > 0) parts.push(payersWord(figures.spenders!));
   return `${slot.long}${slot.when === "today" ? ", день идёт" : ""}: ${parts.join(", ")}`;
+}
+
+/** A week's sum as it is said: its known days' sum, how many of its finished days were not read, whether it goes on. */
+export interface WeekFigure {
+  /** null: no day of it is known. */
+  sum: number | null;
+  /** Finished days that should have been read and were not. */
+  unread: number;
+  running: boolean;
+}
+
+/** The week's figure from its slots' values and which of them were not read (null values of days that existed). */
+export function weekFigure(slots: readonly DaySlot[], values: ReadonlyArray<number | null>, unread: ReadonlyArray<boolean>): WeekFigure {
+  return {
+    sum: sumKnown(values.filter((_, index) => slots[index]!.when !== "future")),
+    unread: slots.filter((slot, index) => slot.when === "past" && unread[index] === true).length,
+    running: slots.some((slot) => slot.when === "today"),
+  };
+}
+
+/** What follows a week's sum: «, идёт», «, 2 дня без чтения»; a week with no known day says «нет чтения» alone. */
+export function weekTail(week: WeekFigure): string {
+  if (week.sum === null) return "";
+  return `${week.running ? ", идёт" : ""}${week.unread > 0 ? `, ${daysWord(week.unread)} без чтения` : ""}`;
+}
+
+/** «2 дня без чтения»; null when every finished day was read. */
+export function unreadWords(week: WeekFigure): string | null {
+  return week.unread > 0 ? `${daysWord(week.unread)} без чтения` : null;
+}
+
+/** The whole week sum in words: «12 фанов, 2 дня без чтения», «нет чтения», «—» (nothing was due). */
+export function weekText(week: WeekFigure, word: (count: number) => string): string {
+  if (week.sum === null) return week.unread > 0 ? "нет чтения" : "—";
+  return `${word(week.sum)}${weekTail(week)}`;
 }
 
 export interface LinkTarget {
   pageId: number;
   linkKind: "tracking" | "trial";
   linkRef: string;
+}
+
+/** The page of one source (screens.ts `traffic-source`). */
+export function sourcePagePath(channelKey: string): string {
+  return `/traffic/source/${encodeURIComponent(channelKey)}`;
 }
 
 /** The page of one link (screens.ts `traffic-link`). */

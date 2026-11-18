@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { linkDayCut, linkDayDelta, type LinkSeries, type LinkSeriesPoint } from "../packages/db/src/repositories/link-stats-deltas.ts";
+import { linkDayCut, linkDayDelta, linkRangeDaysEnd, type LinkSeries, type LinkSeriesPoint } from "../packages/db/src/repositories/link-stats-deltas.ts";
 
 // A link's business day runs between its closing reads: the series is read at
 // 00:45, 06:45, 12:45 and 18:45 Moscow, and the 00:45 read closes the day
@@ -10,10 +10,10 @@ import { linkDayCut, linkDayDelta, type LinkSeries, type LinkSeriesPoint } from 
 const msk = (text: string) => new Date(`${text.replace(" ", "T")}:00+03:00`);
 const midnight = (day: string) => msk(`${day} 00:00`);
 
-function point(at: string, subscribers: number): LinkSeriesPoint {
+function point(at: string, subscribers: number, spenders: number | null = Math.floor(subscribers / 3)): LinkSeriesPoint {
   return {
     observedAt: msk(at), runId: 1, ofapiAccountId: "acct", runReason: null,
-    clicks: subscribers * 2, claims: null, subscribers, netMills: BigInt(subscribers * 1000),
+    clicks: subscribers * 2, claims: null, subscribers, spenders, netMills: BigInt(subscribers * 1000),
   };
 }
 
@@ -94,5 +94,38 @@ describe("a link's business day", () => {
     expect(linkDayDelta(link, {
       previousStartAt: midnight("2026-11-16"), startAt: start, nextStartAt: midnight("2026-11-18"),
     }, { from: null, to: msk("2026-11-17 00:00") })).toBeNull();
+  });
+
+  it("runs the last day of a range that ended in the past to its closing read, never past now", () => {
+    const link = series([
+      point("2026-11-16 00:45", 0),
+      point("2026-11-16 18:45", 3),
+      point("2026-11-17 00:45", 6),
+      point("2026-11-17 12:45", 9),
+    ]);
+    // The range is 1–16 November: its totals end at midnight, its last day at the 00:45 read.
+    const rangeToAt = midnight("2026-11-17");
+    expect(day(link, "2026-11-16", rangeToAt)?.delta?.fans).toBe(3);
+    const end = linkRangeDaysEnd(rangeToAt, msk("2026-11-17 15:00"));
+    expect(end).toEqual(msk("2026-11-17 04:00"));
+    expect(day(link, "2026-11-16", end)?.delta?.fans).toBe(6);
+    // Asked before the closing read came: the day stops at now, still without the evening it has not read.
+    const early = linkRangeDaysEnd(rangeToAt, msk("2026-11-17 00:10"));
+    expect(early).toEqual(msk("2026-11-17 00:10"));
+    expect(day(link, "2026-11-16", early)?.delta?.fans).toBe(3);
+  });
+
+  it("counts a day's new paying fans like its fans, unknown when a snapshot does not know them", () => {
+    const link = series([
+      point("2026-11-15 00:45", 3, 1),
+      point("2026-11-16 00:45", 9, 2),
+      point("2026-11-17 00:45", 12, null),
+      point("2026-11-18 00:45", 15, 5),
+    ]);
+    const now = msk("2026-11-18 12:00");
+    expect(day(link, "2026-11-15", now)?.delta?.spenders).toBe(1);
+    expect(day(link, "2026-11-16", now)?.delta?.spenders).toBeNull();
+    expect(day(link, "2026-11-17", now)?.delta?.spenders).toBeNull();
+    expect(day(link, "2026-11-17", now)?.delta?.fans).toBe(3);
   });
 });

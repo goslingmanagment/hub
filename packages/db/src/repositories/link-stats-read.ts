@@ -590,6 +590,7 @@ export async function listLinkSeries(
     clicks: number;
     claims: number | null;
     subscribers: number;
+    spenders: number | null;
     netMills: bigint | string | null;
   }>(sql`
     select s.platform_account_id as "platformAccountId",
@@ -604,6 +605,7 @@ export async function listLinkSeries(
            s.clicks_count as clicks,
            s.claims_count as claims,
            s.subscribers_count as subscribers,
+           s.spenders_count as spenders,
            ${NET_MILLS} as "netMills"
     from page_link_stat_snapshots s
     join page_link_stat_runs r on r.id = s.run_id
@@ -643,6 +645,7 @@ export async function listLinkSeries(
       clicks: Number(row.clicks),
       claims: row.claims === null ? null : Number(row.claims),
       subscribers: Number(row.subscribers),
+      spenders: row.spenders === null ? null : Number(row.spenders),
       netMills: toBigIntOrNull(row.netMills),
     });
   }
@@ -744,11 +747,15 @@ export interface TrafficChannelTermRow {
   validFrom: Date;
   validTo: Date | null;
   validFromBasis: TrafficValidFromBasis;
+  note: string | null;
 }
 
 export interface TrafficBindingsSnapshot {
-  channels: Array<{ key: string; title: string }>;
-  contractors: Array<{ key: string; title: string }>;
+  /** `counterPage`: the page whose subscriber counter measures a source without links (0428); null: none, or a
+   * test page (the live realm reads it). */
+  channels: Array<{ key: string; title: string; note: string | null; counterPage: { pageId: number; label: string } | null }>;
+  /** `ledgerNames`: the contractor's names in the ledger's journal (0428). */
+  contractors: Array<{ key: string; title: string; ledgerNames: string[] }>;
   terms: TrafficChannelTermRow[];
   bindings: TrafficBindingIntervalRow[];
 }
@@ -766,16 +773,19 @@ export async function readTrafficBindingsSnapshot(db: Database): Promise<Traffic
 }
 
 async function readTrafficBindingsTables(db: Database): Promise<TrafficBindingsSnapshot> {
-  const channels = await db.execute<{ key: string; title: string }>(sql`
-    select key, title from traffic_channels order by key`);
-  const contractors = await db.execute<{ key: string; title: string }>(sql`
-    select key, title from traffic_contractors order by key`);
+  const channels = await db.execute<{ key: string; title: string; note: string | null; counterPageId: string | null; counterPageLabel: string | null }>(sql`
+    select c.key, c.title, c.note, p.id::text as "counterPageId", p.label as "counterPageLabel"
+    from traffic_channels c
+    left join pages p on p.id = c.counter_page_id and ${livePageSql(sql`p.id`)}
+    order by c.key`);
+  const contractors = await db.execute<{ key: string; title: string; ledgerNames: string[] }>(sql`
+    select key, title, ledger_names as "ledgerNames" from traffic_contractors order by key`);
   const terms = await db.execute<{
     channelKey: string; contractorKey: string; contractorTitle: string;
-    validFrom: Date | string; validTo: Date | string | null; validFromBasis: TrafficValidFromBasis;
+    validFrom: Date | string; validTo: Date | string | null; validFromBasis: TrafficValidFromBasis; note: string | null;
   }>(sql`
     select c.key as "channelKey", k.key as "contractorKey", k.title as "contractorTitle",
-           t.valid_from as "validFrom", t.valid_to as "validTo", t.valid_from_basis as "validFromBasis"
+           t.valid_from as "validFrom", t.valid_to as "validTo", t.valid_from_basis as "validFromBasis", t.note
     from traffic_channel_contractors t
     join traffic_channels c on c.id = t.channel_id
     join traffic_contractors k on k.id = t.contractor_id
@@ -791,7 +801,14 @@ async function readTrafficBindingsTables(db: Database): Promise<TrafficBindingsS
     join traffic_channels c on c.id = b.channel_id
     order by b.platform_account_id, b.link_kind, b.platform_link_id, b.valid_from, b.id`);
   return {
-    channels: channels.rows,
+    channels: channels.rows.map((row) => ({
+      key: row.key,
+      title: row.title,
+      note: row.note,
+      counterPage: row.counterPageId === null || row.counterPageLabel === null
+        ? null
+        : { pageId: Number(row.counterPageId), label: row.counterPageLabel },
+    })),
     contractors: contractors.rows,
     terms: terms.rows.map((row) => ({
       ...row,

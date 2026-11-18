@@ -178,19 +178,23 @@ const NO_PAYOUT_TAB = "The ledger has no payout tab of this person";
  * not answer or refuses. Its 404 is a 404 here only for a caller that names what was not found (`notFound`: an
  * unknown person); for anyone else it is a 503 like every other refusal — except the statuses a caller lists in
  * `absentOn`, which answer `undefined` (a read the ledger does not open to Hub yet). `client` names the caller in
- * the user agent.
+ * the user agent. A parameter given a list is repeated.
  */
 export async function ledgerGet(
   app: LedgerReadApp,
   path: string,
-  params: Record<string, string>,
+  params: Record<string, string | readonly string[]>,
   options: { fetchImpl?: typeof fetch; notFound?: string; client?: string; absentOn?: readonly number[] },
 ): Promise<unknown> {
   const key = app.config.ledgerPayoutsKey ?? null;
   if (key === null) throw new ServiceUnavailableError("The ledger is not connected: LEDGER_PAYOUTS_KEY is not set");
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const url = new URL(path, app.config.ledgerUrl ?? "https://ledger.gosling-agency.ru");
-  for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
+  // A list is the parameter repeated (`name=a&name=b`).
+  for (const [name, value] of Object.entries(params)) {
+    if (typeof value === "string") url.searchParams.set(name, value);
+    else for (const item of value) url.searchParams.append(name, item);
+  }
   try {
     const response = await fetchImpl(url, {
       headers: { authorization: `Bearer ${key}`, accept: "application/json", "user-agent": `agency-hub/${options.client ?? "workboard-payouts"}` },

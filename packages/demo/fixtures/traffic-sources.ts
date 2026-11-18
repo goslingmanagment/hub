@@ -16,7 +16,16 @@
  *   - links without a source, a few of them moving.
  * The VIP page's reads failed one whole day four days ago: that day and the
  * next have no figures. Answers `ofLinksChannelsGet` (honouring `from`, `to`,
- * `pageId`, `days`), `ofLinksHistoryGet`, and lends its links to `ofLinksGet`.
+ * `pageId`, `days`, `paid`, `payments`, `channelKey`), `ofLinksHistoryGet`,
+ * and lends its links to `ofLinksGet`.
+ *
+ * What was paid (the ledger's journal, read by the contractors' names): Maple
+ * Media is paid more than it brought, with a payment that waits; Promo Lab
+ * brought more than it is paid, with a refund; Clip Works has no name in the
+ * journal; for the shoutouts' desk the ledger does not answer; «Полдень» works
+ * Instagram and TikTok (its payments are shared by both); Frame Studio was
+ * paid partly in euros. SFS works past the links: its arrivals are the main
+ * page's subscriber counter (a day without a row, a day not closed).
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
@@ -43,24 +52,68 @@ interface TermSeed {
   /** Days before today the term began; it ends `toDaysAgo` days ago, or is open. */
   fromDaysAgo: number;
   toDaysAgo: number | null;
+  note?: string;
 }
 
-const CHANNELS: Readonly<Record<string, { title: string; terms: readonly TermSeed[] }>> = {
-  reddit: {
+const CHANNELS: Readonly<Record<string, { title: string; terms: readonly TermSeed[]; counterPage?: 0 | 1 }>> = {
+  "mia.reddit": {
     title: "Reddit",
     terms: [
       { key: "north-wind", title: "Студия «Северный ветер»", fromDaysAgo: 160, toDaysAgo: 12 },
-      { key: "maple-media", title: "Maple Media", fromDaysAgo: 12, toDaysAgo: null },
+      { key: "maple-media", title: "Maple Media", fromDaysAgo: 12, toDaysAgo: null, note: "оплата раз в неделю, по пятницам" },
     ],
   },
-  x: { title: "X (Twitter)", terms: [{ key: "promo-lab", title: "Promo Lab", fromDaysAgo: 40, toDaysAgo: null }] },
-  tubes: { title: "Видеоплощадки", terms: [{ key: "clip-works", title: "Clip Works", fromDaysAgo: 75, toDaysAgo: null }] },
-  shoutouts: { title: "Шаутауты", terms: [{ key: "shout-desk", title: "Шаут-деск", fromDaysAgo: 3, toDaysAgo: null }] },
-  tiktok: { title: "TikTok", terms: [] },
-  instagram: { title: "Instagram", terms: [{ key: "noon-agency", title: "Агентство «Полдень»", fromDaysAgo: 55, toDaysAgo: null }] },
-  sfs: { title: "SFS", terms: [{ key: "mutual-desk", title: "Взаимный пиар", fromDaysAgo: 30, toDaysAgo: null }] },
-  youtube: { title: "YouTube", terms: [{ key: "frame-studio", title: "Frame Studio", fromDaysAgo: 140, toDaysAgo: 34 }] },
-  telegram: { title: "Telegram-канал", terms: [] },
+  "mia.x": { title: "X (Twitter)", terms: [{ key: "promo-lab", title: "Promo Lab", fromDaysAgo: 40, toDaysAgo: null }] },
+  "mia.tubes": { title: "Видеоплощадки", terms: [{ key: "clip-works", title: "Clip Works", fromDaysAgo: 75, toDaysAgo: null }] },
+  "mia.shoutouts": { title: "Шаутауты", terms: [{ key: "shout-desk", title: "Шаут-деск", fromDaysAgo: 3, toDaysAgo: null }] },
+  "mia.tiktok": { title: "TikTok", terms: [{ key: "noon-agency", title: "Агентство «Полдень»", fromDaysAgo: 20, toDaysAgo: null }] },
+  "mia.instagram": { title: "Instagram", terms: [{ key: "noon-agency", title: "Агентство «Полдень»", fromDaysAgo: 55, toDaysAgo: null }] },
+  "mia.sfs": { title: "SFS", terms: [{ key: "mutual-desk", title: "Взаимный пиар", fromDaysAgo: 30, toDaysAgo: null }], counterPage: 0 },
+  "mia.youtube": { title: "YouTube", terms: [{ key: "frame-studio", title: "Frame Studio", fromDaysAgo: 140, toDaysAgo: 34 }] },
+  "mia.telegram": { title: "Telegram-канал", terms: [] },
+};
+
+/** What the ledger's journal says of each contractor: rows (days ago, dollars, …), no name in it, or no answer. */
+type PaymentSeed = { daysAgo: number; dollars: number; refund?: boolean; pending?: boolean; currency?: string; note?: string };
+const PAYMENTS: Readonly<Record<string, readonly PaymentSeed[] | "no_ledger_names" | "ledger_unavailable">> = {
+  "north-wind": [
+    { daysAgo: 150, dollars: 400, note: "аванс за первый месяц" },
+    { daysAgo: 120, dollars: 400 },
+    { daysAgo: 90, dollars: 400 },
+    { daysAgo: 60, dollars: 400 },
+    { daysAgo: 30, dollars: 400, note: "последний месяц перед заменой" },
+  ],
+  "maple-media": [
+    { daysAgo: 11, dollars: 300, note: "первая неделя, предоплата" },
+    { daysAgo: 6, dollars: 300 },
+    { daysAgo: 4, dollars: 300, note: "вторая неделя: посты в трёх сабреддитах, отчёт со ссылками в чате подрядчика" },
+    { daysAgo: 0, dollars: 300, pending: true, note: "третья неделя" },
+  ],
+  "promo-lab": [
+    { daysAgo: 38, dollars: 100 },
+    { daysAgo: 31, dollars: 100 },
+    { daysAgo: 24, dollars: 100 },
+    { daysAgo: 20, dollars: 50, refund: true, note: "возврат за неделю простоя" },
+    { daysAgo: 17, dollars: 100 },
+    { daysAgo: 10, dollars: 100 },
+    { daysAgo: 3, dollars: 100 },
+  ],
+  "clip-works": "no_ledger_names",
+  "shout-desk": "ledger_unavailable",
+  "noon-agency": [
+    { daysAgo: 50, dollars: 250 },
+    { daysAgo: 20, dollars: 200, note: "Instagram и TikTok вместе" },
+  ],
+  "mutual-desk": [
+    { daysAgo: 28, dollars: 60 },
+    { daysAgo: 14, dollars: 60 },
+  ],
+  "frame-studio": [
+    { daysAgo: 130, dollars: 600 },
+    { daysAgo: 100, dollars: 600 },
+    { daysAgo: 70, dollars: 450, currency: "EUR", note: "оплачено с европейской карты" },
+    { daysAgo: 40, dollars: 600 },
+  ],
 };
 
 interface LinkSeed {
@@ -94,34 +147,34 @@ interface LinkSeed {
 }
 
 const LINKS: readonly LinkSeed[] = [
-  { name: "Reddit · основной профиль", page: 0, kind: "tracking", channel: "reddit", rate: 0.4, oldRate: 4.5, rateChangedDaysAgo: 14, createdDaysAgo: null, before: 380 },
-  { name: "Reddit · промо-посты", page: 0, kind: "tracking", channel: "reddit", rate: 0, oldRate: 2.2, rateChangedDaysAgo: 13, createdDaysAgo: null, before: 210, idle: false },
-  { name: "Reddit · Maple", page: 0, kind: "trial", channel: "reddit", rate: 2.4, createdDaysAgo: 11, trialDays: 30 },
-  { name: "Reddit · VIP", page: 1, kind: "tracking", channel: "reddit", rate: 0.9, createdDaysAgo: null, before: 60 },
-  { name: "Reddit · архив", page: 0, kind: "tracking", channel: "reddit", rate: 0, createdDaysAgo: null, idle: true, before: 540, expiredDaysAgo: 20 },
+  { name: "Reddit · основной профиль", page: 0, kind: "tracking", channel: "mia.reddit", rate: 0.4, oldRate: 4.5, rateChangedDaysAgo: 14, createdDaysAgo: null, before: 380 },
+  { name: "Reddit · промо-посты", page: 0, kind: "tracking", channel: "mia.reddit", rate: 0, oldRate: 2.2, rateChangedDaysAgo: 13, createdDaysAgo: null, before: 210, idle: false },
+  { name: "Reddit · Maple", page: 0, kind: "trial", channel: "mia.reddit", rate: 2.4, createdDaysAgo: 11, trialDays: 30 },
+  { name: "Reddit · VIP", page: 1, kind: "tracking", channel: "mia.reddit", rate: 0.9, createdDaysAgo: null, before: 60 },
+  { name: "Reddit · архив", page: 0, kind: "tracking", channel: "mia.reddit", rate: 0, createdDaysAgo: null, idle: true, before: 540, expiredDaysAgo: 20 },
 
-  { name: "X · ссылка в био", page: 0, kind: "tracking", channel: "x", rate: 3.2, createdDaysAgo: null, quietSinceDaysAgo: 3, before: 90 },
-  { name: "X · закреплённый пост", page: 0, kind: "tracking", channel: "x", rate: 0, createdDaysAgo: null, clicksOnly: 1.6, before: 12 },
-  { name: "X · второй аккаунт", page: 1, kind: "tracking", channel: "x", rate: 0, createdDaysAgo: 4, clicksOnly: 3 },
-  { name: "X · третий аккаунт", page: 1, kind: "tracking", channel: "x", rate: 0, createdDaysAgo: 1 },
+  { name: "X · ссылка в био", page: 0, kind: "tracking", channel: "mia.x", rate: 3.2, createdDaysAgo: null, quietSinceDaysAgo: 3, before: 90 },
+  { name: "X · закреплённый пост", page: 0, kind: "tracking", channel: "mia.x", rate: 0, createdDaysAgo: null, clicksOnly: 1.6, before: 12 },
+  { name: "X · второй аккаунт", page: 1, kind: "tracking", channel: "mia.x", rate: 0, createdDaysAgo: 4, clicksOnly: 3 },
+  { name: "X · третий аккаунт", page: 1, kind: "tracking", channel: "mia.x", rate: 0, createdDaysAgo: 1 },
 
-  { name: "PH", page: 0, kind: "trial", channel: "tubes", rate: 1.2, createdDaysAgo: null, before: 140, trialDays: 360 },
-  { name: "Xfree", page: 0, kind: "trial", channel: "tubes", rate: 0.9, createdDaysAgo: null, before: 120, trialDays: 360 },
-  { name: "Redgifs", page: 0, kind: "trial", channel: "tubes", rate: 0.6, createdDaysAgo: null, before: 80, trialDays: 360 },
-  { name: "Fikfap", page: 0, kind: "trial", channel: "tubes", rate: 0.7, createdDaysAgo: null, before: 60, trialDays: 360, moneyUnknown: true },
-  { name: "TikPorn", page: 0, kind: "trial", channel: "tubes", rate: 0.2, createdDaysAgo: null, before: 20, trialDays: 360 },
-  { name: "Waptap", page: 0, kind: "trial", channel: "tubes", rate: 0.15, createdDaysAgo: 30, trialDays: 360 },
-  { name: "Erome", page: 0, kind: "trial", channel: "tubes", rate: 0, createdDaysAgo: null, idle: true, before: 4, trialDays: 360 },
-  { name: "SpankBang", page: 0, kind: "trial", channel: "tubes", rate: 0, createdDaysAgo: null, idle: true, trialDays: 360 },
+  { name: "PH", page: 0, kind: "trial", channel: "mia.tubes", rate: 1.2, createdDaysAgo: null, before: 140, trialDays: 360 },
+  { name: "Xfree", page: 0, kind: "trial", channel: "mia.tubes", rate: 0.9, createdDaysAgo: null, before: 120, trialDays: 360 },
+  { name: "Redgifs", page: 0, kind: "trial", channel: "mia.tubes", rate: 0.6, createdDaysAgo: null, before: 80, trialDays: 360 },
+  { name: "Fikfap", page: 0, kind: "trial", channel: "mia.tubes", rate: 0.7, createdDaysAgo: null, before: 60, trialDays: 360, moneyUnknown: true },
+  { name: "TikPorn", page: 0, kind: "trial", channel: "mia.tubes", rate: 0.2, createdDaysAgo: null, before: 20, trialDays: 360 },
+  { name: "Waptap", page: 0, kind: "trial", channel: "mia.tubes", rate: 0.15, createdDaysAgo: 30, trialDays: 360 },
+  { name: "Erome", page: 0, kind: "trial", channel: "mia.tubes", rate: 0, createdDaysAgo: null, idle: true, before: 4, trialDays: 360 },
+  { name: "SpankBang", page: 0, kind: "trial", channel: "mia.tubes", rate: 0, createdDaysAgo: null, idle: true, trialDays: 360 },
 
-  { name: "Шаутаут @luna.shares", page: 0, kind: "tracking", channel: "shoutouts", rate: 6, createdDaysAgo: 2 },
-  { name: "TikTok · био", page: 1, kind: "tracking", channel: "tiktok", rate: 1.3, createdDaysAgo: null, firstReadDaysAgo: 9, before: 70 },
+  { name: "Шаутаут @luna.shares", page: 0, kind: "tracking", channel: "mia.shoutouts", rate: 6, createdDaysAgo: 2 },
+  { name: "TikTok · био", page: 1, kind: "tracking", channel: "mia.tiktok", rate: 1.3, createdDaysAgo: null, firstReadDaysAgo: 9, before: 70 },
 
-  { name: "Instagram · сторис", page: 0, kind: "tracking", channel: "instagram", rate: 0, createdDaysAgo: null, idle: true, before: 160, oldFansPay: 11 },
-  { name: "SFS · общая", page: 1, kind: "tracking", channel: "sfs", rate: 0, createdDaysAgo: 28, idle: true },
-  { name: "YouTube · описание", page: 0, kind: "tracking", channel: "youtube", rate: 0, createdDaysAgo: null, idle: true, before: 240 },
-  { name: "YouTube · шортсы", page: 0, kind: "tracking", channel: "youtube", rate: 0, createdDaysAgo: null, idle: true, before: 35, expiredDaysAgo: 30 },
-  { name: "Telegram · закреп", page: 1, kind: "tracking", channel: "telegram", rate: 0, createdDaysAgo: null, idle: true, before: 25 },
+  { name: "Instagram · сторис", page: 0, kind: "tracking", channel: "mia.instagram", rate: 0, createdDaysAgo: null, idle: true, before: 160, oldFansPay: 11 },
+  { name: "SFS · общая", page: 1, kind: "tracking", channel: "mia.sfs", rate: 0, createdDaysAgo: 28, idle: true },
+  { name: "YouTube · описание", page: 0, kind: "tracking", channel: "mia.youtube", rate: 0, createdDaysAgo: null, idle: true, before: 240 },
+  { name: "YouTube · шортсы", page: 0, kind: "tracking", channel: "mia.youtube", rate: 0, createdDaysAgo: null, idle: true, before: 35, expiredDaysAgo: 30 },
+  { name: "Telegram · закреп", page: 1, kind: "tracking", channel: "mia.telegram", rate: 0, createdDaysAgo: null, idle: true, before: 25 },
 
   { name: "Ссылка с основной страницы", page: 1, kind: "tracking", channel: null, rate: 1.4, createdDaysAgo: null, before: 300 },
   { name: "Пробные 30 дней · бывшие фаны", page: 0, kind: "trial", channel: null, rate: 0.5, createdDaysAgo: null, before: 120, trialDays: 30 },
@@ -146,9 +199,11 @@ function readAtOrBefore(at: number): number {
   return (read === undefined ? midnight - 310 * 60_000 : midnight + read * 60_000) - MSK_OFFSET_MS;
 }
 
-interface Figures { fans: number; clicks: number; money: number }
-const ZERO: Figures = { fans: 0, clicks: 0, money: 0 };
-const add = (left: Figures, right: Figures): Figures => ({ fans: left.fans + right.fans, clicks: left.clicks + right.clicks, money: left.money + right.money });
+interface Figures { fans: number; clicks: number; money: number; spenders: number }
+const ZERO: Figures = { fans: 0, clicks: 0, money: 0, spenders: 0 };
+const add = (left: Figures, right: Figures): Figures => ({
+  fans: left.fans + right.fans, clicks: left.clicks + right.clicks, money: left.money + right.money, spenders: left.spenders + right.spenders,
+});
 
 interface ShownDay {
   day: string;
@@ -176,8 +231,8 @@ interface LinkLife {
 function arrivals(seed: LinkSeed, index: number, day: string, daysAgo: number, share: number): Figures {
   const random = rng(`traffic-sources:${index}:${day}`);
   const pay = seed.oldFansPay !== undefined && random() < 0.35 ? mills(seed.oldFansPay * between(random, 0.6, 1.6) * share) : 0;
-  if (seed.idle) return { fans: 0, clicks: 0, money: pay };
-  if (seed.clicksOnly !== undefined) return { fans: 0, clicks: Math.round(seed.clicksOnly * between(random, 0, 2) * share), money: 0 };
+  if (seed.idle) return { fans: 0, clicks: 0, money: pay, spenders: 0 };
+  if (seed.clicksOnly !== undefined) return { fans: 0, clicks: Math.round(seed.clicksOnly * between(random, 0, 2) * share), money: 0, spenders: 0 };
   const quiet = seed.quietSinceDaysAgo !== undefined && daysAgo <= seed.quietSinceDaysAgo;
   const young = seed.createdDaysAgo !== null && seed.createdDaysAgo <= 3;
   const old = seed.rateChangedDaysAgo !== undefined && daysAgo > seed.rateChangedDaysAgo;
@@ -186,7 +241,9 @@ function arrivals(seed: LinkSeed, index: number, day: string, daysAgo: number, s
   const rate = young ? base * (seed.createdDaysAgo! - daysAgo + 1) / 2 : base;
   const fans = quiet ? 0 : Math.max(0, Math.round(rate * between(random, 0.1, 1.9) * share));
   const clicks = Math.round((fans * between(random, 1.2, 2.4) + between(random, 0, 3)) * share);
-  return { fans, clicks, money: mills(fans * between(random, 2, 9)) + pay };
+  // About one new fan in six pays the same day.
+  const spenders = Math.round(fans * between(random, 0, 0.35));
+  return { fans, clicks, money: mills(fans * between(random, 2, 9)) + pay, spenders };
 }
 
 function linkLife(seed: LinkSeed, index: number, now: Date): LinkLife {
@@ -210,6 +267,7 @@ function linkLife(seed: LinkSeed, index: number, now: Date): LinkLife {
       fans: beforeFans,
       clicks: Math.round(beforeFans * between(random, 1.4, 2.6)),
       money: mills(beforeFans * between(random, 4, 14)),
+      spenders: Math.round(beforeFans * 0.08),
     };
   return {
     seed,
@@ -283,6 +341,7 @@ function segmentOf(link: LinkLife, range: Range, piece: { from: string; to: stri
         businessDate: day,
         clicks: shown.figures?.clicks ?? null,
         fans: shown.figures?.fans ?? null,
+        spenders: link.seed.moneyUnknown ? null : shown.figures?.spenders ?? null,
         vendorNetMills: shown.figures === null || link.seed.moneyUnknown ? null : shown.figures.money,
         flags: shown.figures === null ? [] : [...(shown.noBaseline ? ["no_baseline" as const] : []), ...(link.seed.moneyUnknown ? ["money_unknown" as const] : [])],
       });
@@ -351,9 +410,15 @@ export function ofLinkChannels(request: DemoRequest): Channels | ReturnType<type
   const pageId = rawPage === undefined ? undefined : Number(rawPage);
   if (pageId !== undefined && !OF_PAGES.some((page) => page.id === pageId)) return demoError(404, "Not Found", "OnlyFans page not found");
   const withDays = queryString(request, "days") === "true";
+  const withPaid = queryString(request, "paid") === "true";
+  const withPayments = queryString(request, "payments") === "true";
+  const channelKey = queryString(request, "channelKey");
+  if (withPayments && channelKey === undefined) return demoError(400, "Bad Request", "`payments` is answered for one channel: give `channelKey`");
+  if (channelKey !== undefined && CHANNELS[channelKey] === undefined) return demoError(404, "Not Found", "No traffic channel with this key");
   const range: Range = { from, to, fromAt: dayStartMs(from), toAt: Math.min(dayStartMs(nextDay(to)), now.getTime()) };
 
-  const links = LINKS.map((seed, index) => linkLife(seed, index, now)).filter((link) => pageId === undefined || link.pageId === pageId);
+  const links = LINKS.map((seed, index) => linkLife(seed, index, now))
+    .filter((link) => (pageId === undefined || link.pageId === pageId) && (channelKey === undefined || link.seed.channel === channelKey));
   const whole = { from, to };
   const segments = links.flatMap((link) => segmentOf(link, range, whole, null, withDays) ?? []);
   const channelKeys = [...new Set(segments.map((segment) => segment.channelKey))]
@@ -378,10 +443,19 @@ export function ofLinkChannels(request: DemoRequest): Channels | ReturnType<type
 
   const channels: Channel[] = channelKeys.map((key) => {
     const own = segments.filter((segment) => segment.channelKey === key);
-    const terms = key === null ? [] : CHANNELS[key]?.terms ?? [];
+    const seed = key === null ? undefined : CHANNELS[key];
+    const terms = seed?.terms ?? [];
+    const counterPage = seed?.counterPage === undefined ? null : OF_PAGES[seed.counterPage] ?? null;
+    const asked = terms.filter((term) => termPiece(term, today, from, to) !== null).map((term) => term.key);
     return {
       channelKey: key,
-      channelTitle: key === null ? null : CHANNELS[key]?.title ?? key,
+      channelTitle: key === null ? null : seed?.title ?? key,
+      note: null,
+      counterPage: counterPage === null ? null : { pageId: counterPage.id, label: counterPage.label },
+      counterDays: withDays && counterPage !== null ? counterDays(today, from, to, now) : null,
+      payments: withPayments && !asked.some((contractor) => PAYMENTS[contractor] === "ledger_unavailable")
+        ? [...new Set(asked)].flatMap((contractor) => paymentsOf(contractor, today)).sort((left, right) => right.date.localeCompare(left.date) || right.num.localeCompare(left.num, "en", { numeric: true }))
+        : null,
       contractors: terms.flatMap((term) => {
         const piece = termPiece(term, today, from, to);
         if (piece === null) return [];
@@ -392,7 +466,9 @@ export function ofLinkChannels(request: DemoRequest): Channels | ReturnType<type
           validFrom: iso(new Date(dayStartMs(dayAgo(today, term.fromDaysAgo)))),
           validTo: term.toDaysAgo === null ? null : iso(new Date(dayStartMs(dayAgo(today, term.toDaysAgo)))),
           validFromBasis: "confirmed" as const,
+          note: term.note ?? null,
           ...totalsOf(termSegments),
+          paid: withPaid ? paidOf(term.key, today) : null,
         }];
       }),
       ...totalsOf(own),
@@ -420,6 +496,70 @@ export function ofLinkChannels(request: DemoRequest): Channels | ReturnType<type
     range: { from, to, fromAt: iso(new Date(range.fromAt)), toAt: iso(new Date(range.toAt)) },
     channels,
     contractors,
+  };
+}
+
+/** SFS's counter page: new subscribers a day; five days ago has no row, two days ago was not closed. */
+function counterDays(today: string, from: string, to: string, now: Date): NonNullable<Channel["counterDays"]> {
+  const days: NonNullable<Channel["counterDays"]> = [];
+  const last = to < today ? to : today;
+  for (let day = from; day <= last; day = nextDay(day)) {
+    const random = rng(`traffic-sources:counter:${day}`);
+    const value = Math.round(between(random, 4, 22));
+    if (day === dayAgo(today, 5)) {
+      days.push({ businessDate: day, newSubscribers: null, partial: null });
+    } else if (day === today || day === dayAgo(today, 2)) {
+      const share = day === today ? Math.min(1, Math.max(0.1, (now.getTime() - dayStartMs(day)) / DAY_MS)) : 0.7;
+      days.push({ businessDate: day, newSubscribers: null, partial: Math.round(value * share) });
+    } else {
+      days.push({ businessDate: day, newSubscribers: value, partial: null });
+    }
+  }
+  return days;
+}
+
+const contractorTitle = (key: string) => Object.values(CHANNELS).flatMap((channel) => channel.terms).find((term) => term.key === key)?.title ?? key;
+const sourcesOf = (key: string) => Object.values(CHANNELS).filter((channel) => channel.terms.some((term) => term.key === key)).length;
+
+function paymentsOf(contractor: string, today: string): NonNullable<Channel["payments"]> {
+  const seeds = PAYMENTS[contractor];
+  if (seeds === undefined || typeof seeds === "string") return [];
+  return seeds.map((seed, index) => {
+    const currency = seed.currency ?? "USD";
+    return {
+      contractorKey: contractor,
+      contractorTitle: contractorTitle(contractor),
+      num: String(1 + index),
+      date: dayAgo(today, seed.daysAgo),
+      type: seed.refund ? "income" as const : "expense" as const,
+      status: seed.pending ? "pending" as const : "paid" as const,
+      currency,
+      amountMills: (seed.refund ? -1 : 1) * seed.dollars * 1000,
+      summed: !seed.pending && currency === "USD",
+      note: seed.note ?? null,
+    };
+  }).reverse();
+}
+
+function paidOf(contractor: string, today: string): NonNullable<Channel["contractors"][number]["paid"]> {
+  const seeds = PAYMENTS[contractor];
+  const shared = sourcesOf(contractor) > 1;
+  if (seeds === undefined || seeds === "no_ledger_names" || seeds === "ledger_unavailable") {
+    return {
+      status: "unknown", reason: seeds === "ledger_unavailable" ? "ledger_unavailable" : "no_ledger_names",
+      paidMills: null, paymentCount: null, lastPaymentDate: null, shared, otherCurrency: false,
+    };
+  }
+  const rows = paymentsOf(contractor, today);
+  const paid = rows.filter((row) => row.status === "paid");
+  return {
+    status: "known",
+    reason: null,
+    paidMills: rows.reduce((sum, row) => sum + (row.summed ? row.amountMills : 0), 0),
+    paymentCount: paid.length,
+    lastPaymentDate: paid[0]?.date ?? null,
+    shared,
+    otherCurrency: rows.some((row) => row.currency !== "USD"),
   };
 }
 
@@ -523,6 +663,7 @@ function ofLinkHistory(request: DemoRequest): History | ReturnType<typeof demoEr
       claims: figures === null || !kindTrial ? null : figures.fans,
       subscribers: figures === null ? null : kindTrial ? Math.round(figures.fans * 0.4) : figures.fans,
       fans: figures?.fans ?? null,
+      spenders: link.seed.moneyUnknown ? null : figures?.spenders ?? null,
       vendorNetMills: figures === null || link.seed.moneyUnknown ? null : figures.money,
       missedWindows: link.seed.page === 1 && (day === outage || day === nextDay(outage)) ? (day === outage ? 4 : 1) : 0,
       flags: figures === null ? [] : [...(shown.noBaseline ? ["no_baseline" as const] : []), ...(link.seed.moneyUnknown ? ["money_unknown" as const] : [])],

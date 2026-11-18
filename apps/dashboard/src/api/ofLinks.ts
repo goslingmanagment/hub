@@ -20,16 +20,25 @@ export function useOfLinks(pageId?: number | undefined, options: { enabled?: boo
 }
 
 /** Link totals by channel (source) over Moscow days `from`…`to` (both left out:
- * all the series has), with every segment's days when `days` is set. */
-export function useOfLinkChannels(range: { from?: string; to?: string; days?: boolean }) {
+ * all the series has), with every segment's days when `days` is set, what was
+ * paid to the contractors when `paid` is set (the ledger is asked), and the
+ * journal's rows of one channel (`channelKey`) when `payments` is set. */
+export function useOfLinkChannels(
+  range: { from?: string; to?: string; days?: boolean; paid?: boolean; payments?: boolean; channelKey?: string },
+  options: { enabled?: boolean } = {},
+) {
   const query = {
     ...(range.from === undefined ? {} : { from: range.from }),
     ...(range.to === undefined ? {} : { to: range.to }),
     ...(range.days ? { days: true } : {}),
+    ...(range.paid ? { paid: true } : {}),
+    ...(range.payments ? { payments: true } : {}),
+    ...(range.channelKey === undefined ? {} : { channelKey: range.channelKey }),
   };
   return useQuery({
     queryKey: ["admin", "of-links", "channels", query],
     queryFn: () => kernel.ofLinksChannelsGet({ query }),
+    enabled: options.enabled ?? true,
     refetchInterval: OF_LINKS_REFRESH_MS,
     placeholderData: keepPreviousData,
     meta: { suppressGlobalError: true },

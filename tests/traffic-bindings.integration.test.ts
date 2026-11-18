@@ -186,11 +186,12 @@ describe("traffic:bindings:import", () => {
 
     const listed = await runCli(["traffic:bindings:list", "--channel", "lora.porntoki"]);
     expect(listed.json()).toEqual({
-      contractors: [{ key: "coraline-red", title: "Coraline Red" }, { key: "garantteam-social", title: "GaranTTeam" }],
+      contractors: [{ key: "coraline-red", title: "Coraline Red", ledgerNames: [] }, { key: "garantteam-social", title: "GaranTTeam", ledgerNames: [] }],
       channels: [{
         key: "lora.porntoki",
         title: "Порнтоки",
         note: null,
+        counterPage: null,
         contractors: [
           { contractorKey: "coraline-red", validFrom: "2026-04-01T13:31:01.000Z", validTo: "2026-09-15T21:00:00.000Z", validFromBasis: "assumed_link_created", note: null },
           { contractorKey: "coraline-red", validFrom: "2026-09-15T21:00:00.000Z", validTo: null, validFromBasis: "confirmed", note: null },

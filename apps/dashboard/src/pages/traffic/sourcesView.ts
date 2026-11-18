@@ -8,21 +8,27 @@ import {
   dayMonth,
   daySlots,
   fansWord,
+  linkPagePath,
+  sourcePagePath,
+  subscribersWord,
   sumKnown,
+  weekFigure,
   weekRange,
   type DaySlot,
   type LinkTarget,
+  type WeekFigure,
 } from "./trafficDays.js";
 
 // Трафик → Источники: what the screen draws, from two reads of the channels'
 // totals (`ofLinksChannelsGet`): the last two Moscow weeks with every
-// segment's days, and all the series has. Pure: the days come from the
-// response's own range. The component only draws what this returns.
+// segment's days, and all the series has with what was paid. Pure: the days
+// come from the response's own range. The component only draws what this
+// returns.
 
 type Channels = OfLinkChannelsResponse;
-type Channel = Channels["channels"][number];
+export type Channel = Channels["channels"][number];
 type Segment = Channel["segments"][number];
-type Term = Channel["contractors"][number];
+export type Term = Channel["contractors"][number];
 
 /** Two weeks, Monday to Sunday twice: the one grid every chart of the page shares. */
 export const SLOT_COUNT = 14;
@@ -45,18 +51,33 @@ export interface SourceRow {
   link: LinkTarget | null;
 }
 
-export interface WeekSum {
-  /** Fans of the week's known days; null: none is known. */
-  fans: number | null;
-  /** The week is still going. */
-  running: boolean;
+/** What the ledger's journal says was paid to a contractor. Null where nothing is said: not asked, or no name of
+ * the contractor in the journal. */
+export interface PaidFigure {
+  /** unavailable: «журнал не отвечает». */
+  state: "known" | "unavailable";
+  /** Known: the sum (may be 0). */
+  mills: number | null;
+  /** The contractor's payments over all his sources: «по всем его источникам». */
+  shared: boolean;
+  /** Some payment in another currency is left out: «часть в другой валюте». */
+  otherCurrency: boolean;
+}
+
+export function paidFigureOf(paid: Term["paid"]): PaidFigure | null {
+  if (paid === null) return null;
+  if (paid.status === "unknown") {
+    return paid.reason === "ledger_unavailable" ? { state: "unavailable", mills: null, shared: paid.shared, otherCurrency: false } : null;
+  }
+  return { state: "known", mills: paid.paidMills, shared: paid.shared, otherCurrency: paid.otherCurrency };
 }
 
 export interface SourceMoney {
-  /** What the open term brought on this source over the two weeks. */
-  recentMills: number;
-  /** Over all the series has; null: that read is not here. */
-  allMills: number | null;
+  /** What was paid to the contractor whose term is open; null: nothing to say. */
+  paid: PaidFigure | null;
+  /** What the open term brought on this source over all the series has; null: not said (a source counted by its
+   * page's subscribers, or the all-time read is not here). */
+  broughtMills: number | null;
   /** Some link's money is unknown: the figure leaves it out. */
   partial: boolean;
 }
@@ -69,7 +90,9 @@ export interface SourceView {
   /** «с 16 ноября без фанов». */
   attention: string | null;
   money: SourceMoney | null;
-  weeks: [WeekSum, WeekSum];
+  /** Counted by its page's subscriber counter, not by links: the figures are subscribers. */
+  counter: boolean;
+  weeks: [WeekFigure, WeekFigure];
   rows: SourceRow[];
   /** The scale of the small rows: their largest value, at least 2. */
   smallMax: number;
@@ -84,6 +107,8 @@ export interface SourceView {
 export interface RestLine {
   key: string;
   name: string;
+  /** The page the name opens: the source's, or the link's. */
+  to: string | null;
   fact: string | null;
   figures: string[];
 }
@@ -131,12 +156,16 @@ interface LinkDays {
   fans: Array<number | null>;
   clicks: Array<number | null>;
   money: Array<number | null>;
+  /** New paying fans per slot. */
+  spenders: Array<number | null>;
+  /** A finished day the link existed on that has no figure: not read. */
+  unread: boolean[];
   /** Made at OnlyFans inside the two weeks. */
   createdInRange: boolean;
 }
 
 /** A link's segments of one channel merged by day; a day no segment knows stays null. */
-function linkDays(segments: readonly Segment[], slots: readonly DaySlot[], rangeFromAt: string): LinkDays[] {
+export function linkDays(segments: readonly Segment[], slots: readonly DaySlot[], rangeFromAt: string): LinkDays[] {
   const index = new Map(slots.map((slot, position) => [slot.date, position]));
   const links = new Map<string, LinkDays>();
   for (const segment of segments) {
@@ -151,21 +180,30 @@ function linkDays(segments: readonly Segment[], slots: readonly DaySlot[], range
         fans: slots.map(() => null),
         clicks: slots.map(() => null),
         money: slots.map(() => null),
+        spenders: slots.map(() => null),
+        unread: slots.map(() => false),
         createdInRange: false,
       };
       links.set(key, link);
     }
     const young = segment.linkCreatedAt !== null && segment.linkCreatedAt >= rangeFromAt;
     if (young) link.createdInRange = true;
+    const madeOn = segment.linkCreatedAt === null ? null : moscowDayOf(segment.linkCreatedAt);
     for (const day of segment.days ?? []) {
       const position = index.get(day.businessDate);
       if (position === undefined || slots[position]!.when === "future") continue;
       const fans = arrivalOf(day.fans, day.flags, young);
-      if (fans === null) continue;
+      if (fans === null) {
+        // A day the link already existed on and nothing was read of: its week's sum is short of it.
+        if (madeOn === null || madeOn <= day.businessDate) link.unread[position] = true;
+        continue;
+      }
       // A day's money is known when every part of the day that is known knew it.
       const money = day.flags.includes("money_unknown") ? null : arrivalOf(day.vendorNetMills, day.flags, young);
       const before = link.money[position] ?? null;
       link.money[position] = link.fans[position] === null ? money : before === null || money === null ? null : before + money;
+      const spenders = arrivalOf(day.spenders, day.flags, young);
+      link.spenders[position] = link.fans[position] === null ? spenders : sumKnown([link.spenders[position] ?? null, spenders]);
       link.fans[position] = (link.fans[position] ?? 0) + fans;
       link.clicks[position] = sumKnown([link.clicks[position] ?? null, arrivalOf(day.clicks, day.flags, young)]);
     }
@@ -174,8 +212,8 @@ function linkDays(segments: readonly Segment[], slots: readonly DaySlot[], range
 }
 
 /** The per-slot sum of series: the known values of each slot, null when none is known. */
-export function combinedSeries(series: ReadonlyArray<ReadonlyArray<number | null>>): Array<number | null> {
-  return Array.from({ length: SLOT_COUNT }, (_, position) => sumKnown(series.map((values) => values[position] ?? null)));
+export function combinedSeries(series: ReadonlyArray<ReadonlyArray<number | null>>, length: number = SLOT_COUNT): Array<number | null> {
+  return Array.from({ length }, (_, position) => sumKnown(series.map((values) => values[position] ?? null)));
 }
 
 /** A slot's money over several links: unknown as soon as one link with a known day does not know it. */
@@ -197,7 +235,11 @@ const known = (values: ReadonlyArray<number | null>) => sumKnown(values) ?? 0;
 /** «с 16 ноября без фанов»: the finished days since the last fan of the two
  *  weeks, when two or more of them are known; «ни кликов, ни фанов» when they
  *  had no click either. Today is not finished and never counts. */
-export function quietSinceNote(slots: readonly DaySlot[], fans: ReadonlyArray<number | null>, clicks: ReadonlyArray<number | null>): string | null {
+export function quietSinceNote(
+  slots: readonly DaySlot[],
+  fans: ReadonlyArray<number | null>,
+  clicks: ReadonlyArray<number | null> | null,
+): string | null {
   const finished = slots.filter((slot) => slot.when === "past").length;
   let lastFan = -1;
   for (let position = 0; position < finished; position += 1) {
@@ -208,6 +250,8 @@ export function quietSinceNote(slots: readonly DaySlot[], fans: ReadonlyArray<nu
   const knownAfter = after.filter((position) => fans[position] !== null && fans[position] !== undefined);
   if (knownAfter.length < 2) return null;
   const since = dayMonth(slots[lastFan + 1]!.date);
+  // A source counted by its page's subscribers has no clicks to speak of.
+  if (clicks === null) return `с ${since} без подписчиков`;
   const clicked = after.some((position) => (clicks[position] ?? 0) > 0);
   return clicked ? `с ${since} без фанов` : `с ${since} ни кликов, ни фанов`;
 }
@@ -222,7 +266,9 @@ function sourceRows(links: readonly LinkDays[], slots: readonly DaySlot[], manyP
     page: manyPages ? link.page : null,
     large: false,
     fans: link.fans,
-    hints: slots.map((slot, position) => dayHint(slot, { fans: link.fans[position] ?? null, clicks: link.clicks[position] ?? null, money: link.money[position] ?? null })),
+    hints: slots.map((slot, position) => dayHint(slot, {
+      fans: link.fans[position] ?? null, clicks: link.clicks[position] ?? null, money: link.money[position] ?? null, spenders: link.spenders[position] ?? null,
+    })),
     total: sumKnown(link.fans),
     link: link.target,
   });
@@ -234,6 +280,7 @@ function sourceRows(links: readonly LinkDays[], slots: readonly DaySlot[], manyP
   if (rows.length === 0) return [];
   const fans = combinedSeries(links.map((link) => link.fans));
   const clicks = combinedSeries(links.map((link) => link.clicks));
+  const spenders = combinedSeries(links.map((link) => link.spenders));
   const money = combinedMoney(links);
   return [
     {
@@ -242,7 +289,9 @@ function sourceRows(links: readonly LinkDays[], slots: readonly DaySlot[], manyP
       page: null,
       large: true,
       fans,
-      hints: slots.map((slot, position) => dayHint(slot, { fans: fans[position] ?? null, clicks: clicks[position] ?? null, money: money[position] ?? null })),
+      hints: slots.map((slot, position) => dayHint(slot, {
+        fans: fans[position] ?? null, clicks: clicks[position] ?? null, money: money[position] ?? null, spenders: spenders[position] ?? null,
+      })),
       total: sumKnown(fans),
       link: null,
     },
@@ -253,11 +302,32 @@ function sourceRows(links: readonly LinkDays[], slots: readonly DaySlot[], manyP
 const byName = (left: string, right: string) => left.localeCompare(right, "ru");
 
 /** The term open at the end of the range (no end, or an end after it). */
-function openTerm(channel: Channel | undefined, toAt: string): Term | null {
+export function openTerm(channel: Channel | undefined, toAt: string): Term | null {
   return channel?.contractors.find((term) => term.validTo === null || term.validTo > toAt) ?? null;
 }
 
-const sameTerm = (left: Term, right: Term) => left.contractorKey === right.contractorKey && left.validFrom === right.validFrom;
+export const sameTerm = (left: Term, right: Term) => left.contractorKey === right.contractorKey && left.validFrom === right.validFrom;
+
+/** A source counted by its page's subscriber counter: one value per slot (a past day the counter has not closed is a
+ * gap, today shows what it has so far), the hints, and which finished days were not read. Pure. */
+export function counterSeries(channel: Channel, slots: readonly DaySlot[]): { values: Array<number | null>; hints: Array<string | null>; unread: boolean[] } {
+  const byDate = new Map((channel.counterDays ?? []).map((day) => [day.businessDate, day]));
+  const values = slots.map((slot) => {
+    const day = byDate.get(slot.date);
+    if (slot.when === "future" || day === undefined) return null;
+    return slot.when === "today" ? day.partial ?? day.newSubscribers : day.newSubscribers;
+  });
+  const hints = slots.map((slot, position) => {
+    if (slot.when === "future") return null;
+    const day = byDate.get(slot.date);
+    const value = values[position] ?? null;
+    if (value !== null) return `${slot.long}${slot.when === "today" ? ", день идёт" : ""}: ${subscribersWord(value)}`;
+    if (slot.when === "today") return `${slot.long}: за сегодня чтения ещё не было`;
+    if (day?.partial !== null && day?.partial !== undefined) return `${slot.long}: счётчик за день не закрыт, на последнем чтении ${subscribersWord(day.partial)}`;
+    return `${slot.long}: нет чтения`;
+  });
+  return { values, hints, unread: slots.map((slot, position) => slot.when === "past" && values[position] === null) };
+}
 
 export function sourcesView(recent: Channels, allTime: Channels | undefined): SourcesView {
   const from = recent.range.from;
@@ -299,6 +369,7 @@ export function sourcesView(recent: Channels, allTime: Channels | undefined): So
           lines: moved.map((link) => ({
             key: link.key,
             name: link.name,
+            to: linkPagePath(link.target),
             fact: link.page,
             figures: [`${clicksWord(known(link.clicks))}, ${fansWord(known(link.fans))} ${since}`],
           })),
@@ -311,6 +382,47 @@ export function sourcesView(recent: Channels, allTime: Channels | undefined): So
     const title = channel?.channelTitle ?? ever?.channelTitle ?? key;
     const term = openTerm(channel ?? ever, recent.range.toAt);
     const contractor = term === null ? null : `${term.contractorTitle}, с ${dayMonth(moscowDayOf(term.validFrom), today)}`;
+    // Over all time, this contractor's on this source: what was paid to him and what his term brought.
+    const everTerm = term === null ? null : ever?.contractors.find((item) => sameTerm(item, term)) ?? null;
+    const paid = everTerm === null ? null : paidFigureOf(everTerm.paid);
+
+    // A source counted by its page's subscriber counter: one large row, whatever its links did.
+    const counterPage = channel?.counterPage ?? ever?.counterPage ?? null;
+    if (counterPage !== null && channel !== undefined) {
+      const counter = counterSeries(channel, slots);
+      if (counter.values.some((value) => value !== null)) {
+        const total = sumKnown(counter.values);
+        sources.push({
+          key,
+          title,
+          contractor,
+          attention: quietSinceNote(slots, counter.values, null),
+          money: term === null ? null : { paid, broughtMills: null, partial: false },
+          counter: true,
+          weeks: [
+            weekFigure(slots.slice(0, 7), counter.values.slice(0, 7), counter.unread.slice(0, 7)),
+            weekFigure(slots.slice(7, 14), counter.values.slice(7, 14), counter.unread.slice(7, 14)),
+          ],
+          rows: [{
+            key: "counter",
+            name: `Подписчики ${counterPage.label}`,
+            page: null,
+            large: true,
+            fans: counter.values,
+            hints: counter.hints,
+            total,
+            link: null,
+          }],
+          smallMax: 2,
+          noFans: null,
+          noClicks: null,
+          fans: total ?? 0,
+        });
+      } else {
+        unread.push({ key, name: title, to: sourcePagePath(key), fact: contractor, figures: [`нет чтений ${since}`] });
+      }
+      continue;
+    }
 
     if (fans > 0) {
       const combinedFans = combinedSeries(links.map((link) => link.fans));
@@ -327,21 +439,21 @@ export function sourcesView(recent: Channels, allTime: Channels | undefined): So
         .filter((link) => known(link.clicks) === 0 && !link.createdInRange)
         .map((link) => link.name)
         .sort(byName);
-      const recentTerm = term === null ? null : channel?.contractors.find((item) => sameTerm(item, term)) ?? null;
-      const everTerm = term === null ? null : ever?.contractors.find((item) => sameTerm(item, term)) ?? null;
+      const unreadSlots = slots.map((_, position) => links.some((link) => link.unread[position]));
       sources.push({
         key,
         title,
         contractor,
         attention: quietSinceNote(slots, combinedFans, combinedClicks),
-        money: recentTerm === null ? null : {
-          recentMills: recentTerm.totals.vendorNetMills,
-          allMills: everTerm?.totals.vendorNetMills ?? null,
-          partial: recentTerm.flags.includes("money_unknown") || (everTerm?.flags.includes("money_unknown") ?? false),
+        money: term === null ? null : {
+          paid,
+          broughtMills: everTerm?.totals.vendorNetMills ?? null,
+          partial: everTerm?.flags.includes("money_unknown") ?? false,
         },
+        counter: false,
         weeks: [
-          { fans: sumKnown(combinedFans.slice(0, 7)), running: slots.slice(0, 7).some((slot) => slot.when === "today") },
-          { fans: sumKnown(combinedFans.slice(7, 14)), running: slots.slice(7, 14).some((slot) => slot.when === "today") },
+          weekFigure(slots.slice(0, 7), combinedFans.slice(0, 7), unreadSlots.slice(0, 7)),
+          weekFigure(slots.slice(7, 14), combinedFans.slice(7, 14), unreadSlots.slice(7, 14)),
         ],
         rows,
         smallMax: Math.max(2, ...small),
@@ -354,16 +466,23 @@ export function sourcesView(recent: Channels, allTime: Channels | undefined): So
 
     // Not a source on the chart: which of the facts at the bottom it is.
     if (ever !== undefined && ever.totals.clicks === 0 && clicks === 0) {
-      linkless.push({ key, name: title, fact: "здесь не виден", figures: [] });
+      linkless.push({ key, name: title, to: sourcePagePath(key), fact: "здесь не виден", figures: [] });
     } else if (channel !== undefined && !links.some((link) => link.fans.some((value) => value !== null))) {
-      unread.push({ key, name: title, fact: contractor, figures: [`нет чтений ${since}`] });
+      unread.push({ key, name: title, to: sourcePagePath(key), fact: contractor, figures: [`нет чтений ${since}`] });
     } else if (term !== null) {
-      const paid = channel?.totals.vendorNetMills ?? 0;
+      const fromOldFans = channel?.totals.vendorNetMills ?? 0;
+      // A silent source that is paid is the line that matters.
+      const paidMills = paid?.state === "known" ? paid.mills ?? 0 : 0;
       silent.push({
         key,
         name: title,
+        to: sourcePagePath(key),
         fact: contractor,
-        figures: [clicksWord(clicks), ...(paid > 0 ? [`${formatMills(paid)} от прежних фанов`] : [])],
+        figures: [
+          clicksWord(clicks),
+          ...(fromOldFans > 0 ? [`${formatMills(fromOldFans)} от прежних фанов`] : []),
+          ...(paidMills > 0 ? [`заплачено ${formatMills(paidMills)}`] : []),
+        ],
       });
     } else {
       const brought = ever?.totals.vendorNetMills ?? null;
@@ -375,6 +494,7 @@ export function sourcesView(recent: Channels, allTime: Channels | undefined): So
       stopped.push({
         key,
         name: title,
+        to: sourcePagePath(key),
         fact: last ? `${last.contractorTitle}, до ${dayMonth(moscowDayOf(last.validTo!), today)}` : null,
         figures: brought === null ? [] : [
           `принесли ${formatMills(brought)}`,

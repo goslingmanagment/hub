@@ -80,6 +80,8 @@
     padding-bottom: 4px;
   }
   .ts-source-title { font-size: 17px; line-height: 24px; font-weight: 600; color: var(--color-text-primary); }
+  .ts-source-link { color: inherit; text-decoration: none; }
+  .ts-source-link:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--color-border); }
   .ts-source-contractor { font-size: 15px; line-height: 22px; color: var(--color-text-muted); }
   .ts-source-attention { font-size: 15px; line-height: 22px; font-weight: 500; color: var(--color-warning-text); }
   .ts-source-money {
@@ -90,7 +92,8 @@
     font-variant-numeric: tabular-nums;
   }
   .ts-source-money b { font-weight: 600; color: var(--color-text-primary); }
-  .ts-source-partial { font-size: 13px; }
+  .ts-money-flag { font-size: 13px; }
+  .ts-money-sep { color: var(--color-text-muted); }
 
   .ts-days { border-bottom: 1px solid var(--color-border); align-items: end; }
   .ts-day-labels { flex-direction: column; align-items: stretch; justify-content: flex-end; padding-top: 6px; }
@@ -104,6 +107,7 @@
   }
   .ts-week-sums span { padding-left: 10px; }
   .ts-week-sums b { font-weight: 600; color: var(--color-text-primary); }
+  .ts-week-empty { color: var(--color-text-muted); }
   .ts-day-row { display: grid; grid-template-columns: repeat(var(--ts-slots), minmax(0, 1fr)); padding: 4px 0 6px; }
   .ts-day {
     text-align: center;
@@ -161,7 +165,8 @@
   .ts-rest-attention { color: var(--color-warning-text); }
   .ts-rest-line {
     display: grid;
-    grid-template-columns: var(--ts-name) minmax(0, 1fr) auto;
+    /* The fact keeps room for its words; the figures wrap before they reach it. */
+    grid-template-columns: var(--ts-name) minmax(160px, 1fr) minmax(0, auto);
     column-gap: var(--ts-gap);
     padding: 5px 0;
     font-size: 15px;
@@ -169,6 +174,9 @@
     color: var(--color-text-muted);
   }
   .ts-rest-name { color: var(--color-text-secondary); overflow-wrap: anywhere; }
+  .ts-rest-fact { min-width: 0; }
+  .ts-rest-link { color: inherit; text-decoration: none; }
+  .ts-rest-link:hover { color: var(--color-text-primary); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--color-border); }
   .ts-rest-figures { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 14px; text-align: right; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
 
   /* ── A narrow sheet (a rule on the sheet, not the window): the plot never
@@ -269,5 +277,66 @@
   .tl-days .tl-missing { color: var(--color-text-muted); }
   @container ts-sheet (max-width: 560px) {
     .tl-days th, .tl-days td { padding-left: 8px; padding-right: 8px; white-space: nowrap; }
+  }
+}
+
+/* ── The page of one source (it borrows the link page's parts) ────────── */
+@layer components {
+  .tsrc-sheet .tl-weeks { align-items: start; }
+  .tsrc-sheet .tl-week { min-width: 0; }
+  .tsrc-sheet .tl-week-sum { overflow: hidden; text-overflow: ellipsis; }
+  .tl-week-note { font-size: 13px; line-height: 18px; color: var(--color-warning-text); }
+  .tsrc-flag { font-size: 15px; color: var(--color-text-muted); }
+  .tsrc-quiet { font-size: 15px; line-height: 22px; color: var(--color-text-muted); padding-bottom: 8px; }
+  .tsrc-sheet .tl-section .table-wrap { max-width: 1040px; }
+  .tsrc-links td { font-variant-numeric: tabular-nums; }
+  .tsrc-links td:nth-child(2), .tsrc-links td:nth-child(n + 4) { white-space: nowrap; }
+  .tsrc-link-quiet td, .tsrc-link-quiet .link { color: var(--color-text-muted); }
+
+  .tsrc-payments { display: grid; max-width: 760px; }
+  .tsrc-payment {
+    display: grid;
+    grid-template-columns: 110px 150px minmax(0, 1fr);
+    column-gap: 24px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--color-border-light);
+    font-size: 15px;
+    line-height: 22px;
+  }
+  .tsrc-payment:last-child { border-bottom: 0; }
+  .tsrc-payment-date { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .tsrc-payment-amount { text-align: right; font-weight: 500; color: var(--color-text-primary); font-variant-numeric: tabular-nums; }
+  .tsrc-refund { color: var(--color-text-secondary); }
+  .tsrc-pending { display: block; font-size: 13px; line-height: 18px; font-weight: 400; color: var(--color-warning-text); }
+  .tsrc-payment-note {
+    color: var(--color-text-muted);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .tsrc-payment-who { color: var(--color-text-secondary); }
+  .tsrc-more { margin-top: 8px; }
+
+  .tsrc-contractors { display: grid; }
+  .tsrc-contractor {
+    display: grid;
+    grid-template-columns: minmax(0, 220px) minmax(0, 200px) minmax(0, 1fr);
+    column-gap: 24px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--color-border-light);
+    font-size: 15px;
+    line-height: 22px;
+    color: var(--color-text-muted);
+  }
+  .tsrc-contractor:last-child { border-bottom: 0; }
+  .tsrc-contractor-name { color: var(--color-text-primary); }
+  .tsrc-contractor-figures { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0 18px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+
+  @container ts-sheet (max-width: 560px) {
+    .tsrc-payment { grid-template-columns: auto 1fr; row-gap: 2px; }
+    .tsrc-payment-note { grid-column: 1 / -1; }
+    .tsrc-contractor { grid-template-columns: 1fr; }
+    .tsrc-contractor-figures { justify-content: flex-start; }
   }
 }

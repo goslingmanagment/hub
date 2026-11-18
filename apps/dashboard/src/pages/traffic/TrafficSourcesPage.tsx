@@ -9,19 +9,22 @@ import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { formatMills } from "@/lib/format";
 import { DayLine } from "./DayLine.js";
+import { PaidWords } from "./PaidWords.js";
 import { coverageLine, SLOT_COUNT, sourcesRange, sourcesView, type RestLine, type SourceView } from "./sourcesView.js";
-import { fansWord, linkPagePath, type DaySlot } from "./trafficDays.js";
+import { fansWord, linkPagePath, sourcePagePath, subscribersWord, weekTail, type DaySlot } from "./trafficDays.js";
 
 /**
  * Трафик → Источники: for each source of the OnlyFans pages, which of its
- * links brought fans and on which day, over this week and the last. Two local
- * reads of the link series (`ofLinksChannelsGet`): no request reaches
- * OnlyFans. What is drawn comes from sourcesView.ts; this file only draws it.
+ * links brought fans and on which day, over this week and the last, and what
+ * its contractor is paid against what he brought. Two reads of the link
+ * series (`ofLinksChannelsGet`; the all-time one asks the ledger what was
+ * paid): no request reaches OnlyFans. What is drawn comes from sourcesView.ts;
+ * this file only draws it.
  */
 export function TrafficSourcesPage() {
   const range = sourcesRange(moscowToday());
   const recent = useOfLinkChannels({ ...range, days: true });
-  const allTime = useOfLinkChannels({});
+  const allTime = useOfLinkChannels({ paid: true });
   const { pages } = useDashboardShell();
   const [refreshing, setRefreshing] = useState(false);
 
@@ -66,24 +69,30 @@ export function TrafficSourcesPage() {
   );
 }
 
-function Money({ source, since }: { source: SourceView; since: string }) {
+/** «заплачено $900 · принесли $6,760»: both over all time, both this contractor's on this source. */
+function Money({ source }: { source: SourceView }) {
   const money = source.money;
   if (money === null) return null;
-  const same = money.allMills === null ? false : money.allMills === money.recentMills;
+  const brought = money.broughtMills;
+  if (money.paid === null && brought === null) return null;
   return (
     <span className="ts-source-money">
-      {same
-        ? <>принесли <b>{formatMills(money.recentMills)}</b></>
-        : <>принесли {since} <b>{formatMills(money.recentMills)}</b>{money.allMills !== null && <>, всего <b>{formatMills(money.allMills)}</b></>}</>}
-      {money.partial && <span className="ts-source-partial"> не по всем ссылкам</span>}
+      {money.paid && <PaidWords paid={money.paid} />}
+      {money.paid && brought !== null && <span className="ts-money-sep"> · </span>}
+      {brought !== null && (
+        <span>
+          принесли <b>{formatMills(brought)}</b>
+          {money.partial && <span className="ts-money-flag"> не по всем ссылкам</span>}
+        </span>
+      )}
     </span>
   );
 }
 
-function WeekSum({ week }: { week: SourceView["weeks"][number] }) {
-  if (week.fans === null) return <span>—</span>;
-  const [count, ...word] = fansWord(week.fans).split(" ");
-  return <span><b>{count}</b> {word.join(" ")}{week.running ? ", идёт" : ""}</span>;
+function WeekSum({ week, counter }: { week: SourceView["weeks"][number]; counter: boolean }) {
+  if (week.sum === null) return <span className="ts-week-empty">{week.unread > 0 ? "нет чтения" : "—"}</span>;
+  const [count, ...word] = (counter ? subscribersWord : fansWord)(week.sum).split(" ");
+  return <span><b>{count}</b> {word.join(" ")}{weekTail(week)}</span>;
 }
 
 function Source({ source, slots, since }: { source: SourceView; slots: readonly DaySlot[]; since: string }) {
@@ -107,17 +116,17 @@ function Source({ source, slots, since }: { source: SourceView; slots: readonly 
   return (
     <section className="ts-source" aria-label={source.title}>
       <header className="ts-source-head">
-        <h2 className="ts-source-title">{source.title}</h2>
+        <h2 className="ts-source-title"><Link className="ts-source-link" to={sourcePagePath(source.key)}>{source.title}</Link></h2>
         {source.contractor && <span className="ts-source-contractor">{source.contractor}</span>}
         {source.attention && <span className="ts-source-attention">{source.attention}</span>}
-        <Money source={source} since={since} />
+        <Money source={source} />
       </header>
       <div className="ts-scroll" ref={scroller}>
         <div className="ts-grid ts-days">
           <span className="ts-name" />
           <div className="ts-plot ts-day-labels">
             <div className="ts-week-sums">
-              {source.weeks.map((week, index) => <WeekSum key={index} week={week} />)}
+              {source.weeks.map((week, index) => <WeekSum key={index} week={week} counter={source.counter} />)}
             </div>
             <div className="ts-day-row" aria-hidden="true">
               {slots.map((slot) => {
@@ -144,7 +153,7 @@ function Source({ source, slots, since }: { source: SourceView; slots: readonly 
                   labels={row.large ? "all" : "nonzero"}
                   area={row.large}
                   hints={row.hints}
-                  title={`${row.name}: новые фаны по дням, ${since} ${row.total ?? "нет данных"}`}
+                  title={`${row.name}: ${source.counter ? "новые подписчики" : "новые фаны"} по дням, ${since} ${row.total ?? "нет данных"}`}
                 />
               </div>
               <span className="ts-total">{row.total ?? "—"}</span>
@@ -174,7 +183,7 @@ function RestBlock({ title, lines, attention = false, tail }: { title: string; l
       <ul className="ts-rest-lines">
         {lines.map((line) => (
           <li key={line.key} className="ts-rest-line">
-            <span className="ts-rest-name">{line.name}</span>
+            <span className="ts-rest-name">{line.to ? <Link className="ts-rest-link" to={line.to}>{line.name}</Link> : line.name}</span>
             <span className="ts-rest-fact">{line.fact}</span>
             <span className="ts-rest-figures">
               {line.figures.map((figure, index) => <span key={index}>{figure}</span>)}
