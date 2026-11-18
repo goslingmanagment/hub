@@ -224,6 +224,14 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     const audit = auditPagePace([engine(10, "notifications.page"), siteSend, hub], WINDOW);
     expect(audit.violations).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: siteSend.ref, gapMs: 1_000, clock: "wall" })]);
   });
+
+  it("an inconclusive pair does not mask a proven Hub violation", () => {
+    const first = engine(21, "notifications.page", { pauseMs: null });
+    const second = engine(22, "transactions.page");
+    const audit = auditPagePace([engine(10, "notifications.page"), first, second], WINDOW);
+    expect(audit).toMatchObject({ verdict: "fail", pairs: 1, inconclusive: [expect.objectContaining({ ref: first.ref, open: "no_pause" })] });
+    expect(audit.violations).toEqual([expect.objectContaining({ ref: second.ref, prevRef: first.ref, gapMs: 1_000 })]);
+  });
 });
 
 describe("plan-b Б12: a site send after a Hub send's admission is never its predecessor", () => {

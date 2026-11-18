@@ -390,6 +390,32 @@ describe("variant Б: the site's own traffic, observed", () => {
     expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
   }, 30_000);
 
+  it("the engine's own verify sent before the site's refusal was journaled cannot clear its hold: one more verify does", async () => {
+    const r = await rig();
+    // Not trusted yet: the engine's own verify goes at once.
+    await testDb!.pool.query("update sync_pages set credentials_generation = null, identity_account_id = null, identity_checked_at = null where page_id = $1", [r.page.pageId]);
+    let release!: () => void;
+    const answer = new Promise<void>((resolve) => (release = resolve));
+    let verifies = 0;
+    // The first verify's answer waits, after its send, until the site's refusal is committed.
+    r.operator.beforeResult = async (send) => {
+      if (!new URL(send.url).pathname.endsWith("/account/me")) return;
+      verifies += 1;
+      if (verifies === 1) await answer;
+    };
+    await actorOn(r);
+    await until(async () => verifies === 1, 10_000, "the first verify sent");
+    // The site's request left before that verify and is told late: refused.
+    const refused = r.operator.siteSent({ path: "/api/v1/polls", sentMono: monoMs() - 5_000 });
+    r.operator.siteEnded(refused, { status: 401 });
+    await until(async () => (await credentialsHold(r.page.pageId)) !== null, 5_000, "the site's refusal");
+    release();
+    await until(async () => (await clearedAudit(r.page.pageId)).length === 1, 15_000, "the proof that clears");
+    // The first verify left before the hold's episode began: only the second one's proof clears it.
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200, 200]);
+    expect(await credentialsHold(r.page.pageId)).toBeNull();
+  }, 40_000);
+
   it("journals the site's send and its end", async () => {
     const r = await rig();
     await actorOn(r);
