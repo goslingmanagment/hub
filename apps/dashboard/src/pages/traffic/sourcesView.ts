@@ -114,13 +114,16 @@ interface LinkDays {
   name: string;
   fans: Array<number | null>;
   clicks: Array<number | null>;
-  /** Born inside the range: a segment counted from zero without a baseline flag. */
+  /** Made at OnlyFans inside the two weeks. */
   createdInRange: boolean;
 }
 
-/** A link's segments of one channel merged by day. A day flagged no_baseline is
- *  unknown, never an arrival; a day no segment knows stays null. */
-function linkDays(segments: readonly Segment[], slots: readonly DaySlot[]): LinkDays[] {
+/** A link's segments of one channel merged by day; a day no segment knows stays
+ *  null. A day flagged no_baseline holds everything the link had accumulated:
+ *  for a link made inside the two weeks that is its arrivals since creation, and
+ *  a zero is a zero for any link; a positive figure of an older link is unknown,
+ *  never an arrival. */
+function linkDays(segments: readonly Segment[], slots: readonly DaySlot[], rangeFromAt: string): LinkDays[] {
   const index = new Map(slots.map((slot, position) => [slot.date, position]));
   const links = new Map<string, LinkDays>();
   for (const segment of segments) {
@@ -130,13 +133,15 @@ function linkDays(segments: readonly Segment[], slots: readonly DaySlot[]): Link
       link = { key, name: nameOf(segment), fans: slots.map(() => null), clicks: slots.map(() => null), createdInRange: false };
       links.set(key, link);
     }
-    if (segment.startObservedAt === null && !segment.flags.includes("no_baseline")) link.createdInRange = true;
+    const young = segment.linkCreatedAt !== null && segment.linkCreatedAt >= rangeFromAt;
+    if (young) link.createdInRange = true;
     for (const day of segment.days ?? []) {
       const position = index.get(day.businessDate);
       if (position === undefined || slots[position]!.when === "future") continue;
-      if (day.flags.includes("no_baseline")) continue;
-      link.fans[position] = sumKnown([link.fans[position] ?? null, day.fans]);
-      link.clicks[position] = sumKnown([link.clicks[position] ?? null, day.clicks]);
+      const accumulated = day.flags.includes("no_baseline") && !young;
+      const arrived = (value: number | null) => (accumulated && value !== 0 ? null : value);
+      link.fans[position] = sumKnown([link.fans[position] ?? null, arrived(day.fans)]);
+      link.clicks[position] = sumKnown([link.clicks[position] ?? null, arrived(day.clicks)]);
     }
   }
   return [...links.values()];
@@ -201,7 +206,7 @@ export function sourcesView(recent: Channels, allTime: Channels | undefined, tod
     for (const segment of channel.segments) {
       if (dataAt === null || segment.endObservedAt > dataAt) dataAt = segment.endObservedAt;
     }
-    const links = linkDays(channel.segments, slots);
+    const links = linkDays(channel.segments, slots, recent.range.fromAt);
     const active = links.filter((link) => known(link.fans) > 0 || known(link.clicks) > 0 || link.createdInRange);
     const fans = links.reduce((sum, link) => sum + known(link.fans), 0);
     if (channel.channelKey === null) {

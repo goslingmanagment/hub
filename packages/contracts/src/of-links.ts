@@ -426,6 +426,10 @@ export const ofLinkSegmentSchema = z.object({
   linkKind: ofLinkKindSchema,
   linkRef: z.string(),
   name: z.string().nullable(),
+  /** When the link was made at OnlyFans; null: unknown. A link made inside the
+   * asked range has its first read day flagged no_baseline whenever that read
+   * came a day later: the value is then everything since its creation. */
+  linkCreatedAt: isoTimestamp.nullable(),
   channelKey: z.string().nullable(),
   contractorKey: z.string().nullable(),
   startAt: isoTimestamp,

@@ -226,6 +226,7 @@ function segmentOf(link: LinkHistory, range: { from: string; fromAt: number; toA
     linkKind: kind,
     linkRef: link.linkRef,
     name: link.seed.name,
+    linkCreatedAt: link.createdAt === null ? null : iso(new Date(link.createdAt)),
     channelKey: link.seed.channel,
     contractorKey: null,
     startAt: iso(new Date(range.fromAt)),

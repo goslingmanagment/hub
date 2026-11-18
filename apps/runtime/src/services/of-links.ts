@@ -997,6 +997,7 @@ export async function getOfLinkChannels(db: Database, input: {
     linkKind: segment.series.linkKind,
     linkRef: segment.series.linkRef,
     name: names.get(linkKey(segment.series.pageId, segment.series.linkKind, segment.series.linkRef)) ?? null,
+    linkCreatedAt: isoOrNull(linkCreatedAt.get(linkKey(segment.series.pageId, segment.series.linkKind, segment.series.linkRef)) ?? null),
     channelKey: segment.channelKey,
     contractorKey: segment.contractorKey,
     startAt: iso(segment.startAt),

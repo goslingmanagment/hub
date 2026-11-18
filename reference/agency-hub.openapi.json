@@ -20435,6 +20435,12 @@
                                     "null"
                                   ]
                                 },
+                                "linkCreatedAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
                                 "channelKey": {
                                   "type": [
                                     "string",
@@ -20606,6 +20612,7 @@
                                 "linkKind",
                                 "linkRef",
                                 "name",
+                                "linkCreatedAt",
                                 "channelKey",
                                 "contractorKey",
                                 "startAt",
@@ -20819,6 +20826,12 @@
                                     "null"
                                   ]
                                 },
+                                "linkCreatedAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
                                 "channelKey": {
                                   "type": [
                                     "string",
@@ -20990,6 +21003,7 @@
                                 "linkKind",
                                 "linkRef",
                                 "name",
+                                "linkCreatedAt",
                                 "channelKey",
                                 "contractorKey",
                                 "startAt",

@@ -21,7 +21,7 @@ function days(fans: ReadonlyArray<number | null | "no_baseline">): Day[] {
 
 function segment(name: string, fans: ReadonlyArray<number | null | "no_baseline">): Segment {
   return {
-    pageId: 1, pageLabel: "page", linkKind: "tracking", linkRef: name, name, channelKey: "reddit", contractorKey: null,
+    pageId: 1, pageLabel: "page", linkKind: "tracking", linkRef: name, name, linkCreatedAt: "2026-10-01T09:00:00.000Z", channelKey: "reddit", contractorKey: null,
     startAt: "2026-11-08T21:00:00.000Z", endAt: "2026-11-18T09:00:00.000Z",
     startObservedAt: "2026-11-08T18:00:00.000Z", endObservedAt: "2026-11-18T06:00:00.000Z",
     clicks: 0, claims: null, subscribers: 0, fans: 0, vendorNetMills: 0, flags: [],
@@ -55,6 +55,23 @@ describe("Трафик → Источники: the day rules", () => {
     // The only link with fans is the large chart; there is no combined row.
     expect(row!.large).toBe(true);
     expect(view.sources[0]!.rows).toHaveLength(1);
+  });
+
+  it("counts the first read day of a link made inside the two weeks, and keeps such a link a row at zero", () => {
+    const young = segment("young", [null, null, null, null, null, null, "no_baseline", 0, 0, 0]);
+    young.linkCreatedAt = "2026-11-14T10:00:00.000Z";
+    const fresh = segment("fresh", [null, null, null, null, null, null, null, null, 0, 0]);
+    fresh.linkCreatedAt = "2026-11-16T10:00:00.000Z";
+    fresh.days = fresh.days!.map((day) => ({ ...day, clicks: day.clicks === null ? null : 0 }));
+    const old = segment("old", [null, 0, 1, 0, 0, 0, 0, 0, 0, 0]);
+    old.days![0] = { businessDate: DATES[0]!, clicks: 0, fans: 0, vendorNetMills: 0, flags: ["no_baseline"] };
+    const view = sourcesView(response([young, fresh, old]), undefined, TODAY);
+    const rows = view.sources[0]!.rows;
+    expect(rows.map((row) => row.name)).toEqual(["Все 3 ссылки", "young", "old", "fresh"]);
+    expect(rows[1]!.fans.slice(5, 10)).toEqual([null, 25, 0, 0, 0]);
+    // An accumulated zero is a zero for an old link too.
+    expect(rows[2]!.fans[0]).toBe(0);
+    expect(rows[3]!.total).toBe(0);
   });
 
   it("puts «Все N ссылок» first when two links bring fans, summing the known values of each day", () => {
