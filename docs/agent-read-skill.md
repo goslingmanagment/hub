@@ -1400,7 +1400,7 @@ hub capabilities --pretty
 Find the fan without knowing which key you have:
 
 ```
-hub resolve --input "https://fansly.com/rickd" --pretty
+hub resolve --input "https://fansly.com/<username>" --pretty
 ```
 
 Ask the capture question before the data question, when the answer will hinge on
