@@ -137,6 +137,17 @@ describe("reconcileQueueRetention", () => {
 });
 
 describe("pg-boss queue retention settings", () => {
+  it("names only queues the runtime actually declares, and classifies all of them", async () => {
+    // The table carries literals (it must stay a leaf module — see its header),
+    // so this is the pin that keeps them honest in BOTH directions: no invented
+    // name, and no new queue that quietly inherits library defaults.
+    const declared = await readDeclaredQueueNames();
+    expect(declared.size).toBeGreaterThan(20);
+
+    const pinned = QUEUE_RETENTION_SETTINGS.map((setting) => setting.queue);
+    expect([...pinned].sort()).toEqual([...declared.keys()].sort());
+  });
+
   it("never shortens a business cron below the outage floor", () => {
     // A queued tick is DISCARDED once keep_until passes. Retention shorter than
     // a plausible outage would silently drop a daily run — for the observations
