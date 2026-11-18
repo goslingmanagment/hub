@@ -1,8 +1,32 @@
+import { hostname } from "node:os";
+
 import { InvalidArgumentError } from "commander";
 
-// Argument parsers and the JSON printer the `sync` sub-command files share.
-// `../cli.ts` and `public-lookup.ts` keep their own `json`: the first prints
-// an indefinite date as "infinity", the second has no bigint replacer.
+// Argument parsers, the JSON printer, the CLI's audit actor and the context
+// opener the `sync` command files share. `../cli.ts` and `public-lookup.ts`
+// keep their own `json`: the first prints an indefinite date as "infinity",
+// the second has no bigint replacer.
+
+/** The default `--since` of the commands that read the DM chains' journal. */
+export const DEFAULT_CHAIN_JOURNAL_SINCE = "2026-07-05T00:00:00Z";
+
+/** Who acts from the CLI, as the audit rows name it. */
+export function cliActor(): string {
+  return `cli@${hostname()} pid ${process.pid}`;
+}
+
+/** Open a sync context, run `body` in it, close it whatever happens. */
+export async function withSyncContext<C, T>(
+  deps: { openContext(): Promise<C & { close(): Promise<void> }> },
+  body: (ctx: C) => Promise<T>,
+): Promise<T> {
+  const ctx = await deps.openContext();
+  try {
+    return await body(ctx);
+  } finally {
+    await ctx.close();
+  }
+}
 
 /** Pretty JSON with every bigint as its decimal string. */
 export function json(value: unknown): string {
