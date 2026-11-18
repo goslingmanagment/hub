@@ -10,6 +10,7 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { between, intBetween, iso, isoDay, mills, pick, rng } from "../core.ts";
 import { demoFans, demoNetSum, type DemoPage } from "../world.ts";
 import { DAY_MS, HOUR_MS, OF_PAGES, demoDigits, demoSha, demoUuid, mskDayKey, ofAccountId, ofStop } from "./publish-of-common.ts";
+import { trafficSourceLinks } from "./traffic-sources.ts";
 
 type OfLinks = KernelOperationResponse<"ofLinksGet">;
 type OfLink = OfLinks["links"][number];
@@ -200,7 +201,14 @@ function linksPage(now: Date, page: DemoPage, links: readonly OfLink[]): OfLinks
 }
 
 export function ofLinks(now: Date, pageId: number | undefined): OfLinks {
-  const links = OF_PAGES.flatMap((page) => (LINK_SEEDS[page.label] ?? []).map((seed, index) => buildLink(now, page, seed, index)));
+  // The links of «Трафик → Источники» too, so every link row there opens a page that knows its link;
+  // a link of this list with the same name gives way to that one.
+  const sourced = trafficSourceLinks(now);
+  const names = new Set(sourced.map((link) => link.name));
+  const links = [
+    ...OF_PAGES.flatMap((page) => (LINK_SEEDS[page.label] ?? []).map((seed, index) => buildLink(now, page, seed, index))).filter((link) => !names.has(link.name)),
+    ...sourced,
+  ];
   return {
     generatedAt: iso(now),
     businessTimeZone: "Europe/Moscow",
