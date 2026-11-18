@@ -181,7 +181,6 @@ describe("route auth declarations", () => {
       "pageTransactions",
       "statsCoverage",
       "statsHoldings",
-      "statsMedia",
       "statsTags",
       "voiceNoteAllowance",
       "voiceNoteAudio",
@@ -190,7 +189,7 @@ describe("route auth declarations", () => {
     ]);
   });
 
-  it("WP-S1's seven serving routes are owner-session, page-scoped, and read-only", () => {
+  it("WP-S1's six serving routes are owner-session, page-scoped, and read-only", () => {
     // The three halves of the S1 access story, pinned together because each one
     // alone is insufficient: `owner-session` (not `session`, not `any`) is what
     // makes `/money/*` money-gated on the REST surface; `scope: "page"` is what
@@ -198,7 +197,6 @@ describe("route auth declarations", () => {
     // with no body is what makes "serving never authorizes capture" structural
     // rather than a promise in a comment.
     const s1Routes = [
-      "statsMedia",
       "statsTags",
       "statsCoverage",
       "statsHoldings",
