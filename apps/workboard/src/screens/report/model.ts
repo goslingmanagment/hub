@@ -17,7 +17,6 @@ import { ruPlural } from "@agency_hub_core/ui/plural";
 
 export type Board = ShiftReportBoard;
 export type Row = ShiftReportRow;
-export type Colleague = Board["colleagues"][number];
 
 // ── formats, as the prototype writes them ─────────────────────────────────────
 
