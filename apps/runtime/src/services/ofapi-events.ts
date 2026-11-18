@@ -6,10 +6,8 @@ import {
   findObservationByKey,
   getOfapiWebhookEventById,
   listPendingOfapiWebhookEventIds,
-  OFAPI_SYNC_EVENT_CHANNEL,
   settleOfapiWebhookEvent,
 } from "@agency_hub_core/db";
-import { sql } from "drizzle-orm";
 import type { PgBoss } from "pg-boss";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -70,10 +68,6 @@ export const OFAPI_EVENT_PROCESS_QUEUE = "ofapi.events.process.v2";
 export const OFAPI_EVENT_SWEEP_QUEUE = "ofapi.events.sweep";
 export const OFAPI_EVENT_CLEANUP_QUEUE = "ofapi.events.cleanup";
 export const OFAPI_EVENT_PROCESS_BATCH_SIZE = 100;
-
-// Postgres NOTIFY channel carrying journal row ids/floor advances from the
-// worker to the API process's SSE fanout (services/events-stream.ts).
-export { OFAPI_SYNC_EVENT_CHANNEL };
 
 // Rows still pending after this grace period get re-enqueued by the sweep job;
 // long enough that the normal receive-time enqueue always wins the race.
@@ -376,23 +370,14 @@ export async function processOfapiWebhookEvent(app: AppContext, eventId: number)
     return;
   }
 
-  await app.db.transaction(async (tx) => {
-    const settled = await settleOfapiWebhookEvent(tx, {
-      id: row.id,
-      status: "processed",
-      platformAccountId: page.id,
-      // Belt for the truncation fix: vendor strings can carry their own
-      // unpaired surrogates — never let a derived frame wedge the settle.
-      syncEvent: sanitizeLoneSurrogatesDeep(frame.data),
-      processedAt,
-    });
-    if (!settled) {
-      // Another worker settled this row first (sweep racing the immediate job);
-      // it also owns the notification.
-      return;
-    }
-    // Same transaction: the notification fires on commit, after the row is visible.
-    await tx.execute(sql`select pg_notify(${OFAPI_SYNC_EVENT_CHANNEL}, ${String(row.id)})`);
+  await settleOfapiWebhookEvent(app.db, {
+    id: row.id,
+    status: "processed",
+    platformAccountId: page.id,
+    // Belt for the truncation fix: vendor strings can carry their own
+    // unpaired surrogates — never let a derived frame wedge the settle.
+    syncEvent: sanitizeLoneSurrogatesDeep(frame.data),
+    processedAt,
   });
   await runPostSettleOfapiProjections(app, row);
 }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
+import type * as IncidentsModule from "../apps/runtime/src/services/notification-incidents.ts";
 import type * as SyncServiceModule from "../apps/runtime/src/services/sync.ts";
 import type { ConstructorOptions, Queue, SendOptions, StopOptions } from "pg-boss";
 
@@ -99,7 +100,8 @@ vi.mock("../apps/runtime/src/services/page-proxies.ts", () => ({
   removePageProxy: cliMocks.removePageProxy,
 }));
 
-vi.mock("../apps/runtime/src/services/notification-incidents.ts", () => ({
+vi.mock("../apps/runtime/src/services/notification-incidents.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof IncidentsModule>()),
   handleSuccessfulPageVerificationRecovery: cliMocks.handleSuccessfulPageVerificationRecovery,
 }));
 

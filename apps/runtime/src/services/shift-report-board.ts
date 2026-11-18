@@ -67,6 +67,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
+import { reportSums } from "./sale-claim-rules.ts";
 import { runSaleClaims } from "./sale-claims.ts";
 import { SALE_RULE } from "./sale-rule.ts";
 import { matchSightings, runHubChecks, settleGoneShifts, startHubCheck, syncCheckMatters, syncLateMarks } from "./shift-handin-check.ts";
@@ -79,7 +80,6 @@ import {
   handinActorOf,
   handinFor,
   ledgerDayPaid,
-  linesPageSums,
   offPlatformOfRows,
   pageCatalog,
   readShiftReport,
@@ -177,7 +177,7 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
     const facts = await draftFacts(db, subject, handin, catalog, now, marks);
     const lines = draftLines(facts, marks);
     const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
-    const sums = linesPageSums(lines, facts.pages, offPlatform);
+    const sums = reportSums(lines, facts.pages, offPlatform);
     const hubCheck: CandidateHubPage[] = check.pages;
     const made = await insertCandidateWithin(db, {
       handinId: handin.id, door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
@@ -430,7 +430,7 @@ export async function resendShiftReport(
       take.push(line);
     }
     const lines = [...latest.lines.filter((line) => !take.some((one) => one.transactionId === line.transactionId)), ...take];
-    const sums = linesPageSums(lines, latest.pages.map((page) => page.pageLabel), latest.offPlatform);
+    const sums = reportSums(lines, latest.pages.map((page) => page.pageLabel), latest.offPlatform);
     const version = await insertHandinVersion(db, {
       handin: locked, door: actor.door, actorUserId: actor.userId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
       totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform: latest.offPlatform, comment: latest.comment, dayPaid, ruleVersion: SALE_RULE.version,

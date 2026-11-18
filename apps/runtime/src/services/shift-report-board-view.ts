@@ -43,7 +43,7 @@ import {
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
-import { draftFacts, draftLines, linesPageSums, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { draftFacts, draftLines, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
 import { cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor } from "./shift-report-phases.ts";
 
 /**
@@ -753,6 +753,6 @@ export async function signableOf(db: Database, input: { subject: Subject; catalo
   const oldWay = await oldWayGives(db, applied);
   const lines = signedLines({ candidate: candidate.lines, draft, proposals, notes: new Map(marks.map((mark) => [mark.transactionId, mark.note])), oldWay });
   const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
-  const sums = linesPageSums(lines, candidate.pages.map((page) => page.pageLabel), offPlatform);
+  const sums = reportSums(lines, candidate.pages.map((page) => page.pageLabel), offPlatform);
   return { lines, offPlatform, sums, count: lines.filter((line) => line.amountMills > 0).length, proposals, applied, oldWay };
 }

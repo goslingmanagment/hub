@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { hostname } from "node:os";
 
 import { Command, InvalidArgumentError } from "commander";
 
 import { createSyncContext, type SyncContext } from "../context.ts";
+import { cliActor, withSyncContext as withContext } from "./args.ts";
 import {
   readSyncPublicLookupQueue,
   enqueueSyncPublicLookupFans,
@@ -57,10 +57,6 @@ const defaultDeps: SyncPublicLookupCliDeps = {
   readStdin: readAllStdin,
 };
 
-function cliActor(): string {
-  return `cli@${hostname()} pid ${process.pid}`;
-}
-
 function json(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
@@ -77,18 +73,6 @@ function parseLimit(value: string): number {
   const parsed = Number(value);
   if (!/^[1-9]\d*$/.test(value) || parsed > 1000) throw new InvalidArgumentError(`--limit is 1–1000 (received "${value}")`);
   return parsed;
-}
-
-async function withContext<T>(
-  deps: SyncPublicLookupCliDeps,
-  body: (ctx: Pick<SyncContext, "db" | "config" | "rawConfig" | "logger">) => Promise<T>,
-): Promise<T> {
-  const ctx = await deps.openContext();
-  try {
-    return await body(ctx);
-  } finally {
-    await ctx.close();
-  }
 }
 
 /** The proxy password from exactly one of its three sources, or null. A

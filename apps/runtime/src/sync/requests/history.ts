@@ -63,12 +63,11 @@ import {
   estimateSlotOpensAt,
   explainWork,
   ownerRunning,
-  type StatusWork,
   type WaitingReason,
 } from "../engine/status.ts";
 import { FANSLY_RESOURCE_SPECS } from "../fansly/registry.ts";
 import { HISTORY_OLDER_REFUSED_REASON, parseDmMessagesCursor } from "../fansly/resources/dm-messages.ts";
-import { statusPageOf } from "../status-rows.ts";
+import { statusPageOf, statusWorkOf } from "../status-rows.ts";
 import {
   budgetUseOf,
   estimateItemReads,
@@ -1072,23 +1071,6 @@ export async function cancelHistoryRequest(
  *  new credentials lift) has none: null. */
 function iso(date: Date | null | undefined): string | null {
   return date === null || date === undefined || isIndefinite(date) ? null : date.toISOString();
-}
-
-/** Unlike `../status-rows.ts`'s `statusWorkOf`, sets no `http` (absent:
- *  a key that sends) whatever the work's key. */
-function statusWorkOf(work: SyncWorkRow): StatusWork {
-  return {
-    id: work.id,
-    resource: work.resource,
-    subject: work.subject,
-    class: work.class,
-    state: work.state,
-    dueAt: work.dueAt,
-    breakerUntil: work.breakerUntil,
-    blockedByVendorAt: work.blockedByVendorAt,
-    waitingReason: work.waitingReason,
-    waitingUntil: work.waitingUntil,
-  };
 }
 
 /** What a request waits for as a whole: the page (an owner pause, no running

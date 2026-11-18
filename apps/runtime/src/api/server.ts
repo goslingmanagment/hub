@@ -45,8 +45,6 @@ import {
   ForbiddenError,
   GenerationNotEligibleError,
   NotFoundError,
-  OfapiCollectionRefusedError,
-  ProductGateError,
   QuotaDeniedError,
   TooManyRequestsError,
   UnauthorizedError,
@@ -676,22 +674,6 @@ export async function buildApiServer(appContext: AppContext) {
       return;
     }
 
-    if (error instanceof OfapiCollectionRefusedError) {
-      // Documented structured extension (docs/error-handling.md §3): the
-      // machine reason and, for a time-bound cap, the reset advice.
-      if (error.retryAfterMs !== null) {
-        reply.header("retry-after", String(Math.ceil(error.retryAfterMs / 1000)));
-      }
-      reply.code(error.statusCode).send({
-        error: error.code,
-        message: error.message,
-        statusCode: error.statusCode,
-        reason: error.reason,
-        retryAfterMs: error.retryAfterMs,
-      });
-      return;
-    }
-
     if (error instanceof QuotaDeniedError && error.reason !== null) {
       // The personal daily AI limit: the machine reason and when it starts over.
       if (error.retryAfterMs !== null) {
@@ -725,8 +707,7 @@ export async function buildApiServer(appContext: AppContext) {
         || error instanceof BadRequestError
         || error instanceof NotFoundError
         || error instanceof ClientFeatureDisabledError
-        || error instanceof GenerationNotEligibleError
-        || error instanceof ProductGateError)
+        || error instanceof GenerationNotEligibleError)
       && error.reason !== null
     ) {
       // Documented structured extension (docs/error-handling.md §3): the
