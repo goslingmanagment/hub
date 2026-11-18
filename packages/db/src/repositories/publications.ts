@@ -1461,17 +1461,6 @@ export type PublicationCheckKind = "verify" | "search";
 export type PublicationCheckOutcome =
   | "published" | "processing" | "scheduled" | "not_published" | "unknown" | "not_found" | "read_failed" | "withdrawn";
 
-export interface PublicationCheckRecord {
-  id: number;
-  publicationId: number;
-  kind: PublicationCheckKind;
-  outcome: PublicationCheckOutcome;
-  reason: string | null;
-  platformPostRef: string | null;
-  evidence: Record<string, unknown>;
-  createdAt: Date;
-}
-
 export async function insertPublicationCheck(db: Database, input: {
   publicationId: number;
   kind: PublicationCheckKind;

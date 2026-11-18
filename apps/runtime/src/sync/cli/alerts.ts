@@ -1,5 +1,3 @@
-import { hostname } from "node:os";
-
 import type { Command } from "commander";
 
 import { listSyncPages } from "@agency_hub_core/db";
@@ -10,7 +8,7 @@ import { acknowledgeSyncPaceViolations, readSyncAlertStatus } from "../engine/al
 import { createFanslyRegistry } from "../fansly/registry.ts";
 import { findSyncPageByLabel } from "../inspect.ts";
 import { pageLabel } from "./chain.ts";
-import { json } from "./args.ts";
+import { cliActor, json, withSyncContext as withContext } from "./args.ts";
 
 // Owner CLI of the engine's alerts (design §9.6):
 //   pnpm cli sync alerts status [--page <label>]
@@ -26,22 +24,6 @@ const defaultDeps: SyncAlertsCliDeps = {
   openContext: () => createSyncContext(),
   print: (line) => console.log(line),
 };
-
-function cliActor(): string {
-  return `cli@${hostname()} pid ${process.pid}`;
-}
-
-async function withContext<T>(
-  deps: SyncAlertsCliDeps,
-  body: (ctx: Pick<SyncContext, "db" | "logger">) => Promise<T>,
-): Promise<T> {
-  const ctx = await deps.openContext();
-  try {
-    return await body(ctx);
-  } finally {
-    await ctx.close();
-  }
-}
 
 /** Add `sync alerts …` to the `sync` command group. */
 export function registerSyncAlertsCommands(sync: Command, deps: SyncAlertsCliDeps = defaultDeps): void {

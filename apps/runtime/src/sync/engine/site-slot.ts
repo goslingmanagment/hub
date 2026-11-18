@@ -1,7 +1,6 @@
 import {
   captureAttempt,
   clearPageHold,
-  countSiteSendsSince,
   findObservedSiteRequest,
   getSyncPage,
   insertSiteAdmission,
@@ -12,144 +11,26 @@ import {
   reopenRecoveredObservedAttempt,
   setNetworkFailureStreak,
   setPageHold,
-  settleAttemptWithoutCapture,
   writeSyncRouteState,
   type Database,
-  type SyncPageRow,
 } from "@agency_hub_core/db";
 
 import { SITE_OTHER_ROUTE } from "../fansly/route-match.ts";
 import { isFanslyRoute, type FanslyRoute } from "../fansly/routes.ts";
-import { holdSetOf, whyHeld, type HoldSet } from "./admission.ts";
-import { AdmissionHeldError, observedHoldClearedWithin, pageErrorState, type CaptureSend, type CommitDeps } from "./commit.ts";
+import { holdSetOf } from "./admission.ts";
+import { observedHoldClearedWithin, pageErrorState, type CaptureSend, type CommitDeps } from "./commit.ts";
 import { onOutcome } from "./errors.ts";
-import type { SlotGrant } from "./pacer.ts";
-import type { ObservedSiteKey, SiteAdmissionPort, SiteRequestEnd } from "./ports.ts";
-import { routeAdmissionView, routeStateWriteOf, type RouteClocks } from "./route-policy.ts";
-import type { RouteKeySpec } from "./route-policy.ts";
-import {
-  decideSite,
-  isSiteSocket,
-  SITE_END_WAIT_MS,
-  siteAnswerEffect,
-  type ClassifiedSiteRequest,
-  type SiteAnswerEffect,
-  type SiteContext,
-} from "./site-admission.ts";
+import type { ObservedSiteKey, SiteRequestEnd } from "./ports.ts";
+import { routeStateWriteOf } from "./route-policy.ts";
+import { siteAnswerEffect, type ClassifiedSiteRequest, type SiteAnswerEffect } from "./site-admission.ts";
 
-// The slot of a page's own site request (Project Browser, plan §3.2; stage 3
-// PR 8): the decision on the waiting requests, the admission (tx 1), the
-// grant to the page's browser, the end it reports and the commit of that end
-// (tx 2) by the engine's own outcome rules. The actor calls these; nothing
-// here runs on a page without a browser (no `SiteAdmissionPort`).
-
-const HOUR_MS = 3_600_000;
+// The site's own traffic a page's browser let go and observed (variant Б,
+// plan-b §4.2.2): its send journaled after the fact (tx 1) and its end
+// committed by the engine's own outcome rules (tx 2). The actor calls these;
+// nothing here runs on a page without a browser (no `SiteAdmissionPort`).
 
 function inTx<T>(db: Database, body: (tx: Database) => Promise<T>): Promise<T> {
   return db.transaction(async (tx) => body(tx as unknown as Database));
-}
-
-/** What holds the page for the site's requests: a credentials hold, or a
- *  hold that admits nothing. */
-function pageHeldForSite(holds: HoldSet, now: Date): SiteContext["pageHeld"] {
-  const held = whyHeld(holds, null, {}, now);
-  if (held === null) return null;
-  return held.scope === "credentials" ? { kind: "credentials" } : { kind: "closed", until: held.until };
-}
-
-/** The site's decision context at one instant. */
-export async function siteContextOf(
-  d: CommitDeps,
-  input: {
-    page: SyncPageRow;
-    holds: HoldSet;
-    clocks: RouteClocks | null;
-    specs: readonly RouteKeySpec[];
-    checksOnly: boolean;
-    bootstrapOnly?: boolean;
-    now: Date;
-  },
-): Promise<SiteContext> {
-  const view = input.clocks === null ? null : routeAdmissionView(input.clocks, input.specs, input.now);
-  const sendsLastHour = await countSiteSendsSince(d.db, { pageId: d.pageId, since: new Date(input.now.getTime() - HOUR_MS) });
-  return {
-    nowMono: d.clock.monoNow(),
-    now: input.now,
-    pausedAll: input.page.pausedAll,
-    pageHeld: pageHeldForSite(input.holds, input.now),
-    checksOnly: input.checksOnly,
-    bootstrapOnly: input.bootstrapOnly === true,
-    // A route state this build cannot read admits nothing: no route opens.
-    routeOpensAt: (route) => {
-      if (view === null) return { at: new Date(input.now.getTime() + 3_600_000) };
-      const closure = view.routeOpensAt(route);
-      return closure === null ? null : { at: closure.at };
-    },
-    sendsLastHour,
-  };
-}
-
-/** Refuse what must be refused now; the admissible request, if any. */
-export function settleSiteDecision(d: CommitDeps, site: SiteAdmissionPort, ctx: SiteContext, urgentOnly = false): ClassifiedSiteRequest | null {
-  const pending = site.pending();
-  const decision = decideSite(urgentOnly ? pending.filter(isSiteSocket) : pending, ctx);
-  for (const refusal of decision.refuse) {
-    d.metrics.increment("sync_site_refused", { reason: refusal.reason });
-    site.refuse(refusal.id, refusal.reason);
-  }
-  return decision.admit;
-}
-
-/**
- * The admission of one site request (tx 1): the page's final word under its
- * row lock — a hold written since the decision refuses here, the manual
- * login passing only a credentials hold and the owner's pause — then its
- * attempt. Throws `AdmissionHeldError` when a hold or the pause refuses it.
- */
-export async function admitSite(
-  d: CommitDeps,
-  input: {
-    classified: ClassifiedSiteRequest;
-    grant: SlotGrant;
-    intervals: { routeIntervalMs: number | null; familyIntervalMs: number | null };
-  },
-): Promise<{ attemptId: number }> {
-  const { classified, grant } = input;
-  const manual = classified.exempt;
-  return inTx(d.db, async (tx) => {
-    await lockOwnedPage(tx, {
-      pageId: d.pageId,
-      generation: d.generation,
-      lock: "no_key_update",
-      live: true,
-    });
-    const page = await getSyncPage(tx, d.pageId);
-    if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-    if (page.pausedAll && !manual) throw new AdmissionHeldError("paused", null);
-    const held = whyHeld(holdSetOf(page.holds), null, {}, d.clock.wallNow());
-    if (held !== null && !(held.scope === "credentials" && manual)) throw new AdmissionHeldError(held.kind, held.until);
-    const admitted = await insertSiteAdmission(tx, {
-      pageId: d.pageId,
-      generation: d.generation,
-      origin: classified.origin,
-      operation: classified.route,
-      request: {
-        method: classified.request.method.toUpperCase(),
-        host: classified.request.host,
-        // The path only: a query may carry what the journal must not keep.
-        path: classified.request.path.split("?", 1)[0],
-        siteRequestId: classified.request.id,
-        manualLogin: manual,
-      },
-      browserRequestId: classified.request.id,
-      settingMs: grant.settingMs,
-      jitterU: grant.jitterU,
-      pauseMs: grant.pauseMs,
-      routeIntervalMs: input.intervals.routeIntervalMs,
-      familyIntervalMs: input.intervals.familyIntervalMs,
-    });
-    return { attemptId: admitted.attemptId };
-  });
 }
 
 /**
@@ -221,7 +102,7 @@ export async function recordObservedSiteSend(
 
 /**
  * Variant Б: the end of an observed hop, committed with its send's attempt
- * (`commitSiteEnd`'s rules, `observedSend`: the site's 429 holds its route;
+ * (`commitAnswerIn`, `observedSend`: the site's 429 holds its route;
  * its 401 and 403 hold the page's credentials with no digest of their own —
  * one verify of the stored ones settles it; under a credentials hold they
  * change nothing, and within `SITE_REFUSALS_DISCOUNTED_MS` of a proof that
@@ -267,8 +148,8 @@ export async function commitObservedSiteEnd(
   });
 }
 
-/** The send facts of an observed site request for `commitSiteEnd`: it went,
- *  at the instant the browser reported. */
+/** The send facts of an observed site request for `commitAnswerIn`: it
+ *  went, at the instant the browser reported. */
 export function observedSend(sentWall: Date, settingMs: number): CaptureSend {
   return {
     sent: true,
@@ -280,48 +161,6 @@ export function observedSend(sentWall: Date, settingMs: number): CaptureSend {
     pauseMs: settingMs,
     settingMs,
   };
-}
-
-/** The end of an admitted request, or — when the page's browser says
- *  nothing in `SITE_END_WAIT_MS` — a request that may have gone out. */
-export async function siteEnd(site: SiteAdmissionPort, id: string, signal: AbortSignal): Promise<SiteRequestEnd> {
-  const timeout = new AbortController();
-  const timer = setTimeout(() => timeout.abort(), SITE_END_WAIT_MS);
-  const both = AbortSignal.any([signal, timeout.signal]);
-  try {
-    return await site.end(id, both);
-  } catch {
-    return { kind: "transport_error", sent: true, message: timeout.signal.aborted ? "no end from the page browser" : "the end was not heard" };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * The commit of a site request's end (tx 2): the attempt — settled unsent,
- * or captured with its send instant (the pacer's completion fallback) and
- * status; nothing is journaled of its body here — and what the answer does
- * to the page's holds by the engine's own rules (`siteAnswerEffect`,
- * `onOutcome`): the route that answered a 429 waits, a 401/403 outside the
- * manual login holds the credentials.
- */
-export async function commitSiteEnd(
-  d: CommitDeps,
-  input: { attemptId: number; send: CaptureSend; end: SiteRequestEnd; classified: Pick<ClassifiedSiteRequest, "route" | "exempt">; observed?: boolean },
-): Promise<void> {
-  const { attemptId, end } = input;
-  if (end.kind === "aborted_before_send") {
-    d.metrics.increment("sync_site_not_sent", {});
-    await inTx(d.db, async (tx) => {
-      await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-      await settleAttemptWithoutCapture(tx, { attemptId, outcome: "aborted_before_send", errorClass: "not_sent:site" });
-    });
-    return;
-  }
-  await inTx(d.db, async (tx) => {
-    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    await commitAnswerIn(tx, d, { ...input, end });
-  });
 }
 
 /**
@@ -350,8 +189,12 @@ async function siteRefusalDiscountedSince(tx: Database, d: CommitDeps): Promise<
   return observedHoldClearedWithin(tx, { pageId: d.pageId, withinMs: SITE_REFUSALS_DISCOUNTED_MS });
 }
 
-/** `commitSiteEnd`'s commit of an answer or a transport error, in the
- *  caller's transaction (the page locked). */
+/** The commit of a site request's answer or transport error, in the
+ *  caller's transaction (the page locked): the attempt captured with its send
+ *  instant and status — nothing is journaled of its body here — and what the
+ *  answer does to the page's holds by the engine's own rules
+ *  (`siteAnswerEffect`, `onOutcome`): the route that answered a 429 waits, a
+ *  401/403 outside the manual login holds the credentials. */
 async function commitAnswerIn(
   tx: Database,
   d: CommitDeps,

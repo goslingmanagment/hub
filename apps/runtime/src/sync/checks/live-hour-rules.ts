@@ -1,10 +1,10 @@
 import { SYNC_SEND_WINDOW_MS, type FanslySendAuditRow } from "@agency_hub_core/db";
 
-import { incidentKey, syncEngineIncidentKey } from "../../services/notification-incidents.ts";
+import { incidentKey, SYNC_ENGINE_ROUTE_SUBKEY_PREFIX, syncEngineIncidentKey } from "../../services/notification-incidents.ts";
 import { SYNC_ALERT_CLEAN_MS } from "../engine/alerts.ts";
 import { NETWORK_FAILURES_TO_PAUSE } from "../engine/errors.ts";
 import { auditPagePace, auditRouteIntervals, sendAuditJournalOf, sendAuditRouteOf, type SendAuditWindow } from "../engine/send-audit.ts";
-import { intervalMsOf, routeBudget, routeOfEngineOperation, routeOfLegacyOperation, type FanslyRoute } from "../fansly/routes.ts";
+import { intervalMsOf, routeBudget, type FanslyRoute } from "../fansly/routes.ts";
 
 // The rules of the live-hour check of a page's first hour on the engine (step
 // 3b ruling 13, A1 §2b, A6; owner decisions №18, №21–№26), pure. They were the
@@ -166,8 +166,7 @@ export interface AcceptanceJournalRow {
 /** The canonical route of a journal row; an operation this build cannot
  *  place is a pair of its own (`unknown:<journal>:<operation>`). */
 export function acceptanceRouteOf(journal: AcceptanceJournalRow["journal"], operation: string): string {
-  const route = journal === "engine" ? routeOfEngineOperation(operation) : routeOfLegacyOperation(operation);
-  return route ?? `unknown:${journal}:${operation}`;
+  return sendAuditRouteOf({ journal, operation }) ?? `unknown:${journal}:${operation}`;
 }
 
 function inWindow(at: Date, window: Pick<AcceptanceWindow, "start" | "observedUntil">): boolean {
@@ -683,7 +682,7 @@ export function mismatchCheck(confirmed: number, mismatches: number): Acceptance
 
 /** D5's per-route incident (step 3b PR 1-2, `SYNC_ENGINE_ROUTE_SUBKEY_PREFIX`):
  *  one latch per page+route, `route_limited:<route>`. */
-export const ACCEPTANCE_ROUTE_INCIDENT_SUBKEY_PREFIX = "route_limited:";
+export const ACCEPTANCE_ROUTE_INCIDENT_SUBKEY_PREFIX = SYNC_ENGINE_ROUTE_SUBKEY_PREFIX;
 
 /** The latch keys of a page the acceptance reads (`services/notification-incidents.ts`):
  *  alert 1 (the page stopped) and the prefix of its per-route incidents. */

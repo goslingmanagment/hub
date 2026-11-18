@@ -33,8 +33,8 @@ Per account: total rows, event-sourced rows, legacy seeds by source,
 `dm_message_archive` as a source), plus the detached-partition census
 (pg_inherits vs `tiered_pending_drop` and detached-in-public leftovers).
 Nonzero `detachedPartitionsHoldingEvents` for an account means the build will
-hard-refuse for it — re-attach via the restore path
-(`tiering:restore-drill`) first.
+hard-refuse for it — re-attach the partition
+(`docs/runbooks/domain-event-partitions.md`) first.
 
 ## R1 — shadow build (writes ONLY to message_archive_shadow)
 
@@ -48,7 +48,9 @@ detached-partition gate (checked at start AND at end of the transaction);
 (unlock events plus hot `purchased_at`, `is_opened` only ever to true — the
 same facts as `archive:backfill-ppv-purchases`); (5) Fansly WS deletion marks
 re-applied last (exact deletion receipts, `deleted_at` only, text kept — the
-same facts as `archive:backfill-fansly-ws-deletions`). The live table is not touched. Rollback
+receipts the retired ws-hints projector kept in `fansly_ws_hint_receipts`, applied by
+`markFanslyWsArchiveDeletions`; the engine's later deletions are `message.deleted`
+events the replay carries). The live table is not touched. Rollback
 at this stage = simply don't switch (dropping the shadow is a separate owner
 decision; nothing reads it).
 

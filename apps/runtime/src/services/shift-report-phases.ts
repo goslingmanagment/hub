@@ -58,18 +58,6 @@ export function mayAct(actor: BoardActor, action: BoardAction, phase: ShiftRepor
   return PERSON_ACTIONS[phase].includes(action);
 }
 
-/** Where a phase goes on an action; null — the action does not move it. */
-export function phaseAfter(action: BoardAction, phase: ShiftReportPhase, input: { counted: boolean; checkDone: boolean }): ShiftReportPhase | null {
-  switch (action) {
-    case "handIn": return input.checkDone ? "confirm" : "checking";
-    case "confirm": return "counted";
-    case "reopen": return "fixing";
-    case "cancel": return phase === "fixing" ? (input.counted ? "counted" : "draft") : null;
-    case "resend": return "counted";
-    default: return null;
-  }
-}
-
 /**
  * Whether the check lets the person confirm: Hub has no page still reading and Gengar answered (or nobody reviews the
  * shift's pages) — or the server's timer: 10 minutes since the hand-in, whatever is still running.

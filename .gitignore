@@ -27,9 +27,6 @@ docs/*
 !docs/runbooks/
 docs/runbooks/*
 !docs/error-handling.md
-!docs/runbooks/desktop-lifecycle-v2-cutover.md
-# Agent read plane enablement runbook.
-!docs/runbooks/agent-read-plane-enablement.md
 # The Fansly Sync Engine's operator runbook.
 !docs/runbooks/sync.md
 # Operational acceptance for the OFAPI vendor transport and bounded recovery.

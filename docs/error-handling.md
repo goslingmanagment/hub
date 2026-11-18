@@ -1,10 +1,10 @@
 # Error-handling canon
 
 This is the single canonical error-handling reference for the Agency Hub family:
-the core kernel, the ChatGoose Firefox extension (`fansly-chat`), the ChatGoose
-Desktop Electron application (`onlyfans-chat`), and the ChatSpace extension
-(`chat-extension`). It records the currently implemented contract; the
-`chat-extension` columns follow its frozen CG registry (`chat-extension` `docs/error-registry.md`, `architecture.md`
+the core kernel and the ChatSpace extension (`chat-extension`). The ChatGoose
+Firefox extension (`fansly-chat`) and the ChatGoose Desktop Electron application
+(`onlyfans-chat`) are retired; their columns in §2 are history. It records the
+currently implemented contract; the `chat-extension` columns follow its frozen CG registry (`chat-extension` `docs/error-registry.md`, `architecture.md`
 Appendix A) and its hub→CG map (`packages/contracts/src/hub/error-map.ts`).
 Change this document in the same family change as any behavior recorded here;
 do not maintain client-side copies.
@@ -53,7 +53,6 @@ do not maintain client-side copies.
 | chat-extension AI generation | No SSE error code is auto-retried. A structured HTTP 503 `service_unavailable` on the AI stream before the first output frame gets exactly one transparent retry after 5 seconds ("Сервис недоступен, повтор через 5 с…"); never after an output frame and never for a send. EOF without `done` fails closed as `CG-STREAM-TRUNCATED`. | Manual retry after the mapped card; a provider-rate `retryAfterMs` is kept as an absolute display deadline only. |
 | chat-extension hub calls (non-AI) | No transport failure (network, timeout, contract, truncation) is repeated automatically. A rejected cursor (`cursor_invalid`, `cursor_window_mismatch`) is read again once from the first page, without a toast. H-5 `generation_not_ready` repeats only the idempotent link write, never the generation: 5 s, 15 s, 60 s, then every 3 min up to 30 min while the tab is open, then `CG-RECAP-SAVE`. A claim `dispatch` that fails in transport ends its attempt held: no ticket, so no command was enqueued. | The chatter's next click; only a new click makes a new send attempt. |
 | Anthropic adapter | The SDK's HTTP-level retry behavior remains intact. For a page-proxy connect failure, `createStickyConnectFailureFetch` permits one physical proxy dial per resolved generation client; later SDK attempts receive the cached connect failure immediately. | The provider SDK owns eligible response-level attempts; no client owns them. |
-| OpenRouter adapter | One local fetch; there is no adapter retry loop. | A later generation is a new explicit action. |
 | Voice synthesis | One paid provider dispatch. A take ElevenLabs provably never billed (a 4xx refusal; a connection that never came up: the SOCKS handshake, DNS, the TCP connect or its timeout; a fault before the provider call) settles `failed_definite`, not billed, its reservation refunded. A timeout, a reset, another transport failure, or an ambiguous status remains dispatched and is swept to the existing indeterminate outcome; it is never redispatched automatically. Idempotent replay reads the same request result. A queued waiter heartbeats durable ownership until a process-local synthesis slot opens. | A deliberate new take is a new paid attempt. |
 | OFAPI state-changing commands | One execution attempt per command row; an indeterminate mutation is never automatically sent again. Typing, unsend, and mark-read reject retry lineage. | Only an explicitly requested, policy-permitted same-kind retry creates a new command row and lineage; it is never a second attempt on the old row. |
 | Sync/capture reads | Existing lane-specific pacing, durable retry state, and reconciliation remain authoritative; queue redelivery is not a substitute for that state machine. Safe-read retry deadlines are anchored to the failure transition, after transport/capture has finished, using the same clock sample as persistence. | The owning sync/capture lane, never an AI code or chatter card. |
@@ -246,7 +245,6 @@ status, code, and intentional message.
 | Capture | `capture_payload_unavailable` | 503 | The agent plane's owner-only observation payload read (#9b): the envelope has no inline body and its content-addressed copy could not be read right now. Deliberately NOT one of the handler's withholding reasons — `restricted_class` is a decision the kernel made, this is a fetch that failed, and Transient and retriable. |
 | Egress | `proxy_missing` | 409 | A Fansly page has no stored proxy, so fail-closed egress refuses the request. |
 | OFAPI | `follower_outreach_conflict` | 409 | Another first-greeting command already holds page/fan custody. Do not enqueue again automatically; show the held/uncertain state. The error discloses no other chatter's command identity. |
-| OFAPI | `ofapi_collection_refused` | 429 / 409 | A local collection-policy refusal before any vendor fetch (review #136); the body also carries the machine `reason` and `retryAfterMs`. 429 when only time clears it (`daily_limit`, `interval_limit` — `retryAfterMs` is the reset advice and `Retry-After` mirrors it); 409 when only an owner policy change clears it (`background_paused`, `collection_off`, `on_demand_only`, `detail_disabled`, job and configuration reasons). Never retried automatically; never 500/503. |
 | Client | `client_feature_disabled` | 409 | A chat-extension feature is not available to this call (hub-pr-plan H-2b): the owner's switches (`chatExtension*` config), the page, or the extension's version refuse it. Raised by `requireClientFeature`, which every chat-extension client route behind a flag runs after resolving its page, by `requireClientPage`, the same check for a client route that has no flag of its own (the own-AI-spend read, H-15: the page, the master switch and the version only), and by the narrow token's AI switch. Documented structured extension: the machine `reason` — `disabled` (master switch off, or a `chatExtension*` value the hub cannot read: a bad environment value or a stored override that no longer validates, which is logged), `flag_off` (the feature's flag is off for the page: its own row of `chatExtensionFeatures`, else the `"*"` row on an OnlyFans page; a Fansly page reads its own row alone, chat-extension R20 HF-2), `platform_unsupported` (the feature, or the part of it the route serves, does not exist on the page's platform: on Fansly sending from the preview, the Spenders statistics, the list of new subscribers and the narrow token's Help; on OnlyFans the Fansly flags), `binding_missing` (no platform account id and no owner host binding), `hub_not_ready` (this hub does not serve the feature yet), `not_granted` (not an active page granted to the caller; a missing page answers the same), `client_outdated` (`x-client-version` below `chatExtensionMinVersion` or not `chat-extension/<MAJOR.MINOR.PATCH>`); the vocabulary is open (`CLIENT_FEATURE_UNAVAILABLE_REASONS`) and an unknown reason reads as off. 409 because only the owner (or an extension update, for `client_outdated`) lifts it: never retried automatically. The bootstrap is never refused this way: it answers 200 with every feature's availability and the minimum version. The master switch is global (R20 HF-15): off, every flag on every page reads `disabled`, including features absent on that platform; all top-level `flags` are `false`. For calls gated by the switches, `disabled` precedes `platform_unsupported`, then the flag, binding, capabilities and version checks; page-grant checks still come first where required. With the master on the order and answers are unchanged. One reason is the bootstrap's alone, `lane_off` (chat-extension R20 HF-4б): the feature runs on a hub lane with switches of its own that does not serve the page now — for `voice`, the voice-notes lane (`voiceNotesEnabled`, the synthesis provider, `voiceNotesPageAllowlist`, the page's voice profile; the same rule as the released clients' `capabilities.voiceNotes` on `GET /api/v1/pages`); a call is answered by the lane's own codes below, never by `lane_off`. The voice-note routes (R20 HF-4б: create, status, audio) refuse a narrow token this way on every call, a replay's included, unless the page's `voice` flag admits it; a refused replay admits nothing, and the same `clientRequestId` replays the same render once the flag is back. A full token is not asked. On the claim route (H-7b) the check depends on the action: `claim` and `renew` need `newcomers`; the status read has no flag (the page, the master switch, its platform and the version only); `release`, `sent` and `failed` end a lease or a send the hub already admitted and are refused only with `not_granted`, so a switch turned off in between never strands one; `registerNativeSend` reports a send that already happened and is refused only with `not_granted` or `platform_unsupported`, never by the master switch, a flag or the minimum version, so the proof of a send is never lost to a switch. What a platform takes of a send is its admission (R20 HF-3, `client-claim-admission.ts`): on OnlyFans a greeting or a reply with an AI group, on Fansly a greeting only, with an AI or a manual group (`manual-greeting-v1`); anything else is `platform_unsupported` (for a new `dispatch`, `disabled` takes precedence while the master is off). `dispatch` needs `previewSend` (and `newcomers` for a greeting) on OnlyFans, `newcomers` alone on Fansly, and decides inside its own transaction, after the repeat check, from the stored `chatExtension*` rows it holds locked `FOR SHARE`: an owner's change of a stored switch waits for a dispatch in flight and holds from the next one, and for a dispatch `chatExtensionEnabled` and `chatExtensionFeatures` count only as stored rows (a value the environment alone sets admits no send). |
 | Client | `generation_not_ready` | 409 | chat-extension H-5: the dossier save (`POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation`) named a generation of the caller whose record has not appeared. The gateway writes the record right after the stream's `done` frame, so a save sent in that gap is answered this way, and only when the request names the `clientRequestId` of an AI request the gateway admitted for the caller on that page; without it, or for a request the hub does not know, the answer is 404. Retriable: the same request succeeds once the record exists. It can stay for good when the record's write failed (the gateway only logs that), so a client bounds its repeats. No `reason`. |
 | Client | `generation_not_eligible` | 409 | chat-extension H-5: the caller's generation exists and will never become the fan's dossier. Documented structured extension: the machine `reason` — `not_full_summary` (not a `fan-summary`, or not its full mode), `not_completed` (failed or cancelled), `stop_reason_missing` (no stop reason recorded), `output_exhausted` (stop reason `max_tokens` or `length`), `empty` (no text), `context_scope` (its context held something only its caller saw), `too_long` (longer than a dossier body may be, 50,000 characters), `superseded` (the fan's dossier already holds a text that is not older than this generation); the vocabulary is open (`CLIENT_GENERATION_NOT_ELIGIBLE_REASONS`). The first six restate the one definition of a usable full recap (`usableFanSummaryPredicate`). Never retried: the same generation is refused every time. `superseded` alone says nothing against the generation (the dossier already holds a newer text), so a client may show it as information rather than as a failed save. A generation of another user, page or fan is not this error but 404. |
@@ -522,7 +520,7 @@ An additive class in the existing error frame requires one family change:
    threshold, streak effect, and resolve rule—or deliberately `none`. Incident
    failure must remain log-and-continue after terminal persistence.
 7. Add explicit presentation mappings and registry entries in every client
-   (fansly-chat, onlyfans-chat, chat-extension), while retaining tests for the
+   (chat-extension), while retaining tests for the
    namespace-based unknown-code fallback and terminal EOF behavior. A new HTTP
    `AppError` code that a chat-extension route can return also gets its row in
    the §2 chat-extension HTTP table; without one it falls to the status rows.
@@ -534,8 +532,7 @@ Changing the discriminated frame union does. A new frame `type`, a
 required/renamed/retyped field, or a closed-enum change requires:
 
 1. core contract/schema and generated OpenAPI/SDK changes;
-2. vendored SDK updates in every client (fansly-chat, onlyfans-chat,
-   chat-extension);
+2. vendored SDK updates in every client (chat-extension);
 3. client readers capable of the new shape before core can emit it; and
 4. an explicit rollout/rollback gate across core and every client repository.
 
@@ -733,33 +730,6 @@ seconds `history_window_failed` still retains the raw page and old offset. A
 retry of a legacy scan uses its original query bounds and offset; normalization
 must never change the provider query halfway through pagination.
 
-
-### Desktop media resolve (media images)
-
-`POST /api/v1/ofapi/media/resolve` answers HTTP 200 with a closed `outcome`
-(`free_url`, `ofapi_cache`, `paid`, `cap_blocked`, `source_expired`,
-`unavailable`, `refused`, `pending`, `error`) and a bounded machine `reason`;
-these are decisions, not `AppError` codes. HTTP errors stay in the registry:
-404 `not_found` for an account not granted to the chatter (the read gateway's
-rule), 503 `service_unavailable` while the desktop read gateway is disabled,
-400 for an invalid request (a client URL is never accepted; a transfer
-report above 30,000,000 bytes), 409 `conflict`
-(reason `request_id_reused`) for a `requestId` already used for another file,
-429 for the per-device rate limit (keyed by the authenticated device token,
-`retry-after` in seconds). Retry law: a paid transfer is never retried
-automatically; a lost response may be retried once with the SAME `requestId`
-(a concurrent twin joins the resolve in flight, a later one gets the recorded
-answer); `pending` (`in_flight`, `busy`) is final for its `requestId` and
-advises `retryAfterMs` for a new one; `cap_blocked` by the daily budget carries
-the next UTC midnight in `retryAt` and, like `size_unknown` and `click_only`
-(an automatic request for `full`), yields only to an explicit click;
-`refused` and `unavailable` are not bypassed by a click, except `refused`
-`not_ready`, which a click may refresh once through its `reread` hint. A
-paid transfer report of more bytes than its hand-out allowed is rejected and
-changes nothing; a report can only lower an unknown-size click's debit. Only
-fixed reasons, identifiers and error classes/SQL states reach logs and the
-decision log — never a URL, signature, provider body, driver error message or
-file content. See [the media runbook](runbooks/ofapi-media.md).
 
 ### Fansly socket capture
 

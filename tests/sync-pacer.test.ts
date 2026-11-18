@@ -537,6 +537,16 @@ describe("sync pacer: a send the transport reports (transport_reported)", () => 
     expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("send_deadline_passed");
     expect(admission.grantedMono).toBeNull();
   });
+
+  it("a grant after the lock session is gone is refused (lease_inactive): a lost ownership never reaches a grant", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const grant = await ctx.pacer.waitForSlot(live());
+    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
+    ctx.ownership.isAlive = false;
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("lease_inactive");
+    expect(admission.grantedMono).toBeNull();
+  });
 });
 
 describe("sync pacer: takeover (I5)", () => {
