@@ -6,7 +6,7 @@ import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { addDays, daysInRange } from "@agency_hub_core/ui/moscow";
 import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { usePeopleIndex } from "@/shared/people";
-import { SHIFT_SALES_KEY } from "@/shared/reads";
+import { CHATTER_NUMBERS_KEY, SHIFT_SALES_KEY } from "@/shared/reads";
 import { placeNotes } from "@/shared/reportNotes";
 import { liveLogins, personOfLogin, useTeamPeople } from "@/screens/team/teamPeople";
 import { ScreenHeader } from "@/shared/ScreenHeader";
@@ -59,7 +59,7 @@ export function ShiftsScreen() {
   const [search] = useSearchParams();
   const queryClient = useQueryClient();
   const window = useMemo(() => shiftsWindow(period), [period]);
-  const { sales, numbers } = useShiftsPeriod({ window, page, current: period.current });
+  const { sales, numbers } = useShiftsPeriod({ window, period, page, current: period.current });
   const mine = search.get("mine") === "1";
   const own = useOwnLogins(mine);
   const people = usePeopleIndex();
@@ -97,8 +97,10 @@ export function ShiftsScreen() {
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["shifts"] });
-    // Every period's shifts with sales, as ["shifts"] covered before they became the entries Люди and Выплаты share.
+    // Every period's shifts with sales and their numbers, as ["shifts"] covered before they became the entries Люди and
+    // Выплаты share.
     void queryClient.invalidateQueries({ queryKey: SHIFT_SALES_KEY });
+    void queryClient.invalidateQueries({ queryKey: CHATTER_NUMBERS_KEY });
   };
 
   let body;
