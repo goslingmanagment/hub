@@ -1,4 +1,6 @@
-import type { Clock, PauseSource, Rng } from "../../apps/runtime/src/sync/engine/ports.ts";
+import type { AppConfig } from "@agency_hub_core/shared";
+
+import type { Clock, PauseSource, Rng, SettingsSource } from "../../apps/runtime/src/sync/engine/ports.ts";
 
 // Deterministic doubles of the Fansly Sync Engine ports (engine/ports.ts) for
 // unit tests: a virtual clock whose sleeps advance time instantly, a seeded
@@ -95,6 +97,19 @@ export class FakePauseSource implements PauseSource {
     if (this.failure) return Promise.reject(this.failure);
     return Promise.resolve(this.settingMs);
   }
+}
+
+/** The live settings as a test controls them: `values` is called on every
+ *  read, so a change the test makes applies from the next read. */
+export function fakeSettings(values: () => Partial<AppConfig>): SettingsSource {
+  return {
+    async field<K extends keyof AppConfig & string>(key: K): Promise<AppConfig[K]> {
+      return values()[key] as AppConfig[K];
+    },
+    async read(): Promise<AppConfig> {
+      return values() as AppConfig;
+    },
+  };
 }
 
 /** A lock session whose liveness the test flips. */

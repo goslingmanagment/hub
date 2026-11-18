@@ -5,8 +5,8 @@ import {
   tryAcquireDmArchiveWriterFenceLock,
   getProjectionWatermark,
   hashOfapiCaptureValue,
-  listEventAccounts,
   listEventsSince,
+  listProjectionWork,
   setProjectionWatermark,
   type Database,
 } from "@agency_hub_core/db";
@@ -244,11 +244,13 @@ export async function runOfapiMediaProjection(
   input?: { accountId?: number | null },
 ) {
   let applied = 0;
-  const accounts =
+  const work =
     input?.accountId != null
-      ? [input.accountId]
-      : await listEventAccounts(app.db);
+      ? { accounts: [input.accountId], idle: new Set<number>() }
+      : await listProjectionWork(app.db, OFAPI_MEDIA_PROJECTION);
+  const accounts = work.accounts;
   for (const accountId of accounts) {
+    if (work.idle.has(accountId)) continue;
     let watermark = await getProjectionWatermark(
       app.db,
       OFAPI_MEDIA_PROJECTION,
