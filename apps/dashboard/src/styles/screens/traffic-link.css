@@ -1,0 +1,61 @@
+/* The page of one link, beside traffic.css: its source in the line of facts
+   (and the first one given there), and its fans. Every rule inside
+   @layer components (design/build-rules.md). */
+@layer components {
+  /* ── The source in the line of facts ─────────────────────────────────── */
+  .tl-source-link {
+    color: var(--color-text-secondary);
+    text-decoration: underline;
+    text-decoration-color: var(--color-border-strong);
+    text-underline-offset: 3px;
+  }
+  .tl-source-link:hover { color: var(--color-text-primary); text-decoration-color: currentColor; }
+  .tl-unbound { color: var(--color-text-secondary); }
+  .tl-assign-line { display: block; margin-top: 6px; }
+  .tl-assign {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--color-text-secondary);
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: var(--color-border-strong);
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+  .tl-assign:hover { color: var(--color-text-primary); text-decoration-color: currentColor; }
+  .tl-assign:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 2px; }
+  .tl-assign-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .tl-assign-select.select { display: inline-block; width: auto; max-width: 240px; min-height: 32px; padding-block: 4px; font-size: 14px; line-height: 20px; }
+
+  /* ── «Фаны» ─────────────────────────────────────────────────────────── */
+  .tlf-head { padding-bottom: 8px; font-size: 15px; line-height: 22px; color: var(--color-text-secondary); }
+  .tlf-quiet { padding-bottom: 12px; font-size: 15px; line-height: 22px; color: var(--color-text-muted); }
+  .tlf-list { max-width: 760px; border-top: 1px solid var(--color-border-light); }
+  .tlf-line {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 200px) 104px;
+    column-gap: 16px;
+    align-items: baseline;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--color-border-light);
+    font-size: 15px;
+    line-height: 22px;
+  }
+  .tlf-list-nomoney .tlf-line { grid-template-columns: minmax(0, 1fr) minmax(0, 200px); }
+  .tlf-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-primary); }
+  /* The console does not load the shared data styles: the login beside a name two fans share. */
+  .tlf-name .ui-fan__login { margin-left: 6px; color: var(--color-text-muted); }
+  .tlf-since { color: var(--color-text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .tlf-left { margin-left: 8px; color: var(--color-text-muted); }
+  .tlf-money { text-align: right; font-variant-numeric: tabular-nums; color: var(--color-text-primary); }
+  .tlf-money-none { color: var(--color-text-muted); }
+  .tlf-more { margin: 10px 0 8px -10px; }
+  @container ts-sheet (max-width: 560px) {
+    .tlf-line { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
+    .tlf-since { grid-row: 2; }
+    .tlf-money { grid-row: 1 / span 2; grid-column: 2; align-self: center; }
+    .tlf-list-nomoney .tlf-line { grid-template-columns: minmax(0, 1fr); }
+  }
+}

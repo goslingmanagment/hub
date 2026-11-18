@@ -129,6 +129,12 @@ function lineOf(matter: Matter, context: Context): Line {
         action: telegram ? <TelegramLink href={telegram}>Пост</TelegramLink> : null,
       };
     }
+    case "traffic.link_unbound": {
+      // A new OnlyFans link without a source: the source it probably is (the server's proposal), then its page.
+      const proposed = evidence.proposedChannel as { title?: unknown } | null | undefined;
+      const title = text(proposed?.title);
+      return { ...base, about: [...(title ? [`похоже на ${title}`] : []), ...pages] };
+    }
     case "report.post_fix": {
       // The author's line opens their report of the day in «Мои смены» (the matter's link); the owner's (oversight),
       // «Выплаты → Отчёты» of that week: where each reader sees the post's numbers against Hub's.

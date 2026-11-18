@@ -3,6 +3,7 @@ import { registerOfapiReadCollectionsRoutes } from "./ofapi-read-collections.ts"
 import { registerOfapiExportRoutes } from "./ofapi-exports.ts";
 import { registerOfapiCollectionRoutes } from "./ofapi-collection.ts";
 import { registerOfLinksRoutes } from "./of-links.ts";
+import { registerOfLinkFansRoutes } from "./of-link-fans.ts";
 import { registerOpsLiveRoutes } from "./live.ts";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
@@ -180,6 +181,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerOfapiMediaRoutes(server, ctx);
   registerOfapiCollectionRoutes(server, ctx);
   registerOfLinksRoutes(server, ctx);
+  registerOfLinkFansRoutes(server, ctx);
   registerOpsLiveRoutes(server, ctx);
   const { appContext, boss } = ctx;
   const { requirePrincipal, requireSyncHealthAccess } = ctx.auth;

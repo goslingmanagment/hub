@@ -326,6 +326,7 @@ export * from "./repositories/link-fans.ts";
 // «Ссылки OnlyFans» reads (traffic PR 12): the series, its collection state and
 // the bindings; the delta arithmetic over them is pure.
 export * from "./repositories/link-stats-read.ts";
+export * from "./repositories/of-link-fans-read.ts";
 export * from "./repositories/link-stats-deltas.ts";
 export * from "./repositories/link-attribution.ts";
 

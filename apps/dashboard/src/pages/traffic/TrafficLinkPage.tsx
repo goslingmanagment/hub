@@ -12,6 +12,8 @@ import { Segmented } from "@/components/ui/Segmented";
 import { formatMills } from "@/lib/format";
 import { LinkDetails } from "@/pages/marketing/OfLinksTable";
 import { DayLine } from "./DayLine.js";
+import { LinkFacts } from "./LinkFacts.js";
+import { LinkFans } from "./LinkFans.js";
 import { linkChartView, linkHead, linkRange, LINK_WEEKS, type LinkMetric } from "./linkView.js";
 
 const METRICS: ReadonlyArray<{ value: LinkMetric; label: string; title: string }> = [
@@ -23,8 +25,9 @@ const METRICS: ReadonlyArray<{ value: LinkMetric; label: string; title: string }
 /**
  * The page of one OnlyFans link (Трафик → Источники → a link): what it is, what
  * it brought over its life, its days over eight weeks, its money as OnlyFans
- * and Hub count it, and the table of days. Local reads only (`ofLinksGet`,
- * `ofLinksHistoryGet`): no request reaches OnlyFans.
+ * and Hub count it, its fans, and the table of days; a link without a source
+ * gets its first one here. Local reads only (`ofLinksGet`, `ofLinksHistoryGet`,
+ * `ofLinkFansGet`, `ofLinkSourceGet`): no request reaches OnlyFans.
  */
 export function TrafficLinkPage() {
   const params = useParams();
@@ -52,7 +55,7 @@ export function TrafficLinkPage() {
     <div className="ts-screen">
       <PageHeader
         title={head.name}
-        description={<span className="tl-facts">{head.facts.join(", ")}</span>}
+        description={<LinkFacts head={head} link={{ pageId, linkKind, linkRef }} />}
         fresh={{ at: link.observedAt }}
       />
       <QueryNotice error={links.isError || history.isError} stale retry={() => Promise.all([links.refetch(), history.refetch()])} at={links.dataUpdatedAt} />
@@ -101,6 +104,8 @@ export function TrafficLinkPage() {
           <h2 className="tl-section-title">Деньги</h2>
           <LinkDetails link={link} now={now} withHub />
         </section>
+
+        <LinkFans pageId={pageId} linkKind={linkKind} linkRef={linkRef} pageLabel={pageLabel} />
 
         {history.data && <DaysTable history={history.data} />}
       </div>

@@ -216,6 +216,14 @@ export class TrafficBindingsConflictError extends Error {
   }
 }
 
+/** A first binding asked for a link that has one at some time (`rehangTrafficLink` with `firstOnly`). */
+export class TrafficLinkAlreadyBoundError extends TrafficBindingsConflictError {
+  constructor(link: string) {
+    super([`link ${link}: already has a binding; changing a source is traffic:bindings:set`]);
+    this.name = "TrafficLinkAlreadyBoundError";
+  }
+}
+
 const linkKeyLabel = (key: { pageLabel: string; linkKind: string; linkId: string }) =>
   `${key.pageLabel} ${key.linkKind} ${key.linkId}`;
 const linkLockKey = (key: { pageId: number; linkKind: string; linkId: string }) =>
@@ -368,6 +376,10 @@ export interface TrafficBindingsApplyOptions {
   write: boolean;
   /** Who runs it, for the audit rows (e.g. `cli@host pid 123`). */
   actor: string;
+  /** The audit rows' source; default the CLI's. The console's write says `dashboard`. */
+  auditSource?: string;
+  /** The audit rows' actor login, when a signed-in person writes (the console). */
+  actorUserId?: number;
   command: "import" | "set";
   /** Extra audit metadata, e.g. the file name and its SHA-256. */
   auditContext?: Record<string, unknown>;
@@ -600,7 +612,8 @@ async function writePlan(
   const audit = async (eventType: string, metadata: Record<string, unknown>, platformAccountId: number | null = null) => {
     const event = await insertAuditEvent(tx, {
       platformAccountId,
-      source: TRAFFIC_BINDINGS_AUDIT_SOURCE,
+      actorUserId: options.actorUserId ?? null,
+      source: options.auditSource ?? TRAFFIC_BINDINGS_AUDIT_SOURCE,
       eventType,
       metadata: { actor: options.actor, command: options.command, batchId, ...options.auditContext, ...metadata },
     });
@@ -786,6 +799,9 @@ export interface TrafficLinkRehangInput {
   validFrom: Date;
   validFromBasis: TrafficValidFromBasis;
   note?: string | null;
+  /** Only a link with no binding at any time (the console's first binding): any stored row, read under the link's
+   *  lock, throws TrafficLinkAlreadyBoundError. */
+  firstOnly?: boolean;
 }
 
 /**
@@ -807,8 +823,9 @@ export async function rehangTrafficLink(
     const existing = page
       ? await readLinkBindings(database, { pageId: page.id, linkKind: input.linkKind, linkId: input.linkId })
       : [];
-    const open = existing.find((row) => row.validTo === null);
     const common = { pageLabel: input.pageLabel, linkKind: input.linkKind, linkId: input.linkId };
+    if (input.firstOnly && existing.length > 0) throw new TrafficLinkAlreadyBoundError(linkKeyLabel(common));
+    const open = existing.find((row) => row.validTo === null);
     if (open && open.target === input.channelKey) {
       // Already the channel's: name the open row as it is (a no-op) — or
       // refuse, when the requested start lies before the stored one.

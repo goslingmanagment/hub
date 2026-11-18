@@ -36,6 +36,11 @@ export const MATTER_CHECK_KIND_PERIODS = {
   "ledger.sheet_column": 15,
   /** An off-platform sale («мимо площадки») still not in a report N days after it was said. */
   "ledger.off_platform": 15,
+  /**
+   * An OnlyFans link that never had a source, not finished, made in the last 30 days or with a new fan in the last 14
+   * (TRAFFIC_LINK_UNBOUND_*): one matter per link, closed when the link gets a source, finishes or falls out of that.
+   */
+  "traffic.link_unbound": 10,
 } as const;
 
 export type MatterCheckKind = keyof typeof MATTER_CHECK_KIND_PERIODS;
@@ -65,6 +70,10 @@ export function isMatterInfoKind(kind: string): boolean {
 export const LEDGER_CHECK_RED_HOURS = { urgent: 2, other: 24 } as const;
 /** How many days an off-platform sale may wait for its report before it is the owner's matter. */
 export const LEDGER_OFF_PLATFORM_DAYS = 7;
+/** A link without a source waits when it was made within this many days… */
+export const TRAFFIC_LINK_UNBOUND_MADE_DAYS = 30;
+/** …or got a new fan within this many days (old dead links with a stray click raise nothing). */
+export const TRAFFIC_LINK_UNBOUND_FAN_DAYS = 14;
 /** How many days without a touch make access to a page that is not worked idle. */
 export const PEOPLE_ACCESS_IDLE_DAYS = 30;
 /** How many days before its end an agent key is said to expire. */
