@@ -61,6 +61,7 @@ const HUB_SCHEDULE_TITLES: Readonly<Record<string, string>> = {
   "chat-memory.fan-facts": "Факты о фанах (ИИ)",
   "chat-memory.history.top-up": "Догрузка истории активных чатов",
   "client.send-custody.archive-sweep": "Закрытие отложенных отправок",
+  "custom-orders.checks": "Кастомы: проверки заказов",
   "db.disk-usage.check": "Место на диске базы",
   "fan-marks.blocklist.read": "Чтение группы FANSLY BLOCKLIST",
   "fansly.raw-payload-cleanup": "Ночная уборка сырых ответов Fansly",
