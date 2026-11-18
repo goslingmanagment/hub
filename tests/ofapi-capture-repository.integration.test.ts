@@ -8,9 +8,7 @@ import {
   cancelBlockedOfapiExportQuoteJob,
   cancelOfapiCaptureJob,
   captureOfapiAttemptResponse,
-  completeOfapiInteractiveRequest,
   createModel,
-  createOfapiInteractiveRequest,
   createOnlyFansPage,
   createOrGetOfapiCaptureJob,
   createUser,
@@ -111,6 +109,37 @@ async function seed() {
   return { owner, model, page, accountId };
 }
 
+/** A capture job on the interactive budget scope, leased at `now`: the owner of
+ * an attempt charged to the person's own day counters. */
+async function createAndLeaseInteractiveScopeJob(
+  seeded: Awaited<ReturnType<typeof seed>>,
+  now: Date,
+) {
+  const created = await createOrGetOfapiCaptureJob(testDb!.db, {
+    pageId: seeded.page.id,
+    ofapiAccountId: seeded.accountId,
+    kind: "chat_paginate",
+    goal: "bounded_tail",
+    activeSlotKey: `page:${seeded.page.id}:chat:interactive-${randomUUID()}`,
+    target: { chatId: "42", frozenHeadId: "100" },
+    budgetScope: "interactive",
+    originPrincipalId: seeded.owner.id,
+    createdBy: "interactive_open",
+    maxCalls: 100,
+    maxCredits: 100,
+    now,
+  });
+  const leased = await leaseNextOfapiCaptureJob(testDb!.db, {
+    pageId: seeded.page.id,
+    jobId: created.job.id,
+    leaseOwner: `interactive-${randomUUID()}`,
+    leaseTtlMs: 60_000,
+    now,
+  });
+  if (!leased?.leaseToken) throw new Error("interactive-scope fixture lease missing");
+  return { job: created.job, jobLeaseToken: leased.leaseToken };
+}
+
 async function createAndReserveInteractive(input?: {
   reservedCredits?: number;
   globalDailyCap?: number;
@@ -118,18 +147,10 @@ async function createAndReserveInteractive(input?: {
 }) {
   const seeded = await seed();
   const operation = "list_messages";
-  const request = await createOfapiInteractiveRequest(testDb!.db, {
-    pageId: seeded.page.id,
-    ofapiAccountId: seeded.accountId,
-    principalUserId: seeded.owner.id,
-    operation,
-    surface: "messages",
-    target: { path: `/api2/v2/chats/42/messages`, query: { limit: 20 } },
-    now: NOW,
-  });
+  const { job, jobLeaseToken } = await createAndLeaseInteractiveScopeJob(seeded, NOW);
   const reservation = await reserveOfapiRequestAttempt(testDb!.db, {
-    ownerKind: "interactive_request",
-    ownerId: request.id,
+    ownerKind: "capture_job",
+    ownerId: job.id,
     pageId: seeded.page.id,
     ofapiAccountId: seeded.accountId,
     originPrincipalId: seeded.owner.id,
@@ -149,10 +170,11 @@ async function createAndReserveInteractive(input?: {
     balanceMaxAgeMs: 60 * 60 * 1000,
     principalCallCap: 100,
     principalCreditCap: 100,
+    jobLeaseToken,
     deadlineAt: new Date(NOW.getTime() + 60_000),
     now: NOW,
   });
-  return { ...seeded, request, reservation };
+  return { ...seeded, job, jobLeaseToken, reservation };
 }
 
 async function createAndReserveFloorProbeJob(input?: {
@@ -502,11 +524,13 @@ describe("OFAPI capture correctness repository", () => {
       markOfapiAttemptDispatching(testDb.db, {
         attemptId: seeded.reservation.attemptId,
         fenceToken: seeded.reservation.fenceToken,
+        jobLeaseToken: seeded.jobLeaseToken,
         now: new Date(NOW.getTime() + 1_000),
       }),
       markOfapiAttemptDispatching(testDb.db, {
         attemptId: seeded.reservation.attemptId,
         fenceToken: seeded.reservation.fenceToken,
+        jobLeaseToken: seeded.jobLeaseToken,
         now: new Date(NOW.getTime() + 1_000),
       }),
     ]);
@@ -560,15 +584,6 @@ describe("OFAPI capture correctness repository", () => {
       observationKind: "ofapi.response.v1",
       now: new Date(NOW.getTime() + 5_000),
     })).rejects.toThrow(/different raw bytes/);
-
-    expect(await completeOfapiInteractiveRequest(testDb.db, {
-      requestId: seeded.request.id,
-      attemptId: seeded.reservation.attemptId,
-      outcome: "failed",
-      parserOutcome: "contract_rejected",
-      errorCode: "invalid_response",
-      now: new Date(NOW.getTime() + 6_000),
-    })).toBe(true);
 
     const observation = await testDb.pool.query<{
       account_id: string;
@@ -716,18 +731,10 @@ describe("OFAPI capture correctness repository", () => {
     `, [seeded.owner.id, new Date("2026-07-16T00:00:00.000Z"), NOW]);
 
     const reserveAt = async (now: Date) => {
-      const request = await createOfapiInteractiveRequest(testDb!.db, {
-        pageId: seeded.page.id,
-        ofapiAccountId: seeded.accountId,
-        principalUserId: seeded.owner.id,
-        operation: "list_messages",
-        surface: "messages",
-        target: { path: "/api2/v2/chats/42/messages", query: { limit: 20 } },
-        now,
-      });
+      const { job, jobLeaseToken } = await createAndLeaseInteractiveScopeJob(seeded, now);
       return reserveOfapiRequestAttempt(testDb!.db, {
-        ownerKind: "interactive_request",
-        ownerId: request.id,
+        ownerKind: "capture_job",
+        ownerId: job.id,
         pageId: seeded.page.id,
         ofapiAccountId: seeded.accountId,
         originPrincipalId: seeded.owner.id,
@@ -747,6 +754,7 @@ describe("OFAPI capture correctness repository", () => {
         balanceMaxAgeMs: 48 * 60 * 60 * 1000,
         principalCallCap: 1,
         principalCreditCap: 100,
+        jobLeaseToken,
         deadlineAt: new Date(now.getTime() + 60_000),
         now,
       });
@@ -908,6 +916,7 @@ describe("OFAPI capture correctness repository", () => {
     expect(await markOfapiAttemptDispatching(testDb.db, {
       attemptId: seeded.reservation.attemptId,
       fenceToken: seeded.reservation.fenceToken,
+      jobLeaseToken: seeded.jobLeaseToken,
       now: new Date(NOW.getTime() + 1_000),
     })).toBe(true);
     expect(await markOfapiAttemptIndeterminate(testDb.db, {
@@ -954,7 +963,7 @@ describe("OFAPI capture correctness repository", () => {
     if (!seeded.reservation.admitted) return;
     const { attemptId, fenceToken } = seeded.reservation;
     expect(await markOfapiAttemptDispatching(testDb.db, {
-      attemptId, fenceToken, now: new Date(NOW.getTime() + 1_000),
+      attemptId, fenceToken, jobLeaseToken: seeded.jobLeaseToken, now: new Date(NOW.getTime() + 1_000),
     })).toBe(true);
     const observedAt = new Date(NOW.getTime() + 2_000);
     await captureOfapiAttemptResponse(testDb.db, {
@@ -2950,21 +2959,53 @@ describe("OFAPI capture correctness repository", () => {
 
   it("leaves an interactive request's uncertain attempt and its reserve alone", async () => {
     if (!testDb) return;
-    const seeded = await createAndReserveInteractive();
-    if (!seeded.reservation.admitted) throw new Error("attempt was not admitted");
-    expect(await markOfapiAttemptDispatching(testDb.db, {
-      attemptId: seeded.reservation.attemptId,
-      fenceToken: seeded.reservation.fenceToken,
-      now: new Date(NOW.getTime() + 1_000),
-    })).toBe(true);
-    expect(await markOfapiAttemptIndeterminate(testDb.db, {
-      attemptId: seeded.reservation.attemptId,
-      fenceToken: seeded.reservation.fenceToken,
-      outcome: "transport",
-      now: new Date(NOW.getTime() + 2_000),
-    })).toBe(true);
-    expect(await settleLostOfapiCollectionReadAsBilled(testDb.db, { attemptId: seeded.reservation.attemptId })).toBe(false);
-    expect(await getOfapiRequestAttempt(testDb.db, seeded.reservation.attemptId)).toMatchObject({
+    const seeded = await seed();
+    // The retired interactive lane left uncertain safe reads like this one
+    // behind (production still holds them); nothing in the code writes them
+    // any more, so the row is written as that lane left it.
+    const requestId = randomUUID();
+    const attemptId = randomUUID();
+    const fingerprint = "0".repeat(64);
+    await testDb.pool.query(`
+      insert into ofapi_interactive_requests (
+        id, page_id, ofapi_account_id, principal_user_id, operation, surface,
+        target, request_fingerprint, state, error_code, policy_version,
+        created_at, updated_at, completed_at
+      ) values (
+        $1, $2, $3, $4, 'list_messages', 'messages',
+        '{}'::jsonb, $5, 'indeterminate', 'transport', 'test',
+        $6, $6, $6
+      )
+    `, [requestId, seeded.page.id, seeded.accountId, seeded.owner.id, fingerprint, NOW]);
+    await testDb.pool.query(`
+      insert into ofapi_request_attempts (
+        id, owner_kind, owner_id, interactive_request_id, owner_attempt_no,
+        page_id, ofapi_account_id, origin_principal_id, budget_scope,
+        reservation_day, deadline_at, admission_snapshot, operation,
+        endpoint_class, egress_key, method, request_semantics,
+        request_fingerprint, principal_window_started_at, state,
+        dispatch_outcome, credit_state, reserved_credits, fence_token,
+        policy_version, source_contract_version, parser_version,
+        reserved_at, dispatch_started_at, finished_at, updated_at
+      ) values (
+        $1, 'interactive_request', $2, $2, 1,
+        $3, $4, $5, 'interactive',
+        $6::date, $7, '{}'::jsonb, 'list_messages',
+        'messages', $8, 'GET', 'safe_read',
+        $9, $14, 'indeterminate',
+        'transport', 'indeterminate', 5, $10,
+        'test', 'test', 'test',
+        $11, $12, $13, $13
+      )
+    `, [
+      attemptId, requestId, seeded.page.id, seeded.accountId, seeded.owner.id,
+      NOW.toISOString().slice(0, 10), new Date(NOW.getTime() + 60_000), `page:${seeded.page.id}`,
+      fingerprint, randomUUID(), NOW, new Date(NOW.getTime() + 1_000), new Date(NOW.getTime() + 2_000),
+      new Date("2026-07-16T00:00:00.000Z"),
+    ]);
+    await testDb.pool.query("update ofapi_credit_state set governed_unsettled_credits = 5 where id = 1");
+    expect(await settleLostOfapiCollectionReadAsBilled(testDb.db, { attemptId })).toBe(false);
+    expect(await getOfapiRequestAttempt(testDb.db, attemptId)).toMatchObject({
       state: "indeterminate",
       credit_state: "indeterminate",
       certainty_resolution: null,
