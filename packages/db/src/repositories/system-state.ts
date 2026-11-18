@@ -354,8 +354,9 @@ export interface ScheduleRunRow {
 /**
  * Every schedule of the job queue with its newest finished jobs: one pass over
  * the finished jobs of the scheduled queues (the queue keeps a day of the
- * minutely ones, a week of the rest). A database the queue has not started in
- * has none.
+ * minutely ones, a week of the rest), grouped by hash without their `output`;
+ * the `output` is then read by key for the newest completed and the newest
+ * failed job of each schedule. A database the queue has not started in has none.
  */
 export async function readScheduleRuns(db: Database): Promise<ScheduleRunRow[]> {
   const present = await db.execute<{ present: boolean }>(sql`
@@ -367,28 +368,31 @@ export async function readScheduleRuns(db: Database): Promise<ScheduleRunRow[]> 
   }>(sql`
     with schedules as (
       select distinct on (name) name, cron, timezone from pgboss.schedule order by name
-    ), finished as (
-      select j.name, j.state::text as state, j.completed_on, j.output
+    ), finished as materialized (
+      select j.name, j.id, j.state, j.completed_on
         from pgboss.job j
        where j.name in (select name from schedules) and j.state in ('completed', 'failed') and j.completed_on is not null
-    ), success as (
-      select name, max(completed_on) as at from finished where state = 'completed' group by name
-    ), summary as (
-      select f.name,
-             max(f.completed_on) as last_run_at,
-             (array_agg(f.state order by f.completed_on desc))[1] as last_state,
-             count(*) filter (where f.state = 'failed' and (s.at is null or f.completed_on > s.at)) as failed_after_success,
-             (array_agg(left(coalesce(f.output ->> 'message', f.output::text), 200) order by f.completed_on desc)
-               filter (where f.state = 'failed'))[1] as last_error,
-             (array_agg(left(f.output ->> 'detail', 500) order by f.completed_on desc)
-               filter (where f.state = 'completed'))[1] as last_detail
-        from finished f left join success s on s.name = f.name
-       group by f.name
+    ), times as (
+      select name, max(completed_on) as last_run_at,
+             max(completed_on) filter (where state = 'completed') as ok_at,
+             max(completed_on) filter (where state = 'failed') as failed_at
+        from finished group by name
+    ), counted as (
+      select t.name, count(*) filter (where f.state = 'failed' and (t.ok_at is null or f.completed_on > t.ok_at)) as failed_after_success,
+             (array_agg(f.id) filter (where f.state = 'failed' and f.completed_on = t.failed_at))[1] as failed_id,
+             (array_agg(f.id) filter (where f.state = 'completed' and f.completed_on = t.ok_at))[1] as ok_id
+        from finished f join times t on t.name = f.name
+       where f.state = 'failed' or f.completed_on = t.ok_at
+       group by t.name
     )
-    select sc.name, sc.cron, sc.timezone, su.last_run_at, s.at as last_success_at, su.last_state, su.failed_after_success, su.last_error, su.last_detail
+    select sc.name, sc.cron, sc.timezone, t.last_run_at, t.ok_at as last_success_at,
+           case when t.name is null then null when t.last_run_at = t.ok_at then 'completed' else 'failed' end as last_state,
+           c.failed_after_success,
+           (select left(coalesce(j.output ->> 'message', j.output::text), 200) from pgboss.job j where j.name = sc.name and j.id = c.failed_id) as last_error,
+           (select left(j.output ->> 'detail', 500) from pgboss.job j where j.name = sc.name and j.id = c.ok_id) as last_detail
       from schedules sc
-      left join summary su on su.name = sc.name
-      left join success s on s.name = sc.name
+      left join times t on t.name = sc.name
+      left join counted c on c.name = sc.name
      order by sc.name`);
   return result.rows.map((row) => ({
     name: row.name,

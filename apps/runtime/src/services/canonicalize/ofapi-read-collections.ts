@@ -13,6 +13,7 @@ import {
 import type {
   CanonicalizableObservation,
   CanonicalEventDraft,
+  CanonicalQuarantine,
 } from "./types.ts";
 
 export function ofapiReadSnapshotEventKey(observationId: number): string {
@@ -48,11 +49,30 @@ export function canParseOfapiReadObservation(
     input &&
       (input.response.status < 200 ||
         input.response.status >= 300 ||
+        !input.parsed.validJson ||
         (validateOfapiMarketingAccount(input.resolved.definition, input.parsed.body, input.resolved.accountId) && validateOfapiCatalogResponse(
           input.resolved.definition.operation,
           input.parsed.body,
         ))),
   );
+}
+/**
+ * The family's terminal-quarantine classifier (the driver asks it only about a
+ * row that yielded zero events). A 2xx capture whose body is not JSON (a body
+ * the vendor cut mid-response) can never be read by any parser: quarantine it
+ * on its first visit instead of re-reading it every sweep and holding the
+ * family's backlog-age alert open forever.
+ */
+export function classifyOfapiReadQuarantine(
+  observation: CanonicalizableObservation,
+): CanonicalQuarantine | null {
+  const input = captured(observation);
+  return input &&
+    input.response.status >= 200 &&
+    input.response.status < 300 &&
+    !input.parsed.validJson
+    ? { code: "ofapi_read_body_not_json" }
+    : null;
 }
 export function canonicalizeOfapiReadObservation(
   observation: CanonicalizableObservation,
@@ -62,7 +82,8 @@ export function canonicalizeOfapiReadObservation(
     !input ||
     !observation.accountId ||
     input.response.status < 200 ||
-    input.response.status >= 300
+    input.response.status >= 300 ||
+    !input.parsed.validJson
   )
     return [];
   const { definition: def, pathname, query } = input.resolved;
