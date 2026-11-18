@@ -51,7 +51,7 @@ import {
   TooManyRequestsError,
   UnauthorizedError,
 } from "../services/errors.ts";
-import { hideObjectsOfOtherRealm, pageOfOtherRealm, requestObjects, restoreHidden } from "../services/sandbox/objects.ts";
+import { hideObjectsOfOtherRealm, ofOtherRealm, requestObjects, restoreHidden } from "../services/sandbox/objects.ts";
 import { sandboxOwnerRefusal } from "../services/sandbox/owner-operations.ts";
 import { teamLeadRefusal } from "../services/team-lead-reads.ts";
 import { contentManagerRefusal } from "../services/content-manager-operations.ts";
@@ -104,7 +104,7 @@ import { registerCustomOrderRoutes } from "../modules/custom-orders/index.ts";
 import { registerOutreachRoutes } from "../modules/outreach/index.ts";
 import { registerPublicationFileRoutes } from "../modules/publication-files/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
-import { findModelSlugOf, findPageSummaryByLabel } from "@agency_hub_core/db";
+import { findActivePageRealmByLabel, findModelSlugOf } from "@agency_hub_core/db";
 import {
   ensureSyncQueues,
   reconcileQueueRetention,
@@ -121,6 +121,8 @@ declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthPrincipal | null;
     authFailure?: AuthFailure | null;
+    /** The route's `:pageLabel` the page check proved of the principal's realm: the wall's preHandler does not ask again. */
+    pageRealmChecked?: string;
   }
   interface FastifyInstance {
     /** Route → auth declaration rows, collected at registration. */
@@ -263,6 +265,7 @@ export async function buildApiServer(appContext: AppContext) {
   server.setSerializerCompiler(serializerCompiler);
   server.decorateRequest("auth");
   server.decorateRequest("authFailure");
+  server.decorateRequest("pageRealmChecked");
 
   // Fleet-verify: the desktop stamps x-client-version on every call;
   // one "Desktop client version observed" log line per (version, address)
@@ -505,15 +508,17 @@ export async function buildApiServer(appContext: AppContext) {
       resolvePrincipal: () => resolvePrincipal(request),
       hasMonitoringToken: () => hasValidSyncHealthMonitoringToken(request),
       resolvePageAccess: async (pageLabel) => {
-        const page = await findPageSummaryByLabel(appContext.db, pageLabel);
+        // The page and its realm in one statement.
+        const page = await findActivePageRealmByLabel(appContext.db, pageLabel);
         if (!page) {
           return "not-found";
         }
         const resolved = await resolvePrincipal(request);
         // A page of the other realm is missing, not refused (sandbox/objects.ts): no «there, but not yours».
-        if (await pageOfOtherRealm(appContext, resolved, page.id)) {
+        if (ofOtherRealm(resolved, page.test)) {
           return "not-found";
         }
+        request.pageRealmChecked = pageLabel;
         // A fans read answers by the viewer's teams (services/fan-reads.ts), every other read by the page's grant.
         const principal = resolved && FAN_READ_OPERATIONS.has(entry.key) ? await asFanReader(appContext, resolved) : resolved;
         return principal && canAccessPage(principal, page.id) ? "ok" : "denied";
@@ -589,8 +594,14 @@ export async function buildApiServer(appContext: AppContext) {
       return;
     }
     const parts = [request.params, request.query, request.body] as Array<Record<string, unknown> | null>;
-    if (requestObjects(entry.key, parts).length === 0) return;
-    await hideObjectsOfOtherRealm(appContext, await resolvePrincipal(request), entry.key, parts);
+    // The route's page the page check above proved of the principal's realm is not asked again (the validated params,
+    // compared by value); a page label anywhere else in the request still is.
+    const params = request.params as Record<string, unknown> | null;
+    const checked = request.pageRealmChecked !== undefined && params !== null && params.pageLabel === request.pageRealmChecked
+      ? { holder: params, field: "pageLabel" }
+      : undefined;
+    if (requestObjects(entry.key, parts, checked).length === 0) return;
+    await hideObjectsOfOtherRealm(appContext, await resolvePrincipal(request), entry.key, parts, checked);
   });
   // …and the values it hid are put back wherever the answer repeats them («No person «x»»), as for a missing object.
   server.addHook("onSend", async (request, _reply, payload) => {

@@ -108,7 +108,7 @@ export function vaultCadence(page: Parameters<typeof effectiveCadence>[1]): Requ
  *  live: comma-separated exact page labels; empty — every page walks in full). */
 async function vaultHeadWalkOn(settings: SettingsSource | undefined, pageLabel: string | null): Promise<boolean> {
   if (settings === undefined || pageLabel === null) return false;
-  const listed = (await settings.read()).fanslyVaultHeadWalkPages ?? "";
+  const listed = (await settings.field("fanslyVaultHeadWalkPages")) ?? "";
   return listed.split(",").some((label) => label.trim() === pageLabel);
 }
 /** A ref a batch did not return is not asked again for this long. */

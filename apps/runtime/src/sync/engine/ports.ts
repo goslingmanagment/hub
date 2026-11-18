@@ -91,11 +91,17 @@ export function createEffectiveConfigPauseSource(db: Database, rawConfig: AppCon
 /** The live effective config a resource reads at a step (a re-walk cycle, …):
  *  the same overlay the pause comes from, read fresh on every call. */
 export interface SettingsSource {
+  /** One live field, read fresh through its own `config_settings` row; throws
+   *  when it cannot be read. */
+  field<K extends keyof AppConfig & string>(key: K): Promise<AppConfig[K]>;
+  /** The whole scope, for a step that also needs a field that is not live
+   *  (the write module's derive: the switch and the files' root). */
   read(): Promise<AppConfig>;
 }
 
 export function createEffectiveConfigSettingsSource(db: Database, rawConfig: AppConfig): SettingsSource {
   return {
+    field: (key) => loadEffectiveConfigField(db, rawConfig, key),
     read: () => loadEffectiveConfig(db, rawConfig),
   };
 }
