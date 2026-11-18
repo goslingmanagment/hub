@@ -425,10 +425,15 @@ describe("variant Б: the site's own traffic, observed", () => {
     r.operator.siteIdentity(sent, HARNESS_OWN_REF);
     await until(async () => (await attempts(r.page.pageId)).some((row) => row.browserRequestId === sent.siteRequestId && row.outcome === "response"), 5_000, "the observed attempt and its end");
     const row = (await attempts(r.page.pageId)).find((a) => a.browserRequestId === sent.siteRequestId)!;
-    expect(row).toMatchObject({ origin: "site", operation: "account.me", httpStatus: 200, sendMark: "transport_reported" });
+    expect(row).toMatchObject({ origin: "site", class: "site", operation: "account.me", httpStatus: 200, sendMark: "transport_reported" });
     const expected = await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A);
     await until(async () => (await pageRow(r.page.pageId)).credentialsGeneration === expected, 5_000, "the identity proof");
     expect((await pageRow(r.page.pageId)).identityAccountId).toBe(HARNESS_OWN_REF);
+    // The site socket's handshake is told as a send of route ws.upgrade: its row is class urgent.
+    const upgrade = r.operator.siteSent({ host: "wsv3.fansly.com", path: "/", route: "ws.upgrade" });
+    r.operator.siteEnded(upgrade, { status: 101 });
+    await until(async () => (await attempts(r.page.pageId)).some((a) => a.browserRequestId === upgrade.siteRequestId && a.outcome === "response"), 5_000, "the observed handshake and its end");
+    expect((await attempts(r.page.pageId)).find((a) => a.browserRequestId === upgrade.siteRequestId)).toMatchObject({ origin: "site", class: "urgent", operation: "ws.upgrade", httpStatus: 101 });
     // Nothing of the site was asked or answered on the admission path.
     expect(r.operator.siteAnswers).toEqual([]);
   }, 30_000);
