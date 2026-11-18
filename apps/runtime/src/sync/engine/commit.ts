@@ -1969,7 +1969,7 @@ async function recordIdentityProofOf(
   tx: Database,
   d: CommitDeps,
   page: SyncPageRow,
-  facts: { attemptId: number; resource: string; accountId: string; credentialsGeneration: string | null; sentAt: Date; observed?: boolean },
+  facts: { attemptId: number; resource: string; accountId: string; credentialsGeneration: string | null; sentAt: Date },
 ): Promise<IdentityProofWrite> {
   const { attemptId, sentAt } = facts;
   const recorded = await recordSyncPageIdentityProof(tx, {
@@ -2008,40 +2008,6 @@ async function recordIdentityProofOf(
     },
   });
   return { ...proof, cleared: held.kind };
-}
-
-/**
- * Variant Б (plan-b §4.2.3): the proof of the site's own `GET /account/me` —
- * observed by the page's browser, answered from the network (not a cache or
- * a service worker), whole, 200, under the live session it names — judged as
- * an applied identity read of the engine's own: the page's identity and the
- * credentials generation of the browser under that session, sent no earlier
- * than `sentNotBefore` (a lower bound: a fence after it is not passed). Its
- * attempt is the site's observed one: only its send lower bound orders it
- * against a credentials failure, never its after-the-fact id. An account
- * other than the page's proves nothing (the engine's own read then meets
- * the mismatch).
- */
-export async function commitSiteIdentity(
-  d: CommitDeps,
-  input: { attemptId: number; accountId: string; credentialsGeneration: string; sentNotBefore: Date },
-): Promise<"recorded" | "superseded" | "foreign_account" | "no_account_ref"> {
-  if (d.ownRef === null) return "no_account_ref";
-  if (input.accountId !== d.ownRef) return "foreign_account";
-  return inTx(d.db, async (tx) => {
-    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    const page = await getSyncPage(tx, d.pageId);
-    if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-    const written = await recordIdentityProofOf(tx, d, page, {
-      attemptId: input.attemptId,
-      resource: "site",
-      accountId: input.accountId,
-      credentialsGeneration: input.credentialsGeneration,
-      sentAt: input.sentNotBefore,
-      observed: true,
-    });
-    return written.superseded ? "superseded" : "recorded";
-  });
 }
 
 async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown): Promise<ApplyErrorKind> {

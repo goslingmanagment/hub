@@ -257,12 +257,6 @@ export interface PageTransport {
    *  `unknown`, and those nothing waits for taken every lap. Absent where the
    *  transport keeps none (undici): recovery is as it always was. */
   held?: HeldOutcomeSource;
-  /** A browser page's transport (variant Б): the credentials generation of
-   *  the page's browser under the live session `sessionFingerprint` — what a
-   *  proof of the site's own `/account/me` proves. Read when the send is
-   *  journaled and again before proving: changed settings prove nothing.
-   *  Absent (Node): the site's identity proves nothing of this transport. */
-  siteCredentialsGeneration?(sessionFingerprint: string): Promise<string | null>;
   /** The digest of the page's stored credentials now (the session and the
    *  proxy; `readFanslyPageGeneration`), from a read-only snapshot. The actor
    *  compares it with the trusted digest (checks-only, G2) and with the
@@ -418,8 +412,7 @@ export interface SiteAdmissionPort {
 
 /** One hop of an observed site request, as the engine takes it once: the
  *  operator's key (minted when it first followed the request, the same over
- *  its redirects; from an operator before minor 6, the engine's own of the
- *  request's id and send) and the hop under it. */
+ *  its redirects) and the hop under it. */
 export interface ObservedSiteKey {
   requestKey: string;
   hop: number;
@@ -427,8 +420,7 @@ export interface ObservedSiteKey {
 
 /** One fact of the site's own traffic, observed (variant Б), on the engine's
  *  clocks: its hop (`key`), and what to call once it is committed (`ack` —
- *  the operator keeps it until then and tells it again; one before minor 6
- *  takes nothing). */
+ *  the operator keeps it until then and tells it again). */
 export type SiteObservation = { key: ObservedSiteKey; ack: () => void } & (
   | {
     kind: "sent";
@@ -448,18 +440,5 @@ export type SiteObservation = { key: ObservedSiteKey; ack: () => void } & (
     status: number | null;
     retryAfterMs: number | null;
     error: string | null;
-    /** The hop went under the manual login's browser of a page still on
-     *  Node (`LoginSitePort`): its session is a candidate, not the page's —
-     *  its 401/403 says nothing of the page's credentials and holds nothing;
-     *  its 429 holds its route as any (the pace is the account's). */
-    manualLogin?: true;
-  }
-  | {
-    kind: "identity";
-    id: string;
-    accountId: string;
-    sessionFingerprint: string;
-    /** A lower bound of the request's send: a proof is judged by it. */
-    sentNotBeforeWall: Date;
   }
 );

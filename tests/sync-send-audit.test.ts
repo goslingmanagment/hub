@@ -224,31 +224,6 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     const audit = auditPagePace([engine(10, "notifications.page"), siteSend, hub], WINDOW);
     expect(audit.violations).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: siteSend.ref, gapMs: 1_000, clock: "wall" })]);
   });
-
-  it.each([20])("an old observed send without sent_at at %s s leaves Hub's short gap inconclusive", (seconds) => {
-    const observed = site(seconds, "site.other", {
-      sentAt: null, countedAt: at(seconds + 15), httpStatus: null, completedAt: null,
-    });
-    const hub = engine(seconds + 1, "notifications.page");
-    const audit = auditPagePace([engine(-20, "notifications.page"), observed, hub], WINDOW);
-    expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [], minGapMs: null });
-    expect(audit.inconclusive).toEqual([expect.objectContaining({
-      ref: hub.ref, prevRef: observed.ref, prevSentAt: at(seconds), gapMs: 1_000,
-      pauseMs: 2_500, open: "predecessor_send_not_recorded",
-    })]);
-    // The same uncertainty when Hub's own send was never marked either.
-    expect(auditPagePace([observed, unrecorded(seconds + 1, "notifications.page")], WINDOW))
-      .toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [], inconclusive: [expect.objectContaining({ judgedAt: "admission", open: "predecessor_send_not_recorded" })] });
-  });
-
-  it("an inconclusive old observed predecessor does not mask a proven Hub violation", () => {
-    const observed = site(20, "site.other", { sentAt: null, countedAt: at(35) });
-    const first = engine(21, "notifications.page");
-    const second = engine(22, "transactions.page");
-    const audit = auditPagePace([observed, first, second], WINDOW);
-    expect(audit).toMatchObject({ verdict: "fail", pairs: 1, inconclusive: [expect.objectContaining({ ref: first.ref })] });
-    expect(audit.violations).toEqual([expect.objectContaining({ ref: second.ref, prevRef: first.ref, gapMs: 1_000 })]);
-  });
 });
 
 describe("plan-b Б12: a site send after a Hub send's admission is never its predecessor", () => {
