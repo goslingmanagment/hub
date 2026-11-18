@@ -99,7 +99,8 @@ function arrivals(seed: LinkSeed, index: number, day: string, today: string, day
   const random = rng(`traffic-sources:${index}:${day}`);
   const share = day === today ? todayShare : 1;
   if (seed.clicksOnly) {
-    return { fans: 0, clicks: daysAgo <= 6 ? Math.round(between(random, 0, 4) * share) : 0, netMills: 0 };
+    const clicks = daysAgo <= 6 ? Math.round(between(random, 0, 4) * share) : 0;
+    return { fans: 0, clicks, netMills: 0 };
   }
   const quiet = seed.quietSinceDaysAgo !== undefined && daysAgo <= seed.quietSinceDaysAgo;
   const young = seed.createdDaysAgo !== null && seed.createdDaysAgo <= 3;
