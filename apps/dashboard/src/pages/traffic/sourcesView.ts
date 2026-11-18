@@ -369,10 +369,15 @@ export function sourcesView(recent: Channels, allTime: Channels | undefined): So
       });
     } else {
       const brought = ever?.totals.vendorNetMills ?? null;
+      // The last term that ended: whose the source was.
+      const last = [...(channel ?? ever)?.contractors ?? [], ...(ever?.contractors ?? [])]
+        .filter((item) => item.validTo !== null)
+        .sort((left, right) => left.validTo!.localeCompare(right.validTo!))
+        .at(-1);
       stopped.push({
         key,
         name: title,
-        fact: null,
+        fact: last ? `${last.contractorTitle}, до ${dayMonth(moscowDayOf(last.validTo!), today)}` : null,
         figures: brought === null ? [] : [
           `принесли ${formatMills(brought)}`,
           ...(ever?.flags.includes("money_unknown") ? ["не по всем ссылкам"] : []),
