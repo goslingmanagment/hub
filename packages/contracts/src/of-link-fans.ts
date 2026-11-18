@@ -31,8 +31,9 @@ export const ofLinkFanSchema = z.object({
   username: z.string().nullable(),
   /** The fan deleted his account: no name, no login. */
   deleted: z.boolean(),
-  /** When he subscribed by the link (the start of his first period). Null: before the link's first finished walk, or
-   *  never in its subscriber list — he came no later than `firstSeenAt`. */
+  /** When he subscribed by the link: the platform's own date when the walk carries one, otherwise the start of his
+   *  first period. Null: before the link's first finished walk, or never in its subscriber list — he came no later
+   *  than `firstSeenAt`. */
   subscribedAt: isoTimestamp.nullable(),
   /** The first walk that showed him. */
   firstSeenAt: isoTimestamp,

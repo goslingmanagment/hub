@@ -36,7 +36,8 @@ export interface OfLinkFanRow {
   displayName: string | null;
   username: string | null;
   deleted: boolean;
-  /** The start of the fan's first period on the link; null: before the link's floor, or no period at all. */
+  /** The platform's subscription date when the walk carries one, otherwise the start of the fan's first period on the
+   *  link; null: before the link's floor, or no period at all. */
   subscribedAt: Date | null;
   firstSeenAt: Date;
   inSubscriberList: boolean;
@@ -82,7 +83,7 @@ export async function readOfLinkFans(
            case when f.deleted_detected_at is null then f.display_name end as display_name,
            case when f.deleted_detected_at is null then f.username end as username,
            f.deleted_detected_at is not null as deleted,
-           first_period.period_start_at as subscribed_at,
+           coalesce(lf.vendor_subscribed_at, first_period.period_start_at) as subscribed_at,
            lf.first_seen_at, lf.in_subscriber_list, lf.last_seen_active, lf.absent_walks,
            lf.vendor_revenue_net_mills::text as vendor_net
       from page_link_fans lf
@@ -96,7 +97,7 @@ export async function readOfLinkFans(
       ) first_period on true
      where ${linkWhere("lf", input)}
      order by lf.vendor_revenue_net_mills desc nulls last,
-              coalesce(first_period.period_start_at, lf.first_seen_at) desc, lf.id desc
+              coalesce(lf.vendor_subscribed_at, first_period.period_start_at, lf.first_seen_at) desc, lf.id desc
      limit ${input.limit} offset ${input.offset}
   `);
   const head = counts.rows[0];
