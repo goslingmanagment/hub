@@ -59,7 +59,6 @@
   .stats-chart-table { margin-top: 12px; }
   .stats-table-after { padding-top: 12px; }
   .stats-empty { padding-block: 48px; }
-  .stats-block-title { margin-bottom: 12px; }
   .stats-rollup { justify-content: flex-start; gap: 4px 8px; }
 
   /* Skeleton heights of the shapes they stand in for. */
@@ -67,43 +66,6 @@
   .skeleton.stats-skeleton-chart { height: 12px; margin-bottom: 0; }
 
   /* ── Tables ───────────────────────────────────────────────────────────── */
-  .stats-row-open { cursor: pointer; }
-  /* Below 1100 px the table scrolls inside its wrapper: its header stays at its top there. */
-  @media (max-width: 1399px) {
-    .table-wrap:has(> .stats-media-table) { overflow-x: auto; }
-    .stats-media-table.data-table-page th { top: 0; }
-  }
-  .stats-row-open:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
-  .stats-media-cell { min-width: 200px; max-width: 360px; }
-  .stats-media-title {
-    overflow: hidden;
-    font-weight: 500;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .stats-media-line {
-    overflow: hidden;
-    font-size: 14px;
-    line-height: 20px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--color-text-secondary);
-  }
-  .stats-sort {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font: inherit;
-    color: inherit;
-    cursor: pointer;
-  }
-  /* A number's header: the text on the column's edge, the arrow outside it, taking no width. */
-  .stats-sort-num { position: relative; }
-  .stats-sort-num .stats-sort-icon { position: absolute; right: 100%; top: 2px; margin-right: 2px; }
-  .stats-sort:hover { color: var(--color-text-primary); }
-  .stats-sort-icon { display: inline-flex; width: 16px; visibility: hidden; color: var(--color-text-muted); }
-  .stats-sort:hover .stats-sort-icon { visibility: visible; }
-  th.is-sorted .stats-sort-icon { visibility: visible; color: var(--color-text-primary); }
   .stats-bar-col { width: 28%; min-width: 120px; }
   .stats-bar-col-sm { width: 22%; min-width: 80px; }
   .stats-swatch {
@@ -149,27 +111,7 @@
   .stats-heatmap td { height: 24px; padding: 0; border-radius: 4px; background: var(--color-hover-alt); }
   .stats-heatmap td > span { display: block; height: 100%; border-radius: 4px; background: var(--color-chart-blue); }
 
-  /* ── The media's card ─────────────────────────────────────────────────── */
-  .stats-drawer { display: grid; gap: 24px; }
-  .stats-drawer-head { display: grid; gap: 4px; margin-top: -8px; }
-  .stats-drawer-line { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .stats-drawer-title {
-    margin-bottom: 8px;
-    font-size: 15px;
-    font-weight: 600;
-    line-height: 22px;
-    color: var(--color-text-primary);
-  }
-  .stats-drawer-text { font-size: 15px; line-height: 22px; color: var(--color-text-secondary); }
-  .stats-drawer-note { margin-bottom: 8px; font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
-  .stats-kv-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px 24px; }
-  .stats-kv-pair .kv { grid-template-columns: minmax(0, 1fr) auto; }
-  .stats-kv-pair .kv dd { text-align: right; font-variant-numeric: tabular-nums; }
-  .stats-tag-list { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 15px; line-height: 22px; }
-  .stats-tag-list span { color: var(--color-text-secondary); }
-
   @media (max-width: 639px) {
-    .stats-kv-pair { grid-template-columns: minmax(0, 1fr); }
     .stats-strip-action { margin-left: 0; width: 100%; }
   }
 }

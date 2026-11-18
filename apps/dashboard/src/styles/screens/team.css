@@ -36,18 +36,7 @@
     .team-sticky-first tr:hover td:first-child { background: var(--color-hover-alt); }
   }
 
-  /* ── The chatter's cabinet ───────────────────────────────────────────── */
-  .cabinet-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    height: 56px;
-    padding: 0 32px;
-    border-bottom: 1px solid var(--color-border);
-    background: var(--color-bg);
-  }
-  .cabinet-logo,
+  /* ── Sign-in and the invitation: one card in the middle ──────────────── */
   .entry-logo {
     font-size: 17px;
     line-height: 24px;
@@ -55,78 +44,7 @@
     letter-spacing: -0.01em;
     color: var(--color-text-primary);
   }
-  .cabinet-logo > span,
   .entry-logo > span { font-weight: 500; color: var(--color-text-muted); }
-  .cabinet-main { width: 100%; max-width: 1200px; margin: 0 auto; padding: 32px 32px 48px; }
-  @media (max-width: 767px) {
-    .cabinet-bar { padding: 0 16px; }
-    .cabinet-main { padding: 16px 16px 32px; }
-  }
-  .ac-page { display: flex; flex-direction: column; min-width: 0; }
-  .ac-narrow { display: flex; flex-direction: column; gap: 24px; width: 100%; max-width: 720px; margin: 0 auto; }
-  .ac-login { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; word-break: break-all; }
-  .ac-role { margin-top: 4px; color: var(--color-text-secondary); }
-  .ac-pages { margin-top: 16px; }
-  .ac-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-  .ac-muted { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .ac-text { color: var(--color-text-secondary); }
-  .ac-lines { display: grid; gap: 12px; }
-  .ac-retry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 14px; color: var(--color-text-secondary); }
-  .ac-rows { display: flex; flex-direction: column; }
-  .ac-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px 16px;
-    padding: 12px 0;
-    border-top: 1px solid var(--color-border-light);
-  }
-  .ac-row:first-child { border-top: 0; padding-top: 0; }
-  .ac-row-title { font-weight: 500; }
-  .ac-row-meta { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
-  .ac-foot { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--color-border-light); }
-  .ac-confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--color-text-primary); }
-  .ac-form { display: flex; flex-direction: column; gap: 16px; max-width: 360px; }
-  .ac-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .ac-block { margin-top: 24px; }
-  .ac-subtitle { margin-bottom: 8px; font-size: 15px; line-height: 22px; font-weight: 500; }
-  .ac-features { display: flex; flex-direction: column; }
-  .ac-features li {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto 88px;
-    gap: 16px;
-    padding: 8px 0;
-    border-top: 1px solid var(--color-border-light);
-  }
-  .ac-features li:first-child { border-top: 0; }
-  .ac-feature-calls { color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
-  .ac-feature-cost { text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .ac-guide { font-size: 15px; }
-  /* The page's title, and for a chatter the quiet way back to «Мои смены» above it. */
-  .ac-head { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-  .ac-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 32px;
-    margin-left: -8px;
-    padding: 0 8px;
-    border-radius: var(--radius-inner);
-    color: var(--color-text-secondary);
-    font-size: 14px;
-    line-height: 20px;
-    text-decoration: none;
-  }
-  .ac-back:hover { background: var(--color-hover-alt); color: var(--color-text-primary); }
-  .ac-title { font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-text-primary); }
-
-  @media (pointer: coarse) {
-    .ac-page .btn { min-height: 44px; height: auto; }
-    .ac-back { min-height: 44px; }
-  }
-
-  /* ── Sign-in and the invitation: one card in the middle ──────────────── */
   .entry-screen {
     display: flex;
     flex-direction: column;
