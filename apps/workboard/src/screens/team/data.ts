@@ -44,12 +44,12 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { millsToNumber, sumMills } from "@agency_hub_core/shared";
-import { addDays, daysInRange, moscowDayEnd, moscowDayOf } from "@agency_hub_core/ui/moscow";
+import { addDays, daysInRange, moscowDayOf } from "@agency_hub_core/ui/moscow";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { median } from "@agency_hub_core/ui/shiftReview";
 import { CHATTER_SHIFTS_MAX_WINDOW_DAYS } from "@agency_hub_core/contracts";
 import { kernel } from "@/shared/hub";
-import { shiftSalesQuery } from "@/shared/reads";
+import { READ_MAX_DAYS, chatterNumbersQuery, numbersWindow, shiftSalesQuery } from "@/shared/reads";
 import { usersQuery } from "@/shared/usersQuery";
 import { MAX_DAYS, MIN_SAMPLE, priceView, readWindow, speedView, useSalesPpv, useSalesReplies, type ReadWindow } from "@/screens/sales/data";
 import { averageQuality, perHourMills, qualityOfChatterNumbers, type PeriodQuality as AveragedQuality, type ShiftQuality } from "@/shared/metrics";
@@ -57,8 +57,6 @@ import { useMe } from "@/shared/useMe";
 import type { PersonNow, PersonRole, PersonState, SaleKind } from "@agency_hub_core/ui/people/words";
 
 const MINUTE = 60_000;
-/** The longest window of every team read Hub has today. */
-export const READ_MAX_DAYS = 31;
 
 type ShiftSales = KernelOperationResponse<"teamShiftSales">;
 type ChatterNumbersAnswer = KernelOperationResponse<"teamChatterNumbers">;
@@ -182,13 +180,6 @@ export function salesWindow(period: ResolvedPeriod): { days: number; until?: str
   return { days: period.days };
 }
 
-/** The period as `teamChatterNumbers` takes it: `[from, to)` instants. A week ends on its Sunday even while it goes on. */
-export function numbersWindow(period: ResolvedPeriod): { from: string; to: string } | null {
-  if (period.days > READ_MAX_DAYS) return null;
-  const last = period.spec.kind === "week" ? addDays(period.spec.monday, 6) : period.to;
-  return { from: period.startsAt, to: moscowDayEnd(last) };
-}
-
 /** `teamChatterStats` counts days back from today: from the period's first day to today. null — further back than Hub reads. */
 export function statsDays(period: ResolvedPeriod, today: string): number | null {
   const days = daysInRange(period.from, today);
@@ -278,9 +269,14 @@ function useShiftSales(period: ResolvedPeriod, page: string | null) {
 /** The slow numbers (`teamChatterNumbers`): everyone, or one person. */
 function useNumbers(period: ResolvedPeriod, userId?: number) {
   const window = numbersWindow(period);
-  return useQuery({
-    queryKey: ["people", "numbers", window, userId ?? null] as const,
-    queryFn: () => kernel.teamChatterNumbers({ query: { ...window!, ...(userId === undefined ? {} : { userId }) } }),
+  // A period Hub reads is the entry Смены shares for the same request; a longer one is never read by itself and keeps
+  // its own key (only «Обновлено» asks for it, as before).
+  const shared = window === null ? null : chatterNumbersQuery({ ...window, userId });
+  return useQuery<ChatterNumbersAnswer, Error, ChatterNumbersAnswer, readonly unknown[]>({
+    ...(shared ?? {
+      queryKey: ["people", "numbers", window, userId ?? null],
+      queryFn: () => kernel.teamChatterNumbers({ query: { ...window!, ...(userId === undefined ? {} : { userId }) } }),
+    }),
     enabled: window !== null,
     staleTime: 5 * MINUTE,
     // One person's numbers take seconds and follow a period going on; everyone's take up to a
