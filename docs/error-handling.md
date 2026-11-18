@@ -1,10 +1,10 @@
 # Error-handling canon
 
 This is the single canonical error-handling reference for the Agency Hub family:
-the core kernel, the ChatGoose Firefox extension (`fansly-chat`), the ChatGoose
-Desktop Electron application (`onlyfans-chat`), and the ChatSpace extension
-(`chat-extension`). It records the currently implemented contract; the
-`chat-extension` columns follow its frozen CG registry (`chat-extension` `docs/error-registry.md`, `architecture.md`
+the core kernel and the ChatSpace extension (`chat-extension`). The ChatGoose
+Firefox extension (`fansly-chat`) and the ChatGoose Desktop Electron application
+(`onlyfans-chat`) are retired; their columns in §2 are history. It records the
+currently implemented contract; the `chat-extension` columns follow its frozen CG registry (`chat-extension` `docs/error-registry.md`, `architecture.md`
 Appendix A) and its hub→CG map (`packages/contracts/src/hub/error-map.ts`).
 Change this document in the same family change as any behavior recorded here;
 do not maintain client-side copies.
@@ -522,7 +522,7 @@ An additive class in the existing error frame requires one family change:
    threshold, streak effect, and resolve rule—or deliberately `none`. Incident
    failure must remain log-and-continue after terminal persistence.
 7. Add explicit presentation mappings and registry entries in every client
-   (fansly-chat, onlyfans-chat, chat-extension), while retaining tests for the
+   (chat-extension), while retaining tests for the
    namespace-based unknown-code fallback and terminal EOF behavior. A new HTTP
    `AppError` code that a chat-extension route can return also gets its row in
    the §2 chat-extension HTTP table; without one it falls to the status rows.
@@ -534,8 +534,7 @@ Changing the discriminated frame union does. A new frame `type`, a
 required/renamed/retyped field, or a closed-enum change requires:
 
 1. core contract/schema and generated OpenAPI/SDK changes;
-2. vendored SDK updates in every client (fansly-chat, onlyfans-chat,
-   chat-extension);
+2. vendored SDK updates in every client (chat-extension);
 3. client readers capable of the new shape before core can emit it; and
 4. an explicit rollout/rollback gate across core and every client repository.
 
@@ -733,33 +732,6 @@ seconds `history_window_failed` still retains the raw page and old offset. A
 retry of a legacy scan uses its original query bounds and offset; normalization
 must never change the provider query halfway through pagination.
 
-
-### Desktop media resolve (media images)
-
-`POST /api/v1/ofapi/media/resolve` answers HTTP 200 with a closed `outcome`
-(`free_url`, `ofapi_cache`, `paid`, `cap_blocked`, `source_expired`,
-`unavailable`, `refused`, `pending`, `error`) and a bounded machine `reason`;
-these are decisions, not `AppError` codes. HTTP errors stay in the registry:
-404 `not_found` for an account not granted to the chatter (the read gateway's
-rule), 503 `service_unavailable` while the desktop read gateway is disabled,
-400 for an invalid request (a client URL is never accepted; a transfer
-report above 30,000,000 bytes), 409 `conflict`
-(reason `request_id_reused`) for a `requestId` already used for another file,
-429 for the per-device rate limit (keyed by the authenticated device token,
-`retry-after` in seconds). Retry law: a paid transfer is never retried
-automatically; a lost response may be retried once with the SAME `requestId`
-(a concurrent twin joins the resolve in flight, a later one gets the recorded
-answer); `pending` (`in_flight`, `busy`) is final for its `requestId` and
-advises `retryAfterMs` for a new one; `cap_blocked` by the daily budget carries
-the next UTC midnight in `retryAt` and, like `size_unknown` and `click_only`
-(an automatic request for `full`), yields only to an explicit click;
-`refused` and `unavailable` are not bypassed by a click, except `refused`
-`not_ready`, which a click may refresh once through its `reread` hint. A
-paid transfer report of more bytes than its hand-out allowed is rejected and
-changes nothing; a report can only lower an unknown-size click's debit. Only
-fixed reasons, identifiers and error classes/SQL states reach logs and the
-decision log — never a URL, signature, provider body, driver error message or
-file content. See [the media runbook](runbooks/ofapi-media.md).
 
 ### Fansly socket capture
 
