@@ -2242,12 +2242,23 @@ export async function queryAgentDataset(
   // evidence about capture.
   let captureFloorAt: Date | null = null;
   if (mapping.captureFloorPlane !== undefined) {
-    const floorResult = await db.execute<Record<string, unknown>>(sql`
-      with src as (${source})
-      select min(${windowColumn}) as floor_at
-      from src
-      where src.k_page_id = ${input.pageId}
-    `);
+    // A dataset may name a cheaper source with the same per-page minimum
+    // instead of expanding its whole source for one number. It goes in as a
+    // subquery, not a CTE: PostgreSQL skips its min() index shortcut for any
+    // statement with a WITH, even one it inlines.
+    const floorStatement = mapping.captureFloorSource === undefined
+      ? sql`
+        with src as (${source})
+        select min(${windowColumn}) as floor_at
+        from src
+        where src.k_page_id = ${input.pageId}
+      `
+      : sql`
+        select min(f.floor_at) as floor_at
+        from (${sql.raw(mapping.captureFloorSource)}) f
+        where f.k_page_id = ${input.pageId}
+      `;
+    const floorResult = await db.execute<Record<string, unknown>>(floorStatement);
     captureFloorAt = date(floorResult.rows[0]?.floor_at);
   }
 
