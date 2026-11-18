@@ -4,7 +4,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import {
   acquireSyncPageOwnership,
-  ensurePostRepliesWalkRow,
   insertPageBrowser,
   readFanslyWsGapPass,
   readSyncLivePathFacts,
@@ -751,7 +750,12 @@ describe("the review of PR 13", () => {
        values ($1, 'fansly', $2, 'a post', now() - interval '1 day', now() - interval '1 day', now(), repeat('d', 64), 0, 1, 1, 1)`,
       [pageId, postId],
     );
-    await ensurePostRepliesWalkRow(db(), { pageId, subjectRef: postId, dueAt: new Date(Date.now() + 86_400_000) });
+    await testDb!.pool.query(
+      `insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class, next_due_at)
+       values ($1, 'post_replies', $2, 'fresh', $3)
+       on conflict (page_id, plane, subject_ref) do nothing`,
+      [pageId, postId, new Date(Date.now() + 86_400_000)],
+    );
   }
 
   async function backfills(pageId: number): Promise<Array<{ resource: string; subject: string }>> {

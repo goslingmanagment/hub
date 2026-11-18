@@ -30,7 +30,7 @@ import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
-import { clampDraftOccurredAt } from "./canonicalize-driver.ts";
+import { clampDraftOccurredAt } from "./canonicalize-drafts.ts";
 import { buildOnlyFansPostDrafts, ONLYFANS_POSTS_CANONICALIZER_VERSION } from "./canonicalize/onlyfans-post-media.ts";
 import {
   capturePayloadResponse,

@@ -85,7 +85,6 @@ export interface PlatformAdapter<TPullHandler extends AnyPullHandler = AnyPullHa
 
 export interface PlatformRegistry<TAdapter extends PlatformAdapter = PlatformAdapter> {
   get(key: string): TAdapter;
-  maybeGet(key: string): TAdapter | undefined;
   keys(): Platform[];
   all(): TAdapter[];
 }
@@ -108,7 +107,6 @@ export function createPlatformRegistry<TAdapter extends PlatformAdapter>(
       }
       return adapter;
     },
-    maybeGet: (key) => byKey.get(key),
     keys: () => [...byKey.keys()] as Platform[],
     all: () => [...byKey.values()],
   };
