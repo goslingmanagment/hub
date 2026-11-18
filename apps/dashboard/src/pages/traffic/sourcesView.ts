@@ -100,7 +100,7 @@ export interface SourcesView {
   since: string;
   /** The latest snapshot the deltas rest on. */
   dataAt: string | null;
-  /** The pages the reads cover. */
+  /** The pages the two weeks' read covers. */
   pages: string[];
   sources: SourceView[];
   /** Sources whose contractor term is open and that brought no fan. */
@@ -276,11 +276,9 @@ export function sourcesView(recent: Channels, allTime: Channels | undefined): So
   let dataAt: string | null = null;
   const pages = new Set<string>();
 
-  for (const channel of [...recent.channels, ...(allTime?.channels ?? [])]) {
-    for (const segment of channel.segments) pages.add(segment.pageLabel);
-  }
   for (const channel of recent.channels) {
     for (const segment of channel.segments) {
+      pages.add(segment.pageLabel);
       if (dataAt === null || segment.endObservedAt > dataAt) dataAt = segment.endObservedAt;
     }
   }
