@@ -111,9 +111,8 @@ export async function listChatterActivityMinutes(
     join users u on u.id = m.user_id
     join pages p on p.id = m.page_id
     where m.minute >= ${input.from.toISOString()}::timestamptz and m.minute < ${input.to.toISOString()}::timestamptz
-      and ${pageFilter}
-    order by m.user_id, m.minute, m.page_id`);
-  return result.rows.map((row) => ({
+      and ${pageFilter}`);
+  const rows = result.rows.map((row) => ({
     userId: Number(row.user_id),
     username: row.username,
     pageId: Number(row.page_id),
@@ -121,6 +120,9 @@ export async function listChatterActivityMinutes(
     minute: new Date(row.minute),
     input: row.input,
   }));
+  // Sorted here, not by Postgres: its Sort node was half of the statement's time. (user_id, minute, page_id) is the
+  // primary key reordered, so no two rows tie, and minutes are whole minutes: the order is the old `order by`'s.
+  return rows.sort((a, b) => a.userId - b.userId || a.minute.getTime() - b.minute.getTime() || a.pageId - b.pageId);
 }
 
 /** Messages with an author per person, page and minute, on the pages in scope, in [from, to). */

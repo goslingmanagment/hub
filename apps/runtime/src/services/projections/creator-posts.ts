@@ -6,8 +6,8 @@
 import {
   getPageTransactionsWriterInfo,
   getProjectionWatermark,
-  listEventAccounts,
   listEventsSince,
+  listProjectionWork,
   setProjectionWatermark,
   upsertCreatorPost,
   upsertCreatorPostTip,
@@ -336,12 +336,14 @@ export async function runCreatorPostsProjection(
     upserted: 0,
     replyWalksMarkedDirty: 0,
   };
-  const accounts = input?.accountId != null
-    ? [input.accountId]
-    : await listEventAccounts(app.db);
+  const work = input?.accountId != null
+    ? { accounts: [input.accountId], idle: new Set<number>() }
+    : await listProjectionWork(app.db, CREATOR_POSTS_PROJECTION);
+  const accounts = work.accounts;
 
   for (const accountId of accounts) {
     totals.accounts += 1;
+    if (work.idle.has(accountId)) continue;
     const page = await getPageTransactionsWriterInfo(app.db, accountId);
     if (!page) {
       // Keep the watermark parked: a later catalog repair makes the immutable
