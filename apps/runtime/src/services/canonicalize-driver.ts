@@ -42,15 +42,6 @@ import {
 import { buildCanonicalDrafts, gateCanonicalObservation } from "./canonicalize-drafts.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
-// The occurred_at window moved to the pure seam the Fansly Sync Engine shares;
-// re-exported so its existing importers keep their path.
-export {
-  clampDraftOccurredAt,
-  OCCURRED_AT_CLAMP_FUTURE_MONTHS,
-  OCCURRED_AT_CLAMP_MIN,
-  occurredAtClampMax,
-} from "./canonicalize-drafts.ts";
-
 export const CANONICALIZE_SWEEP_QUEUE = "canonicalize.sweep";
 
 /**

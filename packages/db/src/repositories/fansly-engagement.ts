@@ -277,9 +277,6 @@ export type LegacySubjectRefreshPlane =
   | "post_engagement"
   | "of_post_stats";
 
-export type SubjectRefreshPlane = LegacySubjectRefreshPlane
-  | "fan_earnings_lifetime" | "fan_earnings_monthly" | "fan_earnings_attribution";
-
 // ── the post_replies walk queue (WP-F5) ──────────────────────────────────────
 //
 // SAME TABLE, SECOND PLANE. WP-F2 writes `plane='media_stats'` dirty marks and
@@ -295,31 +292,6 @@ export type SubjectRefreshPlane = LegacySubjectRefreshPlane
 // It is a QUEUE, not a scheduler: no reservations, no leases, no settlement.
 // The stream lease the executor already holds is what makes one page's walk
 // single-threaded, and these rows only remember where it got to.
-
-/**
- * Seed ONE walk row, idempotently — the same-transaction hook the creator-posts
- * projector calls for every post it upserts.
- *
- * Why in the projector's transaction and not on a timer: a post that appears
- * between two seeding sweeps would otherwise wait a whole sweep to become
- * walkable, and a sweep that is itself bounded by a daily call budget may be
- * days away. A newly projected post is queued the instant its row exists or it
- * is not queued at all.
- */
-export async function ensurePostRepliesWalkRow(
-  db: Database,
-  input: { pageId: number; subjectRef: string; dueAt: Date },
-): Promise<{ applied: boolean }> {
-  const result = await db.execute(sql`
-    insert into subject_refresh_state (
-      page_id, plane, subject_ref, refresh_class, next_due_at
-    ) values (
-      ${input.pageId}, 'post_replies', ${input.subjectRef}, 'fresh', ${input.dueAt}
-    )
-    on conflict (page_id, plane, subject_ref) do nothing
-  `);
-  return { applied: (result.rowCount ?? 0) > 0 };
-}
 
 /**
  * A post's replies must be walked again (Project Browser, PR 13: the site

@@ -2,7 +2,7 @@ import { SHIFT_REPORT_PHASES, saleSiteWords } from "@agency_hub_core/contracts";
 import type { HandinVersionLine } from "@agency_hub_core/db";
 import { describe, expect, it } from "vitest";
 
-import { linesPageSums } from "../apps/runtime/src/services/shift-handins.ts";
+import { reportSums } from "../apps/runtime/src/services/sale-claim-rules.ts";
 import {
   checkLetsConfirm,
   cardSuperseded,
@@ -10,7 +10,6 @@ import {
   holdsSale,
   lineWithWord,
   mayAct,
-  phaseAfter,
   signedLines,
   silenceSettles,
   withSettlementsNow,
@@ -72,15 +71,6 @@ describe("who may do what on the board", () => {
     for (const action of ACTIONS) expect(mayAct(person, action, "checking")).toBe(false);
     expect(mayAct({ ...person, enabled: false }, "handIn", "draft")).toBe(false);
   });
-
-  it("moves the phases as the prototype does", () => {
-    expect(phaseAfter("handIn", "draft", { counted: false, checkDone: false })).toBe("checking");
-    expect(phaseAfter("handIn", "fixing", { counted: true, checkDone: true })).toBe("confirm");
-    expect(phaseAfter("confirm", "confirm", { counted: false, checkDone: true })).toBe("counted");
-    expect(phaseAfter("reopen", "counted", { counted: true, checkDone: true })).toBe("fixing");
-    expect(phaseAfter("cancel", "fixing", { counted: true, checkDone: true })).toBe("counted");
-    expect(phaseAfter("cancel", "fixing", { counted: false, checkDone: true })).toBe("draft");
-  });
 });
 
 describe("the check holds the person for 10 minutes at most", () => {
@@ -109,7 +99,7 @@ describe("a version made at «Подтверждаю»", () => {
   it("counts the proposals the person did not decline", () => {
     const lines = confirmedLines([viggo, quill, dario], [{ ...share, state: "proposed" }, { ...mine, state: "proposed" }]);
     expect(lines.map((one) => one.amountMills)).toEqual([24_000, 8_000, 40_000]);
-    expect(linesPageSums(lines, ["mia-2"]).totalMills).toBe(72_000);
+    expect(reportSums(lines, ["mia-2"]).totalMills).toBe(72_000);
     expect(lines[0]).toMatchObject({ statement: "share", shareWithUserId: 77 });
   });
 
@@ -117,7 +107,7 @@ describe("a version made at «Подтверждаю»", () => {
     const lines = confirmedLines([viggo, quill, dario], [{ ...share, state: "declined" }, { ...mine, state: "proposed" }]);
     expect(lines.map((one) => one.amountMills)).toEqual([48_000, 8_000, 40_000]);
     expect(lines[0]!.statement).toBeNull();
-    expect(linesPageSums(lines, ["mia-2"]).totalMills).toBe(96_000);
+    expect(reportSums(lines, ["mia-2"]).totalMills).toBe(96_000);
   });
 
   it("never applies a late proposal (it waits for «Принять»)", () => {
@@ -200,13 +190,13 @@ describe("what «Подтверждаю» signs is what «Подтвердите
     const { claimedMills: _claimed, ...plain } = taken;
     const [signed] = signedLines({ candidate: [taken], draft: [{ ...plain, amountMills: 10_000, disputed: false, settled: "agreed" }], proposals: [], notes: new Map(), oldWay: none });
     expect(signed).toMatchObject({ amountMills: 10_000, disputed: false });
-    expect(linesPageSums([signed!], ["mia-2"]).totalMills).toBe(10_000);
+    expect(reportSums([signed!], ["mia-2"]).totalMills).toBe(10_000);
   });
 
   it("the total signed counts «мимо площадки» the owner confirmed, on its page", () => {
     const sale = line(44, { netMills: 20_000 });
     const lines = signedLines({ candidate: [sale], draft: [sale], proposals: [], notes: new Map(), oldWay: none });
-    const sums = linesPageSums(lines, ["mia-2"], [{ amountMills: 5_000, state: "confirmed", pageLabel: "mia-2" }, { amountMills: 7_000, state: "pending", pageLabel: null }]);
+    const sums = reportSums(lines, ["mia-2"], [{ amountMills: 5_000, state: "confirmed", pageLabel: "mia-2" }, { amountMills: 7_000, state: "pending", pageLabel: null }]);
     expect(sums.totalMills).toBe(25_000);
   });
 

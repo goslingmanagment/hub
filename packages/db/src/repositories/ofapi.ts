@@ -20,7 +20,6 @@ import {
 const OFAPI_SPEND_TRANSACTION_PAGE_LOCK_NAMESPACE = 9_003_001;
 const OFAPI_WEBHOOK_REGISTRATION_LOCK_KEY = 9_003_002;
 const OFAPI_WEBHOOK_DISPATCH_STALE_MS = 5 * 60 * 1_000;
-export const OFAPI_SYNC_EVENT_CHANNEL = "ofapi_sync_events";
 
 export async function withOfapiSpendTransactionPageLock<T>(
   db: Database,
@@ -605,17 +604,9 @@ const OFAPI_SPEND_PROJECTION_EVENT_TYPES_SQL = sql.raw(
  * (which must not vouch past one of them).
  */
 function ofapiWebhookEventAwaitsSpendProjectionSql() {
-  // The literal below must stay equal to OFAPI_TIPS_RECEIVED_BLOCKED_REASON
-  // (runtime's ofapi-spend-projection-contract.ts) — it can't be imported
-  // across the package boundary, and a drift silently stops the legacy
-  // blocked-tips rows from self-healing.
   return sql`not exists (
     select 1 from ${ofapiSpendProjectionEvents}
     where ${ofapiSpendProjectionEvents.journalId} = ${ofapiWebhookEvents.id}
-      and not (
-        ${ofapiSpendProjectionEvents.projectionStatus} = 'blocked'
-        and ${ofapiSpendProjectionEvents.blockedReason} = 'tips_received_live_fixture_required'
-      )
   )`;
 }
 
