@@ -38,6 +38,8 @@ import {
   settleEndedOfapiCollectionSafeReads,
 } from "@agency_hub_core/db";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
+import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
+import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
 import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import {
@@ -934,6 +936,58 @@ describe("failed safe reads of scheduled runs", () => {
     expect(send.mock.calls.map(call => (call as unknown as [string, { jobId: string }])[1].jobId)).toEqual([queued[0].id]);
     // The sweep itself asks the vendor nothing; the new run does, under its own limits.
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a 2xx collection read whose body is not JSON", () => {
+  it("is quarantined and stamped on its first sweep visit; a JSON body that fails the contract stays refused", async () => {
+    const approved = await job(["fans_expired"], 2);
+    const capture = async (offset: string, body: string) => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(body)));
+      return captureOfapiCollectionRead(app, {
+        pageId, accountId: "acct_test",
+        step: { operation: "ofapi_read_fans_expired", pathname: "/acct_test/fans/expired", query: { limit: "20", offset } },
+        stepKey: `not-json:${approved.id}:${offset}`,
+        context: { category: "profile_notifications", purpose: "one_off", jobId: approved.id },
+        maxBytes: 100000, beforeDispatch: async () => true,
+      });
+    };
+    const family = CANONICALIZER_FAMILIES.find((candidate) => candidate.lane === "read_collections")!;
+    const sweep = () => runCanonicalization(app, { families: [family], useSweepCursor: true });
+    const parseVersion = async (observationId: number) =>
+      (await db.pool.query("select parse_version from observations where id=$1", [observationId])).rows[0].parse_version;
+
+    // The vendor cut the body mid-escape: no parser can ever read these bytes.
+    const cut = await capture("0", '{"data":{"list":[{"id":7,"name":"\\u04');
+    expect(cut.status).toBe(200);
+    // The live runner still refuses it before canonicalization, as before.
+    await expect(materializeOfapiReadSnapshot(app, {
+      pageId, step: { operation: "ofapi_read_fans_expired", pathname: "/acct_test/fans/expired", query: { limit: "20", offset: "0" } },
+      body: cut.body, observationId: cut.observationId, observationReceivedAt: cut.observationReceivedAt,
+    })).rejects.toThrow("OFAPI read response contract rejected");
+    expect(await parseVersion(cut.observationId)).toBe(0);
+
+    expect(await sweep()).toMatchObject({
+      scanned: 1, appended: 0, skippedUnparseable: 0, quarantined: 1,
+      quarantineSamples: [{ observationId: cut.observationId, reasonCode: "ofapi_read_body_not_json" }],
+    });
+    expect(await parseVersion(cut.observationId)).toBe(family.version);
+    expect((await db.pool.query(
+      "select observation_id::int, parse_version, source, lane, reason_code from observation_parse_quarantine",
+    )).rows).toEqual([{
+      observation_id: cut.observationId, parse_version: family.version, source: "ofapi_capture",
+      lane: "read_collections", reason_code: "ofapi_read_body_not_json",
+    }]);
+    expect(await sweep()).toMatchObject({ scanned: 0, quarantined: 0, skippedUnparseable: 0 });
+
+    // Valid JSON that fails the contract waits unstamped for a future parser.
+    const drifted = await capture("20", JSON.stringify({ data: { unexpected: true } }));
+    expect(await sweep()).toMatchObject({
+      scanned: 1, quarantined: 0, skippedUnparseable: 1,
+      unparseableSamples: [{ observationId: drifted.observationId }],
+    });
+    expect(await parseVersion(drifted.observationId)).toBe(0);
+    expect((await db.pool.query("select count(*)::int count from observation_parse_quarantine")).rows[0].count).toBe(1);
   });
 });
 

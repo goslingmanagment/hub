@@ -1,10 +1,12 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  AGENT_DATASET_SQL,
   createFanslyPage,
   createModel,
   createUser,
   insertAgentKey,
+  queryAgentDataset,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -404,5 +406,79 @@ describe("[sync-critical] agent read plane: review round 3", () => {
     expect(rows[0]!.request_summary.returned).toBe(1);
     expect(Object.keys(rows[0]!.request_summary).sort())
       .toEqual(["planeMode", "platform", "returned"]);
+  });
+});
+
+/**
+ * A dataset's `captureFloorSource` must give the minimum its whole source gives.
+ * The rows here are the ones a cheaper source gets wrong: posts whose attachment
+ * slots are empty (no row in the source) and a bundle without members (still one
+ * row there).
+ */
+describe("[sync-critical] agent read plane: capture floor sources", () => {
+  async function floors(dataset: string) {
+    const mapping = AGENT_DATASET_SQL[dataset]!;
+    const { rows } = await testDb!.pool.query<{ floor_at: Date | null }>(
+      `with src as (${mapping.source})
+       select min(src.${mapping.windowColumn}) as floor_at from src where src.k_page_id = $1`,
+      [pageId],
+    );
+    const served = await queryAgentDataset(testDb!.db, {
+      dataset,
+      pageId,
+      from: new Date("2026-03-01T00:00:00Z"),
+      to: new Date("2026-03-10T00:00:00Z"),
+      filters: [],
+      sort: null,
+      limit: 1,
+    });
+    return { whole: rows[0]?.floor_at ?? null, served: served.captureFloorAt };
+  }
+
+  it("equals the minimum over the dataset's whole source", async () => {
+    const pool = testDb!.pool;
+    await pool.query(
+      `insert into creator_posts (account_id, platform, platform_post_id, published_at,
+         first_observed_at, last_observed_at, content_hash, attachment_count, attachment_refs,
+         source_event_id, source_observation_id, source_account_seq)
+       values
+         ($1, 'fansly', 'post-no-attachments', '2026-01-02T00:00:00Z', '2026-03-01T00:00:00Z',
+          '2026-03-01T00:00:00Z', repeat('d', 64), 0, null, 9103, 9004, 104),
+         ($1, 'fansly', 'post-empty-refs', '2026-01-03T00:00:00Z', '2026-03-01T00:00:00Z',
+          '2026-03-01T00:00:00Z', repeat('d', 64), 2, '[]'::jsonb, 9104, 9005, 105),
+         ($1, 'fansly', 'post-empty-bundle', '2026-01-20T00:00:00Z', '2026-03-01T00:00:00Z',
+          '2026-03-01T00:00:00Z', repeat('d', 64), 1,
+          '[{"pos":0,"contentType":2,"contentId":"bundle-empty"}]'::jsonb, 9105, 9006, 106)`,
+      [pageId],
+    );
+    await pool.query(
+      `insert into creator_media_bundles (page_id, platform, bundle_ref, member_refs,
+         first_observed_at, last_observed_at, content_hash, source_event_id,
+         source_observation_id, source_account_seq)
+       values ($1, 'fansly', 'bundle-empty', '{}', '2026-03-01T00:00:00Z',
+         '2026-03-01T00:00:00Z', repeat('e', 64), 9301, 9007, 107)`,
+      [pageId],
+    );
+
+    const datasets = Object.keys(AGENT_DATASET_SQL)
+      .filter((dataset) => AGENT_DATASET_SQL[dataset]!.captureFloorSource !== undefined);
+    expect(datasets).toContain("post_attachments");
+    for (const dataset of datasets) {
+      const { whole, served } = await floors(dataset);
+      expect(served, dataset).toEqual(whole);
+    }
+
+    // The bundle without members is the oldest post with a slot ...
+    const first = await floors("post_attachments");
+    expect(first.served?.toISOString()).toBe("2026-01-20T00:00:00.000Z");
+    // ... and after it, a post whose refs were never captured but whose count
+    // says it has attachments ('post-old' of the fixture).
+    await pool.query(
+      `delete from creator_posts where account_id = $1 and platform_post_id = 'post-empty-bundle'`,
+      [pageId],
+    );
+    const next = await floors("post_attachments");
+    expect(next.served).toEqual(next.whole);
+    expect(next.served?.toISOString()).toBe("2026-02-10T09:00:00.000Z");
   });
 });
