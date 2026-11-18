@@ -619,18 +619,6 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & P
   });
 }
 
-/**
- * The page sums of lines: the person's lines and the claimed ones, and on its page each «мимо площадки» the owner
- * confirmed (package G; sale-claim-rules.ts `reportSums`, the same `pageSums`). Pure.
- */
-export function linesPageSums(
-  lines: readonly HandinVersionLine[],
-  shiftPages: readonly string[],
-  offPlatform: ReadonlyArray<{ amountMills: number; state: string; pageLabel?: string | null }> = [],
-) {
-  return reportSums(lines, shiftPages, offPlatform);
-}
-
 /** A report's «мимо площадки» lines as a version keeps them: a confirmed one with the label of its page. */
 export function offPlatformOfRows(rows: readonly OffPlatformRow[], labelOf: ReadonlyMap<number, string>): HandinVersionOffPlatform[] {
   return rows.map((row) => ({
@@ -722,7 +710,7 @@ function projectionOf(input: {
   const pages = cut === null ? input.shiftPages : input.shiftPages.filter((page) => cut.has(page));
   // A colleague reads the report's sales, not what the person says came past the platform: nor its sums.
   const offPlatform = cut === null ? input.offPlatform : [];
-  return { lines, pages, offPlatform, sums: linesPageSums(lines, pages, offPlatform), cut: cut !== null && pages.length < input.shiftPages.length };
+  return { lines, pages, offPlatform, sums: reportSums(lines, pages, offPlatform), cut: cut !== null && pages.length < input.shiftPages.length };
 }
 
 /** A version's total as the reader may see it: the stored one whole, else its projection's. */
@@ -1108,7 +1096,7 @@ export async function listShiftReports(
       const marks = handin === null ? [] : await listHandinMarks(db, handin.id);
       const facts = await draftFacts(db, subject, handin, catalog, now, marks);
       const offPlatform = handin === null ? [] : offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
-      drafts.set(shift.id, linesPageSums(draftLines(facts, marks), facts.pages, offPlatform).totalMills);
+      drafts.set(shift.id, reportSums(draftLines(facts, marks), facts.pages, offPlatform).totalMills);
     }
   }
   return {
@@ -1399,10 +1387,8 @@ export async function submitShiftReport(
   app: HandinApp,
   actor: HandinActor,
   input: { shiftId: number },
-  // `dayPaid`: asked at «Подтверждаю», when a version is made; a hand-in asks the ledger nothing.
-  options: { now?: Date; dayPaid?: unknown } = {},
 ): Promise<ShiftReportResponse> {
-  return handInShiftReport(app, actor, input, options.now ?? new Date());
+  return handInShiftReport(app, actor, input, new Date());
 }
 
 /**

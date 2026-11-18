@@ -149,9 +149,6 @@ export function ruledWork(rule: ScreensRule | null | undefined, work: { kind: "s
 export const ruledSale = (rule: ScreensRule | null | undefined, sale: Pick<ShiftSale, "occurredAt">) =>
   rule !== null && rule !== undefined && moscowDayOf(sale.occurredAt.getTime()) >= rule.from;
 
-/** A work's reference as the rule names it (agent-team-sales.ts `workRef`). Pure. */
-export const ruleWorkRef = (userId: number, work: { startedAt: number }) => `${userId}:${new Date(work.startedAt).toISOString()}`;
-
 /** The pieces of work by login, for `homeCredit`. Pure. */
 export function piecesByUser<P extends { userId: number }>(pieces: readonly P[]): Map<number, P[]> {
   const out = new Map<number, P[]>();
