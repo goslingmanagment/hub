@@ -146,8 +146,8 @@ const ENGINE_BLOCK_KEYS = ["connection", "financials", "audience", "messages_liv
 /**
  * The Fansly pages that need a login: their browser was signed out or Fansly
  * refuses the session, or a block of the engine stops on refused credentials —
- * `fanslyPagesNeedingLogin` of apps/dashboard/src/api/waiting.ts with the
- * first two checks of `enginePageStatus`.
+ * the first two checks of the console's `enginePageStatus` (apps/dashboard
+ * enginePageSummary.ts) that end in `login`.
  */
 export function loginPageLabels(
   blocks: readonly SyncBlocksPage[],

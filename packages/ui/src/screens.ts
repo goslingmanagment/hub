@@ -943,11 +943,6 @@ function homeScreen(section: Section, role: Role): Screen | undefined {
   return first ? tabRow(first, role)[0] : undefined;
 }
 
-/** Where a menu item leads for this role. */
-export function sectionHome(section: Section, role: Role): string {
-  return homeScreen(section, role)?.path ?? "/";
-}
-
 /** Hub's sections this role has: the owner's alone (a team lead has no Hub, products plan §2.2). */
 export function menuOf(role: Role): Section[] {
   if (role !== "owner") return [];

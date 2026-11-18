@@ -417,68 +417,6 @@ export async function getRevenueBreakdownForScope(
   }));
 }
 
-export async function listTransactionsForPage(
-  db: Database,
-  input: {
-    pageId: number;
-    limit: number;
-    offset: number;
-    canonicalType?: string;
-    transactionState?: string;
-  },
-) {
-  const clauses = buildTransactionScopeClauses({
-    pageIds: [input.pageId],
-    ...(input.canonicalType === undefined ? {} : { canonicalType: input.canonicalType }),
-    ...(input.transactionState === undefined ? {} : { transactionState: input.transactionState }),
-    excludeExcludedTypes: false,
-  });
-
-  if (!clauses) {
-    return {
-      total: 0,
-      items: [],
-    };
-  }
-
-  const [countRow] = await db.select({
-    total: sql<number>`count(*)::int`,
-  }).from(transactions).where(and(...clauses));
-
-  const items = await db.select({
-    transactionId: transactions.transactionId,
-    rawType: transactions.rawType,
-    canonicalType: transactions.canonicalType,
-    transactionState: settledTransactionState(),
-    amountMills: transactions.grossAmountMills,
-    destinationAmountMills: transactions.sourceDestinationAmountMills,
-    netAmountMills: transactions.creatorNetAmountMills,
-    walletId: transactions.walletId,
-    correlationId: transactions.correlationId,
-    correlationAccountId: transactions.correlationAccountId,
-    occurredAt: transactions.occurredAt,
-    sourceUpdatedAt: transactions.sourceUpdatedAt,
-    fanPlatformUserId: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.platformUserId} else null end`,
-    fanUsername: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.username} else null end`,
-    fanDisplayName: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fans.displayName} else null end`,
-    fanPageAlias: sql<string | null>`case when ${fans.deletedDetectedAt} is null then ${fanPages.pageAlias} else null end`,
-  }).from(transactions)
-    .leftJoin(fans, eq(fans.id, transactions.fanId))
-    .leftJoin(fanPages, and(
-      eq(fanPages.platformAccountId, input.pageId),
-      eq(fanPages.fanId, transactions.fanId),
-    ))
-    .where(and(...clauses))
-    .orderBy(desc(transactions.occurredAt), desc(transactions.id))
-    .limit(input.limit)
-    .offset(input.offset);
-
-  return {
-    total: countRow?.total ?? 0,
-    items,
-  };
-}
-
 export async function listSubscribersForPage(
   db: Database,
   input: {
@@ -579,31 +517,6 @@ export async function listSubscribersForPage(
     total: rows[0]?.total ?? 0,
     items: rows.map(({ total: _total, ...item }) => item),
   };
-}
-
-export async function listSubscriberDailyForPage(
-  db: Database,
-  input: {
-    pageId: number;
-    fromBusinessDate?: string | null;
-    toBusinessDate?: string | null;
-  },
-) {
-  const clauses = [eq(dailySubscribers.platformAccountId, input.pageId)];
-  if (input.fromBusinessDate) {
-    clauses.push(gte(dailySubscribers.businessDate, input.fromBusinessDate));
-  }
-  if (input.toBusinessDate) {
-    clauses.push(lt(dailySubscribers.businessDate, input.toBusinessDate));
-  }
-
-  return db.select({
-    businessDate: dailySubscribers.businessDate,
-    newSubscribers: dailySubscribers.newSubscribers,
-    activeSubscribers: dailySubscribers.activeSubscribers,
-  }).from(dailySubscribers)
-    .where(and(...clauses))
-    .orderBy(dailySubscribers.businessDate);
 }
 
 /** Paid and free current subscriptions per page, as `listSubscribersForPage` lists them. */
@@ -824,31 +737,6 @@ export async function listFollowersForPage(
     total: rows.rows[0]?.total ?? 0,
     items: rows.rows.map(({ total: _total, ...item }) => item),
   };
-}
-
-export async function listFollowerDailyForPage(
-  db: Database,
-  input: {
-    pageId: number;
-    fromBusinessDate?: string | null;
-    toBusinessDate?: string | null;
-  },
-) {
-  const clauses = [eq(dailyFollowers.platformAccountId, input.pageId)];
-  if (input.fromBusinessDate) {
-    clauses.push(gte(dailyFollowers.businessDate, input.fromBusinessDate));
-  }
-  if (input.toBusinessDate) {
-    clauses.push(lt(dailyFollowers.businessDate, input.toBusinessDate));
-  }
-
-  return db.select({
-    businessDate: dailyFollowers.businessDate,
-    newFollowers: dailyFollowers.newFollowers,
-    knownTotalFollowers: dailyFollowers.knownTotalFollowers,
-  }).from(dailyFollowers)
-    .where(and(...clauses))
-    .orderBy(dailyFollowers.businessDate);
 }
 
 export async function listFansForPage(
