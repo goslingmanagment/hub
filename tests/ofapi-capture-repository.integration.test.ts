@@ -2957,7 +2957,7 @@ describe("OFAPI capture correctness repository", () => {
     })).toMatchObject({ admitted: false, reason: "job_cap" });
   });
 
-  it("leaves an interactive request's uncertain attempt and its reserve alone", async () => {
+  it("leaves an interactive request's uncertain attempt to the owner's resolve, which releases its reserve", async () => {
     if (!testDb) return;
     const seeded = await seed();
     // The retired interactive lane left uncertain safe reads like this one
@@ -3011,5 +3011,21 @@ describe("OFAPI capture correctness repository", () => {
       certainty_resolution: null,
     });
     expect((await testDb.pool.query("select governed_unsettled_credits from ofapi_credit_state")).rows[0].governed_unsettled_credits).toBe(5);
+
+    // The owner's resolve is the only way out for these rows: an attempt
+    // without a capture job.
+    expect(await resolveOfapiIndeterminateAttempt(testDb.db, {
+      attemptId,
+      resolution: "confirmed_billed",
+      actorUserId: seeded.owner.id,
+      reason: "retired gateway: lost safe read, assumed billed",
+      now: new Date(NOW.getTime() + 3_000),
+    })).toBe(true);
+    expect(await getOfapiRequestAttempt(testDb.db, attemptId)).toMatchObject({
+      state: "indeterminate",
+      credit_state: "settled",
+      certainty_resolution: "confirmed_billed",
+    });
+    expect((await testDb.pool.query("select governed_unsettled_credits from ofapi_credit_state")).rows[0].governed_unsettled_credits).toBe(0);
   });
 });
