@@ -147,12 +147,14 @@ function DayLine({ row, slots, max }: { row: SourceRow; slots: readonly DaySlot[
   }
   if (run.length > 0) runs.push(run);
   const base = box.height - box.bottom;
+  const closed = <T extends { index: number }>(part: T[]) => (slots[part.at(-1)!.index]?.when === "today" ? part.slice(0, -1) : part);
   const described = slots.map((slot, index) => `${slot.label}: ${row.fans[index] ?? "нет данных"}`).join(", ");
 
   return (
     <svg className="ts-chart" width="100%" height={box.height} role="img" aria-label={`${row.name}, новых фанов по дням. ${described}`}>
       <svg viewBox={`0 0 ${SLOT_COUNT} ${box.height}`} preserveAspectRatio="none" width="100%" height={box.height} aria-hidden="true">
-        {row.large && runs.filter((part) => part.length > 1).map((part) => (
+        {/* The area stops at the last finished day: today's step is not an arrival yet. */}
+        {row.large && runs.map(closed).filter((part) => part.length > 1).map((part) => (
           <polygon
             key={`a${part[0]!.index}`}
             className="ts-area"

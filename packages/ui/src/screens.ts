@@ -279,7 +279,7 @@ export const SCREENS: readonly Screen[] = [
   {
     // The OnlyFans links by source: which source brings fans, day by day, over two weeks (ofLinksChannelsGet).
     id: "traffic-sources", path: "/traffic/sources", label: "Источники", title: "Трафик: источники", section: "traffic", product: "hub", ownerOnly: true,
-    why: "Какие источники приводят фанов и в какие дни: по каждой ссылке за две недели.",
+    why: "Какой источник и в какой день привёл фанов.",
     pageFilter: "none",
     keywords: "трафик источники ссылки фаны график по дням onlyfans каналы подрядчики",
   },

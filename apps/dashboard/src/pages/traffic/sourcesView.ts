@@ -230,6 +230,11 @@ export function sourcesView(recent: Channels, allTime: Channels | undefined, tod
       fans,
     });
   }
+  // A channel the two weeks have no segment of is known only to the all-time read.
+  const recentKeys = new Set(recent.channels.map((channel) => channel.channelKey));
+  for (const channel of allTime?.channels ?? []) {
+    if (channel.channelKey !== null && !recentKeys.has(channel.channelKey)) idle.push(channel.channelTitle ?? channel.channelKey);
+  }
   sources.sort((left, right) => right.fans - left.fans || left.title.localeCompare(right.title, "ru"));
   idle.sort((left, right) => left.localeCompare(right, "ru"));
 
