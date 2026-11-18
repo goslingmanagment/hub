@@ -1181,8 +1181,8 @@ pnpm cli sync why --page lora-1 --resource probe.manual --subject ''
 A new page is connected through its own server browser: Hub never holds its session, the browser logs in from its
 own device and IP (plan §3.2 «Подключение новой страницы через браузер»).
 
-1. **The browser starts in the dashboard** (owner decision 2026-10-15): Settings → Pages → «Новые страницы через
-   серверный браузер» → «Новый браузер страницы». The owner names the new page (its label, the browser's name on the
+1. **The browser starts in the dashboard** (owner decision 2026-10-15): «Настройки → Модели и страницы → Подключить
+   страницу Fansly» (`/settings/pages/connect`). The owner names the new page (its label, the browser's name on the
    server) and pastes its proxy whole into one field — `host:port:login:password`, `login:password:host:port`,
    `login:password@host:port`, `socks5://…`, `socks5h://…`; an `http(s)://` one is read and said unusable (a page's
    browser goes out through SOCKS5 with a login and a password only), a four-part text that reads both ways asks
@@ -1216,7 +1216,8 @@ own device and IP (plan §3.2 «Подключение новой страниц
    resolve it — `sync browser-profile show --profile <uuid>` in the api container, then, if Hub has none,
    `remove-profile … --page <name> --profile <uuid>`. A profile Hub forgot (removed, or said absent) is never
    registered again: an add still under way is refused.
-3. **The dashboard**: Settings → Pages → «Новые страницы через серверный браузер» → «Подключить»: the proxy from
+3. **The dashboard**: «Настройки → Модели и страницы» → «Незавершённые подключения» → «Подключить»
+   (`/settings/pages/connect/<profile>`): the proxy from
    the draft (checked again here, or replaced in the same one field — the SOCKS5 the container was made for), the
    exit IP pinned (the check's IP is offered; the browser opens its exit only when it sees that IP itself, and says
    what it saw), the login through

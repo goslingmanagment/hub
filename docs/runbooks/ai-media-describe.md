@@ -200,7 +200,7 @@ open, resolves on the describer's next sweep.
   free locator is recorded for the file. A photo falls back to `thumb`
   (~300 px) when no larger free rendition exists.
 
-## Switches (console → Settings, all live)
+## Switches («Настройки → ИИ → Функции ИИ → Описание картинок», `/settings/ai/features/media-describe`; all live)
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -227,7 +227,7 @@ first generation or a replayed projection never starts a historical pass.
   `media_describe_breaker` incident resolves on the next sweep.
 - **Account stop:** Anthropic 401/403 → incident `ai_provider_failed` /
   `media_describe_account_stop`; nothing is sent until the owner resolves the
-  incident in the console (Notifications → Incidents → Resolve).
+  incident in the console («Система → Сбои», `/system/failures` → «Закрыть сбой»).
 - **Out of credit:** when every Anthropic account refuses for credit, the row
   goes back to `pending` with `error_code = provider_billing` for 10 minutes,
   and while it waits the sweep claims nothing (`skipped: account_unavailable`):

@@ -130,5 +130,5 @@ on — with the lane off nothing moves. Its own failures (network, egress, 5xx,
 429, an answer that is not a subscription, a key without `user_read`) move no
 latch and log codes only. A refused render settles `failed_definite`,
 `billed=false`, its reservation refunded, then pages. The last answer is
-`voice_provider_health_state` (dashboard: Расходы → AI); the readings' history
+`voice_provider_health_state` (console: «Деньги → Расходы → ИИ», `/money/costs/ai`); the readings' history
 is `ops_metric_samples` `vendor_elevenlabs_characters_{used,limit}`.

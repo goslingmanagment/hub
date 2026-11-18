@@ -7,7 +7,8 @@ for you.
 Rights model behind every step: `docs/identity-rights-matrix.md`. Onboarding and
 the day-to-day link operations: `docs/runbooks/chatter-onboarding.md`.
 
-The console card is "Настройки → Команда → карточка человека". Every account
+The console card is «Люди» → the person → «Входы и устройства»
+(`/people/<ref>/logins`). Every account
 action uses its immutable ID, not its login. An owner cookie session is
 required. See [account deletion](user-account-deletion.md) for lifecycle and
 compatibility details.
@@ -54,33 +55,22 @@ the account permanently. Both close all Hub sign-ins themselves. Use
 4. **Manual — platform passwords.** Change the passwords of any page the person
    worked on if they ever saw them, and rotate anything they had out of band.
 
-5. **Wait up to 60 seconds for open streams.** A stream that was already running
-   re-checks authorisation on a 60-second tick and closes itself; it is not cut
-   the instant you click. Nothing new can be started in the meantime — every
-   fresh request is already refused.
-
-6. **The local cache stays on the machine.** The desktop app's SQLite database
-   and the extension's stored data are not reachable from the hub. The app hides
-   them (the granted-pages snapshot is bound to the identity that fetched it),
-   but the file is erased only by running a purge on that machine (D23 of the
-   desktop repo, #145). If the machine is not coming back, treat the data as
-   still being on it.
+5. **The local cache stays on the machine.** The extension's stored data
+   (`storage.local` in the person's Firefox profile) is not reachable from the
+   hub. If the machine is not coming back, treat the data as still being on it.
 
 ## What the person sees
 
 Vocabulary is fixed by §2 of the plan: people know a login, a password and their
 devices. The words "token", "key" and "API" never appear on their screen.
 
-| After | In the extension / the desktop app | In the browser |
+| After | In the extension | In the browser |
 |---|---|---|
 | «Отозвать вход» (that device) | «Сессия на этом устройстве завершена, войдите снова» — the sign-in screen; the client wipes its own stored sign-in | unchanged |
 | «Отозвать все устройства» | the same, on every device | **still signed in** — the cabinet still opens |
 | «Завершить все входы» | the same, on every device | signed out; the next page load asks for the password, which still works |
 | «Отключить доступ» | the same, and signing in again fails with «Неверный логин или пароль» | the same |
 | «Удалить аккаунт» | the old sign-ins stop working; a reused login belongs to a new account | the old session cannot access the new account |
-
-An already open stream keeps delivering for up to 60 seconds after the
-revocation before it closes — expect that gap rather than treating it as a bug.
 
 ## Verifying it took
 
