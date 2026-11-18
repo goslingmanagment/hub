@@ -25,7 +25,6 @@ import { hasServiceEgressProxy } from "./services/egress/service-proxy.ts";
 import { ofapiCredentialPolicy } from "./services/ofapi-credential-policy.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
 import type { AiGatewayProvider } from "./services/ai-gateway.ts";
-import { createOpenrouterAiGatewayProvider } from "./services/ai-gateway-openrouter-provider.ts";
 import { createAnthropicAiGatewayProvider } from "./services/ai-gateway-anthropic-provider.ts";
 import {
   createAnthropicAccountPool,
@@ -67,9 +66,6 @@ export interface AppContext {
   // a real implementation. Tests may inject a fake provider to exercise SSE
   // plumbing without external network calls.
   aiGatewayProvider?: AiGatewayProvider | undefined;
-  // Second provider ("openrouter:*" models route here); absent
-  // when OPENROUTER_API_KEY is unset — implemented-but-unkeyed ships fine.
-  aiGatewayOpenrouterProvider?: AiGatewayProvider | undefined;
   // The Anthropic accounts of ANTHROPIC_API_KEYS (or the single
   // ANTHROPIC_API_KEY) that the gateway and the image describer spend in
   // order; absent without a key.
@@ -191,9 +187,6 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
     const aiGatewayProvider = config.chatMuseAiGatewayEnabled && anthropicAccountPool
       ? createAnthropicAiGatewayProvider({ accountPool: anthropicAccountPool })
       : undefined;
-    const aiGatewayOpenrouterProvider = config.chatMuseAiGatewayEnabled && config.openrouterApiKey
-      ? createOpenrouterAiGatewayProvider({ apiKey: config.openrouterApiKey })
-      : undefined;
     // Construct on KEY + ROUTE readiness — deliberately NOT gated on
     // voiceNotesEnabled. That flag remains the live admission-time spend gate.
     const voiceTtsProvider = config.elevenLabsApiKey && hasServiceEgressProxy(config)
@@ -209,7 +202,6 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
       db,
       ofapi,
       aiGatewayProvider,
-      aiGatewayOpenrouterProvider,
       anthropicAccountPool,
       voiceTtsProvider,
       fanslySendGuards,
