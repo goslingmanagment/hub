@@ -206,7 +206,11 @@ function linkLife(seed: LinkSeed, index: number, now: Date): LinkLife {
   const beforeFans = seed.before ?? 0;
   const carried = createdAt !== null && seed.firstReadDaysAgo === undefined
     ? ZERO
-    : { fans: beforeFans, clicks: Math.round(beforeFans * between(random, 1.4, 2.6)), money: mills(beforeFans * between(random, 4, 14)) };
+    : {
+      fans: beforeFans,
+      clicks: Math.round(beforeFans * between(random, 1.4, 2.6)),
+      money: mills(beforeFans * between(random, 4, 14)),
+    };
   return {
     seed,
     index,
@@ -441,7 +445,7 @@ export function trafficSourceLinks(now: Date): OfLink[] {
       name: seed.name,
       url: `https://onlyfans.com/${page.username}/${seed.kind === "trial" ? "trial" : "c"}${demoDigits(`traffic-sources-url:${index}`, 3)}`,
       linkCreatedAt: iso(new Date(created)),
-      linkEndsAt: expired !== null ? iso(new Date(expired)) : seed.kind === "trial" ? iso(new Date(created + (seed.trialDays ?? 30) * 12 * DAY_MS)) : null,
+      linkEndsAt: expired !== null ? iso(new Date(expired)) : seed.kind === "trial" ? iso(new Date(Math.max(created, todayStart - 30 * DAY_MS) + 240 * DAY_MS)) : null,
       isFinished: seed.kind === "trial" ? false : null,
       state: expired !== null ? "expired" : "active",
       trialDays: seed.trialDays ?? null,

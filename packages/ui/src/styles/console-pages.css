@@ -238,6 +238,9 @@
   .of-link-toggle { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; text-align: left; color: var(--color-text-primary); }
   .of-link-toggle svg { flex: 0 0 auto; color: var(--color-text-muted); transition: transform 0.15s; }
   .of-link-indent { padding-left: 24px; }
+  .of-link-chevron { display: inline-flex; padding: 2px; margin: -2px; border-radius: 4px; }
+  .of-link-name { color: var(--color-text-primary); text-decoration: none; }
+  .of-link-name:hover { text-decoration: underline; text-underline-offset: 3px; }
   .data-table tr.of-link-open td { padding-left: 48px; background: var(--color-hover-alt); }
   .of-link-details { max-width: 720px; }
   .of-link-cards > li { padding: 16px 24px; border-top: 1px solid var(--color-border-light); }

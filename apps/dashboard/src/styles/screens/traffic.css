@@ -205,3 +205,45 @@
     .ts-sheet { padding: 4px 16px 16px; }
   }
 }
+
+/* ── The page of one link ─────────────────────────────────────────────── */
+@layer components {
+  .tl-facts { color: var(--color-text-muted); }
+  .tl-sheet { display: grid; grid-template-columns: minmax(0, 1fr); padding-top: 20px; }
+  .tl-sheet > * { min-width: 0; }
+  .tl-url {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    font-size: 14px;
+    line-height: 20px;
+    overflow-wrap: anywhere;
+  }
+  .tl-copy { display: inline-flex; align-items: center; gap: 6px; }
+  .tl-figures { padding: 20px 0 24px; border-bottom: 1px solid var(--color-border); }
+  .tl-figure-row { display: flex; flex-wrap: wrap; gap: 8px 40px; }
+  .tl-figure { font-size: 17px; line-height: 28px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+  .tl-figure b { font-size: 26px; line-height: 32px; font-weight: 600; color: var(--color-text-primary); margin-right: 2px; }
+  .tl-figure-unknown { color: var(--color-text-muted); }
+  .tl-clicks { padding-top: 4px; font-size: 15px; line-height: 22px; color: var(--color-text-muted); }
+
+  .tl-section { padding: 24px 0 8px; border-bottom: 1px solid var(--color-border); }
+  .tl-section:last-child { border-bottom: 0; }
+  .tl-section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding-bottom: 12px; }
+  .tl-section-title { font-size: 17px; line-height: 24px; font-weight: 600; color: var(--color-text-primary); padding-bottom: 8px; }
+  .tl-section-head .tl-section-title { padding-bottom: 0; }
+
+  .tl-chart-scroll { min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
+  .tl-chart { min-width: calc(var(--ts-slots) * 15px); }
+  .tl-chart .ts-plot { border-bottom: 1px solid var(--color-border); }
+  .tl-weeks.ts-plot { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); border-bottom: 0; background-image: none; }
+  .tl-week { display: grid; padding: 8px 0 4px 8px; font-variant-numeric: tabular-nums; }
+  .tl-week-sum { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--color-text-primary); white-space: nowrap; }
+  .tl-week-dates { font-size: 13px; line-height: 18px; color: var(--color-text-muted); }
+  .tl-week-running .tl-week-dates { color: var(--color-text-secondary); }
+
+  .tl-section .table-wrap { max-width: 760px; }
+  .tl-days td { font-variant-numeric: tabular-nums; }
+  .tl-days .tl-missing { color: var(--color-text-muted); }
+}

@@ -12,7 +12,7 @@ import {
   weekRange,
   type DaySlot,
   type LinkTarget,
-} from "./trafficDays";
+} from "./trafficDays.js";
 
 // Трафик → Источники: what the screen draws, from two reads of the channels'
 // totals (`ofLinksChannelsGet`): the last two Moscow weeks with every

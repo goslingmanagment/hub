@@ -8,9 +8,9 @@ import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { formatMills } from "@/lib/format";
-import { DayLine } from "./DayLine";
-import { coverageLine, SLOT_COUNT, sourcesRange, sourcesView, type RestLine, type SourceView } from "./sourcesView";
-import { fansWord, linkPagePath, type DaySlot } from "./trafficDays";
+import { DayLine } from "./DayLine.js";
+import { coverageLine, SLOT_COUNT, sourcesRange, sourcesView, type RestLine, type SourceView } from "./sourcesView.js";
+import { fansWord, linkPagePath, type DaySlot } from "./trafficDays.js";
 
 /**
  * Трафик → Источники: for each source of the OnlyFans pages, which of its

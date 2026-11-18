@@ -35,3 +35,15 @@ export function useOfLinkChannels(range: { from?: string; to?: string; days?: bo
     meta: { suppressGlobalError: true },
   });
 }
+
+/** One link's business days over Moscow days `from`…`to` (the page of one link). */
+export function useOfLinkHistory(query: { pageId: number; linkKind: "tracking" | "trial"; linkRef: string; from: string; to: string }, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: ["admin", "of-links", "history", query],
+    queryFn: () => kernel.ofLinksHistoryGet({ query }),
+    enabled: options.enabled ?? true,
+    refetchInterval: OF_LINKS_REFRESH_MS,
+    placeholderData: keepPreviousData,
+    meta: { suppressGlobalError: true },
+  });
+}

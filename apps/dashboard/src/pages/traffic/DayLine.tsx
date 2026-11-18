@@ -1,11 +1,11 @@
 import { Tooltip } from "@/components/shared/Tooltip";
-import type { DaySlot } from "./trafficDays";
+import type { DaySlot } from "./trafficDays.js";
 
 /** The heights of a chart: a large row, a small row of a source, the page of one link. */
 const BOXES = {
   large: { height: 132, top: 26, bottom: 10 },
   small: { height: 52, top: 22, bottom: 8 },
-  page: { height: 220, top: 16, bottom: 10 },
+  page: { height: 220, top: 28, bottom: 10 },
 } as const;
 const LABEL_GAP = 9;
 
@@ -16,8 +16,8 @@ export interface DayLineProps {
   /** The top of the scale. */
   max: number;
   size: keyof typeof BOXES;
-  /** Which values are printed above their points: every one, all but zeros, none (the hint has them). */
-  labels: "all" | "nonzero" | "none";
+  /** Which values are printed above their points: every one, all but zeros, each week's highest (the hint has the rest). */
+  labels: "all" | "nonzero" | "weekPeak";
   /** A soft area under the line, up to the last finished day. */
   area: boolean;
   /** The hover hint of each slot; null: none. */
@@ -60,6 +60,15 @@ export function DayLine({ values, slots, max, size, labels, area, hints, title, 
     }
   }
   if (run.length > 0) runs.push(run);
+  // Each week's highest known day above zero, the first of equals.
+  const peaks = new Set<number>();
+  for (let week = 0; week * 7 < count; week += 1) {
+    let best: { index: number; value: number } | null = null;
+    for (const point of points.slice(week * 7, week * 7 + 7)) {
+      if (point && point.value > 0 && (best === null || point.value > best.value)) best = point;
+    }
+    if (best) peaks.add(best.index);
+  }
   const base = box.height - box.bottom;
   const xy = (point: { index: number; y: number }) => `${point.index + 0.5},${point.y}`;
 
@@ -84,7 +93,7 @@ export function DayLine({ values, slots, max, size, labels, area, hints, title, 
           const after = points[point.index + 1];
           const valley = size === "large" && before && after && point.value < before.value && point.value < after.value;
           const below = valley && point.y + LABEL_GAP + 13 <= box.height;
-          const printed = labels === "all" || (labels === "nonzero" && point.value !== 0);
+          const printed = labels === "all" || (labels === "nonzero" && point.value !== 0) || (labels === "weekPeak" && peaks.has(point.index));
           return (
             <g key={point.index}>
               <circle className={point.today ? "ts-dot ts-dot-today" : "ts-dot"} cx={xPct(point.index)} cy={point.y} r={point.today ? 3.5 : count > 20 ? 2.5 : 3} />
@@ -93,7 +102,8 @@ export function DayLine({ values, slots, max, size, labels, area, hints, title, 
                   className={point.value === 0 ? "ts-value ts-value-zero" : "ts-value"}
                   x={xPct(point.index)}
                   y={below ? point.y + LABEL_GAP + 10 : point.y - LABEL_GAP}
-                  textAnchor="middle"
+                  // A dense chart's first and last labels stay inside the plot.
+                  textAnchor={count > 20 && point.index === 0 ? "start" : count > 20 && point.index === count - 1 ? "end" : "middle"}
                 >
                   {format(point.value)}
                 </text>

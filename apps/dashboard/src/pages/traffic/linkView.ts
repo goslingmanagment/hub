@@ -1,0 +1,149 @@
+import type { OfLink, OfLinkHistoryResponse } from "@agency_hub_core/contracts";
+import { addDays, mondayOf, moscowDayOf, type MoscowDay } from "@agency_hub_core/ui/moscow";
+import { formatDayRange, formatMills } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
+import { linkStateView } from "@/pages/marketing/ofLinksView";
+import { arrivalOf, clicksWord, dayHint, dayMonth, daySlots, fansWord, sumKnown, type DaySlot } from "./trafficDays.js";
+
+// The page of one link: what its header, its figures, its chart and its table
+// of days show, from the link's latest read (`ofLinksGet`) and its days
+// (`ofLinksHistoryGet`). Pure: the days come from the history's own range.
+
+export const LINK_WEEKS = 8;
+
+export type LinkMetric = "fans" | "clicks" | "money";
+
+/** Eight Moscow weeks ending with the current one: Monday seven weeks back to today. */
+export function linkRange(today: MoscowDay): { from: MoscowDay; to: MoscowDay } {
+  return { from: addDays(mondayOf(today), -7 * (LINK_WEEKS - 1)), to: today };
+}
+
+export interface LinkWeek {
+  /** «3–9 нояб.». */
+  label: string;
+  /** «12 фанов», «40 кликов», «$120.00»; «—» when no day of it is known. */
+  sum: string;
+  running: boolean;
+}
+
+export interface LinkDayRow {
+  date: MoscowDay;
+  /** «вт 17 ноября». */
+  label: string;
+  clicks: string;
+  fans: string;
+  money: string;
+  /** No figures: «нет чтения», or «день идёт» for today. */
+  missing: string | null;
+}
+
+export interface LinkChartView {
+  slots: DaySlot[];
+  values: Array<number | null>;
+  hints: Array<string | null>;
+  max: number;
+  weeks: LinkWeek[];
+  /** Every day of the range, newest first. */
+  table: LinkDayRow[];
+}
+
+/** One day of the history as it is drawn: a no_baseline day of an older link is unknown. */
+function dayFigures(day: OfLinkHistoryResponse["days"][number], madeInside: boolean) {
+  const fans = arrivalOf(day.fans, day.flags, madeInside);
+  if (fans === null) return { fans: null, clicks: null, money: null };
+  return {
+    fans,
+    clicks: arrivalOf(day.clicks, day.flags, madeInside),
+    money: day.flags.includes("money_unknown") ? null : arrivalOf(day.vendorNetMills, day.flags, madeInside),
+  };
+}
+
+export function linkChartView(history: OfLinkHistoryResponse, metric: LinkMetric): LinkChartView {
+  const count = LINK_WEEKS * 7;
+  const slots = daySlots(history.range.from, count, history.range.to);
+  const madeInside = history.linkCreatedAt !== null && history.linkCreatedAt >= history.range.fromAt;
+  const byDate = new Map(history.days.map((day) => [day.businessDate, dayFigures(day, madeInside)]));
+  const figures = slots.map((slot) => byDate.get(slot.date) ?? { fans: null, clicks: null, money: null });
+  const values = figures.map((day, index) => (slots[index]!.when === "future" ? null : day[metric]));
+  const sumText = (sum: number | null) => (sum === null ? "—" : metric === "fans" ? fansWord(sum) : metric === "clicks" ? clicksWord(sum) : formatMills(sum));
+  const weeks = Array.from({ length: LINK_WEEKS }, (_, week) => {
+    const part = slots.slice(week * 7, week * 7 + 7);
+    return {
+      label: formatDayRange(part[0]!.date, part[6]!.date),
+      sum: sumText(sumKnown(values.slice(week * 7, week * 7 + 7))),
+      running: part.some((slot) => slot.when === "today"),
+    };
+  });
+  const table = slots
+    .map((slot, index) => ({ slot, day: figures[index]! }))
+    .filter(({ slot }) => slot.when !== "future")
+    .reverse()
+    .map(({ slot, day }) => ({
+      date: slot.date,
+      label: slot.long,
+      clicks: day.clicks === null ? "—" : day.clicks.toLocaleString("ru-RU"),
+      fans: day.fans === null ? "—" : day.fans.toLocaleString("ru-RU"),
+      money: day.money === null ? "—" : formatMills(day.money),
+      missing: day.fans !== null ? null : slot.when === "today" ? "день идёт" : "нет чтения",
+    }));
+  return {
+    slots,
+    values,
+    hints: slots.map((slot, index) => dayHint(slot, figures[index]!)),
+    max: Math.max(metric === "money" ? 1000 : 2, ...values.map((value) => value ?? 0)),
+    weeks,
+    table,
+  };
+}
+
+export interface LinkFigure {
+  /** null: unknown — the word alone says so. */
+  value: string | null;
+  word: string;
+}
+
+export interface LinkHead {
+  name: string;
+  /** «пробная на 360 дней», «трекинг-ссылка», the page, the source, the date it was made, its state. */
+  facts: string[];
+  /** All-time of the link: fans, who pays, the money. */
+  figures: LinkFigure[];
+  /** «28 кликов». */
+  clicks: string;
+}
+
+function trialWords(days: number): string {
+  return `пробная на ${days} ${ruPlural(days, "день", "дня", "дней")}`;
+}
+
+export function linkHead(link: OfLink, pageLabel: string | null): LinkHead {
+  const binding = link.binding;
+  const source = binding === null
+    ? "без источника"
+    : `источник ${binding.channelTitle}${binding.contractor ? `, ${binding.contractor.contractorTitle} с ${dayMonth(moscowDayOf(binding.contractor.validFrom), moscowDayOf(link.observedAt))}` : ""}`;
+  const state = linkStateView(link);
+  const fans = link.fans;
+  const spenders = link.spenders;
+  return {
+    name: link.name ?? `Ссылка ${link.linkRef}`,
+    facts: [
+      link.linkKind === "trial" ? (link.trialDays === null ? "пробная ссылка" : trialWords(link.trialDays)) : "трекинг-ссылка",
+      ...(pageLabel ? [pageLabel] : []),
+      source,
+      ...(link.linkCreatedAt ? [`создана ${dayMonth(moscowDayOf(link.linkCreatedAt), moscowDayOf(link.observedAt))}`] : []),
+      `${state.label.toLowerCase()}${state.detail ? ` ${state.detail}` : ""}`,
+    ],
+    figures: [
+      fans === null
+        ? { value: null, word: "фанов не знаем" }
+        : { value: fans.toLocaleString("ru-RU"), word: ruPlural(fans, "фан", "фана", "фанов") },
+      spenders === null
+        ? { value: null, word: "кто платит, не знаем" }
+        : { value: spenders.toLocaleString("ru-RU"), word: ruPlural(spenders, "платит", "платят", "платят") },
+      link.vendorMoney.netMills === null
+        ? { value: null, word: "доход неизвестен" }
+        : { value: formatMills(link.vendorMoney.netMills), word: "принесли" },
+    ],
+    clicks: clicksWord(link.clicks),
+  };
+}

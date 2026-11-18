@@ -283,6 +283,14 @@ export const SCREENS: readonly Screen[] = [
     pageFilter: "none",
     keywords: "трафик источники ссылки фаны график по дням onlyfans каналы подрядчики",
   },
+  {
+    // One OnlyFans link: its facts, its money, its new fans day by day over eight weeks (ofLinksGet, ofLinksHistoryGet).
+    id: "traffic-link", path: "/traffic/link/:pageId/:kind/:ref", label: "Ссылка", title: "Трафик: ссылка", section: "traffic", product: "hub", ownerOnly: true,
+    why: "Одна ссылка: что принесла и в какие дни.",
+    pageFilter: "none",
+    deep: true, notSearched: true,
+    crumbs: () => [{ label: "Трафик", to: "/traffic/sources" }, { label: "Источники", to: "/traffic/sources" }],
+  },
   // The traffic routine stays on the owner's Mac; its daily summary comes here as an agent's report (package O).
   {
     id: "traffic", path: "/traffic", label: "Сводка", title: "Трафик: сводка", section: "traffic", product: "hub", ownerOnly: true,
@@ -860,7 +868,7 @@ export const SECTIONS: readonly Section[] = [
   },
   {
     id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", product: "hub", ownerOnly: true, nav: "tabs",
-    tabs: [tab("sources", "Источники", "traffic-sources"), tab("summary", "Сводка", "traffic"), tab("promo", "Продвижение", "traffic-promo")],
+    tabs: [tab("sources", "Источники", "traffic-sources", "traffic-link"), tab("summary", "Сводка", "traffic"), tab("promo", "Продвижение", "traffic-promo")],
   },
   {
     id: "applications", label: "Анкеты", title: "Анкеты моделей", icon: "ClipboardList", product: "hub", ownerOnly: true, nav: "none",
