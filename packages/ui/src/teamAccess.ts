@@ -7,15 +7,8 @@ import { joinOriginFor } from "./sites.js";
  * Доступ (the console's people screens it replaced said the same).
  */
 
-export type AccessRole = "owner" | "team_lead" | "chatter";
 export type TeamStatus = "invited" | "active" | "disabled";
 export type LinkKind = "invite" | "password_reset";
-
-export const ROLE_LABEL: Readonly<Record<AccessRole, string>> = {
-  owner: "Владелец",
-  team_lead: "Тимлид",
-  chatter: "Чаттер",
-};
 
 /** Deactivation wins over everything; an account without its password yet waits for the person to open the invite. */
 export function teamStatus(user: { disabledAt: string | null; registrationState: string }): TeamStatus {

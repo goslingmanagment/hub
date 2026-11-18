@@ -21,7 +21,7 @@ import {
   type DemoReply,
   type DemoRequest,
 } from "../core.ts";
-import { DEMO_OFAPI_OFF_DAY, DEMO_PAGES, DEMO_USERS, demoFanProfile, demoUserByRole, type DemoPage } from "../world.ts";
+import { DEMO_PAGES, DEMO_USERS, demoFanProfile, demoUserByRole, type DemoPage } from "../world.ts";
 import {
   DAY_MS,
   FAN_LINES,
@@ -37,7 +37,6 @@ import {
   metricsOf,
   pageRefShort,
   pagePopulation,
-  pageTransactionsOf,
   paginate,
   previousWindow,
   queryBool,
@@ -138,29 +137,6 @@ function followerItem(page: DemoPage, item: PageFan, now: Date) {
       observedAt: item.presence.lastSeenHoursAgo === null ? null : iso(hoursAgo(now, 0.1)),
     },
   };
-}
-
-/** Days of a daily rollup: the console's period, oldest first. */
-function rollupDays(request: DemoRequest): string[] {
-  const period = queryString(request, "period") ?? "30d";
-  if (period === "custom") {
-    const from = queryString(request, "from") ?? isoDay(request.now);
-    const to = queryString(request, "to") ?? isoDay(request.now);
-    const out: string[] = [];
-    for (let at = Date.parse(`${from}T00:00:00Z`); at <= Date.parse(`${to}T00:00:00Z`); at += DAY_MS) out.push(isoDay(new Date(at)));
-    return out;
-  }
-  const days = period === "today" ? 1 : period === "7d" ? 7 : period === "30d" ? 30 : 120;
-  return Array.from({ length: days }, (_, index) => isoDay(daysAgo(request.now, days - 1 - index)));
-}
-
-function countByDay(now: Date, hours: Iterable<number>): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const value of hours) {
-    const day = dayOf(now, value);
-    out.set(day, (out.get(day) ?? 0) + 1);
-  }
-  return out;
 }
 
 // --- Deleted fans ---
@@ -579,35 +555,6 @@ export const pageFanHandlers: DemoHandlers = {
     return { page: assignedPage(page, request.now), ...slice, items: slice.items.map((item) => subscriberItem(page, item, request.now)) };
   },
 
-  pageSubscribersDaily: (request) => {
-    const page = resolvePage(request);
-    if (isReply(page)) return page;
-    const days = rollupDays(request);
-    const subs = pagePopulation(page).filter((item) => item.subscription !== null);
-    const news = countByDay(request.now, subs.map((item) => item.subscription!.startedHoursAgo));
-    // Walk back from today's count: each day's new subscriptions minus the ones that ended.
-    let active = page.subscribers;
-    const today = isoDay(request.now);
-    const allDays: string[] = [];
-    for (let at = Date.parse(`${today}T00:00:00Z`); allDays.length < 400 && (days[0] === undefined || isoDay(new Date(at)) >= days[0]); at -= DAY_MS) {
-      allDays.push(isoDay(new Date(at)));
-    }
-    const activeByDay = new Map<string, number>();
-    for (const day of allDays) {
-      activeByDay.set(day, active);
-      const gained = news.get(day) ?? 0;
-      const lost = Math.round(gained * between(rng(`churn:${page.label}:${day}`), 0.55, 1.05));
-      active -= gained - lost;
-    }
-    return {
-      page: assignedPage(page, request.now),
-      // The full walk of an OnlyFans list went through its API: no day's row after it.
-      items: days
-        .filter((day) => page.platform !== "onlyfans" || day <= DEMO_OFAPI_OFF_DAY)
-        .map((day) => ({ businessDate: day, newSubscribers: news.get(day) ?? 0, activeSubscribers: activeByDay.get(day) ?? page.subscribers })),
-    };
-  },
-
   pageFollowers: (request) => {
     const page = resolvePage(request);
     if (isReply(page)) return page;
@@ -626,25 +573,6 @@ export const pageFanHandlers: DemoHandlers = {
       .sort((left, right) => left.followedHoursAgo! - right.followedHoursAgo!);
     const slice = paginate(request, rows);
     return { page: assignedPage(page, request.now), ...slice, items: slice.items.map((item) => followerItem(page, item, request.now)) };
-  },
-
-  pageFollowersDaily: (request) => {
-    const page = resolvePage(request);
-    if (isReply(page)) return page;
-    const days = rollupDays(request);
-    if (page.platform !== "fansly") return { page: assignedPage(page, request.now), items: days.map((day) => ({ businessDate: day, newFollowers: 0, knownTotalFollowers: null })) };
-    const follows = pagePopulation(page).filter((item) => item.followedHoursAgo !== null).map((item) => item.followedHoursAgo!);
-    const news = countByDay(request.now, follows);
-    return {
-      page: assignedPage(page, request.now),
-      items: days.map((day) => {
-        let later = 0;
-        for (const [other, count] of news) if (other > day) later += count;
-        // A little churn: the known total lags behind the follows a bit.
-        const unfollowed = Math.round(later * 0.12);
-        return { businessDate: day, newFollowers: news.get(day) ?? 0, knownTotalFollowers: (page.followers ?? 0) - later + unfollowed };
-      }),
-    };
   },
 
   pageFanCard: (request) => {
@@ -683,36 +611,6 @@ export const pageFanHandlers: DemoHandlers = {
     const page = resolvePage(request);
     if (isReply(page)) return page;
     return { page: assignedPage(page, request.now), ...paginate(request, deletedFans(page, request.now)) };
-  },
-
-  pageTransactions: (request) => {
-    const page = resolvePage(request);
-    if (isReply(page)) return page;
-    const type = queryString(request, "type");
-    const state = queryString(request, "state");
-    const rows = pageTransactionsOf(page)
-      .filter((row) => type === undefined || row.tx.type === type)
-      .filter((row) => state === undefined || (state === "pending") === row.tx.pending);
-    const slice = paginate(request, rows);
-    return {
-      page: assignedPage(page, request.now),
-      ...slice,
-      items: slice.items.map(({ item, tx }) => ({
-        transactionId: tx.id,
-        rawType: tx.rawType,
-        canonicalType: tx.type,
-        transactionState: tx.pending ? "pending" as const : "posted" as const,
-        amountMills: tx.grossMills,
-        destinationAmountMills: tx.grossMills,
-        netAmountMills: tx.netMills,
-        walletId: null,
-        correlationId: null,
-        correlationAccountId: null,
-        occurredAt: iso(hoursAgo(request.now, tx.hoursAgo)),
-        sourceUpdatedAt: iso(hoursAgo(request.now, Math.max(0, tx.hoursAgo - 0.5))),
-        fan: { platformUserId: item.fan.platformUserId, pageAlias: null, username: item.fan.username, displayName: shownName(item) },
-      })),
-    };
   },
 
   pageSpenderAutoLists: (request) => {

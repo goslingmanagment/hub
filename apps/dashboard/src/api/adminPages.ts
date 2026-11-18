@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   CreateModelBody,
   CreatePageBody,
@@ -7,6 +7,7 @@ import type {
   VerifyCredentialsBody,
 } from "@agency_hub_core/contracts";
 
+import { USERS_KEY } from "./adminUsers.js";
 import { kernel } from "./sdk.js";
 
 function invalidateAdminCatalog(qc: QueryClient) {
@@ -18,7 +19,7 @@ function invalidateAdminCatalog(qc: QueryClient) {
   // offering a page that no longer exists for up to half a minute.
   qc.invalidateQueries({ queryKey: ["pages"] });
   qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-  qc.invalidateQueries({ queryKey: ["admin", "users"] });
+  qc.invalidateQueries({ queryKey: USERS_KEY });
   qc.invalidateQueries({ queryKey: ["overview"] });
 }
 
@@ -76,11 +77,14 @@ export function useAdminDeleteModel(modelSlug: string) {
   });
 }
 
+/** `adminPages` (the owner's): the page catalog, one cache entry for every screen that reads it (Люди too). */
+export const adminPagesQuery = queryOptions({
+  queryKey: ["admin", "pages"] as const,
+  queryFn: () => kernel.adminPages(),
+});
+
 export function useAdminPages() {
-  return useQuery({
-    queryKey: ["admin", "pages"],
-    queryFn: () => kernel.adminPages(),
-  });
+  return useQuery(adminPagesQuery);
 }
 
 export function useAdminCreatePage() {

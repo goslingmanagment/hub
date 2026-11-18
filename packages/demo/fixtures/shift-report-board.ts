@@ -868,11 +868,6 @@ export const shiftReportBoardHandlers: DemoHandlers = {
   }) ?? noBoard(),
 };
 
-/** For the demo's own checks: a scenario's board as the person sees it. */
-export function demoBoardOf(scenario: Scenario): ShiftReportBoard {
-  return boardOf(SCENARIOS[scenario](0), true, GENGAR_PAUSE_MS);
-}
-
 /**
  * «Мои смены» of the demo's ordinary shifts: the read-only preview board (`preview`) drawn from the shift's existing
  * demo report — a column per page, its sales as rows by the rule and the person's words, nothing to tick or hand in.
