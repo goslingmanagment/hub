@@ -76,6 +76,8 @@ export * from "./routes-ofapi-vendor.ts";
 export * from "./routes-ofapi-collection.ts";
 export * from "./of-links.ts";
 export * from "./routes-of-links.ts";
+export * from "./of-link-fans.ts";
+export * from "./routes-of-link-fans.ts";
 // The owner's login of a page's server browser (Project Browser PR 15).
 export * from "./routes-page-browser.ts";
 // The operator screen's one read (`GET /api/v1/ops/live`), spread by routes.ts.

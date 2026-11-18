@@ -37,6 +37,7 @@ const UNCHECKED_WORD: Readonly<Record<string, string>> = {
   "ledger.check": "проверки ledger",
   "ledger.sheet_column": "проверки ledger",
   "ledger.off_platform": "проверки ledger",
+  "traffic.link_unbound": "ссылки без источника",
 };
 
 export function uncheckedWords(kinds: readonly string[]): string[] {

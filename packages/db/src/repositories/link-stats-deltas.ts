@@ -73,6 +73,8 @@ export interface LinkSeriesPoint {
   clicks: number;
   claims: number | null;
   subscribers: number;
+  /** Fans who paid (the vendor's revenue block); null = unknown. */
+  spenders: number | null;
   /** null = unknown (missing or still computing at the vendor). */
   netMills: bigint | null;
 }
@@ -94,6 +96,8 @@ export interface LinkDelta {
   subscribers: number;
   /** claims on a trial link, subscribers on a tracking link. */
   fans: number | null;
+  /** New paying fans: the change of the spenders count; null when either snapshot does not know it. */
+  spenders: number | null;
   netMills: bigint | null;
   flags: OfLinkDeltaFlag[];
 }
@@ -201,6 +205,10 @@ export function linkDeltaBetween(series: LinkSeries, startAt: Date, endAt: Date)
   const claims = series.linkKind === "trial" && endPoint.claims !== null
     ? endPoint.claims - (startPoint?.claims ?? 0)
     : null;
+  // Like money, from the very two snapshots: either not knowing it makes it unknown.
+  const spenders = endPoint.spenders === null || (startPoint !== null && startPoint.spenders === null)
+    ? null
+    : endPoint.spenders - (startPoint?.spenders ?? 0);
   return {
     startPoint,
     endPoint,
@@ -208,6 +216,7 @@ export function linkDeltaBetween(series: LinkSeries, startAt: Date, endAt: Date)
     claims,
     subscribers,
     fans: series.linkKind === "trial" ? claims : subscribers,
+    spenders,
     netMills,
     flags: sortDeltaFlags(flags),
   };
@@ -229,6 +238,14 @@ export function linkDayCut(points: readonly LinkSeriesPoint[], boundary: Date): 
     return new Date(point.observedAt.getTime() + 1);
   }
   return boundary;
+}
+
+/** The latest instant a range's days may reach: the closing read of its last day (the first read within four hours
+ * of the range's end), never later than `now`. A range that ends in the past is cut at midnight for its totals, but
+ * its last day runs to that day's closing read like every other day. Pure. */
+export function linkRangeDaysEnd(rangeToAt: Date, now: Date): Date {
+  const end = rangeToAt.getTime() + LINK_DAY_CLOSING_READ_WITHIN_MS;
+  return new Date(Math.min(end, now.getTime()));
 }
 
 /** One business day of a link: the stretch its figures cover, and the delta. */

@@ -3,7 +3,7 @@ import { addDays, mondayOf, moscowDayOf, type MoscowDay } from "@agency_hub_core
 import { formatDayRange, formatMills, formatWeekdayDay } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { linkStateView } from "@/pages/marketing/ofLinksView";
-import { arrivalOf, clicksWord, dayHint, dayMonth, daySlots, fansWord, sumKnown, type DaySlot } from "./trafficDays.js";
+import { arrivalOf, clicksWord, dayHint, dayMonth, daySlots, fansWord, unreadWords, weekFigure, weekText, type DaySlot } from "./trafficDays.js";
 
 // The page of one link: what its header, its figures, its chart and its table
 // of days show, from the link's latest read (`ofLinksGet`) and its days
@@ -21,8 +21,10 @@ export function linkRange(today: MoscowDay): { from: MoscowDay; to: MoscowDay } 
 export interface LinkWeek {
   /** «3–9 нояб.». */
   label: string;
-  /** «12 фанов», «40 кликов», «$120.00»; «—» when no day of it is known. */
+  /** «12 фанов», «40 кликов», «$120.00»; «нет чтения» when no day of it is known. */
   sum: string;
+  /** «2 дня без чтения» under the week's dates; null when every finished day was read. */
+  note: string | null;
   running: boolean;
 }
 
@@ -32,6 +34,8 @@ export interface LinkDayRow {
   label: string;
   clicks: string;
   fans: string;
+  /** New paying fans of the day; «—» when the snapshots do not know. */
+  spenders: string;
   money: string;
   /** No figures: «нет чтения», or «день идёт» for today. */
   missing: string | null;
@@ -50,10 +54,11 @@ export interface LinkChartView {
 /** One day of the history as it is drawn: a no_baseline day of an older link is unknown. */
 function dayFigures(day: OfLinkHistoryResponse["days"][number], madeInside: boolean) {
   const fans = arrivalOf(day.fans, day.flags, madeInside);
-  if (fans === null) return { fans: null, clicks: null, money: null };
+  if (fans === null) return { fans: null, clicks: null, spenders: null, money: null };
   return {
     fans,
     clicks: arrivalOf(day.clicks, day.flags, madeInside),
+    spenders: arrivalOf(day.spenders, day.flags, madeInside),
     money: day.flags.includes("money_unknown") ? null : arrivalOf(day.vendorNetMills, day.flags, madeInside),
   };
 }
@@ -63,19 +68,22 @@ export function linkChartView(history: OfLinkHistoryResponse, metric: LinkMetric
   const slots = daySlots(history.range.from, count, history.range.to);
   const madeInside = history.linkCreatedAt !== null && history.linkCreatedAt >= history.range.fromAt;
   const byDate = new Map(history.days.map((day) => [day.businessDate, dayFigures(day, madeInside)]));
-  const figures = slots.map((slot) => byDate.get(slot.date) ?? { fans: null, clicks: null, money: null });
+  const figures = slots.map((slot) => byDate.get(slot.date) ?? { fans: null, clicks: null, spenders: null, money: null });
   const values = figures.map((day, index) => (slots[index]!.when === "future" ? null : day[metric]));
-  const sumText = (sum: number | null) => (sum === null ? "—" : metric === "fans" ? fansWord(sum) : metric === "clicks" ? clicksWord(sum) : formatMills(sum));
+  const sumWord = (sum: number) => (metric === "fans" ? fansWord(sum) : metric === "clicks" ? clicksWord(sum) : formatMills(sum));
+  // The link exists from the day it was made: before it there is nothing to read (and nothing unread).
+  const madeOn = history.linkCreatedAt === null ? null : moscowDayOf(history.linkCreatedAt);
+  const unread = slots.map((slot, index) => slot.when === "past" && figures[index]!.fans === null && (madeOn === null || slot.date >= madeOn));
   const weeks = Array.from({ length: LINK_WEEKS }, (_, week) => {
     const part = slots.slice(week * 7, week * 7 + 7);
+    const figure = weekFigure(part, values.slice(week * 7, week * 7 + 7), unread.slice(week * 7, week * 7 + 7));
     return {
       label: formatDayRange(part[0]!.date, part[6]!.date),
-      sum: sumText(sumKnown(values.slice(week * 7, week * 7 + 7))),
-      running: part.some((slot) => slot.when === "today"),
+      sum: weekText(figure.sum === null ? figure : { ...figure, unread: 0, running: false }, sumWord),
+      note: figure.sum === null ? null : unreadWords(figure),
+      running: figure.running,
     };
   });
-  // The table starts on the day the link was made: before it there is nothing to read.
-  const madeOn = history.linkCreatedAt === null ? null : moscowDayOf(history.linkCreatedAt);
   const table = slots
     .map((slot, index) => ({ slot, day: figures[index]! }))
     .filter(({ slot }) => slot.when !== "future" && (madeOn === null || slot.date >= madeOn))
@@ -85,6 +93,7 @@ export function linkChartView(history: OfLinkHistoryResponse, metric: LinkMetric
       label: formatWeekdayDay(slot.date),
       clicks: day.clicks === null ? "—" : day.clicks.toLocaleString("ru-RU"),
       fans: day.fans === null ? "—" : day.fans.toLocaleString("ru-RU"),
+      spenders: day.spenders === null ? "—" : day.spenders.toLocaleString("ru-RU"),
       money: day.money === null ? "—" : formatMills(day.money),
       missing: day.fans !== null ? null : slot.when === "today" ? "день идёт" : "нет чтения",
     }));
@@ -104,10 +113,23 @@ export interface LinkFigure {
   word: string;
 }
 
+/** The link's source in its line of facts: a link to the source's page, or none yet. */
+export type LinkSourceFact =
+  | { kind: "bound"; channelKey: string; title: string; /** «Maple Media с 6 ноября». */ contractor: string | null }
+  | { kind: "none" };
+
+/** The page of one source (Трафик → Источники → a source). */
+export function sourcePath(channelKey: string): string {
+  return `/traffic/source/${encodeURIComponent(channelKey)}`;
+}
+
 export interface LinkHead {
   name: string;
-  /** «пробная на 360 дней», «трекинг-ссылка», the page, the source, the date it was made, its state. */
-  facts: string[];
+  /** «пробная на 360 дней» or «трекинг-ссылка», and the page: before the source. */
+  before: string[];
+  source: LinkSourceFact;
+  /** The date it was made, its state: after the source. */
+  after: string[];
   /** All-time of the link: fans, who pays, the money. */
   figures: LinkFigure[];
   /** «28 кликов». */
@@ -120,18 +142,27 @@ function trialWords(days: number): string {
 
 export function linkHead(link: OfLink, pageLabel: string | null): LinkHead {
   const binding = link.binding;
-  const source = binding === null
-    ? "без источника"
-    : `источник ${binding.channelTitle}${binding.contractor ? `, ${binding.contractor.contractorTitle} с ${dayMonth(moscowDayOf(binding.contractor.validFrom), moscowDayOf(link.observedAt))}` : ""}`;
+  const source: LinkSourceFact = binding === null
+    ? { kind: "none" }
+    : {
+      kind: "bound",
+      channelKey: binding.channelKey,
+      title: binding.channelTitle,
+      contractor: binding.contractor
+        ? `${binding.contractor.contractorTitle} с ${dayMonth(moscowDayOf(binding.contractor.validFrom), moscowDayOf(link.observedAt))}`
+        : null,
+    };
   const state = linkStateView(link);
   const fans = link.fans;
   const spenders = link.spenders;
   return {
     name: link.name ?? `Ссылка ${link.linkRef}`,
-    facts: [
+    before: [
       link.linkKind === "trial" ? (link.trialDays === null ? "пробная ссылка" : trialWords(link.trialDays)) : "трекинг-ссылка",
       ...(pageLabel ? [pageLabel] : []),
-      source,
+    ],
+    source,
+    after: [
       ...(link.linkCreatedAt ? [`создана ${dayMonth(moscowDayOf(link.linkCreatedAt), moscowDayOf(link.observedAt))}`] : []),
       `${state.label.toLowerCase()}${state.detail ? ` ${state.detail}` : ""}`,
     ],

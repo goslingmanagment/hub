@@ -17,9 +17,9 @@ type Value = number | null | "no_baseline";
 function days(fans: readonly Value[], clicks?: readonly (number | null)[]): Day[] {
   return DATES.map((businessDate, index) => {
     const value = fans[index] ?? null;
-    if (value === "no_baseline") return { businessDate, clicks: 40, fans: 25, vendorNetMills: 1000, flags: ["no_baseline"] };
+    if (value === "no_baseline") return { businessDate, clicks: 40, fans: 25, spenders: 3, vendorNetMills: 1000, flags: ["no_baseline"] };
     const clicked = clicks ? clicks[index] ?? null : value === null ? null : value * 5;
-    return { businessDate, clicks: clicked, fans: value, vendorNetMills: value === null ? null : value * 1000, flags: [] };
+    return { businessDate, clicks: clicked, fans: value, spenders: value === null ? null : 0, vendorNetMills: value === null ? null : value * 1000, flags: [] };
   });
 }
 
@@ -42,12 +42,19 @@ function totals(values: { clicks?: number; fans?: number; vendorNetMills?: numbe
   return { linkCount: 1, clicks: values.clicks ?? 0, claims: 0, subscribers: 0, fans: values.fans ?? 0, vendorNetMills: values.vendorNetMills ?? 0, hubMoney };
 }
 
-function term(key: string, validFrom: string, validTo: string | null, vendorNetMills: number, flags: Term["flags"] = []): Term {
-  return { contractorKey: key, contractorTitle: key, validFrom, validTo, validFromBasis: "confirmed", totals: totals({ vendorNetMills }), flags };
+function term(key: string, validFrom: string, validTo: string | null, vendorNetMills: number, flags: Term["flags"] = [], paid: Term["paid"] = null): Term {
+  return { contractorKey: key, contractorTitle: key, validFrom, validTo, validFromBasis: "confirmed", note: null, totals: totals({ vendorNetMills }), flags, paid };
+}
+
+function known(paidMills: number, extra: Partial<NonNullable<Term["paid"]>> = {}): Term["paid"] {
+  return { status: "known", reason: null, paidMills, paymentCount: 1, lastPaymentDate: "2026-11-10", shared: false, otherCurrency: false, ...extra };
 }
 
 function channel(key: string | null, segments: Segment[], extra: Partial<Channel> = {}): Channel {
-  return { channelKey: key, channelTitle: key, contractors: [], totals: totals(), flags: [], segments, ...extra };
+  return {
+    channelKey: key, channelTitle: key, note: null, contractors: [], totals: totals(), flags: [], segments,
+    counterPage: null, counterDays: null, payments: null, ...extra,
+  };
 }
 
 function response(channels: Channel[], range = { from: "2026-11-09", to: TODAY }): OfLinkChannelsResponse {
@@ -112,9 +119,17 @@ describe("Трафик → Источники: rows", () => {
     expect(rows[0]!.total).toBe(8);
   });
 
-  it("sums each week's known fans and marks the running week", () => {
+  it("sums each week's known fans, counts its finished days that were not read, and marks the running week", () => {
     const source = sourcesView(one([segment("a", [1, 2, null, 0, 0, 3, 0, 4, 1, null])]), undefined).sources[0]!;
-    expect(source.weeks).toEqual([{ fans: 6, running: false }, { fans: 5, running: true }]);
+    // Wednesday 11th unread; today (18th) unknown is not «without a read» yet.
+    expect(source.weeks).toEqual([{ sum: 6, unread: 1, running: false }, { sum: 5, unread: 0, running: true }]);
+  });
+
+  it("never counts the days before a link existed as unread", () => {
+    const young = segment("young", [null, null, null, null, null, null, 2, 1, 3, 0]);
+    young.linkCreatedAt = "2026-11-15T08:00:00.000Z";
+    const source = sourcesView(one([young]), undefined).sources[0]!;
+    expect(source.weeks.map((week) => week.unread)).toEqual([0, 0]);
   });
 });
 
@@ -134,22 +149,36 @@ describe("Трафик → Источники: the attention note", () => {
   });
 });
 
-describe("Трафик → Источники: whose money «принесли» is", () => {
-  it("is the open term's on this source, two weeks and all time, never the earlier contractor's", () => {
+describe("Трафик → Источники: «заплачено · принесли»", () => {
+  it("is the open term's contractor's on this source over all time, never the earlier contractor's", () => {
     const recent = one([segment("a", [1, 0, 0, 0, 0, 0, 0, 0, 0, 0])], {
       contractors: [term("new", "2026-11-05T21:00:00.000Z", null, 150_000)],
       totals: totals({ vendorNetMills: 900_000 }),
     });
     const allTime = one([segment("a", [1, 0, 0, 0, 0, 0, 0, 0, 0, 0])], {
       contractors: [
-        term("old", "2026-01-01T21:00:00.000Z", "2026-11-05T21:00:00.000Z", 16_000_000),
-        term("new", "2026-11-05T21:00:00.000Z", null, 200_000, ["money_unknown"]),
+        term("old", "2026-01-01T21:00:00.000Z", "2026-11-05T21:00:00.000Z", 16_000_000, [], known(5_000_000)),
+        term("new", "2026-11-05T21:00:00.000Z", null, 200_000, ["money_unknown"], known(900_000, { shared: true })),
       ],
       totals: totals({ vendorNetMills: 16_200_000 }),
     });
     const source = sourcesView(recent, allTime).sources[0]!;
-    expect(source.money).toEqual({ recentMills: 150_000, allMills: 200_000, partial: true });
+    expect(source.money).toEqual({
+      paid: { state: "known", mills: 900_000, shared: true, otherCurrency: false },
+      broughtMills: 200_000,
+      partial: true,
+    });
     expect(source.contractor).toContain("new");
+  });
+
+  it("says nothing of what was paid without journal names, and that the journal is silent when it does not answer", () => {
+    const at = (paid: Term["paid"]) => sourcesView(
+      one([segment("a", [1, 0, 0, 0, 0, 0, 0, 0, 0, 0])], { contractors: [term("new", "2026-11-05T21:00:00.000Z", null, 0)] }),
+      one([], { contractors: [term("new", "2026-11-05T21:00:00.000Z", null, 0, [], paid)] }),
+    ).sources[0]!.money!.paid;
+    expect(at({ status: "unknown", reason: "no_ledger_names", paidMills: null, paymentCount: null, lastPaymentDate: null, shared: false, otherCurrency: false })).toBeNull();
+    expect(at({ status: "unknown", reason: "ledger_unavailable", paidMills: null, paymentCount: null, lastPaymentDate: null, shared: false, otherCurrency: false })?.state).toBe("unavailable");
+    expect(at(known(0))).toMatchObject({ state: "known", mills: 0 });
   });
 
   it("is absent when no term is open", () => {
@@ -191,5 +220,37 @@ describe("Трафик → Источники: what is not a source on the chart
     expect(view.unread.map((line) => line.key)).toEqual(["unread"]);
     expect(view.unbound?.lines.map((line) => line.name)).toEqual(["moved"]);
     expect(view.unbound?.rest).toBe(2);
+  });
+
+  it("adds what was paid to a silent source's line when it is above zero", () => {
+    const recent = response([channel("silent", [segment("s", zeros, "silent")], { contractors: [open] })]);
+    const allTime = response([channel("silent", [], { contractors: [{ ...open, paid: known(450_000) }], totals: totals({ clicks: 40 }) })]);
+    expect(sourcesView(recent, allTime).silent[0]!.figures).toContain("заплачено $450.00");
+  });
+});
+
+const zeros = () => [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+describe("Трафик → Источники: a source counted by its page's subscribers", () => {
+  const counterDays = DATES.map((businessDate, index) => ({
+    businessDate,
+    newSubscribers: index === 3 || index === 6 || index === 9 ? null : 10 + index,
+    partial: index === 6 ? 4 : index === 9 ? 2 : null,
+  }));
+
+  it("is one large row of the counter: an unclosed day a gap, today what it has so far, the total of known days", () => {
+    const view = sourcesView(response([channel("sfs", [segment("l", zeros(), "sfs")], {
+      counterPage: { pageId: 7, label: "free-page" },
+      counterDays,
+      contractors: [term("desk", "2026-10-01T21:00:00.000Z", null, 0)],
+    })]), response([channel("sfs", [], { contractors: [term("desk", "2026-10-01T21:00:00.000Z", null, 0, [], known(120_000))] })]));
+    expect(view.linkless).toEqual([]);
+    const source = view.sources[0]!;
+    expect(source.counter).toBe(true);
+    expect(source.rows).toHaveLength(1);
+    expect(source.rows[0]!.fans.slice(0, 10)).toEqual([10, 11, 12, null, 14, 15, null, 17, 18, 2]);
+    expect(source.rows[0]!.total).toBe(10 + 11 + 12 + 14 + 15 + 17 + 18 + 2);
+    expect(source.weeks.map((week) => week.unread)).toEqual([2, 0]);
+    expect(source.money).toMatchObject({ broughtMills: null, paid: { state: "known", mills: 120_000 } });
   });
 });

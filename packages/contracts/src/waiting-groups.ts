@@ -8,7 +8,8 @@
 import { MATTER_INFO_KINDS } from "./matter-checks.ts";
 
 export const WAITING_GROUP_IDS = [
-  "questions", "asks", "reports", "customs", "newcomers", "held", "publications", "content", "people", "ledger", "system", "other", "info",
+  "questions", "asks", "reports", "customs", "newcomers", "held", "publications", "content", "people", "traffic", "ledger", "system", "other",
+  "info",
 ] as const;
 export type WaitingGroupId = (typeof WAITING_GROUP_IDS)[number];
 
@@ -48,6 +49,8 @@ export const WAITING_GROUPS: readonly WaitingGroup[] = [
   // ContentOps' findings (`contentops.*`) and the content routines' (`content.*`): each line opens where it is decided.
   { id: "content", title: "Контент", product: "contentops" },
   { id: "people", title: "Люди и доступ", product: "hub" },
+  // The owner's own work on the pages' traffic: a new OnlyFans link without a source (`traffic.*`).
+  { id: "traffic", title: "Трафик", product: "hub" },
   { id: "ledger", title: "Проверки ledger", product: "hub" },
   { id: "system", title: "Сбор, сбои и рутины", product: "hub" },
   { id: "other", title: "Другие дела", product: "hub" },
@@ -76,6 +79,7 @@ export function waitingGroupOf(kind: string): WaitingGroupId {
   if (kind.startsWith("contentops.") || kind.startsWith("content.")) return "content";
   // The people checks' (package K) and a newcomer's way (package J: `person.no_pages`, `person.onboarding_stuck`).
   if (kind.startsWith("people.") || kind.startsWith("person.")) return "people";
+  if (kind.startsWith("traffic.")) return "traffic";
   if (LEDGER_KINDS.has(kind)) return "ledger";
   // Collection and failures, and the system state's (routines, copies, the Mac's reporter).
   if (SYSTEM_KINDS.has(kind) || kind.startsWith("routine.") || kind.startsWith("copy.") || kind.startsWith("reporter.")) return "system";

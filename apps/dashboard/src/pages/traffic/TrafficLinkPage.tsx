@@ -12,6 +12,8 @@ import { Segmented } from "@/components/ui/Segmented";
 import { formatMills } from "@/lib/format";
 import { LinkDetails } from "@/pages/marketing/OfLinksTable";
 import { DayLine } from "./DayLine.js";
+import { LinkFacts } from "./LinkFacts.js";
+import { LinkFans } from "./LinkFans.js";
 import { linkChartView, linkHead, linkRange, LINK_WEEKS, type LinkMetric } from "./linkView.js";
 
 const METRICS: ReadonlyArray<{ value: LinkMetric; label: string; title: string }> = [
@@ -23,8 +25,9 @@ const METRICS: ReadonlyArray<{ value: LinkMetric; label: string; title: string }
 /**
  * The page of one OnlyFans link (Трафик → Источники → a link): what it is, what
  * it brought over its life, its days over eight weeks, its money as OnlyFans
- * and Hub count it, and the table of days. Local reads only (`ofLinksGet`,
- * `ofLinksHistoryGet`): no request reaches OnlyFans.
+ * and Hub count it, its fans, and the table of days; a link without a source
+ * gets its first one here. Local reads only (`ofLinksGet`, `ofLinksHistoryGet`,
+ * `ofLinkFansGet`, `ofLinkSourceGet`): no request reaches OnlyFans.
  */
 export function TrafficLinkPage() {
   const params = useParams();
@@ -52,7 +55,7 @@ export function TrafficLinkPage() {
     <div className="ts-screen">
       <PageHeader
         title={head.name}
-        description={<span className="tl-facts">{head.facts.join(", ")}</span>}
+        description={<LinkFacts head={head} link={{ pageId, linkKind, linkRef }} />}
         fresh={{ at: link.observedAt }}
       />
       <QueryNotice error={links.isError || history.isError} stale retry={() => Promise.all([links.refetch(), history.refetch()])} at={links.dataUpdatedAt} />
@@ -102,6 +105,8 @@ export function TrafficLinkPage() {
           <LinkDetails link={link} now={now} withHub />
         </section>
 
+        <LinkFans pageId={pageId} linkKind={linkKind} linkRef={linkRef} pageLabel={pageLabel} />
+
         {history.data && <DaysTable history={history.data} />}
       </div>
     </div>
@@ -137,8 +142,9 @@ function Chart({ history, metric }: { history: NonNullable<ReturnType<typeof use
         <div className="ts-plot tl-weeks">
           {view.weeks.map((week) => (
             <div key={week.label} className={week.running ? "tl-week tl-week-running" : "tl-week"}>
-              <span className="tl-week-sum">{week.sum}{week.running ? ", идёт" : ""}</span>
-              <span className="tl-week-dates">{week.label}</span>
+              <span className="tl-week-sum">{week.sum}</span>
+              <span className="tl-week-dates">{week.label}{week.running ? ", идёт" : ""}</span>
+              {week.note && <span className="tl-week-note">{week.note}</span>}
             </div>
           ))}
         </div>
@@ -159,6 +165,7 @@ function DaysTable({ history }: { history: NonNullable<ReturnType<typeof useOfLi
               <th scope="col">День</th>
               <th scope="col" className="num">Клики</th>
               <th scope="col" className="num">Фаны</th>
+              <th scope="col" className="num">Новые платящие</th>
               <th scope="col" className="num">Доход</th>
             </tr>
           </thead>
@@ -167,10 +174,11 @@ function DaysTable({ history }: { history: NonNullable<ReturnType<typeof useOfLi
               <tr key={row.date}>
                 <td>{row.label}</td>
                 {row.missing
-                  ? <td className="num tl-missing" colSpan={3}>{row.missing}</td>
+                  ? <td className="num tl-missing" colSpan={4}>{row.missing}</td>
                   : <>
                     <td className="num">{row.clicks}</td>
                     <td className="num">{row.fans}</td>
+                    <td className="num">{row.spenders}</td>
                     <td className="num">{row.money}</td>
                   </>}
               </tr>

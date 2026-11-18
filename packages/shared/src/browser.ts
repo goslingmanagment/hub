@@ -11,6 +11,7 @@ export * from "./page-browser-env.ts";
 export * from "./spender-buckets.ts";
 export * from "./spender-retention.ts";
 export * from "./time.ts";
+export * from "./traffic-source-proposal.ts";
 export * from "./types.ts";
 export * from "./platform-sync.ts";
 export * from "./ofapi-vendor-usage.ts";

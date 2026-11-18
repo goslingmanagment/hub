@@ -13,6 +13,8 @@ import {
   OF_LINKS_REVENUE_BASIS,
   type OfLink,
   type OfLinkChannelsResponse,
+  type OfLinkCounterDay,
+  type OfLinkPayment,
   type OfLinkHistoryResponse,
   type OfLinkHubMoney,
   type OfLinkHubMoneyTotal,
@@ -23,8 +25,10 @@ import {
 import {
   hubLinkKey,
   lastIndexBefore,
+  counterDayOf,
   linkDayDelta,
   linkDeltaBetween,
+  linkRangeDaysEnd,
   linkSegments,
   listLastLinkRecalculations,
   listLatestLinkSnapshots,
@@ -35,6 +39,7 @@ import {
   listLinkSeriesWindowRows,
   listLinkSnapshotHistory,
   listOfLinkPages,
+  listPageNewSubscriberDays,
   pointChangedBinding,
   pointRecalculatedMoney,
   readHubLedgerGap,
@@ -75,6 +80,7 @@ import {
   type LinkStatSeriesExpectation,
 } from "./ofapi-link-stats-monitor.ts";
 import { ofapiLinkStatsWindowAt } from "./ofapi-link-stats-windows.ts";
+import { askableLedgerNames, contractorPayments, type ContractorPayments, type LedgerPaymentsReader } from "./traffic-payments.ts";
 
 /** The series monitor's own expectation: the anchor from the window stamps
  * (an API process has no memory of when it first saw the series enabled). */
@@ -769,14 +775,17 @@ export async function getOfLinkHistory(db: Database, input: {
     clicks: row.clicks,
     claims: row.claims,
     subscribers: row.subscribers,
+    spenders: row.spenders,
     netMills: row.netMills,
   }));
+  // The last day of a range that ended in the past runs to its closing read, like every other day.
+  const daysEnd = linkRangeDaysEnd(range.toAt, now);
   const series = {
     pageId: input.pageId,
     linkKind: input.linkKind,
     linkRef: input.linkRef,
     linkCreatedAt: latest?.linkCreatedAt ?? null,
-    points: points.filter((point) => point.observedAt.getTime() < range.toAt.getTime()),
+    points: points.filter((point) => point.observedAt.getTime() < daysEnd.getTime()),
   };
 
   const snapshots = history.flatMap((row, index) => {
@@ -821,7 +830,7 @@ export async function getOfLinkHistory(db: Database, input: {
       previousStartAt: businessDateToUtcStart(previousBusinessDate(day), MOSCOW_TIME_ZONE),
       startAt: dayStart,
       nextStartAt: nextStart,
-    }, { from: null, to: range.toAt })?.delta ?? null;
+    }, { from: null, to: daysEnd })?.delta ?? null;
     // Every window of the schedule the pair was expected in that day and that
     // has closed, attempted or not, counts as missed without a usable
     // result. A day before the pair was expected at all has no answer.
@@ -839,6 +848,7 @@ export async function getOfLinkHistory(db: Database, input: {
       claims: delta?.claims ?? null,
       subscribers: delta?.subscribers ?? null,
       fans: delta?.fans ?? null,
+      spenders: delta?.spenders ?? null,
       vendorNetMills: delta === null ? null : millsOrNull(delta.netMills),
       missedWindows,
       flags: delta?.flags ?? [],
@@ -912,10 +922,17 @@ const compareKeys = (left: string | null, right: string | null) =>
 /** A segment's business days: one row per day of the range whose stretch
  * between its cuts overlaps [startAt, endAt), the delta over that stretch
  * clipped by the segment's own bounds — the same `linkDayDelta` per day as a
- * link's history. Pure. */
-export function segmentDays(segment: LinkSegment, range: { from: string; to: string }): OfLinkSegmentDay[] {
+ * link's history. A segment that ends with the range runs its last day to
+ * `daysEnd` (`linkRangeDaysEnd`: the day's closing read, never past now). Pure. */
+export function segmentDays(
+  segment: LinkSegment,
+  range: { from: string; to: string; toAt: Date; daysEnd: Date },
+): OfLinkSegmentDay[] {
   const days: OfLinkSegmentDay[] = [];
-  const clip = { from: segment.startAt, to: segment.endAt };
+  const clip = {
+    from: segment.startAt,
+    to: segment.endAt.getTime() === range.toAt.getTime() ? range.daysEnd : segment.endAt,
+  };
   for (let day = range.from; day <= range.to; day = nextBusinessDate(day)) {
     const startAt = businessDateToUtcStart(day, MOSCOW_TIME_ZONE);
     if (startAt.getTime() >= segment.endAt.getTime()) {
@@ -934,9 +951,29 @@ export function segmentDays(segment: LinkSegment, range: { from: string; to: str
       businessDate: day,
       clicks: delta?.clicks ?? null,
       fans: delta?.fans ?? null,
+      spenders: delta?.spenders ?? null,
       vendorNetMills: delta === null ? null : millsOrNull(delta.netMills),
       flags: delta?.flags ?? [],
     });
+  }
+  return days;
+}
+
+/** A counter page's business days over the range (a source without links), up to today. Pure. */
+export function counterDays(
+  rows: ReadonlyArray<{ businessDate: string; newSubscribers: number; updatedAt: Date }>,
+  range: { from: string; to: string },
+  now: Date,
+): OfLinkCounterDay[] {
+  const today = toBusinessDate(now, MOSCOW_TIME_ZONE);
+  const byDate = new Map(rows.map((row) => [row.businessDate, row]));
+  const days: OfLinkCounterDay[] = [];
+  for (let day = range.from; day <= range.to && day <= today; day = nextBusinessDate(day)) {
+    days.push(counterDayOf(byDate.get(day), {
+      businessDate: day,
+      endAt: businessDateToUtcStart(nextBusinessDate(day), MOSCOW_TIME_ZONE),
+      today: day === today,
+    }));
   }
   return days;
 }
@@ -946,9 +983,20 @@ export async function getOfLinkChannels(db: Database, input: {
   to?: string | undefined;
   pageId?: number | undefined;
   days?: boolean | undefined;
+  /** Each contractor term with what the ledger says was paid to the contractor. */
+  paid?: boolean | undefined;
+  /** The channel's journal rows; only with `channelKey`. */
+  payments?: boolean | undefined;
+  /** Only this channel. */
+  channelKey?: string | undefined;
+  /** How the ledger is asked (`paid`, `payments`); without one the ledger counts as not answering. */
+  readPayments?: LedgerPaymentsReader | undefined;
   now: Date;
 }): Promise<OfLinkChannelsResponse> {
   const { now } = input;
+  if (input.payments === true && input.channelKey === undefined) {
+    throw new OfLinksRequestError("bad_request", "`payments` is answered for one channel: give `channelKey`");
+  }
   const seriesFloorAt = await readLinkSeriesFloor(db);
   const today = toBusinessDate(now, MOSCOW_TIME_ZONE);
   const range = resolveRange(
@@ -963,13 +1011,20 @@ export async function getOfLinkChannels(db: Database, input: {
     pages = [page];
   }
   const pageLabels = new Map(pages.map((page) => [page.pageId, page.pageLabel]));
+  // The last day of a range that ended in the past runs to its closing read: the days need the reads up to it.
+  const daysEnd = linkRangeDaysEnd(range.toAt, now);
   const [allSeries, bindingsSnapshot, attribution] = await Promise.all([
-    listLinkSeries(db, { pageIds: pages.map((page) => page.pageId), before: range.toAt }),
+    listLinkSeries(db, { pageIds: pages.map((page) => page.pageId), before: input.days === true ? daysEnd : range.toAt }),
     readTrafficBindingsSnapshot(db),
     // Recipients per page over all its links, before any channel cut.
     readHubLinkAttribution(db, { pageIds: pages.map((page) => page.pageId), from: range.fromAt, to: range.toAt }),
   ]);
   const index = indexBindings(bindingsSnapshot);
+  if (input.channelKey !== undefined && !index.channelTitles.has(input.channelKey)) {
+    throw new OfLinksRequestError("not_found", "No traffic channel with this key");
+  }
+  const onlyChannel = <T extends { channelKey: string | null }>(items: T[]) =>
+    (input.channelKey === undefined ? items : items.filter((item) => item.channelKey === input.channelKey));
 
   // A channel's segments are cut by bindings alone, a contractor's by the
   // bindings and the contractor terms: a term added or moved inside a binding
@@ -982,8 +1037,8 @@ export async function getOfLinkChannels(db: Database, input: {
       range.fromAt,
       range.toAt,
     ));
-  const channelSegments = segmentsOf(null);
-  const contractorSegments = segmentsOf(index.termsByChannel);
+  const channelSegments = onlyChannel(segmentsOf(null));
+  const contractorSegments = onlyChannel(segmentsOf(index.termsByChannel));
   // Hub's own money follows the bindings alone: every link the series or the
   // fan walks know, every stretch of the range, whether OFAPI read it or not.
   const hubLinks = new Map<string, { pageId: number; linkKind: string; linkRef: string }>();
@@ -998,8 +1053,8 @@ export async function getOfLinkChannels(db: Database, input: {
   }
   const linkCreatedAt = new Map(allSeries.map((series) =>
     [linkKey(series.pageId, series.linkKind, series.linkRef), series.linkCreatedAt]));
-  const channelPieces = hubPieces([...hubLinks.values()], index.bindingsByLink, null, range.fromAt, range.toAt);
-  const contractorPieces = hubPieces([...hubLinks.values()], index.bindingsByLink, index.termsByChannel, range.fromAt, range.toAt);
+  const channelPieces = onlyChannel(hubPieces([...hubLinks.values()], index.bindingsByLink, null, range.fromAt, range.toAt));
+  const contractorPieces = onlyChannel(hubPieces([...hubLinks.values()], index.bindingsByLink, index.termsByChannel, range.fromAt, range.toAt));
   const names = new Map(allSeries.map((series) => [linkKey(series.pageId, series.linkKind, series.linkRef), series.name]));
 
   const segmentOut = (segment: LinkSegment) => ({
@@ -1021,7 +1076,7 @@ export async function getOfLinkChannels(db: Database, input: {
     fans: segment.delta.fans,
     vendorNetMills: millsOrNull(segment.delta.netMills),
     flags: segment.delta.flags,
-    days: input.days === true ? segmentDays(segment, range) : null,
+    days: input.days === true ? segmentDays(segment, { from: range.from, to: range.to, toAt: range.toAt, daysEnd }) : null,
   });
 
   const groupBy = <T>(items: readonly T[], keyOf: (item: T) => string | null) => {
@@ -1048,18 +1103,76 @@ export async function getOfLinkChannels(db: Database, input: {
 
   const channelGroups = groupBy(channelSegments, (segment) => segment.channelKey);
   const channelHub = groupBy(channelPieces, (piece) => piece.channelKey);
-  const channels = groupKeys(channelGroups, channelHub)
+  // A source without links is measured by its counter page: listed whether its links moved or not, as is the
+  // channel asked for by key.
+  const channelInfo = new Map(bindingsSnapshot.channels.map((channel) => [channel.key, channel]));
+  const listedKeys = [...new Set([
+    ...groupKeys(channelGroups, channelHub),
+    ...bindingsSnapshot.channels
+      .filter((channel) => channel.counterPage !== null && (input.pageId === undefined || channel.counterPage.pageId === input.pageId))
+      .map((channel) => channel.key),
+    ...(input.channelKey === undefined ? [] : [input.channelKey]),
+  ])].filter((key) => input.channelKey === undefined || key === input.channelKey).sort(compareKeys);
+  const termOverlaps = (term: ChannelTermInterval) =>
+    term.validFrom.getTime() < range.toAt.getTime() && (term.validTo === null || term.validTo.getTime() > range.fromAt.getTime());
+
+  // What was paid: one request of the ledger for the listed channels' contractors.
+  let paidOf: Map<string, ContractorPayments> | null = null;
+  let ledgerAnswered = false;
+  if (input.paid === true || input.payments === true) {
+    const asked = [...new Set(listedKeys.flatMap((key) =>
+      key === null ? [] : (index.termsByChannel.get(key) ?? []).filter(termOverlaps).map((term) => term.contractorKey)))];
+    const sources = new Map<string, Set<string>>();
+    for (const term of bindingsSnapshot.terms) sources.set(term.contractorKey, (sources.get(term.contractorKey) ?? new Set()).add(term.channelKey));
+    const askable = askableLedgerNames(bindingsSnapshot.contractors);
+    const names = asked.flatMap((key) => askable.get(key) ?? []);
+    const answer = names.length === 0
+      ? { state: "answered" as const, payments: [] }
+      : input.readPayments === undefined ? { state: "unavailable" as const } : await input.readPayments(names);
+    ledgerAnswered = answer.state === "answered";
+    paidOf = contractorPayments({
+      contractors: bindingsSnapshot.contractors,
+      asked,
+      sourcesOf: new Map([...sources].map(([key, channels]) => [key, channels.size])),
+      answer,
+    });
+  }
+  const termNotes = new Map(bindingsSnapshot.terms.map((term) =>
+    [`${term.channelKey}:${term.contractorKey}:${term.validFrom.getTime()}`, term.note]));
+
+  // A counter page's days.
+  const counterPageIds = input.days === true
+    ? [...new Set(listedKeys.flatMap((key) => {
+      const page = key === null ? null : channelInfo.get(key)?.counterPage ?? null;
+      return page === null ? [] : [page.pageId];
+    }))]
+    : [];
+  const counterRows = await listPageNewSubscriberDays(db, { pageIds: counterPageIds, from: range.from, to: range.to });
+
+  const channels = listedKeys
     .map((channelKey) => {
       const segments = channelGroups.get(channelKey) ?? [];
+      const info = channelKey === null ? null : channelInfo.get(channelKey) ?? null;
+      const counterPage = info?.counterPage ?? null;
+      const terms = channelKey === null ? [] : (index.termsByChannel.get(channelKey) ?? []).filter(termOverlaps);
+      let payments: OfLinkPayment[] | null = null;
+      if (input.payments === true && paidOf !== null && ledgerAnswered) {
+        payments = [...new Set(terms.map((term) => term.contractorKey))]
+          .flatMap((key) => paidOf!.get(key)?.payments ?? [])
+          .sort((left, right) => right.date.localeCompare(left.date) || right.num.localeCompare(left.num, "en", { numeric: true }));
+      }
       return {
         channelKey,
         channelTitle: channelKey === null ? null : index.channelTitles.get(channelKey) ?? channelKey,
+        note: info?.note ?? null,
+        counterPage,
+        counterDays: input.days === true && counterPage !== null
+          ? counterDays(counterRows.filter((row) => row.pageId === counterPage.pageId), range, now)
+          : null,
+        payments,
         contractors: channelKey === null
           ? []
-          : (index.termsByChannel.get(channelKey) ?? [])
-            .filter((term) =>
-              term.validFrom.getTime() < range.toAt.getTime()
-              && (term.validTo === null || term.validTo.getTime() > range.fromAt.getTime()))
+          : terms
             .map((term) => {
               // The term's own figures on this channel: the contractor-cut
               // segments and Hub's pieces of this channel inside the term.
@@ -1072,7 +1185,9 @@ export async function getOfLinkChannels(db: Database, input: {
               const termPieces = contractorPieces.filter(inTerm);
               return {
                 ...contractorTermOut(term, index.contractorTitles),
+                note: termNotes.get(`${channelKey}:${term.contractorKey}:${term.validFrom.getTime()}`) ?? null,
                 ...totalsOut(termSegments, hubMoneyTotalOf(attribution, termPieces), hubPieceFlags(termPieces, termSegments, linkCreatedAt)),
+                paid: input.paid === true ? paidOf?.get(term.contractorKey)?.paid ?? null : null,
               };
             }),
         ...totalsOut(

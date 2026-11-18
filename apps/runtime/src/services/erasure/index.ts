@@ -2199,6 +2199,10 @@ export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[]
     table: "person_schedule_slots",
     reason: "A person's shift slot on one page, agency staffing and not captured creator or fan data; the pages catalog row it names stays.",
   },
+  {
+    table: "traffic_channels",
+    reason: "A traffic source measured by a page's subscriber counter (0428 counter_page_id): agency configuration, not captured creator or fan data; the pages catalog row it names stays.",
+  },
 ];
 
 async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget[]> {

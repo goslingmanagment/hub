@@ -7,6 +7,8 @@ import {
   applyTrafficBindingsChange,
   listTrafficBindings,
   rehangTrafficLink,
+  setTrafficChannelCounterPage,
+  setTrafficContractorLedgerNames,
   type Database,
   type TrafficBindingsApplyResult,
   type TrafficBindingsChangeSet,
@@ -291,6 +293,28 @@ export async function runTrafficBindingsSet(
   return describeTrafficBindingsResult(result);
 }
 
+/**
+ * The console's first binding of a link (ofLinkSourcePut): `set`'s own writer
+ * — the link's lock, the overlap check, an audit row — for a link with no
+ * binding at any time (else TrafficLinkAlreadyBoundError), from `validFrom`,
+ * basis confirmed: the owner chose the source himself.
+ */
+export async function bindNewTrafficLink(
+  db: Database,
+  input: { page: string; kind: TrafficLinkKind; link: string; channel: string; validFrom: Date; actor: string; actorUserId: number },
+) {
+  const result = await rehangTrafficLink(db, {
+    pageLabel: input.page,
+    linkKind: input.kind,
+    linkId: linkId(input.link, "link"),
+    channelKey: text(input.channel, "channel", TRAFFIC_CHANNEL_KEY_PATTERN),
+    validFrom: input.validFrom,
+    validFromBasis: "confirmed",
+    firstOnly: true,
+  }, { write: true, actor: input.actor, actorUserId: input.actorUserId, auditSource: "dashboard" });
+  return describeTrafficBindingsResult(result);
+}
+
 export async function runTrafficBindingsList(
   db: Database,
   filter: { page?: string; channel?: string },
@@ -299,4 +323,26 @@ export async function runTrafficBindingsList(
     ...(filter.page === undefined ? {} : { pageLabel: filter.page }),
     ...(filter.channel === undefined ? {} : { channelKey: filter.channel }),
   });
+}
+
+/** `traffic:contractors:ledger-names`: the contractor's names as the ledger's journal writes them (`names` empty: none). */
+export async function runTrafficContractorLedgerNames(
+  db: Database,
+  input: { contractor: string; names: readonly string[]; write: boolean; actor?: string },
+) {
+  return setTrafficContractorLedgerNames(db, {
+    contractorKey: text(input.contractor, "<contractor>", TRAFFIC_CONTRACTOR_KEY_PATTERN),
+    names: input.names,
+  }, { write: input.write, actor: input.actor ?? trafficCliActor() });
+}
+
+/** `traffic:channels:counter-page`: the page whose subscriber counter measures the source (`page` null: its links). */
+export async function runTrafficChannelCounterPage(
+  db: Database,
+  input: { channel: string; page: string | null; write: boolean; actor?: string },
+) {
+  return setTrafficChannelCounterPage(db, {
+    channelKey: text(input.channel, "<channel>", TRAFFIC_CHANNEL_KEY_PATTERN),
+    pageLabel: input.page === null ? null : text(input.page, "--page"),
+  }, { write: input.write, actor: input.actor ?? trafficCliActor() });
 }

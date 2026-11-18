@@ -365,6 +365,9 @@ export const ofLinkDaySchema = z.object({
   claims: z.number().int().nullable(),
   subscribers: z.number().int().nullable(),
   fans: z.number().int().nullable(),
+  /** New paying fans: the change of the link's spenders count between the same two snapshots; null under the same
+   * rules as the other figures, and when either snapshot does not know the count. */
+  spenders: z.number().int().nullable(),
   /** Negative = a vendor recalculation (flag vendor_recalculated), not a loss. */
   vendorNetMills: mills.nullable(),
   /** Windows of the schedule the pair (page, kind) was expected in that day
@@ -424,6 +427,8 @@ export const ofLinkSegmentDaySchema = z.object({
   businessDate,
   clicks: z.number().int().nullable(),
   fans: z.number().int().nullable(),
+  /** New paying fans (the change of the spenders count); null as `fans`, and when a snapshot does not know it. */
+  spenders: z.number().int().nullable(),
   vendorNetMills: mills.nullable(),
   flags: z.array(ofLinkDeltaFlagSchema),
 });
@@ -462,25 +467,91 @@ export const ofLinkSegmentSchema = z.object({
   days: z.array(ofLinkSegmentDaySchema).nullable(),
 });
 
+/** What the ledger's journal says was paid to a contractor, over all time, read by the contractor's names in the
+ * journal (Hub stores no payment). Never a zero in place of an unknown:
+ *   known    `paidMills` is the sum (may be 0): expenses add, refunds (income) subtract; pending rows and rows in a
+ *            currency other than USD, USDT, USDC are not summed;
+ *   unknown  `reason` no_ledger_names — the contractor has no name in the journal Hub could ask by (none written, or
+ *            only names another contractor has too: such a name belongs to neither); ledger_unavailable — the
+ *            ledger did not answer, refused, does not open the read yet, or answered a truncated list.
+ * `shared`: the contractor has terms on several sources (over all time); the payments are the CONTRACTOR's, the
+ * same figure on each of them — Hub does not guess which payment was for which source.
+ * `otherCurrency`: some payment is in another currency, listed and not summed. */
+export const ofLinkContractorPaidSchema = z.object({
+  status: z.enum(["known", "unknown"]),
+  reason: z.enum(["no_ledger_names", "ledger_unavailable"]).nullable(),
+  paidMills: mills.nullable(),
+  /** Paid rows (pending ones not counted). */
+  paymentCount: z.number().int().nonnegative().nullable(),
+  /** The newest paid row's date. */
+  lastPaymentDate: businessDate.nullable(),
+  shared: z.boolean(),
+  otherCurrency: z.boolean(),
+});
+export type OfLinkContractorPaid = z.infer<typeof ofLinkContractorPaidSchema>;
+
 /** A contractor term of a channel, with what the term brought on THIS channel
  * over the range: the contractor-cut segments of the channel inside the term
  * (the earlier contractors' and the unbound stretches' figures are not here). */
 export const ofLinkChannelContractorSchema = ofLinkContractorTermSchema.extend({
+  /** The term's note. */
+  note: z.string().nullable(),
   totals: ofLinkTotalsSchema,
   /** Union of those segments' flags. */
   flags: z.array(ofLinkDeltaFlagSchema),
+  /** Asked with `paid`: what was paid to the contractor (see above). Null: not asked. */
+  paid: ofLinkContractorPaidSchema.nullable(),
 });
+
+/** One row of the ledger's journal for a contractor of the channel, newest first. `amountMills`: thousandths of the
+ * row's own currency, signed — a payment positive, a refund from the contractor negative; `summed`: part of
+ * `paidMills` (paid, and in dollars). */
+export const ofLinkPaymentSchema = z.object({
+  contractorKey: z.string(),
+  contractorTitle: z.string(),
+  /** The journal's row number. */
+  num: z.string(),
+  date: businessDate,
+  type: z.enum(["expense", "income"]),
+  status: z.enum(["paid", "pending"]),
+  currency: z.string(),
+  amountMills: mills,
+  summed: z.boolean(),
+  /** The journal's own note. */
+  note: z.string().nullable(),
+});
+export type OfLinkPayment = z.infer<typeof ofLinkPaymentSchema>;
+
+/** One business day of a source's counter page (a source without links): its new subscribers. Null: no row that
+ * day, or the day is not finished in the counter — today always, and a past day whose row was last written before
+ * the day ended; `partial` then holds the value so far. */
+export const ofLinkCounterDaySchema = z.object({
+  businessDate,
+  newSubscribers: z.number().int().nullable(),
+  partial: z.number().int().nullable(),
+});
+export type OfLinkCounterDay = z.infer<typeof ofLinkCounterDaySchema>;
 
 export const ofLinkChannelSchema = z.object({
   /** null: the «без канала» row — links, or stretches of time, with no binding. */
   channelKey: z.string().nullable(),
   channelTitle: z.string().nullable(),
+  /** The channel's note. */
+  note: z.string().nullable(),
   /** The channel's contractor terms that overlap the range, each with its own figures. */
   contractors: z.array(ofLinkChannelContractorSchema),
   totals: ofLinkTotalsSchema,
   /** Union of the segments' flags. */
   flags: z.array(ofLinkDeltaFlagSchema),
   segments: z.array(ofLinkSegmentSchema),
+  /** A source without links: the page whose counter of new subscribers measures it. Null: measured by its links. */
+  counterPage: z.object({ pageId: z.number().int().positive(), label: z.string() }).nullable(),
+  /** Asked with `days`, for a channel with a counter page: one row per business day of the range, oldest first.
+   * Null: not asked, or no counter page. */
+  counterDays: z.array(ofLinkCounterDaySchema).nullable(),
+  /** Asked with `payments` (and `channelKey`): the journal's rows of the channel's contractors (the terms in the
+   * range). Null: not asked, or the ledger did not answer (see `contractors[].paid`). */
+  payments: z.array(ofLinkPaymentSchema).nullable(),
 });
 
 export const ofLinkContractorSchema = z.object({

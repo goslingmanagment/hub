@@ -216,6 +216,14 @@ export class TrafficBindingsConflictError extends Error {
   }
 }
 
+/** A first binding asked for a link that has one at some time (`rehangTrafficLink` with `firstOnly`). */
+export class TrafficLinkAlreadyBoundError extends TrafficBindingsConflictError {
+  constructor(link: string) {
+    super([`link ${link}: already has a binding; changing a source is traffic:bindings:set`]);
+    this.name = "TrafficLinkAlreadyBoundError";
+  }
+}
+
 const linkKeyLabel = (key: { pageLabel: string; linkKind: string; linkId: string }) =>
   `${key.pageLabel} ${key.linkKind} ${key.linkId}`;
 const linkLockKey = (key: { pageId: number; linkKind: string; linkId: string }) =>
@@ -368,6 +376,10 @@ export interface TrafficBindingsApplyOptions {
   write: boolean;
   /** Who runs it, for the audit rows (e.g. `cli@host pid 123`). */
   actor: string;
+  /** The audit rows' source; default the CLI's. The console's write says `dashboard`. */
+  auditSource?: string;
+  /** The audit rows' actor login, when a signed-in person writes (the console). */
+  actorUserId?: number;
   command: "import" | "set";
   /** Extra audit metadata, e.g. the file name and its SHA-256. */
   auditContext?: Record<string, unknown>;
@@ -600,7 +612,8 @@ async function writePlan(
   const audit = async (eventType: string, metadata: Record<string, unknown>, platformAccountId: number | null = null) => {
     const event = await insertAuditEvent(tx, {
       platformAccountId,
-      source: TRAFFIC_BINDINGS_AUDIT_SOURCE,
+      actorUserId: options.actorUserId ?? null,
+      source: options.auditSource ?? TRAFFIC_BINDINGS_AUDIT_SOURCE,
       eventType,
       metadata: { actor: options.actor, command: options.command, batchId, ...options.auditContext, ...metadata },
     });
@@ -786,6 +799,9 @@ export interface TrafficLinkRehangInput {
   validFrom: Date;
   validFromBasis: TrafficValidFromBasis;
   note?: string | null;
+  /** Only a link with no binding at any time (the console's first binding): any stored row, read under the link's
+   *  lock, throws TrafficLinkAlreadyBoundError. */
+  firstOnly?: boolean;
 }
 
 /**
@@ -807,8 +823,9 @@ export async function rehangTrafficLink(
     const existing = page
       ? await readLinkBindings(database, { pageId: page.id, linkKind: input.linkKind, linkId: input.linkId })
       : [];
-    const open = existing.find((row) => row.validTo === null);
     const common = { pageLabel: input.pageLabel, linkKind: input.linkKind, linkId: input.linkId };
+    if (input.firstOnly && existing.length > 0) throw new TrafficLinkAlreadyBoundError(linkKeyLabel(common));
+    const open = existing.find((row) => row.validTo === null);
     if (open && open.target === input.channelKey) {
       // Already the channel's: name the open row as it is (a no-op) — or
       // refuse, when the requested start lies before the stored one.
@@ -861,12 +878,141 @@ export async function rehangTrafficLink(
   );
 }
 
+// ---------------------------------------------------------------------------
+// A contractor's names in the ledger's journal, a source's counter page (0428).
+
+/** At most this many journal names per contractor, each 1–200 characters after trimming (the table's check). */
+export const TRAFFIC_LEDGER_NAMES_MAX = 20;
+const TRAFFIC_LEDGER_NAME_MAX_LENGTH = 200;
+
+/** How a journal's «Кому/Откуда» is matched to a contractor's name: trimmed, case aside. */
+export function trafficLedgerNameKey(name: string): string {
+  return name.trim().toLocaleLowerCase("ru-RU");
+}
+
+/** The names as stored: trimmed, the first spelling of each name kept. Throws on a name the table refuses. */
+export function normalizeTrafficLedgerNames(names: readonly string[]): string[] {
+  const kept = new Map<string, string>();
+  for (const raw of names) {
+    const name = raw.trim();
+    if (name.length === 0 || name.length > TRAFFIC_LEDGER_NAME_MAX_LENGTH) {
+      throw new TrafficBindingsConflictError([`ledger name "${raw}": expected 1–${TRAFFIC_LEDGER_NAME_MAX_LENGTH} characters`]);
+    }
+    if (!kept.has(trafficLedgerNameKey(name))) kept.set(trafficLedgerNameKey(name), name);
+  }
+  if (kept.size > TRAFFIC_LEDGER_NAMES_MAX) {
+    throw new TrafficBindingsConflictError([`${kept.size} ledger names: at most ${TRAFFIC_LEDGER_NAMES_MAX}`]);
+  }
+  return [...kept.values()];
+}
+
+export interface TrafficSettingResult<T> {
+  written: boolean;
+  key: string;
+  before: T;
+  after: T;
+  /** Facts worth a look that do not stop the change. */
+  warnings: string[];
+  auditEventIds: number[];
+}
+
+/**
+ * `traffic:contractors:ledger-names`: replaces the contractor's journal names (an empty list: none). A name another
+ * contractor has too is written, with a warning — it then belongs to neither (the paid read leaves its rows out).
+ * The contractor's lock, one audit row.
+ */
+export async function setTrafficContractorLedgerNames(
+  db: Database,
+  input: { contractorKey: string; names: readonly string[] },
+  options: { write: boolean; actor: string },
+): Promise<TrafficSettingResult<string[]>> {
+  const names = normalizeTrafficLedgerNames(input.names);
+  const run = async (tx: Database): Promise<TrafficSettingResult<string[]>> => {
+    if (options.write) await lockTrafficKeys(tx, [contractorLockKey(input.contractorKey)]);
+    const stored = await tx.execute<{ id: string; ledger_names: string[] }>(sql`
+      select id::text as id, ledger_names from traffic_contractors where key = ${input.contractorKey}`);
+    const row = stored.rows[0];
+    if (!row) throw new TrafficBindingsConflictError([`contractor ${input.contractorKey}: unknown contractor`]);
+    const others = await tx.execute<{ key: string; ledger_names: string[] }>(sql`
+      select key, ledger_names from traffic_contractors where key <> ${input.contractorKey} and cardinality(ledger_names) > 0`);
+    const warnings: string[] = [];
+    for (const name of names) {
+      const sharing = others.rows.filter((other) => other.ledger_names.some((item) => trafficLedgerNameKey(item) === trafficLedgerNameKey(name)));
+      if (sharing.length > 0) {
+        warnings.push(`"${name}" is also a name of ${sharing.map((other) => other.key).join(", ")}: its payments belong to neither`);
+      }
+    }
+    const before = row.ledger_names;
+    const same = before.length === names.length && before.every((name, index) => name === names[index]);
+    if (!options.write || same) {
+      return { written: false, key: input.contractorKey, before, after: names, warnings, auditEventIds: [] };
+    }
+    await tx.execute(sql`
+      update traffic_contractors set ledger_names = ${sql.param(names)}::text[], updated_at = now() where id = ${row.id}::bigint`);
+    const event = await insertAuditEvent(tx, {
+      source: TRAFFIC_BINDINGS_AUDIT_SOURCE,
+      eventType: "admin.traffic_contractor_ledger_names_set",
+      metadata: { actor: options.actor, command: "ledger-names", key: input.contractorKey, before, after: names },
+    });
+    return { written: true, key: input.contractorKey, before, after: names, warnings, auditEventIds: event ? [Number(event.id)] : [] };
+  };
+  return options.write
+    ? db.transaction(async (tx) => run(tx as unknown as Database), { isolationLevel: "read committed" })
+    : db.transaction(async (tx) => run(tx as unknown as Database), { accessMode: "read only" });
+}
+
+/**
+ * `traffic:channels:counter-page`: the page whose subscriber counter measures the source (null: its links do). The
+ * channel's lock, one audit row naming the page.
+ */
+export async function setTrafficChannelCounterPage(
+  db: Database,
+  input: { channelKey: string; pageLabel: string | null },
+  options: { write: boolean; actor: string },
+): Promise<TrafficSettingResult<{ pageId: number; pageLabel: string } | null>> {
+  const run = async (tx: Database): Promise<TrafficSettingResult<{ pageId: number; pageLabel: string } | null>> => {
+    if (options.write) await lockTrafficKeys(tx, [channelLockKey(input.channelKey)]);
+    const stored = await tx.execute<{ id: string; page_id: string | null; page_label: string | null }>(sql`
+      select c.id::text as id, c.counter_page_id::text as page_id, p.label as page_label
+        from traffic_channels c left join pages p on p.id = c.counter_page_id
+       where c.key = ${input.channelKey}`);
+    const row = stored.rows[0];
+    if (!row) throw new TrafficBindingsConflictError([`channel ${input.channelKey}: unknown channel`]);
+    let after: { pageId: number; pageLabel: string } | null = null;
+    const warnings: string[] = [];
+    if (input.pageLabel !== null) {
+      const page = (await resolvePages(tx, [input.pageLabel])).get(input.pageLabel);
+      if (!page) throw new TrafficBindingsConflictError([`channel ${input.channelKey}: unknown page ${input.pageLabel}`]);
+      if (page.status !== "active") warnings.push(`page ${page.label} is ${page.status}`);
+      after = { pageId: page.id, pageLabel: page.label };
+    }
+    const before = row.page_id === null ? null : { pageId: Number(row.page_id), pageLabel: row.page_label ?? row.page_id };
+    if (!options.write || before?.pageId === after?.pageId) {
+      return { written: false, key: input.channelKey, before, after, warnings, auditEventIds: [] };
+    }
+    await tx.execute(sql`
+      update traffic_channels set counter_page_id = ${after?.pageId ?? null}, updated_at = now() where id = ${row.id}::bigint`);
+    const event = await insertAuditEvent(tx, {
+      platformAccountId: after?.pageId ?? before?.pageId ?? null,
+      source: TRAFFIC_BINDINGS_AUDIT_SOURCE,
+      eventType: "admin.traffic_channel_counter_page_set",
+      metadata: { actor: options.actor, command: "counter-page", key: input.channelKey, before, after },
+    });
+    return { written: true, key: input.channelKey, before, after, warnings, auditEventIds: event ? [Number(event.id)] : [] };
+  };
+  return options.write
+    ? db.transaction(async (tx) => run(tx as unknown as Database), { isolationLevel: "read committed" })
+    : db.transaction(async (tx) => run(tx as unknown as Database), { accessMode: "read only" });
+}
+
 export interface TrafficBindingsListing {
-  contractors: Array<{ key: string; title: string }>;
+  contractors: Array<{ key: string; title: string; ledgerNames: string[] }>;
   channels: Array<{
     key: string;
     title: string;
     note: string | null;
+    /** The page whose subscriber counter measures the source; null: its links do. */
+    counterPage: string | null;
     contractors: Array<{ contractorKey: string; validFrom: string; validTo: string | null; validFromBasis: TrafficValidFromBasis; note: string | null }>;
   }>;
   bindings: Array<{
@@ -886,12 +1032,13 @@ export async function listTrafficBindings(
   db: Database,
   filter: { pageLabel?: string; channelKey?: string } = {},
 ): Promise<TrafficBindingsListing> {
-  const contractors = await db.execute<{ key: string; title: string }>(sql`
-    select key, title from traffic_contractors order by key`);
-  const channels = await db.execute<{ key: string; title: string; note: string | null }>(sql`
-    select key, title, note from traffic_channels
-     where ${filter.channelKey === undefined ? sql`true` : sql`key = ${filter.channelKey}`}
-     order by key`);
+  const contractors = await db.execute<{ key: string; title: string; ledger_names: string[] }>(sql`
+    select key, title, ledger_names from traffic_contractors order by key`);
+  const channels = await db.execute<{ key: string; title: string; note: string | null; counter_page: string | null }>(sql`
+    select c.key, c.title, c.note, p.label as counter_page from traffic_channels c
+      left join pages p on p.id = c.counter_page_id
+     where ${filter.channelKey === undefined ? sql`true` : sql`c.key = ${filter.channelKey}`}
+     order by c.key`);
   const terms = await db.execute<{
     channel_key: string; contractor_key: string; valid_from: Date; valid_to: Date | null;
     valid_from_basis: TrafficValidFromBasis; note: string | null;
@@ -917,11 +1064,12 @@ export async function listTrafficBindings(
 
   const isoOf = (value: Date) => new Date(value).toISOString();
   return {
-    contractors: contractors.rows.map((row) => ({ key: row.key, title: row.title })),
+    contractors: contractors.rows.map((row) => ({ key: row.key, title: row.title, ledgerNames: row.ledger_names })),
     channels: channels.rows.map((row) => ({
       key: row.key,
       title: row.title,
       note: row.note,
+      counterPage: row.counter_page,
       contractors: terms.rows
         .filter((term) => term.channel_key === row.key)
         .map((term) => ({

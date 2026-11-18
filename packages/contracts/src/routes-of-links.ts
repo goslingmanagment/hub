@@ -48,8 +48,16 @@ export const ofLinksRouteSchemas = {
       to: businessDate.optional(),
       /** Only this page's links; default all pages. */
       pageId: pageId.optional(),
-      /** Every segment carries its business days (`days`); default not (`days` null). */
+      /** Every segment carries its business days (`days`), a channel with a counter page its counter's days
+       * (`counterDays`); default not (null). */
       days: queryBooleanSchema.optional(),
+      /** Every contractor term carries what the ledger's journal says was paid to the contractor (`paid`);
+       * default not (null, the ledger is not asked). */
+      paid: queryBooleanSchema.optional(),
+      /** The channel's journal rows (`payments`); only with `channelKey`. */
+      payments: queryBooleanSchema.optional(),
+      /** Only this channel (its page); 404 when there is no such channel. */
+      channelKey: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}\.[a-z0-9][a-z0-9_-]{0,63}$/).optional(),
     }),
     response: { 200: ofLinkChannelsResponseSchema, ...errors },
   },

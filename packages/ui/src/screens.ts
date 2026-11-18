@@ -284,6 +284,15 @@ export const SCREENS: readonly Screen[] = [
     keywords: "трафик источники ссылки фаны график по дням onlyfans каналы подрядчики",
   },
   {
+    // One traffic source: what it brought against what its contractor was paid, its days over eight weeks, its links
+    // and payments (ofLinksChannelsGet with channelKey, ofLinksGet).
+    id: "traffic-source", path: "/traffic/source/:key", label: "Источник", title: "Трафик: источник", section: "traffic", product: "hub", ownerOnly: true,
+    why: "Один источник: что принёс, сколько заплачено и в какие дни.",
+    pageFilter: "none",
+    deep: true, notSearched: true,
+    crumbs: () => [{ label: "Трафик", to: "/traffic/sources" }, { label: "Источники", to: "/traffic/sources" }],
+  },
+  {
     // One OnlyFans link: its facts, its money, its new fans day by day over eight weeks (ofLinksGet, ofLinksHistoryGet).
     id: "traffic-link", path: "/traffic/link/:pageId/:kind/:ref", label: "Ссылка", title: "Трафик: ссылка", section: "traffic", product: "hub", ownerOnly: true,
     why: "Одна ссылка: что принесла и в какие дни.",
@@ -868,7 +877,7 @@ export const SECTIONS: readonly Section[] = [
   },
   {
     id: "traffic", label: "Трафик", title: "Трафик", icon: "Megaphone", product: "hub", ownerOnly: true, nav: "tabs",
-    tabs: [tab("sources", "Источники", "traffic-sources", "traffic-link"), tab("summary", "Сводка", "traffic"), tab("promo", "Продвижение", "traffic-promo")],
+    tabs: [tab("sources", "Источники", "traffic-sources", "traffic-source", "traffic-link"), tab("summary", "Сводка", "traffic"), tab("promo", "Продвижение", "traffic-promo")],
   },
   {
     id: "applications", label: "Анкеты", title: "Анкеты моделей", icon: "ClipboardList", product: "hub", ownerOnly: true, nav: "none",

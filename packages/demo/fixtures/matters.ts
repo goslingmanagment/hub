@@ -9,6 +9,7 @@ import { DEMO_USERS } from "../world.ts";
 import { demoAskMatters } from "./asks.ts";
 import { demoClaimMatters } from "./sale-claims.ts";
 import { teamQuestionsHandlers } from "./team-questions.ts";
+import { demoLinkUnboundSeeds } from "./traffic-link-fans.ts";
 import { demoReportDays } from "./team-reports.ts";
 import { DAY, HOUR, MIN, isoAt, viewerPages } from "./team-world.ts";
 import { wbHeldHandlers } from "./wb-admin.ts";
@@ -134,6 +135,8 @@ function standing(request: DemoRequest): Seed[] {
       evidence: { model: "mia-hart", item: "VID-88", custom: "CUS-203", account: "mia-1", surface: "wall", slot: `${isoAt(now + DAY).slice(0, 10)} 18:00` },
       agoMs: 4 * HOUR,
     },
+    // A new OnlyFans link without a source (traffic-link-fans.ts), as the check finds it.
+    ...demoLinkUnboundSeeds(request),
     { kind: "agent.reminder", key: "agent.reminder:owner-1", title: "Генгар: цены на mia-2 не меняли 30 дней, пересмотрите перед выходными", pages: ["mia-2"], agoMs: 9 * HOUR },
     {
       kind: "people.access_idle", key: "people.access_idle:all", title: "Доступ без работы 30 дней: 3 страницы у 2 человек",
@@ -245,6 +248,7 @@ const MIRRORED = [
 const CHECKS = [
   "people.left_with_access", "people.login_unlinked", "people.no_pay_terms", "people.no_working_page", "people.page_without_access",
   "people.access_idle", "people.agent_key_expiring", "people.proposal_open", "ledger.check", "ledger.sheet_column", "ledger.off_platform",
+  "traffic.link_unbound",
 ];
 
 function mattersList(request: DemoRequest): ListAnswer {

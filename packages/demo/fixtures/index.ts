@@ -20,6 +20,7 @@ import { systemHandlers } from "./system.ts";
 import { teamHandlers } from "./team.ts";
 import { teamsHandlers } from "./teams.ts";
 import { todayHandlers } from "./today.ts";
+import { historyWithNewLinks, trafficLinkFansHandlers } from "./traffic-link-fans.ts";
 import { trafficSourcesHandlers } from "./traffic-sources.ts";
 import { moneyMonthHandlers } from "./money-month.ts";
 import { teamLedgerHandlers } from "./team-ledger.ts";
@@ -71,7 +72,9 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   // Workboard «Сегодня» and the person's shifts paired with their reports (today.ts).
   today: todayHandlers,
   // Трафик → Источники: the OnlyFans links by source, day by day (traffic-sources.ts).
-  "traffic-sources": trafficSourcesHandlers,
+  "traffic-sources": { ...trafficSourcesHandlers, ofLinksHistoryGet: historyWithNewLinks(trafficSourcesHandlers.ofLinksHistoryGet!) },
+  // The page of one link: its fans, its source when it has none, given in memory (traffic-link-fans.ts).
+  "traffic-link-fans": trafficLinkFansHandlers,
 };
 
 /** Every area's answers in one table. An operation belongs to one area only:
