@@ -7,6 +7,13 @@ Checks against the **production** page image and operator of this tree
 `part-upload-check.sh` (below), and on the server the publish capture
 (`publish-capture/`) over `stand.sh`'s images, under the stand's guard.
 
+The failure series and load test of plan §5, stage 2 (`stand.sh series`,
+`load`) were removed in #1437. The site scenarios and the load test could
+not pass since variant Б. The other scenarios still passed, but nobody had
+run them since 2026-10-15. The only check of the operator's watchdog
+(`src/watchdog`, a hung operator killed) went with them. The last tree that
+has them is `dee79acf1`.
+
 ## The resource-timing check (variant Б)
 
 ```sh
@@ -26,10 +33,8 @@ show, so a pass is never a timeline or worker that sees nothing. Hub's
 Image and `<video>` are reported as `info`: on 155.0.8059.39 the video is in
 the timeline under its placeholder name (no media go through the browser
 today; how they would is the owner's decision). It runs on every Chrome
-update (`chrome-update.sh`, step 7), and `tests/page-browser-image.test.ts`
-fails while `PASSED_ON` in `resource-timing-check.ts` is not the
-Dockerfile's Chrome. Without `--image` it runs this machine's Chrome,
-headless.
+update (`chrome-update.sh`, step 7). Without `--image` it runs this
+machine's Chrome, headless.
 
 ## The part-upload check
 
