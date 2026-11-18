@@ -262,18 +262,22 @@ export interface FanslyUploadedMedia {
 export async function listFanslyUploadedMedia(db: Database, pageId: number, sha256s: readonly string[]): Promise<FanslyUploadedMedia[]> {
   if (sha256s.length === 0) return [];
   const result = await db.execute<Row>(sql`
-    select distinct on (c.request->'facts'->>'fileSha256')
-           c.request->'facts'->>'fileSha256' as sha256, s.result->>'mediaId' as media_id, s.id as command_id,
+    -- The creates naming the bytes come first, once: the planner guesses one read for the jsonb filters and would
+    -- otherwise scan every create (and detoast its request) per read.
+    with c as materialized (
+      select dispatch_id, item, request->'facts'->>'fileSha256' as sha256
+        from fansly_write_commands
+       where step = 'upload_create' and request->'facts'->>'fileSha256' = any(${sql.param([...sha256s])}::text[])
+    )
+    select distinct on (c.sha256) c.sha256 as sha256, s.result->>'mediaId' as media_id, s.id as command_id,
            s.result->>'filename' as filename
-      from fansly_write_commands s
-      join fansly_write_commands c
-        on c.dispatch_id = s.dispatch_id and c.step = 'upload_create'
+      from c
+      join fansly_write_commands s
+        on s.dispatch_id = c.dispatch_id and s.step = 'upload_status'
        and left(s.item, length(c.item) + 6) = c.item || '/poll:'
-     where s.page_id = ${pageId}
-       and s.step = 'upload_status' and s.state = 'answered'
+     where s.page_id = ${pageId} and s.state = 'answered'
        and s.result->>'done' = 'true' and coalesce(s.result->>'mediaId', '') <> ''
-       and c.request->'facts'->>'fileSha256' = any(${sql.param([...sha256s])}::text[])
-     order by c.request->'facts'->>'fileSha256', s.id desc
+     order by c.sha256, s.id desc
   `);
   return result.rows.map((row) => ({
     sha256: String(row.sha256),
