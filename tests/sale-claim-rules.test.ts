@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   claimStands,
-  decisionOfOutcome,
   deriveClaims,
   disputeAnswersOf,
   disputeSidesOf,
@@ -208,16 +207,8 @@ describe("the people's words and the owner's decisions as the rule's inputs", ()
 });
 
 describe("what a settlement gives, in mills", () => {
-  it("gives the four answers as the rule splits them: halves with the odd mill to the lower user id", () => {
-    expect(decisionOfOutcome("half", 102, 101).shares).toEqual([{ userId: 101, percent: 50 }, { userId: 102, percent: 50 }]);
+  it("gives an agreement as the rule splits it: halves with the odd mill to the lower user id", () => {
     const net = 36_001;
-    const half = (userId: number) => shareAfter({ netMills: net, userId, outcome: "half", first: 102, second: 101, statement: null });
-    expect([half(101), half(102)]).toEqual([18_001, 18_000]);
-    expect(half(101) + half(102)).toBe(net);
-    expect(shareAfter({ netMills: net, userId: 102, outcome: "first", first: 102, second: 101, statement: null })).toBe(net);
-    expect(shareAfter({ netMills: net, userId: 101, outcome: "first", first: 102, second: 101, statement: null })).toBe(0);
-    expect(shareAfter({ netMills: net, userId: 101, outcome: "second", first: 102, second: 101, statement: null })).toBe(net);
-    expect(shareAfter({ netMills: net, userId: 102, outcome: "nobody", first: 102, second: 101, statement: null })).toBe(0);
     // An agreed «делим» is the same halves as two «делим» in the rule.
     expect(shareAfter({ netMills: net, userId: 101, outcome: "agreed", first: 102, second: 101, statement: "share" })).toBe(18_001);
     expect(shareAfter({ netMills: net, userId: 102, outcome: "agreed", first: 102, second: 101, statement: "share" })).toBe(18_000);

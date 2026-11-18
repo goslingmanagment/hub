@@ -51,9 +51,10 @@ import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { clientCaptureProducer } from "./ingest-observations.ts";
+import { reportSums } from "./sale-claim-rules.ts";
 import { SALE_RULE } from "./sale-rule.ts";
 import { disputeDecider, phaseOf, postPagesDiffer } from "./shift-report-board-view.ts";
-import { draftFacts, draftLines, linesPageSums, pageCatalog, postPagesOf, subjectOf, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { draftFacts, draftLines, pageCatalog, postPagesOf, subjectOf, type PageCatalog, type Subject } from "./shift-handins.ts";
 
 /**
  * «Hub сверяет суммы» and «Нет в Hub» (products plan 2026-11-13, package R §5, brief R1b): Hub's own check of every page
@@ -247,7 +248,7 @@ async function remakeAt(db: Database, input: { subject: Subject; catalog: PageCa
     const marks = await listHandinMarks(txDb, handin.id);
     const facts = await draftFacts(txDb, input.subject, handin, input.catalog, input.previous.cutoffAt, marks);
     const lines = draftLines(facts, marks);
-    const sums = linesPageSums(lines, facts.pages, input.previous.offPlatform);
+    const sums = reportSums(lines, facts.pages, input.previous.offPlatform);
     return insertHandinCandidate(txDb, {
       handinId: handin.id, door: input.previous.door, actorUserId: input.previous.actorUserId, agentKeyId: input.previous.agentKeyId,
       telegramMessageRef: input.previous.telegramMessageRef, telegramSenderId: input.previous.telegramSenderId, cutoffAt: input.previous.cutoffAt,
