@@ -1698,7 +1698,7 @@ export const SYNC_LAST_APPLIED_ACTIVE_ROWS = 3;
  *
  *  - its `SYNC_LAST_APPLIED_RECENT_ROWS` newest rows whatever their subject (a
  *    trigger's row closes when it is served, so the newest attempts sit on the
- *    newest rows): the key's range of `sync_work_key_recent`, ids only;
+ *    newest rows): the key's range of `sync_work_key_newest`, ids only;
  *  - its `SYNC_LAST_APPLIED_ACTIVE_ROWS` active rows attempted last (a goal's
  *    row stays open for hours, and a request's rows take turns): the key's
  *    range of `sync_work_open_uniq`.
@@ -1730,20 +1730,18 @@ export async function lastLiveAppliedAtOverSubjects(
        and a.applied_at is not null
      order by a.id desc
      limit 1`;
-  // `offset 0` keeps the key's rows a scan of their own index range: flattened,
-  // "order by id desc limit" invites a walk of the whole table backwards along
-  // its primary key, which never ends for a key the page has no rows of.
+  // The key's newest rows are the head of its range of `sync_work_key_newest`
+  // (page_id, resource, id desc): the scan stops at the limit, with no sort,
+  // and a key the page has no rows of is an empty range.
   const result = await db.execute<{ resource: string; appliedAt: Date | string | null }>(sql`
     select k.resource,
            (select max(recent.applied_at)
               from ((select a.applied_at
-                       from (select s.id
-                               from (select w.id
-                                       from sync_work w
-                                      where w.page_id = ${input.pageId}
-                                        and w.resource = k.resource
-                                     offset 0) s
-                              order by s.id desc
+                       from (select w.id
+                               from sync_work w
+                              where w.page_id = ${input.pageId}
+                                and w.resource = k.resource
+                              order by w.id desc
                               limit ${sql.raw(String(SYNC_LAST_APPLIED_RECENT_ROWS))}) w
                       cross join lateral (${newestApplied}) a)
                     union all
