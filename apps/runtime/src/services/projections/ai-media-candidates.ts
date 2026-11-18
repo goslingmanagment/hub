@@ -3,8 +3,8 @@ import { sql } from "drizzle-orm";
 import {
   getProjectionWatermark,
   hasRecentAiGenerationInConversation,
-  listEventAccounts,
   listEventsSince,
+  listProjectionWork,
   setProjectionWatermark,
   upsertAiMediaDescriptionCandidate,
 } from "@agency_hub_core/db";
@@ -171,7 +171,10 @@ export async function runAiMediaCandidatesProjection(
     return totals;
   }
   const effective = await loadEffectiveConfig(app.db, app.config);
-  const accounts = input?.accountId != null ? [input.accountId] : await listEventAccounts(app.db);
+  const work = input?.accountId != null
+    ? { accounts: [input.accountId], idle: new Set<number>() }
+    : await listProjectionWork(app.db, AI_MEDIA_CANDIDATES_PROJECTION);
+  const accounts = work.accounts;
   for (const accountId of accounts) {
     const page = (await app.db.execute<{ label: string; own_ref: string | null }>(sql`
       select label, external_page_id as own_ref from pages
@@ -179,6 +182,7 @@ export async function runAiMediaCandidatesProjection(
     `)).rows[0];
     if (!page) continue;
     totals.accounts += 1;
+    if (work.idle.has(accountId)) continue;
     const policy = aiMediaNotesPolicyForPage(effective, page.label);
     let watermark = await getProjectionWatermark(app.db, AI_MEDIA_CANDIDATES_PROJECTION, accountId);
     if (!policy || !page.own_ref) {

@@ -79,7 +79,7 @@ const DEFAULT_REWALK_CYCLE_DAYS = Number(getDescriptor("fanslyRepliesRewalkCycle
 
 /** `fanslyRepliesRewalkCycleDays`, read live (≥ 1). */
 async function rewalkCycleDays(settings: SettingsSource | undefined): Promise<number> {
-  const configured = settings === undefined ? undefined : (await settings.read()).fanslyRepliesRewalkCycleDays;
+  const configured = settings === undefined ? undefined : await settings.field("fanslyRepliesRewalkCycleDays");
   return Math.max(1, configured ?? DEFAULT_REWALK_CYCLE_DAYS);
 }
 

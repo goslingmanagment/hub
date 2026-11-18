@@ -1,102 +1,56 @@
-export * from "./repositories/fansly-ws.ts";
-export * from "./repositories/fansly-ws-deletions.ts";
-export * from "./repositories/sync/live-messages.ts";
-export * from "./client.ts";
-// chat-extension greeting lease and send custody (0241, H-7a).
-export * from "./repositories/client-claim.ts";
-export * from "./repositories/client-claim-transition.ts";
-// The cabinet's list of held and hand-resolved sends over the same tables (H-7e).
-export * from "./repositories/client-send-custody-list.ts";
-// A Fansly greeting held only because Fansly's live channel dropped its echo, closed on Hub's archive copy.
-export * from "./repositories/client-send-custody-archive.ts";
-// chat-extension "new subscribers" list reads (H-7c).
-export * from "./repositories/client-audience-new.ts";
-// Who sent each outgoing message (send-attribution-v1, 0286).
-export * from "./repositories/client-send-attributions.ts";
-// The fan's deleted messages of a page, with their text (deleted-messages-v1, 0348).
-export * from "./repositories/client-deleted-messages.ts";
-export * from "./repositories/client-note-attributions.ts";
-// FBuddy's tier and Fansly's «Recent Spender» mark of a fan, from chatters' browsers (fan-badges-v1, 0373).
-export * from "./repositories/fan-badges.ts";
-// A fan's account state on a page, a chatter's browser signal and the page's re-check (fan-account-state-v1, 0374).
-export * from "./repositories/fan-account-state.ts";
-// Chat Memory: a chatter's activity in the chat extension, for the shift (0306).
-export * from "./repositories/chatter-activity.ts";
-export * from "./repositories/chatspace-tab-reports.ts";
-// Model questionnaires from the agency site (0353).
-export * from "./repositories/model-applications.ts";
-// Chat Memory: how many of a page's outgoing messages have an author.
-export * from "./repositories/message-authorship.ts";
-// Chat Memory week 2: the fan's card across pages and «same person» links (0307).
-export * from "./repositories/fan-card.ts";
-// Chat Memory week 3: win back (0309).
-export * from "./repositories/winback.ts";
-// chat-extension «Онлайн»: who came online, why to write now, and the window's rows (0321).
-export * from "./repositories/online.ts";
-export * from "./repositories/fan-queues.ts";
-// «Рассылки» kept by Hub, shared by the page's team (0346).
-export * from "./repositories/client-outreaches.ts";
-export * from "./repositories/client-outreach-rules.ts";
-// Fan marks: a page's user lists and the FANSLY BLOCKLIST posts (0325).
-export * from "./repositories/fan-lists.ts";
-export * from "./repositories/fansly-blocklist.ts";
-// Chat Memory week 4: customs (0310).
-export * from "./repositories/fan-customs.ts";
-// Заказ кастома (0399, package I): orders, their payments and cards, the checks' reads.
-export * from "./repositories/custom-orders.ts";
-export * from "./repositories/matters.ts";
-export * from "./repositories/matter-checks.ts";
-// Agent reports: named markdown pages an agent key publishes (0390, package O).
-export * from "./repositories/agent-reports.ts";
-// «Состояние»: reporters, their routines and copies, and Hub's own schedules (0391).
-export * from "./repositories/system-state.ts";
-// Chat Memory week 4: the draft shift report (0311).
-export * from "./repositories/shift-reports.ts";
-// Shifts as rows with a stable id (0379), whose each sale is by the one rule and the screens' switch to it (0380, 0381).
-export * from "./repositories/shift-rows.ts";
-export * from "./repositories/sale-homes.ts";
-// The shift report as an object (0400): one per shift row, its draft edits, its versions, «мимо площадки».
-export * from "./repositories/shift-handins.ts";
-export * from "./repositories/shift-report-board.ts";
-export * from "./repositories/shift-handin-check.ts";
-export * from "./repositories/people-messages.ts";
-// Claims and agreements (0404): statements that touch another person, their answers, the owner's decisions of a sale.
-export * from "./repositories/sale-claims.ts";
-// The sale's chain of money (package T): a sale by its platform reference, a person's shift holding it.
-export * from "./repositories/sale-chain.ts";
-export * from "./repositories/sale-decision-feed.ts";
-// OnlyFans unlocks paired with their purchases, one to one (the shift report, «Продажи»).
-export * from "./repositories/onlyfans-unlocks.ts";
-// Chat Memory week 5: the numbers of a chatter's shift.
-export * from "./repositories/chatter-numbers.ts";
-export * from "./repositories/shift-numbers.ts";
-export * from "./repositories/shift-review.ts";
-export * from "./repositories/chatter-stats.ts";
-// Chat Memory week 5: the morning report's team block.
-export * from "./repositories/team-morning.ts";
-// Chat Memory week 6: «Покрытие» — empty hours, greetings and broadcasts.
-export * from "./repositories/team-coverage.ts";
-// Chat Memory week 2: the facts lane's runs (0313).
-export * from "./repositories/fan-fact-runs.ts";
-// Chat Memory week 6: «Продажи» — PPV conversion and reply time against purchases.
-export * from "./repositories/team-sales.ts";
-// chat-extension client_health hourly rollups (0244, H-11b).
-export * from "./repositories/client-health.ts";
-// Their reads for the owner's view (H-11c).
-export * from "./repositories/client-health-view.ts";
-export * from "./schema.ts";
-export * from "./repositories/creator-raw-media.ts";
-export * from "./repositories/vault-album-scans.ts";
-export * from "./repositories/onlyfans-vault-lists.ts";
-export * from "./repositories/onlyfans-vault-album-runs.ts";
-export * from "./repositories/ofapi-post-media-replay.ts";
-export * from "./repositories/ofapi-credit-receipts.ts";
-export * from "./schema-guard.ts";
 export * from "./capture-payload-codec.ts";
 // G5 slice 3a: pure derivations for the typed queryable columns. No database
 // access, no body reads — safe on the barrel, and exported so the historical
 // rewrite slice populates the same columns from the same functions.
 export * from "./capture-queryable-fields.ts";
+export * from "./client.ts";
+export * from "./repositories/agent-dataset-map.ts";
+// Agents as participants (0396): whose a key is, its last call, «who is this key», the agents' ready reads.
+export * from "./repositories/agent-doors.ts";
+export * from "./repositories/agent-hydration.ts";
+export * from "./repositories/agent-keys.ts";
+export * from "./repositories/agent-post-delete-slots.ts";
+export * from "./repositories/agent-read-audit.ts";
+// Agent Read Plane witnesses: the TYPE and NOTHING ELSE. The mint helpers stay
+// unexported from the barrel so a runtime handler cannot claim it read a store it
+// never queried — the first review round found four handlers doing exactly that.
+export type { PlaneReadWitness } from "./repositories/agent-read-witness.ts";
+export * from "./repositories/agent-read.ts";
+// Agent reports: named markdown pages an agent key publishes (0390, package O).
+export * from "./repositories/agent-reports.ts";
+export * from "./repositories/agent-transcript.ts";
+export * from "./repositories/ai-chatter-limits.ts";
+export * from "./repositories/ai-live-context.ts";
+export * from "./repositories/ai-media-descriptions.ts";
+export * from "./repositories/ai-persona-openers.ts";
+export * from "./repositories/ai-personas.ts";
+export * from "./repositories/ai-provider-accounts.ts";
+export * from "./repositories/ai-provider-reports.ts";
+export * from "./repositories/ai-restricted.ts";
+export * from "./repositories/ai-spend.ts";
+export * from "./repositories/ai-transcript-depth.ts";
+export * from "./repositories/ai-transcript-union.ts";
+export * from "./repositories/ai-usage.ts";
+// One-time sign-in codes between the names Hub serves (0388).
+export * from "./repositories/auth-handoff.ts";
+export * from "./repositories/auth.ts";
+export * from "./repositories/canonicalize-sweep.ts";
+// G5 slice 3b — the catalog plane of the erasure module. Barrel-safe on the
+// SAME terms as the parity verifier and for the same reason: every function
+// here takes a scope or a reference list and returns METADATA (which objects
+// contain the subject, which of them nothing references any more, which ones
+// were deleted). NONE of them returns a body — the subject match is decided in
+// SQL, inside the database, so the caller never needs the bytes and an
+// "erasure needs to read bodies" back door never has to exist. The `Erasure`
+// in every name is load-bearing: these are reachable only from
+// apps/runtime/src/services/erasure/**, and the deleter among them is
+// enumerated in tests/retention-deleters.test.ts.
+export * from "./repositories/capture-payload-erasure.ts";
+// The parity verifier is barrel-safe: it takes no object id from a caller and
+// returns COUNTS and reference ids, never a body. Its own read of the body
+// stays inside packages/db, which is exactly the boundary the capture-payloads
+// note below draws.
+export * from "./repositories/capture-payload-parity.ts";
 // Capture payload catalog: the WRITER and the METADATA, never the body reader.
 // `loadPayloadBody` takes a bare (bucket_month, object_id) — an address that
 // carries none of the authorization the envelope carries, and one object may be
@@ -105,7 +59,6 @@ export * from "./capture-queryable-fields.ts";
 // apps/runtime/src/services/payload-reader.ts. It stays repository-internal
 // (same law as the agent-read witness mint helpers above); the pointer slice
 // reaches it from inside packages/db, not from a runtime caller.
-// `tests/capture-payload-barrel.test.ts` pins this export list.
 // G5 slice 2 adds `readEnvelopeCapturePayload`: the seam's ONE body read, and
 // barrel-safe for the reason the bare reader is not — it cannot be called
 // without naming the envelope class the reference was read off, and it refuses
@@ -143,22 +96,6 @@ export type {
   PutPayloadObjectInput,
   PutPayloadObjectResult,
 } from "./repositories/capture-payloads.ts";
-// The parity verifier is barrel-safe: it takes no object id from a caller and
-// returns COUNTS and reference ids, never a body. Its own read of the body
-// stays inside packages/db, which is exactly the boundary the note above draws.
-export * from "./repositories/capture-payload-parity.ts";
-// G5 slice 3b — the catalog plane of the erasure module. Barrel-safe on the
-// SAME terms as the parity verifier and for the same reason: every function
-// here takes a scope or a reference list and returns METADATA (which objects
-// contain the subject, which of them nothing references any more, which ones
-// were deleted). NONE of them returns a body — the subject match is decided in
-// SQL, inside the database, so the caller never needs the bytes and an
-// "erasure needs to read bodies" back door never has to exist. The `Erasure`
-// in every name is load-bearing: these are reachable only from
-// apps/runtime/src/services/erasure/**, and the deleter among them is
-// enumerated in tests/retention-deleters.test.ts.
-// `tests/capture-payload-barrel.test.ts` pins this shape.
-export * from "./repositories/capture-payload-erasure.ts";
 // G5 slice 3c-2 — the historical rewrite's database half. Barrel-safe on the
 // same terms as the parity verifier: the sampler reads bodies to compare them,
 // but that read never leaves packages/db and what crosses this boundary is a
@@ -166,190 +103,249 @@ export * from "./repositories/capture-payload-erasure.ts";
 // UPDATE it exposes is licensed in the module header and takes a reference,
 // never a payload.
 export * from "./repositories/capture-rewrite.ts";
-export * from "./repositories/agent-keys.ts";
-// Agents as participants (0396): whose a key is, its last call, «who is this key», the agents' ready reads.
-export * from "./repositories/agent-doors.ts";
-export * from "./repositories/agent-read-audit.ts";
-export * from "./repositories/agent-post-delete-slots.ts";
-// Agent Read Plane witnesses: the TYPE and NOTHING ELSE. The mint helpers stay
-// unexported from the barrel so a runtime handler cannot claim it read a store it
-// never queried — the first review round found four handlers doing exactly that.
-// `tests/agent-read-witness-barrel.test.ts` pins this export list.
-export type { PlaneReadWitness } from "./repositories/agent-read-witness.ts";
-export * from "./repositories/agent-dataset-map.ts";
-export * from "./repositories/agent-hydration.ts";
-export * from "./repositories/agent-read.ts";
-// The fans of a page's audience who paid the model's other pages (`hub
-// cross-spenders`, the excluded list of a mass message).
-export * from "./repositories/cross-page-spenders.ts";
-export * from "./repositories/other-pages.ts";
-export * from "./repositories/agent-transcript.ts";
-export * from "./repositories/ai-live-context.ts";
-export * from "./repositories/ai-transcript-depth.ts";
-export * from "./repositories/ai-transcript-union.ts";
-export * from "./repositories/conversation-feed.ts";
-export * from "./repositories/erasure-fence.ts";
 export * from "./repositories/catalog.ts";
-export * from "./repositories/config-settings.ts";
-export * from "./repositories/dm-material-fingerprint.ts";
-export * from "./repositories/dm-message-candidate.ts";
-export * from "./repositories/dm-message-archive.ts";
-export * from "./repositories/fans.ts";
-export * from "./repositories/auth.ts";
-// One-time sign-in codes between the names Hub serves (0388).
-export * from "./repositories/auth-handoff.ts";
-export * from "./repositories/fan-page-identity.ts";
-export * from "./repositories/fan-profiles.ts";
-export * from "./repositories/fan-metadata.ts";
-export * from "./repositories/ai-usage.ts";
-export * from "./repositories/ai-provider-accounts.ts";
-export * from "./repositories/ai-spend.ts";
-export * from "./repositories/ai-chatter-limits.ts";
-export * from "./repositories/ai-provider-reports.ts";
-export * from "./repositories/notifications.ts";
-export * from "./repositories/notification-outbox.ts";
-export * from "./repositories/notification-paging.ts";
-export * from "./repositories/observations.ts";
-export * from "./repositories/ops-metrics.ts";
-export * from "./repositories/storage-census.ts";
-export * from "./repositories/domain-events.ts";
-export * from "./repositories/domain-event-supersession.ts";
-export * from "./repositories/observation-quarantine.ts";
-export * from "./repositories/ppv-purchase-facts.ts";
-export * from "./repositories/canonicalize-sweep.ts";
-export * from "./repositories/creator-posts.ts";
-export * from "./repositories/message-archive.ts";
-export * from "./repositories/media-plane.ts";
-export * from "./repositories/fansly-engagement.ts";
-export * from "./repositories/fansly-media-stats-dm-only-queue.ts";
-export * from "./repositories/fan-earnings-refresh.ts";
-export * from "./repositories/fan-earnings-receipts.ts";
-export * from "./repositories/fansly-transaction-dirty.ts";
-export * from "./repositories/fansly-catalog.ts";
-export * from "./repositories/fansly-insights.ts";
-export * from "./repositories/post-comments.ts";
-export * from "./repositories/page-payouts.ts";
-export * from "./repositories/fansly-creator-stats.ts";
-export * from "./repositories/fansly-creator-stats-audience.ts";
-export * from "./repositories/fansly-creator-stats-read.ts";
-export * from "./repositories/fansly-creator-stats-read-content.ts";
-export * from "./repositories/fansly-creator-stats-media.ts";
-export * from "./repositories/fansly-page-profile.ts";
-export * from "./repositories/fansly-page-promo.ts";
-export * from "./repositories/fansly-page-settings.ts";
-export * from "./repositories/fansly-tracking-link-days.ts";
-export * from "./repositories/fansly-stats.ts";
-export * from "./repositories/ai-personas.ts";
-export * from "./repositories/ai-persona-openers.ts";
-export * from "./repositories/ai-restricted.ts";
-export * from "./repositories/ai-media-descriptions.ts";
-export * from "./repositories/erasure.ts";
-export * from "./repositories/ofapi.ts";
-export * from "./repositories/ofapi-capture.ts";
-export * from "./repositories/ofapi-message-coverage.ts";
-export * from "./repositories/telegram-settings.ts";
-export * from "./repositories/reporting.ts";
-export * from "./repositories/runtime-instances.ts";
-// The reads of `GET /api/v1/ops/live` (the operator screen's one request).
-export * from "./repositories/ops-live.ts";
-export * from "./repositories/page-dm.ts";
-export * from "./repositories/fansly-dm-reader-heads.ts";
-export * from "./repositories/fansly-send-guard.ts";
-export * from "./repositories/fansly-send-guard-checks.ts";
-// The session-less public account reader's own proxy (arena "vanished chat" R5).
-export * from "./repositories/fansly-public-egress.ts";
-export * from "./repositories/page-browsers.ts";
-export * from "./repositories/page-browser-intake.ts";
-export * from "./repositories/page-browser-onboarding.ts";
-export * from "./repositories/page-browser-drafts.ts";
-export * from "./repositories/page-browser-commands.ts";
-// Its demand, budget, answers and stop (0259).
-export * from "./repositories/fansly-public-lookup.ts";
-// Fansly Sync Engine core state (0228): pages, the work queue, the attempt
-// journal and its telemetry retention; the DM thread chain (0231); the
-// conversation list's own writer; the DM message reads; the subject-queue
-// walks; the history requests (0232).
-export * from "./repositories/sync/holds.ts";
-export * from "./repositories/sync/pages.ts";
-export * from "./repositories/sync/work.ts";
-export * from "./repositories/sync/attempts.ts";
-export * from "./repositories/sync/retention.ts";
-export * from "./repositories/sync/thread-chain.ts";
-export * from "./repositories/sync/conversation-list.ts";
-export * from "./repositories/sync/dm-messages.ts";
-export * from "./repositories/sync/subject-queue.ts";
-export * from "./repositories/sync/history-requests.ts";
-// The WebSocket demand router's reads (design §6).
-export * from "./repositories/sync/ws-router.ts";
-export * from "./repositories/sync/ws-gap.ts";
-// Project Browser (0289, minor 6): the observed site requests, once per hop.
-export * from "./repositories/sync/observed-site-requests.ts";
-export * from "./repositories/sync/media-handoff.ts";
-export * from "./repositories/sync/dm-exclusions.ts";
-export * from "./repositories/sync/observability.ts";
-// The alert evaluator's proof of work (0262, bug hunt Д11).
-export * from "./repositories/sync/alert-evaluations.ts";
-// The chat-unavailability episodes (0251, arena "vanished chat" plan §2).
-export * from "./repositories/sync/chat-unavailability.ts";
-export * from "./repositories/spenders.ts";
-export * from "./repositories/spender-stats.ts";
-export * from "./repositories/sync-context.ts";
-export * from "./repositories/sync.ts";
-export * from "./repositories/top-spenders.ts";
-export * from "./repositories/transactions.ts";
-export * from "./repositories/transaction-settled-state.ts";
-export * from "./repositories/transaction-tip-contexts.ts";
-export * from "./repositories/voice-notes.ts";
-export * from "./repositories/voice-profiles.ts";
-export * from "./repositories/voice-provider-health.ts";
-// Publications: wall posts through Hub (0297, docs/plans/2026-10-23-wall-posts).
-export * from "./repositories/publications.ts";
-export * from "./repositories/media-looks.ts";
-// The people registry (0384–0386): people, their logins, keys, working pages, schedule, rights, pay terms, proposals.
-export * from "./repositories/people.ts";
-export * from "./repositories/team-roles.ts";
-export * from "./repositories/workboard-today.ts";
-export * from "./repositories/team-questions.ts";
-// «Начало» of a newcomer (0402): the facts its steps close by, and where a person's payouts go.
-export * from "./repositories/person-start.ts";
-export * from "./repositories/publication-files.ts";
-// ... and the media a page can publish, for the agents who draft (plan PR 10).
-export * from "./repositories/publication-media.ts";
-// ... and the Fansly write commands of a page's engine actor (0300, plan PR 6).
-export * from "./repositories/fansly-write-commands.ts";
-
-export * from "./repositories/ofapi-bindings.ts";
-export * from "./repositories/traffic-bindings.ts";
-// A traffic source without links: its page's counter of new subscribers (0428).
-export * from "./repositories/traffic-counter-days.ts";
-export * from "./repositories/link-fans.ts";
-// «Ссылки OnlyFans» reads (traffic PR 12): the series, its collection state and
-// the bindings; the delta arithmetic over them is pure.
-export * from "./repositories/link-stats-read.ts";
-export * from "./repositories/of-link-fans-read.ts";
-export * from "./repositories/link-stats-deltas.ts";
-export * from "./repositories/link-attribution.ts";
-
-export * from "./repositories/ofapi-vendor-usage.ts";
-export * from "./repositories/ofapi-collection.ts";
-export * from "./repositories/ofapi-media-images.ts";
-export * from "./repositories/ofapi-webhook-recovery.ts";
-
-export * from "./repositories/ofapi-provider-operations.ts";
-export * from "./repositories/ofapi-media-token-fences.ts";
-export * from "./repositories/ofapi-banned-words.ts";
-
-export * from "./repositories/ofapi-read-collections.ts";
-
-export * from "./repositories/ofapi-typed-exports.ts";
-export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/ofapi-content-events.ts';
-
+export * from "./repositories/chatspace-tab-reports.ts";
+// Chat Memory: a chatter's activity in the chat extension, for the shift (0306).
+export * from "./repositories/chatter-activity.ts";
+// Chat Memory week 5: the numbers of a chatter's shift.
+export * from "./repositories/chatter-numbers.ts";
+export * from "./repositories/chatter-stats.ts";
+// chat-extension "new subscribers" list reads (H-7c).
+export * from "./repositories/client-audience-new.ts";
 // The chat extension's bootstrap page list (active, untombstoned, scoped) and
 // its config revision.
 export * from "./repositories/client-bootstrap.ts";
+export * from "./repositories/client-claim-transition.ts";
+// chat-extension greeting lease and send custody (0241, H-7a).
+export * from "./repositories/client-claim.ts";
+// The fan's deleted messages of a page, with their text (deleted-messages-v1, 0348).
+export * from "./repositories/client-deleted-messages.ts";
+// The client_health rollups' reads for the owner's view (H-11c).
+export * from "./repositories/client-health-view.ts";
+// chat-extension client_health hourly rollups (0244, H-11b).
+export * from "./repositories/client-health.ts";
+export * from "./repositories/client-note-attributions.ts";
+export * from "./repositories/client-outreach-rules.ts";
+// «Рассылки» kept by Hub, shared by the page's team (0346).
+export * from "./repositories/client-outreaches.ts";
 // The chat extension's dossier save from a stored generation: the caller's own
 // generation, whether its AI request was admitted, a dossier version by body.
 export * from "./repositories/client-profile-from-generation.ts";
+// Who sent each outgoing message (send-attribution-v1, 0286).
+export * from "./repositories/client-send-attributions.ts";
+// A Fansly greeting held only because Fansly's live channel dropped its echo, closed on Hub's archive copy.
+export * from "./repositories/client-send-custody-archive.ts";
+// The cabinet's list of held and hand-resolved sends over the send custody tables (H-7e).
+export * from "./repositories/client-send-custody-list.ts";
+export * from "./repositories/config-settings.ts";
+export * from "./repositories/conversation-feed.ts";
+export * from "./repositories/creator-posts.ts";
+export * from "./repositories/creator-raw-media.ts";
+// The fans of a page's audience who paid the model's other pages (`hub
+// cross-spenders`, the excluded list of a mass message).
+export * from "./repositories/cross-page-spenders.ts";
+// Заказ кастома (0399, package I): orders, their payments and cards, the checks' reads.
+export * from "./repositories/custom-orders.ts";
+export * from "./repositories/dm-material-fingerprint.ts";
+export * from "./repositories/dm-message-archive.ts";
+export * from "./repositories/dm-message-candidate.ts";
+export * from "./repositories/domain-event-supersession.ts";
+export * from "./repositories/domain-events.ts";
+export * from "./repositories/erasure-fence.ts";
+export * from "./repositories/erasure.ts";
+// A fan's account state on a page, a chatter's browser signal and the page's re-check (fan-account-state-v1, 0374).
+export * from "./repositories/fan-account-state.ts";
+// FBuddy's tier and Fansly's «Recent Spender» mark of a fan, from chatters' browsers (fan-badges-v1, 0373).
+export * from "./repositories/fan-badges.ts";
+// Chat Memory week 2: the fan's card across pages and «same person» links (0307).
+export * from "./repositories/fan-card.ts";
+// Chat Memory week 4: customs (0310).
+export * from "./repositories/fan-customs.ts";
+export * from "./repositories/fan-earnings-receipts.ts";
+export * from "./repositories/fan-earnings-refresh.ts";
+// Chat Memory week 2: the facts lane's runs (0313).
+export * from "./repositories/fan-fact-runs.ts";
+// Fan marks: a page's user lists (0325).
+export * from "./repositories/fan-lists.ts";
+export * from "./repositories/fan-metadata.ts";
+export * from "./repositories/fan-page-identity.ts";
+export * from "./repositories/fan-profiles.ts";
+export * from "./repositories/fan-queues.ts";
+export * from "./repositories/fans.ts";
+// Fan marks: the FANSLY BLOCKLIST posts (0325).
+export * from "./repositories/fansly-blocklist.ts";
+export * from "./repositories/fansly-catalog.ts";
+export * from "./repositories/fansly-creator-stats-audience.ts";
+export * from "./repositories/fansly-creator-stats-media.ts";
+export * from "./repositories/fansly-creator-stats-read-content.ts";
+export * from "./repositories/fansly-creator-stats-read.ts";
+export * from "./repositories/fansly-creator-stats.ts";
+export * from "./repositories/fansly-dm-reader-heads.ts";
+export * from "./repositories/fansly-engagement.ts";
+export * from "./repositories/fansly-insights.ts";
+export * from "./repositories/fansly-media-stats-dm-only-queue.ts";
+export * from "./repositories/fansly-page-profile.ts";
+export * from "./repositories/fansly-page-promo.ts";
+export * from "./repositories/fansly-page-settings.ts";
+// The session-less public account reader's own proxy (arena "vanished chat" R5).
+export * from "./repositories/fansly-public-egress.ts";
+// The session-less public account reader's demand, budget, answers and stop (0259).
+export * from "./repositories/fansly-public-lookup.ts";
+export * from "./repositories/fansly-send-guard-checks.ts";
+export * from "./repositories/fansly-send-guard.ts";
+export * from "./repositories/fansly-stats.ts";
+export * from "./repositories/fansly-tracking-link-days.ts";
+export * from "./repositories/fansly-transaction-dirty.ts";
+// Publications: the Fansly write commands of a page's engine actor (0300, plan PR 6).
+export * from "./repositories/fansly-write-commands.ts";
+export * from "./repositories/fansly-ws-deletions.ts";
+export * from "./repositories/fansly-ws.ts";
+export * from "./repositories/link-attribution.ts";
+export * from "./repositories/link-fans.ts";
+// «Ссылки OnlyFans» (traffic PR 12): the delta arithmetic over the series is pure.
+export * from "./repositories/link-stats-deltas.ts";
+// «Ссылки OnlyFans» reads (traffic PR 12): the series, its collection state and
+// the bindings.
+export * from "./repositories/link-stats-read.ts";
+export * from "./repositories/matter-checks.ts";
+export * from "./repositories/matters.ts";
+export * from "./repositories/media-looks.ts";
+export * from "./repositories/media-plane.ts";
+export * from "./repositories/message-archive.ts";
+// Chat Memory: how many of a page's outgoing messages have an author.
+export * from "./repositories/message-authorship.ts";
+// Model questionnaires from the agency site (0353).
+export * from "./repositories/model-applications.ts";
+export * from "./repositories/notification-outbox.ts";
+export * from "./repositories/notification-paging.ts";
+export * from "./repositories/notifications.ts";
+export * from "./repositories/observation-quarantine.ts";
+export * from "./repositories/observations.ts";
+export * from "./repositories/of-link-fans-read.ts";
+export * from "./repositories/ofapi-banned-words.ts";
+export * from "./repositories/ofapi-bindings.ts";
+export * from "./repositories/ofapi-capture.ts";
+export * from "./repositories/ofapi-collection.ts";
+export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/ofapi-content-events.ts';
+export * from "./repositories/ofapi-credit-receipts.ts";
+export * from "./repositories/ofapi-media-images.ts";
+export * from "./repositories/ofapi-media-token-fences.ts";
+export * from "./repositories/ofapi-message-coverage.ts";
+export * from "./repositories/ofapi-post-media-replay.ts";
+export * from "./repositories/ofapi-provider-operations.ts";
+export * from "./repositories/ofapi-read-collections.ts";
+export * from "./repositories/ofapi-typed-exports.ts";
+export * from "./repositories/ofapi-vendor-usage.ts";
+export * from "./repositories/ofapi-webhook-recovery.ts";
+export * from "./repositories/ofapi.ts";
+// chat-extension «Онлайн»: who came online, why to write now, and the window's rows (0321).
+export * from "./repositories/online.ts";
 export * from "./repositories/onlyfans-feed.ts";
+// OnlyFans unlocks paired with their purchases, one to one (the shift report, «Продажи»).
+export * from "./repositories/onlyfans-unlocks.ts";
+export * from "./repositories/onlyfans-vault-album-runs.ts";
+export * from "./repositories/onlyfans-vault-lists.ts";
+// The reads of `GET /api/v1/ops/live` (the operator screen's one request).
+export * from "./repositories/ops-live.ts";
+export * from "./repositories/ops-metrics.ts";
+export * from "./repositories/other-pages.ts";
+export * from "./repositories/page-browser-commands.ts";
+export * from "./repositories/page-browser-drafts.ts";
+export * from "./repositories/page-browser-intake.ts";
+export * from "./repositories/page-browser-onboarding.ts";
+export * from "./repositories/page-browsers.ts";
+export * from "./repositories/page-dm.ts";
+export * from "./repositories/page-payouts.ts";
+export * from "./repositories/people-messages.ts";
+// The people registry (0384–0386): people, their logins, keys, working pages, schedule, rights, pay terms, proposals.
+export * from "./repositories/people.ts";
+// «Начало» of a newcomer (0402): the facts its steps close by, and where a person's payouts go.
+export * from "./repositories/person-start.ts";
+export * from "./repositories/post-comments.ts";
+export * from "./repositories/ppv-purchase-facts.ts";
+export * from "./repositories/publication-files.ts";
+// Publications: the media a page can publish, for the agents who draft (plan PR 10).
+export * from "./repositories/publication-media.ts";
+// Publications: wall posts through Hub (0297, docs/plans/2026-10-23-wall-posts).
+export * from "./repositories/publications.ts";
 // The test realm (0414): the database half of the wall (apps/runtime/src/services/sandbox/realm.ts).
 export * from "./repositories/realm.ts";
+export * from "./repositories/reporting.ts";
+export * from "./repositories/runtime-instances.ts";
+// The sale's chain of money (package T): a sale by its platform reference, a person's shift holding it.
+export * from "./repositories/sale-chain.ts";
+// Claims and agreements (0404): statements that touch another person, their answers, the owner's decisions of a sale.
+export * from "./repositories/sale-claims.ts";
+export * from "./repositories/sale-decision-feed.ts";
+// Whose each sale is by the one rule and the screens' switch to it (0380, 0381).
+export * from "./repositories/sale-homes.ts";
+export * from "./repositories/shift-handin-check.ts";
+// The shift report as an object (0400): one per shift row, its draft edits, its versions, «мимо площадки».
+export * from "./repositories/shift-handins.ts";
+export * from "./repositories/shift-numbers.ts";
+export * from "./repositories/shift-report-board.ts";
+// Chat Memory week 4: the draft shift report (0311).
+export * from "./repositories/shift-reports.ts";
+export * from "./repositories/shift-review.ts";
+// Shifts as rows with a stable id (0379).
+export * from "./repositories/shift-rows.ts";
+export * from "./repositories/spender-stats.ts";
+export * from "./repositories/spenders.ts";
+export * from "./repositories/storage-census.ts";
+export * from "./repositories/sync-context.ts";
+export * from "./repositories/sync.ts";
+// Fansly Sync Engine core state (0228), the `sync/` files below: pages, the work
+// queue, the attempt journal and its telemetry retention; the DM thread chain
+// (0231); the conversation list's own writer; the DM message reads; the
+// subject-queue walks; the history requests (0232).
+
+// The alert evaluator's proof of work (0262, bug hunt Д11).
+export * from "./repositories/sync/alert-evaluations.ts";
+export * from "./repositories/sync/attempts.ts";
+// The chat-unavailability episodes (0251, arena "vanished chat" plan §2).
+export * from "./repositories/sync/chat-unavailability.ts";
+export * from "./repositories/sync/conversation-list.ts";
+export * from "./repositories/sync/dm-exclusions.ts";
+export * from "./repositories/sync/dm-messages.ts";
+export * from "./repositories/sync/history-requests.ts";
+export * from "./repositories/sync/holds.ts";
+export * from "./repositories/sync/live-messages.ts";
+export * from "./repositories/sync/media-handoff.ts";
+export * from "./repositories/sync/observability.ts";
+// Project Browser (0289, minor 6): the observed site requests, once per hop.
+export * from "./repositories/sync/observed-site-requests.ts";
+export * from "./repositories/sync/pages.ts";
+export * from "./repositories/sync/retention.ts";
+export * from "./repositories/sync/subject-queue.ts";
+export * from "./repositories/sync/thread-chain.ts";
+export * from "./repositories/sync/work.ts";
+export * from "./repositories/sync/ws-gap.ts";
+// The WebSocket demand router's reads (design §6).
+export * from "./repositories/sync/ws-router.ts";
+// «Состояние»: reporters, their routines and copies, and Hub's own schedules (0391).
+export * from "./repositories/system-state.ts";
+// Chat Memory week 6: «Покрытие» — empty hours, greetings and broadcasts.
+export * from "./repositories/team-coverage.ts";
+// Chat Memory week 5: the morning report's team block.
+export * from "./repositories/team-morning.ts";
+export * from "./repositories/team-questions.ts";
+export * from "./repositories/team-roles.ts";
+// Chat Memory week 6: «Продажи» — PPV conversion and reply time against purchases.
+export * from "./repositories/team-sales.ts";
+export * from "./repositories/telegram-settings.ts";
+export * from "./repositories/top-spenders.ts";
+export * from "./repositories/traffic-bindings.ts";
+// A traffic source without links: its page's counter of new subscribers (0428).
+export * from "./repositories/traffic-counter-days.ts";
+export * from "./repositories/transaction-settled-state.ts";
+export * from "./repositories/transaction-tip-contexts.ts";
+export * from "./repositories/transactions.ts";
+export * from "./repositories/vault-album-scans.ts";
+export * from "./repositories/voice-notes.ts";
+export * from "./repositories/voice-profiles.ts";
+export * from "./repositories/voice-provider-health.ts";
+// Chat Memory week 3: win back (0309).
+export * from "./repositories/winback.ts";
+export * from "./repositories/workboard-today.ts";
+export * from "./schema-guard.ts";
+export * from "./schema.ts";
