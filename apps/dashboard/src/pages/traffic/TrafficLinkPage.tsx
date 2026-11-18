@@ -143,7 +143,8 @@ function Chart({ history, metric }: { history: NonNullable<ReturnType<typeof use
           {view.weeks.map((week) => (
             <div key={week.label} className={week.running ? "tl-week tl-week-running" : "tl-week"}>
               <span className="tl-week-sum">{week.sum}</span>
-              <span className="tl-week-dates">{week.label}</span>
+              <span className="tl-week-dates">{week.label}{week.running ? ", идёт" : ""}</span>
+              {week.note && <span className="tl-week-note">{week.note}</span>}
             </div>
           ))}
         </div>

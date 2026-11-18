@@ -214,7 +214,7 @@ function amountText(payment: Payment): string {
   const dollars = ["USD", "USDT", "USDC"].includes(payment.currency);
   const magnitude = Math.abs(payment.amountMills);
   const text = dollars
-    ? `${formatMills(magnitude)}${payment.currency === "USD" ? "" : ` ${payment.currency}`}`
+    ? formatMills(magnitude)
     : `${(magnitude / 1000).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${payment.currency}`;
   return payment.amountMills < 0 ? `−${text}` : text;
 }

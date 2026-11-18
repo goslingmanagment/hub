@@ -3,7 +3,7 @@ import { addDays, mondayOf, moscowDayOf, type MoscowDay } from "@agency_hub_core
 import { formatDayRange, formatMills, formatWeekdayDay } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { linkStateView } from "@/pages/marketing/ofLinksView";
-import { arrivalOf, clicksWord, dayHint, dayMonth, daySlots, fansWord, weekFigure, weekText, type DaySlot } from "./trafficDays.js";
+import { arrivalOf, clicksWord, dayHint, dayMonth, daySlots, fansWord, unreadWords, weekFigure, weekText, type DaySlot } from "./trafficDays.js";
 
 // The page of one link: what its header, its figures, its chart and its table
 // of days show, from the link's latest read (`ofLinksGet`) and its days
@@ -21,8 +21,10 @@ export function linkRange(today: MoscowDay): { from: MoscowDay; to: MoscowDay } 
 export interface LinkWeek {
   /** «3–9 нояб.». */
   label: string;
-  /** «12 фанов», «40 кликов, идёт», «$120.00, 2 дня без чтения»; «нет чтения» when no day of it is known. */
+  /** «12 фанов», «40 кликов», «$120.00»; «нет чтения» when no day of it is known. */
   sum: string;
+  /** «2 дня без чтения» under the week's dates; null when every finished day was read. */
+  note: string | null;
   running: boolean;
 }
 
@@ -77,7 +79,8 @@ export function linkChartView(history: OfLinkHistoryResponse, metric: LinkMetric
     const figure = weekFigure(part, values.slice(week * 7, week * 7 + 7), unread.slice(week * 7, week * 7 + 7));
     return {
       label: formatDayRange(part[0]!.date, part[6]!.date),
-      sum: weekText(figure, sumWord),
+      sum: weekText(figure.sum === null ? figure : { ...figure, unread: 0, running: false }, sumWord),
+      note: figure.sum === null ? null : unreadWords(figure),
       running: figure.running,
     };
   });
