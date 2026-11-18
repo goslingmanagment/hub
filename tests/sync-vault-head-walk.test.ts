@@ -9,6 +9,7 @@ import { vaultHeadWalkPage, vaultRewalkMode, type VaultHeadBasis } from "../apps
 import type { VaultWalkProof } from "../apps/runtime/src/sync/fansly/lib/vault-walk-proof.ts";
 import type { ApplyInput, PlanContext } from "../apps/runtime/src/sync/engine/resource.ts";
 import { catalogModule } from "../apps/runtime/src/sync/fansly/resources/catalog.ts";
+import { fakeSettings } from "./helpers/sync-fakes.ts";
 
 // The vault walk's head walk (owner decision №6 «инкрементально ежедневно,
 // полностью еженедельно», 2026-11-07): a moved album is read from its head
@@ -77,7 +78,7 @@ function ctx(labels: string, pageLabel = "lora-1"): PlanContext {
     pageId: 1,
     now: NOW,
     page: { pageLabel, registryOverrides: {} },
-    settings: { read: async () => ({ fanslyVaultHeadWalkPages: labels }) },
+    settings: fakeSettings(() => ({ fanslyVaultHeadWalkPages: labels })),
   } as unknown as PlanContext;
 }
 
