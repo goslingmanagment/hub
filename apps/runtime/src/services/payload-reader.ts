@@ -106,11 +106,7 @@
 //   services/sync/executor-handlers.ts (×2)       propagate (chunk fails; the
 //                                                 raw-payload cursor is NOT
 //                                                 advanced past unread pages)
-//   services/observations-account-me-rejournal.ts catch → unavailableBody
-//                                                 (the capture is skipped, never
-//                                                 journaled empty; a re-run
-//                                                 resumes)
-//   sync/fansly/lib/chain-rebuild.ts              catch → body_unavailable
+//   sync/fansly/lib/chain-rebuild.ts             catch → body_unavailable
 //                                                 (the journal page folds
 //                                                 nothing and is counted; never
 //                                                 read as an empty page, which
