@@ -26,9 +26,9 @@ import { readBrowserCredentialsGeneration } from "../browser-transport.ts";
 // The events come from the buffer's intake (`fansly/browser-intake.ts`, PR
 // 13), which takes a batch of them in one transaction (`takeIn`) and tells
 // the source once it committed (`committed`); the frames themselves, the gap
-// marks and the repair are the intake's. The admission of the site's socket
-// rides the site path (`engine/site-admission.ts`, route `ws.upgrade`) over
-// the operator's `wsAdmit`/`wsDone`.
+// marks and the repair are the intake's. The site's socket is the site's own:
+// the operator lets its CONNECT go (variant Б), the engine admits nothing of
+// it.
 
 export interface BrowserWsSourceDeps {
   db: Database;

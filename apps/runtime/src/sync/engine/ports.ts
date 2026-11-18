@@ -281,10 +281,6 @@ export interface PageTransport {
    *  many (engine/part-lane.ts). 0 or absent: a part goes in the page's turn,
    *  one at a time, under the pacer. */
   parallelParts?(): number;
-  /** A fresh browser learns its session from admitted site GETs. While
-   *  unknown, only the bootstrap reads may use that path. Absent: a test's
-   *  stand-in. */
-  needsSiteBootstrap?(): boolean;
   /** A newly loaded browser must witness an engine identity read in this
    *  Chrome start even when its saved session's digest is already trusted.
    *  Absent: a test's stand-in; never grants permission around a page/route
@@ -302,17 +298,11 @@ export interface PageTransport {
 export type HeldAnswer =
   /** It never left, by the sender's own record: closed as not sent. */
   | { kind: "not_sent"; attemptId: number }
-  /** Nothing tells whether it left: `unknown`, as without such a sender.
-   *  `held`: the sender keeps an outcome that says so (a site socket whose
-   *  operator started again after its admission, `wsDone.fate`) — dropped
-   *  once the attempt is settled `unknown`. */
-  | { kind: "unknown"; attemptId: number; held?: true }
+  /** Nothing tells whether it left: `unknown`, as without such a sender. */
+  | { kind: "unknown"; attemptId: number }
   /** An engine request's outcome, as `send` would have returned it for the
    *  attempt's row. */
-  | { kind: "request"; attemptId: number; resolve(attempt: SyncAttemptRow): Promise<HeldRequestOutcome> }
-  /** A site request's or a site socket's end (`fate: "unknown"` of a socket
-   *  comes as `unknown`). */
-  | { kind: "site"; attemptId: number; end: SiteRequestEnd; sentWall: Date | null };
+  | { kind: "request"; attemptId: number; resolve(attempt: SyncAttemptRow): Promise<HeldRequestOutcome> };
 
 export interface HeldRequestOutcome {
   outcome: TransportOutcome;
@@ -407,78 +397,23 @@ export type WsSourceState = "idle" | "open" | "stopped";
 
 // ── a page's own site requests (Project Browser, plan §3.2, spec §3) ────────
 
-/** A request of the page's own site that waits for the engine's admission:
- *  the page's browser holds it paused until the engine grants or refuses it
- *  (`siteAdmit` of the operator, spec §6). */
-export interface PendingSiteRequest {
-  /** The operator's id of the request (`siteRequestId`). */
-  id: string;
-  method: string;
-  /** The class of its host: the API, the socket, the media CDN. */
-  host: "api" | "ws" | "cdn";
-  /** Its URL's path (a query is ignored; the journal keeps parameter names
-   *  only). */
-  path: string;
-  /** When the engine heard of it (this process's monotonic clock). */
-  askedMono: number;
-  /** When the request's own wait ends, on this process's monotonic clock
-   *  (the browser's absolute deadline: a socket's counts from its CONNECT,
-   *  before the engine heard of it). Never admitted at or after it. Absent:
-   *  the engine's wait alone (`SITE_WAIT_MS` from `askedMono`). */
-  waitDeadlineMono?: number;
-  /** The operator is in its manual-login mode: the owner logs in. Only then
-   *  does a login operation pass, and only then do the site's requests pass
-   *  the page's pause, its credentials hold and checks-only (plan §3.2). */
-  manualLogin: boolean;
-}
-
-/** How an admitted site request ended, as the operator reports it.
- *  `sentMono`: when it left, as the browser reported it, on the engine's
- *  monotonic clock (absent or null: not reported — the completion counts). */
+/** How a site request ended, as its answer is committed (variant Б: an
+ *  observed hop's end, `commitObservedSiteEnd`). `sentMono`: when it left,
+ *  as the browser reported it, on the engine's monotonic clock (absent or
+ *  null: not reported). */
 export type SiteRequestEnd =
   | { kind: "response"; status: number; retryAfterMs: number | null; sentMono?: number | null }
   | { kind: "transport_error"; sent: boolean; message: string; sentMono?: number | null }
   | { kind: "aborted_before_send"; reason: string };
 
-/** Why the engine refused a site request (`siteAdmitResult`). */
-export type SiteRefusalReason =
-  | "waited_too_long"
-  | "write"
-  | "method"
-  | "not_api_path"
-  | "not_a_route"
-  | "mode"
-  | "paused"
-  | "credentials"
-  | "held"
-  | "route_held"
-  | "hour_ceiling"
-  /** The admission's final check refused the grant (ownership lost, the send
-   *  window passed, the pause): nothing may be sent. */
-  | "lease";
-
-/** The page browser's side of the site admission: its pending requests, the
- *  engine's answers, the end of an admitted request. Absent on a page without
- *  a browser: nothing of the site path runs there. */
+/** The page browser's side of the site path: what it tells of the site's
+ *  own traffic. Absent on a page without a browser: nothing of the site path
+ *  runs there. */
 export interface SiteAdmissionPort {
-  /** The requests waiting now, oldest first. Objects stay stable while
-   *  pending, so a choice can be fenced against cancellation/reconnection. */
-  pending(): readonly PendingSiteRequest[];
-  /** Admit one: the browser may send it within `sendWithinMs` from now (the
-   *  admission's send window left), under the attempt `attemptId`. False:
-   *  this exact choice was cancelled/replaced before the grant. */
-  grant(id: string, admission: { attemptId: number; sendWithinMs: number }, request?: PendingSiteRequest): boolean | void;
-  /** Refuse one: it is failed in the browser, nothing is sent. */
-  refuse(id: string, reason: SiteRefusalReason, request?: PendingSiteRequest): void;
-  /** The end of an admitted request; never throws for an outcome. */
-  end(id: string, signal: AbortSignal): Promise<SiteRequestEnd>;
-  /** The end of `id` (its attempt `attemptId`) is committed: a browser that
-   *  keeps the end until it is acknowledged may drop it now. Never throws. */
-  settled?(id: string, attemptId: number): void;
   /** Variant Б (protocol minor 4): what the page's browser tells of the
    *  site's own traffic it let go — observed, never admitted. One listener;
    *  null removes it. */
-  onObserved?(listener: ((event: SiteObservation) => void) | null): void;
+  onObserved(listener: ((event: SiteObservation) => void) | null): void;
 }
 
 /** One hop of an observed site request, as the engine takes it once: the

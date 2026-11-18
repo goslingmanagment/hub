@@ -11,7 +11,6 @@ import {
 } from "@agency_hub_core/db";
 import { FANSLY_WIRE_IDS, fanslyWireSpec, type FanslyWireId, type FanslyWireOutcome } from "@agency_hub_core/fansly";
 
-import type { FanslyRoute } from "../fansly/routes.ts";
 import {
   apply,
   capture,
@@ -29,13 +28,11 @@ import {
 import { classifyWireOutcome } from "./errors.ts";
 import type { HeldAnswer, HeldOutcomeSource, HeldRequestOutcome } from "./ports.ts";
 import type { WorkClass } from "./scheduler.ts";
-import { commitSiteEnd } from "./site-slot.ts";
 
 // The outcomes a sender outside the process keeps until the engine commits
 // them (Project Browser, plan §3.2 «Приём буфера и восстановление», §4.2
 // step 7, §4.9; spec §6.1 `recover`; stage 3 PR 13): a page's operator keeps
-// every outcome of a request — a Hub request's `result`, a site request's
-// `siteDone`, a site socket's `wsDone` — in its buffer until `resultAck`.
+// every outcome of a Hub request (`result`) in its buffer until `resultAck`.
 //
 // At the actor's start (`reconcileHeldOutcomes`), BEFORE its recovery closes
 // the attempts left unfinished as `unknown` (`recoverUnfinished`), the sender
@@ -49,9 +46,7 @@ import { commitSiteEnd } from "./site-slot.ts";
 //   otherwise skip it. An answer of another session is never the attempt's:
 //   it is kept as a fact first, and the attempt settles as a request that
 //   went without its answer — nothing of it is captured as the route's or
-//   applied. A site request's or socket's end settles its attempt by the
-//   site path's rules (a 429 holds its route; a 401/403 holds the
-//   credentials unless its admission recorded the manual login);
+//   applied;
 // - `not_sent`: the sender's record shows it never left — closed as not sent
 //   (`aborted_before_send`, `not_sent:held`);
 // - `unknown` (or the sender not reachable within `HELD_RECOVER_WAIT_MS`):
@@ -82,7 +77,7 @@ export const HELD_LATE_PER_LAP = 50;
 /** How one held outcome was taken (tests, metrics). */
 export interface HeldTaken {
   attemptId: number;
-  how: "captured" | "not_sent" | "site_end" | "applied" | "journaled" | "acknowledged" | "unknown" | "left";
+  how: "captured" | "not_sent" | "applied" | "journaled" | "acknowledged" | "unknown" | "left";
 }
 
 function isUnfinished(attempt: SyncAttemptRow): boolean {
@@ -180,35 +175,15 @@ async function takeOne(d: CommitDeps, held: HeldOutcomeSource, answer: HeldAnswe
 async function take(d: CommitDeps, held: HeldOutcomeSource, answer: HeldAnswer, attempt: SyncAttemptRow | null): Promise<HeldTaken["how"]> {
   if (attempt === null || attempt.pageId !== d.pageId) {
     // Not an attempt of this page: nothing will ever claim it.
-    if (answer.kind === "request" || answer.kind === "site") held.acknowledge(answer.attemptId);
+    if (answer.kind === "request") held.acknowledge(answer.attemptId);
     return "acknowledged";
   }
   switch (answer.kind) {
     case "unknown":
-      if (answer.held === true) {
-        // An outcome that says nothing tells: the attempt is `unknown` (as
-        // the recovery would close it), and the sender may drop it.
-        if (isUnfinished(attempt)) await settleHeldUnknown(d, attempt);
-        held.acknowledge(attempt.id);
-      }
       return "unknown";
     case "not_sent":
       if (isUnfinished(attempt)) await settleHeldNotSent(d, attempt);
       return "not_sent";
-    case "site":
-      if (isUnfinished(attempt)) {
-        const sent = answer.end.kind === "response" || (answer.end.kind === "transport_error" && answer.end.sent);
-        await commitSiteEnd(d, {
-          attemptId: attempt.id,
-          send: heldSend(attempt, sent, answer.sentWall),
-          end: answer.end,
-          // The manual login's exemption as its admission recorded it: an
-          // ordinary request's 401/403 holds the credentials, as live.
-          classified: { route: attempt.operation as FanslyRoute, exempt: manualLoginOf(attempt) },
-        });
-      }
-      held.acknowledge(attempt.id);
-      return "site_end";
     case "request": {
       if (!(FANSLY_WIRE_IDS as readonly string[]).includes(attempt.operation)) {
         // Not an engine request's attempt (a site request's): no result of
@@ -220,13 +195,6 @@ async function take(d: CommitDeps, held: HeldOutcomeSource, answer: HeldAnswer, 
       return isUnfinished(attempt) ? captureHeld(d, held, attempt, resolved) : lateHeld(d, held, attempt, resolved);
     }
   }
-}
-
-/** Whether a site attempt was the manual login's (its admission records it,
- *  `engine/site-slot.ts` `admitSite`). */
-function manualLoginOf(attempt: SyncAttemptRow): boolean {
-  const request = attempt.request as { manualLogin?: unknown } | null;
-  return request?.manualLogin === true;
 }
 
 /** The send facts of a held outcome: the instant the sender reported, else
@@ -245,14 +213,6 @@ function heldSend(attempt: SyncAttemptRow, sent: boolean, reported: Date | null)
     pauseMs: attempt.pauseMs,
     settingMs: attempt.settingMs,
   };
-}
-
-async function settleHeldUnknown(d: CommitDeps, attempt: SyncAttemptRow): Promise<void> {
-  await d.db.transaction(async (raw) => {
-    const tx = raw as unknown as Database;
-    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    await settleAttemptWithoutCapture(tx, { attemptId: attempt.id, outcome: "unknown", errorClass: "held:fate_unknown" });
-  });
 }
 
 async function settleHeldNotSent(d: CommitDeps, attempt: SyncAttemptRow): Promise<void> {

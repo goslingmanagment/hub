@@ -62,7 +62,6 @@ or collection flags.
 |---|---|
 | `OFAPI_EXPECTED_TEAM_SLUG` | Exact slug established independently through the owner's existing OFAPI team/console evidence. Never populate it by copying a new key's whoami response as the sole proof. |
 | `OFAPI_WEBHOOK_MANAGEMENT_SCOPE=unknown\|team` | Default `unknown`. Set `team` only after verifying full management/inventory visibility in the provider console; whoami and account counts do not prove this. |
-| `OFAPI_BALANCE_PING_ENABLED` | Existing flag remains default off; enabling the credit ledger or deploying this release does not enable the optional daily probe. The probe now costs zero credits. |
 
 The API key remains server-side in the existing secret configuration. Never put
 keys, authorization headers or webhook signing requests in rollout notes.
@@ -187,25 +186,6 @@ repository still has that pre-existing type debt. Vite reports its existing
 large-chunk warning. `pnpm contracts:generate`, `pnpm build:production` and `git diff --check` completed.
 The dated full-repository code maps retain their earlier generation commit;
 current release behavior is described here and in the generated API/auth artifacts.
-
-The following single, serial integration invocation passed all 357 tests across
-24 files with Docker/Testcontainers and no skips:
-
-```sh
-pnpm exec vitest run --no-file-parallelism \
-  tests/ofapi-refresh.integration.test.ts tests/ofapi-webhook.integration.test.ts \
-  tests/ofapi-account-health.integration.test.ts tests/ofapi-command-outbox.integration.test.ts \
-  tests/ofapi-audience-sync.integration.test.ts tests/ofapi-fan-identities.integration.test.ts \
-  tests/ofapi-read-gateway.integration.test.ts tests/ofapi-credit-ledger.integration.test.ts \
-  tests/ofapi-dm-projection.integration.test.ts tests/ofapi-presence.integration.test.ts \
-  tests/ofapi-dm-archive.integration.test.ts tests/ofapi-dm-sync.integration.test.ts \
-  tests/ofapi-capture-repository.integration.test.ts tests/ofapi-flag-flip-hardening.integration.test.ts \
-  tests/ofapi-sync-snapshot.integration.test.ts tests/canonicalize-sweep.integration.test.ts \
-  tests/db-write.integration.test.ts tests/erasure-page-owned-tables.integration.test.ts \
-  tests/erasure.integration.test.ts tests/ofapi-roster-boundary.integration.test.ts \
-  tests/tiering.integration.test.ts tests/ofapi-spend-transaction-ingest.integration.test.ts \
-  tests/page-sync-gated-skip.integration.test.ts tests/overview-read-paths.integration.test.ts
-```
 
 
 ### Auth recovery evidence boundary

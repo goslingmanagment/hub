@@ -12,13 +12,6 @@ docker exec -it agency-hub-postgres-1 psql -X -v ON_ERROR_STOP=1 -U postgres -d 
 # BEGIN READ ONLY; SET LOCAL statement_timeout='30s'; …; ROLLBACK;
 ```
 
-The original Wave-1 rollout used desktop 0.1.33 and required no desktop build.
-For a new rollout, check the intended version and feed against the desktop's
-`apps/desktop/package.json` and `docs/RELEASE.md` in
-`~/code/1-platform/onlyfans-chat`; do not use 0.1.33 as a current release target.
-**0.1.29 is manual-reinstall-only**: the updater has no allowDowngrade
-(verified), so a machine rolled back to 0.1.29 can only move forward by reinstalling.
-
 ## PR1 — capture path
 
 - **Cold-archive upsert failure is self-healing, no alarm.** If the post-settle
@@ -57,9 +50,8 @@ For a new rollout, check the intended version and feed against the desktop's
 
 ## PR4 — readthrough reconcile (`ofapiDmReadthroughReconcileEnabled`)
 
-- **Flag lane:** boolean, STAGED (boot-applied) — flips via the staged endpoint +
-  restart, own verification window (same day per the rollout override). Deploy
-  precondition (owner-verified): `ofapiDmColdArchiveEnabled` effectively ON.
+- **Removed 2026-11-10** (#1146) with the desktop read gateway: its switch was retired
+  2026-10-21, then the projector itself was deleted. Nothing below runs; the bullets are history.
 - **What it does when ON:** chat-open readthroughs journal the widened v2 observation
   (`ofapi_gateway_chat_messages_v2`) + immediate best-effort projection; the minutely
   readthrough sweep (rides canonicalize.sweep) is the retry. When OFF, capture keeps
@@ -112,8 +104,8 @@ mass-appends redundant superseding events for the whole history (preamble 1).
    command-only rows that will get FIRST events when the reconciler turns on;
    `emittedClosed` should be the overwhelming majority (webhook history already in
    the ledger); `stubsSkipped` = null-ref tombstone stubs (documented survivors).
-3. **Flip `OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED`** (staged boot flag #122 +
-   restart). Watch the worker's `DM corrections reconcile sweep complete` line:
+3. **The DM corrections reconciler** always runs (its switch was retired
+   2026-10-21). Watch the worker's `DM corrections reconcile sweep complete` line:
    `firstEvents` drains ≈ drainOpen at ≤500 rows/min then goes quiet;
    `superseding` stays near zero in steady state (each one = a real material
    correction reaching the ledger); `lineageSkips`/`stubSkips` nonzero-but-stable
@@ -155,8 +147,8 @@ mass-appends redundant superseding events for the whole history (preamble 1).
   intake CLI + operator-lane fallback + persistent sweep cursor +
   aggregated warn. Re-enable sequence, in this order:
   `corrections:intake-lineage --dry-run` (expect journal+material ≈ the
-  open drain) → real run → flip `OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED`
-  back on (env + recreate) → watch `DM corrections reconcile sweep
+  open drain) → real run → the reconciler back on (since 2026-10-21 it
+  always runs: its switch was retired) → watch `DM corrections reconcile sweep
   complete`: firstEvents drains ≈17k at ≤500/min (~35 min), lineageSkips
   → 0. The snapshot table stays until the drain completes.
 - **The backfill expectation was miscalibrated**: prod reality is
@@ -172,9 +164,8 @@ mass-appends redundant superseding events for the whole history (preamble 1).
 
 ### Rollback
 
-- Reconciler: staged flag off + restart — sweeps stop; fingerprint columns are
-  passive bookkeeping; no cleanup. (Turning it back on later resumes from the
-  repair signal exactly where it stopped.)
+- Reconciler: it always runs since its switch was retired (2026-10-21); stopping
+  it is a code change. Fingerprint columns are passive bookkeeping; no cleanup.
 - The 1970 repair and any appended superseding events are FACTS (append-only
   ledger) — there is no rollback; "stop" = don't run the campaign further. The
   archive projection keeps whatever it last applied.

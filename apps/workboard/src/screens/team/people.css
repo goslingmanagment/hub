@@ -49,44 +49,7 @@
     font-variant-numeric: normal;
   }
 
-  .people-link {
-    color: var(--ui-text);
-    font-weight: 500;
-    text-decoration: none;
-  }
-
-  .people-link:hover {
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-
-  /* On a wide screen the name column has room: the person's pages stand beside the name, in their own column of text. */
-  .people-who {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    align-items: start;
-  }
-
-  .people-who__pages {
-    display: none;
-  }
-
   @media (min-width: 1680px) {
-    .people-who {
-      grid-template-columns: 240px minmax(0, 1fr);
-      column-gap: 24px;
-    }
-
-    .people-who__pages {
-      display: inline;
-      min-width: 0;
-      overflow: hidden;
-      color: var(--ui-text-2);
-      font-variant-numeric: normal;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
     .people-head__break {
       display: none;
     }

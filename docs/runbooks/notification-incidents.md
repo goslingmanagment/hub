@@ -34,9 +34,8 @@ Consequences:
 - An incident opened while alerts were disabled gets a `suppressed` row and is
   never retro-paged (re-enabling alerts must not flood).
 
-Telegram alerting does NOT carry the outbox one-attempt law — that law is the
-platform command outbox's (`ofapi_commands`), where a duplicate is a real
-action; a duplicate pager message is harmless.
+Telegram alerting is not an outgoing platform command: a duplicate pager
+message is harmless.
 
 Checks (read-only, `prodsql.sh`; `:d` = deploy time):
 
@@ -99,10 +98,8 @@ tombstone, the paging sweep's resolve message after its hold), stored as
 `Reason: the page is owned by the Fansly Sync Engine; the legacy stream no longer runs`.
 While the engine owns the page (`handover` or `live`) a legacy chunk failure
 opens no legacy incident (`proxy_failed` or `stream_failed_threshold`); the
-engine reports the page through its own `fansly_sync_engine` alerts. A page
-rolled back to `off` gets its legacy latches back from the next legacy failure
-(the streak stays on the legacy row). OnlyFans pages and the engine's own
-latches are untouched.
+engine reports the page through its own `fansly_sync_engine` alerts. OnlyFans
+pages and the engine's own latches are untouched.
 
 ## syncUnblocked: false (W3.3, D4-N1)
 

@@ -185,18 +185,20 @@ open, resolves on the describer's next sweep.
   its switch and its daily limit went with the other config keys of the legacy
   Fansly engine (S4-26). Its rows stay as records:
   `ai_media_accelerator_reads` with `lane = 'chunk'`.
-- **OnlyFans** (0216): locators of the desktop images layer, **free sources
-  only** — webhook `Expires` URLs (≥120 s left) and `cdn.fansapi.com` URLs the
-  desktop resolve handed out (now persisted as `source = 'resolve'`). `policy`
-  URLs are ignored. The AI path makes **zero OFAPI calls**. Variant: `preview`
+- **OnlyFans** (0216): the locators the hub records (`ofapi_media_locators`),
+  **free sources only** — webhook `Expires` URLs (≥120 s left) and
+  `cdn.fansapi.com` (OFAPI cache) URLs; `policy` URLs are ignored. Live
+  locators come from the `messages.*` webhooks only
+  (`recordOfapiWebhookMediaLocators`); collection and interactive read
+  observations feed them only through the manual `ofapi:media-locators:recover`.
+  The AI path makes **zero OFAPI calls**. Variant: `preview`
   (~960–1700 px) first, then `full` (photo) / `thumb` (video poster).
   Candidates: `messages.received` fan media (live/dormant as above) and
   `messages.sent` PPV teasers (`previews[]`, due at once — the free link lives
   ~23 h). No free URL → `awaiting_source`, looked at again after 1, 5 and 30
   minutes, then every 6 hours, `unavailable` after 7 days — and at once when a
-  free locator (webhook Expires, OFAPI cache hand-out) is recorded for the
-  file. A photo falls back to the desktop's own `thumb` (~300 px) when no
-  larger free rendition exists.
+  free locator is recorded for the file. A photo falls back to `thumb`
+  (~300 px) when no larger free rendition exists.
 
 ## Switches (console → Settings, all live)
 
@@ -238,8 +240,8 @@ first generation or a replayed projection never starts a historical pass.
 ## Privacy
 
 Restricted class like `ai_generation_content`: owner-only, excluded from the
-lake (`LAKE_EXCLUDED_TABLES`) and the Agent Read Plane (no dataset maps it),
-inside fan and page erasure. Fan erasure deletes the fan's links and the
+Agent Read Plane (no dataset maps it), inside fan and page erasure. Fan
+erasure deletes the fan's links and the
 descriptions of media the fan sent; a PPV teaser's description (creator
 content, nothing about the fan) stays with its other links. No TTL. The
 describer and its logs never store a URL, a signature, bytes or a description
