@@ -671,6 +671,17 @@ function requireServer(context: { skip: () => void }) {
 }
 
 describe("WP-S1 serving routes: media, tags and coverage", () => {
+  it("serves a tag's unserved metrics as null, never zero", async (context) => {
+    if (!requireServer(context)) return;
+    const response = await get(`/api/v1/pages/${PAGE}/stats/tags?from=${WINDOW_FROM}&to=${WINDOW_TO}`);
+    expect(response.statusCode, response.body).toBe(200);
+    const tags = new Map<string, unknown>(
+      response.json().topTags.map((row: { tagRef: string }) => [row.tagRef, row]),
+    );
+    expect(tags.get("tag-1")).toMatchObject({ views: 900, previewViews: null, interactionTimeMs: null });
+    expect(tags.get("tag-2")).toMatchObject({ tagName: null, previewInteractionTimeMs: null });
+  });
+
   it("lists what sells by net, whatever its views, with the derived gross, for the owner only", async (context) => {
     if (!requireServer(context)) return;
     const url = `/api/v1/pages/${PAGE}/stats/creator/content?days=30`;
@@ -799,12 +810,14 @@ describe("WP-S1 agent datasets: the generated SQL runs and labels what it reads"
     }>(
       `with src as (${AGENT_DATASET_SQL.media_stats!.source})
        select src.f_sales_net_mills, src.f_sales_gross_mills_derived, src.f_source_label
-       from src where src.k_page_id = $1 limit 1`,
+       from src where src.k_page_id = $1 and src.f_media_offer_ref = 'media-1'
+       order by src.f_source_code, src.f_bucket_start`,
       [pageId],
     );
     expect(Number(result.rows[0]!.f_sales_net_mills)).toBe(16_792);
     expect(Number(result.rows[0]!.f_sales_gross_mills_derived)).toBe(20_990);
-    expect(["fyp", "direct"]).toContain(result.rows[0]!.f_source_label);
+    // Both media codes, each by its own label.
+    expect([...new Set(result.rows.map((row) => row.f_source_label))]).toEqual(["fyp", "direct"]);
   });
 
   it("labels revenue codes with their era, and names an unmapped one", async (context) => {
