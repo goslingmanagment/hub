@@ -1,5 +1,3 @@
-import { hostname } from "node:os";
-
 import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 
@@ -18,7 +16,7 @@ import {
   unliftExcludedChats,
 } from "../excluded.ts";
 import { createFanslyRegistry } from "../fansly/registry.ts";
-import { json } from "./args.ts";
+import { cliActor, json, withSyncContext as withContext } from "./args.ts";
 
 // The owner's CLI of owner decision №8 (step-3 design S3-06, runbook §6.2 S6):
 //   pnpm cli sync excluded probe  --page P [--sample 20] [--reason partner_missing_from_aggregation_accounts]
@@ -37,10 +35,6 @@ const defaultDeps: SyncExcludedCliDeps = {
   print: (line) => console.log(line),
 };
 
-function cliActor(): string {
-  return `cli@${hostname()} pid ${process.pid}`;
-}
-
 function reasonOption(value: string): FanslyDmMessageSyncExcludedReason {
   try {
     return parseExclusionReason(value);
@@ -55,15 +49,6 @@ function sampleOption(value: string): number {
     throw new InvalidArgumentError(`Expected a sample between 1 and ${EXCLUDED_PROBE_MAX_SAMPLE}, received "${value}"`);
   }
   return parsed;
-}
-
-async function withContext<T>(deps: SyncExcludedCliDeps, body: (ctx: Pick<SyncContext, "db">) => Promise<T>): Promise<T> {
-  const ctx = await deps.openContext();
-  try {
-    return await body(ctx);
-  } finally {
-    await ctx.close();
-  }
 }
 
 export function registerSyncExcludedCommands(sync: Command, deps: SyncExcludedCliDeps = defaultDeps): void {

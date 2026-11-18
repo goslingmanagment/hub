@@ -5,13 +5,11 @@ import { listSyncPages, readThreadChain, type SyncPageRow } from "@agency_hub_co
 import { createAppContext } from "../../bootstrap.ts";
 import { checkEndRule, checkWindow, type EndRulePageReport } from "../fansly/lib/chain-checks.ts";
 import { ScanGovernor } from "../fansly/lib/chain-rebuild.ts";
-import { isoDate, nonNegativeInt, positiveInt } from "./args.ts";
+import { DEFAULT_CHAIN_JOURNAL_SINCE, isoDate, nonNegativeInt, positiveInt } from "./args.ts";
 
 // Owner CLI `pnpm cli sync chain …` (design §8.3): the read-only checks of the
 // DM chains over the legacy journal. JSON reports on stdout, progress on
 // stderr.
-
-const DEFAULT_SINCE = "2026-07-05T00:00:00Z";
 
 /** `90s`, `30m`, `2h`, or plain seconds. */
 export function parseDurationMs(value: string): number {
@@ -79,7 +77,7 @@ export function registerSyncChainCommands(sync: Command): void {
       "Read-only: short-page counterexamples, empty-page soundness, the first-second heuristic and legacy "
         + "verdicts over the legacy /message journal (design §8.3)",
     )
-    .option("--since <iso>", "journal rows captured since", isoDate, new Date(DEFAULT_SINCE))
+    .option("--since <iso>", "journal rows captured since", isoDate, new Date(DEFAULT_CHAIN_JOURNAL_SINCE))
     .option("--page <label>", "one page (default: every Fansly page)")
     .option("--batch-rows <n>", "journal rows per read", positiveInt, 500)
     .option("--sleep-ms <n>", "pause between batches", nonNegativeInt, 200)
