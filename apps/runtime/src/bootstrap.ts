@@ -178,7 +178,11 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
       })
       : undefined;
     // Preflight failure leaves database-only work available; stateful dispatch stays closed.
-    await ofapi?.getCredentialPreflight?.();
+    // Every role starts the /whoami here; the api alone builds its server while
+    // it is in flight (an OFAPI write still awaits it, assertCredentialReady),
+    // and close() lets it settle before the pool ends.
+    const ofapiPreflight: Promise<unknown> = ofapi?.getCredentialPreflight?.() ?? Promise.resolve(undefined);
+    if (options.processRole !== "api") await ofapiPreflight;
     const anthropicAccountPool = createAnthropicAccountPool({
       db,
       logger,
@@ -211,8 +215,9 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
       fanslySendGuards,
       poolLifetime,
       async close() {
-        // Before the pool ends: a lease still held (none at run time since
-        // step 4) writes its completion first.
+        // Before the pool ends: the api's preflight writes its result, and a
+        // lease still held (none at run time since step 4) its completion.
+        await ofapiPreflight.catch(() => undefined);
         await fanslySendGuards.close();
         await pool.end();
       },
