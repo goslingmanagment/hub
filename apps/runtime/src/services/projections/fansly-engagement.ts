@@ -50,8 +50,8 @@
 import {
   getPageTransactionsWriterInfo,
   getProjectionWatermark,
-  listEventAccounts,
   listEventsSince,
+  listProjectionWork,
   markMediaStatsPurchaseDirty,
   setProjectionWatermark,
   upsertPlatformNotification,
@@ -152,13 +152,15 @@ export async function runFanslyEngagementProjection(
     notifications: 0,
     purchaseSignals: 0,
   };
-  const accounts = input?.accountId != null
-    ? [input.accountId]
-    : await listEventAccounts(app.db);
+  const work = input?.accountId != null
+    ? { accounts: [input.accountId], idle: new Set<number>() }
+    : await listProjectionWork(app.db, FANSLY_ENGAGEMENT_PROJECTION);
+  const accounts = work.accounts;
   const platformCache = new Map<number, string | null>();
 
   for (const accountId of accounts) {
     totals.accounts += 1;
+    if (work.idle.has(accountId)) continue;
     if (!platformCache.has(accountId)) {
       const page = await getPageTransactionsWriterInfo(app.db, accountId);
       platformCache.set(accountId, page?.platform ?? null);

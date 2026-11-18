@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { Database, SyncAttemptRow, SyncPageRow, SyncWorkRow } from "@agency_hub_core/db";
 import { describeFanslyWrite } from "@agency_hub_core/fansly";
-import type { AppConfig } from "@agency_hub_core/shared";
 
 import type { ApplyInput, ApplyResult, PlanContext, RequestPlan, StepPlan } from "../apps/runtime/src/sync/engine/resource.ts";
 import { diffFanSetList, FAN_SET_LIST_AFTER_CUT_MS, FAN_SET_LIST_RECHECK_MS } from "../apps/runtime/src/sync/fansly/lib/fan-set-list-rules.ts";
@@ -12,6 +11,7 @@ import {
   type FanSetListSet,
   type FanSetListStore,
 } from "../apps/runtime/src/sync/fansly/resources/fan-set-lists.ts";
+import { fakeSettings } from "./helpers/sync-fakes.ts";
 
 // Fan set lists (2026-10-28): the Fansly list Hub keeps equal to a page's
 // cross-page spenders. The diff and its removal guard, and the sync's steps:
@@ -85,7 +85,7 @@ function storeOf(w: World): FanSetListStore {
   };
 }
 
-const settings = (w: World) => ({ read: async () => ({ crossSpendersLists: w.setting }) as AppConfig });
+const settings = (w: World) => fakeSettings(() => ({ crossSpendersLists: w.setting }));
 
 function workOf(w: World): SyncWorkRow {
   return { id: 9, pageId: 1, resource: "fan-set-lists.sync", subject: "", cursor: w.work.cursor, lastAttemptId: w.work.lastAttemptId } as SyncWorkRow;

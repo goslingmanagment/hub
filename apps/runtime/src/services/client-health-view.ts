@@ -6,6 +6,7 @@ import {
   listClientHealthPerfTotals,
   type ClientHealthContractTotal,
   type ClientHealthCounterTotal,
+  type ClientHealthHourRange,
   type ClientHealthMissingTotal,
   type ClientHealthPerfTotal,
 } from "@agency_hub_core/db";
@@ -254,7 +255,7 @@ export async function getClientHealthView(
   now: Date = new Date(),
 ): Promise<AdminClientHealthResponse> {
   const range = resolveClientHealthViewRange(query);
-  const hours = { from: range.fromBound, toExclusive: range.toExclusiveBound, clientName: query.clientName };
+  const hours = rollupHoursOf(range, query.clientName);
   // One snapshot: a report folded between two of the reads would otherwise be
   // counted in the contract rows and missing from the histograms.
   const totals = await app.db.transaction(async (tx): Promise<ClientHealthViewTotals> => ({
@@ -269,4 +270,19 @@ export async function getClientHealthView(
   }), { isolationLevel: "repeatable read", accessMode: "read only" });
 
   return buildClientHealthView(totals, { range, asOf: now, metric: query.metric });
+}
+
+/** The view's counters alone, as `getClientHealthView` gives them (the matters mirror's, every minute): one read,
+ *  its own snapshot. */
+export async function readClientHealthCounters(
+  app: Pick<AppContext, "db">,
+  query: Pick<AdminClientHealthQuery, "from" | "to" | "clientName">,
+): Promise<Array<{ code: string; total: number }>> {
+  const hours = rollupHoursOf(resolveClientHealthViewRange(query), query.clientName);
+  return (await listClientHealthCounterTotals(app.db, hours)).map((row) => ({ code: row.code, total: row.total }));
+}
+
+/** The rollup hours a range of days reads: one bound for the view and its counters. */
+function rollupHoursOf(range: ClientHealthViewRange, clientName: string | undefined): ClientHealthHourRange {
+  return { from: range.fromBound, toExclusive: range.toExclusiveBound, clientName };
 }
