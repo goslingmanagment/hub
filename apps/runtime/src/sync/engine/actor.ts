@@ -3,6 +3,7 @@ import {
   findObservedSiteRequest,
   getSyncAttempt,
   getSyncPage,
+  hasRunnableWork,
   LiveGateClosedError,
   lockOwnedPage,
   markAttemptCommitFailed,
@@ -602,9 +603,20 @@ export class SyncActor {
       const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals, !this.#siteTurns.due());
       if (served !== "none") return served;
     }
-    const picked = underCredentials
-      ? await this.#pickCredentialsCheck(page, gate.checks?.verify === true)
-      : await this.#pick(page, holds, held?.until ?? null, now, exclusions, clocks, now.getTime() + grant.settingMs * (1 + JITTER_MAX));
+    let picked: PickedWork | PickWait | null = null;
+    if (underCredentials) {
+      picked = await this.#pickCredentialsCheck(page, gate.checks?.verify === true);
+    } else {
+      // The pick asks at now and at the look-ahead instants, and a later
+      // instant leaves out fewer route-closed keys: one question with the last
+      // instant's exclusions finds every row a class picker could take. None:
+      // the pick is null, and its pickers are not asked.
+      const lookahead = lookaheadInstants(d.registry.specs, clocks, now, new Date(now.getTime() + grant.settingMs * (1 + JITTER_MAX)));
+      const widest = withRouteExclusions(exclusions, d.registry, clocks, lookahead.at(-1) ?? now);
+      if (await hasRunnableWork(d.db, { pageId: d.pageId, ...widest })) {
+        picked = await this.#pick(page, holds, held?.until ?? null, now, exclusions, clocks, lookahead);
+      }
+    }
     if (picked !== null && isPickWait(picked)) {
       // The short look-ahead: the slot waits for the class whose turn it is
       // (nothing is reserved; a wake picks again).
@@ -1164,7 +1176,8 @@ export class SyncActor {
     now: Date,
     exclusions: PickExclusions,
     clocks: RouteClocks,
-    lookaheadUntilMs: number,
+    /** The look-ahead instants (`lookaheadInstants`), ascending. */
+    lookahead: readonly Date[],
   ): Promise<PickedWork | PickWait | null> {
     const d = this.#d;
     const eligible = (work: SyncWorkRow): boolean =>
@@ -1225,7 +1238,7 @@ export class SyncActor {
       pausedAll: page.pausedAll,
       pausedRequests: page.pausedRequests,
       holdUntil: pageHeldUntil,
-    }, now, lookaheadInstants(d.registry.specs, clocks, now, new Date(lookaheadUntilMs)));
+    }, now, lookahead);
     if (picked === null || isPickWait(picked)) return picked;
     return {
       work: picked.work.work,

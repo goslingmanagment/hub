@@ -1242,6 +1242,31 @@ export async function nextOpenWorkDueAt(
   return toDate(result.rows[0]?.dueAt);
 }
 
+/** Whether the page has an open row due now, past its breaker and outside
+ *  these exclusions: the actor's one question before its class pickers.
+ *  Every picker (`pickUrgent`, `pickPlanned`, `pickRequests`) asks
+ *  `runnablePredicate` — this predicate plus a class and further conditions —
+ *  with exclusions that contain these, so false means each of them finds
+ *  nothing. */
+export async function hasRunnableWork(
+  db: Database,
+  input: Pick<SyncWorkPickFilter, "pageId" | "excludeResources" | "excludeFiles" | "excludeClasses">,
+): Promise<boolean> {
+  const result = await db.execute<{ runnable: boolean }>(sql`
+    select exists (
+      select 1
+        from sync_work w
+       where w.page_id = ${input.pageId}
+         and not w.shadow
+         and w.state = 'open'
+         and w.due_at <= clock_timestamp()
+         and (w.breaker_until is null or w.breaker_until <= clock_timestamp())
+         and ${exclusionPredicate(input)}
+    ) as runnable
+  `);
+  return result.rows[0]?.runnable === true;
+}
+
 /** Which of these subjects (absent: any) have an open (or running) row of
  *  `resource` — plain read, no lock. */
 export async function listOpenWorkSubjects(
