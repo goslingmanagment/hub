@@ -41,7 +41,7 @@ import {
   type QueueCreationClient,
   type SyncQueueLifecycleClient,
 } from "./sync-queue.ts";
-import { createOfapiRestGuard } from "./sync/ofapi-dm-sync.ts";
+import { createOfapiRestGuard } from "./ofapi-rest-guard.ts";
 import { buildNormalizedSyncError } from "./sync/errors.ts";
 import { persistRawPayload, retentionDate } from "./sync/shared.ts";
 import {

@@ -45,7 +45,7 @@ import {
   type SyncQueueLifecycleClient,
 } from "./sync-queue.ts";
 import { buildNormalizedSyncError } from "./sync/errors.ts";
-import { createOfapiRestGuard } from "./sync/ofapi-dm-sync.ts";
+import { createOfapiRestGuard } from "./ofapi-rest-guard.ts";
 import { persistRawPayload, retentionDate } from "./sync/shared.ts";
 
 export const OFAPI_FAN_ACCOUNT_CHECK_QUEUE = "ofapi.fan-account-check";

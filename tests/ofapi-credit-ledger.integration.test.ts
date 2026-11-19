@@ -21,7 +21,7 @@ import {
   runOfapiWebhookAccrual,
 } from "../apps/runtime/src/services/ofapi-credits.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
-import { createOfapiRestGuard } from "../apps/runtime/src/services/sync/ofapi-dm-sync.ts";
+import { createOfapiRestGuard } from "../apps/runtime/src/services/ofapi-rest-guard.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
