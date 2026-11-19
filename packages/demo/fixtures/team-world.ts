@@ -425,7 +425,8 @@ function fromAccountModel(schedule: Schedule, now: Date): { shifts: DemoShift[];
     kind: sale.kind,
     fan: sale.fan,
     netMills: sale.netMills,
-    priceMills: millsToNumber(millsRoundedTo(millsPercentOf(sale.netMills, 125), "cent")),
+    // The fan paid the net and the platform's cut: 125 % of the net (`millsPercentOf` takes 0…100: the net and its quarter).
+    priceMills: millsToNumber(millsRoundedTo(sumMills([sale.netMills, millsPercentOf(sale.netMills, 25)]), "cent")),
     at: sale.at,
     mark: sale.myMark?.mark ?? "mine",
     shareWith: sale.myMark?.shareWith ? DEMO_USERS.find((one) => one.username === sale.myMark!.shareWith) ?? null : null,
