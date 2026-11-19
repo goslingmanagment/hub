@@ -27,6 +27,9 @@ type List = KernelOperationResponse<"shiftReportsList">;
 /** The demo chatter hands in in Hub since a week ago (sale-chain.ts reads the same day). */
 export const SWITCH_DAYS = 7;
 
+/** The one chatter whose switch is off: their reports are posts in «Отчётность», as most of the agency's are today. */
+export const DEMO_OLD_WAY_USER = "ivan.p";
+
 interface Word { statement: ShiftReportLine["statement"]; shareWithUserId: number | null; shareWithName: string | null; note: string | null }
 interface Version { version: number; submittedAt: string; door: "workboard" | "telegram"; by: string; madeFor: string | null; body: ShiftReportBody }
 interface Kept {
@@ -447,6 +450,50 @@ export function demoChainShifts(now: Date, pick: { transactionId: number } | { p
   return out;
 }
 
+/**
+ * A shift's report as «Смены → Отчёты» reads it (team-shift-reports.ts), from the same rows as `shiftReportsList` and
+ * the board: the same phase, version and post, so the feed and «Мои» tell one story. Null — not one of the person's
+ * shifts here (the account model knows only the demo chatter's).
+ */
+export interface DemoHubReport {
+  id: number;
+  board: boolean;
+  phase: "draft" | "confirm" | "counted" | null;
+  latest: { version: number; submittedAt: string; door: "workboard" | "telegram"; body: ShiftReportBody } | null;
+  /** «Подтвердите»: what was handed in, and when. */
+  candidate: { at: string; body: ShiftReportBody } | null;
+  comment: string;
+  modelComments: Record<string, string>;
+  postCopied: boolean | null;
+  /** Nothing handed in on the board: the draft's total now («предварительно»), as `shiftReportsList` says it to the person. */
+  draftTotalMills: number | null;
+}
+
+export function demoHubReportOf(now: Date, owner: DemoUser, start: number): DemoHubReport | null {
+  const shift = shiftsOf(owner, now).find((one) => one.start === start);
+  if (shift === undefined) return null;
+  const id = shiftIdOf(shift, owner);
+  const today = Date.parse(`${mskDay(now.getTime())}T00:00:00Z`);
+  const found: Found = { shift, back: Math.round((today - Date.parse(`${mskDay(shift.start)}T00:00:00Z`)) / DAY_MS), id, owner };
+  seed(found, now);
+  const one = keptOf(id);
+  const latest = one.versions.at(-1) ?? null;
+  const board = shift.start >= switchSince(now);
+  const stage = stageOf(owner, shift, now);
+  const phase = latest !== null ? "counted" as const : !board ? null : stage?.kind === "confirm" ? "confirm" as const : "draft" as const;
+  return {
+    id,
+    board,
+    phase,
+    latest: latest === null ? null : { version: latest.version, submittedAt: latest.submittedAt, door: latest.door, body: latest.body },
+    candidate: phase === "confirm" ? { at: new Date(shift.end + 6 * MINUTE_MS).toISOString(), body: bodyOf(shift, found.back, owner, id, now) } : null,
+    comment: one.comment,
+    modelComments: one.modelComments,
+    postCopied: board && latest !== null ? one.postCopiedAt !== null : null,
+    draftTotalMills: board && latest === null && phase !== "confirm" ? bodyOf(shift, found.back, owner, id, now).totalMills : null,
+  };
+}
+
 const isReply = (value: unknown): value is DemoReply => typeof value === "object" && value !== null && "demoReply" in value;
 
 export const shiftReportHandlers: DemoHandlers = {
@@ -454,7 +501,7 @@ export const shiftReportHandlers: DemoHandlers = {
     const viewer = demoUserByRole(request.role);
     const userId = request.query.userId === undefined ? viewer.id : Number(request.query.userId);
     const owner = DEMO_USERS.find((user) => user.id === userId);
-    if (!owner || owner.role !== "chatter") return { enabled: false, enabledSince: null, shifts: [], serverNow: request.now.toISOString() };
+    if (!owner || owner.role !== "chatter" || owner.username === DEMO_OLD_WAY_USER) return { enabled: false, enabledSince: null, shifts: [], serverNow: request.now.toISOString() };
     const from = String(request.query.from ?? "");
     const to = String(request.query.to ?? "");
     const since = switchSince(request.now);

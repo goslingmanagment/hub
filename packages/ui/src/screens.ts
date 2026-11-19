@@ -359,6 +359,14 @@ export const SCREENS: readonly Screen[] = [
     keywords: "команда заработок кто работал на смене неделя журнал разбор смены без автора",
   },
   {
+    // «Отчёты» of «Смены» (owner, 2026-11-19): every shift's report of the teams the viewer sees, as Hub counts each for
+    // them (`teamShiftReports`); a tab, not a menu item.
+    id: "shift-reports", tabOf: "shifts", path: "/workboard/shifts/reports", label: "Отчёты", title: "Отчёты смен", section: "team", product: "workboard", roles: ["owner", "team_lead", "chatter"],
+    why: "Отчёты смен команды: кто, когда, сколько, из чего, сдан ли.",
+    pageFilter: "any",
+    keywords: "отчёты смен сдан не сдан проверка подтвердить учтён правка комментарий следующей смене",
+  },
+  {
     // The team at work (products plan §2.3, §4.3; it was «Люди» at /workboard/people, which leads here): the owner every
     // team, a team lead theirs, and a chatter who leads a team by its records (`leads`); a plain chatter has no item.
     id: "team", path: "/workboard/team", label: "Команда", title: "Команда", section: "team", product: "workboard", icon: "Users",

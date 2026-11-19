@@ -182,6 +182,18 @@ export async function listHandinCandidates(db: Database, handinId: number): Prom
   return result.rows.map(candidateOf);
 }
 
+/** The newest candidate of each report named, by report id (one query for a window of reports). */
+export async function listLatestHandinCandidates(db: Database, handinIds: readonly number[]): Promise<Map<number, CandidateRow>> {
+  if (handinIds.length === 0) return new Map();
+  const result = await db.execute<Row>(sql`
+    select distinct on (c.handin_id) ${CANDIDATE_COLUMNS} from shift_handin_candidates c
+    where c.handin_id = any(${ids(handinIds)}) order by c.handin_id, c.number desc`);
+  return new Map(result.rows.map((row) => {
+    const candidate = candidateOf(row);
+    return [candidate.handinId, candidate];
+  }));
+}
+
 export async function findHandinCandidate(db: Database, id: number, options: { lock?: boolean } = {}): Promise<CandidateRow | null> {
   const result = await db.execute<Row>(sql`
     select ${CANDIDATE_COLUMNS} from shift_handin_candidates c where c.id = ${id} ${options.lock ? sql`for update` : sql``}`);
@@ -291,6 +303,15 @@ export async function insertHandinProposal(
 export async function listHandinProposals(db: Database, handinId: number): Promise<ProposalRow[]> {
   const result = await db.execute<Row>(sql`select * from shift_handin_proposals where handin_id = ${handinId} order by id`);
   return result.rows.map(proposalOf);
+}
+
+/** How many proposals of each kind Gengar made on each candidate named, by candidate id (one query). */
+export async function countHandinProposals(db: Database, candidateIds: readonly number[]): Promise<Map<number, { ownerChange: number; note: number }>> {
+  if (candidateIds.length === 0) return new Map();
+  const result = await db.execute<Row>(sql`
+    select candidate_id, count(*) filter (where kind = 'owner_change') as owner_change, count(*) filter (where kind = 'note') as note
+    from shift_handin_proposals where candidate_id = any(${ids(candidateIds)}) group by candidate_id`);
+  return new Map(result.rows.map((row) => [num(row.candidate_id), { ownerChange: num(row.owner_change), note: num(row.note) }]));
 }
 
 export async function findHandinProposal(db: Database, id: number, options: { lock?: boolean } = {}): Promise<ProposalRow | null> {
@@ -419,6 +440,14 @@ export async function listTransactionPlatformRefs(db: Database, transactionIds: 
 }
 
 /** Whether a live agent key reviews shift reports on every one of the pages (Gengar's check is then awaited). */
+/** The page sets of the live keys that review shift reports (`hasShiftReportReviewer` of many shifts, one query). */
+export async function listShiftReportReviewerPages(db: Database): Promise<number[][]> {
+  const result = await db.execute<Row>(sql`
+    select page_ids from agent_keys
+    where 'review:shift_reports' = any(capabilities) and revoked_at is null and expires_at > now()`);
+  return result.rows.map((row) => jsonArray<unknown>(row.page_ids).map(Number));
+}
+
 export async function hasShiftReportReviewer(db: Database, pageIds: readonly number[]): Promise<boolean> {
   if (pageIds.length === 0) return false;
   const result = await db.execute<Row>(sql`

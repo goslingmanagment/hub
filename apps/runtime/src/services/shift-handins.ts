@@ -49,8 +49,10 @@ import {
   setHandinMark,
   withdrawOffPlatform,
   type Database,
+  type HandinPerson,
   type HandinRow,
   type HandinSaleRow,
+  type HandinShift,
   type HandinVersionLine,
   type HandinVersionMadeFor,
   type HandinVersionOffPlatform,
@@ -203,10 +205,20 @@ function projectionOf(input: {
   return { lines, pages, offPlatform, sums: reportSums(lines, pages, offPlatform), cut: cut !== null && pages.length < input.shiftPages.length };
 }
 
+/**
+ * A handed-in report (a version, or a candidate the board checks) as the reader may see it: whole — its stored total and
+ * pages; cut — its projection's (`projectionOf`). The total `shiftReportsList` and the version history show, and every
+ * report of «Смены → Отчёты» (team-shift-reports.ts).
+ */
+export function reportSeenBy(report: Pick<HandinVersionRow, "totalMills" | "pages" | "lines" | "offPlatform">, cutTo: Set<string> | null) {
+  if (cutTo === null) return { totalMills: report.totalMills, pages: report.pages.map((page) => ({ pageLabel: page.pageLabel, amountMills: page.amountMills })), lines: report.lines, cut: false };
+  const seen = projectionOf({ lines: report.lines, offPlatform: report.offPlatform, shiftPages: report.pages.map((page) => page.pageLabel), cutTo });
+  return { totalMills: seen.sums.totalMills, pages: seen.sums.pages, lines: seen.lines, cut: seen.cut };
+}
+
 /** A version's total as the reader may see it: the stored one whole, else its projection's. */
 function versionTotalFor(version: HandinVersionRow, cutTo: Set<string> | null): number {
-  if (cutTo === null) return version.totalMills;
-  return projectionOf({ lines: version.lines, offPlatform: version.offPlatform, shiftPages: version.pages.map((page) => page.pageLabel), cutTo }).sums.totalMills;
+  return reportSeenBy(version, cutTo).totalMills;
 }
 
 function bodyOf(input: {
@@ -524,6 +536,34 @@ export async function readAgentShiftReport(app: HandinApp, principal: AgentAuthP
 /** How many open drafts `shiftReportsList` computes for their total. */
 const LIST_DRAFTS_MAX = 7;
 
+/**
+ * The person's OWN shifts not handed in yet, begun since their switch: each one's draft total now, the one number «Мои
+ * смены» shows until the hand-in («предварительно») — the newest few; an older one shows none rather than slow the
+ * screen. Only ever for the reader's own shifts (`shiftReportsList`, «Смены → Отчёты»): a draft is its person's.
+ */
+export async function ownDraftTotals(
+  db: Database,
+  input: { person: HandinPerson; userIds: number[]; shifts: readonly HandinShift[]; handins: ReadonlyMap<number, HandinRow>; catalog: PageCatalog; now: Date },
+): Promise<Map<number, number>> {
+  const drafts = new Map<number, number>();
+  const { person, userIds, handins, catalog, now } = input;
+  if (person.submitsShiftSince === null) return drafts;
+  const since = person.submitsShiftSince.getTime();
+  const open = input.shifts
+    .filter((shift) => shift.startedAt.getTime() >= since && handins.get(shift.id)?.state !== "submitted")
+    .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
+    .slice(0, LIST_DRAFTS_MAX);
+  for (const shift of open) {
+    const subject: Subject = { shift, person, userIds, enabled: true };
+    const handin = handins.get(shift.id) ?? null;
+    const marks = handin === null ? [] : await listHandinMarks(db, handin.id);
+    const facts = await draftFacts(db, subject, handin, catalog, now, marks);
+    const offPlatform = handin === null ? [] : offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
+    drafts.set(shift.id, reportSums(draftLines(facts, marks), facts.pages, offPlatform).totalMills);
+  }
+  return drafts;
+}
+
 /** `shiftReportsList`: a person's shifts of a window with their report's state. */
 export async function listShiftReports(
   app: HandinApp,
@@ -551,24 +591,7 @@ export async function listShiftReports(
     .filter((shift) => cutTo === null || shift.pages.some((page) => cutTo!.has(page.pageLabel)));
   const handins = await listHandinsOfShifts(db, shifts.map((shift) => shift.id));
   const versions = await listCurrentHandinVersions(db, [...handins.values()].map((handin) => handin.id));
-  // The person's own shifts not handed in yet: their draft's total, the one number «Мои смены» shows until the hand-in
-  // (the newest few; an older one shows none rather than slow the screen).
-  const drafts = new Map<number, number>();
-  if (own && enabled) {
-    const since = person!.submitsShiftSince!.getTime();
-    const open = shifts
-      .filter((shift) => shift.startedAt.getTime() >= since && handins.get(shift.id)?.state !== "submitted")
-      .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())
-      .slice(0, LIST_DRAFTS_MAX);
-    for (const shift of open) {
-      const subject: Subject = { shift, person, userIds, enabled };
-      const handin = handins.get(shift.id) ?? null;
-      const marks = handin === null ? [] : await listHandinMarks(db, handin.id);
-      const facts = await draftFacts(db, subject, handin, catalog, now, marks);
-      const offPlatform = handin === null ? [] : offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
-      drafts.set(shift.id, reportSums(draftLines(facts, marks), facts.pages, offPlatform).totalMills);
-    }
-  }
+  const drafts = own && enabled ? await ownDraftTotals(db, { person: person!, userIds, shifts, handins, catalog, now }) : new Map<number, number>();
   return {
     enabled,
     enabledSince: person?.submitsShiftSince?.toISOString() ?? null,

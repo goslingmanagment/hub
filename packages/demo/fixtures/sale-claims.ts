@@ -25,7 +25,7 @@ import { demoBoardClaimAnswer } from "./shift-report-board.ts";
  */
 
 /** A shift row's id: the Moscow day it is reported on and whose it is, so it stays the same across requests. */
-export const demoShiftId = (shift: DemoShift, user: DemoUser) => Number(mskDay(shift.start).replaceAll("-", "").slice(2)) * 10 + user.id;
+export const demoShiftId = (shift: Pick<DemoShift, "start">, user: Pick<DemoUser, "id">) => Number(mskDay(shift.start).replaceAll("-", "").slice(2)) * 10 + user.id;
 /** A sale's id, as a line names it. */
 export const demoLineId = (sale: DemoSale) => (hashString(sale.ref) % 900_000_000) + 1;
 

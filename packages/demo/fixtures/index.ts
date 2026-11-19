@@ -26,6 +26,7 @@ import { moneyMonthHandlers } from "./money-month.ts";
 import { teamLedgerHandlers } from "./team-ledger.ts";
 import { teamQuestionsHandlers } from "./team-questions.ts";
 import { teamReportsHandlers } from "./team-reports.ts";
+import { teamShiftReportHandlers } from "./team-shift-reports.ts";
 import { wbSalesHandlers } from "./wb-sales.ts";
 import { wbAdminHandlers, wbHeldHandlers } from "./wb-admin.ts";
 import { wbCustomsHandlers } from "./wb-customs.ts";
@@ -57,6 +58,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   "shift-reports": shiftReportHandlers,
   // The «Отчёт» board (package R): one board per scenario of the prototype, stable shift ids, every write played in memory (shift-report-board.ts).
   "shift-report-board": shiftReportBoardHandlers,
+  // «Смены → Отчёты»: every shift of the team's journal with its report, the demo chatter's as «Мои» (team-shift-reports.ts).
+  "team-shift-reports": teamShiftReportHandlers,
   // «Смены» and «Мои смены»: what stands between a day's shifts and the report it is paid by (shift-report-notes.ts).
   "shift-report-notes": shiftReportNoteHandlers,
   // «Начало»: a newcomer's way to the first shift, by the scenario's stage, and where they are paid (person-start.ts).

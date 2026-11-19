@@ -84,6 +84,8 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "teamPeople",
   "teamShifts",
   "teamShiftSales",
+  // «Смены → Отчёты»: the reports of the teams' shifts, each cut to the reader's pages on the server.
+  "teamShiftReports",
   "teamChatterStats",
   "teamChatterNumbers",
   "teamAuthorship",

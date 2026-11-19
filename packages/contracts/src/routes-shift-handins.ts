@@ -20,6 +20,7 @@
  */
 import { z } from "zod";
 
+import { CHATTER_SALE_KINDS, CHATTER_STATS_MAX_DAYS } from "./chatter-stats.ts";
 import { businessDate, errorResponseSchema, intId, isoTimestamp, mills } from "./primitives.ts";
 import { shiftReportClaimSchema } from "./sale-claims.ts";
 import { shiftReportBoardSchema, shiftReportPhaseEnum, shiftReportWordEnum } from "./shift-report-board.ts";
@@ -306,6 +307,150 @@ export const shiftReportsListResponseSchema = z.object({
   shifts: z.array(shiftReportsListItemSchema),
   serverNow: isoTimestamp,
 });
+
+// ── The team's reports (teamShiftReports) ───────────────────────────────────
+//
+// Workboard «Смены → Отчёты» (owner, 2026-11-19): every shift's report of the people the reader sees, in one read for
+// the window. The cut is `teamShiftSales`' (the pages of the reader's teams and their own, services/teams.ts; the
+// reader's realm); each report is as Hub counts it FOR THIS READER, cut to their pages as `shiftReportsList` cuts it (the
+// owner and the person see it whole). Nobody's draft is computed here (a draft is its person's): a shift with nothing
+// handed in carries its sales by the rule, the very count of `teamShiftSales`. Sales only: no rate, accrual or payout.
+
+const teamCount = z.number().int().nonnegative();
+
+export const teamShiftReportsQuerySchema = z.object({
+  /** Whole Moscow days of the reports' dates back from `until` (default today), that day included. */
+  days: z.coerce.number().int().min(1).max(CHATTER_STATS_MAX_DAYS).default(7),
+  /** The window's last Moscow day; default today. A later one keeps today inside the window (as `teamShiftSales`). */
+  until: businessDate.optional(),
+  /** One page only (404 for a page that does not exist, 403 for one the reader does not reach): its part of each report. */
+  pageLabel: z.string().min(1).max(120).optional(),
+  /** One person: the person behind this login, every login of theirs. */
+  userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+});
+
+/** What a report's sales are made of, or a shift's by the rule: counted on the server, the parts add up to `mills`. */
+export const teamShiftReportPartsSchema = z.object({
+  /** Sales that count something. */
+  count: teamCount,
+  /** What they count together: the whole the parts by kind make. */
+  mills,
+  byKind: z.object({ ppv: mills, tip: mills, subscription: mills, post: mills }),
+  /** Each sale at its minute, the oldest first (the card's line in time): what it counts here. */
+  sales: z.array(z.object({
+    at: isoTimestamp,
+    netMills: mills,
+    kind: z.enum(CHATTER_SALE_KINDS),
+    pageLabel: z.string(),
+    fanName: z.string().nullable(),
+  })),
+});
+
+export const teamShiftReportSchema = z.object({
+  /** The shift row's id (`shifts.id`): its board is `/report/:shiftId`. */
+  shiftId: intId,
+  userId: intId,
+  /** The person's name in the registry, else the login. */
+  personName: z.string(),
+  startedAt: isoTimestamp,
+  endedAt: isoTimestamp,
+  ongoing: z.boolean(),
+  workedMinutes: teamCount,
+  pauses: z.array(z.object({ from: isoTimestamp, to: isoTimestamp })),
+  /** The shift's pages the reader sees, in the shift's order. */
+  pages: z.array(z.string()),
+  /** The Moscow day the shift is reported on (handed in: the report's own). */
+  reportDate: businessDate,
+  /** The reader's own shift (by any login of theirs). */
+  own: z.boolean(),
+  /** A board shift: the person's right «сдаёт смену в системе» was on when it began. false — the old way (a post in «Отчётность»). */
+  board: z.boolean(),
+  /** The board's phase; null — the old way, nothing handed in in Hub. */
+  phase: shiftReportPhaseEnum.nullable(),
+  /**
+   * What was handed in, as Hub counts it for this reader: the newest version (counted; reopened — «Правка», the counted
+   * one stands), or, before one, the candidate on the check or waiting for «Подтверждаю». Null — nothing handed in.
+   */
+  report: z.object({
+    source: z.enum(["version", "candidate"]),
+    /** The version's number; a candidate's — its number among the hand-ins. */
+    number: z.number().int().positive(),
+    /** When it was counted (a version) or handed in (a candidate). */
+    at: isoTimestamp,
+    door: shiftReportDoorEnum,
+    totalMills: mills,
+    /** Each page's sum, the reader's pages. */
+    pages: z.array(z.object({ pageLabel: z.string(), amountMills: mills })),
+    /** The report has pages the reader does not see: only theirs are counted here. */
+    cut: z.boolean(),
+    parts: teamShiftReportPartsSchema,
+  }).nullable(),
+  /** The newest counted version: «Учтён в 16:04, версия 1». Null — none. */
+  counted: z.object({ version: z.number().int().positive(), at: isoTimestamp }).nullable(),
+  /** Hub's check and Gengar's of the newest hand-in, as the board's candidate says them (the reader's pages). Null — no hand-in on the board. */
+  check: z.object({
+    hub: z.enum(["running", "matched", "found", "unchecked", "statement"]),
+    foundCount: teamCount,
+    foundMills: mills,
+    gengar: z.enum(["idle", "reading", "found", "clean", "silent"]),
+    proposals: teamCount,
+  }).nullable(),
+  /** The candidate waits for the person's «Подтверждаю»: not counted until then. */
+  waitsConfirm: z.boolean(),
+  /**
+   * The comment for the next shift, each model's of the reader's pages, those with words only: what the next shift
+   * reads (the report's as handed in, else the one being written).
+   */
+  comments: z.array(z.object({ modelName: z.string(), comment: z.string() })),
+  /** The shift's sales by the rule, as «Команда» counts them (`teamShiftSales`): the card's number before a hand-in. Null — Hub counted no such shift on the reader's pages. */
+  rule: teamShiftReportPartsSchema.nullable(),
+  /**
+   * The reader's OWN board shift with nothing handed in: the draft's total now (by the rule and their words),
+   * «предварительно», as `shiftReportsList` gives it (the newest few). Null — handed in, someone else's, or not computed.
+   */
+  draftTotalMills: mills.nullable(),
+  /** The reader's own counted report: its post for «Отчётность» was copied; null — not counted, not one's own, or no board. */
+  postCopied: z.boolean().nullable(),
+});
+
+/** A tally of reports (a day's, the window's): counts and Hub's sum, as this reader sees each report. */
+export const teamShiftReportsTallySchema = z.object({
+  /** Shifts: every card. */
+  shifts: teamCount,
+  /** Reports handed in (counted, reopened, on the check, waiting for «Подтверждаю»). */
+  handedIn: teamCount,
+  /** The reports due or in: handed in, and board shifts over with nothing handed in. */
+  expected: teamCount,
+  /** The sum of the handed-in reports' totals. */
+  reportedMills: mills,
+  /** Board shifts over with nothing handed in. */
+  notHandedIn: teamCount,
+  /** Of `handedIn`: waiting for the person's «Подтверждаю». */
+  waitingConfirm: teamCount,
+  /** Going on, nothing handed in yet. */
+  ongoing: teamCount,
+  /** Over, reported the old way (a post in «Отчётность»): Hub holds no report. */
+  oldWay: teamCount,
+});
+
+export const teamShiftReportsResponseSchema = z.object({
+  /** The window's Moscow days (the reports' dates), both included. */
+  from: businessDate,
+  to: businessDate,
+  /** The window's days that have a report, the newest first. */
+  days: z.array(teamShiftReportsTallySchema.extend({ date: businessDate })),
+  totals: teamShiftReportsTallySchema,
+  /** The newest first (by the report's day, then the start). */
+  reports: z.array(teamShiftReportSchema),
+  /** The people with a shift in the window on the reader's pages (whatever `userId` asks), by name: the filter's choices. */
+  people: z.array(z.object({ userId: intId, name: z.string() })),
+  serverNow: isoTimestamp,
+});
+
+export type TeamShiftReportsQuery = z.infer<typeof teamShiftReportsQuerySchema>;
+export type TeamShiftReportsResponse = z.infer<typeof teamShiftReportsResponseSchema>;
+export type TeamShiftReport = z.infer<typeof teamShiftReportSchema>;
+export type TeamShiftReportParts = z.infer<typeof teamShiftReportPartsSchema>;
 
 /** «Добавить → продажу»: a sale of the last 7 days the person may add to the report by hand. */
 export const shiftReportClaimableSaleSchema = z.object({
@@ -702,6 +847,16 @@ export const shiftHandinRouteSchemas = {
     description: `${ANY} Without userId the reader's own; with it someone else's shifts on pages the reader may open.`,
     querystring: shiftReportsListQuerySchema,
     response: { 200: shiftReportsListResponseSchema, ...personErrors },
+  },
+  teamShiftReports: {
+    auth: { kind: "any-session" }, tags: ["client"],
+    summary: "The reports of the window's shifts of everyone the reader sees: state, Hub's sum for this reader, what they are made of",
+    description: "Workboard «Смены → Отчёты»; read-only, database only. A cookie session of any role (the narrow one too); the "
+      + "shifts on the pages of the reader's teams and their own (as `teamShiftSales`; `pageLabel` narrows to one, `userId` to "
+      + "one person). The owner and the person read a report whole, anyone else cut to their pages (as `shiftReportsList`). "
+      + "No draft is computed: a shift with nothing handed in carries its sales by the rule. No pay.",
+    querystring: teamShiftReportsQuerySchema,
+    response: { 200: teamShiftReportsResponseSchema, ...personErrors },
   },
   shiftReportClaimable: {
     auth: { kind: "any" }, tags: ["client"],
