@@ -487,11 +487,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # A shard runs its files two at a time (the script's default is
+      # A shard runs its files three at a time (the script's default is
       # --no-file-parallelism, one at a time): each file still clones its own
       # database from the shard's one cluster, and anything cluster-wide in
       # those files is scoped or created once in tests/helpers/global-setup.ts.
-      # Two on the owner's PC since 01.10, and on a 4-vCPU hosted runner.
+      # Two from 01.10; three on the 4-vCPU hosted runner since 19.11
+      # (measured: the slowest shard's job ~148 s with two, ~121 s with three).
+      # The weights (tests/ci/shard-weights.json) are wall seconds at this
+      # count: after changing it, regenerate them (scripts/ci-shard-weights.mjs).
       #
       # The shard's test cluster keeps PGDATA in a tmpfs (HUB_TEST_PG_TMPFS,
       # tests/helpers/global-setup.ts): the cluster is thrown away with the run,
@@ -502,7 +505,7 @@ jobs:
       # The Nightly full suite keeps it on disk.
       - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 6 }})
         env:
-          SYNC_CRITICAL_DB_PARALLELISM: --fileParallelism --maxWorkers=2
+          SYNC_CRITICAL_DB_PARALLELISM: --fileParallelism --maxWorkers=3
           HUB_TEST_PG_TMPFS: "1"
         run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 6 }}
 
