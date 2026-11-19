@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview",
     "typecheck:demo": "tsc -p ../../packages/demo/tsconfig.json"
   },
@@ -13,7 +13,6 @@
     "lucide-react": "^0.511.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-markdown": "^10.1.0",
     "react-router": "^7.17.0",
     "recharts": "^3.10.1",
     "sonner": "^2.0.3",
@@ -25,7 +24,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "tailwindcss": "^4.1.8",
-    "typescript": "^5.8.2",
+    "typescript": "^6.0.3",
     "vite": "^6.3.5"
   }
 }
