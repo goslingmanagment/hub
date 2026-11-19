@@ -2,7 +2,7 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 import type { AgentReadAuditSummary } from "@agency_hub_core/db";
 
 import { createMediaLook, readMediaLook, type MediaLookAnswer } from "../../services/media-looks/index.ts";
-import { beginAgentRequest, staticNotFound, writeAgentAudit } from "../agent-read/index.ts";
+import { beginAgentRequest, settleAgentRequest as settled, staticNotFound, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -45,17 +45,6 @@ export function registerMediaLookRoutes(server: ApiServer, ctx: ApiModuleContext
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: ["look:media"] });
     return { principal, scope };
-  }
-
-  async function settled<T>(scope: { finish(rows: number): Promise<void> }, body: () => Promise<T>, rows: (result: T) => number) {
-    let delivered = 0;
-    try {
-      const result = await body();
-      delivered = rows(result);
-      return result;
-    } finally {
-      await scope.finish(delivered);
-    }
   }
 
   server.post("/api/v1/agent/pages/:pageLabel/media-looks", { schema: routeSchemas.agentMediaLookCreate }, async (request) => {

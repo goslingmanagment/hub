@@ -13,7 +13,6 @@ import {
   readShiftReportsFeed,
   setShiftReportComment,
   setShiftReportLine,
-  submitShiftReport,
   withdrawShiftReportOffPlatform,
 } from "../../services/shift-handins.ts";
 import {
@@ -29,11 +28,12 @@ import {
   readShiftReportChecks,
   reopenShiftReport,
   resendShiftReport,
+  submitShiftReport,
   withdrawShiftReportAsk,
 } from "../../services/shift-report-board.ts";
 import { recordSaleSightings } from "../../services/shift-handin-check.ts";
 import { realmOf, requireShiftOfRealm } from "../../services/sandbox/realm.ts";
-import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
+import { beginAgentRequest, settleAgentRequest as settled, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -176,17 +176,6 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: capabilities });
     return { principal, scope, pageIds: scope.pages.map((page) => page.id) };
-  }
-
-  async function settled<T>(scope: { finish(rows: number): Promise<void> }, body: () => Promise<T>) {
-    let delivered = 0;
-    try {
-      const result = await body();
-      delivered = 1;
-      return result;
-    } finally {
-      await scope.finish(delivered);
-    }
   }
 
   async function audit(principal: AgentAuthPrincipal, operation: string, summary: { shiftId: number; reportVersion?: number; outcome?: string }) {

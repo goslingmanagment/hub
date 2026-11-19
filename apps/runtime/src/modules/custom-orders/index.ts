@@ -16,7 +16,7 @@ import {
 } from "../../services/custom-orders/agent.ts";
 import { personCustomOrders, personCustomOrderStep } from "../../services/custom-orders/person.ts";
 import { doorPerson, type PersonDoorOperation } from "../../services/person-door.ts";
-import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
+import { beginAgentRequest, settleAgentRequest as settled, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -76,17 +76,6 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
       principal, pages: scope.pages.map((page) => ({ id: page.id, pageLabel: page.pageLabel, platform: page.platform })),
     };
     return { principal, scope, customScope };
-  }
-
-  async function settled<T>(scope: { finish(rows: number): Promise<void> }, body: () => Promise<T>, rows: (result: T) => number = () => 1) {
-    let delivered = 0;
-    try {
-      const result = await body();
-      delivered = rows(result);
-      return result;
-    } finally {
-      await scope.finish(delivered);
-    }
   }
 
   server.get("/api/v1/agent/custom-orders", { schema: routeSchemas.agentCustomOrders }, async (request) => {

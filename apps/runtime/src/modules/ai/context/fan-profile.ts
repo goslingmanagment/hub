@@ -38,7 +38,7 @@ export function usesLiteDossier(feature: string): boolean {
   return LITE_DOSSIER_FEATURES.has(feature);
 }
 
-/** The section vocabulary of the fan-summary template (templates/fan-summary.md
+/** The section vocabulary of the fan-summary template (FAN_SUMMARY_TEMPLATE,
  * "## Sections"). The template instructs "Write in Russian", so PRODUCTION
  * dossiers carry Russian headings in the dashboard-pinned markdown shape
  * (`## 1. ДОСЬЕ` — see apps/dashboard/src/lib/parseFanProfile.ts and

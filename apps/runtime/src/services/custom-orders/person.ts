@@ -1,4 +1,4 @@
-import type { AgentCustomOrder } from "@agency_hub_core/contracts";
+import { parseCustomOrderCode, type AgentCustomOrder } from "@agency_hub_core/contracts";
 import {
   findCustomOrder,
   listAgentCustomOrders,
@@ -142,8 +142,8 @@ export async function personCustomOrderStep(
   body: ShootingStepBody & { code: string },
   now: Date = new Date(),
 ) {
-  const id = /^[KkКк]-?(\d{1,16})$/u.exec(body.code.trim())?.[1];
-  const order = id === undefined ? null : await findCustomOrder(app.db, Number(id));
+  const id = parseCustomOrderCode(body.code);
+  const order = id === null ? null : await findCustomOrder(app.db, id);
   const scope = await shootingScope(app, person);
   if (order === null || !inScope(scope, order)) throw new NotFoundError("The custom order was not found");
   const changed = await takeShootingStep(app, order, { userId: person.user.id, owner: person.user.role === "owner" }, body, { door: "contentops", userId: person.user.id }, now);
