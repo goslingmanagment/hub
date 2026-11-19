@@ -143,28 +143,6 @@ describe("page holds: what clears a credentials hold (ruling 5)", () => {
     expect(proofClearsCredentialsHold(hold, { attemptId: 9, sentAt: NOW })).toBe(false);
   });
 
-  it.each([
-    { attemptId: 11, sentAt: at(-2 * MIN), clears: false },
-    { attemptId: 11, sentAt: at(-MIN), clears: false },
-    { attemptId: 9, sentAt: at(-MIN + 1), clears: true },
-    { attemptId: 10, sentAt: at(-MIN + 1), clears: true },
-  ])("an observed site's proof uses its send lower bound, never id $attemptId ($clears)", ({ attemptId, sentAt, clears }) => {
-    const hold = readFanslyPageHolds([authRow({ attemptId: 10, at: at(-MIN), digest: "gen-b" })]).credentials!;
-    expect(proofClearsCredentialsHold(hold, { attemptId, sentAt, observed: true })).toBe(clears);
-  });
-
-  it("an observed site's proof must also be after the episode start", () => {
-    const hold = { ...readFanslyPageHolds([authRow({ attemptId: 10, at: at(-MIN), digest: "gen-b" })]).credentials!, since: NOW };
-    expect(proofClearsCredentialsHold(hold, { attemptId: 11, sentAt: at(-30_000), observed: true })).toBe(false);
-    expect(proofClearsCredentialsHold(hold, { attemptId: 11, sentAt: NOW, observed: true })).toBe(false);
-    expect(proofClearsCredentialsHold(hold, { attemptId: 9, sentAt: at(1), observed: true })).toBe(true);
-  });
-
-  it.each([10, null])("an observed site's proof cannot clear a hold without a failure instant (attempt %s), even with a known episode start", (attemptId) => {
-    const hold = readFanslyPageHolds([authRow({ attemptId, at: null, digest: "gen-b" })]).credentials!;
-    expect(proofClearsCredentialsHold(hold, { attemptId: 11, sentAt: NOW, observed: true })).toBe(false);
-  });
-
   it("a refusal without an attempt: by the send instant against the later of the refusal and the episode start", () => {
     const imported = readFanslyPageHolds([authRow({ attemptId: null, at: null, digest: "gen-b" })]).credentials!;
     expect(proofClearsCredentialsHold(imported, { attemptId: 1, sentAt: at(-10 * MIN) })).toBe(false);
@@ -172,6 +150,11 @@ describe("page holds: what clears a credentials hold (ruling 5)", () => {
     const dated = readFanslyPageHolds([authRow({ attemptId: null, at: at(-MIN), digest: "gen-b" })]).credentials!;
     expect(proofClearsCredentialsHold(dated, { attemptId: 1, sentAt: at(-2 * MIN) })).toBe(false);
     expect(proofClearsCredentialsHold(dated, { attemptId: 1, sentAt: at(-MIN + 1) })).toBe(true);
+    // The episode began after the refused request left (the site's own refusal is journaled after its send).
+    const lateEpisode = { ...dated, since: NOW };
+    expect(proofClearsCredentialsHold(lateEpisode, { attemptId: 1, sentAt: at(-30_000) })).toBe(false);
+    expect(proofClearsCredentialsHold(lateEpisode, { attemptId: 1, sentAt: NOW })).toBe(false);
+    expect(proofClearsCredentialsHold(lateEpisode, { attemptId: 1, sentAt: at(1) })).toBe(true);
     const undated = { ...dated, since: null, failure: { ...dated.failure, at: null } };
     expect(proofClearsCredentialsHold(undated, { attemptId: 1, sentAt: NOW })).toBe(false);
   });

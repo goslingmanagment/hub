@@ -1,14 +1,8 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
-import {
-  listArchiveConversationMessages,
-  searchArchiveMessages,
-} from "@agency_hub_core/db";
+import { searchArchiveMessages } from "@agency_hub_core/db";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
-import {
-  getPageConversationMessagesReport,
-  getPageConversationPreviewReport,
-} from "../../services/conversations.ts";
+import { getPageConversationPreviewReport } from "../../services/conversations.ts";
 import {
   getPageConversationProfile,
   getPageFanProfile,
@@ -82,15 +76,8 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
     return getPageConversationPreviewReport(appContext, principal, request.params, request.query);
   });
 
-  server.get("/api/v1/pages/:pageLabel/conversations/:conversationId/messages", {
-    schema: routeSchemas.pageConversationMessages,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return getPageConversationMessagesReport(appContext, principal, request.params, request.query);
-  });
-
   // === Archive reads — dashboard-grade, owner/team_lead only ===
-  const serializeArchiveMessage = (row: Awaited<ReturnType<typeof listArchiveConversationMessages>>[number]) => ({
+  const serializeArchiveMessage = (row: Awaited<ReturnType<typeof searchArchiveMessages>>[number]) => ({
     id: row.id,
     accountId: row.accountId,
     platform: row.platform,
@@ -105,20 +92,6 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
     isTip: row.isTip,
     tipAmountMills: row.tipAmountMills,
     deletedAt: row.deletedAt?.toISOString() ?? null,
-  });
-
-  server.get("/api/v1/archive/conversations/:ref/messages", {
-    schema: routeSchemas.archiveConversationMessages,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const accountIds = pageScopeFor(principal);
-    const rows = await listArchiveConversationMessages(appContext.db, {
-      ...(accountIds === undefined ? {} : { accountIds }),
-      conversationRef: request.params.ref,
-      beforeId: request.query.before ?? null,
-      ...(request.query.limit !== undefined ? { limit: request.query.limit } : {}),
-    });
-    return rows.map(serializeArchiveMessage);
   });
 
   server.get("/api/v1/archive/search", {

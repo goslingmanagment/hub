@@ -57,7 +57,6 @@ export function saleSiteWords(platform: "fansly" | "onlyfans", kind: string): st
 
 export const SHIFT_REPORT_WORDS = ["mine", "not_mine", "share", "give", "pot"] as const;
 export const shiftReportWordEnum = z.enum(SHIFT_REPORT_WORDS);
-export type ShiftReportWord = z.infer<typeof shiftReportWordEnum>;
 
 /** How long the check may hold the person: after this the server's timer moves `checking` to `confirm`. */
 export const SHIFT_REPORT_CHECK_MINUTES = 10;
@@ -67,8 +66,6 @@ export const SHIFT_REPORT_ASK_SILENCE_HOURS = 24;
 export const SHIFT_REPORT_BARE_NOTE_FROM_MILLS = 30_000;
 /** The quick words of a sale's comment; each one appends to the text. */
 export const SHIFT_REPORT_QUICK_WORDS = ["торг", "кастом", "голосовое", "допродажа"] as const;
-/** A sighting still not in Hub this long after it was seen goes to the decider. */
-export const SALE_SIGHTING_UNMATCHED_HOURS = 48;
 
 /**
  * A person's name in the cases the board's texts need: «Спросить Олега», «Пополам с Олегом», «Вопрос ушёл Олегу». A

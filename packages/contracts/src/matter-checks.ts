@@ -51,11 +51,6 @@ export function isMatterCheckKind(kind: string): kind is MatterCheckKind {
   return CHECK_KIND_SET.has(kind);
 }
 
-/** The people checks: a person or a login, read from the people registry and the logins. */
-export const PEOPLE_CHECK_KINDS = MATTER_CHECK_KINDS.filter((kind) => kind.startsWith("people."));
-/** The ledger's: its checks, its notice about the payout tabs, its off-platform sales. */
-export const LEDGER_CHECK_KINDS = ["ledger.check", "ledger.sheet_column", "ledger.off_platform"] as const satisfies readonly MatterCheckKind[];
-
 /**
  * Kinds that only inform: they wait for nobody, are not counted in «Ждут вас»
  * or on the extension's icon, and the list shows them apart («Для сведения»).
