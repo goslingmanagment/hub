@@ -502,7 +502,9 @@ pnpm cli sync work requeue --page lora-1 --quarantined --resource dm-messages.he
 Requeue only after the cause is fixed and deployed; requeueing unchanged code quarantines the row again. A row whose
 last attempt holds a captured answer is applied again from the journal, without a request; other rows run again.
 `--work` ids are all-or-nothing. A quarantined `followers.reconcile` is the blast-radius guard: its reset and its
-override are the Settings levers (the README's status-surfaces table), not a requeue.
+override are owner HTTP calls, not a requeue and not a Settings lever (no screen has them):
+`POST /api/v1/admin/sync/followers-reconcile/reset`, then `…/blast-radius/preview` and `…/blast-radius/apply` (the
+README's status-surfaces table says what each does).
 
 ## Route holds and sync route raise
 

@@ -47,8 +47,7 @@ function inTx<T>(db: Database, body: (tx: Database) => Promise<T>): Promise<T> {
  * Once per hop (minor 6, 0289): the hop's row keeps its attempt — a send told
  * again (the operator repeats what is not confirmed, and tells a new
  * connection what is still flying) finds it and journals nothing more
- * (`recorded: false`). The settings and the session it went under are kept
- * with it for an identity proof that comes later.
+ * (`recorded: false`). The session it went under is kept with it.
  */
 export async function recordObservedSiteSend(
   d: CommitDeps,
@@ -62,7 +61,6 @@ export async function recordObservedSiteSend(
     settingMs: number;
     sentWall: Date;
     sessionFingerprint: string | null;
-    credentialsGeneration: string | null;
   },
 ): Promise<{ attemptId: number; recorded: boolean }> {
   return inTx(d.db, async (tx) => {
@@ -93,7 +91,7 @@ export async function recordObservedSiteSend(
       ...hop,
       browserRequestId: input.id,
       attemptId: admitted.attemptId,
-      credentialsGeneration: input.credentialsGeneration,
+      credentialsGeneration: null,
       sessionFingerprint: input.sessionFingerprint,
     });
     return { attemptId: admitted.attemptId, recorded: true };
@@ -107,13 +105,10 @@ export async function recordObservedSiteSend(
  * one verify of the stored ones settles it; under a credentials hold they
  * change nothing, and within `SITE_REFUSALS_DISCOUNTED_MS` of a proof that
  * answered the site's last refusal they hold nothing) and its row's end in one
- * transaction. `manualLogin`: the hop went under the manual login — a
- * session that is not the page's trusted one yet: its 401/403 holds nothing,
- * its 429 holds its route as any. An end
- * told again changes nothing (its attempt is captured once; its row keeps
- * the first end). An end the operator kept across the engine's start finds
- * its attempt closed `unknown` by the start's recovery: reopened, it is
- * captured and holds as any. `send_not_journaled`: its send's attempt is not
+ * transaction. An end told again changes nothing (its attempt is captured
+ * once; its row keeps the first end). An end the operator kept across the
+ * engine's start finds its attempt closed `unknown` by the start's recovery:
+ * reopened, it is captured and holds as any. `send_not_journaled`: its send's attempt is not
  * journaled yet — nothing is committed, and the operator tells both again.
  */
 export async function commitObservedSiteEnd(
@@ -123,7 +118,6 @@ export async function commitObservedSiteEnd(
     end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }>;
     error: string | null;
     settingMs: number;
-    manualLogin?: boolean;
   },
 ): Promise<"committed" | "send_not_journaled"> {
   return inTx(d.db, async (tx) => {
@@ -140,7 +134,7 @@ export async function commitObservedSiteEnd(
       attemptId: sent.attemptId,
       send: observedSend(sent.sentAt, input.settingMs),
       end: input.end,
-      classified: { route, exempt: input.manualLogin === true },
+      classified: { route, exempt: false },
       observed: true,
     });
     await recordObservedSiteEnded(tx, { ...hop, status: input.end.kind === "response" ? input.end.status : null, error: input.error });
@@ -194,7 +188,7 @@ async function siteRefusalDiscountedSince(tx: Database, d: CommitDeps): Promise<
  *  instant and status — nothing is journaled of its body here — and what the
  *  answer does to the page's holds by the engine's own rules
  *  (`siteAnswerEffect`, `onOutcome`): the route that answered a 429 waits, a
- *  401/403 outside the manual login holds the credentials. */
+ *  401/403 holds the credentials. */
 async function commitAnswerIn(
   tx: Database,
   d: CommitDeps,

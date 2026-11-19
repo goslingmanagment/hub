@@ -2,7 +2,6 @@ import {
   LEGACY_EXECUTOR_STREAMS,
   countDistinctFansForPages,
   listSyncMonitorRecentEvents,
-  listSyncMonitorRecentRequests,
   listSyncMonitorStreamRows,
   type PageSyncStatus,
   type SyncMonitorRecentEventRow,
@@ -13,7 +12,6 @@ import {
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError } from "./errors.ts";
 import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
 import {
   buildOverallSyncUx,
@@ -24,9 +22,6 @@ import type { SyncUxSummary } from "@agency_hub_core/contracts";
 
 const DEFAULT_WINDOW_HOURS = 24;
 const DEFAULT_EVENT_LIMIT = 50;
-const DEFAULT_REQUEST_LOOKBACK_MS = 60_000;
-const DEFAULT_REQUEST_LIMIT = 100;
-const MAX_REQUEST_LIMIT = 500;
 const STALLED_THRESHOLD_MS = 45_000;
 const RATE_LIMITED_LOOKBACK_MS = 15 * 60 * 1000;
 /** The monitor is the legacy page-sync executor's: it lists the streams that
@@ -34,8 +29,8 @@ const RATE_LIMITED_LOOKBACK_MS = 15 * 60 * 1000;
  *  the monitor cannot see is a lane that can wedge unobserved, so the list is
  *  the executor's own. A Fansly page is not here: `pnpm cli sync page status`
  *  and `/api/v1/sync/pages` report the Fansly Sync Engine. The recent events
- *  and requests beside the rows are the executor's journal as it stands (any
- *  page, any stream that wrote a line). */
+ *  beside the rows are the executor's journal as it stands (any page, any
+ *  stream that wrote a line). */
 export const MONITORED_SYNC_STREAMS: readonly SyncStream[] = LEGACY_EXECUTOR_STREAMS;
 
 export type SyncMonitorStatus = PageSyncStatus;
@@ -187,26 +182,6 @@ export interface SyncMonitorRecentEvent {
   emittedAt: string;
 }
 
-export interface SyncMonitorRequestItem {
-  timestamp: string;
-  pageLabel: string;
-  platform: Platform;
-  stream: SyncStream;
-  operation: string;
-  endpoint: string;
-  method: string;
-  attemptNumber: number;
-  status: "started" | "success" | "retry" | "failed";
-  httpStatusCode: number | null;
-  durationMs: number | null;
-  rateLimitWaitMs: number | null;
-  groupId: string | null;
-  partnerUsername: string | null;
-  returnedItems: number | null;
-  syncDone: boolean | null;
-  proxyGapMs: number | null;
-}
-
 export interface SyncMonitorSnapshot {
   generatedAt: string;
   window: {
@@ -222,41 +197,10 @@ function iso(value: Date | null | undefined) {
   return value ? value.toISOString() : null;
 }
 
-function asRecord(value: unknown) {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function asNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function asNullableNumber(value: unknown) {
-  return value === null ? null : asNumber(value);
-}
-
-function asNullableString(value: unknown) {
-  return value === null || typeof value === "string" ? value : null;
-}
-
 function maxDate(a: Date | null, b: Date | null) {
   if (!a) return b;
   if (!b) return a;
   return a.getTime() >= b.getTime() ? a : b;
-}
-
-function parseOptionalTimestamp(value: string | undefined, field: string) {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    throw new BadRequestError(`Invalid \`${field}\` timestamp`);
-  }
-
-  return parsed;
 }
 
 function isRunning(row: SyncMonitorStreamRow) {
@@ -507,33 +451,6 @@ function eventItemFor(row: SyncMonitorRecentEventRow): SyncMonitorRecentEvent {
   };
 }
 
-function requestItemFor(
-  row: Awaited<ReturnType<typeof listSyncMonitorRecentRequests>>[number],
-  proxyGapMs: number | null,
-): SyncMonitorRequestItem {
-  const requestShape = asRecord(row.requestShape);
-
-  return {
-    timestamp: row.startedAt.toISOString(),
-    pageLabel: row.pageLabel,
-    platform: row.provider,
-    stream: row.stream,
-    operation: row.operation,
-    endpoint: asNullableString(requestShape?.endpointTemplate) ?? "unknown",
-    method: asNullableString(requestShape?.method) ?? "GET",
-    attemptNumber: row.attemptNumber,
-    status: row.state,
-    httpStatusCode: row.httpStatus,
-    durationMs: row.durationMs,
-    rateLimitWaitMs: asNullableNumber(requestShape?.rateLimitWaitMs) ?? null,
-    groupId: asNullableString(requestShape?.groupId),
-    partnerUsername: row.partnerUsername,
-    returnedItems: row.returnedItems,
-    syncDone: row.syncDone,
-    proxyGapMs,
-  };
-}
-
 export async function getSyncMonitorSnapshot(
   app: AppContext,
   input?: {
@@ -744,41 +661,4 @@ export async function getSyncMonitorSnapshot(
     pages,
     recentEvents: monitorEvents.map((event) => eventItemFor(event)),
   };
-}
-
-export async function getSyncMonitorRecentRequests(
-  app: AppContext,
-  input?: {
-    pageIds?: number[];
-    since?: string;
-    limit?: number;
-    now?: Date;
-  },
-): Promise<SyncMonitorRequestItem[]> {
-  const now = input?.now ?? new Date();
-  const since = parseOptionalTimestamp(input?.since, "since") ??
-    new Date(now.getTime() - DEFAULT_REQUEST_LOOKBACK_MS);
-  const limit = Math.min(input?.limit ?? DEFAULT_REQUEST_LIMIT, MAX_REQUEST_LIMIT);
-
-  const rows = await listSyncMonitorRecentRequests(app.db, {
-    ...(input?.pageIds === undefined ? {} : { pageIds: input?.pageIds }),
-    since,
-    limit,
-  });
-  const previousRequestAtByEgressKey = new Map<string, Date>();
-  return rows
-    .map((row) => {
-    const requestShape = asRecord(row.requestShape);
-    const egressKey = asNullableString(requestShape?.egressKey);
-    const previousRequestAt = egressKey ? previousRequestAtByEgressKey.get(egressKey) ?? null : null;
-    const proxyGapMs = previousRequestAt
-      ? Math.max(0, previousRequestAt.getTime() - row.startedAt.getTime())
-      : null;
-
-    if (egressKey) {
-      previousRequestAtByEgressKey.set(egressKey, row.startedAt);
-    }
-
-      return requestItemFor(row, proxyGapMs);
-    });
 }
