@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "path";
 import { WORKBOARD_BASE } from "./src/base.ts";
+import { stripRouteProse } from "../../packages/ui/vite/stripRouteProse.ts";
 
 const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:3000";
 const root = resolve(__dirname, "../..");
@@ -18,7 +19,8 @@ export default defineConfig(({ mode }) => {
   // agency of packages/demo and no hub behind it — the same fixtures as the
   // console's demo. Imported lazily so no other mode loads it.
   const demo = mode === "demo";
-  const plugins: PluginOption[] = [react(), tailwindcss()];
+  // The SDK keeps every route; their prose (summary, description) is the server's OpenAPI only.
+  const plugins: PluginOption[] = [react(), tailwindcss(), stripRouteProse()];
   if (demo) {
     plugins.push(import("../../packages/demo/plugin.ts").then((module) => module.demoApi({
       // The role switch lands on Workboard's home (an anonymous visitor too:
@@ -49,6 +51,10 @@ export default defineConfig(({ mode }) => {
       emptyOutDir: true,
       // The main chunk carries the SDK's contract schemas (~1 MB, as the console's own).
       chunkSizeWarningLimit: 1200,
+      // As the console's: these packages' modules have no top-level effect outside themselves.
+      rollupOptions: {
+        treeshake: { moduleSideEffects: (id) => !/\/packages\/(contracts|sdk|shared)\/src\//.test(id) },
+      },
     },
     server: {
       port: demo ? 5190 : 5191,
