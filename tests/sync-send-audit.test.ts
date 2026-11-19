@@ -213,8 +213,8 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
       site(17.899, "site.other"), // 1 999 ms: within the clock tolerance
     ];
     expect(auditPagePace(rows, WINDOW)).toMatchObject({ verdict: "pass", pairs: 1, violations: [], siteClose: 3 });
-    // A predecessor whose send was never recorded proves nothing.
-    expect(auditPagePace([site(30, "site.other", { sentAt: null, countedAt: at(45) }), site(30.5, "site.other")], WINDOW).siteClose).toBe(0);
+    // A predecessor whose send was never recorded proves nothing: Hub's unrecorded send stands at its upper bound (45 s).
+    expect(auditPagePace([unrecorded(30, "notifications.page"), site(45.5, "site.other")], WINDOW).siteClose).toBe(0);
   });
 
   it("fails Hub's send closer than its pause to an observed site request", () => {
