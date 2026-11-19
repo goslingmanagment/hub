@@ -6,67 +6,33 @@
  * the line of facts over the rows. Sales only — nothing here is pay.
  */
 import type { ChatterStats, OwnShiftRow } from "@agency_hub_core/contracts";
-import { addDays, daysInRange, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
+import { addDays, moscowDayOf, moscowDayStart } from "@agency_hub_core/ui/moscow";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { perHourMills } from "../../shared/metrics.js";
+import { SHIFT_READS_MAX_DAYS, shiftsWindow, type ShiftsWindow } from "../../shared/shiftsWindow.js";
 
 export type StatsShift = ChatterStats["shifts"][number];
 
 /** The longest window `accountShifts` reads (Moscow days): a longer own range shows its last days. */
-export const MY_SHIFTS_MAX_DAYS = 31;
+export const MY_SHIFTS_MAX_DAYS = SHIFT_READS_MAX_DAYS;
 
 // ─────────────────────────────────────────────────────────────── The window
 
-export interface MyShiftsWindow {
-  /** What `accountShifts` is asked for. */
-  days: number;
-  until: MoscowDay | undefined;
-  /** The shown Moscow days, both included (a week's days to come are inside, empty). */
-  from: MoscowDay;
-  to: MoscowDay;
+/** The shift reads' window (`accountShifts` is asked its `days`/`until`), with its instants. */
+export interface MyShiftsWindow extends ShiftsWindow {
   /** `[startsAt, endsAt)`, ms: Moscow midnight of `from` and of the day after `to`. */
   startsAt: number;
   endsAt: number;
-  /** The period is longer than Hub reads: its last MY_SHIFTS_MAX_DAYS days are shown. */
-  clipped: boolean;
 }
 
 /** The window of a period of the app (spec §3: week · 14 · 30 · own range). */
 export function myShiftsWindow(period: ResolvedPeriod): MyShiftsWindow {
-  const { spec } = period;
-  let days: number;
-  let until: MoscowDay | undefined;
-  let from: MoscowDay;
-  let to: MoscowDay;
-  let clipped = false;
-  if (spec.kind === "week") {
-    // The whole calendar week: its days to come are empty.
-    days = 7;
-    until = addDays(spec.monday, 6);
-    from = spec.monday;
-    to = until;
-  } else if (spec.kind === "days") {
-    days = spec.days;
-    until = undefined;
-    from = period.from;
-    to = period.to;
-  } else {
-    const full = daysInRange(period.from, period.to);
-    days = Math.min(full, MY_SHIFTS_MAX_DAYS);
-    until = period.to;
-    from = addDays(period.to, -(days - 1));
-    to = period.to;
-    clipped = full > days;
-  }
+  const window = shiftsWindow(period);
   return {
-    days,
-    until,
-    from,
-    to,
-    startsAt: Date.parse(moscowDayStart(from)),
-    endsAt: Date.parse(moscowDayStart(addDays(to, 1))),
-    clipped,
+    ...window,
+    startsAt: Date.parse(moscowDayStart(window.from)),
+    endsAt: Date.parse(moscowDayStart(addDays(window.to, 1))),
   };
 }
 

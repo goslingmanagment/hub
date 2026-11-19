@@ -46,6 +46,17 @@ export function personCodePath(code: string, search: URLSearchParams | string = 
 }
 
 /**
+ * The «Работа» tab's link of a card (`personPath` / `personCodePath` with no tab): on the bare address the bare path, so
+ * the tab is the current one; from another tab the explicit `…/work`, since the bare address alone may open another tab
+ * first (Р8 of the card by code).
+ */
+export function workPath(path: string, bare: boolean): string {
+  if (bare) return path;
+  const [pathname, query] = path.split("?");
+  return `${pathname}/work${query ? `?${query}` : ""}`;
+}
+
+/**
  * A Hub address (`/people/alex/logins`) as a page here opens it: on Hub's name, through the one-time sign-in hand-off
  * (packages/ui/src/sites.ts). A full page load.
  */

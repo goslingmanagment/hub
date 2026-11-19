@@ -9,7 +9,7 @@ import { kernel } from "@/shared/hub";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { ShiftsTabs } from "@/shared/ShiftsTabs";
 import { useMe } from "@/shared/useMe";
-import { useTeamPeople } from "../team/teamPeople";
+import { personOfLogin, useTeamPeople } from "../team/teamPeople";
 import { useToday } from "../today/data";
 import { AskModal, type AskStart } from "../waiting/Questions";
 import "./shifts.css";
@@ -58,7 +58,7 @@ export function ScheduleScreen() {
   const { role, leadsTeam, isOwner, user } = useMe();
   const swaps = useQuery({ queryKey: ["team-swaps"], queryFn: () => kernel.teamSwaps(), staleTime: 60_000 });
   const [asking, setAsking] = useState<AskStart | null>(null);
-  const meCode = (people.data?.people ?? []).find((person) => person.logins.some((login) => login.userId === user?.id))?.code ?? null;
+  const meCode = user ? personOfLogin(people.data?.people ?? [], user.id)?.code ?? null : null;
   // A lead asks a swap for anyone of the team; anyone else for their own slot. The owner decides, he does not ask.
   const mayAskFor = (code: string) => !isOwner && (code === meCode || leadsTeam);
   const teams = useMemo(() => teamsOf(people.data?.people ?? []), [people.data]);

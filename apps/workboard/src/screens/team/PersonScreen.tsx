@@ -5,7 +5,7 @@ import { Badge, Card, EmptyState, ErrorState, LinkButton, Money, Skeleton, Statu
 import { hubPersonPath } from "@agency_hub_core/contracts";
 import { capitalized, periodShort, ROLE_WORD, statusOf } from "@agency_hub_core/ui/people/words";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { carryParams, hubHref, personPath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";
+import { carryParams, hubHref, personPath, ShiftLink, useBackTarget, workPath, type PersonTab } from "@/shared/links";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
@@ -80,7 +80,7 @@ export function LoginCard({ userId: id }: { userId: number }) {
           <Tabs
             label="Разделы карточки"
             items={TABS.map((item) => ({
-              to: item.tab === "work" ? workPath(id, location.search, tab === undefined) : personPath(id, location.search, item.tab),
+              to: item.tab === "work" ? workPath(personPath(id, location.search), tab === undefined) : personPath(id, location.search, item.tab),
               label: item.label,
               end: true,
             }))}
@@ -102,14 +102,6 @@ export function LoginCard({ userId: id }: { userId: number }) {
       </div>
     </>
   );
-}
-
-/** «Работа» from another tab is the explicit `/team/:id/work`; on the bare address the tab links there, so it is the current one. */
-function workPath(userId: number, search: string, bare: boolean): string {
-  const path = personPath(userId, search);
-  if (bare) return path;
-  const [pathname, query] = path.split("?");
-  return `${pathname}/work${query ? `?${query}` : ""}`;
 }
 
 /**

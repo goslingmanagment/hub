@@ -1,5 +1,5 @@
 import { Suspense, useMemo } from "react";
-import { useLocation, useSearchParams } from "react-router";
+import { useLocation } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Button, ErrorState, Skeleton } from "@agency_hub_core/ui";
 import { groupOfAnchor } from "@agency_hub_core/ui/waiting/kinds";
@@ -8,6 +8,7 @@ import { leadOnly } from "@/shared/leadOnly";
 import { mattersListQuery } from "@/shared/myMatters";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { useMe } from "@/shared/useMe";
+import { useSearchParam } from "@/shared/useSearchParam";
 import { goLink } from "./links";
 import { ClaimAnswer } from "./MyMatters";
 import { AskModal, MyOpenQuestions, QuestionModal, useMyOpenQuestions } from "./Questions";
@@ -28,13 +29,7 @@ const NOTHING_TO_OPEN = () => undefined;
 
 function OwnWaiting() {
   const location = useLocation();
-  const [search, setSearch] = useSearchParams();
-  const setParam = (param: string, value: string | null) => setSearch((current) => {
-    const next = new URLSearchParams(current);
-    if (value === null) next.delete(param);
-    else next.set(param, value);
-    return next;
-  });
+  const [search, setParam] = useSearchParam();
   const questionParam = Number(search.get("question"));
   const myQuestions = useMyOpenQuestions();
   const list = useQuery({ ...mattersListQuery, refetchInterval: MINUTE });

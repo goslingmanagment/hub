@@ -34,6 +34,7 @@ import { LOGINS_ONLY, type PeopleIndex } from "@agency_hub_core/ui/people";
 import { loginsByPerson } from "./byPerson.js";
 import { kernel } from "@/shared/hub";
 import { chatterNumbersQuery, numbersWindow, shiftSalesQuery } from "@/shared/reads";
+import { SHIFT_READS_MAX_DAYS, type ShiftsWindow } from "@/shared/shiftsWindow";
 import { perHourMills, qualityOfChatterNumbers, type ShiftQuality } from "@/shared/metrics";
 
 type SalesResponse = KernelOperationResponse<"teamShiftSales">;
@@ -46,7 +47,7 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
 /** The longest window `teamShiftSales` and `teamChatterNumbers` read (Moscow days). */
-export const SHIFTS_MAX_DAYS = 31;
+export const SHIFTS_MAX_DAYS = SHIFT_READS_MAX_DAYS;
 /** The longest window `teamAuthorship` reads. */
 export const AUTHORSHIP_MAX_DAYS = 7;
 /** Up to this many days the grid has a column a day; a longer period has a column per 7 days back from its end (D4). */
@@ -141,16 +142,8 @@ export interface GridRow {
   cells: GridCell[];
 }
 
-export interface ShiftsWindow {
-  /** What Hub is asked for. */
-  days: number;
-  until: MoscowDay | undefined;
-  /** Shown days, both included (a week's days to come are listed empty). */
-  from: MoscowDay;
-  to: MoscowDay;
-  /** The period is longer than Hub reads: its last SHIFTS_MAX_DAYS days are shown. */
-  clipped: boolean;
-}
+// The period's window: the one of every shift read (Мои смены and Команда take the same).
+export { shiftsWindow, type ShiftsWindow } from "@/shared/shiftsWindow";
 
 export interface ShiftsModel {
   window: ShiftsWindow;
@@ -196,21 +189,6 @@ export interface NowState {
 }
 
 // ─────────────────────────────────────────────────────────── Pure helpers
-
-/** What Hub is asked for, for a period of the app. */
-export function shiftsWindow(period: ResolvedPeriod): ShiftsWindow {
-  const { spec } = period;
-  if (spec.kind === "week") {
-    // The whole calendar week: Hub lists the days to come empty.
-    return { days: 7, until: addDays(spec.monday, 6), from: spec.monday, to: addDays(spec.monday, 6), clipped: false };
-  }
-  if (spec.kind === "days") {
-    return { days: spec.days, until: undefined, from: period.from, to: period.to, clipped: false };
-  }
-  const full = daysInRange(period.from, period.to);
-  const days = Math.min(full, SHIFTS_MAX_DAYS);
-  return { days, until: period.to, from: addDays(period.to, -(days - 1)), to: period.to, clipped: full > days };
-}
 
 function pagesOf(shift: Pick<SalesShift, "pages">): ShiftPage[] {
   return shift.pages

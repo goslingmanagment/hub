@@ -7,7 +7,7 @@ import { PersonMeta as PersonMetaLine } from "@agency_hub_core/ui/people/PersonM
 import { hubPersonPath } from "@agency_hub_core/contracts";
 import { TeamRolesCard, type TeamRoleChange } from "@agency_hub_core/ui/people/TeamRoles";
 import { capitalized, statusOf } from "@agency_hub_core/ui/people/words";
-import { carryParams, hubHref, personCodePath, ShiftLink, useBackTarget, type PersonTab } from "@/shared/links";
+import { carryParams, hubHref, personCodePath, ShiftLink, useBackTarget, workPath, type PersonTab } from "@/shared/links";
 import { kernel } from "@/shared/hub";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter } from "@/shared/usePageFilter";
@@ -104,7 +104,7 @@ export function PersonCard({ code }: { code: string }) {
           <Tabs
             label="Разделы карточки"
             items={TABS.map((item) => ({
-              to: item.tab === "work" ? workPath(code, location.search, tab === undefined) : personCodePath(code, location.search, item.tab),
+              to: item.tab === "work" ? workPath(personCodePath(code, location.search), tab === undefined) : personCodePath(code, location.search, item.tab),
               label: item.label,
               end: true,
             }))}
@@ -120,14 +120,6 @@ export function PersonCard({ code }: { code: string }) {
       </div>
     </>
   );
-}
-
-/** «Работа» from another tab is the explicit `/people/<code>/work`, so the bare address alone may open another tab first. */
-function workPath(code: string, search: string, bare: boolean): string {
-  const path = personCodePath(code, search);
-  if (bare) return path;
-  const [pathname, query] = path.split("?");
-  return `${pathname}/work${query ? `?${query}` : ""}`;
 }
 
 /**

@@ -44,12 +44,13 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { millsToNumber, sumMills } from "@agency_hub_core/shared";
-import { addDays, daysInRange, moscowDayOf } from "@agency_hub_core/ui/moscow";
+import { daysInRange, moscowDayOf } from "@agency_hub_core/ui/moscow";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
 import { median } from "@agency_hub_core/ui/shiftReview";
 import { CHATTER_SHIFTS_MAX_WINDOW_DAYS } from "@agency_hub_core/contracts";
 import { kernel } from "@/shared/hub";
 import { READ_MAX_DAYS, chatterNumbersQuery, numbersWindow, shiftSalesQuery } from "@/shared/reads";
+import { SHIFT_READS_MAX_DAYS, shiftsWindow } from "@/shared/shiftsWindow";
 import { usersQuery } from "@/shared/usersQuery";
 import { MAX_DAYS, MIN_SAMPLE, priceView, readWindow, speedView, useSalesPpv, useSalesReplies, type ReadWindow } from "@/screens/sales/data";
 import { averageQuality, perHourMills, qualityOfChatterNumbers, type PeriodQuality as AveragedQuality, type ShiftQuality } from "@/shared/metrics";
@@ -162,13 +163,11 @@ export interface PersonVisit {
 
 // ─────────────────────────────────────────────── Windows of today's operations
 
-/** The period as `teamShiftSales` takes it: `days` up to `until`. null — longer than Hub reads. */
+/** The period as `teamShiftSales` takes it (Смены' `shiftsWindow`): `days` up to `until`. null — longer than Hub reads. */
 export function salesWindow(period: ResolvedPeriod): { days: number; until?: string } | null {
-  if (period.days > READ_MAX_DAYS) return null;
-  const spec = period.spec;
-  if (spec.kind === "week") return { days: 7, until: addDays(spec.monday, 6) };
-  if (spec.kind === "range") return { days: period.days, until: period.to };
-  return { days: period.days };
+  if (period.days > SHIFT_READS_MAX_DAYS) return null;
+  const { days, until } = shiftsWindow(period);
+  return until === undefined ? { days } : { days, until };
 }
 
 /** `teamChatterStats` counts days back from today: from the period's first day to today. null — further back than Hub reads. */
@@ -212,6 +211,12 @@ function latest(...values: (string | null | undefined)[]): string | null {
   let best: string | null = null;
   for (const value of values) if (value && (best === null || value > best)) best = value;
   return best;
+}
+
+/** One person's now from their logins': the earliest shift going on, the latest end, the longest reach. */
+function mergeNows(nows: readonly PersonNow[]): PersonNow {
+  const going = nows.map((one) => one.onShiftSince).filter((at): at is string => at !== null).sort()[0] ?? null;
+  return { onShiftSince: going, lastShiftEnd: latest(...nows.map((one) => one.lastShiftEnd)), quietDays: Math.max(0, ...nows.map((one) => one.quietDays)) };
 }
 
 type NowShifts = KernelOperationResponse<"teamShifts">["shifts"];
@@ -293,10 +298,8 @@ function useNow() {
 /** Who of these logins is on a shift now, and when their last shift ended (the shifts of the last 7 days, every page). */
 export function usePeopleNow(userIds: readonly number[]): { now: PersonNow; known: boolean } {
   const now = useNow();
-  const nows = userIds.map((id) => nowOf(id, now.data?.shifts, [], { periodToday: false, periodDays: 0 }));
-  const going = nows.map((one) => one.onShiftSince).filter((at): at is string => at !== null).sort()[0] ?? null;
   return {
-    now: { onShiftSince: going, lastShiftEnd: latest(...nows.map((one) => one.lastShiftEnd)), quietDays: Math.max(0, ...nows.map((one) => one.quietDays)) },
+    now: mergeNows(userIds.map((id) => nowOf(id, now.data?.shifts, [], { periodToday: false, periodDays: 0 }))),
     known: now.data !== undefined || now.isError,
   };
 }
@@ -481,11 +484,9 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
       });
       // Hub joins a person's logins itself: the line that holds any of them is the person's.
       const counted = (numbers.data?.chatters ?? []).find((one) => one.userIds.some((id) => userIds.includes(id)))?.shifts ?? [];
-      const nows = userIds.map((id) => nowOf(id, now.data?.shifts, periodShifts, reach));
-      const going = nows.map((one) => one.onShiftSince).filter((at): at is string => at !== null).sort()[0] ?? null;
       const spent = spendState === "ready" ? userIds.map((id) => spend.data!.get(String(id))).filter((value): value is number => typeof value === "number") : [];
       return {
-        now: { onShiftSince: going, lastShiftEnd: latest(...nows.map((one) => one.lastShiftEnd)), quietDays: Math.max(0, ...nows.map((one) => one.quietDays)) },
+        now: mergeNows(userIds.map((id) => nowOf(id, now.data?.shifts, periodShifts, reach))),
         work: mine.length === 0 ? null : sumWork(mine),
         quality: qualityState !== "ready" ? undefined : mine.length === 0 ? null : qualityOf(counted),
         aiSpendMicroUsd: spendState !== "ready" ? undefined : spent.length === 0 ? null : spent.reduce((sum, value) => sum + value, 0),
