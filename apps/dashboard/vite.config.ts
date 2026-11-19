@@ -2,6 +2,7 @@ import { defineConfig, type PluginOption } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "path";
+import { stripRouteProse } from "../../packages/ui/vite/stripRouteProse.ts";
 
 // Long-lived third-party code in chunks of its own, so their file names (content hashes) stay the
 // same across deploys and a returning browser downloads only the app's code again. Without this,
@@ -59,7 +60,8 @@ export default defineConfig(({ mode }) => {
   // hub behind it — see packages/demo/core.ts (one harness and one set of
   // fixtures with Workboard). Imported lazily so no other mode loads it.
   const demo = mode === "demo";
-  const plugins: PluginOption[] = [react(), tailwindcss()];
+  // The SDK keeps every route; their prose (summary, description) is the server's OpenAPI only.
+  const plugins: PluginOption[] = [react(), tailwindcss(), stripRouteProse()];
   // «Команда» is Workboard at /workboard/ on the console's host (Hub serves both in
   // production). Here it is Workboard's own dev server, behind the same origin:
   // `pnpm dev:workboard:demo` (5190) beside `pnpm dev:demo`, `pnpm dev:workboard` (5191) beside this one.
@@ -80,7 +82,14 @@ export default defineConfig(({ mode }) => {
         "@agency_hub_core/look": resolve(__dirname, "../../packages/look/src"),
       },
     },
-    build: { rollupOptions: { output: { manualChunks } } },
+    build: {
+      rollupOptions: {
+        output: { manualChunks },
+        // No module of these packages has a top-level effect outside itself (a scan of every top-level
+        // statement): one nothing imports from may be left out, and one only a lazy screen needs moves there.
+        treeshake: { moduleSideEffects: (id) => !/\/packages\/(contracts|sdk|shared)\/src\//.test(id) },
+      },
+    },
     server: {
       port: 5173,
       proxy: demo
