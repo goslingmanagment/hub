@@ -522,7 +522,6 @@ export const kernelOperations = {
   spenders: { method: "GET", path: "/api/v2/spenders" },
   statsCoverage: { method: "GET", path: "/api/v1/pages/:pageLabel/stats/coverage" },
   statsHoldings: { method: "GET", path: "/api/v1/pages/:pageLabel/stats/holdings" },
-  statsMedia: { method: "GET", path: "/api/v1/pages/:pageLabel/stats/media" },
   statsTags: { method: "GET", path: "/api/v1/pages/:pageLabel/stats/tags" },
   syncHistoryRequestCancel: { method: "POST", path: "/api/v1/sync/history-requests/:requestRef/cancel" },
   syncHistoryRequestCreate: { method: "POST", path: "/api/v1/sync/pages/:pageLabel/history-requests" },
