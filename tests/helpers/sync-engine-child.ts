@@ -28,7 +28,8 @@ import {
 //   node --import tsx/esm tests/helpers/sync-engine-child.ts <mode>
 // with DATABASE_URL set. Modes:
 //   host        a SyncEngineHost over a test-only registry (one poll) and a
-//               scripted transport (50 ms an answer);
+//               scripted transport (50 ms an answer, SYNC_TEST_LATENCY_MS
+//               overrides it);
 //               SIGTERM stops it gracefully (exit 0). SYNC_TEST_HOSTNAME
 //               overrides the OS probe's hostname (two "containers" on one
 //               machine).
@@ -53,6 +54,7 @@ async function runHost(): Promise<void> {
   const pool = createPool(connectionString);
   const db = createDb(pool) as unknown as Database;
   const settingMs = Number(process.env.SETTING_MS ?? "300");
+  const latencyMs = Number(process.env.SYNC_TEST_LATENCY_MS ?? "50");
   const base = createDefaultFanslySendOsProbe();
   const hostName = process.env.SYNC_TEST_HOSTNAME;
   const probe = hostName === undefined ? base : { ...base, hostname: () => hostName };
@@ -69,7 +71,7 @@ async function runHost(): Promise<void> {
     routeTimeScale: 0,
     liveTransportFactory: async () => {
       const transport = new ScriptedLiveTransport();
-      transport.latencyMs = 50;
+      transport.latencyMs = latencyMs;
       return transport;
     },
     modeLoopIntervalMs: 250,

@@ -100,7 +100,7 @@ function refused(status: number, retryAfter: string | null): FanslyWireOutcome {
     headers: retryAfter === null ? {} : { "retry-after": retryAfter },
     bodyText,
     bodyBytes: bodyText.length,
-    sendMark: "request_start",
+    sendMark: "transport_reported",
   };
 }
 

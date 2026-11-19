@@ -39,7 +39,7 @@ const at = (ms: number) => new Date(NOW.getTime() + ms);
 
 function answer(status: number, body: unknown, headers: Record<string, string> = {}): FanslyWireOutcome {
   const bodyText = typeof body === "string" ? body : JSON.stringify(body);
-  return { kind: "response", status, headers, bodyText, bodyBytes: bodyText.length, sendMark: "request_start" };
+  return { kind: "response", status, headers, bodyText, bodyBytes: bodyText.length, sendMark: "transport_reported" };
 }
 
 const accountMe = fanslyWireSpec("account.me");
