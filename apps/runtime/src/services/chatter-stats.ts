@@ -149,6 +149,13 @@ function emptyByKind(): Record<ChatterSaleKind, number> {
   return { ppv: 0, tip: 0, subscription: 0, post: 0 };
 }
 
+/** What a shift's sales are made of, by the cabinet's kinds: the parts add up to the shift's `salesNetMills`. Pure. */
+export function byKindOf(sales: ReadonlyArray<Pick<ShiftSale, "kind" | "netMills">>): Record<ChatterSaleKind, number> {
+  const byKind = emptyByKind();
+  for (const sale of sales) byKind[saleKindOf(sale.kind)] += sale.netMills;
+  return byKind;
+}
+
 /** Money per worked hour; null without worked time. Pure. */
 export function perHour(netMills: number, minutes: number): number | null {
   return minutes === 0 ? null : Number((BigInt(netMills) * 60n) / BigInt(minutes));
@@ -345,6 +352,7 @@ export async function computeChatterStats(
       pauses: shift.pauses.map((pause) => ({ from: iso(pause.from), to: iso(pause.to) })),
       pages: pagesOf(shift),
       salesNetMills: netOf(own),
+      byKind: byKindOf(own),
       overlapNetMills: netOf(overlapping),
       together: [...new Set(overlapping.flatMap((sale) => together.get(sale.transactionId)!))].sort(),
       messages: ownSends.length,
@@ -366,8 +374,7 @@ export async function computeChatterStats(
   });
 
   const sum = (pick: (shift: (typeof shifts)[number]) => number) => shifts.reduce((total, shift) => total + pick(shift), 0);
-  const byKind = emptyByKind();
-  for (const sale of [...currentSales, ...ownNow.map((one) => one.sale)]) byKind[saleKindOf(sale.kind)] += sale.netMills;
+  const byKind = byKindOf([...currentSales, ...ownNow.map((one) => one.sale)]);
   const workedMinutes = sum((shift) => shift.workedMinutes);
   const salesNetMills = sum((shift) => shift.salesNetMills) + netOf(ownNow.map((one) => one.sale));
 

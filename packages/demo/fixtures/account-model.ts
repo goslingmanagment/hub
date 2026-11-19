@@ -4,10 +4,12 @@
  * shift report. One model, so the cabinet's «Статистика», «Отчёт смены» and
  * «Мои AI-траты» tell the same story about the same days.
  *
- * Shifts sit at the same hour of the clock every day, around the moment the
- * request arrived: today's shift is always going on, so the cabinet shows its
- * live state; yesterday's waits for marks, the one before is ready to confirm,
- * older ones are confirmed (one with a late sale that came after).
+ * Today's shift began a little over three hours before the request (on the
+ * hour), so it is always going on and the cabinet shows its live state; every
+ * other day's began at about one in the afternoon, so a shift keeps its start —
+ * and its page's address — however late the demo is looked at. Yesterday's waits
+ * for marks, the one before is ready to confirm, older ones are confirmed (one
+ * with a late sale that came after).
  */
 import type { ChatterSaleKind } from "@agency_hub_core/contracts";
 
@@ -411,7 +413,7 @@ function sharedWithMeOf(me: DemoUser, anchor: number): DemoSale[] {
   });
 }
 
-/** The person's working life up to `now`. Deterministic within five minutes. */
+/** The person's working life up to `now`. Deterministic within an hour (today's shift), past shifts always. */
 export function chatterWorld(user: DemoUser, nowDate: Date): DemoChatterWorld {
   const now = nowDate.getTime();
   const today = mskDay(now);
@@ -420,15 +422,15 @@ export function chatterWorld(user: DemoUser, nowDate: Date): DemoChatterWorld {
   if (user.role !== "chatter") {
     return { user, now, today, activitySince: null, shifts: [], sharedWithMe: [], teammates };
   }
-  // Today's shift began a little over three hours ago; every other day's at about the same hour.
-  const anchor = Math.floor((now - 192 * MINUTE_MS) / (5 * MINUTE_MS)) * 5 * MINUTE_MS;
-  const activitySince = anchor - ACTIVITY_SINCE_DAYS * DAY_MS + 35 * MINUTE_MS;
+  // Today's shift began a little over three hours ago, on the hour; every other day's at about one in the afternoon.
+  const anchor = Math.floor((now - 192 * MINUTE_MS) / HOUR_MS) * HOUR_MS;
+  const activitySince = mskMidnight(addDays(mskDay(anchor), -ACTIVITY_SINCE_DAYS)) + 13 * HOUR_MS + 35 * MINUTE_MS;
   const shifts: DemoShift[] = [];
   for (let back = 0; back <= HISTORY_DAYS; back += 1) {
     const day = mskDay(anchor - back * DAY_MS);
     const random = rng(`shift:${user.id}:${day}`);
     const off = random() < 0.2;
-    const start = back === 0 ? anchor : anchor - back * DAY_MS + intBetween(random, -100, 50) * MINUTE_MS;
+    const start = back === 0 ? anchor : mskMidnight(day) + 13 * HOUR_MS + intBetween(random, -100, 50) * MINUTE_MS;
     if (start < activitySince) break;
     if (back === 0 || !off) {
       const end = back === 0 ? now : start + intBetween(random, 330, 500) * MINUTE_MS;

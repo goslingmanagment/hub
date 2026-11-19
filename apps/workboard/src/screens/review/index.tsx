@@ -23,7 +23,7 @@ import { useShiftReview, useShiftsAround, type ReviewFilter, type ReviewIndex, t
 import { Evidence } from "./Evidence.js";
 import { LOOK, focusOf, ordered } from "./look.js";
 import { Pulse } from "./Pulse.js";
-import { ReportLink } from "./ReportLink.js";
+import { ReportBlock } from "./ReportBlock.js";
 import { ShiftStepper } from "./ShiftStepper.js";
 import { Transcript } from "./Transcript.js";
 import { useReviewParams, type ReviewChange, type ReviewParams } from "./useReviewParams.js";
@@ -154,7 +154,7 @@ function tilesOf(index: ReviewIndex, when: ShiftWhen): Tile[] {
       label: METRICS.reply.label,
       value: formatReplyMedian(quality.replyMedianSeconds),
       hint: totals.replies > 0
-        ? `Половина ответов быстрее, половина медленнее. До ${REPLY_FAST_SECONDS / 60} мин — ${percent(totals.repliesWithinFast)}, до ${REPLY_NORM_SECONDS / 60} мин — ${percent(totals.repliesWithinNorm)}.`
+        ? `Половина ответов быстрее, половина медленнее. До ${REPLY_FAST_SECONDS / 60} мин: ${percent(totals.repliesWithinFast)}, до ${REPLY_NORM_SECONDS / 60} мин: ${percent(totals.repliesWithinNorm)}.`
         : "Половина ответов быстрее, половина медленнее. Ответов в смену не было.",
     },
     {
@@ -162,7 +162,7 @@ function tilesOf(index: ReviewIndex, when: ShiftWhen): Tile[] {
       value: formatUnanswered(quality.unansweredAtEnd),
       hint: [
         "Фаны, которые писали в смену и не дождались ответа до её конца.",
-        late > 0 ? `${formatCount(late)} из них — в последние ${REPLY_NORM_SECONDS / 60} мин.` : "",
+        late > 0 ? `${formatCount(late)} из них в последние ${REPLY_NORM_SECONDS / 60} мин.` : "",
       ].join(" ").trim(),
     },
     {
@@ -175,7 +175,7 @@ function tilesOf(index: ReviewIndex, when: ShiftWhen): Tile[] {
     {
       label: "Отработано",
       value: when.worked ?? "—",
-      hint: [when.withPauses ? `${when.withPauses}.` : "", shift.pauseMinutes > 0 ? "Паузы — серые полосы на пульсе." : ""].join(" ").trim() || "Время работы без пауз.",
+      hint: [when.withPauses ? `${when.withPauses}.` : "", shift.pauseMinutes > 0 ? "Паузы на пульсе: серые полосы." : ""].join(" ").trim() || "Время работы без пауз.",
     },
   ];
 }
@@ -192,7 +192,7 @@ function LiveRefresh({ updatedAt, onRefresh, refreshing }: { updatedAt: number; 
   }, []);
   if (!updatedAt) return null;
   return (
-    <Tooltip content={`Обновлено в ${formatTimeOfDay(updatedAt)}, ${formatAgo(updatedAt, Math.max(now, updatedAt))}. Смена идёт: Hub читается каждые 2 мин, нажмите — прочитать сейчас.`} align="end">
+    <Tooltip content={`Обновлено в ${formatTimeOfDay(updatedAt)}, ${formatAgo(updatedAt, Math.max(now, updatedAt))}. Смена идёт: Hub читается каждые 2 мин, нажмите, чтобы прочитать сейчас.`} align="end">
       <button type="button" className="review-live" onClick={onRefresh} disabled={refreshing}>
         {refreshing ? <Spinner /> : <RotateCw size={14} strokeWidth={1.75} aria-hidden />}
         {refreshing ? "обновляем…" : `обновлено ${formatTimeOfDay(updatedAt)}`}
@@ -216,7 +216,7 @@ function PageMenu({ shift, page, onPage }: { shift: ReviewShift; page: string | 
         : `${formatCount(one.messages)} ${ruPlural(one.messages, "сообщение", "сообщения", "сообщений")}`,
       title: !one.worked && shift.kind === "shift"
         ? one.allFans
-          ? `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене. Но страницу в смену больше никто не вёл — здесь все её фаны`
+          ? `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене. Но страницу в смену больше никто не вёл: здесь все её фаны`
           : `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений, и страницу вёл коллега: продажи не в этой смене, здесь только чаты, где писал чаттер`
         : "Сообщений чаттера на странице за смену, рассылки тоже",
       checked: page === one.pageLabel,
@@ -555,12 +555,13 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
         actions={(
           <span className="review-actions">
             {shift.ongoing && <LiveRefresh updatedAt={updatedAt} onRefresh={onRefresh} refreshing={refreshing} />}
-            <ReportLink userId={shift.userId} start={shift.start} end={shift.end} label={`${shift.username}, ${when.days}`} />
             <ShiftStepper shift={shift} />
           </span>
         )}
       />
       <div className={cx("wb-content review-content", font)}>
+        {/* The shift's report first: its state, its sums and the way to the board (a chatter lands here from «Мои смены»). */}
+        <ReportBlock userId={shift.userId} start={shift.start} end={shift.end} startedAt={shift.startedAt} label={`${shift.username}, ${when.days}`} />
         <section className="review-overview" aria-label="Вся смена">
           <Tiles tiles={tilesOf(index, when)} label="Смена в цифрах" />
           {notes.length > 0 && <p className="review-notes">{notes.join(" · ")}</p>}
@@ -693,7 +694,7 @@ function deletedNote(model: ReviewModel, deleted: number): string {
     for (const message of model.transcript(row.key)?.chat.messages ?? []) if (message.by === "me" && message.inShift && message.deletedAt !== undefined) shown += 1;
   }
   const missing = Math.max(0, deleted - shown);
-  return `${formatCount(deleted)} сообщ. удалены после отправки — зачёркнуты${missing > 0 ? `, у ${formatCount(missing)} нет текста` : ""}`;
+  return `${formatCount(deleted)} сообщ. удалены после отправки: зачёркнуты${missing > 0 ? `, у ${formatCount(missing)} нет текста` : ""}`;
 }
 
 /** What an empty list says: what narrowed it, and the one way back. */
@@ -720,6 +721,6 @@ function emptyOf({ narrowed, query, span, page, show, inBase, onClearSearch, onS
     }
     return { title: "Таких чатов нет", text: `Список сужают: ${parts.join(", ")}.`, action: <Button onClick={onShowAll}>Показать все чаты смены</Button> };
   }
-  if (inBase > 0) return { title: FILTER_EMPTY[show], text: "Остальные чаты смены — в «Все».", action: <Button onClick={onAll}>Все чаты · {formatCount(inBase)}</Button> };
+  if (inBase > 0) return { title: FILTER_EMPTY[show], text: "Остальные чаты смены в «Все».", action: <Button onClick={onAll}>Все чаты · {formatCount(inBase)}</Button> };
   return { title: "В смене нет чатов", text: "Чаттер в эту смену никому не писал, и фаны его страниц не ждали ответа.", action: null };
 }

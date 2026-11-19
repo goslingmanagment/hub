@@ -837,7 +837,7 @@ export const shiftReportBoardHandlers: DemoHandlers = {
   shiftReportConfirm: (request) => {
     const shiftId = shiftOf(request);
     const scenario = SCENARIO_OF.get(shiftId);
-    if (scenario === undefined) return noBoard();
+    if (scenario === undefined) return (ownBoardWrites?.confirm(request, shiftId) ?? noBoard()) as never;
     if (request.role !== "chatter") return notYours();
     const state = stateOf(request, scenario);
     if (state.phase !== "confirm") return { confirmed: false, refused: "not_ready", report: reportOf(request, scenario) };
@@ -915,7 +915,7 @@ export const shiftReportBoardHandlers: DemoHandlers = {
     }
     return null;
   }) ?? noBoard(),
-  shiftReportPostCopied: (request) => write(request, shiftOf(request), (state) => {
+  shiftReportPostCopied: (request) => (SCENARIO_OF.has(shiftOf(request)) ? null : ownBoardWrites?.postCopied(request, shiftOf(request)) as never) ?? write(request, shiftOf(request), (state) => {
     if (!state.counted) return refused("Nothing counted to copy");
     const model = modelsOf(state).find((one) => one === queryString(request, "model")) ?? modelsOf(state)[0]!;
     state.postCopies = { ...state.postCopies, [model]: request.now.toISOString() };
@@ -932,10 +932,23 @@ export const shiftReportBoardHandlers: DemoHandlers = {
 };
 
 /**
- * «Мои смены» of the demo's ordinary shifts: the read-only preview board (`preview`) drawn from the shift's existing
- * demo report — a column per page, its sales as rows by the rule and the person's words, nothing to tick or hand in.
+ * The demo chatter's own board shift (the switch on before it began), as Hub reads its phase (shift-reports.ts): the
+ * board is no preview then, it hands in, asks «Подтверждаю», counts and copies the post.
  */
-export function demoPreviewBoardOf(body: ShiftReportBody, shift: { startedAt: string; pages: string[] }, owner: { userId: number; name: string }): ShiftReportBoard {
+export interface DemoOwnBoardPhase {
+  phase: ShiftReportPhase;
+  handedInAt: string | null;
+  countedAt: string | null;
+  candidate: ShiftReportBoard["candidate"];
+  post: ShiftReportBoard["post"];
+}
+
+/**
+ * «Мои смены» of the demo's ordinary shifts: the read-only preview board (`preview`) drawn from the shift's existing
+ * demo report — a column per page, its sales as rows by the rule and the person's words, nothing to tick. With `own`
+ * (a board shift of the demo chatter), the same rows in the shift's phase: «Сдать смену», «Подтверждаю», «Учтён».
+ */
+export function demoPreviewBoardOf(body: ShiftReportBody, shift: { startedAt: string; pages: string[] }, owner: { userId: number; name: string }, own?: DemoOwnBoardPhase): ShiftReportBoard {
   const platformOf = (label: string) => body.pages.find((page) => page.pageLabel === label)?.platform ?? body.lines.find((line) => line.pageLabel === label)?.platform ?? "onlyfans";
   const labels = [...new Set([...shift.pages, ...body.lines.map((line) => line.pageLabel)])];
   const ownerOfLine = (line: ShiftReportBody["lines"][number]): ShiftReportOwner => {
@@ -980,10 +993,22 @@ export function demoPreviewBoardOf(body: ShiftReportBody, shift: { startedAt: st
     };
   });
   const rows = columns.flatMap((column) => column.rows);
+  const phase = own?.phase ?? "draft";
   return {
-    phase: "draft", chip: SHIFT_REPORT_PHASE_CHIPS.draft, offShift: [], columns, candidate: null,
+    phase, chip: SHIFT_REPORT_PHASE_CHIPS[phase], offShift: [], columns, candidate: own?.candidate ?? null,
     totals: { count: rows.filter((row) => row.ticked).length, nowMills: rows.reduce((sum, row) => sum + row.amountMills, 0), wasMills: null },
     waiting: [], colleagues: [], decider: { kind: "owner", user: null, words: "владелец" },
-    canConfirm: false, needsMe: false, handedInAt: null, countedAt: null, preview: true, previous: null, post: null,
+    canConfirm: phase === "confirm", needsMe: phase === "confirm", handedInAt: own?.handedInAt ?? null, countedAt: own?.countedAt ?? null,
+    preview: own === undefined, previous: null, post: own?.post ?? null,
   };
+}
+
+/** «Подтверждаю» and «Скопировать пост» on the demo chatter's own board shifts (shift-reports.ts answers them). */
+interface OwnBoardWrites {
+  confirm: (request: DemoRequest, shiftId: number) => unknown;
+  postCopied: (request: DemoRequest, shiftId: number) => unknown;
+}
+let ownBoardWrites: OwnBoardWrites | null = null;
+export function onDemoOwnBoard(writes: OwnBoardWrites): void {
+  ownBoardWrites = writes;
 }

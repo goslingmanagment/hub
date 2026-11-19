@@ -6,8 +6,10 @@
  * the line of facts over the rows. Sales only — nothing here is pay.
  */
 import type { ChatterStats, OwnShiftRow } from "@agency_hub_core/contracts";
+import { formatMills, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { addDays, moscowDayOf, moscowDayStart } from "@agency_hub_core/ui/moscow";
 import type { ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { REPORT_DRAFT_NEXT, reportStatusWord } from "@agency_hub_core/ui/shiftReports";
 import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { perHourMills } from "../../shared/metrics.js";
 import { SHIFT_READS_MAX_DAYS, shiftsWindow, type ShiftsWindow } from "../../shared/shiftsWindow.js";
@@ -106,3 +108,68 @@ export function factsOf(rows: readonly MyShiftRow[], reportsKnown: boolean): MyS
     drafts: rows.filter((row) => row.state === "draft").length,
   };
 }
+
+// ─────────────────────────────────────────────────────────────── The report's step
+
+/** What a missing report asks of the chatter (the old way: the agent composes it from the shift's sales). */
+export const MISSING_NEXT = "попросите в чате: /smena";
+
+/**
+ * Where a shift's report stands, in plain words, and the ONE thing to do next when something is due — a button that
+ * opens the board (`/report/:shiftId`). The state is Hub's: the row's (`accountShifts`) and, for a report handed in in
+ * Hub, its board's phase and whether its post was copied (`shiftReportsList`).
+ */
+export interface ReportStep {
+  /** «Сдайте смену», «Сдан в 16:04, версия 1», «Пост отправлен». Empty — nothing known (the reports did not come). */
+  words: string;
+  /** warn — something is the person's to do; good — done; live — the shift goes on; quiet — nothing to say more. */
+  tone: "warn" | "good" | "live" | "quiet";
+  /** A quieter line beside the words. */
+  note: string | null;
+  /** The button's words, opening the board; null — nothing to do now. */
+  action: string | null;
+}
+
+/** The step of a row. Pure. */
+export function reportStepOf(row: OwnShiftRow): ReportStep {
+  const phase = row.hub?.phase ?? null;
+  // Handed in (while the shift goes on too), and after a correction: the board's phase leads while it checks or asks.
+  if (row.hub !== null) {
+    if (phase === "checking") return { words: "Проверяется", tone: "live", note: "Hub сверяет суммы, Генгар читает переписки", action: null };
+    if (phase === "confirm") return { words: "Подтвердите отчёт", tone: "warn", note: "без «Подтверждаю» отчёт не учтён", action: "Подтвердить" };
+  }
+  switch (row.state) {
+    case "ongoing":
+      return { words: "Идёт", tone: "live", note: "отчёт в конце смены", action: null };
+    case "due":
+      return { words: "Сдайте смену", tone: "warn", note: null, action: "Сдать смену" };
+    case "handed": {
+      if (phase === "fixing") return { words: "Отчёт открыт снова", tone: "warn", note: "исправьте и сдайте заново", action: "Сдать заново" };
+      if (phase === "counted" && row.hub?.postCopied === false) {
+        return { words: "Учтён", tone: "warn", note: "осталось скопировать пост в «Отчётность»", action: "Скопировать пост" };
+      }
+      const at = row.hub?.submittedAt ?? null;
+      const version = row.hub?.version ?? null;
+      const words = [at === null ? "Сдан" : `Сдан в ${formatTimeOfDay(at)}`, version === null ? null : `версия ${version}`].filter(Boolean).join(", ");
+      return { words, tone: "good", note: null, action: null };
+    }
+    case "posted":
+      return { words: "Пост отправлен", tone: "good", note: row.draftMills === null ? null : `в черновике было ${formatMills(row.draftMills)}`, action: null };
+    case "draft":
+      return { words: "Собран", tone: "warn", note: REPORT_DRAFT_NEXT, action: null };
+    case "missing":
+      return { words: "Отчёта нет", tone: "warn", note: MISSING_NEXT, action: null };
+    case "other":
+      return { words: reportStatusWord(row.report?.status ?? ""), tone: "quiet", note: null, action: null };
+    case "unknown":
+      return { words: "", tone: "quiet", note: null, action: null };
+  }
+}
+
+/** The kinds of a sale as a card says them, short. */
+export const KIND_SHORT: Readonly<Record<keyof StatsShift["byKind"], string>> = {
+  ppv: "PPV",
+  tip: "чаевые",
+  subscription: "подписки",
+  post: "посты",
+};

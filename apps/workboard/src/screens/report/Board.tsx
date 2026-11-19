@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { SHIFT_REPORT_QUICK_WORDS, type ShiftReportResponse } from "@agency_hub_core/contracts";
 import { Link } from "react-router";
 import { KernelApiError, hubErrorStatus } from "@agency_hub_core/ui/hubClient";
+import { shiftPath } from "@/shared/links";
 import { BoardBar } from "./BoardBar";
 import { phaseConflictReport, useBoardWrite, type Write } from "./data";
 import { Ico } from "./icons";
@@ -774,6 +775,7 @@ export function ReportBoard({ report, host, transport, light }: {
             {board.offShift.length > 0 && <span className="bh-off">{offShiftOf(board)}</span>}
             <span className="bh-sum">{chip}</span>
             <span className="bh-sum" style={{ marginLeft: 0 }}>Итого<b>{usd(board.totals.nowMills)}</b></span>
+            {host === "tab" && board.phase === "counted" && <Link to={shiftPath(report.shift.userId, report.shift.startedAt)} className="btn btn--quiet btn--sm">Итог смены</Link>}
             {host === "frame" && (
               <button type="button" className="btn btn--quiet btn--sm" title="Свернуть доску в полосу внизу" onClick={collapse}><Ico name="min" size={14} />Свернуть</button>
             )}

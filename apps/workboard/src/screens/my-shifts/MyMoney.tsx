@@ -1,20 +1,20 @@
 import { RotateCw } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
-import { Button, Facts, Money, Tooltip, type Column, type FactItem } from "@agency_hub_core/ui";
+import { Button, Facts, Money, Tooltip, type FactItem } from "@agency_hub_core/ui";
 import { formatDay, formatMills } from "@agency_hub_core/ui/format";
 import type { MyShiftRow, MyShiftsWindow } from "./model.js";
 import { accrualOfRows, useMyMoney, type MoneyDay, type MyMoneyRead } from "./money.js";
 import "./my-money.css";
 
 /**
- * «Мои деньги» on «Мои смены» (ecosystem package H1): above the journal, what is accrued for the period, what the
- * agency owes now and what it paid, with the date of the last payout; in each shift's row, under the report's sum, the
+ * «Мои деньги» on «Мои смены» (ecosystem package H1): above the shifts, what is accrued for the period, what the
+ * agency owes now and what it paid, with the date of the last payout; on each shift's card, under the report's sum, the
  * accrual of its day once the ledger has it. Behind the person's switch «видит свои деньги»: off — no block, no line,
  * the screen as before. Sums only: a rate is never on this screen.
  */
 
-/** The day's accrual under a row's report sum: «начислено $13.75», its state on hover and in the shade of the words. */
-function AccrualLine({ day }: { day: MoneyDay }) {
+/** The day's accrual under a card's report sum: «начислено $13.75», its state on hover and in the shade of the words. */
+export function AccrualLine({ day }: { day: MoneyDay }) {
   const state = day.state === "paid" ? "оплачено" : day.paidMills > 0 ? `к выплате ${formatMills(day.unpaidMills)}` : "ждёт выплаты";
   return (
     <Tooltip content={`Начислено за день этой смены по отчёту дня (пост или сданный отчёт), вместе с долей общака: ${state}.`} align="end">
@@ -80,28 +80,17 @@ export function MoneyBlock({ read }: { read: MyMoneyRead }) {
 }
 
 /**
- * The block, and the journal's columns with the day's accrual under «По отчёту» (a column of its own would push the
- * report's state off a laptop's screen): the screen's one line of wiring. Until the switch is known to be on, the
- * block is nothing and the columns are the screen's own.
+ * The block, and each card's accrual of its day (`accrualOfRows`): the screen's one line of wiring. Until the switch is
+ * known to be on, the block is nothing and no card has an accrual.
  */
-export function useMyMoneyParts(window: MyShiftsWindow, columns: readonly Column<MyShiftRow>[], rows: readonly MyShiftRow[] | undefined): {
+export function useMyMoneyParts(window: MyShiftsWindow, rows: readonly MyShiftRow[] | undefined): {
   block: ReactNode;
-  columns: readonly Column<MyShiftRow>[];
+  accrual: ReadonlyMap<string, MoneyDay>;
 } {
   const read = useMyMoney(window);
   const pay = read.pay;
   const accrual = useMemo(() => (pay && rows ? accrualOfRows(rows, pay.days) : new Map<string, MoneyDay>()), [pay, rows]);
-  const withMoney = useMemo(() => {
-    if (pay === null) return columns;
-    return columns.map((column): Column<MyShiftRow> => (column.key !== "total" ? column : {
-      ...column,
-      cell: (row, index) => {
-        const day = accrual.get(row.key);
-        return day === undefined ? column.cell(row, index) : <span className="mym-total"><span className="mym-total__sum">{column.cell(row, index)}</span><AccrualLine day={day} /></span>;
-      },
-    }));
-  }, [pay, columns, accrual]);
-  return { block: <MoneyBlock read={read} />, columns: withMoney };
+  return { block: <MoneyBlock read={read} />, accrual };
 }
 
 /** «Мои деньги» alone, for «Сегодня»: the same block over the same read; nothing while the person's switch is off. */

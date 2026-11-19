@@ -26,7 +26,7 @@ function shift(from: string, to: string, extra: Partial<StatsShift> = {}): Stats
   const workedMinutes = Math.round((Date.parse(to) - Date.parse(from)) / 60_000);
   return {
     date: from.slice(0, 10), startedAt: from, endedAt: to, ongoing: false, workedMinutes, pauses: [], pages: ["page-a"],
-    salesNetMills: 100_000, overlapNetMills: 0, together: [], messages: 0, ppvSent: 0, fansWritten: 0, fansPaid: 0,
+    salesNetMills: 100_000, byKind: { ppv: 100_000, tip: 0, subscription: 0, post: 0 }, overlapNetMills: 0, together: [], messages: 0, ppvSent: 0, fansWritten: 0, fansPaid: 0,
     confirmedNetMills: null, sales: [], ...extra,
   };
 }

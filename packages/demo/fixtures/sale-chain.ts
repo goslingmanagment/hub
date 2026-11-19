@@ -7,7 +7,7 @@ import { DAY_MS, HOUR_MS, addDays, mskDay } from "./account-model.ts";
 import { HISTORY_DAYS, ledgerRange } from "./money-ledger.ts";
 import { fanTransactions, pagePopulation } from "./page-world.ts";
 import { demoClaimsOfSale } from "./sale-claims.ts";
-import { demoChainShifts, demoShiftSalesIn, type DemoChainShift } from "./shift-reports.ts";
+import { SWITCH_DAYS, demoChainShifts, demoShiftSalesIn, type DemoChainShift } from "./shift-reports.ts";
 import { demoPersonPay } from "./team-ledger.ts";
 
 /**
@@ -36,7 +36,6 @@ const money = (mills: number) => formatUsdFromMills(mills);
 
 /** The rule's first day (sale-rule.ts `SALE_RULE.since`). */
 const RULE_SINCE = Date.parse("2026-11-02T00:00:00+03:00");
-const SWITCH_DAYS = 5;
 const SALE_KINDS = new Set(["subscription", "tip", "message_purchase", "post_purchase", "stream_tip"]);
 const SETTLED = new Set(["agreed", "owner_split"]);
 
