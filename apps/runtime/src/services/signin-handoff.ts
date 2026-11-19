@@ -21,6 +21,7 @@ import {
   authenticateSessionById,
   createWebSessionTx,
   findLiveSession,
+  liveFullSession,
   recordAudit,
   roleCanUseSession,
   withAuditTransaction,
@@ -353,15 +354,8 @@ function newCode(): { code: string; digest: string } {
   return { code, digest: sha256Hex(code) };
 }
 
-/** The live FULL session behind this name's cookie and its person, or null (none, dead, narrow, deactivated). */
-export async function liveFullSession(app: AppContext, sessionToken: string | undefined) {
-  if (!sessionToken) return null;
-  const session = await findLiveSession(app, sessionToken);
-  if (!session || session.narrowDeviceTokenId !== null) return null;
-  const user = await findUserById(app.db, session.userId);
-  if (!user || user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) return null;
-  return { session, user };
-}
+/** The live FULL session behind this name's cookie and its person — its one definition is auth.ts'. */
+export { liveFullSession } from "./auth.ts";
 
 /** A code that plants `sessionToken` on `target` for the browser whose state hashes to `stateDigest`. */
 export async function mintSessionCode(app: AppContext, input: {
@@ -658,9 +652,11 @@ export async function checkServerGrant(app: AppContext, input: {
 export async function principalOfServerGrant(app: AppContext, input: { client: string; grant: string }) {
   const grant = await findHandoffGrant(app.db, sha256Hex(input.grant));
   if (!grant || grant.target !== input.client) return null;
-  const status = await sessionStatus(app.db, grant.sessionId, grant.userId);
-  if (!status || (status.test && input.client !== SANDBOX_HANDOFF_CLIENT)) return null;
-  return authenticateSessionById(app, grant.sessionId, grant.userId);
+  const principal = await authenticateSessionById(app, grant.sessionId, grant.userId);
+  if (principal === null) return null;
+  // A test person's login carries `sandbox.test` (sandbox/realm.ts `principalSandboxOf`, the same `isTestUser`).
+  if (principal.sandbox?.test === true && input.client !== SANDBOX_HANDOFF_CLIENT) return null;
+  return principal;
 }
 
 /** A full session by id, while it signs in, and its person while active. */
