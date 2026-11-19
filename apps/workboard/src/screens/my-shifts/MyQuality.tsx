@@ -65,7 +65,7 @@ export type ShiftNumbers = Answer["shifts"][number];
  * A shift's numbers on its card, one compact row: what the person did (messages, PPV sent → bought, fans written to →
  * paid) and how they answered (the three quality numbers). A number shows only where the read has it.
  */
-export function ShiftNumbersLine({ shift }: { shift: ShiftNumbers }) {
+export function ShiftNumbersLine({ shift }: { shift: Pick<ShiftNumbers, "numbers" | "quality" | "ongoing"> }) {
   const { numbers, quality } = shift;
   const items: Array<{ key: string; label: string; value: string; hint: string }> = [
     {

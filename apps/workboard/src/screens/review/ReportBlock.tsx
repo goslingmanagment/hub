@@ -9,6 +9,7 @@ import { kindWord } from "@agency_hub_core/ui/shiftReports";
 import { kernel } from "@/shared/hub";
 import { useBackState } from "@/shared/links";
 import { ReportBody } from "@/shared/ReportBody";
+import { checkWords } from "@/shared/reportChecks";
 import { useMe } from "@/shared/useMe";
 import { reportStepOf } from "@/screens/my-shifts/model";
 import { reportKey } from "@/screens/report/data";
@@ -114,25 +115,14 @@ function madeOf(lines: readonly Line[]): string {
   return [...counts].sort((a, b) => b[1] - a[1]).map(([group, count]) => `${group} ${count}`).join(", ");
 }
 
-/** Hub's check and Gengar's, in words; null — none to say. */
+/** Hub's check and Gengar's, in words (the board's, shared/reportChecks.ts); none — nothing to say. */
 function checksOf(board: Board | null): string[] {
   const candidate = board?.candidate ?? null;
   if (!board || board.preview || candidate === null) return [];
-  const hub = {
-    running: "Hub сверяет суммы с кошельками",
-    matched: "Hub: суммы сошлись с кошельками",
-    found: `Hub дочитал кошельки: ещё ${candidate.hub.foundCount} ${ruPlural(candidate.hub.foundCount, "продажа", "продажи", "продаж")}, ${formatMills(candidate.hub.foundMills)}`,
-    unchecked: "Hub сверит позже",
-    statement: "Hub ждёт выписку OnlyFans",
-  }[candidate.hub.state];
-  const gengar = {
-    idle: null,
-    reading: "Генгар читает переписки",
-    found: `Генгар: ${candidate.gengar.proposals} ${ruPlural(candidate.gengar.proposals, "правка", "правки", "правок")}`,
-    clean: "Генгар: замечаний нет",
-    silent: "Генгар дочитает позже",
-  }[candidate.gengar.state];
-  return [hub, gengar].filter((words): words is string => words !== null);
+  return checkWords({
+    hub: candidate.hub.state, foundCount: candidate.hub.foundCount, foundMills: candidate.hub.foundMills,
+    gengar: candidate.gengar.state, proposals: candidate.gengar.proposals,
+  });
 }
 
 /** The state's words, its tone and the one way to the board. */

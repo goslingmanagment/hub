@@ -3,7 +3,7 @@ import { formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { KIND_OF } from "@agency_hub_core/ui/people/words";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { beadSize } from "@agency_hub_core/ui/ribbon";
-import type { StatsShift } from "./model";
+import type { ChatterSaleKind } from "@agency_hub_core/contracts";
 
 /**
  * One shift's line on its card: the shift from its start to its end (to now while it goes on) as one bar, its pauses
@@ -15,6 +15,26 @@ import type { StatsShift } from "./model";
  */
 
 const HOUR_MS = 3_600_000;
+
+/** A sale at its minute on the line: what it counts here (by the rule, or in the report). */
+export interface TrackSale {
+  at: string;
+  netMills: number;
+  kind: ChatterSaleKind;
+  pageLabel: string;
+  fanName: string | null;
+  /** It counts for a colleague too (the old count): a hollow bead. */
+  overlap?: boolean;
+}
+
+/** What the line draws: the shift's span, its pauses and its sales («Мои»: `accountShifts`' shift; the team's reports: `teamShiftReports`). */
+export interface TrackShift {
+  startedAt: string;
+  endedAt: string;
+  ongoing: boolean;
+  pauses: ReadonlyArray<{ from: string; to: string }>;
+  sales: readonly TrackSale[];
+}
 
 /** The whole hours inside the shift, at most five labels: every hour, every 2, 3… */
 function hourMarks(start: number, end: number): number[] {
@@ -29,7 +49,7 @@ function hourMarks(start: number, end: number): number[] {
   return marks;
 }
 
-export function ShiftTrack({ shift, maxSaleMills }: { shift: StatsShift; maxSaleMills: number }) {
+export function ShiftTrack({ shift, maxSaleMills }: { shift: TrackShift; maxSaleMills: number }) {
   const start = Date.parse(shift.startedAt);
   const end = Math.max(Date.parse(shift.endedAt), start + 60_000);
   const span = end - start;

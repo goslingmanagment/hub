@@ -1,12 +1,12 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { MouseEvent, ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
-import { Badge, Button, LinkButton, Money, PageLabels, Tooltip } from "@agency_hub_core/ui";
+import { Badge, Button, LinkButton, Money, PageLabels, Person, Tooltip } from "@agency_hub_core/ui";
 import { formatMills } from "@agency_hub_core/ui/format";
 import { KINDS, shareOf, shareText } from "@agency_hub_core/ui/people/words";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { shiftPauseText } from "@agency_hub_core/ui/shiftLive";
-import { shiftDurationHint } from "@agency_hub_core/ui/shiftWhen";
+import { shiftDurationHint, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { ReportBody } from "@/shared/ReportBody";
 import { ReportNoteLine } from "@/shared/ReportNote";
 import type { PlacedNote } from "@/shared/reportNotes";
@@ -15,19 +15,27 @@ import { KIND_SHORT, reportStepOf, type MyShiftRow, type ReportStep, type StatsS
 import { AccrualLine } from "./MyMoney";
 import type { MoneyDay } from "./money";
 import { ShiftNumbersLine, type ShiftNumbers } from "./MyQuality";
-import { ShiftTrack } from "./ShiftTrack";
+import { ShiftTrack, type TrackShift } from "./ShiftTrack";
 
 /**
- * One shift of «Мои смены» as a card: its report at a glance. When (the day, the clock, «сейчас»), the pages and the
- * time worked; the money — the report's one number («по отчёту»; a draft's, «предварительно»), else, before any report,
- * the shift's sales by the rule («по правилу»), never a third; the shift's line in time with a bead per sale; what its
- * sales are made of; its numbers; and where the report stands, with the one step to take when something is due.
+ * One shift as a card: its report at a glance. When (the day, the clock, «сейчас»), the pages and the time worked; the
+ * money — the report's one number («по отчёту»; a draft's, «предварительно»), else, before any report, the shift's sales
+ * by the rule («по правилу»), never a third; the shift's line in time with a bead per sale; what its sales are made of;
+ * its numbers; and where the report stands, with the one step to take when something is due.
  *
  * The card opens the shift's page (`/shifts/:userId/:shiftStart`: the report, its numbers and the pulse in one place);
- * its button opens the board. A report Hub has no shift for, or a post in «Отчётность», opens in place, as before.
+ * its button opens the board. «Мои смены» draws its own shifts with it (`ShiftCard`); «Смены → Отчёты» draws everyone's
+ * reports with the same frame, the person on it (`ShiftCardFrame`, screens/shift-reports).
  */
 
-const STEP_TONE: Record<ReportStep["tone"], "warning" | "success" | "info" | "off"> = { warn: "warning", good: "success", live: "info", quiet: "off" };
+export const STEP_TONE: Record<ReportStep["tone"], "warning" | "success" | "info" | "off"> = { warn: "warning", good: "success", live: "info", quiet: "off" };
+
+/** What some sales are made of: Hub's count, their whole and its parts by kind (the parts add up to the whole). */
+export interface KindsParts {
+  count: number;
+  mills: number;
+  byKind: StatsShift["byKind"];
+}
 
 /** The card's money: the report's, a draft's «предварительно», or the rule's before any report. */
 function CardMoney({ row, accrual }: { row: MyShiftRow; accrual: MoneyDay | undefined }) {
@@ -58,26 +66,30 @@ function CardMoney({ row, accrual }: { row: MyShiftRow; accrual: MoneyDay | unde
   );
 }
 
-/** What the shift's sales are made of: one thin bar of shares by kind, the shares in words. The parts are Hub's sums. */
-function KindsLine({ shift }: { shift: StatsShift }) {
-  const total = shift.salesNetMills;
-  const count = shift.sales.length;
-  const parts = KINDS.filter((kind) => shift.byKind[kind.kind] > 0).map((kind) => ({ ...kind, mills: shift.byKind[kind.kind] }));
+/**
+ * What the shift's sales are made of: one thin bar of shares by kind, the shares in words. The parts are Hub's sums:
+ * by the rule («Мои», a shift with nothing handed in), or the report's own lines (`basis` says which, on hover).
+ */
+export function KindsLine({ parts, ongoing, basis = "rule" }: { parts: KindsParts; ongoing: boolean; basis?: "rule" | "report" }) {
+  const total = parts.mills;
+  const count = parts.count;
+  const items = KINDS.filter((kind) => parts.byKind[kind.kind] > 0).map((kind) => ({ ...kind, mills: parts.byKind[kind.kind] }));
   if (count === 0 || total <= 0) {
-    return <div className="mys-kinds mys-kinds--none">{shift.ongoing ? "Продаж пока нет" : "Продаж не было"}</div>;
+    const none = basis === "report" ? "В отчёте продаж нет" : ongoing ? "Продаж пока нет" : "Продаж не было";
+    return <div className="mys-kinds mys-kinds--none">{none}</div>;
   }
   return (
     <div className="mys-kinds">
       <div className="mys-kinds__head">
-        {count} {ruPlural(count, "продажа", "продажи", "продаж")}
+        {count} {ruPlural(count, "продажа", "продажи", "продаж")}{basis === "report" ? " в отчёте" : ""}
       </div>
-      <span className="mys-kinds__bar" role="img" aria-label={parts.map((part) => `${KIND_SHORT[part.kind]} ${shareText(shareOf(part.mills, total))}`).join(", ")}>
-        {parts.map((part) => <i key={part.kind} style={{ flexGrow: part.mills, background: part.color }} />)}
+      <span className="mys-kinds__bar" role="img" aria-label={items.map((part) => `${KIND_SHORT[part.kind]} ${shareText(shareOf(part.mills, total))}`).join(", ")}>
+        {items.map((part) => <i key={part.kind} style={{ flexGrow: part.mills, background: part.color }} />)}
       </span>
       <ul className="mys-kinds__legend">
-        {parts.map((part) => (
+        {items.map((part) => (
           <li key={part.kind}>
-            <Tooltip content={`${part.label}: ${formatMills(part.mills)} по правилу`} align="start">
+            <Tooltip content={`${part.label}: ${formatMills(part.mills)} ${basis === "report" ? "по отчёту" : "по правилу"}`} align="start">
               <span className="mys-kinds__item">
                 <span aria-hidden className="wb-kind-key" style={{ background: part.color }} />
                 {KIND_SHORT[part.kind]} <b>{shareText(shareOf(part.mills, total))}</b>
@@ -87,6 +99,115 @@ function KindsLine({ shift }: { shift: StatsShift }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+export interface ShiftCardFrameProps {
+  /** The card's key in the feed (`data-key`). */
+  cardKey: string;
+  /** The shift's page; null — none (a report Hub has no shift for). */
+  page: string | null;
+  back: { back: BackTarget };
+  /** Whose shift (the team's reports); absent — one's own («Мои»): the day leads the card. */
+  person?: string | undefined;
+  when: ShiftWhen;
+  ongoing: boolean;
+  /** «пауза с 11:02»: a going shift in a break; null — none. */
+  pause: string | null;
+  /** Hub's worked time; null — no shift. */
+  workedMinutes: number | null;
+  pages: readonly string[];
+  /** After the pages: «смена в Hub не найдена». */
+  lost?: ReactNode;
+  /** The card's money (its `mys-card__money` block). */
+  money: ReactNode;
+  /** The shift's line in time; null — no shift. */
+  track: TrackShift | null;
+  /** What its sales are made of; null — no shift. */
+  kinds: { parts: KindsParts; basis: "rule" | "report" } | null;
+  numbers: Pick<ShiftNumbers, "numbers" | "quality" | "ongoing"> | undefined;
+  /** The beads of every card are sized against this sale. */
+  maxSaleMills: number;
+  /** Under the numbers: the day's note, the comment for the next shift. */
+  note?: ReactNode;
+  step: ReportStep;
+  /** More facts beside the state's words (Hub's check, Gengar). */
+  facts?: readonly string[];
+  /** The card's buttons; null — none. */
+  actions: ReactNode;
+  /** The report opened in place, under the foot; null — none. */
+  report?: ReactNode;
+}
+
+/** The card's frame: the same marks for one's own shift and everyone's report. */
+export function ShiftCardFrame(props: ShiftCardFrameProps) {
+  const { cardKey, page, back, person, when, ongoing, pause, workedMinutes, pages, lost, money, track, kinds, numbers, maxSaleMills, note, step, facts = [], actions, report } = props;
+  const navigate = useNavigate();
+  const hint = workedMinutes !== null ? shiftDurationHint(when) : null;
+  // The whole card opens the shift's page; a press on a button or a link stays theirs, and the report opened in place
+  // is read, not left.
+  const onCard = (event: MouseEvent<HTMLElement>) => {
+    if (page === null || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    if ((event.target as Element).closest("a, button, .mys-card__report")) return;
+    if (window.getSelection()?.toString()) return;
+    navigate(page, { state: back });
+  };
+
+  const time = (
+    <span className="mys-card__time" data-live={ongoing || undefined}>
+      {ongoing && <span aria-hidden className="mys-card__dot" />}
+      {/* Under a day's head the clock leads: it is the shift's link. */}
+      {person !== undefined && page !== null ? <Link to={page} state={back} className="mys-card__time-link">{when.time}</Link> : when.time}
+    </span>
+  );
+  const meta = (
+    <div className="mys-card__meta">
+      {workedMinutes !== null && (
+        <Tooltip content={hint ?? ""} align="start"><span>{when.worked} работы</span></Tooltip>
+      )}
+      {pages.length > 0 && <PageLabels labels={[...pages]} />}
+      {lost}
+    </div>
+  );
+
+  return (
+    <li className="mys-card" data-key={cardKey} data-link={page !== null || undefined} onClick={onCard}>
+      {person !== undefined ? (
+        <div className="mys-card__head mys-card__head--who">
+          {/* The clock says «сейчас» with its own dot: the circle carries none. */}
+          <Person name={person} size="lg" nameEnd={<>{time}{pause !== null && <span className="mys-card__pause">{pause}</span>}</>} />
+          {meta}
+        </div>
+      ) : (
+        <div className="mys-card__head">
+          <div className="mys-card__when">
+            {page !== null
+              ? <Link to={page} state={back} className="mys-card__day">{when.days}</Link>
+              : <span className="mys-card__day">{when.days}</span>}
+            {time}
+            {/* A going shift in a break (a break inside one's own slot is a pause of the shift, not its end). */}
+            {pause !== null && <span className="mys-card__pause">{pause}</span>}
+          </div>
+          {meta}
+        </div>
+      )}
+      {money}
+      {track !== null && <div className="mys-card__track"><ShiftTrack shift={track} maxSaleMills={maxSaleMills} /></div>}
+      {kinds !== null && <div className="mys-card__kinds"><KindsLine parts={kinds.parts} ongoing={ongoing} basis={kinds.basis} /></div>}
+      {numbers !== undefined && <div className="mys-card__nums"><ShiftNumbersLine shift={numbers} /></div>}
+      {note !== undefined && note !== null && <div className="mys-card__note">{note}</div>}
+      <div className="mys-card__foot">
+        {step.words !== "" && (
+          <span className="mys-card__state">
+            <Badge tone={STEP_TONE[step.tone]} bare={step.tone !== "warn"}>{step.words}</Badge>
+            {step.note !== null && <span className="mys-card__state-note">{step.note}</span>}
+            {facts.map((words) => <span key={words} className="mys-card__state-note">{words}</span>)}
+          </span>
+        )}
+        {actions !== null && <span className="mys-card__actions">{actions}</span>}
+      </div>
+      {report !== undefined && report !== null && <div className="mys-card__report">{report}</div>}
+    </li>
   );
 }
 
@@ -106,71 +227,45 @@ export interface ShiftCardProps {
   back: { back: BackTarget };
 }
 
+/** One shift of «Мои смены». */
 export function ShiftCard({ row, userId, numbers, maxSaleMills, accrual, note, open, onOpen, back }: ShiftCardProps) {
   const location = useLocation();
-  const navigate = useNavigate();
   const step = reportStepOf(row);
   const shift = row.shift;
   const page = shift !== null && userId !== null ? shiftPath(userId, shift.startedAt, location.search) : null;
   const board = row.hub === null ? null : `/report/${row.hub.shiftId}`;
   // A post in «Отчётность» (the old way) opens in place, as the journal's row did.
   const inPlace = row.hub === null && row.report !== null;
-  const hint = row.workedMinutes !== null ? shiftDurationHint(row.when) : null;
-  // The whole card opens the shift's page; a press on a button or a link stays theirs, and the report opened in place
-  // is read, not left.
-  const onCard = (event: MouseEvent<HTMLElement>) => {
-    if (page === null || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    if ((event.target as Element).closest("a, button, .mys-card__report")) return;
-    if (window.getSelection()?.toString()) return;
-    navigate(page, { state: back });
-  };
-
-  const pause = shift === null ? null : shiftPauseText(shift);
 
   return (
-    <li className="mys-card" data-key={row.key} data-link={page !== null || undefined} onClick={onCard}>
-      <div className="mys-card__head">
-        <div className="mys-card__when">
-          {page !== null
-            ? <Link to={page} state={back} className="mys-card__day">{row.when.days}</Link>
-            : <span className="mys-card__day">{row.when.days}</span>}
-          <span className="mys-card__time" data-live={shift?.ongoing || undefined}>
-            {shift?.ongoing && <span aria-hidden className="mys-card__dot" />}
-            {row.when.time}
-          </span>
-          {/* A going shift in a break (a break inside one's own slot is a pause of the shift, not its end). */}
-          {pause !== null && <span className="mys-card__pause">{pause}</span>}
-        </div>
-        <div className="mys-card__meta">
-          {row.workedMinutes !== null && (
-            <Tooltip content={hint ?? ""} align="start"><span>{row.when.worked} работы</span></Tooltip>
-          )}
-          {row.pages.length > 0 && <PageLabels labels={row.pages} />}
-          {shift === null && (
-            <Tooltip
-              content={row.report?.source === "post"
-                ? "Hub не видел в этот день вашей работы в расширении ChatGoose: к какой смене относится отчёт, неизвестно."
-                : "Hub не видел в это время вашей работы в расширении ChatGoose: отчёт собрали без смены."}
-              align="start"
-            >
-              <span className="mys-card__lost">смена в Hub не найдена</span>
-            </Tooltip>
-          )}
-        </div>
-      </div>
-      <CardMoney row={row} accrual={accrual} />
-      {shift !== null && <div className="mys-card__track"><ShiftTrack shift={shift} maxSaleMills={maxSaleMills} /></div>}
-      {shift !== null && <div className="mys-card__kinds"><KindsLine shift={shift} /></div>}
-      {numbers !== undefined && <div className="mys-card__nums"><ShiftNumbersLine shift={numbers} /></div>}
-      {note !== undefined && <div className="mys-card__note"><ReportNoteLine placed={note} own sum={false} /></div>}
-      <div className="mys-card__foot">
-        {step.words !== "" && (
-          <span className="mys-card__state">
-            <Badge tone={STEP_TONE[step.tone]} bare={step.tone !== "warn"}>{step.words}</Badge>
-            {step.note !== null && <span className="mys-card__state-note">{step.note}</span>}
-          </span>
-        )}
-        <span className="mys-card__actions">
+    <ShiftCardFrame
+      cardKey={row.key}
+      page={page}
+      back={back}
+      when={row.when}
+      ongoing={shift?.ongoing ?? false}
+      pause={shift === null ? null : shiftPauseText(shift)}
+      workedMinutes={row.workedMinutes}
+      pages={row.pages}
+      lost={shift === null && (
+        <Tooltip
+          content={row.report?.source === "post"
+            ? "Hub не видел в этот день вашей работы в расширении ChatGoose: к какой смене относится отчёт, неизвестно."
+            : "Hub не видел в это время вашей работы в расширении ChatGoose: отчёт собрали без смены."}
+          align="start"
+        >
+          <span className="mys-card__lost">смена в Hub не найдена</span>
+        </Tooltip>
+      )}
+      money={<CardMoney row={row} accrual={accrual} />}
+      track={shift}
+      kinds={shift === null ? null : { parts: { count: shift.sales.length, mills: shift.salesNetMills, byKind: shift.byKind }, basis: "rule" }}
+      numbers={numbers}
+      maxSaleMills={maxSaleMills}
+      note={note === undefined ? undefined : <ReportNoteLine placed={note} own sum={false} />}
+      step={step}
+      actions={(
+        <>
           {inPlace && (
             <Button size="md" variant="ghost" icon={open ? ChevronUp : ChevronDown} aria-expanded={open} onClick={() => onOpen(!open)}>
               {open ? "Свернуть отчёт" : "Отчёт"}
@@ -178,9 +273,9 @@ export function ShiftCard({ row, userId, numbers, maxSaleMills, accrual, note, o
           )}
           {board !== null && step.action !== null && <LinkButton to={board} state={back} variant="primary" size="md">{step.action}</LinkButton>}
           {board !== null && step.action === null && <LinkButton to={board} state={back} variant="ghost" size="md">Открыть отчёт</LinkButton>}
-        </span>
-      </div>
-      {inPlace && open && row.report !== null && <div className="mys-card__report"><ReportBody report={row.report} /></div>}
-    </li>
+        </>
+      )}
+      report={inPlace && open && row.report !== null ? <ReportBody report={row.report} /> : null}
+    />
   );
 }

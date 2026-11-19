@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import { livePageSql, testUserSql } from "./realm.ts";
+import { livePageSql, liveUserSql, testUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 
 // The shift report as an object of Hub (0400; ecosystem plan 2026-11-12,
@@ -86,6 +86,30 @@ export async function listHandinShifts(db: Database, input: { userIds: readonly 
       and started_at >= ${input.from.toISOString()}::timestamptz and started_at < ${input.to.toISOString()}::timestamptz
     order by started_at, id`);
   return result.rows.map(shiftOf);
+}
+
+/** A shift row with its pauses, as the team's reports list it. */
+export interface TeamHandinShift extends HandinShift {
+  pauses: Array<{ from: string; to: string }>;
+}
+
+/**
+ * The living shift rows (going, closed) of one realm (a row's realm is its login's person's, realm.ts) whose report date
+ * — the row's own, or its handed-in report's — is in [from, to] (Moscow days), with their pauses, oldest first: what
+ * «Смены → Отчёты» (`teamShiftReports`) cuts to the reader's pages. One query for the window.
+ */
+export async function listTeamHandinShifts(db: Database, input: { from: string; to: string; realm: "live" | "test" }): Promise<TeamHandinShift[]> {
+  const realm = input.realm === "test" ? testUserSql(sql`s.user_id`) : liveUserSql(sql`s.user_id`);
+  const result = await db.execute<Row>(sql`
+    select s.id, s.user_id, s.state, s.started_at, s.ended_at, s.worked_minutes, to_char(s.report_date, 'YYYY-MM-DD') as report_date,
+      s.pages, s.pauses, s.merged_into
+    from shifts s
+    where s.state in ('going', 'closed') and ${realm}
+      and (s.report_date between ${input.from}::date and ${input.to}::date
+        or exists (select 1 from shift_handins h where h.shift_id = s.id and h.state = 'submitted'
+          and h.report_date between ${input.from}::date and ${input.to}::date))
+    order by s.started_at, s.id`);
+  return result.rows.map((row) => ({ ...shiftOf(row), pauses: jsonArray<{ from: string; to: string }>(row.pauses) }));
 }
 
 /** The person's latest living shift that began before `before`: the one an agent's /smena means. Null — none. */
