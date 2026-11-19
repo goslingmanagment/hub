@@ -40,12 +40,12 @@ import {
   findTestOwnerLogin,
   isTestUser,
 } from "@agency_hub_core/db";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
 import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-report-draft.ts";
 import { commentText, modelComment } from "./shift-handin-rules.ts";
-import { cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor } from "./shift-report-phases.ts";
+import { CLAIM_SILENCE_MS, cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor } from "./shift-report-phases.ts";
 
 /**
  * The «Отчёт» board as a reader sees it (products plan 2026-11-13, package R; the contract shift-report-board.ts): a
@@ -370,7 +370,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       note: ask.claimantNote ?? "",
       state: askState(ask),
       answerNote: ask.answerNote,
-      answerBy: ask.sideUserId === null || ask.state !== "asked" ? null : new Date(ask.createdAt.getTime() + DAY_MS).toISOString(),
+      answerBy: ask.sideUserId === null || ask.state !== "asked" ? null : new Date(ask.createdAt.getTime() + CLAIM_SILENCE_MS).toISOString(),
       decision: ask.decisionId === null ? null : "решение владельца",
       oldWay,
     };
@@ -382,7 +382,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       state: incoming.state === "asked" ? "asked" as const : incoming.state === "owner" ? "disputed" as const : "settled" as const,
       canAnswer: own && incoming.kind === "claim" && incoming.answer === null && (incoming.state === "asked" || (incoming.state === "agreed" && incoming.silenceAt !== null)),
       answer: incoming.answer,
-      answerBy: incoming.state === "asked" ? new Date(incoming.createdAt.getTime() + DAY_MS).toISOString() : null,
+      answerBy: incoming.state === "asked" ? new Date(incoming.createdAt.getTime() + CLAIM_SILENCE_MS).toISOString() : null,
     };
     const shownProposal = proposal ?? noteProposal;
     const proposalWire = shownProposal === null ? null : {
@@ -633,7 +633,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     modelsOfPages(catalog, shiftLabels),
   );
   const previousNames = previousComment === null ? new Map<number, string>() : await listHandinNames(db, [previousComment.userId]);
-  const moscowToday = new Date(now.getTime() + 3 * HOUR_MS).toISOString().slice(0, 10);
+  const moscowToday = moscowDayOfMs(now.getTime());
   const reportDay = latest?.reportDate ?? handin?.reportDate ?? subject.shift.reportDate;
   const copied = handin?.postCopiedVersion == null ? null : input.versions.find((version) => version.version === handin.postCopiedVersion) ?? null;
   return {

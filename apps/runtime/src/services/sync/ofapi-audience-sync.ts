@@ -43,6 +43,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { asRecord, idToString } from "../ofapi-payloads.ts";
+import { createOfapiRestGuard } from "../ofapi-rest-guard.ts";
 import type { OfapiClient, OfapiRequestContext } from "../ofapi.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import { composeRequestObservers, type SyncChunkBudget } from "./chunk-budget.ts";
@@ -52,11 +53,7 @@ import {
   ofapiAudienceQualityHoldFor,
   parseOfapiAudienceCursorState,
 } from "./cursor-state.ts";
-import {
-  budgetBlockResult,
-  createOfapiRestGuard,
-  type OfapiStreamChunkResult,
-} from "./ofapi-dm-sync.ts";
+import { budgetBlockResult, type OfapiStreamChunkResult } from "./ofapi-dm-sync.ts";
 import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 import { persistRawPayload, retentionDate } from "./shared.ts";
 

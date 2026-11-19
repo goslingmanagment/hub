@@ -10,7 +10,7 @@ import { RecordFromSaleModal } from "./index";
  */
 export function FrameCustomScreen() {
   const [search] = useSearchParams();
-  const link = useFramePort();
+  const link = useFramePort({ client: true });
   const page = search.get("page") ?? "";
   const fan = search.get("fan") ?? "";
   const name = search.get("name");

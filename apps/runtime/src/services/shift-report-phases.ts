@@ -85,13 +85,16 @@ export function gengarState(input: { reviewed: boolean; answeredAt: Date | null;
   return input.now.getTime() - input.handedInAt.getTime() >= SHIFT_REPORT_CHECK_MINUTES * 60_000 ? "silent" : "reading";
 }
 
+/** How long the other side has to answer a question: the silence that settles it, and every «до …» people are shown. */
+export const CLAIM_SILENCE_MS = SHIFT_REPORT_ASK_SILENCE_HOURS * 3_600_000;
+
 /**
  * A day of silence (R-board §4): a question to a colleague nobody answered for a day settles for the one who asked. A
  * question with nobody to ask (the pot, the owner's) never settles by silence.
  */
 export function silenceSettles(claim: { kind: string; state: string; sideUserId: number | null; createdAt: Date }, now: Date): boolean {
   return claim.kind === "claim" && claim.state === "asked" && claim.sideUserId !== null
-    && now.getTime() - claim.createdAt.getTime() >= SHIFT_REPORT_ASK_SILENCE_HOURS * 3_600_000;
+    && now.getTime() - claim.createdAt.getTime() >= CLAIM_SILENCE_MS;
 }
 
 /** The word a statement is to the arithmetic of a line (`lineAmount`): given away and to the pot count as «не моё». */

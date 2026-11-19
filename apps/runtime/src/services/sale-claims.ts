@@ -9,7 +9,7 @@ import type {
   ShiftReportLineFacts,
 } from "@agency_hub_core/contracts";
 import { personNameForms } from "@agency_hub_core/contracts";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { formatUsdFromMills, moscowDayOfMs as moscowDay } from "@agency_hub_core/shared";
 import {
   listHandinMarks,
   listOpenPotOffers,
@@ -68,7 +68,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { moscowWeekStart, refreshSaleHomes } from "./sale-homes.ts";
-import { silenceSettles } from "./shift-report-phases.ts";
+import { CLAIM_SILENCE_MS, silenceSettles } from "./shift-report-phases.ts";
 import {
   claimStands,
   claimTitle,
@@ -90,6 +90,7 @@ import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, halvesOf, type SaleHomeRe
 import { realmOf, testUserIds } from "./sandbox/realm.ts";
 import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, teamFactsFor, type Decider } from "./teams.ts";
 import { dayWords } from "./shift-handin-rules.ts";
+import { POT_OFFER_KIND } from "./shift-handin-check.ts";
 import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, pageCatalog, saleLineFacts, type HandinActor } from "./shift-report-draft.ts";
 
 /**
@@ -133,12 +134,8 @@ const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 /** How far back the pass reads reports: older claims keep their state. */
 const LOOKBACK_DAYS = 14;
-/** How long the other side has to answer before the owner hears of it. */
-export const CLAIM_SILENCE_MS = 24 * HOUR_MS;
 const SYSTEM: MatterActor = { door: "system" };
 const OPEN_STATES = ["asked", "agreed", "owner"] as const;
-
-const moscowDay = (at: number) => new Date(at + 3 * HOUR_MS).toISOString().slice(0, 10);
 
 const money = (mills: number) => formatUsdFromMills(mills);
 
@@ -653,6 +650,36 @@ async function settleReport(
   return { shiftId: input.shiftId, version: version.version, versionId: version.id, dayPaid };
 }
 
+/**
+ * Every handed-in report whose line of the sale `holds` it goes back to what the shift's draft says of it now — an
+ * agreement of the two sides, else the rule with the person's own word (what handing in again would write) — in the
+ * caller's transaction, the settlements' turn taken: every report locked first, then every draft line read, then the
+ * versions made, so each draft reads the other reports as they stand before any of them changes.
+ */
+async function reportsBackToDraft(
+  txDb: Database,
+  input: {
+    transactionId: number; holds: (line: HandinVersionLine) => boolean; madeFor: HandinVersionMadeFor; by: SettleBy;
+    paid: ReadonlyMap<number, boolean | null>; at: Date;
+  },
+): Promise<MadeVersion[]> {
+  const { transactionId, at } = input;
+  const settled = (await listCurrentReportsOfSales(txDb, [transactionId]))
+    .filter((report) => report.lines.some((line) => line.transactionId === transactionId && input.holds(line)));
+  for (const report of settled) await findHandinByShift(txDb, report.shiftId, { lock: true });
+  const lines: Array<HandinVersionLine | null> = [];
+  for (const report of settled) lines.push(await draftLineOfSale(txDb, report.shiftId, transactionId, at));
+  const made: MadeVersion[] = [];
+  for (const [index, report] of settled.entries()) {
+    const one = await settleReport(txDb, {
+      shiftId: report.shiftId, transactionId, to: { line: lines[index] ?? null }, madeFor: input.madeFor, by: input.by, at,
+      dayPaid: input.paid.get(report.shiftId) ?? null,
+    });
+    if (one !== null) made.push(one);
+  }
+  return made;
+}
+
 /** After a settlement: the report of a paid day changed is the owner's matter (as a hand-in after the ledger paid it). */
 async function afterPaid(app: ClaimsApp, made: readonly MadeVersion[], now: Date) {
   for (const one of made) {
@@ -745,6 +772,41 @@ async function othersToDecider(db: Database, settled: Pick<SaleClaimRow, "id" | 
 }
 
 /**
+ * An agreement (an answer «Согласен», a day of silence) written into the reports, in the caller's transaction (the
+ * settlements' turn taken): every handed-in report of the claimant or of the side that holds the sale gets what the
+ * agreement gives its person — the claimant all (or a half), the side none (or the other half). `netIfNone` — the net
+ * when no report line names it.
+ */
+async function settleAgreedReports(
+  txDb: Database,
+  input: {
+    claim: Pick<SaleClaimRow, "id" | "sideUserId" | "statement"> & { transactionId: number; claimantUserId: number };
+    sideIds: readonly number[]; netIfNone: number; by: SettleBy; paid: ReadonlyMap<number, boolean | null>; at: Date;
+  },
+): Promise<MadeVersion[]> {
+  const { claim, sideIds } = input;
+  const made: MadeVersion[] = [];
+  const reports = await listCurrentReportsOfSales(txDb, [claim.transactionId]);
+  const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === claim.transactionId)?.netMills ?? input.netIfNone;
+  for (const report of reports) {
+    const mine = report.userId === claim.claimantUserId;
+    const theirs = sideIds.includes(report.userId);
+    if (!mine && !theirs) continue;
+    const amount = shareAfter({
+      netMills: net, userId: mine ? claim.claimantUserId : claim.sideUserId!, outcome: "agreed",
+      first: claim.claimantUserId, second: claim.sideUserId, statement: claim.statement,
+    });
+    const one = await settleReport(txDb, {
+      shiftId: report.shiftId, transactionId: claim.transactionId, to: { amountMills: amount, settled: "agreed" },
+      madeFor: { kind: "claim", claimId: claim.id, transactionId: claim.transactionId, outcome: "agreed" }, by: input.by, at: input.at,
+      dayPaid: input.paid.get(report.shiftId) ?? null,
+    });
+    if (one !== null) made.push(one);
+  }
+  return made;
+}
+
+/**
  * A day of silence: the claim is settled for the one who asked, as an agreement is (the claimant all or the half, the
  * side none or the other half), in the settlements' turn; every counted report holding the sale gets its version made
  * by the system. False — the claim was answered or moved meanwhile.
@@ -774,24 +836,10 @@ async function settleBySilence(app: Pick<AppContext, "db" | "logger">, claim: Sa
     }
     await updateSaleClaim(txDb, locked.id, { state: "agreed", closedAt: now, silenceAt: now }, now, { ifState: "asked" });
     await othersToDecider(txDb, locked, now);
-    const reports = await listCurrentReportsOfSales(txDb, [claim.transactionId!]);
-    const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === claim.transactionId)?.netMills ?? 0;
     const by: SettleBy = { door: "workboard", actorUserId: claim.claimantUserId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null };
-    for (const report of reports) {
-      const mine = report.userId === claim.claimantUserId;
-      const theirs = sideIds.includes(report.userId);
-      if (!mine && !theirs) continue;
-      const amount = shareAfter({
-        netMills: net, userId: mine ? claim.claimantUserId! : claim.sideUserId!, outcome: "agreed",
-        first: claim.claimantUserId!, second: claim.sideUserId, statement: claim.statement,
-      });
-      const one = await settleReport(txDb, {
-        shiftId: report.shiftId, transactionId: claim.transactionId!, to: { amountMills: amount, settled: "agreed" },
-        madeFor: { kind: "claim", claimId: claim.id, transactionId: claim.transactionId!, outcome: "agreed" }, by, at: now,
-        dayPaid: paid.get(report.shiftId) ?? null,
-      });
-      if (one !== null) made.push(one);
-    }
+    made.push(...await settleAgreedReports(txDb, {
+      claim: { ...claim, transactionId: claim.transactionId!, claimantUserId: claim.claimantUserId! }, sideIds, netIfNone: 0, by, paid, at: now,
+    }));
     return true;
   });
   if (done) await afterPaid(app as ClaimsApp, made, now);
@@ -866,23 +914,9 @@ export async function answerSaleClaim(
     if (input.answer !== "agree" || thirdHolds || claim.transactionId === null || claim.claimantUserId === null) return;
     await othersToDecider(txDb, claim, now);
     // Agreed: every report that counts the sale gets what the agreement gives — the claimant all (or a half), the side none (or the other half).
-    const reports = await listCurrentReportsOfSales(txDb, [claim.transactionId]);
-    const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === claim.transactionId)?.netMills ?? sale?.netMills ?? 0;
-    for (const report of reports) {
-      const mine = report.userId === claim.claimantUserId;
-      const theirs = sideIds.includes(report.userId);
-      if (!mine && !theirs) continue;
-      const amount = shareAfter({
-        netMills: net, userId: mine ? claim.claimantUserId : claim.sideUserId!, outcome: "agreed",
-        first: claim.claimantUserId, second: claim.sideUserId, statement: claim.statement,
-      });
-      const one = await settleReport(txDb, {
-        shiftId: report.shiftId, transactionId: claim.transactionId, to: { amountMills: amount, settled: "agreed" },
-        madeFor: { kind: "claim", claimId: claim.id, transactionId: claim.transactionId, outcome: "agreed" }, by, at: now,
-        dayPaid: paid.get(report.shiftId) ?? null,
-      });
-      if (one !== null) made.push(one);
-    }
+    made.push(...await settleAgreedReports(txDb, {
+      claim: { ...claim, transactionId: claim.transactionId, claimantUserId: claim.claimantUserId }, sideIds, netIfNone: sale?.netMills ?? 0, by, paid, at: now,
+    }));
   });
   await afterPaid(app, made, now);
   if (input.answer === "agree") await refreshHomeOf(app, sale?.occurredAt ?? null, now);
@@ -995,19 +1029,9 @@ export async function decideSaleDispute(
       const closing = (await listSaleClaims(txDb, { transactionIds: [transactionId] })).filter((claim) => claim.state === "owner" || claim.state === "asked" || claim.state === "agreed");
       for (const claim of closing) await updateSaleClaim(txDb, claim.id, { state: "decided", closedAt: now }, now);
       await refreshHomeWithin(txDb, now_.sale?.occurredAt ?? null, now);
-      const settled = (await listCurrentReportsOfSales(txDb, [transactionId]))
-        .filter((report) => report.lines.some((line) => line.transactionId === transactionId));
-      // Every report first, then every line, then the versions: each draft reads the others as they stand before any changes.
-      for (const report of settled) await findHandinByShift(txDb, report.shiftId, { lock: true });
-      const lines: Array<HandinVersionLine | null> = [];
-      for (const report of settled) lines.push(await draftLineOfSale(txDb, report.shiftId, transactionId, now));
-      for (const [at, report] of settled.entries()) {
-        const one = await settleReport(txDb, {
-          shiftId: report.shiftId, transactionId, to: { line: lines[at] ?? null },
-          madeFor: { kind: "claim", claimId: (closing[0] ?? open[0]!).id, transactionId, outcome: "rule" }, by, at: now, dayPaid: paid.get(report.shiftId) ?? null,
-        });
-        if (one !== null) made.push(one);
-      }
+      made.push(...await reportsBackToDraft(txDb, {
+        transactionId, holds: () => true, madeFor: { kind: "claim", claimId: (closing[0] ?? open[0]!).id, transactionId, outcome: "rule" }, by, paid, at: now,
+      }));
     });
     await afterPaid(app, made, now);
     await runSaleClaims(app, now).catch(() => undefined);
@@ -1214,20 +1238,10 @@ export async function cancelSaleDecisionApplied(
     let again: DerivedClaim[] = [];
     if (unruled) {
       await refreshHomeWithin(txDb, (await listHandinSalesByIds(txDb, [saleId]))[0]?.occurredAt ?? null, now);
-      const settled = (await listCurrentReportsOfSales(txDb, [saleId]))
-        .filter((report) => report.lines.some((line) => line.transactionId === saleId && line.settled === "owner"));
-      // Every report first, then every line, then the versions: each draft reads the other reports as they stand before any of them changes.
-      for (const report of settled) await findHandinByShift(txDb, report.shiftId, { lock: true });
-      const lines: Array<HandinVersionLine | null> = [];
-      for (const report of settled) lines.push(await draftLineOfSale(txDb, report.shiftId, saleId, now));
-      for (const [at, report] of settled.entries()) {
-        const one = await settleReport(txDb, {
-          shiftId: report.shiftId, transactionId: saleId, to: { line: lines[at] ?? null },
-          madeFor: { kind: "decision", decisionId: decision.id, transactionId: saleId, outcome: "cancelled" },
-          by: input.by, at: now, dayPaid: paid.get(report.shiftId) ?? null,
-        });
-        if (one !== null) made.push(one);
-      }
+      made.push(...await reportsBackToDraft(txDb, {
+        transactionId: saleId, holds: (line) => line.settled === "owner",
+        madeFor: { kind: "decision", decisionId: decision.id, transactionId: saleId, outcome: "cancelled" }, by: input.by, paid, at: now,
+      }));
       again = deriveClaims((await listCurrentReportsOfSales(txDb, [saleId])).map(viewOf)).filter((one) => one.transactionId === saleId);
     }
     for (const claim of closed.values()) {
@@ -1734,13 +1748,11 @@ async function decidePotOffer(app: ClaimsApp, principal: HumanAuthPrincipal, inp
     },
   }, sale, now);
   // Answered: the owner's matter leaves «Ждут вас» at once, as a dispute's does (the minute pass would close it later).
-  await closeMatter(db, { key: `${POT_OFFER_MATTER_KIND}:${offer.transactionId}`, how: "resolved", writer: "server" }, SYSTEM, now).catch((error: unknown) => {
+  await closeMatter(db, { key: `${POT_OFFER_KIND}:${offer.transactionId}`, how: "resolved", writer: "server" }, SYSTEM, now).catch((error: unknown) => {
     app.logger.warn({ transactionId: offer.transactionId, err: error instanceof Error ? error.message : String(error) }, "pot offer: the matter did not close; the next pass will");
   });
   return { decided: true, versions: applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
 }
-
-const POT_OFFER_MATTER_KIND = "sale.pot_offer";
 
 /**
  * An offer of the pot the owner already answered: the window re-read after the press shows what was decided, not a

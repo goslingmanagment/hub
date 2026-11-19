@@ -55,7 +55,7 @@ import {
   type QueueCreationClient,
   type SyncQueueLifecycleClient,
 } from "./sync-queue.ts";
-import { createOfapiRestGuard } from "./sync/ofapi-dm-sync.ts";
+import { createOfapiRestGuard } from "./ofapi-rest-guard.ts";
 import {
   nextOfapiLinkStatsWindowAt,
   OFAPI_LINK_STATS_CRON,
