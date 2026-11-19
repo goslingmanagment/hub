@@ -10,7 +10,7 @@
 // own time: the duration vitest reports for it, plus the job's setup, import
 // and environment time per file (vitest's "Duration (…)" line sums them),
 // divided by the files the job ran at once (--maxWorkers of the DB step's
-// SYNC_CRITICAL_DB_PARALLELISM, 2 on the PC; 1 without --fileParallelism).
+// SYNC_CRITICAL_DB_PARALLELISM, 3 in CI; 1 without --fileParallelism).
 // So weights are seconds of shard wall time, as firstShardExtraSeconds is,
 // whatever order the files ran in. Not the time between two completions:
 // with two files at a time, a slow file that finishes just after its
@@ -34,7 +34,7 @@ const API_STEP = "##[group]Run pnpm test:sync-critical:api";
 const LINE = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) ?(.*)$/;
 // " ✓ tests/x.integration.test.ts (32 tests) 8718ms"; a failed file is ❯ or ×.
 const FILE_RESULT = /^\s*[✓✗×❯↓]\s+(tests\/\S+?\.test\.ts)\s+\([^)]*\)(?:\s+(\d+)\s*ms)?/;
-// The step's env block: "--fileParallelism --maxWorkers=2" on the PC, empty on GitHub.
+// The step's env block: "--fileParallelism --maxWorkers=3" in CI.
 const PARALLELISM = /^\s*SYNC_CRITICAL_DB_PARALLELISM:(.*)$/;
 // "   Duration  112.01s (transform 8.95s, setup 0ms, import 67.94s, tests 123.46s, environment 5ms)"
 const SUMMARY = /^\s*Duration\s+\S+\s+\((.+)\)\s*$/;
