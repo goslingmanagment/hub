@@ -2820,6 +2820,18 @@ describe("api integration", () => {
       requestShape: { endpointTemplate: "/account/me", method: "GET" },
       responseShape: { returnedItems: 1 },
     });
+    // An attempt still in flight: no finish time, status or duration yet (what `status --watch` lists).
+    const inFlightAt = new Date(attemptAt.getTime() + 1_000);
+    await seedMonitorAttempt(testDb, {
+      runId: run.id,
+      pageId: fixture.lanaPage.id,
+      stream: "light",
+      operation: "account_me",
+      attemptNumber: 2,
+      startedAt: inFlightAt,
+      state: "started",
+      requestShape: { endpointTemplate: "/account/me", method: "GET" },
+    });
     await finishSyncRun(testDb.db, run.id, {
       status: "success",
       stats: { synced: 1 },
@@ -2857,7 +2869,15 @@ describe("api integration", () => {
         status: "success",
       },
     });
-    expect(response.json().attempts).toHaveLength(1);
+    expect(response.json().attempts).toHaveLength(2);
+    expect(response.json().attempts[1]).toMatchObject({
+      attemptNumber: 2,
+      state: "started",
+      httpStatus: null,
+      durationMs: null,
+      startedAt: inFlightAt.toISOString(),
+      finishedAt: null,
+    });
 
     const detail = await getStatusDetail(app, run.id);
     expect(detail.attempts).toEqual([
@@ -2876,6 +2896,15 @@ describe("api integration", () => {
         responseShape: { returnedItems: 1 },
         startedAt: attemptAt,
         finishedAt: new Date(attemptAt.getTime() + 240),
+      }),
+      expect.objectContaining({
+        runId: run.id,
+        attemptNumber: 2,
+        state: "started",
+        httpStatus: null,
+        durationMs: null,
+        startedAt: inFlightAt,
+        finishedAt: null,
       }),
     ]);
     expect(typeof detail.attempts[0]?.attemptId).toBe("number");
