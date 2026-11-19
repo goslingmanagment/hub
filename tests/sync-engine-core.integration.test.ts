@@ -31,7 +31,6 @@ import {
   lockOwnedPage,
   lockWorkRows,
   markApplied,
-  markAttemptSent,
   markDeferred,
   markWorkRunning,
   nextOpenWorkDueAt,
@@ -937,9 +936,6 @@ describe("sync_attempts", () => {
     const first = await upsertDemand(db(), demand(pageId, { subject: "a" }));
     const a = await admit(pageId, generation, { ...first, resource: "dm-messages.head", subject: "a", class: "urgent" });
     const sentAt = new Date(Date.now() - 3_000);
-    expect(await markAttemptSent(db(), { attemptId: a.attemptId, sentAt })).toBe(true);
-    expect(await markAttemptSent(db(), { attemptId: a.attemptId, sentAt })).toBe(false);
-    expect(await getSyncAttempt(db(), a.attemptId)).toMatchObject({ outcome: "sent", sentAt });
 
     const receivedAt = new Date(Date.now() - 2_000);
     const captured = await captureAttempt(db(), {
@@ -1204,7 +1200,7 @@ describe("sync_attempts", () => {
     };
     const admitted = await make("admitted");
     const sent = await make("sent");
-    await markAttemptSent(db(), { attemptId: sent.attemptId, sentAt: new Date() });
+    await query("update sync_attempts set outcome = 'sent', sent_at = $2 where id = $1", [sent.attemptId, new Date()]);
     const captured = await make("captured");
     await captureAttempt(db(), {
       attemptId: captured.attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "transport_reported",
@@ -1267,7 +1263,7 @@ describe("the takeover floor (I5) and the pace audit", () => {
     const admitted = await admit(pageId, generation, { ...work, resource: "dm-messages.head", subject: "group-1", class: "urgent" });
     near(await floor(), 15_000 + 2_400);
     // Its recorded send (a second ago) replaces the window bound.
-    await markAttemptSent(db(), { attemptId: admitted.attemptId, sentAt: new Date(Date.now() - 1_000) });
+    await query("update sync_attempts set outcome = 'sent', sent_at = $2 where id = $1", [admitted.attemptId, new Date(Date.now() - 1_000)]);
     near(await floor(), 2_400);
     // An unknown outcome still counts; one older than the 10-minute lookback does not.
     await query("update sync_attempts set outcome = 'unknown', sent_at = null where id = $1", [admitted.attemptId]);

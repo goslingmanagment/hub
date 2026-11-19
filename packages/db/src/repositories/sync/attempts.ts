@@ -428,8 +428,8 @@ export async function reopenRecoveredObservedAttempt(db: Database, input: { page
  * capture, or the settle of a refusal before sending, kept failing; bug hunt
  * Д3): why, as `commit_failed:<SQLSTATE|error name>`, on the attempt still
  * `admitted`/`sent` that has no error class yet. Its own transaction, without
- * the generation fence, like `markAttemptSent`; recovery closes the attempt
- * `unknown` and keeps the class. False: nothing was marked.
+ * the generation fence; recovery closes the attempt `unknown` and keeps the
+ * class. False: nothing was marked.
  */
 export async function markAttemptCommitFailed(
   db: Database,
@@ -441,22 +441,6 @@ export async function markAttemptCommitFailed(
      where id = ${input.attemptId}
        and outcome in ('admitted', 'sent')
        and error_class is null
-  `);
-  return (result.rowCount ?? 0) > 0;
-}
-
-/** Best effort right after onRequestStart (never awaited by the send): the
- *  send instant, so a takeover after a crash sees it. Only an `admitted` row. */
-export async function markAttemptSent(
-  db: Database,
-  input: { attemptId: number; sentAt: Date },
-): Promise<boolean> {
-  const result = await db.execute(sql`
-    update sync_attempts
-       set outcome = 'sent',
-           sent_at = ${input.sentAt}::timestamptz
-     where id = ${input.attemptId}
-       and outcome = 'admitted'
   `);
   return (result.rowCount ?? 0) > 0;
 }

@@ -24,7 +24,6 @@ import {
   markApplied,
   markAttemptQuarantined,
   markHistoryTurnServed,
-  markAttemptSent,
   markDeferred,
   markWorkRunning,
   OwnershipLostError,
@@ -617,14 +616,6 @@ export async function admit(
       request,
       credentialsGeneration: prepared?.credentialsGeneration ?? null,
     };
-  });
-}
-
-/** Best effort right after `onRequestStart` (never awaited by the send): the
- *  send instant, so a takeover after a crash sees it. */
-export function markSentBestEffort(d: CommitDeps, attemptId: number, sentAt: Date): void {
-  markAttemptSent(d.db, { attemptId, sentAt }).catch((error: unknown) => {
-    d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync: best-effort send mark failed");
   });
 }
 
