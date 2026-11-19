@@ -1,8 +1,8 @@
 import { shiftReportConfirmResponseSchema, shiftReportResponseSchema, type ShiftReportResponse } from "@agency_hub_core/contracts";
 import { expect } from "vitest";
 
-import { readShiftReport, submitShiftReport, type HandinPersonActor } from "../../apps/runtime/src/services/shift-handins.ts";
-import { confirmShiftReport, reopenShiftReport } from "../../apps/runtime/src/services/shift-report-board.ts";
+import { readShiftReport, type HandinPersonActor } from "../../apps/runtime/src/services/shift-handins.ts";
+import { confirmShiftReport, reopenShiftReport, submitShiftReport } from "../../apps/runtime/src/services/shift-report-board.ts";
 
 /**
  * The «Отчёт» board (package R): «Сдать смену» records a candidate, «Подтверждаю» makes the version. What the tests of

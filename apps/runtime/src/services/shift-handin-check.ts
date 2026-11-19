@@ -8,6 +8,7 @@ import {
   countLateSales,
   findHandinByShift,
   findHandinPersonOfUser,
+  hasShiftReportReviewer,
   insertHandinCandidate,
   insertObservation,
   listHandinCandidates,
@@ -53,8 +54,9 @@ import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { clientCaptureProducer } from "./ingest-observations.ts";
 import { reportSums } from "./sale-claim-rules.ts";
 import { SALE_RULE } from "./sale-rule.ts";
-import { disputeDecider, phaseOf, postPagesDiffer } from "./shift-report-board-view.ts";
-import { draftFacts, draftLines, pageCatalog, postPagesOf, subjectOf, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { disputeDecider, hubPending, phaseOf, postPagesDiffer } from "./shift-report-board-view.ts";
+import { draftFacts, draftLines, pageCatalog, postPagesOf, subjectOf, type PageCatalog, type Subject } from "./shift-report-draft.ts";
+import { checkLetsConfirm } from "./shift-report-phases.ts";
 
 /**
  * «Hub сверяет суммы» and «Нет в Hub» (products plan 2026-11-13, package R §5, brief R1b): Hub's own check of every page
@@ -486,4 +488,25 @@ export async function settleGoneShifts(app: CheckApp, now: Date): Promise<number
     touched += 1;
   }
   return touched;
+}
+
+/**
+ * «Проверка» → «Подтвердите» when it is due: Hub's check done and Gengar answered (or nobody reviews the pages), or the
+ * 10 minutes since the hand-in are up (`checkLetsConfirm`). The moment it is due, not at the next pass: a read of the
+ * board and «Подтверждаю» call it, so «Генгар молчит 10 минут. Можно подтвердить» is true when the board says it. Its own
+ * transaction, the report locked; true — moved.
+ */
+export async function moveWhenDue(db: Database, input: { shiftId: number; catalog: PageCatalog }, now: Date): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const locked = await findHandinByShift(txDb, input.shiftId, { lock: true });
+    if (locked === null || phaseOf(locked) !== "checking") return false;
+    const candidate = (await listHandinCandidates(txDb, locked.id)).filter((row) => row.supersededAt === null).at(-1);
+    if (candidate === undefined) return false;
+    const subject = await subjectOf(txDb, input.shiftId).catch(() => null);
+    const pageIds = subject === null ? [] : subject.shift.pages.map((page) => input.catalog.idOf.get(page.pageLabel)).filter((id): id is number => id !== undefined);
+    const gengarPending = candidate.gengarAnsweredAt === null && (await hasShiftReportReviewer(txDb, pageIds));
+    if (!checkLetsConfirm({ handedInAt: candidate.madeAt, now, hubPending: hubPending(candidate), gengarPending })) return false;
+    return setHandinPhase(txDb, { handinId: locked.id, phase: "confirm", at: now, from: ["checking"] });
+  });
 }
