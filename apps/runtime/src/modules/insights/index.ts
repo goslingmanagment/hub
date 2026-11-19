@@ -12,31 +12,22 @@ import {
   type MoneyRevenueMixResponse,
   type StatsCoverageResponse,
   type StatsHoldingsResponse,
-  type StatsMediaResponse,
   type StatsTagsResponse,
   routeSchemas,
 } from "@agency_hub_core/contracts";
 import {
   type InsightsCoverageRow,
-  type InsightsMediaHeadRow,
-  type InsightsTrafficBucketRow,
   listInsightsComments,
   listInsightsCommentsPerPost,
   listInsightsCoverage,
   listInsightsHoldings,
-  listInsightsMediaDailyPoints,
-  listInsightsMediaHeadsByRefs,
-  listInsightsMediaTrafficBuckets,
-  listInsightsMediaWindowTotals,
   listInsightsPayoutMethods,
   listInsightsPayoutRequests,
   listInsightsPlatformTags,
   listInsightsPostLikes,
   listInsightsRevenueMix,
   listInsightsRevenueMonths,
-  listInsightsTopMedia,
   listInsightsTopTags,
-  listInsightsRecentMediaHeads,
   readCreatorStatsAudience,
   readCreatorStatsContent,
   readCreatorStatsTopSales,
@@ -50,15 +41,10 @@ import {
 } from "@agency_hub_core/db";
 import {
   CAPTURE_COVERAGE_PLANES,
-  FANSLY_PROFILE_STAT_FAMILIES,
   FANSLY_REVENUE_LABEL_VERSION,
   fanslyRevenueTypeEra,
   fanslyRevenueTypeLabel,
-  mediaStatLabel,
   millsToNumber,
-  profileStatFamily,
-  profileStatLabel,
-  profileStatMeasure,
 } from "@agency_hub_core/shared";
 
 import { canAccessPage, requireOwner } from "../../services/auth.ts";
@@ -109,10 +95,6 @@ const SALES_GROSS_BASIS =
  *  pathological page cannot produce an unbounded body. */
 const CATALOG_SIDECAR_LIMIT = 500;
 const TOP_WINDOW_LIMIT = 500;
-/** Per-media chart points (one per bucket, source codes summed) for the whole
- *  response: 60 media over 90 daily buckets, with room. Bounded so an
- *  arbitrary window cannot produce an unbounded body; a cut is flagged. */
-const MEDIA_DAILY_POINT_LIMIT = 6_000;
 const PER_POST_ROLLUP_LIMIT = 500;
 const LIKERS_LIMIT = 200;
 const MONTH_TOTALS_LIMIT = 500;
@@ -151,65 +133,6 @@ function deriveGrossFromNet(netMills: string | null) {
   };
 }
 
-/**
- * The label half of a traffic row.
- *
- * `sourceCode` on the wire is the RAW integer as text and it is what a caller
- * should key on. Everything else here is THIS BUILD'S reading of that integer
- * and can be wrong — `fansly-notification-types.ts` documents a version that
- * was wrong on eight of sixteen codes.
- *
- * The 0/1 media codes are not a family/member structure at all, so `family`,
- * `familyLabel` and `measure` are null for them rather than being forced into a
- * shape that does not exist.
- */
-function labelTrafficRow(row: InsightsTrafficBucketRow) {
-  const code = Number(row.sourceCode);
-  const isMedia = row.subjectKind === "media_offer" || row.subjectKind === "account_media";
-  if (isMedia) {
-    return {
-      sourceLabel: mediaStatLabel(code),
-      family: null,
-      familyLabel: null,
-      measure: null,
-    };
-  }
-  const family = Number.isSafeInteger(code) ? profileStatFamily(code) : null;
-  const known = family !== null
-    && FANSLY_PROFILE_STAT_FAMILIES[family] !== undefined
-    && (code % 10 === 0 || code % 10 === 1);
-  return {
-    sourceLabel: profileStatLabel(code),
-    family: family === null ? null : String(family),
-    familyLabel: known ? FANSLY_PROFILE_STAT_FAMILIES[family] ?? null : null,
-    measure: known ? profileStatMeasure(code) : null,
-  };
-}
-
-function trafficRowToWire(row: InsightsTrafficBucketRow): StatsMediaResponse["media"][number]["buckets"][number] {
-  return {
-    subjectKind: row.subjectKind,
-    subjectRef: row.subjectRef,
-    periodMs: row.periodMs,
-    bucketStart: iso(row.bucketStart),
-    sourceCode: row.sourceCode,
-    mappingVersion: row.mappingVersion,
-    ...labelTrafficRow(row),
-    views: row.views,
-    previewViews: row.previewViews,
-    uniqueViewers: row.uniqueViewers,
-    previewUniqueViewers: row.previewUniqueViewers,
-    videoViews: row.videoViews,
-    previewVideoViews: row.previewVideoViews,
-    interactionTimeMs: row.interactionTimeMs,
-    previewInteractionTimeMs: row.previewInteractionTimeMs,
-    videoPercentWatchedSum: row.videoPercentWatchedSum,
-    previewVideoPercentWatchedSum: row.previewVideoPercentWatchedSum,
-    revisionCount: row.revisionCount,
-    lastObservedAt: iso(row.lastObservedAt),
-  };
-}
-
 function coverageRowToWire(row: InsightsCoverageRow): StatsCoverageResponse["planes"][number] {
   return {
     plane: row.plane,
@@ -224,31 +147,6 @@ function coverageRowToWire(row: InsightsCoverageRow): StatsCoverageResponse["pla
     reasonCode: row.reasonCode,
     nextProbeAt: isoOrNull(row.nextProbeAt),
     updatedAt: iso(row.updatedAt),
-  };
-}
-
-function mediaHeadToWire(row: InsightsMediaHeadRow) {
-  return {
-    mediaOfferRef: row.mediaOfferRef,
-    mediaRef: row.mediaRef,
-    bundleRefs: row.bundleRefs,
-    mediaType: row.mediaType,
-    mimeType: row.mimeType,
-    width: row.width,
-    height: row.height,
-    durationMs: row.durationMs,
-    priceMills: millsOrNull(row.priceMills),
-    likeCount: row.likeCount,
-    sales: {
-      count: row.salesCount,
-      netMills: millsOrNull(row.salesNetMills),
-      pendingMills: millsOrNull(row.salesPendingMills),
-      grossMills: deriveGrossFromNet(row.salesNetMills),
-    },
-    createdAtPlatform: isoOrNull(row.createdAtPlatform),
-    deletedAtPlatform: isoOrNull(row.deletedAtPlatform),
-    firstObservedAt: iso(row.firstObservedAt),
-    lastObservedAt: iso(row.lastObservedAt),
   };
 }
 
@@ -477,146 +375,6 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
       window,
       ...read,
       revenue: read.revenue.map((row) => ({ ...row, productLabel: fanslyRevenueTypeLabel(row.productType) })),
-    };
-  });
-
-  server.get("/api/v1/pages/:pageLabel/stats/media", {
-    schema: routeSchemas.statsMedia,
-  }, async (request): Promise<StatsMediaResponse> => {
-    const page = await resolveOwnerPage(request);
-    const window = parseWindow(request.query.from, request.query.to);
-    const after = request.query.cursor === undefined
-      ? undefined
-      : (() => {
-        const [lastObservedAt, mediaOfferRef] = decodeCursor(request.query.cursor as string, 2);
-        return {
-          lastObservedAt: parseInstant(lastObservedAt as string, "cursor"),
-          mediaOfferRef: mediaOfferRef as string,
-        };
-      })();
-
-    const limit = request.query.limit;
-    const [landingHeads, top, coverage] = await Promise.all([
-      listInsightsRecentMediaHeads(appContext.db, {
-        pageId: page.id,
-        mediaOfferRef: request.query.mediaOfferRef,
-        limit,
-        after,
-      }),
-      listInsightsTopMedia(appContext.db, {
-        pageId: page.id,
-        from: window.from,
-        to: window.to,
-        limit: TOP_WINDOW_LIMIT,
-      }),
-      listInsightsCoverage(appContext.db, { pageId: page.id }),
-    ]);
-    const landingRefs = new Set(landingHeads.map((head) => head.mediaOfferRef));
-    const rankedMissingRefs = request.query.mediaOfferRef === undefined
-      ? [...new Set(top.map((row) => row.mediaOfferRef))].filter((ref) => !landingRefs.has(ref))
-      : [];
-    const rankedHeads = await listInsightsMediaHeadsByRefs(appContext.db, {
-      pageId: page.id,
-      mediaOfferRefs: rankedMissingRefs,
-    });
-    const heads = [...landingHeads, ...rankedHeads];
-    const bucketLimit = request.query.bucketLimit;
-    const headRefs = heads.map((head) => head.mediaOfferRef);
-    const [buckets, dailyPoints, windowTotals] = await Promise.all([
-      listInsightsMediaTrafficBuckets(appContext.db, {
-        pageId: page.id,
-        mediaOfferRefs: headRefs,
-        periodMs: request.query.periodMs,
-        from: window.from,
-        to: window.to,
-        // One row over the budget is how truncation is DETECTED rather than
-        // guessed: a full page could always be exactly full by coincidence.
-        limit: bucketLimit + 1,
-      }),
-      listInsightsMediaDailyPoints(appContext.db, {
-        pageId: page.id,
-        mediaOfferRefs: headRefs,
-        periodMs: request.query.periodMs,
-        from: window.from,
-        to: window.to,
-        limit: MEDIA_DAILY_POINT_LIMIT + 1,
-      }),
-      listInsightsMediaWindowTotals(appContext.db, {
-        pageId: page.id,
-        mediaOfferRefs: headRefs,
-        periodMs: request.query.periodMs,
-        from: window.from,
-        to: window.to,
-      }),
-    ]);
-    const dailyTruncated = dailyPoints.length > MEDIA_DAILY_POINT_LIMIT;
-    const dailyByMedia = new Map<string, Array<{
-      bucketStart: string;
-      views: number | null;
-      previewViews: number | null;
-    }>>();
-    for (const point of dailyTruncated ? dailyPoints.slice(0, MEDIA_DAILY_POINT_LIMIT) : dailyPoints) {
-      const list = dailyByMedia.get(point.mediaOfferRef) ?? [];
-      list.push({ bucketStart: iso(point.bucketStart), views: point.views, previewViews: point.previewViews });
-      dailyByMedia.set(point.mediaOfferRef, list);
-    }
-    const totalsByMedia = new Map(windowTotals.map((total) => [total.mediaOfferRef, total]));
-    const bucketsTruncated = buckets.length > bucketLimit;
-    const servedBuckets = bucketsTruncated ? buckets.slice(0, bucketLimit) : buckets;
-    const bucketsByMedia = new Map<string, InsightsTrafficBucketRow[]>();
-    for (const bucket of servedBuckets) {
-      const list = bucketsByMedia.get(bucket.subjectRef);
-      if (list) {
-        list.push(bucket);
-      } else {
-        bucketsByMedia.set(bucket.subjectRef, [bucket]);
-      }
-    }
-
-    const last = landingHeads.length === limit
-      ? landingHeads[landingHeads.length - 1]
-      : undefined;
-
-    return {
-      page: { label: page.label, platform: page.platform },
-      window: {
-        from: iso(window.from),
-        to: iso(window.to),
-        periodMs: request.query.periodMs,
-      },
-      media: heads.map((head) => ({
-        ...mediaHeadToWire(head),
-        buckets: (bucketsByMedia.get(head.mediaOfferRef) ?? []).map(trafficRowToWire),
-        windowViews: totalsByMedia.get(head.mediaOfferRef)?.views ?? null,
-        windowPreviewViews: totalsByMedia.get(head.mediaOfferRef)?.previewViews ?? null,
-        // Oldest first, as a series is read.
-        daily: (dailyByMedia.get(head.mediaOfferRef) ?? [])
-          .sort((left, right) => left.bucketStart.localeCompare(right.bucketStart)),
-      })),
-      top: top.map((row) => ({
-        plane: row.plane,
-        rank: row.rank,
-        mediaOfferRef: row.mediaOfferRef,
-        bundleRef: row.bundleRef,
-        periodMs: row.periodMs,
-        requestedStart: iso(row.requestedStart),
-        requestedEnd: iso(row.requestedEnd),
-        views: row.views,
-        previewViews: row.previewViews,
-        interactionTimeMs: row.interactionTimeMs,
-        previewInteractionTimeMs: row.previewInteractionTimeMs,
-        observedAt: iso(row.observedAt),
-      })),
-      watchMetrics: {
-        perMediaAvailable: false,
-        reason: "not_served_per_media_e5",
-      },
-      coverage: coverage.map(coverageRowToWire),
-      bucketsTruncated,
-      dailyTruncated,
-      nextCursor: last === undefined
-        ? null
-        : encodeCursor([iso(last.lastObservedAt), last.mediaOfferRef]),
     };
   });
 

@@ -5166,39 +5166,6 @@ function insightsDerived<T extends z.ZodTypeAny>(value: T) {
   });
 }
 
-const insightsTrafficRowSchema = z.object({
-  subjectKind: z.string(),
-  subjectRef: z.string(),
-  periodMs: z.number().int(),
-  bucketStart: isoTimestamp,
-  /** RAW, as text — the integer the platform sent. */
-  sourceCode: z.string(),
-  /** THIS BUILD'S reading of the code. `unknown:<code>` when it has none. */
-  sourceLabel: z.string(),
-  mappingVersion: z.number().int(),
-  /** `type - (type % 10)` as text for a profile row; null for a media row,
-   *  whose 0/1 codes are not a family/member structure at all. */
-  family: z.string().nullable(),
-  familyLabel: z.string().nullable(),
-  /** Member 1 is the creator widget's visit counter; every other member is the
-   *  dwell-bearing series. Null for media rows, for the same reason. */
-  measure: z.enum(["visits", "dwell"]).nullable(),
-  /** Metrics: NULL means the platform did not serve it. Never 0. */
-  views: z.number().int().nullable(),
-  previewViews: z.number().int().nullable(),
-  uniqueViewers: z.number().int().nullable(),
-  previewUniqueViewers: z.number().int().nullable(),
-  videoViews: z.number().int().nullable(),
-  previewVideoViews: z.number().int().nullable(),
-  interactionTimeMs: z.number().int().nullable(),
-  previewInteractionTimeMs: z.number().int().nullable(),
-  /** A SUM over views on the wire; divided at read time or not at all. */
-  videoPercentWatchedSum: z.string().nullable(),
-  previewVideoPercentWatchedSum: z.string().nullable(),
-  revisionCount: z.number().int(),
-  lastObservedAt: isoTimestamp,
-});
-
 /** Fansly's 2026-10 statistics (`/creator/stats/*`, 0292): one page's
  *  account plane over the last `days` UTC days ending on `to` (default:
  *  today). The window's totals are Fansly's own, from the summary of exactly
@@ -5609,90 +5576,6 @@ export const creatorStatsAudienceResponseSchema = z.object({
     })),
   }).nullable(),
   mediaShown: z.array(z.object({ hour: isoTimestamp, source: z.number().int(), mediaShown: creatorStatsCount })),
-});
-
-const insightsMediaRowSchema = z.object({
-  mediaOfferRef: z.string(),
-  mediaRef: z.string().nullable(),
-  bundleRefs: z.array(z.string()),
-  mediaType: z.number().int().nullable(),
-  mimeType: z.string().nullable(),
-  width: z.number().int().nullable(),
-  height: z.number().int().nullable(),
-  durationMs: z.number().int().nullable(),
-  priceMills: mills.nullable(),
-  likeCount: z.number().int().nullable(),
-  sales: insightsMediaSalesSchema,
-  createdAtPlatform: isoTimestamp.nullable(),
-  deletedAtPlatform: isoTimestamp.nullable(),
-  firstObservedAt: isoTimestamp,
-  lastObservedAt: isoTimestamp,
-  /** Raw rows, one per bucket AND source code, under the response-wide
-   *  `bucketLimit` — a page of rows, not a window. */
-  buckets: z.array(insightsTrafficRowSchema),
-  /** The media's views over the WHOLE window, summed across buckets and
-   *  source codes; never cut by a budget. Null when no row carried it. */
-  windowViews: z.number().int().nullable(),
-  windowPreviewViews: z.number().int().nullable(),
-  /** One point per bucket (source codes summed), newest-first budget shared
-   *  with the other media; `dailyTruncated` says when it ran out. */
-  daily: z.array(z.object({
-    bucketStart: isoTimestamp,
-    views: z.number().int().nullable(),
-    previewViews: z.number().int().nullable(),
-  })),
-});
-
-const insightsTopMediaRowSchema = z.object({
-  plane: z.string(),
-  rank: z.number().int(),
-  mediaOfferRef: z.string(),
-  bundleRef: z.string().nullable(),
-  periodMs: z.number().int(),
-  requestedStart: isoTimestamp,
-  requestedEnd: isoTimestamp,
-  views: z.number().int().nullable(),
-  previewViews: z.number().int().nullable(),
-  interactionTimeMs: z.number().int().nullable(),
-  previewInteractionTimeMs: z.number().int().nullable(),
-  observedAt: isoTimestamp,
-});
-
-export const statsMediaQuerySchema = z.object({
-  from: insightsInstant,
-  to: insightsInstant,
-  periodMs: z.coerce.number().int().min(1).default(86_400_000),
-  mediaOfferRef: z.string().max(64).optional(),
-  limit: insightsLimitSchema.default(50),
-  /** Total bucket rows across the whole response, not per media. */
-  bucketLimit: insightsLimitSchema.default(200),
-  cursor: insightsCursorSchema.optional(),
-});
-
-export const statsMediaResponseSchema = z.object({
-  page: insightsPageSchema,
-  window: z.object({
-    from: isoTimestamp,
-    to: isoTimestamp,
-    periodMs: z.number().int(),
-  }),
-  media: z.array(insightsMediaRowSchema),
-  /** `stats_top_media` for the freshest window the page holds. Window identity
-   *  is part of a row: rank 2 of one window is not rank 2 of the next. */
-  top: z.array(insightsTopMediaRowSchema),
-  /** [E5]: the per-media statistics route serves SEVEN stat keys and no video
-   *  fields at all, even for a video asset. Watch metrics are therefore not
-   *  claimable per media — stated here so a caller cannot read their absence as
-   *  zero watch time. The account-level media datapoints DO carry them, and
-   *  those rows arrive under `subjectKind: "account_media"`. */
-  watchMetrics: z.object({
-    perMediaAvailable: z.literal(false),
-    reason: z.literal("not_served_per_media_e5"),
-  }),
-  coverage: z.array(insightsCoverageRowSchema),
-  bucketsTruncated: z.boolean(),
-  dailyTruncated: z.boolean(),
-  nextCursor: z.string().nullable(),
 });
 
 export const statsTagsQuerySchema = z.object({
@@ -8279,20 +8162,6 @@ const baseRouteSchemas = {
   // `read:money` capability exists on the AGENT plane, whose datasets carry the
   // same data behind it). `tests/contracts-auth-declarations.test.ts` pins both
   // halves so a later widening cannot happen quietly.
-  statsMedia: {
-    auth: { kind: "owner-session", scope: "page" },
-    tags: ["insights"],
-    summary: "Per-media traffic buckets, catalog head and top-media rankings",
-    params: pageParamsSchema,
-    querystring: statsMediaQuerySchema,
-    response: {
-      200: statsMediaResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   statsTags: {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["insights"],
@@ -8779,8 +8648,6 @@ export type CreatorStatsOverviewResponse = z.infer<typeof creatorStatsOverviewRe
 export type CreatorStatsContentResponse = z.infer<typeof creatorStatsContentResponseSchema>;
 export type CreatorStatsMediaResponse = z.infer<typeof creatorStatsMediaResponseSchema>;
 export type CreatorStatsAudienceResponse = z.infer<typeof creatorStatsAudienceResponseSchema>;
-export type StatsMediaQuery = z.infer<typeof statsMediaQuerySchema>;
-export type StatsMediaResponse = z.infer<typeof statsMediaResponseSchema>;
 export type StatsTagsQuery = z.infer<typeof statsTagsQuerySchema>;
 export type StatsTagsResponse = z.infer<typeof statsTagsResponseSchema>;
 export type StatsCoverageResponse = z.infer<typeof statsCoverageResponseSchema>;
