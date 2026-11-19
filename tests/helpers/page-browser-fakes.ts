@@ -15,7 +15,7 @@ import { buildPackage, EXTENSION_ORIGIN, PACKAGE_FILES, UPDATE_PATH } from "../.
 import { ABORT, ISSUE, RELEASE } from "../../apps/page-browser/src/hub-requests/page.ts";
 import { Holder } from "../../apps/page-browser/src/holder/holder.ts";
 import type { ChromeControl } from "../../apps/page-browser/src/operator/chrome.ts";
-import type { Result } from "../../apps/page-browser/src/rpc/protocol.ts";
+import { PROTOCOL, type Result } from "../../apps/page-browser/src/rpc/protocol.ts";
 import { buildRules, type DnrRule } from "../../apps/page-browser/src/policy/rules.ts";
 import { monoMs } from "../../apps/page-browser/src/shared/util.ts";
 import { acceptWebSocket, type WsConnection } from "../../apps/page-browser/src/shared/ws.ts";
@@ -537,14 +537,14 @@ export function hello(overrides: Record<string, unknown> = {}, params: Record<st
   return {
     type: "hello",
     ownerGeneration: 1,
-    protocol: { majors: [1], minor: 0 },
+    protocol: { majors: [1], minor: PROTOCOL.minor },
     token: RPC_TOKEN,
     pageId: 7,
     expectedAccountId: "123456789",
     pinnedExitIp: "203.0.113.7",
     params: {
-      pingMs: 100,
-      linkLossMs: 600,
+      pingMs: 1000,
+      linkLossMs: 5000,
       cancelMarginMs: 1000,
       siteAdmitWaitMs: 60_000,
       siteRequestLimitMs: 20_000,

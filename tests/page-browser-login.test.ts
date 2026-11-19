@@ -243,7 +243,7 @@ interface SetUp {
   rpcPort: number;
 }
 
-async function setUp(options: { apiToken?: string | null; haltStore?: HaltStore } = {}): Promise<SetUp> {
+async function setUp(options: { apiToken?: string | null; haltStore?: HaltStore; minor?: number } = {}): Promise<SetUp> {
   const temp = tempDir();
   cleanups.push(temp.remove);
   const lines: string[] = [];
@@ -306,7 +306,7 @@ async function setUp(options: { apiToken?: string | null; haltStore?: HaltStore 
   const engine = new FakeEngine();
   await engine.connect(ports.rpcPort);
   cleanups.push(() => engine.close());
-  engine.send(hello({ socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+  engine.send(hello({ ...(options.minor === undefined ? {} : { protocol: { majors: [1], minor: options.minor } }), socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
   await engine.waitFor("helloResult", undefined, WAIT_MS);
   return { dir: temp.dir, operator, engine, chrome, model, socks, site, logDir, lines, rpcPort: ports.rpcPort };
 }
@@ -443,7 +443,8 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
     const store = new HaltStore(null);
     const held = { id: randomUUID(), reason: "login_required" as const, atWall: Date.now() - 60_000 };
     store.write({ halt: held, lastClearedId: null });
-    const s = await setUp({ haltStore: store });
+    // An engine before minor 4: the only one whose page is loaded anew for a change of mode.
+    const s = await setUp({ haltStore: store, minor: 0 });
     expect(s.operator.heldHalt).toEqual(held);
     let attempt = 7600;
     s.engine.onMessage = (message) => {

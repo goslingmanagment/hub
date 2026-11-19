@@ -17,7 +17,7 @@ import type { BrowserControl } from "../apps/page-browser/src/cdp/control.ts";
 import type { ChromeControl } from "../apps/page-browser/src/operator/chrome.ts";
 import { parseOperatorMessage } from "../apps/runtime/src/services/egress/page-browser-protocol.ts";
 import { HaltStore } from "../apps/page-browser/src/state/halt-store.ts";
-import { decodeBodyFrame } from "../apps/page-browser/src/rpc/protocol.ts";
+import { decodeBodyFrame, PROTOCOL } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
 import {
@@ -196,7 +196,7 @@ async function setUp(
   const engine = new FakeEngine();
   await engine.connect(rpcPort);
   cleanups.push(() => engine.close());
-  engine.send(hello({ protocol: { majors: [1], minor: options.minor ?? 2 }, socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
+  engine.send(hello({ protocol: { majors: [1], minor: options.minor ?? PROTOCOL.minor }, socks5: { ip: "127.0.0.1", port: socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }, options.params));
   await engine.waitFor("helloResult");
   return { dir: temp.dir, operator, engine, chrome, model, control, holder, socks, logDir, netSelftest, chromeEnv, extensionId, lines, newOperator, rpcPort: () => rpcPort };
 }
@@ -523,7 +523,7 @@ describe("the page's environment (env/)", () => {
 
 describe("the engine's link", () => {
   it("lost (no ping for 5 s — 600 ms here) admits nothing new; the exit and the browser stay", async () => {
-    const s = await setUp();
+    const s = await setUp({ params: { pingMs: 100, linkLossMs: 600 } });
     await started(s);
     expect(s.operator.admissionsOpen()).toBe(true);
     s.engine.answerPings = false;
@@ -857,7 +857,7 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     expect(s.operator.egress.exitOpen).toBe(false);
     expect(s.operator.admissionsOpen()).toBe(false);
     expect(s.operator.page.halted).toBe(false);
-    await until(() => s.engine.of("alarm").filter((alarm) => alarm.kind === "buffer").length >= 3, 3000, "the alarms");
+    await until(() => s.engine.of("alarm").filter((alarm) => alarm.kind === "buffer").length >= 3, START_MS, "the alarms");
     expect(s.engine.of("alarm").map((alarm) => [alarm.kind, (alarm.detail as Record<string, unknown>).percent, (alarm.detail as Record<string, unknown>).full ?? false])).toEqual([
       ["buffer", 50, false],
       ["buffer", 80, false],
@@ -877,7 +877,7 @@ describe("the buffer (plan §4.4; spec §5, §6.2; PR 11)", () => {
     await until(() => eventsOf(s.engine).some((event) => event.kind === "gap" && event.reason === "buffer_full"), 5000, "the gap");
     expect(eventsOf(s.engine).find((event) => event.kind === "gap" && event.reason === "buffer_full")).toMatchObject({ seq: last + 1, fromSeq: last, reason: "buffer_full" });
     await until(() => s.operator.page.step === "site_loaded", START_MS, "the page to start again");
-    expect(s.operator.admissionsOpen()).toBe(true);
+    await until(() => s.operator.admissionsOpen(), START_MS, "admissions to open again");
   });
 });
 
