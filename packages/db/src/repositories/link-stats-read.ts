@@ -15,7 +15,13 @@ import type { TrafficLinkKind, TrafficValidFromBasis } from "@agency_hub_core/sh
 import { livePageSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import type { LinkSeries, LinkSeriesPoint } from "./link-stats-deltas.ts";
-import { linkStatRunUsableResultSql, type LinkStatKind, type LinkStatRunStatus } from "./ofapi.ts";
+import {
+  linkPairStatesSql,
+  linkStatRunUsableResultSql,
+  type LinkPairStatesSqlRow,
+  type LinkStatKind,
+  type LinkStatRunStatus,
+} from "./ofapi.ts";
 
 const NET_MILLS = sql.raw("coalesce(s.revenue_net_mills, s.revenue_gross_mills)");
 
@@ -129,8 +135,8 @@ export interface LinkSeriesPairState {
   lastAttempt: LinkSeriesAttemptRow | null;
 }
 
-/** Both kinds of every page given, by index-order lookups on (page, kind,
- * pulled_at) — the same plan as the series monitor's health read. */
+/** Both kinds of every page given (linkPairStatesSql: the same read as the
+ * series monitor's health read). */
 export async function listLinkSeriesPairStates(
   db: Database,
   input: { pageIds: readonly number[] },
@@ -138,79 +144,7 @@ export async function listLinkSeriesPairStates(
   if (input.pageIds.length === 0) {
     return [];
   }
-  const run = sql.raw("r");
-  const result = await db.execute<{
-    platformAccountId: number | string;
-    pageLabel: string;
-    pageCreatedAt: Date | string;
-    ofapiAccountId: string | null;
-    ofapiAuthStatus: string | null;
-    linkKind: LinkStatKind;
-    usableId: number | string | null;
-    usableAt: Date | string | null;
-    usableRows: number | null;
-    firstAttemptAt: Date | string | null;
-    lastId: number | string | null;
-    lastAt: Date | string | null;
-    lastWindowAt: Date | string | null;
-    lastAttemptNo: number | null;
-    lastStatus: LinkStatRunStatus | null;
-    lastReason: string | null;
-    lastApiPages: number | null;
-    lastRawItems: number | null;
-    lastWrittenRows: number | null;
-    lastUsable: boolean | null;
-  }>(sql`
-    select p.id as "platformAccountId",
-           p.label as "pageLabel",
-           p.created_at as "pageCreatedAt",
-           p.ofapi_account_id as "ofapiAccountId",
-           p.ofapi_auth_status as "ofapiAuthStatus",
-           kind.link_kind as "linkKind",
-           usable.id as "usableId",
-           usable.pulled_at as "usableAt",
-           usable.written_rows as "usableRows",
-           first_attempt.pulled_at as "firstAttemptAt",
-           last_attempt.id as "lastId",
-           last_attempt.pulled_at as "lastAt",
-           last_attempt.window_at as "lastWindowAt",
-           last_attempt.attempt as "lastAttemptNo",
-           last_attempt.status as "lastStatus",
-           last_attempt.reason as "lastReason",
-           last_attempt.api_pages as "lastApiPages",
-           last_attempt.raw_items as "lastRawItems",
-           last_attempt.written_rows as "lastWrittenRows",
-           last_attempt.usable as "lastUsable"
-    from pages p
-    cross join (values ('tracking'), ('trial')) as kind(link_kind)
-    left join lateral (
-      select r.id, r.pulled_at, r.written_rows
-      from page_link_stat_runs r
-      where r.platform_account_id = p.id
-        and r.link_kind = kind.link_kind
-        and ${linkStatRunUsableResultSql(run)}
-      order by r.pulled_at desc, r.id desc
-      limit 1
-    ) usable on true
-    left join lateral (
-      select r.pulled_at
-      from page_link_stat_runs r
-      where r.platform_account_id = p.id and r.link_kind = kind.link_kind
-      order by r.pulled_at asc, r.id asc
-      limit 1
-    ) first_attempt on true
-    left join lateral (
-      select r.id, r.pulled_at, r.window_at, r.attempt, r.status, r.reason,
-             r.api_pages, r.raw_items, r.written_rows,
-             ${linkStatRunUsableResultSql(run)} as usable
-      from page_link_stat_runs r
-      where r.platform_account_id = p.id and r.link_kind = kind.link_kind
-      order by r.pulled_at desc, r.id desc
-      limit 1
-    ) last_attempt on true
-    where ${pageFilter("p.id", input.pageIds)}
-    order by p.id, kind.link_kind
-  `);
+  const result = await db.execute<LinkPairStatesSqlRow>(linkPairStatesSql(pageFilter("p.id", input.pageIds)));
   return result.rows.map((row) => {
     const platformAccountId = Number(row.platformAccountId);
     const lastAttempt: LinkSeriesAttemptRow | null = row.lastId === null || row.lastAt === null
