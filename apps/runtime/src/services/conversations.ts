@@ -1,7 +1,4 @@
 import type {
-  PageConversationMessagesParams,
-  PageConversationMessagesQuery,
-  PageConversationMessagesResponse,
   PageConversationPreviewParams,
   PageConversationPreviewQuery,
   PageConversationPreviewResponse,
@@ -9,7 +6,6 @@ import type {
 import {
   PAGE_DM_MESSAGE_HISTORY_LIMIT,
   findPageSummaryByLabel,
-  getPageConversationMessages,
   getPageConversationPreview,
   getPageDmSyncCoverage,
   readDmReaderStore,
@@ -23,7 +19,7 @@ import {
 import { normalizeDmMessageText, platformHasLiveOverlay, type Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
+import { canAccessPage, type AuthPrincipal } from "./auth.ts";
 import { requireTeamReader } from "./teams.ts";
 import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { buildConversationHistorySyncUx } from "./sync-ux.ts";
@@ -226,53 +222,6 @@ export async function getPageConversationPreviewReport(
       createdAt: message.createdAt.toISOString(),
       content: normalizeDmMessageText(message.content),
       totalTipAmountCents: message.totalTipAmountCents,
-      ...serializeProvenance(message.provenance),
-    })),
-  };
-}
-
-export async function getPageConversationMessagesReport(
-  app: AppContext,
-  principal: AuthPrincipal,
-  params: PageConversationMessagesParams,
-  query: PageConversationMessagesQuery,
-): Promise<PageConversationMessagesResponse> {
-  requireDashboardUser(principal);
-  const page = await resolveAccessiblePage(app, principal, params.pageLabel);
-  const conversation = await getPageConversationMessages(app.db, {
-    platformAccountId: page.id,
-    platformConversationId: params.conversationId,
-    limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
-    liveOverlay: platformHasLiveOverlay(page.platform),
-    store: await readDmReaderStore(app.db, page.id),
-  });
-
-  if (!conversation) {
-    throw new NotFoundError("Conversation messages were not found");
-  }
-  const chatAccess = await readChatAccessEpisode(app, page.id, params.conversationId);
-
-  return {
-    page: serializePage(page),
-    conversationId: conversation.conversationId,
-    conversation: {
-      platformConversationId: conversation.conversation.platformConversationId,
-      storedMessageCount: conversation.conversation.storedMessageCount,
-      messageCoverageStatus: conversation.conversation.messageCoverageStatus,
-      messageBackfillComplete: conversation.conversation.messageBackfillComplete,
-      messageSyncEligibility: conversation.conversation.messageSyncEligibility,
-      messageSyncExcludedReason: conversation.conversation.messageSyncExcludedReason,
-      lastMessageSyncAt: serializeTimestamp(conversation.conversation.lastMessageSyncAt),
-      unreadCount: conversation.conversation.unreadCount,
-      lastMessageAt: serializeTimestamp(conversation.conversation.lastMessageAt),
-      ...serializeChatAccess(chatAccess),
-    },
-    messages: conversation.messages.map((message) => ({
-      messageId: message.messageId,
-      senderRole: message.senderRole,
-      content: normalizeDmMessageText(message.content),
-      createdAt: message.createdAt.toISOString(),
-      tipAmountCents: message.tipAmountCents,
       ...serializeProvenance(message.provenance),
     })),
   };

@@ -20,8 +20,6 @@ type Event = Detail["events"][number];
 type Finding = Publication["findings"][number];
 type Status = Publication["status"];
 type Kind = Publication["kind"];
-type Settings = KernelOperationResponse<"adminPublicationSettingsList">["pages"][number];
-type Queue = KernelOperationResponse<"adminPublicationQueueList">["pages"][number];
 
 const FIRST_DAY = -10;
 const LAST_DAY = 12;
@@ -376,110 +374,4 @@ export function demoPublications(now: Date): Built[] {
   built.push(...demoOnlyfansAlbums(now));
   built.sort((left, right) => Date.parse(left.publication.publishAt) - Date.parse(right.publication.publishAt) || left.publication.id - right.publication.id);
   return built;
-}
-
-export function publicationSettings(now: Date): KernelOperationResponse<"adminPublicationSettingsList"> {
-  const stop = ofStop(now);
-  const pages: Settings[] = DEMO_PAGES.map((page) => {
-    const updated = iso(new Date(now.getTime() - (3 + (page.id % 5)) * DAY_MS));
-    if (page.platform === "onlyfans") {
-      // As on production: switched on, never stopped; the switched-off API is what keeps them quiet.
-      return {
-        pageLabel: page.label, platform: page.platform, enabled: true,
-        autostopReason: null,
-        autostoppedAt: null,
-        paidPriceMinMills: null, paidPriceMaxMills: null, repostThresholdDays: 30, dailyLimit: 4, updatedAt: iso(new Date(stop.getTime() - 3 * DAY_MS)),
-      };
-    }
-    if (page.label === "nova-1") {
-      // The one live stop: Fansly signed the page's browser out five hours ago (a stop always turns the page off).
-      return {
-        pageLabel: page.label, platform: page.platform, enabled: false,
-        autostopReason: "browser_login_lost",
-        autostoppedAt: iso(new Date(now.getTime() - 5 * HOUR_MS)),
-        paidPriceMinMills: mills(8), paidPriceMaxMills: mills(50), repostThresholdDays: 45, dailyLimit: 8, updatedAt: updated,
-      };
-    }
-    const ranges: Record<string, [number, number] | null> = {
-      "mia-1": [5, 40], "mia-2": [5, 40], "mia-3": [5, 30], "nova-1": [8, 50], "ivy-1": null, "ivy-2": null,
-    };
-    const range = ranges[page.label] ?? null;
-    return {
-      pageLabel: page.label,
-      platform: page.platform,
-      enabled: page.label !== "ivy-1",
-      autostopReason: null,
-      autostoppedAt: null,
-      paidPriceMinMills: range ? mills(range[0]) : null,
-      paidPriceMaxMills: range ? mills(range[1]) : null,
-      repostThresholdDays: page.label === "nova-1" ? 45 : 30,
-      dailyLimit: page.label === "mia-1" ? 6 : page.label === "nova-1" ? 8 : null,
-      updatedAt: page.label === "ivy-1" ? null : updated,
-    };
-  });
-  return { globalEnabled: true, pages };
-}
-
-const MANUAL_CAPTIONS = ["Happy Friday!! 💋", "Live tonight at 10pm — set a reminder", "Quick hello from the airport ✈️", "Sunday reset: face mask and a movie", "Weekend giveaway: comment your favourite emoji"] as const;
-
-export function publicationQueues(now: Date, publications: readonly Publication[]): KernelOperationResponse<"adminPublicationQueueList"> {
-  const nowMs = now.getTime();
-  const stop = ofStop(now).getTime();
-  const pages: Queue[] = [];
-  for (const page of DEMO_DATA_PAGES) {
-    if (page.label === "ivy-1") continue;
-    const off = page.platform === "onlyfans";
-    const readAt = off ? stop - 35 * 60_000 : nowMs - (12 + (page.id % 7) * 4) * 60_000;
-    const scheduled = publications.filter((item) => item.pageLabel === page.label && item.status === "scheduled");
-    const random = rng(`queue:${page.label}`);
-    const manualCount = off ? (page.label === "mia-of" ? 3 : 1) : page.label === "nova-1" ? 2 : page.label === "mia-1" ? 1 : 0;
-    const entries: Queue["entries"] = scheduled.map((item) => ({
-      queueId: demoDigits(`q:${item.id}`, 9),
-      postRef: item.platformPostRef,
-      publishAt: item.publishAt,
-      text: item.text,
-      mediaCount: item.media.filter((media) => media.role === "media").length,
-      publicationId: item.id,
-    }));
-    for (let index = 0; index < manualCount; index += 1) {
-      entries.push({
-        queueId: demoDigits(`qm:${page.label}:${index}`, 9),
-        postRef: null,
-        publishAt: iso(new Date(readAt + (index + 1) * intBetween(random, 20, 40) * HOUR_MS)),
-        text: MANUAL_CAPTIONS[(page.id + index) % MANUAL_CAPTIONS.length] ?? "",
-        mediaCount: intBetween(random, 1, 3),
-        publicationId: null,
-      });
-    }
-    entries.sort((left, right) => Date.parse(left.publishAt ?? "") - Date.parse(right.publishAt ?? ""));
-    const postsPerDay: Record<string, number> = {};
-    for (const entry of entries) {
-      if (entry.publishAt === null) continue;
-      const day = entry.publishAt.slice(0, 10);
-      postsPerDay[day] = (postsPerDay[day] ?? 0) + 1;
-    }
-    if (page.label === "mia-1") {
-      // An entry Fansly answered without a time.
-      entries.push({ queueId: demoDigits("qm:mia-1:undated", 9), postRef: null, publishAt: null, text: "Polaroid dump from the weekend", mediaCount: 4, publicationId: null });
-    }
-    // As on production: Fansly's whole-list read is never confirmed (a permanent reason the
-    // screen hides) and Fansly has no read window; mia-3 also ran out of reads.
-    const fansly = page.platform === "fansly";
-    pages.push({
-      pageLabel: page.label,
-      platform: page.platform,
-      readAt: iso(new Date(readAt)),
-      windowFrom: fansly ? null : new Date(readAt).toISOString().slice(0, 10),
-      windowTo: fansly ? null : new Date(readAt + 7 * DAY_MS).toISOString().slice(0, 10),
-      complete: !fansly,
-      incompleteReasons: fansly ? (page.label === "mia-3" ? ["list_whole_unverified", "read_budget"] : ["list_whole_unverified"]) : [],
-      stale: off,
-      postsPerDay,
-      refreshRequestedAt: null,
-      lastFailure: off ? "OnlyFans API выключен: чтение расписания не отправлялось" : null,
-      lastFailedAt: off ? iso(new Date(nowMs - 50 * 60_000)) : null,
-      entries,
-    });
-  }
-  return { pages };
 }

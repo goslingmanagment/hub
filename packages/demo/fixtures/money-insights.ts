@@ -5,9 +5,9 @@
  * «Статистика» and the same ledger as Overview.
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
-import { between, demoError, hashString, intBetween, isoDay, pick, queryNumber, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
-import { demoFans, type DemoPage } from "../world.ts";
-import { TAGS, demoMedia, mediaDay, mediaSales, reachOf, soldInMessages, type DemoMedia } from "./money-creator-stats.ts";
+import { between, demoError, hashString, intBetween, isoDay, queryNumber, queryString, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
+import type { DemoPage } from "../world.ts";
+import { TAGS, demoMedia, reachOf } from "./money-creator-stats.ts";
 import { DAY_MS, ledgerDay, ownerOnly, pageOr404, startOfDayMs, type LedgerType } from "./money-ledger.ts";
 
 type CoverageRow = KernelOperationResponse<"statsCoverage">["planes"][number];
@@ -29,13 +29,6 @@ function instantWindow(request: DemoRequest): { from: string; to: string; fromMs
     return demoError(400, "bad_request", "from and to must be RFC 3339 timestamps with an offset");
   }
   return { from, to, fromMs: Date.parse(from), toMs: Date.parse(to) };
-}
-
-/** Bucket starts (UTC midnights) inside `[fromMs, toMs)`, never past now. */
-function bucketsOf(fromMs: number, toMs: number, now: Date): number[] {
-  const out: number[] = [];
-  for (let at = Math.ceil(fromMs / DAY_MS) * DAY_MS; at < toMs && at <= now.getTime(); at += DAY_MS) out.push(at);
-  return out;
 }
 
 function iso(ms: number): string {
@@ -129,173 +122,6 @@ function coverageFor(page: DemoPage, now: Date, planes: readonly string[]): Cove
   return coverageRows(page, now).filter((row) => planes.includes(row.plane));
 }
 
-// --- traffic ---
-
-type TrafficRow = KernelOperationResponse<"statsMedia">["media"][number]["buckets"][number];
-
-function trafficRow(subjectKind: string, subjectRef: string, bucket: number, now: Date, fields: Partial<TrafficRow> & Pick<TrafficRow, "sourceCode" | "sourceLabel">): TrafficRow {
-  return {
-    subjectKind,
-    subjectRef,
-    periodMs: DAY_MS,
-    bucketStart: iso(bucket),
-    family: null,
-    familyLabel: null,
-    measure: null,
-    mappingVersion: 2,
-    views: null,
-    previewViews: null,
-    uniqueViewers: null,
-    previewUniqueViewers: null,
-    videoViews: null,
-    previewVideoViews: null,
-    interactionTimeMs: null,
-    previewInteractionTimeMs: null,
-    videoPercentWatchedSum: null,
-    previewVideoPercentWatchedSum: null,
-    revisionCount: bucket + DAY_MS > now.getTime() - DAY_MS ? 3 : 1,
-    lastObservedAt: iso(Math.min(now.getTime() - 20 * 60_000, bucket + DAY_MS + 2 * 3_600_000)),
-    ...fields,
-  };
-}
-
-// --- media ---
-
-function mediaWindowViews(media: DemoMedia, buckets: readonly number[], now: Date) {
-  const posted = startOfDayMs(now) - media.postedDaysAgo * DAY_MS;
-  return buckets.map((bucket) => {
-    const point = mediaDay(media, (bucket - posted) / DAY_MS, day(bucket));
-    const views = point.fyp + point.timeline + point.other;
-    return { bucket, views, fyp: point.fyp, preview: Math.round(views * 0.3) };
-  });
-}
-
-function statsMedia(request: DemoRequest): KernelOperationResponse<"statsMedia"> | DemoReply {
-  const page = ownerPage(request);
-  if (isReply(page)) return page;
-  const window = instantWindow(request);
-  if (isReply(window)) return window;
-  const now = request.now;
-  const buckets = bucketsOf(window.fromMs, window.toMs, now);
-  const limit = Math.min(500, Math.max(1, queryNumber(request, "limit", 50)));
-  const bucketLimit = Math.min(500, Math.max(1, queryNumber(request, "bucketLimit", 200)));
-  const only = queryString(request, "mediaOfferRef");
-  const all = page.platform === "fansly" ? demoMedia(page) : [];
-  const scored = all
-    .filter((media) => !only || media.mediaOfferId === only)
-    .map((media) => ({ media, points: mediaWindowViews(media, buckets, now) }))
-    .map((entry) => ({ ...entry, total: entry.points.reduce((sum, point) => sum + point.views, 0) }))
-    .filter((entry) => entry.total > 0 || Boolean(only))
-    .sort((left, right) => right.total - left.total);
-  // Fansly's own ranking of its freshest week; one entry Hub's catalog lacks.
-  const weekEnd = startOfDayMs(now);
-  const weekStart = weekEnd - 7 * DAY_MS;
-  const ranked = all
-    .map((item) => ({ item, fyp: mediaWindowViews(item, bucketsOf(weekStart, weekEnd, now), now).reduce((sum, point) => sum + point.views, 0) }))
-    .filter((entry) => entry.fyp > 0)
-    .sort((left, right) => right.fyp - left.fyp)
-    .slice(0, 14);
-  // The ranked media ride first, so every ranked row can draw its line.
-  const rankedIds = new Set(ranked.map((entry) => entry.item.mediaOfferId));
-  const chosen = [...scored.filter((entry) => rankedIds.has(entry.media.mediaOfferId)), ...scored.filter((entry) => !rankedIds.has(entry.media.mediaOfferId))]
-    .slice(0, limit)
-    .sort((left, right) => right.total - left.total);
-  let bucketBudget = bucketLimit;
-  const media = chosen.map(({ media, points, total }) => {
-    const { random, priceMills, sales } = mediaSales(page, media);
-    const video = media.mediaType === 2;
-    const posted = startOfDayMs(now) - media.postedDaysAgo * DAY_MS + 17 * 3_600_000;
-    const rawBuckets = (bucketBudget > 0 ? points.filter((point) => point.views > 0).slice(-bucketBudget) : []).map((point) =>
-      trafficRow("media_offer", media.mediaOfferId, point.bucket, now, { sourceCode: "1", sourceLabel: "direct", views: point.views - point.fyp, previewViews: point.preview }));
-    bucketBudget -= rawBuckets.length;
-    return {
-      mediaOfferRef: media.mediaOfferId,
-      mediaRef: `${media.mediaOfferId.slice(0, -3)}${String(hashString(media.mediaOfferId) % 1000).padStart(3, "0")}`,
-      bundleRefs: random() < 0.2 ? [`${9_000_000_000 + (hashString(`bundle:${media.mediaOfferId}`) % 900_000_000)}00001`] : [],
-      mediaType: media.mediaType,
-      mimeType: video ? "video/mp4" : "image/jpeg",
-      width: video ? 1080 : pick(random, [1080, 1440]),
-      height: video ? 1920 : pick(random, [1350, 1920]),
-      durationMs: media.durationMs,
-      priceMills,
-      likeCount: Math.round(total * media.likeRate),
-      sales,
-      createdAtPlatform: iso(posted),
-      deletedAtPlatform: media.deletedDaysAgo === null ? null : iso(startOfDayMs(now) - media.deletedDaysAgo * DAY_MS),
-      firstObservedAt: iso(posted + 40 * 60_000),
-      lastObservedAt: iso(now.getTime() - intBetween(random, 1, 9) * 3_600_000),
-      buckets: rawBuckets,
-      windowViews: total,
-      windowPreviewViews: points.reduce((sum, point) => sum + point.preview, 0),
-      daily: points.filter((point) => point.views > 0).map((point) => ({ bucketStart: iso(point.bucket), views: point.views, previewViews: point.preview })),
-    };
-  });
-  // Sold in messages: no post and no views, but the catalog knows its price and sales.
-  if (only && media.length === 0) {
-    const sold = soldInMessages(page).find((entry) => entry.mediaOfferId === only);
-    if (sold) {
-      const posted = startOfDayMs(now) - sold.postedDaysAgo * DAY_MS + 17 * 3_600_000;
-      media.push({
-        mediaOfferRef: sold.mediaOfferId,
-        mediaRef: sold.mediaOfferId,
-        bundleRefs: [],
-        mediaType: sold.mediaType as 1 | 2,
-        mimeType: sold.mediaType === 2 ? "video/mp4" : "image/jpeg",
-        width: 1080,
-        height: 1920,
-        durationMs: sold.durationMs,
-        priceMills: sold.priceMills,
-        likeCount: 0,
-        sales: sold.sales,
-        createdAtPlatform: iso(posted),
-        deletedAtPlatform: null,
-        firstObservedAt: iso(posted + 40 * 60_000),
-        lastObservedAt: iso(now.getTime() - 3 * 3_600_000),
-        buckets: [],
-        windowViews: 0,
-        windowPreviewViews: 0,
-        daily: [],
-      });
-    }
-  }
-
-  const top = ranked.map((entry, rank) => ({
-    plane: "fyp",
-    rank: rank >= 6 ? rank + 1 : rank,
-    mediaOfferRef: entry.item.mediaOfferId,
-    bundleRef: null,
-    periodMs: 7 * DAY_MS,
-    requestedStart: iso(weekStart),
-    requestedEnd: iso(weekEnd),
-    views: entry.fyp,
-    previewViews: Math.round(entry.fyp * 0.31),
-    interactionTimeMs: Math.round(entry.fyp * (entry.item.durationMs ?? 4_000) * (entry.item.watchPct / 100)),
-    previewInteractionTimeMs: Math.round(entry.fyp * 0.31 * 3_000),
-    observedAt: iso(now.getTime() - 4 * 3_600_000),
-  }));
-  if (top.length > 6) {
-    const missing = top[6]!;
-    top.splice(6, 0, {
-      ...missing,
-      rank: 6,
-      mediaOfferRef: `7${String(hashString(`${page.label}:gone`)).padStart(9, "0")}00000077`,
-      views: Math.round(missing.views! * 1.04),
-      previewViews: Math.round(missing.previewViews! * 1.04),
-    });
-  }
-  return {
-    page: { label: page.label, platform: page.platform },
-    window: { from: window.from, to: window.to, periodMs: queryNumber(request, "periodMs", DAY_MS) },
-    media,
-    top,
-    watchMetrics: { perMediaAvailable: false, reason: "not_served_per_media_e5" },
-    coverage: coverageFor(page, now, ["media_stats", "catalog"]),
-    bucketsTruncated: scored.some((entry) => entry.points.some((point) => point.views > 0)) && bucketBudget <= 0,
-    dailyTruncated: false,
-    nextCursor: scored.length > limit ? `k${limit}` : null,
-  };
-}
-
 // --- tags ---
 
 const FYP_TAGS: ReadonlyArray<[string, number]> = [
@@ -355,88 +181,6 @@ function statsTags(request: DemoRequest): KernelOperationResponse<"statsTags"> |
     window: { from: window.from, to: window.to },
     topTags: sliced.rows,
     platformTags,
-    coverage: coverageRows(page, now),
-    nextCursor: sliced.nextCursor,
-  };
-}
-
-// --- comments ---
-
-const COMMENTS = [
-  "omg 😍😍", "you look amazing!!", "Best post this week", "that outfit 🔥", "need part 2 asap",
-  "Good morning beautiful ☀️", "can't stop watching", "wow just wow", "You never miss", "this is art",
-  "Where is this place?", "love the vibe", "🔥🔥🔥", "bought it, worth every cent", "the smile at the end 😊",
-  "happy weekend!", "red looks perfect on you", "drop the playlist pls", "Queen 👑", "",
-];
-
-function contentComments(request: DemoRequest): KernelOperationResponse<"contentComments"> | DemoReply {
-  const page = ownerPage(request);
-  if (isReply(page)) return page;
-  const window = instantWindow(request);
-  if (isReply(window)) return window;
-  const now = request.now;
-  const fans = demoFans(page.label);
-  const posts = page.platform === "fansly"
-    ? demoMedia(page).filter((media) => {
-        const posted = startOfDayMs(now) - media.postedDaysAgo * DAY_MS + 17 * 3_600_000;
-        return media.postId !== null && posted >= window.fromMs && posted < window.toMs && posted <= now.getTime();
-      })
-    : [];
-  const comments: KernelOperationResponse<"contentComments">["comments"] = [];
-  posts.forEach((media, postIndex) => {
-    const random = rng(`comments:${media.postId}`);
-    const posted = startOfDayMs(now) - media.postedDaysAgo * DAY_MS + 17 * 3_600_000;
-    const count = Math.min(25, Math.round(media.peak / 190 + random() * 6));
-    const truncated = count >= 25;
-    for (let index = 0; index < count; index += 1) {
-      const fan = fans[Math.floor(random() ** 1.8 * fans.length)] ?? fans[0];
-      if (!fan) break;
-      const occurred = Math.min(now.getTime() - 60_000, posted + Math.round(random() ** 2 * 5 * DAY_MS));
-      const tipped = random() < 0.05;
-      comments.push({
-        commentRef: `${5_100_000_000 + (hashString(`${media.postId}:${index}`) % 800_000_000)}${String(index).padStart(6, "0")}`,
-        parentPostRef: media.postId!,
-        rootPostRef: media.postId,
-        authorRef: fan.platformUserId,
-        authorUsername: fan.username,
-        authorDisplayName: fan.displayName,
-        textPlain: pick(random, COMMENTS),
-        likeCount: random() < 0.3 ? intBetween(random, 1, 6) : 0,
-        mediaLikeCount: null,
-        tipTotalMills: tipped ? pick(random, [5, 10, 10, 20, 50]) * 1000 : null,
-        attachmentTipMills: null,
-        attachmentCount: random() < 0.04 ? 1 : 0,
-        pinned: postIndex === 0 && index === 0,
-        occurredAt: iso(occurred),
-        changedAt: iso(occurred),
-        discoveredVia: "post-replies.walk",
-        possiblyTruncated: truncated,
-        missingSince: postIndex === 2 && index === 1 ? iso(now.getTime() - 2 * DAY_MS) : null,
-      });
-    }
-  });
-  comments.sort((left, right) => right.occurredAt.localeCompare(left.occurredAt));
-  const perPost = posts.map((media) => {
-    const own = comments.filter((comment) => comment.parentPostRef === media.postId);
-    const times = own.map((comment) => comment.occurredAt).sort();
-    return {
-      postRef: media.postId!,
-      commentCount: own.length,
-      possiblyTruncatedCount: own.filter((comment) => comment.possiblyTruncated).length,
-      missingCount: own.filter((comment) => comment.missingSince !== null).length,
-      oldestAt: times[0] ?? null,
-      newestAt: times.at(-1) ?? null,
-      caption: media.caption,
-      publishedAt: iso(startOfDayMs(now) - media.postedDaysAgo * DAY_MS + 17 * 3_600_000),
-    };
-  }).filter((post) => post.commentCount > 0).sort((left, right) => right.commentCount - left.commentCount);
-  const sliced = paged(comments, request, 200);
-  return {
-    page: { label: page.label, platform: page.platform },
-    window: { from: window.from, to: window.to },
-    comments: sliced.rows,
-    perPost,
-    likers: { state: "not_started", reason: "no_confirmed_like_code_e4", rows: [] },
     coverage: coverageRows(page, now),
     nextCursor: sliced.nextCursor,
   };
@@ -669,10 +413,8 @@ function statsHoldings(request: DemoRequest): KernelOperationResponse<"statsHold
 }
 
 export const insightsHandlers: DemoHandlers = {
-  statsMedia,
   statsTags,
   statsCoverage,
   statsHoldings,
-  contentComments,
   moneyRevenueMix,
 };

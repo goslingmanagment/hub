@@ -39,7 +39,7 @@ import type { SyncTriggerScope } from "./sync-queue.ts";
 // `fansly_page_switching`.
 
 /** The lever streams each trigger scope names on a Fansly page ("sync now"
- *  for `light`, `data`, … in `POST /admin/sync/trigger` and `trigger-all`;
+ *  for `light`, `data`, … in `POST /admin/sync/trigger`;
  *  `all` leaves out the bulk reads), which `fanslyFilesForStreams` turns into
  *  the registry keys' resource files. */
 export const FANSLY_ENGINE_SCOPE_STREAMS: Readonly<Record<SyncTriggerScope, readonly SyncStream[]>> = {

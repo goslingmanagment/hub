@@ -226,7 +226,7 @@ export * from "./repositories/ofapi-banned-words.ts";
 export * from "./repositories/ofapi-bindings.ts";
 export * from "./repositories/ofapi-capture.ts";
 export * from "./repositories/ofapi-collection.ts";
-export { saveOfapiChatQueueState, readOfapiContentEvents } from './repositories/ofapi-content-events.ts';
+export { saveOfapiChatQueueState } from './repositories/ofapi-content-events.ts';
 export * from "./repositories/ofapi-credit-receipts.ts";
 export * from "./repositories/ofapi-media-images.ts";
 export * from "./repositories/ofapi-media-token-fences.ts";

@@ -15,7 +15,6 @@ import {
   insertDeliveryAttempt,
   listDeliveryAttempts,
   listNotificationIncidentsWithPages,
-  listSyncPages,
   recoverAndResolveNotificationIncident,
   updateTelegramSettings,
 } from "@agency_hub_core/db";
@@ -91,9 +90,8 @@ import {
 import { getOfapiSpendComparison } from "../../services/ofapi-spend-comparison.ts";
 import { getPageSummary } from "../../services/reporting.ts";
 import { notificationLanguage } from "../../services/notification-ru.ts";
-import { getStatusDetail, listStatus } from "../../services/sync.ts";
+import { getStatusDetail } from "../../services/sync.ts";
 import {
-  getPageMessagesSyncBlock,
   getPageSyncBlocks,
   getSyncBlocksOverview,
   pauseSyncBlock,
@@ -102,15 +100,11 @@ import {
   resumeSyncBlock,
   triggerSyncBlock,
 } from "../../services/sync-blocks.ts";
-import { requestAllPagesSync, requestPageSync } from "../../services/sync-control.ts";
+import { requestPageSync } from "../../services/sync-control.ts";
 import {
   engineOwnedSyncPageByLabel,
   triggerEngineScope,
-  type EngineLeverOutcome,
 } from "../../services/sync-engine-levers.ts";
-import {
-  getSyncMonitorRecentRequests,
-} from "../../services/sync-monitor.ts";
 import { getGoldenSignalsReport } from "../../services/golden-signals.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -559,19 +553,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return getOfapiDmColdArchiveStatus(appContext);
   });
 
-  server.get("/api/v1/sync/requests", {
-    schema: routeSchemas.syncRequests,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-
-    const pageIds = pageScopeFor(principal);
-    return await getSyncMonitorRecentRequests(appContext, {
-      ...(pageIds === undefined ? {} : { pageIds }),
-      ...(request.query.since === undefined ? {} : { since: request.query.since }),
-      limit: request.query.limit,
-    }) as never;
-  });
-
   server.get("/api/v1/sync/overview", {
     schema: routeSchemas.syncOverview,
   }, async (request) => {
@@ -599,39 +580,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     });
   });
 
-  server.get("/api/v1/pages/:pageLabel/sync/blocks/messages", {
-    schema: routeSchemas.pageMessagesBlock,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
-
-    const pageIds = pageScopeFor(principal);
-    return getPageMessagesSyncBlock(appContext, {
-      pageLabel: request.params.pageLabel,
-      ...(pageIds === undefined ? {} : { pageIds }),
-    });
-  });
-
   // Sync management
-  server.get("/api/v1/admin/sync/runs", {
-    schema: routeSchemas.adminSyncRuns,
-  }, async (request) => {
-    const query = request.query;
-    const runs = await listStatus(appContext, {
-      ...(query.pageLabel === undefined ? {} : { pageLabel: query.pageLabel }),
-      limit: query.limit,
-      ...(query.since ? { since: new Date(query.since) } : {}),
-    });
-    return runs.map((r) => ({
-      ...r,
-      startedAt: r.startedAt.toISOString(),
-      finishedAt: r.finishedAt?.toISOString() ?? null,
-    }));
-  });
-
   server.get("/api/v1/admin/sync/runs/:runId", {
     schema: routeSchemas.adminSyncRunDetail,
   }, async (request) => {
@@ -695,31 +644,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     });
     reply.code(202);
     return { accepted: true as const, pageLabel, scope };
-  });
-
-  server.post("/api/v1/admin/sync/trigger-all", {
-    schema: routeSchemas.adminSyncTriggerAll,
-  }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    if (!boss) throw new Error("Job queue not available");
-    // Pages the Fansly Sync Engine runs (live) are refreshed by the engine; a
-    // row in `handover` is left alone (neither engine reads it); the legacy
-    // executor queues the pages of the platforms it serves.
-    const enginePages = await listSyncPages(appContext.db, { modes: ["live"] });
-    const engine: Array<{ pageLabel: string } & EngineLeverOutcome> = [];
-    for (const page of enginePages) {
-      const outcome = await triggerEngineScope(appContext.db, page as typeof page & { mode: "live" }, "all");
-      engine.push({ pageLabel: page.pageLabel ?? String(page.pageId), ...outcome });
-    }
-    const results = await requestAllPagesSync(appContext, boss, { scope: "all", reason: "manual" });
-    const pagesQueued = results.length + engine.length;
-    await recordAudit(appContext, {
-      ...auditCtx(principal),
-      eventType: "admin.sync_trigger_all",
-      metadata: { scope: "all", pagesQueued, ...(engine.length === 0 ? {} : { engine }) },
-    });
-    reply.code(202);
-    return { accepted: true as const, pagesQueued };
   });
 
   server.post("/api/v1/admin/sync/blocks/trigger", {

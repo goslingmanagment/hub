@@ -37,13 +37,12 @@ with the registry's detached-partition preflight.
 
 ## Owner use and rollout
 
-The Collection screen has **Queue and post likes · retained events** with a page
-selector. It reads at most 50 heads of each type from Hub; refresh is local. The
-SDK operation `ofapiContentEventsGet` calls
-`GET /api/v1/admin/ofapi/content/events?pageId=…&limit=50` and requires an owner
-session. It returns source, source/receipt times, partial-list flags, lineage and
-unattributed count. Coverage is always `observed_events_only`, including an empty
-result. The report never claims a full history or a delivered recipient count.
+No screen or route reads these heads any more: the console's redesign (#1000)
+dropped the Collection screen's **Queue and post likes · retained events**, and
+its owner route `GET /api/v1/admin/ofapi/content/events` was removed after it.
+The heads stay in `ofapi_chat_queue_state` and `post_likes` (read them with SQL).
+They are observed events only: never a full history or a delivered recipient
+count.
 
 1. Deploy compatible migrations and code through the normal reviewed release.
    No collector or event group is enabled by this change.

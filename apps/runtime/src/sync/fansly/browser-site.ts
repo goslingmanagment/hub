@@ -13,14 +13,10 @@ import type { Metrics, ObservedSiteKey, SiteAdmissionPort, SiteObservation } fro
 // parsed and taken by nobody: the RPC client logs them at debug, and an
 // operator's own wait fails closed a request nobody admits.
 //
-// - An operator of minor 6 names the key (`requestKey`, `hop`) and keeps the
-//   fact until its `deliverySeq` is acknowledged — on the connection it came
-//   on, once the actor committed it.
-// - An older one names neither: a send's key is the engine's own (its id and
-//   send instant, so a send told again after a reconnect is the same hop),
-//   an end or an identity takes the key of its id's last send (the newest
-//   `LEGACY_KEYS_KEPT`; one older is dropped, counted), and nothing is
-//   acknowledged.
+// Every fact names its hop's key (`requestKey`, `hop`: protocol minor 6, the
+// oldest the RPC client takes at hello), and the operator keeps it until its
+// `deliverySeq` is acknowledged — on the connection it came on, once the
+// actor committed it. A fact without a key is dropped, counted.
 
 /** A reported send instant is taken this much later than the bridge says:
  *  the shift between the two clocks is read, not known, and the pause must
@@ -37,10 +33,6 @@ export function protocolRefusalOf(reason: string): Refusal {
   return PROTOCOL_REFUSALS.has(reason) ? (reason as Refusal) : "lease_inactive";
 }
 
-/** An operator before minor 6: the keys of the last sends by their id, for
- *  the ends and identities that follow them. */
-export const LEGACY_KEYS_KEPT = 4_096;
-
 export interface BrowserSiteAdmissionOptions {
   client: PageBrowserRpcClient;
   bridge: MonoBridge;
@@ -54,8 +46,6 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
   readonly #unlisten: Array<() => void> = [];
   #closed = false;
   #observed: ((event: SiteObservation) => void) | null = null;
-  /** An operator before minor 6: the key of each id's last send, oldest first. */
-  readonly #legacyKeys = new Map<string, ObservedSiteKey>();
 
   constructor(options: BrowserSiteAdmissionOptions) {
     this.#o = options;
@@ -78,32 +68,18 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
     this.#observed = listener;
   }
 
-  /** The hop a fact names, and its ack: an operator of minor 6's own key; an
-   *  older one's, the engine's (null: an end or identity of an id whose send
-   *  is not remembered). */
+  /** The hop a fact names, and its ack (null: it names no key). */
   #observedKey(message: SiteObservedMessage): { key: ObservedSiteKey; ack: () => void } | null {
-    if (message.requestKey !== undefined && message.hop !== undefined) {
-      const client = this.#o.client;
-      const epoch = client.epoch;
-      const deliverySeq = message.deliverySeq;
-      return {
-        key: { requestKey: message.requestKey, hop: message.hop },
-        ack: () => {
-          if (deliverySeq !== undefined) client.siteObservedAck(epoch, [deliverySeq]);
-        },
-      };
-    }
-    const ack = () => undefined;
-    if (message.type === "siteSent") {
-      // Its send instant as the operator wrote it: the same in every repeat.
-      const key = { requestKey: `legacy:${message.siteRequestId}:${message.sentMono}`, hop: 0 };
-      this.#legacyKeys.delete(message.siteRequestId);
-      this.#legacyKeys.set(message.siteRequestId, key);
-      if (this.#legacyKeys.size > LEGACY_KEYS_KEPT) this.#legacyKeys.delete(this.#legacyKeys.keys().next().value!);
-      return { key, ack };
-    }
-    const key = this.#legacyKeys.get(message.siteRequestId);
-    return key === undefined ? null : { key, ack };
+    if (message.requestKey === undefined || message.hop === undefined) return null;
+    const client = this.#o.client;
+    const epoch = client.epoch;
+    const deliverySeq = message.deliverySeq;
+    return {
+      key: { requestKey: message.requestKey, hop: message.hop },
+      ack: () => {
+        if (deliverySeq !== undefined) client.siteObservedAck(epoch, [deliverySeq]);
+      },
+    };
   }
 
   #onObservedMessage(message: SiteObservedMessage): void {
@@ -145,19 +121,6 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
           error: message.error,
         });
         return;
-      case "siteIdentity": {
-        // A lower bound stays one: rounded early, never later than now.
-        const at = Math.min(this.#o.monoNow(), bridge.fromKernel(message.sentNotBeforeMono) - SEND_REPORT_GUARD_MS);
-        listener({
-          ...named,
-          kind: "identity",
-          id: message.siteRequestId,
-          accountId: message.accountId,
-          sessionFingerprint: message.sessionFingerprint,
-          sentNotBeforeWall: wallOf(at),
-        });
-        return;
-      }
     }
   }
 }

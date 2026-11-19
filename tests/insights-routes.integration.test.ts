@@ -671,52 +671,15 @@ function requireServer(context: { skip: () => void }) {
 }
 
 describe("WP-S1 serving routes: media, tags and coverage", () => {
-  it("derives gross from NET and labels it, leaving an unserved sale null", async (context) => {
+  it("serves a tag's unserved metrics as null, never zero", async (context) => {
     if (!requireServer(context)) return;
-    const response = await get(
-      `/api/v1/pages/${PAGE}/stats/media?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
+    const response = await get(`/api/v1/pages/${PAGE}/stats/tags?from=${WINDOW_FROM}&to=${WINDOW_TO}`);
+    expect(response.statusCode, response.body).toBe(200);
+    const tags = new Map<string, unknown>(
+      response.json().topTags.map((row: { tagRef: string }) => [row.tagRef, row]),
     );
-    expect(response.statusCode).toBe(200);
-    const body = response.json();
-    const media = new Map<string, Record<string, never>>(
-      body.media.map((row: { mediaOfferRef: string }) => [row.mediaOfferRef, row]),
-    );
-
-    const sold = media.get("media-1")! as unknown as {
-      sales: {
-        count: number | null;
-        netMills: number | null;
-        grossMills: { value: number; derived: boolean; basis: string } | null;
-      };
-      buckets: { sourceCode: string; sourceLabel: string; videoViews: number | null }[];
-    };
-    // A12's own arithmetic: 16 792 × 1.25 = 20 990 = 1 × $20.99, exactly.
-    expect(sold.sales.netMills).toBe(16_792);
-    expect(sold.sales.grossMills?.value).toBe(20_990);
-    expect(sold.sales.grossMills?.derived).toBe(true);
-    expect(sold.sales.grossMills?.basis).toContain("A12");
-
-    // 83 of 85 live media carried no `saleStats` at all. Null in, null out.
-    const unsold = media.get("media-2")! as unknown as {
-      sales: { count: number | null; netMills: number | null; grossMills: unknown };
-    };
-    expect(unsold.sales.netMills).toBeNull();
-    expect(unsold.sales.count).toBeNull();
-    expect(unsold.sales.grossMills).toBeNull();
-
-    // The 0/1 media codes get the MEDIA vocabulary, not the profile one.
-    const labels = sold.buckets.map((bucket) => bucket.sourceLabel).sort();
-    expect(labels).toEqual(["direct", "fyp"]);
-    // [E5]: no per-media watch metric is claimed, and the response says so
-    // rather than leaving a reader to infer it from nulls.
-    expect(body.watchMetrics).toEqual({
-      perMediaAvailable: false,
-      reason: "not_served_per_media_e5",
-    });
-    for (const bucket of sold.buckets) {
-      expect(bucket.videoViews).toBeNull();
-    }
-    expect(body.bucketsTruncated).toBe(false);
+    expect(tags.get("tag-1")).toMatchObject({ views: 900, previewViews: null, interactionTimeMs: null });
+    expect(tags.get("tag-2")).toMatchObject({ tagName: null, previewInteractionTimeMs: null });
   });
 
   it("lists what sells by net, whatever its views, with the derived gross, for the owner only", async (context) => {
@@ -799,7 +762,6 @@ describe("WP-S1 serving routes: money", () => {
   it("every route refuses a team lead — the whole surface is owner-only today", async (context) => {
     if (!requireServer(context)) return;
     for (const url of [
-      `/api/v1/pages/${PAGE}/stats/media?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
       `/api/v1/pages/${PAGE}/stats/tags?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
       `/api/v1/pages/${PAGE}/stats/coverage`,
       `/api/v1/pages/${PAGE}/stats/holdings`,
@@ -818,7 +780,6 @@ describe("WP-S1 serving routes: no delivery address leaves the kernel", () => {
     // the WHOLE body, and a new field added a year from now is exactly what a
     // per-field assertion would miss. Media travel as REFS, which are ids.
     for (const url of [
-      `/api/v1/pages/${PAGE}/stats/media?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
       `/api/v1/pages/${PAGE}/stats/tags?from=${WINDOW_FROM}&to=${WINDOW_TO}`,
       `/api/v1/pages/${PAGE}/stats/coverage`,
       `/api/v1/pages/${PAGE}/stats/holdings`,
@@ -849,12 +810,28 @@ describe("WP-S1 agent datasets: the generated SQL runs and labels what it reads"
     }>(
       `with src as (${AGENT_DATASET_SQL.media_stats!.source})
        select src.f_sales_net_mills, src.f_sales_gross_mills_derived, src.f_source_label
-       from src where src.k_page_id = $1 limit 1`,
+       from src where src.k_page_id = $1 and src.f_media_offer_ref = 'media-1'
+       order by src.f_source_code, src.f_bucket_start`,
       [pageId],
     );
     expect(Number(result.rows[0]!.f_sales_net_mills)).toBe(16_792);
     expect(Number(result.rows[0]!.f_sales_gross_mills_derived)).toBe(20_990);
-    expect(["fyp", "direct"]).toContain(result.rows[0]!.f_source_label);
+    // Both media codes, each by its own label.
+    expect([...new Set(result.rows.map((row) => row.f_source_label))]).toEqual(["fyp", "direct"]);
+  });
+
+  it("keeps a media with no sale stats null, never zero", async (context) => {
+    if (!requireServer(context)) return;
+    // `saleStats` was null on 83 of 85 live media: written as null, read as null.
+    const result = await testDb!.pool.query(
+      `with src as (${AGENT_DATASET_SQL.media_stats!.source})
+       select src.f_sales_count, src.f_sales_net_mills, src.f_sales_gross_mills_derived
+       from src where src.k_page_id = $1 and src.f_media_offer_ref = 'media-2'`,
+      [pageId],
+    );
+    expect(result.rows).toEqual([
+      { f_sales_count: null, f_sales_net_mills: null, f_sales_gross_mills_derived: null },
+    ]);
   });
 
   it("labels revenue codes with their era, and names an unmapped one", async (context) => {

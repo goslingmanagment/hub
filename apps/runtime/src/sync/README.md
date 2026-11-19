@@ -87,7 +87,7 @@ sync/
     browser-intake.ts        a browser page's operator buffer into the engine (PR 13): the event stream, frames by
                              event id, gaps, the site's answers (`browser-site-capture.ts`); built by the slot
     browser-site.ts          the site path over the operator's RPC: what the operator observed of the site's own
-                             traffic (variant Б: `siteSent`/`siteEnded`/`siteIdentity`), keyed and acknowledged
+                             traffic (variant Б: `siteSent`/`siteEnded`), keyed and acknowledged
     browser-page.ts          a page's slot (PR 14): the link, the transport, the site path, the socket rows,
                              the intake; the operator's `quiesced`
     identity-answer.ts       the account a `/account/me` answer names (the browser's check of a profile no page has)
@@ -283,7 +283,7 @@ a host runs and nothing stops.
 |---|---|
 | `/api/v1/health/sync` | an `engine` block (mode, owner heartbeat age, hold, oldest due urgent work, socket, quarantine, open alerts); unhealthy on an owner silent > 90 s, an `auth`/`identity_mismatch` hold, or `handover` > 10 min. No legacy stream is judged, and a chat Fansly does not serve to the page is not reflected |
 | Settings blocks (`syncOverview`, `pageSyncBlocks`) | every block `state: "engine"` + `engineMode` + `engine`: whether a host runs the page (`ownerRunning`), the block's own keys (`keys`), its polls (`pollKeys`: what "sync now" makes due — a block without one has nothing to move), the keys the owner paused (`pausedKeys`, `pausedAll`), what stops its keys (`stopped`, `stops`, `paused`), its quarantined rows and the rows Fansly refuses, by key; each lever stream of the block from its keys' live work (last applied, next due, why the earliest waits, quarantine / vendor block, what stops it); a refused credential reads `credentials_invalid` on the connection block. Last applied of a key that works per subject (`dm-messages.head` per chat, `purchases.targets` per target) is its newest applied attempt over all its subjects (`lastLiveAppliedAtOverSubjects`: a bounded number of the key's rows, never a read per subject). Work that needs the owner names the command that lists it: `sync work list --state quarantined` for quarantined rows, `--state open --resource <key>` for rows Fansly refuses (they stay open, waiting `blocked_by_vendor`) |
-| Block buttons, `/admin/sync/trigger(-all)` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read. The answer's `engine.affected` is what moved (polls made due, keys paused or resumed, rows requeued): 0 is a lever that did nothing, and the dashboard says so instead of "done" |
+| Block buttons, `/admin/sync/trigger` | trigger ⇒ the keys' polls due now (`refreshSyncPage`); pause / resume ⇒ the keys in / out of `paused_resources` (the rest kept); reset ⇒ the keys' quarantined work requeued — `page_sync_states` never touched; `handover` ⇒ 409 `fansly_page_switching` for a lever that would read. The answer's `engine.affected` is what moved (polls made due, keys paused or resumed, rows requeued): 0 is a lever that did nothing, and the dashboard says so instead of "done" |
 | Page summary (`syncUx` of the overview, the sidebar's connections, the credentials tab) | `buildEnginePageSyncUx`, from the page's row and the counts of its active work: new credentials needed (an `auth`/`identity_mismatch` hold), work of a Settings block quarantined or refused by Fansly, a switch in progress, or managed by the engine — and, beside the last three, `Chats Fansly does not serve: N` (a chat's unavailability episode is no attention: its work is out of the vendor-block count) |
 | Connection status (`/admin/connections`, the health page item) | `expired` while the engine holds the page for its credentials, else by the age of the account read the engine stamps on the page (`account.poll`); no legacy run is consulted |
 | Follower reconcile reset / blast-radius override | the quarantined `followers.reconcile` row: reset cancels it and files owner demand (a fresh walk); the override reads the walk from the row's cursor and `result.quarantine`, deactivates exactly the previewed set and closes the row done |
@@ -303,7 +303,7 @@ requests are on «Система → Заявки на историю» (`/syste
 `engineBlockDisplay.ts`, the lines of the block table.
 
 Not for a Fansly page at all: the legacy monitor (`pnpm cli sync status` — the rows are the
-legacy executor's pages and streams, the events and `/api/v1/sync/requests` its journal as it stands; `sync page
+legacy executor's pages and streams, the events its journal as it stands; `sync page
 status` and `/api/v1/sync/pages` are the engine's) and the agent dataset `sync_streams` (the legacy executor's stream
 rows; the engine's state is `agentSyncStatus` / `agentSyncWhy`).
 
@@ -962,8 +962,8 @@ deleted on 2026-10-25 (owner); Hub stores no session it sends with.
   refusals hold as ever. Each hop is named by the
   operator's key of its request and the hop under it, and taken once (`sync_observed_site_requests`): a send told
   again journals no second attempt, an end commits with its send's attempt or not at all. The operator keeps each
-  observation until the engine confirmed its commit (`siteObservedAck`) and tells it again until then; an operator
-  before minor 6 is never confirmed (its key is the engine's own of the request's id and send). The answer it kept
+  observation until the engine confirmed its commit (`siteObservedAck`) and tells it again until then; one that names
+  no key is dropped (`sync_site_observed_unkeyed`). The answer it kept
   (`site.response`) is linked to the same row by the intake: the attempt, the end and the observation of one hop are
   one row. What the operator keeps unconfirmed is in its state (`page_browsers.site_observed_*`); its oldest waiting
   past 2 min is `browser:site_unconfirmed`; `sync browser status` shows both and the last hour's hops.

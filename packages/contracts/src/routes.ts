@@ -769,14 +769,6 @@ export const pageConversationPreviewQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(25).default(10),
 });
 
-export const pageConversationMessagesParamsSchema = pageParamsSchema.extend({
-  conversationId: z.string().min(1),
-});
-
-export const pageConversationMessagesQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).default(25),
-});
-
 // ── Voice notes (Task 6) ──────────────────────────────────────────────────────
 // Three page-scoped routes on the chatter lane. The status/create views share
 // one projection (voiceNoteStatusSchema); the audio route returns raw bytes.
@@ -992,14 +984,6 @@ export const overviewRevenueResponseSchema = revenueWindowSchema.extend({
   pages: z.array(pageRevenueItemSchema),
 });
 
-export const overviewGrowthResponseSchema = z.object({
-  pages: z.array(z.object({
-    pageId: intId,
-    newFollowers: z.number().int(),
-    newSubscribers: z.number().int(),
-  })),
-});
-
 export const modelRevenueResponseSchema = revenueWindowSchema.extend({
   model: modelListItemSchema,
   pages: z.array(pageRevenueItemSchema),
@@ -1070,31 +1054,6 @@ export const followerItemSchema = z.object({
 export const followerListResponseSchema = z.object({
   page: assignedPageSchema,
   items: z.array(followerItemSchema),
-  limit: z.number().int(),
-  offset: z.number().int(),
-  total: z.number().int(),
-});
-
-export const fanListItemSchema = z.object({
-  platformUserId: z.string(),
-  pageAlias: z.string().nullable(),
-  username: z.string().nullable(),
-  displayName: z.string().nullable(),
-  totalCreatorNetMills: mills,
-  currency: z.literal("USD"),
-  isFollower: z.boolean(),
-  followerSince: isoTimestamp.nullable(),
-  isSubscriber: z.boolean(),
-  subscriberSince: isoTimestamp.nullable(),
-  subscriptionExpiresAt: isoTimestamp.nullable(),
-  autoRenew: z.boolean().nullable(),
-  autoRenewOffDetectedAt: isoTimestamp.nullable(),
-  lastTransactionAt: isoTimestamp.nullable(),
-});
-
-export const fanListResponseSchema = z.object({
-  page: assignedPageSchema,
-  items: z.array(fanListItemSchema),
   limit: z.number().int(),
   offset: z.number().int(),
   total: z.number().int(),
@@ -1550,23 +1509,6 @@ export const pageConversationPreviewResponseSchema = z.object({
   messages: z.array(pageConversationPreviewMessageSchema),
 });
 
-export const pageConversationMessageItemSchema = z.object({
-  messageId: z.string(),
-  senderRole: z.enum(["fan", "model", "system", "unknown"]),
-  content: z.string(),
-  createdAt: isoTimestamp,
-  tipAmountCents: z.number().int(),
-  source: conversationMessageSourceSchema.optional(),
-  apiUnavailable: conversationMessageApiUnavailableSchema.optional(),
-});
-
-export const pageConversationMessagesResponseSchema = z.object({
-  page: assignedPageSchema,
-  conversationId: z.string(),
-  conversation: pageConversationStateSchema,
-  messages: z.array(pageConversationMessageItemSchema),
-});
-
 const fanProfileSourceEnum = z.enum(["chatmuse"]);
 
 export const fanProfileDocumentSchema = z.object({
@@ -1819,14 +1761,6 @@ export const fanNoteResponseSchema = z.object({
   authorUserId: intId,
   body: z.string(),
   createdAt: isoTimestamp,
-});
-
-export const setFanFlagsBodySchema = z.object({
-  flags: z.array(fanFlagEnum),
-});
-
-export const fanFlagsResponseSchema = z.object({
-  flags: z.array(fanFlagSchema),
 });
 
 // Client-capture lane. The desktop uploads spool-backed batches of
@@ -3097,33 +3031,6 @@ const extendedSyncStreamEnum = z.enum([
   "media_stats",
 ]);
 
-export const syncRequestsQuerySchema = z.object({
-  since: z.string().optional(),
-  limit: z.coerce.number().int().min(1).default(100),
-});
-
-export const syncRequestItemSchema = z.object({
-  timestamp: isoTimestamp,
-  pageLabel: z.string(),
-  platform: platformEnum,
-  stream: extendedSyncStreamEnum,
-  operation: z.string(),
-  endpoint: z.string(),
-  method: z.string(),
-  attemptNumber: z.number().int(),
-  status: z.enum(["started", "success", "retry", "failed"]),
-  httpStatusCode: z.number().int().nullable(),
-  durationMs: z.number().int().nullable(),
-  rateLimitWaitMs: z.number().int().nullable(),
-  groupId: z.string().nullable(),
-  partnerUsername: z.string().nullable(),
-  returnedItems: z.number().int().nullable(),
-  syncDone: z.boolean().nullable(),
-  proxyGapMs: z.number().int().nullable(),
-});
-
-export const syncRequestsResponseSchema = z.array(syncRequestItemSchema);
-
 const syncBlockKeyEnum = z.enum([
   "connection",
   "financials",
@@ -3345,21 +3252,6 @@ export const pageSyncBlocksResponseSchema = z.object({
   page: syncBlocksPageSchema,
 });
 
-export const pageMessagesBlockResponseSchema = z.object({
-  generatedAt: isoTimestamp,
-  page: z.object({
-    pageId: z.number().int(),
-    pageLabel: z.string(),
-    platform: platformEnum,
-    modelSlug: z.string(),
-    modelName: z.string(),
-    username: z.string().nullable(),
-    displayName: z.string().nullable(),
-    diagnosis: syncDiagnosisSchema.nullable(),
-  }),
-  block: syncBlockStatusSchema,
-});
-
 export const adminSyncBlockBodySchema = z.object({
   pageLabel: z.string().min(1),
   block: syncBlockKeyEnum,
@@ -3460,17 +3352,6 @@ export const syncTriggerResponseSchema = z.object({
   accepted: z.literal(true),
   pageLabel: z.string(),
   scope: syncTriggerScopeEnum,
-});
-
-export const syncTriggerAllResponseSchema = z.object({
-  accepted: z.literal(true),
-  pagesQueued: z.number().int(),
-});
-
-export const syncRunsQuerySchema = z.object({
-  pageLabel: z.string().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(20),
-  since: z.string().optional(),
 });
 
 export const adminLogsQuerySchema = z.object({
@@ -5166,39 +5047,6 @@ function insightsDerived<T extends z.ZodTypeAny>(value: T) {
   });
 }
 
-const insightsTrafficRowSchema = z.object({
-  subjectKind: z.string(),
-  subjectRef: z.string(),
-  periodMs: z.number().int(),
-  bucketStart: isoTimestamp,
-  /** RAW, as text — the integer the platform sent. */
-  sourceCode: z.string(),
-  /** THIS BUILD'S reading of the code. `unknown:<code>` when it has none. */
-  sourceLabel: z.string(),
-  mappingVersion: z.number().int(),
-  /** `type - (type % 10)` as text for a profile row; null for a media row,
-   *  whose 0/1 codes are not a family/member structure at all. */
-  family: z.string().nullable(),
-  familyLabel: z.string().nullable(),
-  /** Member 1 is the creator widget's visit counter; every other member is the
-   *  dwell-bearing series. Null for media rows, for the same reason. */
-  measure: z.enum(["visits", "dwell"]).nullable(),
-  /** Metrics: NULL means the platform did not serve it. Never 0. */
-  views: z.number().int().nullable(),
-  previewViews: z.number().int().nullable(),
-  uniqueViewers: z.number().int().nullable(),
-  previewUniqueViewers: z.number().int().nullable(),
-  videoViews: z.number().int().nullable(),
-  previewVideoViews: z.number().int().nullable(),
-  interactionTimeMs: z.number().int().nullable(),
-  previewInteractionTimeMs: z.number().int().nullable(),
-  /** A SUM over views on the wire; divided at read time or not at all. */
-  videoPercentWatchedSum: z.string().nullable(),
-  previewVideoPercentWatchedSum: z.string().nullable(),
-  revisionCount: z.number().int(),
-  lastObservedAt: isoTimestamp,
-});
-
 /** Fansly's 2026-10 statistics (`/creator/stats/*`, 0292): one page's
  *  account plane over the last `days` UTC days ending on `to` (default:
  *  today). The window's totals are Fansly's own, from the summary of exactly
@@ -5609,90 +5457,6 @@ export const creatorStatsAudienceResponseSchema = z.object({
     })),
   }).nullable(),
   mediaShown: z.array(z.object({ hour: isoTimestamp, source: z.number().int(), mediaShown: creatorStatsCount })),
-});
-
-const insightsMediaRowSchema = z.object({
-  mediaOfferRef: z.string(),
-  mediaRef: z.string().nullable(),
-  bundleRefs: z.array(z.string()),
-  mediaType: z.number().int().nullable(),
-  mimeType: z.string().nullable(),
-  width: z.number().int().nullable(),
-  height: z.number().int().nullable(),
-  durationMs: z.number().int().nullable(),
-  priceMills: mills.nullable(),
-  likeCount: z.number().int().nullable(),
-  sales: insightsMediaSalesSchema,
-  createdAtPlatform: isoTimestamp.nullable(),
-  deletedAtPlatform: isoTimestamp.nullable(),
-  firstObservedAt: isoTimestamp,
-  lastObservedAt: isoTimestamp,
-  /** Raw rows, one per bucket AND source code, under the response-wide
-   *  `bucketLimit` — a page of rows, not a window. */
-  buckets: z.array(insightsTrafficRowSchema),
-  /** The media's views over the WHOLE window, summed across buckets and
-   *  source codes; never cut by a budget. Null when no row carried it. */
-  windowViews: z.number().int().nullable(),
-  windowPreviewViews: z.number().int().nullable(),
-  /** One point per bucket (source codes summed), newest-first budget shared
-   *  with the other media; `dailyTruncated` says when it ran out. */
-  daily: z.array(z.object({
-    bucketStart: isoTimestamp,
-    views: z.number().int().nullable(),
-    previewViews: z.number().int().nullable(),
-  })),
-});
-
-const insightsTopMediaRowSchema = z.object({
-  plane: z.string(),
-  rank: z.number().int(),
-  mediaOfferRef: z.string(),
-  bundleRef: z.string().nullable(),
-  periodMs: z.number().int(),
-  requestedStart: isoTimestamp,
-  requestedEnd: isoTimestamp,
-  views: z.number().int().nullable(),
-  previewViews: z.number().int().nullable(),
-  interactionTimeMs: z.number().int().nullable(),
-  previewInteractionTimeMs: z.number().int().nullable(),
-  observedAt: isoTimestamp,
-});
-
-export const statsMediaQuerySchema = z.object({
-  from: insightsInstant,
-  to: insightsInstant,
-  periodMs: z.coerce.number().int().min(1).default(86_400_000),
-  mediaOfferRef: z.string().max(64).optional(),
-  limit: insightsLimitSchema.default(50),
-  /** Total bucket rows across the whole response, not per media. */
-  bucketLimit: insightsLimitSchema.default(200),
-  cursor: insightsCursorSchema.optional(),
-});
-
-export const statsMediaResponseSchema = z.object({
-  page: insightsPageSchema,
-  window: z.object({
-    from: isoTimestamp,
-    to: isoTimestamp,
-    periodMs: z.number().int(),
-  }),
-  media: z.array(insightsMediaRowSchema),
-  /** `stats_top_media` for the freshest window the page holds. Window identity
-   *  is part of a row: rank 2 of one window is not rank 2 of the next. */
-  top: z.array(insightsTopMediaRowSchema),
-  /** [E5]: the per-media statistics route serves SEVEN stat keys and no video
-   *  fields at all, even for a video asset. Watch metrics are therefore not
-   *  claimable per media — stated here so a caller cannot read their absence as
-   *  zero watch time. The account-level media datapoints DO carry them, and
-   *  those rows arrive under `subjectKind: "account_media"`. */
-  watchMetrics: z.object({
-    perMediaAvailable: z.literal(false),
-    reason: z.literal("not_served_per_media_e5"),
-  }),
-  coverage: z.array(insightsCoverageRowSchema),
-  bucketsTruncated: z.boolean(),
-  dailyTruncated: z.boolean(),
-  nextCursor: z.string().nullable(),
 });
 
 export const statsTagsQuerySchema = z.object({
@@ -6799,17 +6563,6 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
-  overviewGrowth: {
-    auth: { kind: "session" },
-    tags: ["dashboard"],
-    summary: "Get period-aware follower and subscriber growth",
-    querystring: revenueQuerySchema,
-    response: {
-      200: overviewGrowthResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
   pageRevenue: {
     auth: { kind: "session", scope: "page" },
     tags: ["revenue"],
@@ -6844,19 +6597,6 @@ const baseRouteSchemas = {
     querystring: followerListQuerySchema,
     response: {
       200: followerListResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  pageFans: {
-    auth: { kind: "any", scope: "page" },
-    tags: ["fans"],
-    summary: "List fans for one page",
-    params: pageParamsSchema,
-    querystring: fanListQuerySchema,
-    response: {
-      200: fanListResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -7070,20 +6810,6 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
-  pageConversationMessages: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["conversations"],
-    summary: "Return cached DM messages for one conversation",
-    params: pageConversationMessagesParamsSchema,
-    querystring: pageConversationMessagesQuerySchema,
-    response: {
-      200: pageConversationMessagesResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   // --- Phase 4: Dashboard routes ---
   overview: {
     auth: { kind: "session" },
@@ -7091,18 +6817,6 @@ const baseRouteSchemas = {
     summary: "Get agency overview dashboard data",
     response: {
       200: overviewResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
-  syncRequests: {
-    auth: { kind: "session" },
-    tags: ["dashboard"],
-    summary: "Get recent visible sync worker HTTP requests",
-    querystring: syncRequestsQuerySchema,
-    response: {
-      200: syncRequestsResponseSchema,
-      400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
@@ -7124,18 +6838,6 @@ const baseRouteSchemas = {
     params: pageSyncBlocksParamsSchema,
     response: {
       200: pageSyncBlocksResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  pageMessagesBlock: {
-    auth: { kind: "any", scope: "page" },
-    tags: ["dashboard"],
-    summary: "Get the combined Messages sync block for one visible page",
-    params: pageSyncBlocksParamsSchema,
-    response: {
-      200: pageMessagesBlockResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -7223,19 +6925,6 @@ const baseRouteSchemas = {
     body: createFanNoteBodySchema,
     response: {
       200: fanNoteResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  setFanFlags: {
-    auth: { kind: "owner-session" },
-    tags: ["fans"],
-    summary: "Set flags on a fan",
-    params: fanLookupParamsSchema,
-    body: setFanFlagsBodySchema,
-    response: {
-      200: fanFlagsResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -7762,21 +7451,6 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
-  archiveConversationMessages: {
-    auth: { kind: "session" },
-    tags: ["archive"],
-    summary: "List archived messages for one conversation (paged, before-cursor)",
-    params: z.object({ ref: z.string().min(1).max(200) }),
-    querystring: z.object({
-      before: z.coerce.number().int().positive().optional(),
-      limit: z.coerce.number().int().min(1).max(500).optional(),
-    }),
-    response: {
-      200: z.array(archiveMessageItemSchema),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
   archiveSearch: {
     auth: { kind: "session" },
     tags: ["archive"],
@@ -7788,17 +7462,6 @@ const baseRouteSchemas = {
     }),
     response: {
       200: z.array(archiveMessageItemSchema),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-    },
-  },
-  adminSyncRuns: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "List recent sync runs",
-    querystring: syncRunsQuerySchema,
-    response: {
-      200: z.array(syncRunItemSchema),
       401: errorResponseSchema,
       403: errorResponseSchema,
     },
@@ -7939,16 +7602,6 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
       // legacy_sync_retired: a Fansly page the engine does not own (step 4 S4-17)
       409: errorResponseSchema,
-    },
-  },
-  adminSyncTriggerAll: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Trigger sync for all pages",
-    response: {
-      202: syncTriggerAllResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
     },
   },
   adminConnections: {
@@ -8279,20 +7932,6 @@ const baseRouteSchemas = {
   // `read:money` capability exists on the AGENT plane, whose datasets carry the
   // same data behind it). `tests/contracts-auth-declarations.test.ts` pins both
   // halves so a later widening cannot happen quietly.
-  statsMedia: {
-    auth: { kind: "owner-session", scope: "page" },
-    tags: ["insights"],
-    summary: "Per-media traffic buckets, catalog head and top-media rankings",
-    params: pageParamsSchema,
-    querystring: statsMediaQuerySchema,
-    response: {
-      200: statsMediaResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   statsTags: {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["insights"],
@@ -8530,17 +8169,13 @@ export const routeSchemas: RouteSchemas = {
   ...workboardTodayRouteSchemas,
   ...personDoorRouteSchemas,
 };
-export type AuthState = z.infer<typeof authStateSchema>;
-export type AuthUser = z.infer<typeof authUserSchema>;
 export type AdminUser = z.infer<typeof adminUserSchema>;
 export type AssignedPage = z.infer<typeof assignedPageSchema>;
 export type SyncUxSummary = z.infer<typeof syncUxSummarySchema>;
 export type IngestObservationsBody = z.infer<typeof ingestObservationsBodySchema>;
 export type IngestObservationsResponse = z.infer<typeof ingestObservationsResponseSchema>;
-export type AiGatewayPromptCacheTtl = z.infer<typeof aiGatewayPromptCacheTtlSchema>;
 export type AiGatewayReasoningEffort = z.infer<typeof aiGatewayReasoningEffortSchema>;
 export type AiGatewayPromptBlock = z.infer<typeof aiGatewayPromptBlockSchema>;
-export type AiFeatureDebugPromptBlock = z.infer<typeof aiFeatureDebugPromptBlockSchema>;
 export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSchema>;
 export type AiFeatureContextFrame = z.infer<typeof aiFeatureContextFrameSchema>;
 export type AiLiveTextContext = z.infer<typeof aiLiveTextContextSchema>;
@@ -8555,16 +8190,11 @@ export type AiGatewayQuota = z.infer<typeof aiGatewayQuotaSchema>;
 export type AiFeatureAttachedRecaps = z.infer<typeof aiFeatureAttachedRecapsSchema>;
 export type AiGatewayStreamFrame = z.infer<typeof aiGatewayStreamFrameSchema>;
 export type AiFeatureStreamFrame = z.infer<typeof aiFeatureStreamFrameSchema>;
-export type AiPersonaCatalogItem = z.infer<typeof aiPersonaCatalogItemSchema>;
-export type AiPersonaCatalogResponse = z.infer<typeof aiPersonaCatalogResponseSchema>;
 export type AdminAiPersona = z.infer<typeof adminAiPersonaSchema>;
-export type AdminAiPersonasResponse = z.infer<typeof adminAiPersonasResponseSchema>;
 export type AdminAiPersonaCreateBody = z.infer<typeof adminAiPersonaCreateBodySchema>;
 export type AdminAiPersonaUpdateBody = z.infer<typeof adminAiPersonaUpdateBodySchema>;
 export type SyncEvent = z.infer<typeof syncEventSchema>;
-export type NormalizedSyncMessage = z.infer<typeof normalizedSyncMessageSchema>;
 export type OfapiWebhookAckResponse = z.infer<typeof ofapiWebhookAckResponseSchema>;
-export type OfapiPageMapping = z.infer<typeof ofapiPageMappingSchema>;
 export type OfapiWebhookStatusResponse = z.infer<typeof ofapiWebhookStatusResponseSchema>;
 export type OfapiWebhookReconcileBody = z.infer<typeof ofapiWebhookReconcileBodySchema>;
 export type OfapiCaptureSeedBody = z.infer<typeof ofapiCaptureSeedBodySchema>;
@@ -8594,7 +8224,6 @@ export type OfapiExportQuoteCreateResponse =
   z.infer<typeof ofapiExportQuoteCreateResponseSchema>;
 export type OfapiExportQuoteStatusResponse =
   z.infer<typeof ofapiExportQuoteStatusResponseSchema>;
-export type OfapiExportQuoteCancelBody = z.infer<typeof ofapiExportQuoteCancelBodySchema>;
 export type OfapiExportPilotApprovalBody =
   z.infer<typeof ofapiExportPilotApprovalBodySchema>;
 export type OfapiExportPilotApprovalResponse =
@@ -8611,42 +8240,25 @@ export type OfapiCreditsLedgerResponse = z.infer<typeof ofapiCreditsLedgerRespon
 export type AdminOfapiSpendComparisonQuery =
   z.infer<typeof adminOfapiSpendComparisonQuerySchema>;
 export type OfapiSpendComparisonResponse = z.infer<typeof ofapiSpendComparisonResponseSchema>;
-export type OfapiDmColdArchiveStatusResponse =
-  z.infer<typeof ofapiDmColdArchiveStatusResponseSchema>;
-export type OfapiWebhookRegisterBody = z.infer<typeof ofapiWebhookRegisterBodySchema>;
 export type OfapiWebhookRegisterResponse = z.infer<typeof ofapiWebhookRegisterResponseSchema>;
 export type AdminChatterUsageQuery = z.infer<typeof adminChatterUsageQuerySchema>;
 export type AdminChatterUsageResponse = z.infer<typeof adminChatterUsageResponseSchema>;
 export type CrossPageFanDetailResponse = z.infer<typeof crossPageFanDetailResponseSchema>;
 export type FanListQuery = z.infer<typeof fanListQuerySchema>;
-export type FanListResponse = z.infer<typeof fanListResponseSchema>;
-export type FanLookupParams = z.infer<typeof fanLookupParamsSchema>;
 export type FollowerListQuery = z.infer<typeof followerListQuerySchema>;
 export type FollowerListResponse = z.infer<typeof followerListResponseSchema>;
-export type LoginBody = z.infer<typeof loginBodySchema>;
 export type ModelListItem = z.infer<typeof modelListItemSchema>;
-export type AdminModelListItem = z.infer<typeof adminModelListItemSchema>;
-export type ModelParams = z.infer<typeof modelParamsSchema>;
 export type ModelRevenueResponse = z.infer<typeof modelRevenueResponseSchema>;
-export type OverviewGrowthResponse = z.infer<typeof overviewGrowthResponseSchema>;
 export type OverviewResponse = z.infer<typeof overviewResponseSchema>;
 export type OverviewRevenueResponse = z.infer<typeof overviewRevenueResponseSchema>;
 export type PageFanDetailResponse = z.infer<typeof pageFanDetailResponseSchema>;
 export type FanProfileDocument = z.infer<typeof fanProfileDocumentSchema>;
 export type FanProfileResponse = z.infer<typeof fanProfileResponseSchema>;
 export type FanProfileVersionListResponse = z.infer<typeof fanProfileVersionListResponseSchema>;
-export type PageFanParams = z.infer<typeof pageFanParamsSchema>;
-export type FanProfileVersionParams = z.infer<typeof fanProfileVersionParamsSchema>;
-export type PageParams = z.infer<typeof pageParamsSchema>;
-export type PageConversationProfileParams = z.infer<typeof pageConversationProfileParamsSchema>;
 export type PageRevenueResponse = z.infer<typeof pageRevenueResponseSchema>;
 export type PlatformRevenueWindow = z.infer<typeof platformRevenueWindowSchema>;
-export type PaginationQuery = z.infer<typeof paginationQuerySchema>;
 export type RevenueQuery = z.infer<typeof revenueQuerySchema>;
 export type RevenueDailyQuery = z.infer<typeof revenueDailyQuerySchema>;
-export type PageRevenueQuery = z.infer<typeof pageRevenueQuerySchema>;
-export type PageRevenueDailyQuery = z.infer<typeof pageRevenueDailyQuerySchema>;
-export type RevenueDailyItem = z.infer<typeof revenueDailyItemSchema>;
 export type RevenueDailyTypedItem = z.infer<typeof revenueDailyTypedItemSchema>;
 export type RevenueDailyResponse = z.infer<typeof revenueDailyResponseSchema>;
 export type SubscriberListQuery = z.infer<typeof subscriberListQuerySchema>;
@@ -8654,25 +8266,12 @@ export type SubscriberListResponse = z.infer<typeof subscriberListResponseSchema
 export type CrossPageTransactionItem = z.infer<typeof crossPageTransactionItemSchema>;
 export type CrossPageTransactionListQuery = z.infer<typeof crossPageTransactionListQuerySchema>;
 export type CrossPageTransactionListResponse = z.infer<typeof crossPageTransactionListResponseSchema>;
-export type FanTransactionItem = z.infer<typeof fanTransactionItemSchema>;
-export type FanTransactionListResponse = z.infer<typeof fanTransactionListResponseSchema>;
-export type CrossPageFanTransactionItem = z.infer<typeof crossPageFanTransactionItemSchema>;
-export type CrossPageFanTransactionListResponse = z.infer<typeof crossPageFanTransactionListResponseSchema>;
-export type UpsertFanProfileBody = z.infer<typeof upsertFanProfileBodySchema>;
-export type CreateFanNoteBody = z.infer<typeof createFanNoteBodySchema>;
-export type FanNoteResponse = z.infer<typeof fanNoteResponseSchema>;
-export type SetFanFlagsBody = z.infer<typeof setFanFlagsBodySchema>;
-export type FanFlagsResponse = z.infer<typeof fanFlagsResponseSchema>;
 export type FansSearchQuery = z.infer<typeof fansSearchQuerySchema>;
 export type FansSearchResponse = z.infer<typeof fansSearchResponseSchema>;
 export type PageDeletedFansResponse = z.infer<typeof pageDeletedFansResponseSchema>;
 export type PageConversationPreviewParams = z.infer<typeof pageConversationPreviewParamsSchema>;
 export type PageConversationPreviewQuery = z.infer<typeof pageConversationPreviewQuerySchema>;
 export type PageConversationPreviewResponse = z.infer<typeof pageConversationPreviewResponseSchema>;
-export type PageConversationMessagesParams = z.infer<typeof pageConversationMessagesParamsSchema>;
-export type PageConversationMessagesQuery = z.infer<typeof pageConversationMessagesQuerySchema>;
-export type PageConversationMessagesResponse = z.infer<typeof pageConversationMessagesResponseSchema>;
-export type PageSpenderAutoListParams = z.infer<typeof pageSpenderAutoListParamsSchema>;
 export type PageSpenderAutoListDetailResponse = z.infer<typeof pageSpenderAutoListDetailResponseSchema>;
 export type PageSpenderAutoListsResponse = z.infer<typeof pageSpenderAutoListsResponseSchema>;
 export type SpenderBatchBody = z.infer<typeof spenderBatchBodySchema>;
@@ -8683,113 +8282,46 @@ export type SpenderListQuery = z.infer<typeof spenderListQuerySchema>;
 export type SpenderListResponse = z.infer<typeof spenderListResponseSchema>;
 export type SpenderSeriesQuery = z.infer<typeof spenderSeriesQuerySchema>;
 export type SpenderSeriesResponse = z.infer<typeof spenderSeriesResponseSchema>;
-export type AdminCreateInviteBody = z.infer<typeof adminCreateInviteBodySchema>;
-export type AdminCreateInviteResponse = z.infer<typeof adminCreateInviteResponseSchema>;
-export type AdminCreateAccountLinkBody = z.infer<typeof adminCreateAccountLinkBodySchema>;
-export type AccountLinkItem = z.infer<typeof accountLinkItemSchema>;
 export type AccountLinkKind = z.infer<typeof accountLinkKindEnum>;
 export type AccountLinkState = z.infer<typeof accountLinkStateEnum>;
-export type IssuedAccountLink = z.infer<typeof issuedAccountLinkSchema>;
-export type AuthInspectAccountLinkResponse = z.infer<typeof authInspectAccountLinkResponseSchema>;
-export type AuthRedeemAccountLinkBody = z.infer<typeof authRedeemAccountLinkBodySchema>;
-export type AuthIssueDeviceTokenWithPasswordBody = z.infer<typeof authIssueDeviceTokenWithPasswordBodySchema>;
-export type AuthIssueDeviceTokenWithPasswordResponse = z.infer<typeof authIssueDeviceTokenWithPasswordResponseSchema>;
-export type OwnDeviceItem = z.infer<typeof ownDeviceItemSchema>;
 export type AuthMyUsageResponse = z.infer<typeof authMyUsageResponseSchema>;
-export type AdminTerminateAllAccessResponse = z.infer<typeof adminTerminateAllAccessResponseSchema>;
-export type AdminAssignPageBody = z.infer<typeof adminAssignPageBodySchema>;
-export type SyncRunItem = z.infer<typeof syncRunItemSchema>;
 export type SyncRunDetailResponse = z.infer<typeof syncRunDetailResponseSchema>;
-export type SyncRequestsQuery = z.infer<typeof syncRequestsQuerySchema>;
-export type SyncRequestItem = z.infer<typeof syncRequestItemSchema>;
-export type SyncRequestsResponse = z.infer<typeof syncRequestsResponseSchema>;
 export type SyncDiagnosis = z.infer<typeof syncDiagnosisSchema>;
 export type SyncBlockStatus = z.infer<typeof syncBlockStatusSchema>;
 export type SyncEngineStop = z.infer<typeof syncEngineStopSchema>;
 export type SyncBlocksPage = z.infer<typeof syncBlocksPageSchema>;
-export type SyncOverviewResponse = z.infer<typeof syncOverviewResponseSchema>;
-export type PageSyncBlocksResponse = z.infer<typeof pageSyncBlocksResponseSchema>;
-export type PageMessagesBlockResponse = z.infer<typeof pageMessagesBlockResponseSchema>;
 export type AdminSyncBlockBody = z.infer<typeof adminSyncBlockBodySchema>;
 export type AdminSyncBlockResponse = z.infer<typeof adminSyncBlockResponseSchema>;
-export type AdminFollowersReconcileResetBody = z.infer<
-  typeof adminFollowersReconcileResetBodySchema
->;
-export type AdminFollowersReconcileResetResponse = z.infer<
-  typeof adminFollowersReconcileResetResponseSchema
->;
-export type AdminFollowersReconcileOverridePreviewBody = z.infer<
-  typeof adminFollowersReconcileOverridePreviewBodySchema
->;
-export type AdminFollowersReconcileOverridePreviewResponse = z.infer<
-  typeof adminFollowersReconcileOverridePreviewResponseSchema
->;
-export type AdminFollowersReconcileOverrideApplyBody = z.infer<
-  typeof adminFollowersReconcileOverrideApplyBodySchema
->;
-export type AdminFollowersReconcileOverrideApplyResponse = z.infer<
-  typeof adminFollowersReconcileOverrideApplyResponseSchema
->;
-export type SyncTriggerBody = z.infer<typeof syncTriggerBodySchema>;
-export type SyncTriggerResponse = z.infer<typeof syncTriggerResponseSchema>;
-export type SyncTriggerAllResponse = z.infer<typeof syncTriggerAllResponseSchema>;
-export type SyncRunsQuery = z.infer<typeof syncRunsQuerySchema>;
 export type ConnectionItem = z.infer<typeof connectionItemSchema>;
 export type VerifyCredentialsBody = z.infer<typeof verifyCredentialsBodySchema>;
 export type VerifyCredentialsResponse = z.infer<typeof verifyCredentialsResponseSchema>;
 export type CreateModelBody = z.infer<typeof createModelBodySchema>;
 export type UpdateModelBody = z.infer<typeof updateModelBodySchema>;
-export type CreateModelResponse = z.infer<typeof createModelResponseSchema>;
 export type CreatePageBody = z.infer<typeof createPageBodySchema>;
 export type UpdatePageBody = z.infer<typeof updatePageBodySchema>;
-export type AdminCreatePageResponse = z.infer<typeof adminCreatePageResponseSchema>;
-export type AdminUpdatePageResponse = z.infer<typeof adminUpdatePageResponseSchema>;
-export type VerifyPageResponse = z.infer<typeof verifyPageResponseSchema>;
-export type DeletedResponse = z.infer<typeof deletedResponseSchema>;
 export type ConfigViewResponse = z.infer<typeof configViewResponseSchema>;
 export type ConfigItem = z.infer<typeof configItemSchema>;
 export type ConfigUpdateBody = z.infer<typeof configUpdateBodySchema>;
 export type ConfigUpdateResponse = z.infer<typeof configUpdateResponseSchema>;
-export type ConfigClearQuery = z.infer<typeof configClearQuerySchema>;
-export type ConfigClearResponse = z.infer<typeof configClearResponseSchema>;
 export type NotificationsSettingsResponse = z.infer<typeof notificationsSettingsResponseSchema>;
 export type NotificationsSettingsUpdateBody = z.infer<typeof notificationsSettingsUpdateBodySchema>;
-export type NotificationsTestMessageResponse = z.infer<typeof notificationsTestMessageResponseSchema>;
 export type NotificationsDiscoverChatsBody = z.infer<typeof notificationsDiscoverChatsBodySchema>;
-export type NotificationsDiscoverChatsResponse = z.infer<typeof notificationsDiscoverChatsResponseSchema>;
-export type NotificationsIncidentsQuery = z.infer<typeof notificationsIncidentsQuerySchema>;
-export type NotificationsIncidentsResponse = z.infer<typeof notificationsIncidentsResponseSchema>;
 export type NotificationsIncidentItem = z.infer<typeof notificationsIncidentItemSchema>;
-export type NotificationsReportPreviewResponse = z.infer<typeof notificationsReportPreviewResponseSchema>;
-export type NotificationsReportSendResponse = z.infer<typeof notificationsReportSendResponseSchema>;
-export type NotificationsDeliveryAttemptItem = z.infer<typeof notificationsDeliveryAttemptItemSchema>;
-export type NotificationsReportHistoryResponse = z.infer<typeof notificationsReportHistoryResponseSchema>;
-export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
-export type DeviceTokenItem = z.infer<typeof deviceTokenItemSchema>;
-export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponseSchema>;
 
 export type PageSettingsResponse = z.infer<typeof pageSettingsResponseSchema>;
 export type PagePromoResponse = z.infer<typeof pagePromoResponseSchema>;
-export type PageMassMessagesQuery = z.infer<typeof pageMassMessagesQuerySchema>;
 export type PageMassMessagesResponse = z.infer<typeof pageMassMessagesResponseSchema>;
-export type PageProfileQuery = z.infer<typeof pageProfileQuerySchema>;
 export type PageProfileResponse = z.infer<typeof pageProfileResponseSchema>;
-export type CreatorStatsOverviewQuery = z.infer<typeof creatorStatsOverviewQuerySchema>;
 export type CreatorStatsOverviewResponse = z.infer<typeof creatorStatsOverviewResponseSchema>;
 export type CreatorStatsContentResponse = z.infer<typeof creatorStatsContentResponseSchema>;
 export type CreatorStatsMediaResponse = z.infer<typeof creatorStatsMediaResponseSchema>;
 export type CreatorStatsAudienceResponse = z.infer<typeof creatorStatsAudienceResponseSchema>;
-export type StatsMediaQuery = z.infer<typeof statsMediaQuerySchema>;
-export type StatsMediaResponse = z.infer<typeof statsMediaResponseSchema>;
 export type StatsTagsQuery = z.infer<typeof statsTagsQuerySchema>;
 export type StatsTagsResponse = z.infer<typeof statsTagsResponseSchema>;
 export type StatsCoverageResponse = z.infer<typeof statsCoverageResponseSchema>;
 export type StatsHoldingsResponse = z.infer<typeof statsHoldingsResponseSchema>;
-export type ContentCommentsQuery = z.infer<typeof contentCommentsQuerySchema>;
 export type ContentCommentsResponse = z.infer<typeof contentCommentsResponseSchema>;
-export type MoneyRevenueMixQuery = z.infer<typeof moneyRevenueMixQuerySchema>;
 export type MoneyRevenueMixResponse = z.infer<typeof moneyRevenueMixResponseSchema>;
-export type MoneyPayoutsQuery = z.infer<typeof moneyPayoutsQuerySchema>;
 export type MoneyPayoutsResponse = z.infer<typeof moneyPayoutsResponseSchema>;
 
 export type OfapiWebhookDeliveryHistoryResponse = z.infer<typeof ofapiWebhookDeliveryHistorySchema>;

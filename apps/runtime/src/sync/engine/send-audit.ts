@@ -46,13 +46,7 @@ import {
 // tell, and nobody recorded it — `inconclusive` (never judged at its upper
 // bound, where no interval up to the send window could fail). One that
 // provably never went out does not count.
-// An older observed site row without `sent_at` was journaled after its send,
-// with no bound on that delay. Let L be the latest such admission read: its
-// send may have been anywhere before L. A Hub send that may lie at or before
-// L + its own pause is inconclusive, unless a recorded predecessor already
-// proves a violation. An unrecorded Hub send may lie anywhere from admission
-// to `countedAt`: only an admission after L + its pause clears that uncertainty.
-// Equal recorded site and Hub instants leave their order unknown too.
+// Equal recorded site and Hub instants leave their order unknown.
 //
 // A site send recorded after a Hub send was let go and before that send
 // (plan-b Б12, accepted) is not its predecessor: Hub could not know of it
@@ -163,7 +157,7 @@ interface Placed {
   row: FanslySendAuditRow;
   journal: string;
   /** Its instant as the earlier send of a pair: the recorded send, else its
-   *  upper bound (an old observed site's admission in the pace audit). */
+   *  upper bound. */
   ms: number;
   /** Its instant as the later send of a pair: the recorded send, else its
    *  admission. */
@@ -191,9 +185,6 @@ export type PaceOpenReason =
   /** The later send's instant was never recorded and its admission does not
    *  prove the pause. */
   | "send_not_recorded"
-  /** An observed send's instant was never recorded and the Hub send may lie
-   *  at or before its admission plus Hub's own pause. */
-  | "predecessor_send_not_recorded"
   /** Recorded site and Hub send instants are equal: their order is unknown. */
   | "send_order_unknown"
   /** The pacer's monotonic gap keeps the pause, the recorded instants do not. */
@@ -210,7 +201,7 @@ export interface PacePair {
   prevJournal: string;
   prevRef: number;
   /** The earlier send's instant: its recorded send, or — never recorded — its
-   *  upper bound (an old observed site's admission). */
+   *  upper bound. */
   prevSentAt: Date;
   /** The gap the verdict rests on, on `clock`. */
   gapMs: number;
@@ -278,24 +269,20 @@ function siteSendClose(site: Placed, prev: Placed | undefined, window: SendAudit
  * previous actual send — the recorded one, or a later one never recorded,
  * which only makes it shorter). A send never recorded that may have gone out
  * stands at its upper bound, as the takeover floor counts it (`paceFloorFromDb`),
- * and is judged at its admission. An old observed site's admission is only
- * an upper bound on its send. The latest such admission makes Hub pairs
- * inconclusive through that admission + their own pause; a proven violation
- * on a recorded predecessor stays a violation. An upload's part is no send
- * to Fansly (`isFanslySend`): neither judged nor anyone's predecessor.
+ * and is judged at its admission. An upload's part is no send to Fansly
+ * (`isFanslySend`): neither judged nor anyone's predecessor.
  */
 export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendAuditWindow): PaceAudit {
   const sends: Placed[] = rows
     .filter(isFanslySend)
     .flatMap((row) => {
-      const at = row.sentAt ?? (row.observed ? row.admittedAt : row.countedAt);
+      const at = row.sentAt ?? row.countedAt;
       return at === null ? [] : [placed(row, at)];
     })
     .sort((a, b) => a.ms - b.ms
       // Equal site and Hub instants have no known order, whatever their ids.
       || Number(b.row.observed) - Number(a.row.observed)
       || byJournalAndRef(a, b));
-  const latestUnknownObserved = sends.findLast((send) => send.row.observed && send.row.sentAt === null);
   const audit: PaceAudit = {
     verdict: "pass",
     pairs: 0,
@@ -331,23 +318,12 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
         gapMs, clock: "wall", wallGapMs: gapMs, pauseMs: later.row.pauseMs, open: null,
       });
     }
-    let prev = prevIndex >= 0 ? sends[prevIndex] : undefined;
-    let judged = prev === undefined ? null : judgePlacedPaceGap(later, prev);
+    const prev = prevIndex >= 0 ? sends[prevIndex] : undefined;
+    const judged = prev === undefined ? null : judgePlacedPaceGap(later, prev);
     const recorded = later.row.sentAt !== null;
     const sendOrderUnknown = prev !== undefined && prev.row.observed && recorded
       && prev.row.sentAt !== null && later.laterMs === prev.ms;
-    const provenViolation = prev !== undefined && recorded && prev.row.sentAt !== null
-      && judged?.verdict === "fail" && !sendOrderUnknown;
-    // No search window: an old site send has no lower bound. For an
-    // unrecorded Hub send, laterMs is its earliest instant; countedAt cannot
-    // rule out a send at or before L + pause.
-    if (!provenViolation && !sendOrderUnknown && latestUnknownObserved !== undefined
-      && (later.row.pauseMs === null || later.laterMs <= latestUnknownObserved.ms + later.row.pauseMs)) {
-      prev = latestUnknownObserved;
-      judged = judgePlacedPaceGap(later, prev);
-    }
     if (prev === undefined) continue;
-    const unrecordedPredecessor = prev.row.observed && prev.row.sentAt === null;
     const wallGapMs = later.laterMs - prev.ms;
     const pair: PacePair = {
       journal: later.journal,
@@ -367,13 +343,12 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
       pair.gapMs = judged.gapMs;
       pair.clock = judged.clock;
     }
-    if (recorded && !unrecordedPredecessor) {
+    if (recorded) {
       audit.minGapMs = minOf(audit.minGapMs, pair.gapMs);
       if (pair.journal !== pair.prevJournal) audit.minCrossJournalGapMs = minOf(audit.minCrossJournalGapMs, pair.gapMs);
     }
     pair.open = judged === null
       ? "no_pause"
-      : unrecordedPredecessor && later.laterMs <= prev.ms + pair.pauseMs! ? "predecessor_send_not_recorded"
       : sendOrderUnknown ? "send_order_unknown"
       // Its admission is the earliest it can have left: short of the pause
       // there, only its send instant could tell — and nobody recorded it.
