@@ -8,10 +8,13 @@ import "../screens/report/board.css";
  * «Записать кастом» (`/frame/custom`) and «Спросить» (`/frame/ask`). The frame takes the extension's port by the key of
  * its own address, then every request of the screen goes over it (`setFrameClient`): no cookie, never a sign-in. Closing
  * the screen says `collapse`; a finished one says `done` with what it made, so the fan panel shows it at once.
+ * The board's own frame (`/frame/report`) takes its port the same way, with `client: false`: it makes its own client
+ * over the port and never touches Workboard's one; it keeps the port of a `version` answer for «Открыть во вкладке».
  */
-export type FrameLink = { kind: "waiting" } | { kind: "none" } | { kind: "version" } | { kind: "port"; transport: PortTransport };
+export type FrameLink = { kind: "waiting" } | { kind: "none" } | { kind: "version"; port: MessagePort | null } | { kind: "port"; transport: PortTransport };
 
-export function useFramePort(): FrameLink {
+export function useFramePort(options: { client: boolean }): FrameLink {
+  const { client } = options;
   const [link, setLink] = useState<FrameLink>({ kind: "waiting" });
   useEffect(() => {
     let alive = true;
@@ -25,15 +28,15 @@ export function useFramePort(): FrameLink {
       }
       if (result.kind === "port") {
         held = portTransport(result.port);
-        setFrameClient(held.fetch);
+        if (client) setFrameClient(held.fetch);
         setLink({ kind: "port", transport: held });
-      } else setLink({ kind: result.kind });
+      } else setLink(result);
     });
     return () => {
       alive = false;
       held?.close();
     };
-  }, []);
+  }, [client]);
   return link;
 }
 
@@ -48,8 +51,8 @@ export function FrameGate({ link, title, children }: { link: FrameLink; title: s
   return <>{children(link.transport)}</>;
 }
 
-/** One sentence in the middle of the frame, in the board's look (the board's own frame says its states the same way). */
-function Gate({ children, waiting = false }: { children: ReactNode; waiting?: boolean }) {
+/** One sentence in the middle of the window, in the board's look: the frames' states and a board that cannot be drawn. */
+export function Gate({ children, waiting = false }: { children: ReactNode; waiting?: boolean }) {
   return (
     <div className="rb">
       <div className="view">
