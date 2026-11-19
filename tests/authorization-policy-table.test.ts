@@ -76,6 +76,42 @@ describe("authorization policy table", () => {
     }
   });
 
+  it("declares page scope on every :pageLabel route but the owner's page administration", async () => {
+    // The other direction of the check above: the middleware resolves page access
+    // from params.pageLabel only for a route that declares scope "page", so a route
+    // with the page in its path that drops it skips the check. The exceptions act on
+    // a page as an object (admin, sync work, the page browser's login), owner-only;
+    // the list changes only when such a route is added.
+    const server = await buildTableServer();
+    try {
+      const unscoped = server.routePolicyTable
+        .filter((row) => row.url.split("/").includes(":pageLabel") && row.auth?.scope !== "page");
+      expect(unscoped.filter((row) => row.auth?.kind !== "owner-session").map((row) => row.routeKey))
+        .toEqual([]);
+      expect(unscoped.map((row) => row.routeKey).sort()).toEqual([
+        "adminDeletePage",
+        "adminPublicationSettingsUpdate",
+        "adminUnassignPage",
+        "adminUpdatePage",
+        "adminVerifyPage",
+        "pageBrowserLoginCode",
+        "pageBrowserLoginFinish",
+        "pageBrowserLoginGet",
+        "pageBrowserLoginOpen",
+        "pageBrowserLoginScreenshot",
+        "pageBrowserLoginStart",
+        "pageBrowserLoginSubmit",
+        "pageBrowserScreen",
+        "syncHistoryRequestCreate",
+        "syncPageRefresh",
+        "syncPageWork",
+        "syncPageWorkGet",
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("preserves route config and protects both GET and its automatic HEAD twin", async () => {
     const server = await buildTableServer();
     try {
