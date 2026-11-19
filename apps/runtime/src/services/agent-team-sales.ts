@@ -16,7 +16,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, workHoldsSale, type ComputedWork } from "./chatter-shifts.ts";
-import { saleKindOf } from "./chatter-stats.ts";
+import { saleKindOf } from "./sale-kinds.ts";
 
 /**
  * `agentTeamSales` (ledger release 2): the team's work and the facts of every

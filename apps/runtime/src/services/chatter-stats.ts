@@ -38,6 +38,7 @@ import {
   type ComputedWork,
   type PersonWork,
 } from "./chatter-shifts.ts";
+import { saleKindOf } from "./sale-kinds.ts";
 import {
   RULED_SALES_LEAD_MS,
   homeCredit,
@@ -83,18 +84,7 @@ import { DELAY_BOUNDS, byDelayOf, byPriceOf } from "./team-sales.ts";
 const DAY_MS = 86_400_000;
 const TOP_FANS = 5;
 
-const KIND_OF: Readonly<Record<string, ChatterSaleKind>> = {
-  message_purchase: "ppv",
-  tip: "tip",
-  stream_tip: "tip",
-  subscription: "subscription",
-  post_purchase: "post",
-};
-
-/** A sale's kind as the screens name it, from the transaction's canonical type. Pure. */
-export function saleKindOf(canonicalType: string): ChatterSaleKind {
-  return KIND_OF[canonicalType] ?? "tip";
-}
+export { saleKindOf } from "./sale-kinds.ts";
 
 function push<K, V>(map: Map<K, V[]>, key: K, value: V) {
   const known = map.get(key);
