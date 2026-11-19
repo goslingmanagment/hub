@@ -1,13 +1,14 @@
+// node:http stays in startup.js's static graph, as when the bundle was one
+// file: Node loads this builtin before any module evaluates, and with it Node's
+// own undici, which takes fetch()'s global dispatcher. Without it npm undici
+// (a static import through @agency_hub_core/shared) would take it first. The
+// binding is used in main() because esbuild drops a bare `import "node:http"`.
+import { STATUS_CODES } from "node:http";
+
 import { createPool } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
 
 import { runMigrations } from "../../../packages/db/src/migrate-runner.ts";
-import { runApiRuntime } from "./api-runtime.ts";
-import { runSchedulerRuntime } from "./scheduler-runtime.ts";
-import { describeCompatibleClientSdks } from "./services/compatible-client-sdks.ts";
-import { PUBLIC_RUNTIME_CAPABILITIES } from "./services/public-capabilities.ts";
-import { runSyncRuntime } from "./sync/main.ts";
-import { runWorkerRuntime } from "./worker-runtime.ts";
 
 async function runStartupMigrations() {
   const config = loadConfig();
@@ -37,33 +38,54 @@ function resolveRole() {
   return role;
 }
 
+// A role loads only its own code: the production bundle is split into chunks
+// (scripts/build-production.mjs), so importing a role's module pulls in that
+// role's graph alone. It is imported before the migrations, where the static
+// imports evaluated it before.
+async function loadRole(role: ReturnType<typeof resolveRole>) {
+  if (role === "api") {
+    return (await import("./api-runtime.ts")).runApiRuntime;
+  }
+  if (role === "scheduler") {
+    return (await import("./scheduler-runtime.ts")).runSchedulerRuntime;
+  }
+  if (role === "sync") {
+    return (await import("./sync/main.ts")).runSyncRuntime;
+  }
+
+  return (await import("./worker-runtime.ts")).runWorkerRuntime;
+}
+
 export async function main() {
+  if (STATUS_CODES === undefined) {
+    throw new Error("node:http is not loaded");
+  }
   if (process.argv[2] === "print-public-capabilities") {
+    // Still loads every role's code (and so every package they import, the
+    // native bindings included): CI's capability manifest smoke and the
+    // deploy's candidate probe run this command in the image, the one load of
+    // the whole bundle before any container is swapped, and the image's
+    // compile-cache warm-up (Dockerfile, the dist-only overlay) runs it to
+    // cache every role's chunks.
+    await import("./api-runtime.ts");
+    await import("./scheduler-runtime.ts");
+    await import("./services/compatible-client-sdks.ts");
+    const { PUBLIC_RUNTIME_CAPABILITIES } = await import("./services/public-capabilities.ts");
+    await import("./sync/main.ts");
+    await import("./worker-runtime.ts");
     process.stdout.write(`${JSON.stringify(PUBLIC_RUNTIME_CAPABILITIES)}\n`);
     return;
   }
   if (process.argv[2] === "print-compatible-client-sdks") {
+    const { describeCompatibleClientSdks } = await import("./services/compatible-client-sdks.ts");
     process.stdout.write(`${JSON.stringify(describeCompatibleClientSdks())}\n`);
     return;
   }
 
   const role = resolveRole();
+  const runRole = await loadRole(role);
   await runStartupMigrations();
-
-  if (role === "api") {
-    await runApiRuntime();
-    return;
-  }
-  if (role === "scheduler") {
-    await runSchedulerRuntime();
-    return;
-  }
-  if (role === "sync") {
-    await runSyncRuntime();
-    return;
-  }
-
-  await runWorkerRuntime();
+  await runRole();
 }
 
 main().catch((error) => {
