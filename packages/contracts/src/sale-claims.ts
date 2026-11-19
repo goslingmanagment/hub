@@ -31,11 +31,6 @@ export const SALE_DISPUTE_OUTCOMES = ["first", "second", "half", "nobody"] as co
  * sides the window shows, in its order.
  */
 export const SALE_DISPUTE_OUTCOMES_WITH_DISMISS = [...SALE_DISPUTE_OUTCOMES, "dismiss", "pot", "return", "give", "split", "rule"] as const;
-/**
- * The answers to a sale its holder gave to the pot («<имя> отдаёт продажу в общак», the board): «В общак» (`pot`: the
- * owner's decision of kind pot), «Вернуть <имени>» (`return`: the sale is the person's again) and «Никому» (`nobody`).
- */
-export const POT_OFFER_OUTCOMES = ["pot", "return", "nobody"] as const;
 
 export const saleClaimStateEnum = z.enum(SALE_CLAIM_STATES);
 export const saleClaimAnswerEnum = z.enum(SALE_CLAIM_ANSWERS);
