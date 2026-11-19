@@ -21,7 +21,6 @@ import {
   type SiteAdmitResult,
   type SiteDone,
   type SiteEnded,
-  type SiteIdentity,
   type SiteSent,
   type State,
   type WsAdmit,
@@ -604,8 +603,9 @@ export class FakeOperator {
   }
 
   /** Variant Б (minor 4): a request of the site that left on its own —
-   *  observed, not admitted. With a `requestKey` (minor 6): its hop (0 by
-   *  default) and the next delivery number, unless given. */
+   *  observed, not admitted. Keyed as an operator of minor 6 keys it: its
+   *  `requestKey` (a new one), its hop (0) and the next delivery number,
+   *  unless given. */
   siteSent(input: Partial<Omit<SiteSent, "type">> & { path: string }): SiteSent {
     const message: SiteSent = {
       type: "siteSent",
@@ -616,7 +616,7 @@ export class FakeOperator {
       route: input.route ?? "site.other",
       sessionFingerprint: input.sessionFingerprint === undefined ? this.live : input.sessionFingerprint,
       sentMono: input.sentMono ?? monoMs(),
-      ...this.#delivery(input.requestKey, input.hop, input.deliverySeq),
+      ...this.#delivery(input.requestKey ?? randomUUID(), input.hop, input.deliverySeq),
     };
     this.server.send(message);
     return message;
@@ -640,27 +640,13 @@ export class FakeOperator {
 
   /** An observation told again as it was (minor 6: the operator repeats
    *  what the engine has not confirmed). */
-  tellAgain(message: SiteSent | SiteEnded | SiteIdentity): void {
+  tellAgain(message: SiteSent | SiteEnded): void {
     this.server.send(message);
   }
 
   #delivery(requestKey: string | undefined, hop: number | undefined, deliverySeq: number | undefined): Pick<SiteSent, "requestKey" | "hop" | "deliverySeq"> {
     if (requestKey === undefined) return {};
     return { requestKey, hop: hop ?? 0, deliverySeq: deliverySeq ?? ++this.#deliverySeq };
-  }
-
-  /** Variant Б: the site's own `/account/me` named this account, from the network. */
-  siteIdentity(sent: SiteSent, accountId: string, input: Partial<Omit<SiteIdentity, "type" | "siteRequestId" | "accountId">> = {}): SiteIdentity {
-    const message: SiteIdentity = {
-      type: "siteIdentity",
-      siteRequestId: sent.siteRequestId,
-      accountId,
-      sessionFingerprint: input.sessionFingerprint ?? sent.sessionFingerprint ?? this.live!,
-      sentNotBeforeMono: input.sentNotBeforeMono ?? sent.sentMono - 5,
-      ...this.#delivery(sent.requestKey, sent.hop, input.deliverySeq),
-    };
-    this.server.send(message);
-    return message;
   }
 
   static async start(options: FakeOperatorOptions = {}): Promise<FakeOperator> {

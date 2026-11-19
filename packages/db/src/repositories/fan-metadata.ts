@@ -1,6 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
 
-import type { FanFlagType } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { requireSingleRow } from "../rows.ts";
 import { fanFlags, fanNotes, fanSummaries } from "../schema.ts";
@@ -66,32 +65,4 @@ export async function createFanNote(
       body: input.body,
     })
     .returning(), "createFanNote");
-}
-
-export async function setFanFlags(
-  db: Database,
-  input: {
-    fanId: number;
-    flags: FanFlagType[];
-    createdByUserId: number;
-  },
-) {
-  return db.transaction(async (tx) => {
-    await tx.delete(fanFlags).where(eq(fanFlags.fanId, input.fanId));
-
-    if (input.flags.length === 0) {
-      return [];
-    }
-
-    return tx
-      .insert(fanFlags)
-      .values(
-        input.flags.map((flag) => ({
-          fanId: input.fanId,
-          flag,
-          createdByUserId: input.createdByUserId,
-        })),
-      )
-      .returning();
-  });
 }

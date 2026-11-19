@@ -137,18 +137,6 @@ export async function recordObservedSiteEnded(
   `);
 }
 
-/** The account a hop named, taken (once). */
-export async function recordObservedSiteIdentity(db: Database, key: ObservedSiteRequestKey): Promise<void> {
-  await db.execute(sql`
-    update sync_observed_site_requests
-       set identity_recorded_at = clock_timestamp()
-     where page_id = ${key.pageId}
-       and request_key = ${key.requestKey}
-       and hop = ${key.hop}::integer
-       and identity_recorded_at is null
-  `);
-}
-
 /** The buffer event that carried a hop's answer and the observation it was
  *  journaled as (null: not written), linked in the intake's batch — before
  *  its send's row, if the answer came first. Once: an event delivered again

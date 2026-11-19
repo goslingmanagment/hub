@@ -32,8 +32,6 @@ export const shiftReportDoorEnum = z.enum(SHIFT_REPORT_DOORS);
 /** The longest note of a line, and the comment. */
 export const SHIFT_REPORT_NOTE_MAX = 300;
 export const SHIFT_REPORT_COMMENT_MAX = 2000;
-/** The widest window of `shiftReportsList`, Moscow days. */
-export const SHIFT_REPORTS_LIST_MAX_DAYS = 62;
 
 const shiftIdParam = z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 
@@ -672,9 +670,7 @@ export type ShiftReportLineBody = z.infer<typeof shiftReportLineBodySchema>;
 export type ShiftReportOffPlatformBody = z.infer<typeof shiftReportOffPlatformBodySchema>;
 export type ShiftReportsListResponse = z.infer<typeof shiftReportsListResponseSchema>;
 export type ShiftReportClaimableResponse = z.infer<typeof shiftReportClaimableResponseSchema>;
-export type ShiftReportsListItem = z.infer<typeof shiftReportsListItemSchema>;
 export type AgentShiftReportsFeedResponse = z.infer<typeof agentShiftReportsFeedResponseSchema>;
-export type AgentShiftReportsFeedItem = z.infer<typeof agentShiftReportsFeedItemSchema>;
 
 const personErrors = {
   400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema, 409: errorResponseSchema,
