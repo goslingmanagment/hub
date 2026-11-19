@@ -327,13 +327,25 @@ export function slotRuns(slots: readonly RuleSlot[], input: { personId: number; 
   return anyRuns((on) => linesOn(own, input.pageId, on)) && !anyRuns((on) => swapLinesOn(own, input.pageId, on, "off"));
 }
 
-const validOn = (slot: RuleSlot, on: string) => (slot.validFrom === null || slot.validFrom <= on) && (slot.validTo === null || on <= slot.validTo);
+/** A schedule line as the choice of a day's lines reads it: its page (null — every page) and its validity. */
+type DatedLine = { pageId: number | null; validFrom: string | null; validTo: string | null };
 
-/** A person's STANDING lines on a page for a Moscow day: the page's own valid that day, else the every-page ones valid that day. */
+const validOn = (slot: DatedLine, on: string) => (slot.validFrom === null || slot.validFrom <= on) && (slot.validTo === null || on <= slot.validTo);
+
+/**
+ * Which of a person's STANDING lines stand for them on a page on a Moscow day: the page's own valid that day, else the
+ * every-page ones valid that day — chosen by the dates alone, the weekday is read after. The one home of the choice: the
+ * rule (`slotRuns`) and a swap's pages (team-questions.ts). Pure.
+ */
+export function standingLinesOn<L extends DatedLine>(standing: readonly L[], pageId: number | null, on: string): L[] {
+  const valid = standing.filter((slot) => validOn(slot, on));
+  const ofPage = pageId === null ? [] : valid.filter((slot) => slot.pageId === pageId);
+  return ofPage.length > 0 ? ofPage : valid.filter((slot) => slot.pageId === null);
+}
+
+/** A person's STANDING lines on a page for a Moscow day (`standingLinesOn` of their lines that are not a swap's). */
 function linesOn(own: readonly RuleSlot[], pageId: number | null, on: string): RuleSlot[] {
-  const standing = own.filter((slot) => slot.day === undefined && validOn(slot, on));
-  const ofPage = pageId === null ? [] : standing.filter((slot) => slot.pageId === pageId);
-  return ofPage.length > 0 ? ofPage : standing.filter((slot) => slot.pageId === null);
+  return standingLinesOn(own.filter((slot) => slot.day === undefined), pageId, on);
 }
 
 /** A swap's one-day lines of a kind on a page that began on a Moscow day (each acts on its own hours). */
@@ -560,8 +572,7 @@ function agreedHome(sale: RuleSale, found: SaleHome, ix: Index): SaleHome | null
   if (settled.kind === "mine") {
     const user = settled.users[0]!;
     if (people.includes(user) || !people.every(saysNotMine)) return null;
-    const mark = markOf(marks, user);
-    const mills = mark.ownAmountMills !== null && mark.ownAmountMills < net ? mark.ownAmountMills : net;
+    const mills = mineMills(markOf(marks, user), net);
     return sharesHome([{ workRef: workRefFor(user, sale, found, ix), userId: user, percent: percentOfNet(mills, net), mills }], "agreed", ix);
   }
   if (settled.kind === "share") {
@@ -586,35 +597,19 @@ function agreedHome(sale: RuleSale, found: SaleHome, ix: Index): SaleHome | null
 function decide(sale: RuleSale, holders: readonly RuleWork[], shifts: readonly RuleWork[], ix: Index): SaleHome {
   const net = sale.netMills;
   const resolution = sale.resolution ?? [];
-  if (resolution.length > 0) {
-    let given = 0;
-    const shares = resolution.map((share, at): SaleShare => {
-      // The last share takes the rounding: the shares sum to the net exactly.
-      const mills = at === resolution.length - 1 ? net - given : millsToNumber(millsPercentOf(net, share.percent));
-      given += mills;
-      return { workRef: workRefOf(share.userId, holders), userId: share.userId, percent: share.percent, mills };
-    });
-    return sharesHome(shares, "owner_split", ix);
-  }
+  if (resolution.length > 0) return sharesHome(splitShares(net, resolution, (user) => workRefOf(user, holders)), "owner_split", ix);
   const settled = judgeMarks(sale.marks);
   if (settled.kind === "mine") {
     const user = settled.users[0]!;
     const mark = markOf(sale.marks, user);
     if (mark.confirmed) {
-      // «моё» claims the net, or the chatter's own amount, never above it.
-      const mills = mark.ownAmountMills !== null && mark.ownAmountMills < net ? mark.ownAmountMills : net;
+      const mills = mineMills(mark, net);
       return sharesHome([{ workRef: workRefOf(user, holders), userId: user, percent: percentOfNet(mills, net), mills }], "marks", ix);
     }
   } else if (settled.kind === "share") {
     const [a, b] = settled.users as [number, number];
     if (markOf(sale.marks, a).confirmed || markOf(sale.marks, b).confirmed) {
-      const low = Math.min(a, b);
-      const high = Math.max(a, b);
-      const first = millsToNumber(millsPercentOf(net, 50)); // the odd mill to the lower user id
-      return sharesHome([
-        { workRef: workRefOf(low, holders), userId: low, percent: 50, mills: first },
-        { workRef: workRefOf(high, holders), userId: high, percent: 50, mills: net - first },
-      ], "marks", ix);
+      return sharesHome(halvesOf(net, a, b).map((half) => ({ workRef: workRefOf(half.userId, holders), userId: half.userId, percent: 50, mills: half.mills })), "marks", ix);
     }
   } else if (settled.kind === "not_mine") {
     if (sale.marks.length > 0 && everyoneSaysNotMine(sale.marks, shifts)) return homeOf("nobody", "marks");
@@ -667,6 +662,11 @@ function sharesHome(shares: SaleShare[], reason: SaleHomeReason, ix: Index): Sal
     return at !== undefined && ix.works[at]!.kind === "visit";
   });
   return homeOf(allVisits ? "visit" : "shift", reason, { shares });
+}
+
+/** What a «моё» claims: the net, or the chatter's own amount, never above it. */
+function mineMills(mark: RuleMark, net: number): number {
+  return mark.ownAmountMills !== null && mark.ownAmountMills < net ? mark.ownAmountMills : net;
 }
 
 /** The whole percent of the net an amount is, rounded down; all of it — 100. */
