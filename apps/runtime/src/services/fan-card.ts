@@ -2,8 +2,6 @@ import {
   CLIENT_FAN_CARD_MAX_SUGGESTIONS,
   CLIENT_FAN_FACT_QUOTE_MAX_CHARS,
   type ClientFanCardPage,
-  type ClientFanCustomChangeBody,
-  type ClientFanCustomCreateBody,
   type ClientFanFactChangeBody,
   type ClientFanFactChangeResponse,
   type ClientFanFactQuote,
@@ -13,12 +11,9 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   changeFanFact,
-  findCustomOrder,
-  findFanConversationRef,
   findCardFan,
   findFanFact,
   isPersonOnPage,
-  isUniqueViolation,
   findFanLinkDecision,
   findPageSummaryByLabel,
   listCardPages,
@@ -36,7 +31,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
 import { ClientFeatureDisabledError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
-import { extensionCardCustoms, extensionChangeCustom, extensionRecordCustom } from "./custom-orders/extension.ts";
+import { extensionCardCustoms } from "./custom-orders/extension.ts";
 
 /**
  * Chat Memory week 2 (docs/plans/2026-10-24-chat-memory/week-2.md §1–2): the
@@ -293,57 +288,3 @@ export async function changeClientFanFact(
   return { changed: result.changed, card };
 }
 
-/** Chat Memory week 4: a chatter writes a custom into the fan's record, paid by a suggested tip or not yet. */
-/** A payment another custom took a moment ago (two chatters at once): 409, not a 500. Drizzle wraps the driver's error, the code is in its cause. */
-export async function paymentTaken<T>(write: () => Promise<T>): Promise<T> {
-  try {
-    return await write();
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      throw new ConflictError("The payment is taken by another custom", { reason: "not_suggested" });
-    }
-    throw error;
-  }
-}
-
-export async function createClientFanCustom(
-  app: AppContext,
-  principal: HumanAuthPrincipal,
-  input: { pageLabel: string; fanRef: string; body: ClientFanCustomCreateBody },
-): Promise<ClientFanFactChangeResponse> {
-  requireApiKeyUser(principal);
-  const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_CARD_FEATURE);
-  const fan = await findCardFan(app.db, page.platform, input.fanRef);
-  const person = fan === null ? [] : (await listPersonFans(app.db, fan.id)).map((one) => one.id);
-  // Only a fan of this page (he or an account joined to him has it), like the card.
-  if (fan === null || !(await isPersonOnPage(app.db, person, page.id))) throw new NotFoundError("The fan is not known");
-  // The chat: on Fansly the fan's thread of the page, on OnlyFans the fan.
-  const conversationRef = page.platform === "onlyfans" ? fan.platformUserId : await findFanConversationRef(app.db, page.id, fan.id);
-  // Package I: a custom order, accepted by the chatter (custom-orders/extension.ts).
-  await paymentTaken(() => extensionRecordCustom(app, principal, {
-    pageId: page.id, fanId: fan.id, personIds: person, conversationRef, description: input.body.description,
-    priceMills: input.body.priceMills ?? null, paymentRef: input.body.paymentRef,
-  }));
-  return { changed: true, card: await cardOf(app, principal, { pageLabel: page.label, fanRef: input.fanRef, fan, pageId: page.id }) };
-}
-
-/** Chat Memory week 4: a chatter marks a custom paid, delivered, cancelled, or edits it. */
-export async function changeClientFanCustom(
-  app: AppContext,
-  principal: HumanAuthPrincipal,
-  input: { pageLabel: string; fanRef: string; customId: number; body: ClientFanCustomChangeBody },
-): Promise<ClientFanFactChangeResponse> {
-  requireApiKeyUser(principal);
-  const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_CARD_FEATURE);
-  const fan = await findCardFan(app.db, page.platform, input.fanRef);
-  const custom = await findCustomOrder(app.db, input.customId);
-  const person = fan === null ? [] : (await listPersonFans(app.db, fan.id)).map((one) => one.id);
-  if (fan === null || custom === null || custom.fanId === null || custom.pageId === null || !person.includes(custom.fanId)
-    || !(await isPersonOnPage(app.db, person, page.id))) {
-    throw new NotFoundError("The custom was not found");
-  }
-  if (!canAccessPage(principal, custom.pageId)) throw new ClientFeatureDisabledError(FAN_CARD_FEATURE, "not_granted");
-  // Package I: a step of the custom order (custom-orders/extension.ts); a sale another order took a moment ago is 409.
-  const changed = await paymentTaken(() => extensionChangeCustom(app, principal, { orderId: custom.id, body: input.body }));
-  return { changed, card: await cardOf(app, principal, { pageLabel: page.label, fanRef: input.fanRef, fan, pageId: page.id }) };
-}

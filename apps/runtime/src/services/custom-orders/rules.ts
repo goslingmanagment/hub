@@ -1,4 +1,3 @@
-import { millsToWholeCents } from "@agency_hub_core/shared";
 import {
   findCustomOrderCode,
   cardOf,
@@ -272,14 +271,6 @@ export function priceMillsOf(price: string | undefined): number | null {
   const match = /^\$?\s*(\d{1,7})(?:[.,](\d{1,2}))?\s*\$?$/u.exec(price.trim());
   if (!match) return null;
   return Number(match[1]) * 1000 + Number((match[2] ?? "0").padEnd(2, "0")) * 10;
-}
-
-/** Mills → «120$» / «120.50$», the team's way of writing a price. */
-export function priceTextOf(priceMills: number): string {
-  const cents = millsToWholeCents(priceMills);
-  const dollars = Math.floor(cents / 100);
-  const rest = cents % 100;
-  return rest === 0 ? `${dollars}$` : `${dollars}.${String(rest).padStart(2, "0")}$`;
 }
 
 /**

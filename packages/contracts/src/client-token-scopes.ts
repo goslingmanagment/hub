@@ -99,9 +99,6 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientOutreachSave",
       "clientOutreachSend",
       "clientOutreachTouches",
-      // Chat Memory week 4: customs in the fan's card.
-      "clientFanCustomCreate",
-      "clientFanCustomChange",
       // ai-limit-v1: the person's own daily AI limit and today's AI spend.
       "clientAiLimit",
       // Дела: how many matters wait for the person and the newest of them, no evidence (the badge of a later package).
