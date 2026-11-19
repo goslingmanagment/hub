@@ -19,7 +19,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import type { OfapiRequestContext } from "./ofapi.ts";
 import { upsertTransactionWithNegationGuards } from "./money-negation-guards.ts";
-import { createOfapiRestGuard, type OfapiBudgetBlock } from "./sync/ofapi-dm-sync.ts";
+import { createOfapiRestGuard, type OfapiBudgetBlock } from "./ofapi-rest-guard.ts";
 import {
   mapOfapiTransactionStatusForSpendProjection,
   mapTransactionCategory,

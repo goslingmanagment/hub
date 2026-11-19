@@ -27,6 +27,7 @@ import { BadRequestError } from "./errors.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
 import { TEST_REALM_NO_MONEY, homeLinkOf, hubReportLinkOf, postReportLinkOf, type ChainSums } from "./sale-chain.ts";
 import { realmOf } from "./sandbox/realm.ts";
+import { CLAIM_SILENCE_MS } from "./shift-report-phases.ts";
 import { requireTeamReader } from "./teams.ts";
 
 /**
@@ -170,7 +171,7 @@ export async function readTeamSalesList(
       decision: decisions.get(sale.transactionId) ?? null,
       claims: claims.filter((claim) => claim.transactionId === sale.transactionId),
       ownerReads: owner,
-      silenceMs: 24 * 3_600_000,
+      silenceMs: CLAIM_SILENCE_MS,
     });
     const share = reportPersonOf(sale);
     let report: SaleChainLink;
