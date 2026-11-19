@@ -1,3 +1,5 @@
+import { moscowDayOfMs } from "@agency_hub_core/shared";
+
 import {
   CUSTOM_ORDER_ACTIONS,
   customOrderCardSchema,
@@ -263,7 +265,6 @@ export function whatOf(card: CustomOrderCard): string {
   return chars.length > 140 ? `${chars.slice(0, 139).join("").trimEnd()}…` : text;
 }
 
-const MSK_OFFSET_MS = 3 * 3_600_000;
 /** `YYYY-MM-DD` → `DD.MM.YYYY`. */
 export function dottedDay(day: string): string {
   const [year, month, date] = day.split("-");
@@ -271,7 +272,7 @@ export function dottedDay(day: string): string {
 }
 /** The Moscow day of a moment, `YYYY-MM-DD`. */
 export function moscowDay(at: Date): string {
-  return new Date(at.getTime() + MSK_OFFSET_MS).toISOString().slice(0, 10);
+  return moscowDayOfMs(at.getTime());
 }
 /** The deadline is behind: its Moscow day has ended. */
 export function deadlinePassed(deadlineOn: string | null, now: Date): boolean {
