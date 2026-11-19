@@ -3,10 +3,10 @@
  * Workboard's «Кастомы» and in the extension's fan panel (vendored), never a second copy. The step's own word is the
  * contracts' CUSTOM_STATE_WORDS («Записан», «Оплачен», «Проверен», «У модели», «Снят», «Отдан»).
  */
+import { moscowDayOfMs } from "@agency_hub_core/shared";
+
 import { ruPlural } from "./plural.js";
 
-const MSK_OFFSET_MS = 3 * 3_600_000;
-const moscowDayOfMs = (ms: number) => new Date(ms + MSK_OFFSET_MS).toISOString().slice(0, 10);
 const daysWord = (days: number) => `${days} ${ruPlural(days, "день", "дня", "дней")}`;
 const dotted = (day: string) => `${day.slice(8, 10)}.${day.slice(5, 7)}`;
 /** The steps an order is still to be shot or given in (not given, not ended). */

@@ -1,4 +1,5 @@
 import type { AccountReport, AccountReportLine, TeamLedgerReportPost } from "@agency_hub_core/contracts";
+import { moscowDayOfMs } from "@agency_hub_core/shared";
 
 /**
  * Shift reports (the agency ledger's breakdown of each shift, and the posts in
@@ -9,7 +10,6 @@ import type { AccountReport, AccountReportLine, TeamLedgerReportPost } from "@ag
  * mirror). Times are Moscow's. No React here.
  */
 
-const MSK_OFFSET_MS = 3 * 3_600_000;
 const DAY_MS = 86_400_000;
 
 const dayMonth = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", timeZone: "UTC" });
@@ -24,7 +24,7 @@ export function clockOf(iso: string | null): string {
 
 function moscowDay(iso: string): string | null {
   const at = Date.parse(iso);
-  return Number.isNaN(at) ? null : new Date(at + MSK_OFFSET_MS).toISOString().slice(0, 10);
+  return Number.isNaN(at) ? null : moscowDayOfMs(at);
 }
 
 /**

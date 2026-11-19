@@ -1,6 +1,4 @@
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
+import { asRecord as record } from "./ofapi-payloads.ts";
 
 function fanId(value: unknown): string | null {
   if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? String(value) : null;

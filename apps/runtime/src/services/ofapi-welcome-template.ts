@@ -1,6 +1,7 @@
 import { readOfapiStoredSnapshots, type Database } from "@agency_hub_core/db";
 import { normalizeDmMessageText } from "@agency_hub_core/shared";
 import { ofapiDollarValueToMillsString } from "./ofapi-message-material.ts";
+import { asRecord as record } from "./ofapi-payloads.ts";
 
 /**
  * The page's automatic welcome template, as the `account_settings` collection
@@ -57,12 +58,6 @@ export function ofapiWelcomeTemplateFacts(row: Record<string, unknown>): OfapiWe
       || (typeof mediaCount === "number" && Number.isFinite(mediaCount) && mediaCount > 0),
     priceMills: ofapiWelcomeTemplatePriceMills(row.price),
   };
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
 }
 
 /** Reads one stored snapshot back; null unless it carries the canonical facts. */

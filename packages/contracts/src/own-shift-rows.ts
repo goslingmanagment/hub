@@ -4,21 +4,16 @@
  * handed in in Hub. Pure rules; Hub's server runs them (apps/runtime/src/services/own-shift-rows.ts, `accountShifts`) and
  * every screen reads the paired rows from there — no screen pairs them again (the demo plays the server with them).
  */
-import { millsToWholeCents } from "@agency_hub_core/shared";
+import { millsToWholeCents, moscowDayOfMs } from "@agency_hub_core/shared";
 
 import type { ChatterStats } from "./chatter-stats.ts";
 import type { AccountShiftReport } from "./routes-account-reports.ts";
 import type { ShiftReportsListResponse } from "./routes-shift-handins.ts";
 import type { OwnShiftRow, OwnShiftRowState } from "./routes-workboard-today.ts";
 
-/** The Moscow `YYYY-MM-DD` of an instant (Moscow has no DST: UTC+3). */
-function moscowDayOf(at: number): string {
-  return new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
-}
-
 /** The Moscow day holding most of a piece of work (Hub's `dayOfWork`, chatter-shifts.ts): its middle's. */
 function dayOfWork(work: { startedAt: number; endedAt: number }): string {
-  return moscowDayOf(Math.floor((work.startedAt + work.endedAt - 1) / 2));
+  return moscowDayOfMs(Math.floor((work.startedAt + work.endedAt - 1) / 2));
 }
 
 type StatsShift = ChatterStats["shifts"][number];
@@ -55,7 +50,7 @@ export interface OwnShiftsWindow {
  * (chatter-stats.ts `statsWindow`): a later `until` keeps today inside and lists the days to come empty. Pure.
  */
 export function ownShiftsWindow(input: { days: number; until?: string | undefined; now: number }): OwnShiftsWindow {
-  const today = moscowDayOf(input.now);
+  const today = moscowDayOfMs(input.now);
   const latest = addDays(today, input.days - 1);
   const asked = input.until ?? today;
   const to = asked > latest ? latest : asked;
@@ -206,7 +201,7 @@ export function pairShiftsWithReports(input: {
       for (const [shiftIndex, shift] of shifts.entries()) {
         if (shift.ongoing || reportOfShift.has(shiftIndex)) continue;
         const span = { startedAt: Date.parse(shift.startedAt), endedAt: Date.parse(shift.endedAt) };
-        const began = moscowDayOf(span.startedAt) === report.reportDate;
+        const began = moscowDayOfMs(span.startedAt) === report.reportDate;
         if (!began && dayOfWork(span) !== report.reportDate) continue;
         if (best === null || (began && !best.began) || (began === best.began && shift.workedMinutes > shifts[best.index]!.workedMinutes)) best = { index: shiftIndex, began };
       }

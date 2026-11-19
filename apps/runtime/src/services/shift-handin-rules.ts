@@ -1,4 +1,4 @@
-import { formatUsdFromMills, millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
+import { formatUsdFromMills, millsPercentOf, millsRoundedTo, millsToNumber, moscowDayOfMs as moscowDay } from "@agency_hub_core/shared";
 
 import { weekdayOfDay, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 
@@ -227,7 +227,6 @@ function withoutHours(run: { start: number; end: number }, out: ReadonlyArray<{ 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
 const MINUTES_OF_DAY = 1440;
-const moscowDay = (at: number) => new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
 
 export type Statement = "mine" | "not_mine" | "share" | "give" | "pot";
 

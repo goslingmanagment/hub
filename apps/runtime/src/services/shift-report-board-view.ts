@@ -43,7 +43,7 @@ import {
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
-import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-report-draft.ts";
 import { commentText, modelComment } from "./shift-handin-rules.ts";
 import { cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor } from "./shift-report-phases.ts";
 
