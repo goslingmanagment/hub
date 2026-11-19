@@ -13,7 +13,6 @@ import {
   readShiftReportsFeed,
   setShiftReportComment,
   setShiftReportLine,
-  submitShiftReport,
   withdrawShiftReportOffPlatform,
 } from "../../services/shift-handins.ts";
 import {
@@ -29,6 +28,7 @@ import {
   readShiftReportChecks,
   reopenShiftReport,
   resendShiftReport,
+  submitShiftReport,
   withdrawShiftReportAsk,
 } from "../../services/shift-report-board.ts";
 import { recordSaleSightings } from "../../services/shift-handin-check.ts";

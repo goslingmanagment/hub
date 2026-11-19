@@ -70,11 +70,11 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import { reportSums } from "./sale-claim-rules.ts";
 import { runSaleClaims } from "./sale-claims.ts";
 import { SALE_RULE } from "./sale-rule.ts";
-import { matchSightings, runHubChecks, settleGoneShifts, startHubCheck, syncCheckMatters, syncLateMarks } from "./shift-handin-check.ts";
-import { boardOn, hubPending, oldWayGives, phaseOf, signableOf } from "./shift-report-board-view.ts";
+import { matchSightings, moveWhenDue, runHubChecks, settleGoneShifts, startHubCheck, syncCheckMatters, syncLateMarks } from "./shift-handin-check.ts";
+import { boardOn, oldWayGives, phaseOf, signableOf } from "./shift-report-board-view.ts";
+import { afterPersonVersion, readShiftReport, readSubject } from "./shift-handins.ts";
 import {
   accessOf,
-  afterPersonVersion,
   commentsOf,
   draftFacts,
   draftLines,
@@ -83,8 +83,6 @@ import {
   ledgerDayPaid,
   offPlatformOfRows,
   pageCatalog,
-  readShiftReport,
-  readSubject,
   reportDateOf,
   ruleWordsOfLine,
   subjectOf,
@@ -92,12 +90,15 @@ import {
   writer,
   SHIFT_REPORT_MISSING_KIND,
   type HandinActor,
+  type HandinApp,
   type HandinPersonActor,
   type PageCatalog,
   type Subject,
-} from "./shift-handins.ts";
-import { cardSuperseded, checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, proposalDelta, type BoardAction } from "./shift-report-phases.ts";
+} from "./shift-report-draft.ts";
+import { cardSuperseded, checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, PhaseConflictError, proposalDelta, type BoardAction } from "./shift-report-phases.ts";
 import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
+
+export { PhaseConflictError } from "./shift-report-phases.ts";
 
 /**
  * The «Отчёт» board's operations (products plan 2026-11-13, package R), one service behind every door: the person's
@@ -124,16 +125,6 @@ interface Board {
   catalog: PageCatalog;
   handin: HandinRow | null;
   phase: ShiftReportPhase;
-}
-
-/**
- * A change the phase does not take now (ticks and «чья» in «Проверка», «Подтвердите», «Учтён»): the route answers 409
- * with the fresh board; «Исправить» is the way back to editing.
- */
-export class PhaseConflictError extends ConflictError {
-  constructor(readonly shiftId: number, phase: ShiftReportPhase) {
-    super(`Not now: the report is in «${phase}»; «Исправить» first`, { reason: "phase" });
-  }
 }
 
 /** The report the actor acts on, with its phase; the action must be the actor's in that phase. */
@@ -199,6 +190,18 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
   await closeMatter(app.db, { key: `${SHIFT_REPORT_MISSING_KIND}:${subject.shift.id}`, how: "resolved", writer: "server" }, SYSTEM, now).catch(() => undefined);
   await syncBoardMatters(app, now).catch((error: unknown) => warn(app, error, "the board's matters after a hand-in"));
   return readSubject(app, actor, subject, now);
+}
+
+/**
+ * `shiftReportSubmit` (and the agent's «со слов»): «Сдать смену» on the «Отчёт» board records a candidate and makes no
+ * version (shift-report-board.ts `handInShiftReport`); «Подтверждаю» makes the version. One service behind every door.
+ */
+export async function submitShiftReport(
+  app: HandinApp,
+  actor: HandinActor,
+  input: { shiftId: number },
+): Promise<ShiftReportResponse> {
+  return handInShiftReport(app, actor, input, new Date());
 }
 
 const insertCandidateWithin = (db: Database, input: Parameters<typeof insertHandinCandidate>[1]): Promise<CandidateRow> => insertHandinCandidate(db, input);
@@ -827,27 +830,6 @@ export async function runShiftReportBoardPass(app: Pick<AppContext, "db" | "logg
     return 0;
   });
   return { moved, matters };
-}
-
-/**
- * «Проверка» → «Подтвердите» when it is due: Hub's check done and Gengar answered (or nobody reviews the pages), or the
- * 10 minutes since the hand-in are up (`checkLetsConfirm`). The moment it is due, not at the next pass: a read of the
- * board and «Подтверждаю» call it, so «Генгар молчит 10 минут. Можно подтвердить» is true when the board says it. Its own
- * transaction, the report locked; true — moved.
- */
-export async function moveWhenDue(db: Database, input: { shiftId: number; catalog: PageCatalog }, now: Date): Promise<boolean> {
-  return db.transaction(async (tx) => {
-    const txDb = tx as unknown as Database;
-    const locked = await findHandinByShift(txDb, input.shiftId, { lock: true });
-    if (locked === null || phaseOf(locked) !== "checking") return false;
-    const candidate = (await listHandinCandidates(txDb, locked.id)).filter((row) => row.supersededAt === null).at(-1);
-    if (candidate === undefined) return false;
-    const subject = await subjectOf(txDb, input.shiftId).catch(() => null);
-    const pageIds = subject === null ? [] : subject.shift.pages.map((page) => input.catalog.idOf.get(page.pageLabel)).filter((id): id is number => id !== undefined);
-    const gengarPending = candidate.gengarAnsweredAt === null && (await hasShiftReportReviewer(txDb, pageIds));
-    if (!checkLetsConfirm({ handedInAt: candidate.madeAt, now, hubPending: hubPending(candidate), gengarPending })) return false;
-    return setHandinPhase(txDb, { handinId: locked.id, phase: "confirm", at: now, from: ["checking"] });
-  });
 }
 
 /**
