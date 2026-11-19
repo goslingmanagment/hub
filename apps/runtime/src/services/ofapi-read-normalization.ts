@@ -9,14 +9,9 @@ import {
 } from "@agency_hub_core/shared";
 import { ofapiDollarValueToMillsString } from "./ofapi-message-material.ts";
 import { ofapiWelcomeTemplateFacts } from "./ofapi-welcome-template.ts";
+import { asRecord as ofapiReadRecord } from "./ofapi-payloads.ts";
 
-export function ofapiReadRecord(
-  value: unknown,
-): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+export { ofapiReadRecord };
 function id(value: unknown): string | null {
   return typeof value === "string" && value.length > 0
     ? value

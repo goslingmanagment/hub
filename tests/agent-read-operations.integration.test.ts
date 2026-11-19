@@ -420,7 +420,7 @@ describe("[sync-critical] agent read plane: capture floor sources", () => {
     const mapping = AGENT_DATASET_SQL[dataset]!;
     const { rows } = await testDb!.pool.query<{ floor_at: Date | null }>(
       `with src as (${mapping.source})
-       select min(src.${mapping.windowColumn}) as floor_at from src where src.k_page_id = $1`,
+       select min(src.k_occurred_at) as floor_at from src where src.k_page_id = $1`,
       [pageId],
     );
     const served = await queryAgentDataset(testDb!.db, {

@@ -1,5 +1,5 @@
 import type { OfapiCollectionAction } from "../../../../packages/contracts/src/ofapi-actions-collections.ts";
-import { negativeReceipt } from "./ofapi-payloads.ts";
+import { asRecord as record, negativeReceipt } from "./ofapi-payloads.ts";
 import type { OfapiActionRequest } from "./ofapi-actions-types.ts";
 
 /** Build a closed provider request only after account binding and principal checks. */
@@ -72,10 +72,6 @@ export function ofapiCollectionRequest(command: OfapiCollectionAction, accountId
     case "fan_notes_clear":
       return request("DELETE", `${account}/fans/${fan}/notes`, "resource");
   }
-}
-
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
 function returnedId(value: unknown): string | null {

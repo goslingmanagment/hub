@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 
 import { inLast30BusinessDates } from "../business-day.ts";
 import type { Database } from "../client.ts";
-import { AWAITING_MASS_MIN_CHATS } from "./spender-stats.ts";
+import { AWAITING_MASS_MIN_CHATS, clockHourTextBurstSql } from "./spender-stats.ts";
 
 // chat-extension «Онлайн» (0321): the page's fans seen online recently with the
 // facts that say why to write to each now, and what the chatters did in the
@@ -222,17 +222,7 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
       where th.conversation_ref is not null and m.account_id = ${page} and m.conversation_ref = th.conversation_ref
         and m.is_sent_by_me and m.deleted_at is null and coalesce(m.message_type, 1) <> 2
         and m.occurred_at > ${now} - interval '90 days'
-        and (
-          select count(*) from (
-            select distinct b.conversation_ref from message_archive b
-            where b.account_id = m.account_id and b.is_sent_by_me
-              and b.occurred_at >= date_trunc('hour', m.occurred_at)
-              and b.occurred_at < date_trunc('hour', m.occurred_at) + interval '1 hour'
-              and coalesce(b.text_plain, '') = coalesce(m.text_plain, '')
-              and coalesce(b.price_mills, 0) = coalesce(m.price_mills, 0)
-            limit ${AWAITING_MASS_MIN_CHATS}
-          ) burst
-        ) < ${AWAITING_MASS_MIN_CHATS}
+        and ${clockHourTextBurstSql("m", AWAITING_MASS_MIN_CHATS)} < ${AWAITING_MASS_MIN_CHATS}
       order by m.occurred_at desc
       limit 1
     ) personal on true

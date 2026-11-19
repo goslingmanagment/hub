@@ -2,8 +2,8 @@
 // prompts/templates.ts @ 1db76a4ae13d (2026-07-06); adapted ONLY in imports.
 // Prompts are tuned production assets — do not reword outside
 // the parity harness.
-// Prompt templates as runtime constants. The human-reviewable source is the
-// adjacent templates/*.md files; tests/templates-sync.test.ts enforces byte-equality.
+// Prompt templates as runtime constants. This file is their one source: the
+// constants below are the text the model receives.
 // Content is the legacy ChatGoose artifact, ported byte-for-byte (Fansly→OnlyFans only).
 
 export const FAST_REPLY_TEMPLATE = `You are generating a reply to send to a fan in a OnlyFans DM conversation. Write as the model, stay completely in character using the personality provided in the system prompt.
@@ -288,8 +288,7 @@ Practical recommendations for the chatter:
 // Fan-summary short variant (Task 8): kernel-native compact-recap template —
 // fan-summary with summaryMode:'short' selects it (builder.ts) and the feature
 // service caps its output at 2048 tokens. Postdates the freeze (no
-// desktop antecedent, like coach-chat); held byte-identical to
-// templates/fan-summary-short.md by templates-sync.test.ts.
+// desktop antecedent, like coach-chat).
 export const FAN_SUMMARY_SHORT_TEMPLATE = `You are building a COMPACT RECAP of one fan for the OnlyFans-agency chatter
 working them right now. 300 recent messages max are provided. Be dense: facts
 only, no prose padding. Hard limit: keep the whole recap under 350 words.
@@ -536,8 +535,7 @@ Display name: {fanDisplayName}
 `;
 
 // Coach feature (Task 7): kernel-native template — coach-chat postdates the
-// freeze, so there is no desktop antecedent. The runtime constant and
-// templates/coach-chat.md are held byte-identical by templates-sync.test.ts.
+// freeze, so there is no desktop antecedent.
 export const COACH_CHAT_TEMPLATE = `{coachIntro} A chatter working THIS fan
 conversation is asking you for advice. Answer the chatter (never the fan),
 concretely and directly, grounded in this fan's actual history.
@@ -592,8 +590,7 @@ Answer the chatter now in the language they asked in. Use a draft fence for any 
 
 // voice-script: the {voiceScriptLengthLimit} slot appends the live script cap
 // (`voiceNotesScriptMaxChars`, builder.ts) to the rule that keeps the script
-// short; without a cap it is empty and the rule keeps its bytes. Held
-// byte-identical to templates/voice-script.md.
+// short; without a cap it is empty and the rule keeps its bytes.
 export const VOICE_SCRIPT_TEMPLATE = `You are adapting a chosen chat-message draft into a short spoken script for a voice note the model will record on OnlyFans. Rewrite the draft as something the model would naturally SAY out loud, staying fully in character with the personality in the system prompt.
 
 ## Rules
@@ -630,8 +627,7 @@ Rewrite the current draft into a natural spoken script in the model's voice, kee
 // without the request's `noteValues` they render the template's original
 // wording or nothing, so the released clients' prompt keeps its bytes; with
 // them, the merge mode's rules. The «Характеристика» and «Медиа» definitions
-// are slots too: the merge mode defines those two fields differently. Held
-// byte-identical to templates/fan-notes-fill.md by templates-sync.test.ts.
+// are slots too: the merge mode defines those two fields differently.
 export const FAN_NOTES_FILL_TEMPLATE = `You are filling in a questionnaire note about one fan for a OnlyFans agency chatter. The chatter keeps the note beside the chat and rereads it before writing to the fan, {noteFillFactSource} Read the whole conversation, the spending and subscription data and the fan's bio below, then fill in the fields listed in the task.{noteFillIntro}
 
 ## Rules

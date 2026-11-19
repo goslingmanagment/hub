@@ -1130,6 +1130,16 @@ export async function findLiveSession(app: Pick<AppContext, "db">, sessionToken:
   return { ...session, narrowDeviceTokenId };
 }
 
+/** The live FULL session behind this name's cookie and its person, or null (none, dead, narrow, deactivated). */
+export async function liveFullSession(app: AppContext, sessionToken: string | undefined) {
+  if (!sessionToken) return null;
+  const session = await findLiveSession(app, sessionToken);
+  if (!session || session.narrowDeviceTokenId !== null) return null;
+  const user = await findUserById(app.db, session.userId);
+  if (!user || user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) return null;
+  return { session, user };
+}
+
 export async function authenticateSessionToken(app: AppContext, sessionToken: string) {
   const session = await findLiveSession(app, sessionToken);
   if (!session) {
@@ -1184,15 +1194,10 @@ export async function authenticateSessionById(app: AppContext, sessionId: number
  * null. A narrow session is null here: it opens the team's place alone.
  */
 export async function readSessionIdentity(app: AppContext, sessionToken: string) {
-  const session = await findLiveSession(app, sessionToken);
-  if (!session || session.narrowDeviceTokenId !== null) {
-    return null;
-  }
-  const user = await findUserById(app.db, session.userId);
-  if (!user || user.disabledAt || user.deletedAt || !roleCanUseSession(user.role)) {
-    return null;
-  }
-  return { sessionId: session.id, expiresAt: session.expiresAt, user: { id: user.id, username: user.username, role: user.role } };
+  const live = await liveFullSession(app, sessionToken);
+  return live === null
+    ? null
+    : { sessionId: live.session.id, expiresAt: live.session.expiresAt, user: { id: live.user.id, username: live.user.username, role: live.user.role } };
 }
 
 /** The session is still an owner's — not revoked, not expired, not narrow, its
@@ -1201,10 +1206,8 @@ export async function readSessionIdentity(app: AppContext, sessionToken: string)
  *  repeats while a connection the session opened lives (the page browser's
  *  screen). */
 export async function ownerSessionExpiry(app: AppContext, sessionToken: string): Promise<Date | null> {
-  const session = await findLiveSession(app, sessionToken);
-  if (!session || session.narrowDeviceTokenId !== null) return null;
-  const user = await getAuthenticatedUserById(app, session.userId);
-  return user !== null && user.role === "owner" ? session.expiresAt : null;
+  const live = await liveFullSession(app, sessionToken);
+  return live !== null && live.user.role === "owner" ? live.session.expiresAt : null;
 }
 
 export async function logoutSessionToken(app: AppContext, sessionToken: string) {

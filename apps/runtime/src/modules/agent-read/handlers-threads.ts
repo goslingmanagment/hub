@@ -1,8 +1,6 @@
 import { createHash } from "node:crypto";
 
 import {
-  AGENT_CLAIM_FIELDS,
-  agentClaimFieldClass,
   type AgentCoverageResponse,
   type AgentPersonTimelineResponse,
   type AgentPlaneReason,
@@ -42,7 +40,7 @@ import {
 } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
 import { AgentPlaneDisabledError, staticNotFound, toSafeNumber } from "./errors.ts";
-import { MESSAGE_PLANES, MONEY_PLANES, planesNotRead } from "./planes.ts";
+import { MESSAGE_PLANES, MONEY_CLAIM_FIELDS, MONEY_PLANES, planesNotRead } from "./planes.ts";
 import {
   AGENT_POST_TIP_VIEW_CLAIM_FIELDS,
   postTipParseDebtGaps,
@@ -116,13 +114,6 @@ function nonNegativeNumberOrNull(value: unknown): number | null {
     ? value
     : null;
 }
-
-/** Derived from the registry (plus the subscription-price field, which rides
- *  the same capability) so a money field added there cannot skip this gate. */
-const MONEY_CLAIM_FIELDS: readonly string[] = [
-  ...AGENT_CLAIM_FIELDS.filter((field) => agentClaimFieldClass(field) === "money"),
-  "subscriptionPriceMills",
-];
 
 /**
  * Which lanes this key may actually be served.

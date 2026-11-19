@@ -507,6 +507,25 @@ export async function beginAgentRequest(
   };
 }
 
+/**
+ * Runs an agent route's body and settles its request: the rows `rows` counts
+ * from the result on success (one by default), 0 when the body throws.
+ */
+export async function settleAgentRequest<T>(
+  scope: Pick<AgentRequestScope, "finish">,
+  body: () => Promise<T>,
+  rows: (result: T) => number = () => 1,
+): Promise<T> {
+  let delivered = 0;
+  try {
+    const result = await body();
+    delivered = rows(result);
+    return result;
+  } finally {
+    await scope.finish(delivered);
+  }
+}
+
 /** Builds the delivery block. `returned` is the RECORD count of this response. */
 export function buildDelivery(input: {
   returned: number;

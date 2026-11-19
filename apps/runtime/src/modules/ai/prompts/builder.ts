@@ -18,6 +18,7 @@ import type {
   ReplyTone,
 } from './types.ts';
 import { escapeForPrompt } from './escape.ts';
+import { FEATURE_POLICIES } from './feature-policies.ts';
 import { thinTranscriptTimes } from './transcript/format.ts';
 import {
   CHAT_REVIEW_TEMPLATE,
@@ -282,9 +283,9 @@ interface PromptFeaturePolicy {
    * optionalDraft feature today. */
   optionalDraft: boolean;
   supportsReplyMode: boolean;
-  /** Split by capability (see PromptBuildInput.splitAll). Mirrors
-   * FEATURE_POLICIES.supportsSplitAll; tests/ai-prompts-split-all.test.ts
-   * holds the two tables together. */
+  /** Split by capability (see PromptBuildInput.splitAll). Taken from
+   * FEATURE_POLICIES.supportsSplitAll, like the other flags the feature
+   * service reads too (PROMPT_POLICIES below). */
   supportsSplitAll: boolean;
   supportsReplyTone: boolean;
   usesPingSegment: boolean;
@@ -328,41 +329,64 @@ interface PromptFeaturePolicy {
   fanNames: 'plain' | 'as-written';
 }
 
-const REPLY_POLICY: PromptFeaturePolicy = {
-  promptMode: 'reply',
-  requiresDraft: false,
+/** The fields only the builder reads. The six flags the feature service reads
+ * too (promptMode, requiresDraft, supportsReplyMode, supportsSplitAll,
+ * supportsReplyTone, usesPingSegment) have one home, FEATURE_POLICIES. */
+type PromptOwnPolicy = Pick<
+  PromptFeaturePolicy,
+  'optionalDraft' | 'promptCache' | 'thinTranscriptTimes' | 'persona' | 'fanNames'
+>;
+
+const REPLY_POLICY: PromptOwnPolicy = {
   optionalDraft: false,
-  supportsReplyMode: false,
-  supportsSplitAll: false,
-  supportsReplyTone: false,
-  usesPingSegment: false,
   promptCache: 'static',
   thinTranscriptTimes: false,
   persona: 'self',
   fanNames: 'plain',
 };
 
-const ANALYSIS_POLICY: PromptFeaturePolicy = {
+const ANALYSIS_POLICY: PromptOwnPolicy = {
   ...REPLY_POLICY,
-  promptMode: 'analysis',
   persona: 'reference',
 };
 
-const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
-  'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true, thinTranscriptTimes: true },
-  'improve-draft': { ...REPLY_POLICY, requiresDraft: true, supportsReplyMode: true },
+const PROMPT_OWN_POLICIES: Record<PromptFeature, PromptOwnPolicy> = {
+  'fast-reply': { ...REPLY_POLICY, thinTranscriptTimes: true },
+  'improve-draft': REPLY_POLICY,
   'help-me': ANALYSIS_POLICY,
   'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none', fanNames: 'as-written' },
   'chat-review': ANALYSIS_POLICY,
-  ping: { ...REPLY_POLICY, usesPingSegment: true, supportsSplitAll: true },
-  'hi-greeting': { ...REPLY_POLICY, supportsSplitAll: true },
-  'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true, supportsSplitAll: true },
-  'voice-script': { ...REPLY_POLICY, requiresDraft: true, supportsReplyTone: true },
+  ping: REPLY_POLICY,
+  'hi-greeting': REPLY_POLICY,
+  'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true },
+  'voice-script': REPLY_POLICY,
   // One-shot like the full Recap, and on its own model (Sonnet 5.5 by default):
   // no other feature writes a cache it could read, so a cache write would only
   // be paid for.
   'fan-notes-fill': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none', fanNames: 'as-written' },
 };
+
+function promptPolicy(feature: PromptFeature): PromptFeaturePolicy {
+  const shared = FEATURE_POLICIES[feature];
+  const own = PROMPT_OWN_POLICIES[feature];
+  return {
+    promptMode: shared.promptMode,
+    requiresDraft: shared.requiresDraft,
+    optionalDraft: own.optionalDraft,
+    supportsReplyMode: shared.supportsReplyMode,
+    supportsSplitAll: shared.supportsSplitAll,
+    supportsReplyTone: shared.supportsReplyTone,
+    usesPingSegment: shared.usesPingSegment,
+    promptCache: own.promptCache,
+    thinTranscriptTimes: own.thinTranscriptTimes,
+    persona: own.persona,
+    fanNames: own.fanNames,
+  };
+}
+
+const PROMPT_POLICIES = Object.fromEntries(
+  (Object.keys(PROMPT_OWN_POLICIES) as PromptFeature[]).map((feature) => [feature, promptPolicy(feature)]),
+) as Record<PromptFeature, PromptFeaturePolicy>;
 
 const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
   'fast-reply': FAST_REPLY_TEMPLATE,

@@ -25,7 +25,7 @@ import {
   type SaleDecisionKind,
   type SaleDecisionRow,
 } from "@agency_hub_core/db";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
@@ -104,7 +104,7 @@ function instantOf(value: string): Date {
 }
 
 const moscow = (at: Date) => new Date(at.getTime() + 3 * 3_600_000).toISOString();
-const moscowDay = (at: Date) => moscow(at).slice(0, 10);
+const moscowDay = (at: Date) => moscowDayOfMs(at.getTime());
 /** «2026-11-11 18:41» by Moscow time. */
 const moscowMinute = (at: Date) => moscow(at).slice(0, 16).replace("T", " ");
 
