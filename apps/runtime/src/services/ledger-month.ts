@@ -5,7 +5,7 @@ import { listAdminModels } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { ServiceUnavailableError } from "./errors.ts";
-import { ledgerGet, payMillsOf } from "./ledger-payouts.ts";
+import { ledgerChecked, ledgerGet, payMillsOf } from "./ledger-payouts.ts";
 
 /**
  * «Деньги → Месяц»: the agency's month card as the ledger keeps it (its hourly `month_cards` row), read with Hub's
@@ -97,13 +97,7 @@ export function monthCardOf(
   month: string,
   options: { logger?: Pick<AppContext["logger"], "warn">; models?: readonly HubModel[] } = {},
 ): TeamLedgerMonthCard {
-  const { logger } = options;
-  const parsed = ledgerMonthSchema.safeParse(body);
-  if (!parsed.success) {
-    logger?.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger month: unexpected answer");
-    throw new ServiceUnavailableError("The ledger's GET /v1/payouts/month answered in a shape Hub does not know");
-  }
-  const card = parsed.data;
+  const card = ledgerChecked(options.logger, ledgerMonthSchema, body, "/v1/payouts/month", "ledger month: unexpected answer");
   if (card.month !== month) throw new ServiceUnavailableError("The ledger's GET /v1/payouts/month answered of another month");
   // Pay's one conversion, the ledger's whole cents; null stays null (never computed, never a zero).
   const money = Object.fromEntries(CARD_MONEY.map((name) => {

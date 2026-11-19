@@ -9,7 +9,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { requireSessionUser, type AuthPrincipal } from "./auth.ts";
 import { NotFoundError, ServiceUnavailableError } from "./errors.ts";
 import { isTestPrincipal } from "./sandbox/realm.ts";
-import { checkWindow, ledgerGet, list, micros, payMillsOf } from "./ledger-payouts.ts";
+import { checkWindow, ledgerChecked, ledgerGet, list, micros, payMillsOf } from "./ledger-payouts.ts";
 
 /**
  * One person's pay as the agency ledger keeps it (ledger #80, GET /v1/payouts/person, the `payouts` scope only): the
@@ -81,16 +81,12 @@ async function readLedgerPersonPay(
     ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
   });
   if (body === undefined) return undefined;
-  const parsed = ledgerPersonPaySchema.safeParse(body);
-  if (!parsed.success) {
-    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger person pay: unexpected answer");
-    throw new ServiceUnavailableError("The ledger's GET /v1/payouts/person answered in a shape Hub does not know");
-  }
-  if (parsed.data.person !== slug) {
+  const pay = ledgerChecked(app.logger, ledgerPersonPaySchema, body, "/v1/payouts/person", "ledger person pay: unexpected answer");
+  if (pay.person !== slug) {
     app.logger.warn({ asked: slug }, "ledger person pay: the answer is of another person, dropped");
     throw new ServiceUnavailableError("The ledger's GET /v1/payouts/person answered of another person");
   }
-  return parsed.data;
+  return pay;
 }
 
 /** The owner's: one person's pay in a window, every day by model with its source, state and the payouts that paid it. */

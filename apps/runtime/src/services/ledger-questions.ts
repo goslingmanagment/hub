@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { TeamLedgerQuestion, TeamLedgerQuestionsResponse } from "@agency_hub_core/contracts";
 
 import { ServiceUnavailableError } from "./errors.ts";
-import { ledgerGet, list, micros, millsOf, type LedgerReadApp } from "./ledger-payouts.ts";
+import { ledgerGet, ledgerShapeIssues, list, micros, millsOf, type LedgerReadApp } from "./ledger-payouts.ts";
 
 /**
  * Workboard «Решения → Чья продажа» (the owner's): the open questions «whose is this sale» the team's chat agent asked
@@ -81,7 +81,7 @@ export async function readTeamLedgerQuestions(
     return { owner: [], chatters: [], questionsRead: false, serverNow };
   }
   const parsed = ledgerQuestionsSchema.safeParse(body);
-  if (!parsed.success) unknownShape(app, parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`));
+  if (!parsed.success) unknownShape(app, ledgerShapeIssues(parsed.error));
 
   const owner: TeamLedgerQuestion[] = [];
   const chatters: TeamLedgerQuestion[] = [];

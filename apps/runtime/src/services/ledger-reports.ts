@@ -15,7 +15,7 @@ import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import { requireSessionUser, type AuthPrincipal } from "./auth.ts";
 import { ServiceUnavailableError } from "./errors.ts";
 import { isTestPrincipal, SANDBOX_NO_DATA } from "./sandbox/realm.ts";
-import { checkWindow, ledgerGet, list, micros, millsOf, type LedgerReadApp } from "./ledger-payouts.ts";
+import { checkWindow, ledgerChecked, ledgerGet, list, micros, millsOf, type LedgerReadApp } from "./ledger-payouts.ts";
 
 /**
  * Workboard «Мои смены» from the agency ledger (owner, 2026-11-10): the caller's own shift reports, one per report
@@ -159,24 +159,14 @@ export function accountReportOf(report: LedgerReport): AccountReport {
   };
 }
 
-/** A read's answer, checked: a changed shape is a 503, and the log says what changed. */
-function checked<T extends z.ZodTypeAny>(app: Pick<LedgerReadApp, "logger">, schema: T, body: unknown, path: string, what: string): z.output<T> {
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) {
-    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, `${what}: unexpected answer`);
-    throw new ServiceUnavailableError(`The ledger's GET ${path} answered in a shape Hub does not know`);
-  }
-  return parsed.data as z.output<T>;
-}
-
 /** The ledger's GET /v1/reports answer, checked: a changed shape is a 503, and the log says what changed. */
 export function parseLedgerReports(app: Pick<LedgerReadApp, "logger">, body: unknown) {
-  return checked(app, ledgerReportsSchema, body, "/v1/reports", "ledger reports");
+  return ledgerChecked(app.logger, ledgerReportsSchema, body, "/v1/reports", "ledger reports: unexpected answer");
 }
 
 /** The ledger's GET /v1/report-days answer, checked the same way. */
 export function parseLedgerReportDays(app: Pick<LedgerReadApp, "logger">, body: unknown): LedgerReportDay[] {
-  return checked(app, ledgerReportDaysSchema, body, "/v1/report-days", "ledger report days").days;
+  return ledgerChecked(app.logger, ledgerReportDaysSchema, body, "/v1/report-days", "ledger report days: unexpected answer").days;
 }
 
 /** One page of a report day in mills: posted, drafted, and the difference when the chatter changed it. */

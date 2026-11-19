@@ -1,6 +1,5 @@
-import type { TeamShiftSalesQuery, TeamShiftSalesResponse } from "@agency_hub_core/contracts";
+import { ownShiftsWindow, type TeamShiftSalesQuery, type TeamShiftSalesResponse } from "@agency_hub_core/contracts";
 import { listFirstChatterActivities, listSaleLastWriters, listShiftSales, type Database, type ShiftSale } from "@agency_hub_core/db";
-import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { type AuthPrincipal } from "./auth.ts";
@@ -180,22 +179,20 @@ export function outsideMoney(settled: ReadonlyArray<{ sale: ShiftSale; visit: Pe
 
 /**
  * The window of `days` Moscow days ending on `until` (default today; at most the
- * days that keep today inside it), cut at `now`, and the one before it: the same
- * days earlier, cut at the same point — this week so far against last week up to
- * the same hour, never against all of it. Pure.
+ * days that keep today inside it), cut at `now` — the one window of contracts'
+ * `ownShiftsWindow` — and the one before it: the same days earlier, cut at the
+ * same point — this week so far against last week up to the same hour, never
+ * against all of it. Pure.
  */
 export function shiftSalesWindow(input: { days: number; now: Date; until?: string | undefined }) {
   const { days, now } = input;
-  const today = moscowDayOf(now.getTime());
-  const latest = moscowDayOf(addUtcDays(startOfBusinessDay(now), days - 1).getTime());
-  const asked = input.until ?? today;
-  const lastDay = asked > latest ? latest : asked;
-  const from = addUtcDays(new Date(Date.parse(`${lastDay}T00:00:00+03:00`)), -(days - 1)).getTime();
-  const to = Math.min(now.getTime(), from + days * DAY_MS);
+  const window = ownShiftsWindow({ days, until: input.until, now: now.getTime() });
+  const from = window.startsAt;
+  const to = Math.min(now.getTime(), window.endsAt);
   return {
     from,
     to,
-    previousFrom: from - days * DAY_MS,
+    previousFrom: window.previous.startsAt,
     previousTo: to - days * DAY_MS,
     dates: Array.from({ length: days }, (_, offset) => moscowDayOf(from + offset * DAY_MS)),
   };

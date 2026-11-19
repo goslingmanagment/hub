@@ -1,6 +1,7 @@
 import {
   CHATTER_STATS_MAX_DAYS,
   MASS_SEND_MIN_CHATS,
+  ownShiftsWindow,
   type ChatterSaleKind,
   type ChatterStats,
   type ShiftReviewSaleOrigin,
@@ -20,7 +21,7 @@ import {
   type Database,
   type ShiftSale,
 } from "@agency_hub_core/db";
-import { addUtcDays, startOfBusinessDay } from "@agency_hub_core/shared";
+import { addUtcDays } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireSessionUser, type AuthPrincipal } from "./auth.ts";
@@ -194,21 +195,16 @@ function fansOf(shift: { endedAt: number }, sends: readonly AuthoredSendRow[], s
 
 /**
  * The window of `days` Moscow days ending on `until` (default today; at most the
- * days that keep today inside it), cut at `now` — the rule of `teamShiftSales`
- * (team-shift-sales.ts `shiftSalesWindow`), so a chatter's week is the owner's
- * week. The window before is the `days` whole days right before it. Pure.
+ * days that keep today inside it), cut at `now` — the one window of contracts'
+ * `ownShiftsWindow`, as `teamShiftSales` reads it, so a chatter's week is the
+ * owner's week. The window before is the `days` whole days right before it. Pure.
  */
 export function statsWindow(input: { days: number; now: Date; until?: string | undefined }): { from: Date; to: Date; previousFrom: Date } {
-  const { days, now } = input;
-  const today = moscowDayOf(now.getTime());
-  const latest = moscowDayOf(addUtcDays(startOfBusinessDay(now), days - 1).getTime());
-  const asked = input.until ?? today;
-  const lastDay = asked > latest ? latest : asked;
-  const from = addUtcDays(new Date(Date.parse(`${lastDay}T00:00:00+03:00`)), -(days - 1));
+  const window = ownShiftsWindow({ days: input.days, until: input.until, now: input.now.getTime() });
   return {
-    from,
-    to: new Date(Math.min(now.getTime(), from.getTime() + days * DAY_MS)),
-    previousFrom: addUtcDays(from, -days),
+    from: new Date(window.startsAt),
+    to: new Date(Math.min(input.now.getTime(), window.endsAt)),
+    previousFrom: new Date(window.previous.startsAt),
   };
 }
 
