@@ -19,10 +19,6 @@ export const CUSTOM_ORDER_STATES = [
   "recorded", "paid", "checked", "at_model", "partly", "shot", "revision", "refused", "given", "closed", "cancelled",
 ] as const;
 export type CustomOrderState = (typeof CUSTOM_ORDER_STATES)[number];
-/** Still in work: neither given to the fan nor ended. */
-export const CUSTOM_ORDER_OPEN_STATES: readonly CustomOrderState[] = ["recorded", "paid", "checked", "at_model", "partly", "shot", "revision", "refused"];
-/** Ended: nothing moves it any more but a person's «правка» after «отдали». */
-export const CUSTOM_ORDER_FINAL_STATES: readonly CustomOrderState[] = ["closed", "cancelled"];
 
 export const CUSTOM_ORDER_ORIGINS = ["extension", "agent", "workboard", "import"] as const;
 
@@ -41,7 +37,6 @@ export function isCustomOrderCheckKind(kind: string): kind is CustomOrderCheckKi
 }
 
 /** `K-<number>`: what a person says and types, never one of ContentOps' `CUS-217`. */
-export const CUSTOM_ORDER_CODE_PATTERN = /^K-[1-9]\d{0,15}$/;
 export function customOrderCode(id: number): string {
   return `K-${id}`;
 }
@@ -66,13 +61,6 @@ export function findCustomOrderCode(text: string): number | null {
 export const customOrderCodeSchema = z.string().trim().min(2).max(24).refine((value) => parseCustomOrderCode(value) !== null, {
   message: "a custom order code is K-<number>",
 });
-
-/**
- * A Telegram message, in ContentOps' form `tg:<chat>/<topic>/<message>` (chat
- * without `-100`). Pasted links and the other spellings are read by
- * `parseTelegramRef` (packages/contracts/src/custom-orders.ts).
- */
-export const TELEGRAM_REF_PATTERN = /^tg:[a-z0-9_]+\/[0-9]+(\/[0-9]+)?$/;
 
 function normalChat(raw: string): string | null {
   const value = raw.trim();

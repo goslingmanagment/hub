@@ -222,9 +222,8 @@ No test holds its row now: its suite was removed on 2026-10-20.
 
 The archive feed (chat-extension H-9c) is the route on which a device token
 reads a conversation's **messages from the hub's own stores**. The dashboard's
-reads of a stored conversation (`pageConversationPreview`,
-`pageConversationMessages`, `archiveConversationMessages`) stay cookie-session
-routes; a client saw messages through the desktop read gateway and the event
+read of a stored conversation (`pageConversationPreview`) stays a cookie-session
+route; a client saw messages through the desktop read gateway and the event
 streams, and the chat-extension token reaches neither, so this is the one way
 that token reads message text. Every chatter granted a page reads, for any fan
 of that page, what the message archive and the webhook store hold of the chat,

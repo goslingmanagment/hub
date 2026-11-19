@@ -149,7 +149,6 @@ describe("route auth declarations", () => {
       "creatorStatsOverview",
       "moneyPayouts",
       "moneyRevenueMix",
-      "pageConversationMessages",
       "pageConversationPreview",
       "pageConversationProfile",
       "pageDeletedFans",
@@ -161,10 +160,8 @@ describe("route auth declarations", () => {
       "pageFanTransactions",
       // «Кто с ним работал» on the fan's card (products package M).
       "pageFanWorkedWith",
-      "pageFans",
       "pageFollowers",
       "pageMassMessages",
-      "pageMessagesBlock",
       "pageProfile",
       "pagePromo",
       "pageRevenue",

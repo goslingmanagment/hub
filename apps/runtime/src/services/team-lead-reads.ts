@@ -11,12 +11,12 @@ import { ForbiddenError } from "./errors.ts";
  */
 export const CONSOLE_ONLY_READS: ReadonlySet<string> = new Set([
   // Главная and Деньги: the agency's income.
-  "overview", "overviewGrowth", "overviewRevenue", "overviewRevenueDaily", "modelRevenueDaily", "pageRevenue", "pageRevenueDaily",
+  "overview", "overviewRevenue", "overviewRevenueDaily", "modelRevenueDaily", "pageRevenue", "pageRevenueDaily",
   "crossPageTransactions", "models",
   // The archive's conversations («Фаны» is Workboard's since products package M: its reads left this table).
-  "pageConversationMessages", "archiveSearch", "archiveConversationMessages",
+  "archiveSearch",
   // Система: collection, OnlyFans API, agents' reports, the server's state.
-  "syncOverview", "syncRequests", "healthSync", "opsLive", "opsMetrics", "reportsList", "reportGet",
+  "syncOverview", "healthSync", "opsLive", "opsMetrics", "reportsList", "reportGet",
   "ofapiCollectionGet", "ofapiMediaGet", "ofapiVaultListsGet", "ofapiTypedExportList", "ofapiTypedExportRows", "ofapiProfileVisitorsGet",
 ]);
 

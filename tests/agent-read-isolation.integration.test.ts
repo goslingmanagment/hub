@@ -150,7 +150,7 @@ describe("[sync-critical] agent read plane isolation (refusals)", () => {
   it("an agent key is refused on routes of kind `any`", async () => {
     // `any` used to be a wildcard; it is now an allowlist of the pre-agent
     // authentication methods, which is why these 26 routes stay closed.
-    for (const url of ["/api/v1/auth/me", "/api/v1/pages", "/api/v1/pages/lora-2/fans"]) {
+    for (const url of ["/api/v1/auth/me", "/api/v1/pages", "/api/v1/pages/lora-2/subscribers"]) {
       const response = await agentGet(url);
       expect([401, 403], url).toContain(response.statusCode);
     }

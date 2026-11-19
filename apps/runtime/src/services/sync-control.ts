@@ -4,7 +4,6 @@ import {
   ensurePageSyncStates,
   findPageByLabel,
   listPageSyncStates,
-  listPlatformAccounts,
   clearPageSyncManualActionBlock,
   requestPageSync as requestPageSyncRows,
   resumePageSync,
@@ -170,42 +169,6 @@ export async function requestPageSync(
     wakeupId,
     requests,
   };
-}
-
-/** Every page of the platforms the legacy executor serves (OnlyFans since
- *  step 4 S4-10); the Fansly Sync Engine refreshes its own pages
- *  (`triggerEngineScope`). */
-export async function requestAllPagesSync(
-  app: AppContext,
-  boss: Pick<PgBoss, "send">,
-  input: {
-    scope: SyncTriggerScope;
-    reason: SyncRequestSource;
-  },
-) {
-  if (input.scope === "posts") {
-    throw new BadRequestError("The posts sync scope is per-page only");
-  }
-  const pages = await listPlatformAccounts(app.db);
-  const results = [] as Array<{
-    pageLabel: string;
-    requests: RequestedSyncRequest[];
-  }>;
-
-  for (const page of pages) {
-    if (!isLegacyExecutorPlatform(page.platform)) continue;
-    const request = await requestPageSync(app, boss, {
-      pageLabel: page.label,
-      scope: input.scope,
-      reason: input.reason,
-    });
-    results.push({
-      pageLabel: page.label,
-      requests: request.requests,
-    });
-  }
-
-  return results;
 }
 
 export async function waitForRequestedSyncRequests(

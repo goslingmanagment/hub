@@ -136,7 +136,6 @@ export const creatableUserRoles = ["owner", "team_lead", "chatter"] as const;
 export type CreatableUserRole = (typeof creatableUserRoles)[number];
 
 export const fanFlagTypes = ["whale", "vip", "risky"] as const;
-export type FanFlagType = (typeof fanFlagTypes)[number];
 
 export const aiUsageFeatures = [
   "fast-reply",
