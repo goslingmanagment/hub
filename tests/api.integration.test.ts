@@ -2827,12 +2827,38 @@ describe("api integration", () => {
 
     const app = createTestAppContext(testDb);
     expect(await listStatus(app, { limit: 1 })).toEqual([
-      expect.objectContaining({
+      {
+        runId: run.id,
+        platformAccountId: fixture.lanaPage.id,
+        pageLabel: "lana",
+        platform: "fansly",
+        stream: "light",
+        trigger: "scheduled",
+        status: "success",
+        startedAt: expect.any(Date),
+        finishedAt: expect.any(Date),
+        errorSummary: null,
+        stats: expect.objectContaining({ synced: 1 }),
+      },
+    ]);
+
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/v1/admin/sync/runs/${run.id}`,
+      headers: { cookie: await loginOwnerCookie(server) },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      run: {
         runId: run.id,
         pageLabel: "lana",
         stream: "light",
-      }),
-    ]);
+        trigger: "scheduled",
+        status: "success",
+      },
+    });
+    expect(response.json().attempts).toHaveLength(1);
+
     const detail = await getStatusDetail(app, run.id);
     expect(detail.attempts).toEqual([
       expect.objectContaining({
