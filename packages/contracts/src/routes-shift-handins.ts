@@ -919,7 +919,8 @@ export const shiftHandinRouteSchemas = {
       + "the version by that signature (no «Подтверждаю»). Unsigned, or changed by the check — the person confirms. A version "
       + "made after the ledger paid the day is kept and raises a matter for the owner.",
     params: shiftReportParamsSchema,
-    body: shiftReportSubmitBodySchema.optional(),
+    // No body at all (an older client, a test, `inject` without payload) reaches the route as null: the same as none.
+    body: shiftReportSubmitBodySchema.nullish(),
     response: { 200: shiftReportResponseSchema, ...personErrors },
   },
   agentShiftReport: {

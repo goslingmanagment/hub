@@ -371211,20 +371211,27 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object",
-                "properties": {
-                  "seenTotalMills": {
-                    "type": "integer",
-                    "minimum": -9007199254740991,
-                    "maximum": 9007199254740991
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "seenTotalMills": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "seenCount": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "additionalProperties": false
                   },
-                  "seenCount": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 9007199254740991
+                  {
+                    "type": "null"
                   }
-                },
-                "additionalProperties": false
+                ]
               }
             }
           }
