@@ -9,7 +9,7 @@ import { consoleHref } from "@/shared/links";
  * (packages/ui `SaleChainTrigger`, the one component of every place a sale stands). Workboard's own links open in the
  * app, the console's by a page load.
  */
-export const workboardLink: ChainLinkRenderer = (href, children) => (href.startsWith("/workboard/") || href === "/workboard"
+const workboardLink: ChainLinkRenderer = (href, children) => (href.startsWith("/workboard/") || href === "/workboard"
   ? <Link to={href.slice("/workboard".length) || "/"} className="ui-chain__go">{children}</Link>
   : <a href={consoleHref(href)} className="ui-chain__go">{children}</a>);
 
