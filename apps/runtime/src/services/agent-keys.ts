@@ -438,6 +438,26 @@ export async function revokeAgentKeyById(
   });
 }
 
+/** The key's row locked for the transaction, and the instant it was found live: a missing key is a 404, a revoked or
+ *  expired one a 409 (changing a dead key would only make its listing lie about what it could do). */
+async function lockLiveAgentKey(
+  dbTx: Parameters<typeof getAgentKeyById>[0],
+  id: number,
+): Promise<{ existing: AgentKeyRow; now: Date }> {
+  const existing = await getAgentKeyById(dbTx, id, { forUpdate: true });
+  if (!existing) {
+    throw new NotFoundError(`Agent key ${id} not found`);
+  }
+  if (existing.revokedAt !== null) {
+    throw new ConflictError(`Agent key "${existing.name}" is revoked; issue a new key instead`);
+  }
+  const now = new Date();
+  if (existing.expiresAt.getTime() <= now.getTime()) {
+    throw new ConflictError(`Agent key "${existing.name}" has expired; issue a new key instead`);
+  }
+  return { existing, now };
+}
+
 /**
  * Replaces a live key's capabilities with `input.capabilities` (the whole new
  * set). The dashboard sends the ticked set; the CLI computes it from --add and
@@ -456,17 +476,7 @@ export async function updateAgentKeyCapabilities(
   const after = canonicalCapabilities(input.capabilities);
 
   const row = await withAuditTransaction(app, async (dbTx) => {
-    const existing = await getAgentKeyById(dbTx, input.id, { forUpdate: true });
-    if (!existing) {
-      throw new NotFoundError(`Agent key ${input.id} not found`);
-    }
-    if (existing.revokedAt !== null) {
-      throw new ConflictError(`Agent key "${existing.name}" is revoked; issue a new key instead`);
-    }
-    const now = new Date();
-    if (existing.expiresAt.getTime() <= now.getTime()) {
-      throw new ConflictError(`Agent key "${existing.name}" has expired; issue a new key instead`);
-    }
+    const { existing, now } = await lockLiveAgentKey(dbTx, input.id);
 
     const before = canonicalCapabilities(existing.capabilities);
     if (before.length === after.length && before.every((capability, index) => capability === after[index])) {
@@ -565,17 +575,7 @@ export async function updateAgentKeyPages(
   }
 
   const row = await withAuditTransaction(app, async (dbTx) => {
-    const existing = await getAgentKeyById(dbTx, input.id, { forUpdate: true });
-    if (!existing) {
-      throw new NotFoundError(`Agent key ${input.id} not found`);
-    }
-    if (existing.revokedAt !== null) {
-      throw new ConflictError(`Agent key "${existing.name}" is revoked; issue a new key instead`);
-    }
-    const now = new Date();
-    if (existing.expiresAt.getTime() <= now.getTime()) {
-      throw new ConflictError(`Agent key "${existing.name}" has expired; issue a new key instead`);
-    }
+    const { existing, now } = await lockLiveAgentKey(dbTx, input.id);
 
     const current = existing.pageIds.length === 0 ? [] : await listPagesByIds(dbTx, existing.pageIds);
     const labelById = new Map(current.map((page) => [page.id, page.label]));

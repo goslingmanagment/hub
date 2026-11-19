@@ -8,7 +8,6 @@ import {
   AGENT_PLANNED_DATASET_NAMES,
   AGENT_PREDICATE_REGISTRY,
   KERNEL_CONTRACT_HASH,
-  agentClaimFieldClass,
   agentDatasetFields,
   agentDatasetRequiredCapabilities,
   type AgentCapabilitiesResponse,
@@ -41,7 +40,7 @@ import { POSTS_CANONICALIZER_VERSION } from "../../services/canonicalize/posts.t
 import { loadEffectiveConfigField } from "../../services/effective-config.ts";
 import { toSafeNumber, toSafeNumberOr } from "./errors.ts";
 import { buildAgentEvidence } from "./epistemics.ts";
-import { IDENTITY_PLANES, MESSAGE_PLANES, MONEY_PLANES, CRM_PLANES, planesNotRead } from "./planes.ts";
+import { IDENTITY_PLANES, MESSAGE_PLANES, MONEY_CLAIM_FIELDS, MONEY_PLANES, CRM_PLANES, planesNotRead } from "./planes.ts";
 import {
   AGENT_POST_TIP_VIEW_CLAIM_FIELDS,
   postTipParseDebtGaps,
@@ -197,14 +196,6 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
 };
 
 type MoneyByType = NonNullable<AgentPersonResponse["money"]>["byType"][number];
-
-/** Claim fields whose class is money; withheld wholesale without `read:money`.
- *  Derived from the registry (plus the subscription-price field, which rides
- *  the same capability) so a money field added there cannot skip this gate. */
-const MONEY_CLAIM_FIELDS: readonly string[] = [
-  ...AGENT_CLAIM_FIELDS.filter((field) => agentClaimFieldClass(field) === "money"),
-  "subscriptionPriceMills",
-];
 
 /**
  * Operator-written FREE TEXT about a person: the same disclosure class as verbatim

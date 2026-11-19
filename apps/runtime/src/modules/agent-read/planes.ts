@@ -1,4 +1,4 @@
-import type { AgentPlaneReason } from "@agency_hub_core/contracts";
+import { AGENT_CLAIM_FIELDS, agentClaimFieldClass, type AgentPlaneReason } from "@agency_hub_core/contracts";
 import type { PlaneReadWitness } from "@agency_hub_core/db";
 
 import type { PlaneNotReadReason } from "./epistemics.ts";
@@ -33,6 +33,14 @@ export const IDENTITY_PLANES = [
 export const MONEY_PLANES = ["transactions", "fan_spend_daily", "fan_spend_lifetime"] as const;
 
 export const CRM_PLANES = ["fan_notes", "fan_summaries", "fan_profiles", "fan_flags"] as const;
+
+/** Claim fields whose class is money; withheld wholesale without `read:money`.
+ *  Derived from the registry (plus the subscription-price field, which rides
+ *  the same capability) so a money field added there cannot skip this gate. */
+export const MONEY_CLAIM_FIELDS: readonly string[] = [
+  ...AGENT_CLAIM_FIELDS.filter((field) => agentClaimFieldClass(field) === "money"),
+  "subscriptionPriceMills",
+];
 
 /**
  * Builds the `not_read` explanations for every plane in the set that produced no
