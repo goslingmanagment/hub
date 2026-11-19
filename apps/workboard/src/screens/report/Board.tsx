@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { SHIFT_REPORT_QUICK_WORDS, type ShiftReportResponse } from "@agency_hub_core/contracts";
+import { Link } from "react-router";
 import { KernelApiError, hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { BoardBar } from "./BoardBar";
 import { phaseConflictReport, useBoardWrite, type Write } from "./data";
@@ -518,10 +519,10 @@ export function ReportBoard({ report, host, transport, light }: {
         <div className="u" key="asked">
           <span className="t">{asked.oldWay
             // The colleague hands in the old way: the question went to the decider at once (the server's words).
-            ? <>Вы спросили: «{asked.note}». {upper(row.reasonWords)}.</>
+            ? <>Вы спросили{said(asked.note)}. {upper(row.reasonWords)}.</>
             : asked.to === "owner"
-            ? <>Вы спросили владельца: «{asked.note}». До его ответа продажа в общаке.</>
-            : <>Вы спросили {asked.toUser?.forms.acc ?? ""}: «{asked.note}». Согласится, продажа станет вашей.</>}</span>
+            ? <>Вы спросили владельца{said(asked.note)}. До его ответа продажа в общаке.</>
+            : <>Вы спросили {asked.toUser?.forms.acc ?? ""}{said(asked.note)}. Согласится, продажа станет {asked.want.kind === "share" ? "пополам" : "вашей"}.</>}</span>
           {own && <button type="button" className="lk" onClick={() => void run({ op: "unask", transactionId }, "Вопрос отменён")}>Отменить</button>}
         </div>,
       );
@@ -764,6 +765,10 @@ export function ReportBoard({ report, host, transport, light }: {
       <div className="view" ref={viewRef}>
         <section className="board" aria-label="Отчёт смены">
           <header className="bh">
+            {host === "tab" && (
+              // In a tab the board is the whole window: the way back to Workboard (asked for on 19.11).
+              <Link to="/" className="btn btn--quiet btn--sm bh-back" title="Вернуться в Workboard"><Ico name="back" size={14} />На главную</Link>
+            )}
             <span className="bh-t"><Ico name="report" />{titleOf(report.shift, own)}</span>
             {board.offShift.length > 0 && <span className="bh-off">{offShiftOf(board)}</span>}
             <span className="bh-sum">{chip}</span>
@@ -870,6 +875,8 @@ function lineOf(row: Row): Pick<Write & { op: "line" }, "body">["body"] {
 
 /** The person's own comment of a row, sent along with a new word so the word does not drop it. */
 const personNote = (row: Row) => (row.note?.by === "person" ? row.note.text : null);
+/** The one line of why after «Вы спросили …»: «: «…»», or nothing when the question carries none (a «пополам» from a handed-in version). */
+const said = (note: string | null | undefined) => (note && note.trim() !== "" ? `: «${note.trim()}»` : "");
 
 function reducedMotion(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;

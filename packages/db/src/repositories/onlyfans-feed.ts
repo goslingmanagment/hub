@@ -301,10 +301,14 @@ export interface OnlyfansFeedPollLease {
  * The page's poll, asked for by `userId` at `now` (0342): the agency's always-on tab (`server`) while it asked within
  * `serverHoldMs`, else the first that asks once `nextAt` passed; granted — the next one comes `everyMs` later. One
  * row a page, locked for the decision.
+ *
+ * `awaitedSince`: a handed-in shift report waits for this page's statement since then (the board «Отчёт» asked the
+ * read at once). The poll is lent to whoever asks, out of turn, if nobody was lent it since — one read a hand-in;
+ * before, the always-on tab kept it and the person watched «Ждём выписку» for up to ten minutes (19.11).
  */
 export async function takeOnlyfansFeedPoll(
   db: Database,
-  input: { pageId: number; userId: number; server: boolean; now: Date; everyMs: number; serverHoldMs: number },
+  input: { pageId: number; userId: number; server: boolean; now: Date; everyMs: number; serverHoldMs: number; awaitedSince?: Date | null },
 ): Promise<OnlyfansFeedPollLease> {
   await db.execute(sql`
     insert into onlyfans_feed_poll_leases (platform_account_id, next_at) values (${input.pageId}, ${input.now})
@@ -312,16 +316,19 @@ export async function takeOnlyfansFeedPoll(
   `);
   const [row] = (await db.execute<{
     user_id: string | null; server: boolean; next_at: Date | string; server_seen_at: Date | string | null;
-    subscribers_cursor: string | null; ledger_cursor: string | null;
+    granted_at: Date | string | null; subscribers_cursor: string | null; ledger_cursor: string | null;
   }>(sql`
-    select user_id::text, server, next_at, server_seen_at, subscribers_cursor, ledger_cursor
+    select user_id::text, server, next_at, server_seen_at, granted_at, subscribers_cursor, ledger_cursor
     from onlyfans_feed_poll_leases where platform_account_id = ${input.pageId} for update
   `)).rows;
   const nextAt = new Date(row!.next_at);
   const serverSeen = row!.server_seen_at === null ? null : new Date(row!.server_seen_at);
   const serverPresent = serverSeen !== null && input.now.getTime() - serverSeen.getTime() <= input.serverHoldMs;
   const due = input.now.getTime() >= nextAt.getTime();
-  const granted = due && (input.server || !serverPresent);
+  const grantedAt = row!.granted_at === null ? null : new Date(row!.granted_at);
+  const awaited = input.awaitedSince ?? null;
+  const outOfTurn = awaited !== null && (grantedAt === null || grantedAt.getTime() < awaited.getTime());
+  const granted = (due && (input.server || !serverPresent)) || outOfTurn;
   const cursors = { subscribers: row!.subscribers_cursor, ledger: row!.ledger_cursor };
   if (!granted) {
     if (input.server) {

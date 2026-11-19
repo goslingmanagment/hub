@@ -4,7 +4,7 @@ import {
   type ClientOnlyfansPollBody,
   type ClientOnlyfansPollResponse,
 } from "@agency_hub_core/contracts";
-import { readOnlyfansFeedPoll, recordOnlyfansFeedPollPass, takeOnlyfansFeedPoll, type Database } from "@agency_hub_core/db";
+import { pageStatementAwaitedSince, readOnlyfansFeedPoll, recordOnlyfansFeedPollPass, takeOnlyfansFeedPoll, type Database } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
@@ -33,6 +33,8 @@ import { requireClientFeatureOnLabel, type ClientFeatureRequest } from "./client
 export const CHATSPACE_SERVER_USERNAME = "chatspace-server";
 /** While the always-on tab asked this recently, the page's poll is its alone. */
 export const SERVER_HOLD_MS = 15 * 60_000;
+/** A hand-in this recent that waits for the page's statement is lent its read out of turn (the check waits 10 minutes). */
+const AWAITED_WINDOW_MS = 30 * 60_000;
 
 export async function applyClientOnlyfansPoll(
   app: AppContext,
@@ -53,6 +55,8 @@ export async function applyClientOnlyfansPoll(
     // grant; it lends nothing, and the answer says when the next poll may be lent.
     await recordOnlyfansFeedPollPass(app.db, { pageId: page.id, userId: principal.user.id, now, holdMs: SERVER_HOLD_MS, passed });
   }
+  // The board «Отчёт» asks a waiting page's statement at once (the extension's `report.statement`): one read a hand-in.
+  const awaitedSince = passed !== undefined ? null : await pageStatementAwaitedSince(app.db, { pageLabel: page.label, since: new Date(now.getTime() - AWAITED_WINDOW_MS) });
   const lease = await app.db.transaction(async (tx) => passed !== undefined ? readOnlyfansFeedPoll(tx as unknown as Database, page.id, now) : takeOnlyfansFeedPoll(tx as unknown as Database, {
     pageId: page.id,
     userId: principal.user.id,
@@ -60,6 +64,7 @@ export async function applyClientOnlyfansPoll(
     now,
     everyMs: CLIENT_ONLYFANS_POLL_EVERY_SECONDS * 1000,
     serverHoldMs: SERVER_HOLD_MS,
+    awaitedSince,
   }));
   return {
     pageLabel: page.label,

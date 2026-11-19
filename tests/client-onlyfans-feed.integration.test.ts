@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { clientOnlyfansFeedResponseSchema, errorResponseSchema, type ClientOnlyfansFeedResponse } from "@agency_hub_core/contracts";
-import { createModel, createOnlyFansPage, listStalePendingOfapiTransactions, upsertFans } from "@agency_hub_core/db";
+import { createModel, createOnlyFansPage, listStalePendingOfapiTransactions, takeOnlyfansFeedPoll, upsertFans } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -237,6 +237,24 @@ describe("the OnlyFans feed route", () => {
     expect(event).toEqual({ type: "subscription.started", sub_type: "new_subscriber" });
     await testDb!.pool.query("update onlyfans_feed_poll_leases set next_at = now() - interval '1 second' where platform_account_id = $1", [pageId]);
     expect((await poll(grishaToken)).cursors.subscribers).toBe("88001");
+  });
+
+  it("lends the read a handed-in report waits for out of turn, once a hand-in", async () => {
+    const userId = async (username: string) => Number((await query<{ id: string }>("select id from users where username = $1", [username]))[0]!.id);
+    const [grisha, always] = [await userId("grisha"), await userId("chatspace-server")];
+    const take = (awaitedSince: Date | null) =>
+      takeOnlyfansFeedPoll(app.db, { pageId, userId: grisha, server: false, now: new Date(), everyMs: 600_000, serverHoldMs: 15 * 60_000, awaitedSince });
+    // The always-on tab was lent the poll a minute ago and is here: a chatter's tab waits its turn.
+    await testDb!.pool.query(
+      "update onlyfans_feed_poll_leases set user_id = $2, server = true, granted_at = now() - interval '1 minute', next_at = now() + interval '9 minutes', server_seen_at = now() where platform_account_id = $1",
+      [pageId, always],
+    );
+    expect((await take(null)).granted).toBe(false);
+    // A report handed in now waits for the page's statement: the board's ask is lent at once (19.11: ten minutes of «Ждём выписку»).
+    const handedIn = new Date();
+    expect(await take(handedIn)).toMatchObject({ granted: true, holder: "tab" });
+    // One read a hand-in: the same wait does not lend it again.
+    expect((await take(handedIn)).granted).toBe(false);
   });
 
   it("refuses a report whose account is not the page's", async () => {
