@@ -103,8 +103,11 @@ export const errorResponseSchema = z.object({
   statusUrl: z.string().optional(),
 });
 
+/** The largest `limit` a paginated read takes. */
+export const PAGINATION_LIMIT_MAX = 200;
+
 export const paginationQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).default(50),
+  limit: z.coerce.number().int().min(1).max(PAGINATION_LIMIT_MAX).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
 
