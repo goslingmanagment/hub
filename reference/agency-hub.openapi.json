@@ -195134,6 +195134,58 @@
                             "preview": {
                               "type": "boolean"
                             },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "previous": {
                               "anyOf": [
                                 {
@@ -200231,6 +200283,58 @@
                             },
                             "preview": {
                               "type": "boolean"
+                            },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
                             },
                             "previous": {
                               "anyOf": [
@@ -307714,6 +307818,58 @@
                                     "preview": {
                                       "type": "boolean"
                                     },
+                                    "otherShifts": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "shiftId": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "startedAt": {
+                                            "type": "string"
+                                          },
+                                          "endedAt": {
+                                            "type": "string"
+                                          },
+                                          "ongoing": {
+                                            "type": "boolean"
+                                          },
+                                          "phase": {
+                                            "type": "string",
+                                            "enum": [
+                                              "draft",
+                                              "checking",
+                                              "confirm",
+                                              "counted",
+                                              "fixing"
+                                            ]
+                                          },
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "mills": {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          }
+                                        },
+                                        "required": [
+                                          "shiftId",
+                                          "startedAt",
+                                          "endedAt",
+                                          "ongoing",
+                                          "phase",
+                                          "count",
+                                          "mills"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
                                     "previous": {
                                       "anyOf": [
                                         {
@@ -312118,6 +312274,58 @@
                             },
                             "preview": {
                               "type": "boolean"
+                            },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
                             },
                             "previous": {
                               "anyOf": [
@@ -316537,6 +316745,58 @@
                             "preview": {
                               "type": "boolean"
                             },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "previous": {
                               "anyOf": [
                                 {
@@ -320862,6 +321122,58 @@
                                 },
                                 "preview": {
                                   "type": "boolean"
+                                },
+                                "otherShifts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "shiftId": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "startedAt": {
+                                        "type": "string"
+                                      },
+                                      "endedAt": {
+                                        "type": "string"
+                                      },
+                                      "ongoing": {
+                                        "type": "boolean"
+                                      },
+                                      "phase": {
+                                        "type": "string",
+                                        "enum": [
+                                          "draft",
+                                          "checking",
+                                          "confirm",
+                                          "counted",
+                                          "fixing"
+                                        ]
+                                      },
+                                      "count": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "mills": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "shiftId",
+                                      "startedAt",
+                                      "endedAt",
+                                      "ongoing",
+                                      "phase",
+                                      "count",
+                                      "mills"
+                                    ],
+                                    "additionalProperties": false
+                                  }
                                 },
                                 "previous": {
                                   "anyOf": [
@@ -325078,6 +325390,58 @@
                             "preview": {
                               "type": "boolean"
                             },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "previous": {
                               "anyOf": [
                                 {
@@ -329403,6 +329767,58 @@
                                 },
                                 "preview": {
                                   "type": "boolean"
+                                },
+                                "otherShifts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "shiftId": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "startedAt": {
+                                        "type": "string"
+                                      },
+                                      "endedAt": {
+                                        "type": "string"
+                                      },
+                                      "ongoing": {
+                                        "type": "boolean"
+                                      },
+                                      "phase": {
+                                        "type": "string",
+                                        "enum": [
+                                          "draft",
+                                          "checking",
+                                          "confirm",
+                                          "counted",
+                                          "fixing"
+                                        ]
+                                      },
+                                      "count": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "mills": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "shiftId",
+                                      "startedAt",
+                                      "endedAt",
+                                      "ongoing",
+                                      "phase",
+                                      "count",
+                                      "mills"
+                                    ],
+                                    "additionalProperties": false
+                                  }
                                 },
                                 "previous": {
                                   "anyOf": [
@@ -334212,6 +334628,58 @@
                                 "preview": {
                                   "type": "boolean"
                                 },
+                                "otherShifts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "shiftId": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "startedAt": {
+                                        "type": "string"
+                                      },
+                                      "endedAt": {
+                                        "type": "string"
+                                      },
+                                      "ongoing": {
+                                        "type": "boolean"
+                                      },
+                                      "phase": {
+                                        "type": "string",
+                                        "enum": [
+                                          "draft",
+                                          "checking",
+                                          "confirm",
+                                          "counted",
+                                          "fixing"
+                                        ]
+                                      },
+                                      "count": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "mills": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "shiftId",
+                                      "startedAt",
+                                      "endedAt",
+                                      "ongoing",
+                                      "phase",
+                                      "count",
+                                      "mills"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "previous": {
                                   "anyOf": [
                                     {
@@ -338847,6 +339315,58 @@
                                 },
                                 "preview": {
                                   "type": "boolean"
+                                },
+                                "otherShifts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "shiftId": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "startedAt": {
+                                        "type": "string"
+                                      },
+                                      "endedAt": {
+                                        "type": "string"
+                                      },
+                                      "ongoing": {
+                                        "type": "boolean"
+                                      },
+                                      "phase": {
+                                        "type": "string",
+                                        "enum": [
+                                          "draft",
+                                          "checking",
+                                          "confirm",
+                                          "counted",
+                                          "fixing"
+                                        ]
+                                      },
+                                      "count": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "mills": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "shiftId",
+                                      "startedAt",
+                                      "endedAt",
+                                      "ongoing",
+                                      "phase",
+                                      "count",
+                                      "mills"
+                                    ],
+                                    "additionalProperties": false
+                                  }
                                 },
                                 "previous": {
                                   "anyOf": [
@@ -343601,6 +344121,58 @@
                             "preview": {
                               "type": "boolean"
                             },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "previous": {
                               "anyOf": [
                                 {
@@ -348017,6 +348589,58 @@
                             "preview": {
                               "type": "boolean"
                             },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "previous": {
                               "anyOf": [
                                 {
@@ -352389,6 +353013,58 @@
                             "preview": {
                               "type": "boolean"
                             },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "previous": {
                               "anyOf": [
                                 {
@@ -356760,6 +357436,58 @@
                             },
                             "preview": {
                               "type": "boolean"
+                            },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
                             },
                             "previous": {
                               "anyOf": [
@@ -361158,6 +361886,58 @@
                             "preview": {
                               "type": "boolean"
                             },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "previous": {
                               "anyOf": [
                                 {
@@ -365540,6 +366320,58 @@
                             "preview": {
                               "type": "boolean"
                             },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "previous": {
                               "anyOf": [
                                 {
@@ -369866,6 +370698,58 @@
                                 "preview": {
                                   "type": "boolean"
                                 },
+                                "otherShifts": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "shiftId": {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "startedAt": {
+                                        "type": "string"
+                                      },
+                                      "endedAt": {
+                                        "type": "string"
+                                      },
+                                      "ongoing": {
+                                        "type": "boolean"
+                                      },
+                                      "phase": {
+                                        "type": "string",
+                                        "enum": [
+                                          "draft",
+                                          "checking",
+                                          "confirm",
+                                          "counted",
+                                          "fixing"
+                                        ]
+                                      },
+                                      "count": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "mills": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "shiftId",
+                                      "startedAt",
+                                      "endedAt",
+                                      "ongoing",
+                                      "phase",
+                                      "count",
+                                      "mills"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "previous": {
                                   "anyOf": [
                                     {
@@ -374070,6 +374954,58 @@
                             },
                             "preview": {
                               "type": "boolean"
+                            },
+                            "otherShifts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "shiftId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "startedAt": {
+                                    "type": "string"
+                                  },
+                                  "endedAt": {
+                                    "type": "string"
+                                  },
+                                  "ongoing": {
+                                    "type": "boolean"
+                                  },
+                                  "phase": {
+                                    "type": "string",
+                                    "enum": [
+                                      "draft",
+                                      "checking",
+                                      "confirm",
+                                      "counted",
+                                      "fixing"
+                                    ]
+                                  },
+                                  "count": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "mills": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "shiftId",
+                                  "startedAt",
+                                  "endedAt",
+                                  "ongoing",
+                                  "phase",
+                                  "count",
+                                  "mills"
+                                ],
+                                "additionalProperties": false
+                              }
                             },
                             "previous": {
                               "anyOf": [

@@ -227,6 +227,12 @@
 .rb .prev{flex:none;display:flex;align-items:center;gap:7px;min-height:30px;padding:5px 16px;border-bottom:1px solid var(--rule-2);font-size:12.5px;line-height:18px;color:var(--ink-2);white-space:nowrap}
 .rb .prev .ico{color:var(--ink-faint)}
 .rb .prev .t{min-width:0;overflow:hidden;text-overflow:ellipsis}
+/* another shift of the person that waits for them: «Не сдана ваша смена …» and the way there */
+.rb .oth{flex:none;display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 10px 4px 16px;border-bottom:1px solid var(--rule-2);font-size:12.5px;line-height:18px;color:var(--ink-2);white-space:nowrap}
+.rb .oth .ico{color:var(--ink-faint)}
+.rb .oth .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.rb .oth.is-wait{background:var(--amber-bg);border-bottom-color:var(--amber-line);color:var(--ink)}
+.rb .oth.is-wait .ico{color:var(--amber-ink)}
 
 /* a phone: one column per screen width, swiped sideways; the header and the bar wrap instead of squeezing */
 @media (max-width:720px){
@@ -248,6 +254,7 @@
   .rb .bar-m .btn--lg{order:7;flex:1 1 0}
   .rb .cf{flex:1 1 100%}
   .rb .nq{flex:1 1 100%;white-space:normal}
+  .rb .oth{padding:6px 10px 6px 14px;white-space:normal}
   .rb .toast{white-space:normal;max-width:calc(100% - 32px)}
   .rb .pnl{left:8px!important;right:8px;width:auto}
 }

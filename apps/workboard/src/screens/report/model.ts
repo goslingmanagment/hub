@@ -61,10 +61,31 @@ export function offShiftOf(board: Board): string {
   return board.offShift.length === 0 ? "" : `${board.offShift.map((page) => page.pageLabel).join(", ")} не в смене`;
 }
 
-/** «До 18:00: 3 продажи Олега». */
+/** «До 18:00: 3 продажи Олега»; with the person's own among them: «До 18:00: 4 продажи: 3 Олега, 1 ваша». */
 export function beforeWords(before: Board["columns"][number]["before"]): string {
   const whose = before.people.map((one) => one.forms.gen).join(" и ");
-  return `До ${clock(before.until)}: ${salesCount(before.count)}${whose ? ` ${whose}` : ""}`;
+  const mine = before.rows.filter((row) => row.owner.kind === "me").length;
+  const head = `До ${clock(before.until)}: ${salesCount(before.count)}`;
+  if (mine === 0) return `${head}${whose ? ` ${whose}` : ""}`;
+  const yours = `${mine} ${plural(mine, "ваша", "ваши", "ваших")}`;
+  if (mine === before.count) return `${head}, ${mine === 1 ? "ваша" : "все ваши"}`;
+  return `${head}: ${before.count - mine}${whose ? ` ${whose}` : " чужих"}, ${yours}`;
+}
+
+/** The person's other shift that waits for them (`board.otherShifts`). */
+export type OtherShift = NonNullable<Board["otherShifts"]>[number];
+
+/**
+ * Its line above the columns: «Не сдана ваша смена 19 нояб., 08:00–11:02: 1 продажа, $40.00. В этот отчёт они не
+ * входят», «Смена … ждёт вашего «Подтверждаю»», «Смена … открыта для правки», «Идёт ваша смена с 13:24».
+ */
+export function otherShiftWords(one: OtherShift): string {
+  if (one.ongoing) return `Идёт ваша смена с ${clock(one.startedAt)}`;
+  const when = `${day(one.startedAt)}, ${clock(one.startedAt)}–${clock(one.endedAt)}`;
+  if (one.phase === "confirm") return `Смена ${when} ждёт вашего «Подтверждаю»`;
+  if (one.phase === "fixing") return `Смена ${when} открыта для правки: сдайте её снова`;
+  const sales = one.count === 0 ? "продаж в ней нет" : `${salesCount(one.count)}, ${usd(one.mills)}. В этот отчёт ${one.count === 1 ? "она не входит" : "они не входят"}`;
+  return `Не сдана ваша смена ${when}: ${sales}`;
 }
 
 export const allRows = (board: Board): Row[] => board.columns.flatMap((column) => column.rows);

@@ -15,6 +15,7 @@ import {
   keyOfOwner,
   keyOfTransaction,
   offShiftOf,
+  otherShiftWords,
   ownerWord,
   plus,
   reasonLook,
@@ -783,6 +784,18 @@ export function ReportBoard({ report, host, transport, light }: {
               <span className="t">От прошлой смены{board.previous.user ? ` (${board.previous.user.forms.nom})` : ""}: „{board.previous.comment}“</span>
             </div>
           )}
+          {own && (board.otherShifts ?? []).map((one) => (
+            // Another shift of the person waits for them: its sales count only in its own report, so the way is here.
+            <div className={`oth${one.ongoing ? "" : " is-wait"}`} key={one.shiftId}>
+              <Ico name="report" size={13} />
+              <span className="t">{otherShiftWords(one)}</span>
+              <Link
+                to={host === "tab" ? `/report/${one.shiftId}` : { search: `?shift=${one.shiftId}` }}
+                className="btn btn--line btn--sm"
+                onClick={() => void commitNote()}
+              >{one.ongoing ? "Вернуться" : "Открыть"}</Link>
+            </div>
+          ))}
           <div className="cols" ref={colsRef}>{board.columns.map(columnHtml)}</div>
           <BoardBar actions={actions} barRef={barRef} />
         </section>
