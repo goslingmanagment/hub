@@ -1,14 +1,22 @@
+import type { OfapiHttpOutcome } from "@agency_hub_core/db";
 import { ofapiResponseEvidence } from "./ofapi-response-evidence.ts";
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
+import { asRecord } from "./ofapi-payloads.ts";
 
 function itemId(value: unknown) {
   if (typeof value === "string" && value.length > 0) return value;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return null;
+}
+
+export function ofapiHttpOutcome(status: number): OfapiHttpOutcome {
+  if (status >= 200 && status < 300) return "success";
+  if (status === 404) return "not_found";
+  if (status === 401) return "auth_confirmed";
+  if (status === 403) return "forbidden_unconfirmed";
+  if (status === 429) return "rate";
+  if (status >= 500) return "vendor_5xx";
+  if (status === 400 || status === 409 || status === 422) return "request_rejected";
+  return "unexpected_http";
 }
 
 export interface ParsedOfapiJsonBody {

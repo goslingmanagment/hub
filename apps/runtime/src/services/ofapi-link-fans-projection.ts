@@ -37,13 +37,12 @@ import {
   tryLockLinkFanProjection,
 } from "@agency_hub_core/db";
 import {
-  dollarsToMills,
   LINK_ATTRIBUTION_RULE,
   linkFanJournalEndpointShape,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { idToString } from "./ofapi-payloads.ts";
+import { idToString, parseOfapiDollarMills as parseDollarMills } from "./ofapi-payloads.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
 
 type ProjectionContext = Pick<AppContext, "db" | "logger">;
@@ -68,16 +67,6 @@ function parseInstant(value: unknown): Date | null {
   if (typeof value !== "string" || value.trim().length === 0) return null;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function parseDollarMills(value: unknown): bigint | null {
-  if (typeof value !== "number" && typeof value !== "string") return null;
-  const normalized = typeof value === "string" ? value.trim().replace(/^\$/, "").replace(/,/g, "") : value;
-  try {
-    return dollarsToMills(normalized);
-  } catch {
-    return null;
-  }
 }
 
 /** The page after this one, as the walk itself decides it

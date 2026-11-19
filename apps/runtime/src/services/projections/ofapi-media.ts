@@ -12,13 +12,10 @@ import {
 } from "@agency_hub_core/db";
 import type { AppContext } from "../../bootstrap.ts";
 import { onlyFansRawMediaDrafts } from "../canonicalize/raw-media.ts";
+import { asRecord as mediaRecord } from "../ofapi-payloads.ts";
 export const OFAPI_MEDIA_EVENT = "ofapi.media_observed",
   OFAPI_MEDIA_PROJECTION = "ofapi_media";
-export function mediaRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+export { mediaRecord };
 function string(value: unknown) {
   return typeof value === "string" ? value : null;
 }

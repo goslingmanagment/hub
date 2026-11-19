@@ -26,6 +26,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import type { ParsedOfapiJsonBody } from "./ofapi-capture-contract.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
+import { asRecord } from "./ofapi-payloads.ts";
 
 // Vendor documents that large export scans may take several hours. Polling
 // every 15 minutes for a full day stays bounded without making a second
@@ -113,12 +114,6 @@ export interface OfapiExportQuoteRequestPlan {
   reservedCredits: number;
   timeoutMs: number;
   maxResponseBytes: number;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
 }
 
 function nonnegativeInteger(value: unknown) {

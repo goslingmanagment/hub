@@ -29,6 +29,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import {
   capturePayloadResponse,
+  ofapiHttpOutcome,
   parseOfapiJsonBytes,
 } from "./ofapi-capture-contract.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
@@ -309,14 +310,7 @@ export async function captureOfapiCollectionRead(
         fenceToken: reservation.fenceToken,
         responseObservedAt: raw.receivedAt,
         httpStatus: raw.status,
-        httpOutcome:
-          raw.status >= 200 && raw.status < 300
-            ? "success"
-            : raw.status === 429
-              ? "rate"
-              : raw.status >= 500
-                ? "vendor_5xx"
-                : "request_rejected",
+        httpOutcome: ofapiHttpOutcome(raw.status),
         responseHeaders: raw.headers,
         bodyBytes: raw.bodyBytes,
         request: { ...input.step },

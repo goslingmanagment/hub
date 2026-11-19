@@ -2,11 +2,11 @@ import { sql } from "drizzle-orm";
 import { claimOfapiActionMediaCustody, claimOfapiMediaTokenFence, isOfapiMediaTokenReserved, type Database } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError } from "./errors.ts";
+import { asRecord as object } from "./ofapi-payloads.ts";
 
 const nativeId = /^[1-9][0-9]{0,63}$/;
 const cdnToken = /^ofapi_media_[A-Za-z0-9_-]{1,128}$/;
 type MediaCommand = { pageId: number } & Record<string, unknown>;
-function object(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
 
 /** Validate retained custody only. The supplied database keeps dispatch-time checks under the caller's lock. */
 export async function validateOfapiActionMedia(app: AppContext, command: MediaCommand, accountId: string, db: Database = app.db): Promise<string[]> {
