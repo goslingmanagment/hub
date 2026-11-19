@@ -3,7 +3,6 @@ import {
   createFanNote,
   findPlatformFan,
   listFanPageContexts,
-  setFanFlags,
 } from "@agency_hub_core/db";
 
 import { pageScopeFor, platformRollupScopeFor } from "../../api/request-auth.ts";
@@ -13,10 +12,8 @@ import {
 import { ForbiddenError, NotFoundError } from "../../services/errors.ts";
 import {
   getCrossPageFanDetailReport,
-  getOverviewGrowthReport,
   getPageDeletedFansReport,
   getPageFanDetailReport,
-  getPageFansReport,
   getPageFollowersReport,
   getPageSubscribersReport,
   getPageSummary,
@@ -27,25 +24,12 @@ import { searchVisibleFans } from "../../services/spenders.ts";
 import { asFanReader } from "../../services/fan-reads.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
-// Audience module (target §6.1): fans, subscriptions, follows, growth, fan
-// enrichment (notes/flags). Handlers relocated verbatim from server.ts.
+// Audience module (target §6.1): fans, subscriptions, follows, fan notes.
+// Handlers relocated verbatim from server.ts.
 
 export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
-
-  server.get("/api/v1/overview/growth", {
-    schema: routeSchemas.overviewGrowth,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const query = request.query;
-    const pageIds = pageScopeFor(principal);
-    return getOverviewGrowthReport(appContext, {
-      period: query.period,
-      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
-      ...(pageIds === undefined ? {} : { pageIds }),
-    });
-  });
 
   server.get("/api/v1/pages/:pageLabel/subscribers", {
     schema: routeSchemas.pageSubscribers,
@@ -67,18 +51,6 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       throw new ForbiddenError("Page access denied");
     }
     return getPageFollowersReport(appContext, request.params.pageLabel, request.query);
-  });
-
-  server.get("/api/v1/pages/:pageLabel/fans", {
-    schema: routeSchemas.pageFans,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const query = request.query;
-    const page = await getPageSummary(appContext, request.params.pageLabel);
-    if (!canAccessPage(principal, page.id)) {
-      throw new ForbiddenError("Page access denied");
-    }
-    return getPageFansReport(appContext, request.params.pageLabel, query);
   });
 
   server.get("/api/v1/pages/:pageLabel/deleted-fans", {
@@ -175,33 +147,6 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
       authorUserId: note.authorUserId!,
       body: note.body,
       createdAt: new Date(note.createdAt).toISOString(),
-    };
-  });
-
-  // Set fan flags
-  server.patch("/api/v1/fans/:platform/:platformUserId/flags", {
-    schema: routeSchemas.setFanFlags,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const fan = await findPlatformFan(appContext.db, request.params.platform, request.params.platformUserId);
-    if (!fan) {
-      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
-    }
-    const fanPages = await listFanPageContexts(appContext.db, fan.id, pageScopeFor(principal));
-    if (fanPages.length === 0) {
-      throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);
-    }
-    const flagRows = await setFanFlags(appContext.db, {
-      fanId: fan.id,
-      flags: request.body.flags,
-      createdByUserId: principal.user.id,
-    });
-    return {
-      flags: flagRows.map((row) => ({
-        flag: row.flag,
-        createdAt: new Date(row.createdAt).toISOString(),
-        createdByUserId: row.createdByUserId,
-      })),
     };
   });
 }

@@ -2,12 +2,10 @@ import type {
   AssignedPage,
   CrossPageFanDetailResponse,
   FanListQuery,
-  FanListResponse,
   FollowerListQuery,
   FollowerListResponse,
   ModelListItem,
   ModelRevenueResponse,
-  OverviewGrowthResponse,
   OverviewRevenueResponse,
   PageDeletedFansResponse,
   PageFanDetailResponse,
@@ -25,13 +23,10 @@ import {
   getRevenueBreakdown,
   getRevenueBreakdownForScope,
   getRevenuePageTotals,
-  listFansForPage,
   listFollowersForPage,
-  listFollowerTotalsForPages,
   listFanPageContexts,
   listDeletedFansForPage,
   listSubscribersForPage,
-  listSubscriberTotalsForPages,
   listRevenueModels,
   listRevenuePages,
   listVisibleModels,
@@ -45,7 +40,6 @@ import {
 import {
   BUSINESS_TIME_ZONE,
   millsToNumber,
-  resolveBusinessDateRangeForPlatform,
   resolveRevenueComparisonPeriodBoundsForPlatform,
   resolveRevenuePeriodBoundsForPlatform,
   resolvePeriodBounds,
@@ -845,43 +839,6 @@ export async function getPageFollowersReport(
   };
 }
 
-export async function getPageFansReport(
-  app: AppContext,
-  pageLabel: string,
-  input: FanListQuery,
-): Promise<FanListResponse> {
-  const page = await getPageSummary(app, pageLabel);
-  const rows = await listFansForPage(app.db, {
-    pageId: page.id,
-    limit: input.limit,
-    offset: input.offset,
-    ...(input.query === undefined ? {} : { query: input.query }),
-  });
-
-  return {
-    page: serializePage(page),
-    items: rows.items.map((row) => ({
-      platformUserId: row.platformUserId,
-      pageAlias: row.pageAlias,
-      username: row.username,
-      displayName: row.displayName,
-      totalCreatorNetMills: millsToNumber(row.totalCreatorNetMills),
-      currency: "USD" as const,
-      isFollower: row.isFollower,
-      followerSince: serializeTimestamp(row.followerSince),
-      isSubscriber: row.isSubscriber,
-      subscriberSince: serializeTimestamp(row.subscriberSince),
-      subscriptionExpiresAt: serializeTimestamp(row.subscriptionExpiresAt),
-      autoRenew: row.autoRenew,
-      autoRenewOffDetectedAt: serializeTimestamp(row.autoRenewOffDetectedAt),
-      lastTransactionAt: serializeTimestamp(row.lastTransactionAt),
-    })),
-    limit: input.limit,
-    offset: input.offset,
-    total: rows.total,
-  };
-}
-
 export async function getPageDeletedFansReport(
   app: AppContext,
   pageLabel: string,
@@ -1072,49 +1029,6 @@ export async function getCrossPageFanDetailReport(
       flag: row.flag,
       createdAt: serializeTimestamp(row.createdAt)!,
       createdByUserId: row.createdByUserId,
-    })),
-  };
-}
-
-export async function getOverviewGrowthReport(
-  app: AppContext,
-  input: PeriodInput & { pageIds?: number[] },
-): Promise<OverviewGrowthResponse> {
-  const pageRows = await listVisiblePages(app.db, input.pageIds);
-  const groupedPageIds = groupPageIdsByPlatform(pageRows);
-  const now = input.now ?? new Date();
-
-  const followerMap = new Map<number, number>();
-  const subscriberMap = new Map<number, number>();
-
-  for (const [platform, pageIds] of groupedPageIds) {
-    const range = resolveBusinessDateRangeForPlatform(platform, input.period, now, input.custom);
-    const [followers, subscribers] = await Promise.all([
-      listFollowerTotalsForPages(app.db, {
-        pageIds,
-        fromBusinessDate: range.from,
-        toBusinessDate: range.toExclusive,
-      }),
-      listSubscriberTotalsForPages(app.db, {
-        pageIds,
-        fromBusinessDate: range.from,
-        toBusinessDate: range.toExclusive,
-      }),
-    ]);
-
-    for (const row of followers) {
-      followerMap.set(row.pageId, (followerMap.get(row.pageId) ?? 0) + row.newFollowers);
-    }
-    for (const row of subscribers) {
-      subscriberMap.set(row.pageId, (subscriberMap.get(row.pageId) ?? 0) + row.newSubscribers);
-    }
-  }
-
-  return {
-    pages: pageRows.map((page) => ({
-      pageId: page.id,
-      newFollowers: followerMap.get(page.id) ?? 0,
-      newSubscribers: subscriberMap.get(page.id) ?? 0,
     })),
   };
 }

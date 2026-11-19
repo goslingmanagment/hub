@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 85 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (566)
+## Routes (556)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -106,7 +106,6 @@ A full device token is not affected.
 | POST | `/api/v1/admin/ofapi/collection/jobs/:id/resume` | `ofapiCollectionJobResume` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/ofapi/collection/preview` | `ofapiCollectionPreview` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ofapi/collection/results` | `ofapiReadCollectionsGet` | `owner-session` | — | — | no |
-| GET | `/api/v1/admin/ofapi/content/events` | `ofapiContentEventsGet` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ofapi/credits/daily` | `adminOfapiCreditsDaily` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ofapi/credits/ledger` | `adminOfapiCreditsLedger` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ofapi/credits/ledger.csv` | `adminOfapiCreditsLedgerCsv` | `owner-session` | — | — | no |
@@ -196,10 +195,8 @@ A full device token is not affected.
 | POST | `/api/v1/admin/sync/followers-reconcile/blast-radius/apply` | `adminFollowersReconcileOverrideApply` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/sync/followers-reconcile/blast-radius/preview` | `adminFollowersReconcileOverridePreview` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/sync/followers-reconcile/reset` | `adminFollowersReconcileReset` | `owner-session` | — | — | no |
-| GET | `/api/v1/admin/sync/runs` | `adminSyncRuns` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/sync/runs/:runId` | `adminSyncRunDetail` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/sync/trigger` | `adminSyncTrigger` | `owner-session` | — | — | no |
-| POST | `/api/v1/admin/sync/trigger-all` | `adminSyncTriggerAll` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/usage/chatters` | `adminChatterUsage` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/users` | `adminListUsers` | `owner-session` | — | — | no |
 | DELETE | `/api/v1/admin/users/by-id/:userId` | `adminDeleteUser` | `owner-session` | — | — | no |
@@ -317,7 +314,6 @@ A full device token is not affected.
 | GET | `/api/v1/ai/recap-status` | `aiRecapStatus` | `apiKey` | — | — | yes |
 | GET | `/api/v1/ai/restricted/generations` | `aiRestrictedGenerations` | `owner-session` | — | — | no |
 | GET | `/api/v1/ai/restricted/generations/:generationRef` | `aiRestrictedGenerationDetail` | `owner-session` | — | — | no |
-| GET | `/api/v1/archive/conversations/:ref/messages` | `archiveConversationMessages` | `session` | — | — | no |
 | GET | `/api/v1/archive/search` | `archiveSearch` | `session` | — | — | no |
 | POST | `/api/v1/auth/change-password` | `authChangePassword` | `any-session` | — | — | no |
 | DELETE | `/api/v1/auth/device-tokens/current` | `authRevokeCurrentDeviceToken` | `device-token` | — | — | yes |
@@ -399,7 +395,6 @@ A full device token is not affected.
 | POST | `/api/v1/custom-orders/:code` | `customOrderAct` | `any` | — | — | yes |
 | POST | `/api/v1/custom-orders/sales/:transactionRef/dismiss` | `customSaleDismiss` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `any-session` | — | — | no |
-| PATCH | `/api/v1/fans/:platform/:platformUserId/flags` | `setFanFlags` | `owner-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/pages` | `fanPages` | `any-session` | — | — | no |
 | GET | `/api/v1/health` | `health` | `public` | — | — | — |
@@ -421,7 +416,6 @@ A full device token is not affected.
 | GET | `/api/v1/ops/live` | `opsLive` | `monitoring` | owner | — | no |
 | GET | `/api/v1/ops/metrics` | `opsMetrics` | `monitoring` | — | — | no |
 | GET | `/api/v1/overview` | `overview` | `session` | — | — | no |
-| GET | `/api/v1/overview/growth` | `overviewGrowth` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue` | `overviewRevenue` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — | no |
 | GET | `/api/v1/page-browser/drafts` | `pageBrowserDrafts` | `owner-session` | — | — | no |
@@ -451,11 +445,9 @@ A full device token is not affected.
 | GET | `/api/v1/pages` | `pages` | `any` | — | — | no |
 | POST | `/api/v1/pages/:pageLabel/client-send-custody/:attemptId/resolve` | `clientSendCustodyResolve` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/content/comments` | `contentComments` | `owner-session` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/messages` | `pageConversationMessages` | `session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/conversations/:conversationId/profile` | `pageConversationProfile` | `any` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/conversations/:platformConversationId/preview` | `pageConversationPreview` | `any-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/deleted-fans` | `pageDeletedFans` | `any` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/fans` | `pageFans` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId` | `pageFanDetail` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/card` | `pageFanCard` | `any-session` | — | page | no |
 | POST | `/api/v1/pages/:pageLabel/fans/:platformUserId/notes` | `createFanNote` | `any` | — | page | no |
@@ -484,7 +476,6 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/stats/tags` | `statsTags` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/subscribers` | `pageSubscribers` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/sync/blocks` | `pageSyncBlocks` | `any` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/sync/blocks/messages` | `pageMessagesBlock` | `any` | — | page | no |
 | POST | `/api/v1/pages/:pageLabel/voice-notes` | `voiceNoteCreate` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page | yes |
@@ -551,7 +542,6 @@ A full device token is not affected.
 | POST | `/api/v1/sync/pages/:pageLabel/refresh` | `syncPageRefresh` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/pages/:pageLabel/work` | `syncPageWork` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/pages/:pageLabel/work/:workId` | `syncPageWorkGet` | `owner-session` | — | — | no |
-| GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — | no |
 | GET | `/api/v1/system/people-messages` | `peopleMessages` | `owner-session` | — | — | no |
 | POST | `/api/v1/system/people-messages/kinds/:kind` | `peopleMessageSwitch` | `owner-session` | — | — | no |
 | POST | `/api/v1/system/people-messages/press` | `peopleMessagePress` | `owner-session` | — | — | no |
