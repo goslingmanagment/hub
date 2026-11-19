@@ -30,6 +30,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { idToString } from "../ofapi-payloads.ts";
 import { resolveOfapiListNextOffset } from "../ofapi-list-pagination.ts";
+import { createOfapiRestGuard, type OfapiBudgetBlock } from "../ofapi-rest-guard.ts";
 import {
   OFAPI_TRIAL_LINK_SUBSCRIBERS_PAGE_LIMIT,
   type OfapiClient,
@@ -38,12 +39,7 @@ import {
 } from "../ofapi.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import { composeRequestObservers, type SyncChunkBudget } from "./chunk-budget.ts";
-import {
-  budgetBlockResult,
-  createOfapiRestGuard,
-  type OfapiBudgetBlock,
-  type OfapiStreamChunkResult,
-} from "./ofapi-dm-sync.ts";
+import { budgetBlockResult, type OfapiStreamChunkResult } from "./ofapi-dm-sync.ts";
 import type { SyncRunTelemetry } from "./observability.ts";
 import { projectLinkFanJournal } from "../ofapi-link-fans-projection.ts";
 import { persistRawPayload, retentionDate } from "./shared.ts";
