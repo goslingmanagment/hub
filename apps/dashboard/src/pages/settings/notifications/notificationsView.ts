@@ -67,6 +67,6 @@ export function telegramHtml(text: string): ReactNode[] {
     out.push(createElement(tag, { key: key++, className: tag === "b" ? "font-semibold" : undefined }, decode(match[2] ?? "")));
     last = match.index + match[0].length;
   }
-  if (last < text.length) out.push(createElement(Fragment, { key: key++ }, decode(text.slice(last))));
+  if (last < text.length) out.push(createElement(Fragment, { key }, decode(text.slice(last))));
   return out;
 }

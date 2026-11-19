@@ -111,7 +111,7 @@ export function OfapiMediaPage() {
       if (results.some((result) => result.isError)) {
         setError("Не удалось обновить сохранённые данные. Результат действия сохранён; нажмите на время обновления, чтобы проверить.");
       } else if (refreshedNotice) setNotice(refreshedNotice);
-    } catch (error) {
+    } catch {
       setError("Не получилось. Hub вернул ошибку.");
     } finally {
       inFlight.current = false;

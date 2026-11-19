@@ -1,5 +1,5 @@
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
-import { AI_SETTINGS_EFFORTS, type AiSettingsFeature } from "@agency_hub_core/shared";
+import type { AI_SETTINGS_EFFORTS, AiSettingsFeature } from "@agency_hub_core/shared";
 import { featureLabel } from "@/pages/account/accountView";
 import { seedValue } from "../ConfigurationEditors.js";
 import { parseTuning, TUNING_KEYS, type TuningKind } from "./featureSettingPatch.js";

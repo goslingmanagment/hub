@@ -78,7 +78,6 @@ export function JoinPage() {
     requested.current = true;
     inspect.mutate({ token });
     // The secret is the only input; re-running on hook identity would replay it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   if (!token) return <Unusable message={LINK_UNUSABLE_MESSAGE} />;

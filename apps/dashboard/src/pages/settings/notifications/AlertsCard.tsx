@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import type { NotificationsSettingsResponse } from "@agency_hub_core/contracts";
-import { useUpdateNotificationsSettings } from "@/api/queries";
+import type { useUpdateNotificationsSettings } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Switch } from "@/components/ui/Switch";
 import { toastError } from "../settingsFeedback.js";
