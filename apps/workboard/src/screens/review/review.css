@@ -181,6 +181,244 @@
     background: var(--ui-surface);
   }
 
+  /* ---------------------------------------------------- The shift's report (ReportBlock.tsx) */
+
+  /* Its own sheet above the numbers: the state and the way to the board on top, the sums, the comment, the sales folded. */
+  .review-report {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+
+  .review-report__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+  }
+
+  .review-report__title {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+  }
+
+  .review-report__state {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    min-width: 0;
+  }
+
+  .review-report__state .ui-badge--success {
+    color: var(--ui-text-2);
+  }
+
+  .review-report__fact {
+    color: var(--ui-text-2);
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  /* A fact keeps its « · » at its own end: where the line breaks on a phone, no line begins with it. */
+  .review-report__fact:not(:last-child)::after {
+    content: "·";
+    margin-left: 12px;
+    color: var(--ui-text-3);
+  }
+
+  .review-report__go {
+    margin-left: auto;
+  }
+
+  .review-report__body {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 12px 48px;
+  }
+
+  .review-report__total {
+    display: flex;
+    flex-direction: column;
+    min-width: 120px;
+  }
+
+  .review-report__total--inline {
+    align-items: flex-end;
+  }
+
+  .review-report__sum {
+    color: var(--ui-text);
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-report__sum .ui-money {
+    font-weight: inherit;
+  }
+
+  .review-report__word {
+    color: var(--ui-text-3);
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  .review-report__word--pre {
+    color: var(--ui-warn-text);
+  }
+
+  .review-report__parts {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding-top: 4px;
+  }
+
+  .review-report__pages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 24px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .review-report__pages li {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-report__pages .ui-page {
+    color: var(--ui-text-2);
+  }
+
+  .review-report__made,
+  .review-report__after {
+    margin: 0;
+    color: var(--ui-text-2);
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  .review-report__comment {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: var(--ui-measure);
+    padding-left: 12px;
+    border-left: 2px solid var(--ui-line);
+  }
+
+  .review-report__comment-head {
+    color: var(--ui-text-3);
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  .review-report__comment-text {
+    margin: 0;
+    color: var(--ui-text);
+    white-space: pre-wrap;
+  }
+
+  .review-report__sales {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin: -8px 0 0 -8px;
+  }
+
+  .review-report__lines {
+    display: flex;
+    flex-direction: column;
+    align-self: stretch;
+    max-width: 760px;
+    margin: 0 0 0 8px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .review-report__line {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px solid var(--ui-line-soft);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-report__line-time {
+    color: var(--ui-text-3);
+  }
+
+  .review-report__line-what {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 12px;
+    min-width: 0;
+  }
+
+  .review-report__line-fan {
+    font-weight: 600;
+  }
+
+  .review-report__line-meta {
+    color: var(--ui-text-2);
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  .review-report__line-note {
+    width: 100%;
+    color: var(--ui-text-2);
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  .review-report .wb-report {
+    width: auto;
+    min-width: 0;
+    padding-left: 0;
+  }
+
+  @media (max-width: 640px) {
+    .review-report {
+      padding: 12px 16px;
+    }
+
+    .review-report__go {
+      width: 100%;
+      margin-left: 0;
+    }
+
+    .review-report__go > .ui-btn {
+      width: 100%;
+      justify-content: center;
+    }
+
+    .review-report__body {
+      gap: 8px 24px;
+    }
+  }
+
   .review-notes {
     margin: -8px 0 0;
     color: var(--ui-text-3);

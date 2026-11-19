@@ -1,6 +1,6 @@
 /*
  * «Мои деньги» on «Мои смены» (MyMoney.tsx): one sheet above the journal, the
- * look of «Сейчас на смене»; and the day's accrual under a row's report sum. Tokens only.
+ * look of «Сейчас на смене»; and the day's accrual under a card's report sum. Tokens only.
  */
 @layer components {
   .mym {
@@ -41,13 +41,7 @@
     line-height: var(--ui-lh-14);
   }
 
-  /* The day's accrual under a row's report sum: one quiet line; still owed, a shade darker. */
-  .mym-total {
-    display: inline-flex;
-    flex-direction: column;
-    align-items: flex-end;
-  }
-
+  /* The day's accrual under a card's report sum: one quiet line; still owed, a shade darker. */
   .mym-line {
     color: var(--ui-text-3);
     font-size: var(--ui-fs-14);
@@ -85,27 +79,6 @@
     .mym__facts.ui-facts--stacked .ui-fact {
       padding: 0;
       border-left: 0;
-    }
-
-    /* The journal's rows stack (my-shifts.css): the report's sum keeps its place on the first line, the day's
-       accrual goes under everything else of the row, where the clock's line cannot run into it. */
-    .mys-journal .ui-table tbody td.mys-col-total:has(.mym-total),
-    .mys-journal .mym-total {
-      display: contents;
-    }
-
-    .mys-journal .mym-total__sum {
-      grid-column: 1;
-      grid-row: 2;
-      justify-self: start;
-      margin-top: 4px;
-    }
-
-    .mys-journal .mym-total > .ui-tooltip-anchor {
-      grid-column: 1 / -1;
-      grid-row: 4;
-      margin-top: 4px;
-      padding-left: 24px;
     }
   }
 }

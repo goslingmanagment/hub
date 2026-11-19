@@ -1,10 +1,10 @@
 import type { KernelOperationResponse, ShiftReportBody, ShiftReportLine } from "@agency_hub_core/contracts";
 import { millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
 
-import { demoError, intBetween, rng, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
+import { demoError, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_USERS, demoPage, demoUserByRole, type DemoUser } from "../world.ts";
 import { DAY_MS, MINUTE_MS, chatterWorld, mskDay, type DemoSale, type DemoShift } from "./account-model.ts";
-import { demoBoardReport, demoBoardWrite, demoPreviewBoardOf } from "./shift-report-board.ts";
+import { demoBoardReport, demoBoardWrite, demoPreviewBoardOf, onDemoOwnBoard, type DemoOwnBoardPhase } from "./shift-report-board.ts";
 import { demoClaimedLines, demoLineId, demoLineOutcome, demoOffPlatformOf, demoOwnShare, demoReportClaims, demoShiftId, onDemoSettle } from "./sale-claims.ts";
 
 /**
@@ -14,8 +14,9 @@ import { demoClaimedLines, demoLineId, demoLineOutcome, demoOffPlatformOf, demoO
  * restarts) — so the whole walk works: mark «не моё», a note, «мимо
  * площадки», the comment, «Сдать смену», «Скопировать пост», «Исправить», the
  * second version. The switch «сдаёт смену в системе» is on for the demo
- * chatter since five days ago: older shifts keep their posts. The shift of two
- * days ago is a long one (60 sales on three pages), the one of three days ago had nothing; both wait to be handed in.
+ * chatter since a week ago: older shifts keep their posts. The ended shifts
+ * since then walk every next step of «Мои смены» (`stageOf`), and a report holds
+ * exactly the sales «Мои смены» shows for its shift (account-model.ts).
  *
  * Invented data only.
  */
@@ -23,7 +24,8 @@ import { demoClaimedLines, demoLineId, demoLineOutcome, demoOffPlatformOf, demoO
 type Report = KernelOperationResponse<"shiftReport">;
 type List = KernelOperationResponse<"shiftReportsList">;
 
-const SWITCH_DAYS = 5;
+/** The demo chatter hands in in Hub since a week ago (sale-chain.ts reads the same day). */
+export const SWITCH_DAYS = 7;
 
 interface Word { statement: ShiftReportLine["statement"]; shareWithUserId: number | null; shareWithName: string | null; note: string | null }
 interface Version { version: number; submittedAt: string; door: "workboard" | "telegram"; by: string; madeFor: string | null; body: ShiftReportBody }
@@ -34,6 +36,8 @@ interface Kept {
   modelComments: Record<string, string>;
   offPlatform: Array<{ id: number; amountMills: number; fromWhom: string; whatFor: string; state: "pending" | "confirmed" | "rejected"; pageLabel: string | null }>;
   versions: Version[];
+  /** When the person copied the counted report's post («Скопировать пост» on the board); null — not by this demo run. */
+  postCopiedAt: string | null;
 }
 
 const kept = new Map<number, Kept>();
@@ -48,22 +52,36 @@ function shiftsOf(user: DemoUser, now: Date) {
   return chatterWorld(user, now).shifts.filter((shift) => !shift.visit);
 }
 
-/** A long shift for the screen's worst case: the shift of two days ago carries 60 sales. */
-function salesOf(shift: DemoShift, back: number, user: DemoUser): DemoSale[] {
-  if (back !== 2 || shift.sales.length >= 60 || shift.sales.length === 0) return back === 3 ? [] : shift.sales;
-  const random = rng(`long:${user.id}:${shift.start}`);
-  const extra: DemoSale[] = [];
-  for (let at = 0; shift.sales.length + extra.length < 60; at += 1) {
-    const base = shift.sales[at % shift.sales.length]!;
-    extra.push({ ...base, ref: `${base.ref}:x${at}`, pageLabel: at % 5 === 0 ? "mia-3" : base.pageLabel, at: shift.start + intBetween(random, 10, Math.max(20, Math.round((shift.end - shift.start) / MINUTE_MS) - 5)) * MINUTE_MS, kind: at % 4 === 0 ? "tip" : "ppv", overlap: false, ppvSender: null });
-  }
-  return [...shift.sales, ...extra].sort((a, b) => a.at - b.at);
+/** A report's sales: the shift's own, the same «Мои смены», «Смены» and the review show (one story of one shift). */
+function salesOf(shift: DemoShift, _back: number, _user: DemoUser): DemoSale[] {
+  return shift.sales;
+}
+
+/** The switch's first moment: midnight of the day `SWITCH_DAYS` back. */
+function switchSince(now: Date): number {
+  return Date.parse(`${mskDay(now.getTime() - SWITCH_DAYS * DAY_MS)}T00:00:00+03:00`);
+}
+
+/**
+ * Where a shift of the switch's days stands, so «Мои смены» walks every next step: the newest ended shift waits to be
+ * handed in («Сдать смену»), the one before is counted and its post sent, the third was handed in and still waits for
+ * «Подтверждаю», the fourth is counted with its post not copied yet, older ones are counted and sent (the fifth by
+ * Gengar «со слов»). Null — going on, or a shift before the switch (the old way).
+ */
+type DemoStage = { kind: "draft" | "confirm" | "uncopied" | "counted"; place: number };
+const STAGES: ReadonlyArray<DemoStage["kind"]> = ["draft", "counted", "confirm", "uncopied"];
+function stageOf(owner: DemoUser, shift: DemoShift, now: Date): DemoStage | null {
+  const since = switchSince(now);
+  if (shift.ongoing || shift.start < since) return null;
+  const place = shiftsOf(owner, now).filter((one) => !one.ongoing && one.start >= since).findIndex((one) => one.start === shift.start);
+  if (place < 0) return null;
+  return { kind: STAGES[place] ?? "counted", place };
 }
 
 function keptOf(id: number): Kept {
   let one = kept.get(id);
   if (!one) {
-    one = { words: new Map(), comment: "", modelComments: {}, offPlatform: [], versions: [] };
+    one = { words: new Map(), comment: "", modelComments: {}, offPlatform: [], versions: [], postCopiedAt: null };
     kept.set(id, one);
   }
   return one;
@@ -236,14 +254,60 @@ function find(request: DemoRequest, id: number): Found | null {
 /** The demo's history: shifts of the switch's days before yesterday were handed in once, by the person. */
 function seed(found: Found, now: Date) {
   const one = keptOf(found.id);
-  if (one.versions.length > 0 || found.back < 3 || found.back > SWITCH_DAYS || found.shift.ongoing) return;
-  // The empty shift stays to be handed in: the screen's other extreme.
-  if (salesOf(found.shift, found.back, found.owner).length === 0) return;
+  if (one.versions.length > 0) return;
+  const stage = stageOf(found.owner, found.shift, now);
+  if (stage === null || (stage.kind !== "uncopied" && stage.kind !== "counted")) return;
   const body = bodyOf(found.shift, found.back, found.owner, found.id, now);
   const at = new Date(found.shift.end + 7 * MINUTE_MS).toISOString();
+  const door = stage.place === 4 ? "telegram" : "workboard";
   // A version keeps the claims' state of its moment: a settled claim is a later version of its own.
   const unsettled = { ...body, lines: body.lines.map((row) => ({ ...row, facts: null })) };
-  one.versions.push({ version: 1, submittedAt: at, door: found.back === 4 ? "telegram" : "workboard", by: found.back === 4 ? "Генгар, со слов" : found.owner.name, madeFor: null, body: { ...unsettled, source: "version", version: 1, submittedAt: at, door: found.back === 4 ? "telegram" : "workboard" } });
+  one.versions.push({ version: 1, submittedAt: at, door, by: door === "telegram" ? "Генгар, со слов" : found.owner.name, madeFor: null, body: { ...unsettled, source: "version", version: 1, submittedAt: at, door } });
+  // Its post went to «Отчётность» a few minutes later; one counted report's has not yet.
+  if (stage.kind === "counted") one.postCopiedAt = new Date(found.shift.end + 11 * MINUTE_MS).toISOString();
+}
+
+/**
+ * The demo chatter's own board: a shift begun before the switch is the read-only preview (handed in the old way); a
+ * board shift stands in its stage's phase — the draft to hand in, the candidate Hub and Gengar checked waiting for
+ * «Подтверждаю», or counted (its version's rows, its post copied or not).
+ */
+function ownBoardOf(found: Found, draft: ShiftReportBody, now: Date): Report["board"] {
+  const shift = { startedAt: new Date(found.shift.start).toISOString(), pages: found.shift.pages };
+  const owner = { userId: found.owner.id, name: found.owner.name };
+  if (found.shift.start < switchSince(now)) return demoPreviewBoardOf(draft, shift, owner);
+  const one = keptOf(found.id);
+  const latest = one.versions.at(-1) ?? null;
+  const stage = stageOf(found.owner, found.shift, now);
+  const phase = latest !== null ? "counted" as const : stage?.kind === "confirm" ? "confirm" as const : "draft" as const;
+  const body = latest?.body ?? draft;
+  const handedInAt = latest?.submittedAt ?? (phase === "confirm" ? new Date(found.shift.end + 6 * MINUTE_MS).toISOString() : null);
+  const candidate: DemoOwnBoardPhase["candidate"] = handedInAt === null ? null : {
+    id: found.id, number: 1, madeAt: handedInAt, by: found.owner.name, door: "workboard", cutoffAt: handedInAt,
+    count: body.lines.filter((row) => row.amountMills > 0).length, totalMills: body.totalMills,
+    hub: {
+      state: "matched",
+      pages: body.pages.map((page) => ({ pageLabel: page.pageLabel, state: "matched" as const, foundCount: 0, foundMills: 0, at: handedInAt })),
+      foundCount: 0, foundMills: 0,
+    },
+    gengar: { state: "clean", since: handedInAt, answeredAt: new Date(Date.parse(handedInAt) + 3 * MINUTE_MS).toISOString(), proposals: 0, notes: 0 },
+    superseded: false,
+  };
+  const copiedAt = latest === null ? null : one.postCopiedAt;
+  const post: DemoOwnBoardPhase["post"] = latest === null ? null : {
+    copiedAt, seen: copiedAt === null ? null : true, changedSinceCopy: false, late: false,
+    models: [{ modelSlug: "mia", modelName: "Mia", copiedAt, changedSinceCopy: false }],
+  };
+  return demoPreviewBoardOf(body, shift, owner, { phase, handedInAt, countedAt: latest?.submittedAt ?? null, candidate, post });
+}
+
+/** A version of the draft as it stands, handed in by the person (on the board: «Подтверждаю» of the checked candidate). */
+function handIn(found: Found, now: Date): void {
+  const one = keptOf(found.id);
+  const body = bodyOf(found.shift, found.back, found.owner, found.id, now);
+  const version = one.versions.length + 1;
+  const at = now.toISOString();
+  one.versions.push({ version, submittedAt: at, door: "workboard", by: found.owner.name, madeFor: null, body: { ...body, source: "version", version, submittedAt: at, door: "workboard", lines: body.lines.map((row) => ({ ...row, facts: null })) } });
 }
 
 function reportOf(request: DemoRequest, found: Found): Report | DemoReply {
@@ -281,7 +345,7 @@ function reportOf(request: DemoRequest, found: Found): Report | DemoReply {
     colleagues: own ? DEMO_USERS.filter((user) => user.active && user.id !== found.owner.id && user.role === "chatter" && user.pages.some((page) => found.shift.pages.includes(page))).map((user) => ({ userId: user.id, name: user.name })) : [],
     claims: demoReportClaims({ now: request.now, shiftId: found.id, ownerId: found.owner.id, lineIds: new Set((view?.lines ?? draft.lines).map((row) => row.transactionId)), own }),
     // The «Отчёт» board's preview of the shift (the demo chatter hands in the old way): read only, from this report.
-    board: own ? demoPreviewBoardOf(draft, { startedAt: new Date(found.shift.start).toISOString(), pages: found.shift.pages }, { userId: found.owner.id, name: found.owner.name }) : null,
+    board: own ? ownBoardOf(found, draft, request.now) : null,
     serverNow: request.now.toISOString(),
   };
 }
@@ -393,7 +457,7 @@ export const shiftReportHandlers: DemoHandlers = {
     if (!owner || owner.role !== "chatter") return { enabled: false, enabledSince: null, shifts: [], serverNow: request.now.toISOString() };
     const from = String(request.query.from ?? "");
     const to = String(request.query.to ?? "");
-    const since = Date.parse(`${mskDay(request.now.getTime() - SWITCH_DAYS * DAY_MS)}T00:00:00+03:00`);
+    const since = switchSince(request.now);
     const shifts = shiftsOf(owner, request.now).filter((shift) => {
       const day = mskDay(shift.start);
       return day >= from && day <= to;
@@ -406,7 +470,12 @@ export const shiftReportHandlers: DemoHandlers = {
         const found = find(request, id);
         if (found) seed(found, request.now);
         const latest = keptOf(id).versions.at(-1) ?? null;
+        const stage = stageOf(owner, shift, request.now);
+        const board = shift.start >= since;
         return {
+          // The board's phase as Hub reads it (a version made: counted), and whether the person copied its post.
+          phase: !board ? null : latest !== null ? "counted" as const : stage?.kind === "confirm" ? "confirm" as const : "draft" as const,
+          postCopied: board && latest !== null && owner.id === viewer.id ? keptOf(id).postCopiedAt !== null : null,
           shiftId: id, startedAt: new Date(shift.start).toISOString(), endedAt: new Date(shift.end).toISOString(), ongoing: shift.ongoing,
           reportDate: mskDay(shift.start), pages: shift.pages, state: latest ? "submitted" as const : "open" as const,
           version: latest?.version ?? null, submittedAt: latest?.submittedAt ?? null, totalMills: latest?.body.totalMills ?? null,
@@ -484,12 +553,24 @@ export const shiftReportHandlers: DemoHandlers = {
     if (board !== null) return board as never;
     const found = writable(request);
     if (isReply(found)) return found;
-    const one = keptOf(found.id);
-    const body = bodyOf(found.shift, found.back, found.owner, found.id, request.now);
-    const version = one.versions.length + 1;
-    const at = request.now.toISOString();
-    one.versions.push({ version, submittedAt: at, door: "workboard", by: found.owner.name, madeFor: null, body: { ...body, source: "version", version, submittedAt: at, door: "workboard", lines: body.lines.map((row) => ({ ...row, facts: null })) } });
+    handIn(found, request.now);
     return reportOf(request, found);
   },
 };
+
+/** «Подтверждаю» and «Скопировать пост» of the demo chatter's own board shifts (the scenario boards answer their own). */
+onDemoOwnBoard({
+  confirm: (request, shiftId) => {
+    const found = writable({ ...request, params: { ...request.params, shiftId: String(shiftId) } });
+    if (isReply(found)) return found;
+    if (keptOf(found.id).versions.length === 0) handIn(found, request.now);
+    return { confirmed: true, refused: null, report: reportOf(request, found) };
+  },
+  postCopied: (request, shiftId) => {
+    const found = writable({ ...request, params: { ...request.params, shiftId: String(shiftId) } });
+    if (isReply(found)) return found;
+    keptOf(found.id).postCopiedAt = request.now.toISOString();
+    return reportOf(request, found);
+  },
+});
 

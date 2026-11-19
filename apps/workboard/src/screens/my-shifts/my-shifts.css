@@ -1,8 +1,7 @@
 /*
  * Мои смены: what the shared components do not say themselves. Tokens only.
- * Chatters look from a phone: at 640 px and below the journal's rows stack —
- * the day, the report's total and its state on the first line — and nothing is
- * wider than the screen.
+ * Chatters look from a phone: at 640 px and below a card is one column, the
+ * period's blocks stand one under another, and nothing is wider than the screen.
  */
 @layer components {
   .mys {
@@ -32,10 +31,6 @@
     gap: 4px 24px;
     margin: 0;
     font-size: 13px;
-  }
-
-  .mys-quality__list--shift {
-    padding: 4px 0 8px 24px;
   }
 
   .mys-quality__item {
@@ -144,53 +139,7 @@
     line-height: var(--ui-lh-14);
   }
 
-  /* --------------------------------------------------------------- The journal */
-
-  /* While it loads: two lines of the day and the clock, as tall as the rows to come — no person's avatar here. */
-  .mys-journal td:first-child > .ui-table__skeleton > .ui-skel:first-child {
-    display: none;
-  }
-
-  .mys-when {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .mys-when__day {
-    color: var(--ui-text);
-    font-weight: 500;
-  }
-
-  .mys-when__time {
-    color: var(--ui-text-2);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-variant-numeric: tabular-nums;
-  }
-
-  .mys-when__time--now {
-    color: var(--ui-good-text);
-  }
-
-  /* The worked time, pages and Hub's figure under the day: a phone's, not a wide screen's. */
-  .mys-phone {
-    display: none;
-    color: var(--ui-text-2);
-  }
-
-  .mys-pages {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-  }
-
-  .mys-pages__note {
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-  }
-
-  /* Hub's own figure where there is no report: quiet, smaller, never the row's number. */
+  /* Hub's own figure where there is no report («Сейчас на смене»): quiet, smaller, never the row's number. */
   .mys-hub {
     color: var(--ui-text-3);
     font-size: var(--ui-fs-14);
@@ -202,41 +151,6 @@
     color: inherit;
   }
 
-  .mys-state {
-    display: inline-flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 2px 10px;
-    min-height: 24px;
-  }
-
-  .mys-state__next {
-    color: var(--ui-text-2);
-  }
-
-  /* A sum the chatter changed after the draft: their right, said quietly beside the word — never a mark. */
-  .mys-state__was {
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-14);
-    line-height: var(--ui-lh-14);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-  }
-
-  /* Colour only where something is to be done: a sent report keeps its green mark, its word is plain. */
-  .mys-state .ui-badge--success {
-    color: var(--ui-text-2);
-  }
-
-  /* The day's note under the report's sum (shared/ReportNote.tsx): the number first, the note under it, across the cell. */
-  .mys-noted {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-  }
-
-  /* -------------------------------------------------------------- A phone */
-
   @media (max-width: 640px) {
     .mys-now {
       gap: 4px 12px;
@@ -247,158 +161,770 @@
       margin-left: 0;
       width: 100%;
     }
-
-    /* The journal's rows stack: the day, the total and the state on the first line; the clock, the worked time and
-       the pages under them; what to do under that. One DOM, the table's own. */
-    .mys-journal .ui-table,
-    .mys-journal .ui-table tbody {
-      display: block;
-    }
-
-    .mys-journal .ui-table colgroup {
-      display: none;
-    }
-
-    .mys-journal .ui-table thead {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
-
-    .mys-journal .ui-table tbody tr {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto auto;
-      align-items: start;
-      column-gap: 12px;
-      /* A finger's row: at least 44 px, the whole row is the button. */
-      min-height: 64px;
-      padding: 10px 16px;
-      border-bottom: 1px solid var(--ui-line-soft);
-    }
-
-    .mys-journal .ui-table tbody tr:last-child {
-      border-bottom: 0;
-    }
-
-    .mys-journal .ui-table tbody td,
-    .mys-journal .ui-table tbody td:first-child,
-    .mys-journal .ui-table tbody td:last-child {
-      display: block;
-      height: auto;
-      padding: 0;
-      border: 0;
-    }
-
-    /* The shift on the first line (the day, the clock, the worked time, the pages), its report's sum and state on the
-       second: a long state («Сдайте смену») or «предварительно» never lies over the day or the sum. */
-    .mys-journal .ui-table td.mys-col-when {
-      grid-column: 1 / -1;
-      grid-row: 1;
-    }
-
-    .mys-journal .ui-table td.mys-col-total {
-      grid-column: 1;
-      grid-row: 2;
-      justify-self: start;
-      margin-top: 4px;
-    }
-
-    .mys-journal .ui-table td.mys-col-total .mys-hub {
-      display: none;
-    }
-
-    .mys-journal .ui-table tbody td.mys-col-state,
-    .mys-journal .ui-table tbody td.mys-col-state .mys-state {
-      display: contents;
-    }
-
-    .mys-journal .mys-state__badge {
-      grid-column: 3;
-      grid-row: 2;
-      justify-self: end;
-      margin-top: 4px;
-    }
-
-    .mys-journal .mys-state__next,
-    .mys-journal .mys-state__was {
-      grid-column: 1 / -1;
-      grid-row: 3;
-      margin-top: 4px;
-      padding-left: 24px;
-      font-size: var(--ui-fs-14);
-      line-height: var(--ui-lh-14);
-    }
-
-    /* The day's note goes under everything else of the row, across it: the sum keeps its place on the first line
-       (the second; with «Мои деньги» on, my-money.css places the sum and the accrual inside it). */
-    .mys-journal .ui-table tbody td.mys-col-total:has(.mys-noted),
-    .mys-journal .mys-noted,
-    .mys-journal .mys-noted__sum:has(.mym-total) {
-      display: contents;
-    }
-
-    .mys-journal .mys-noted__sum:not(:has(.mym-total)) {
-      grid-column: 1;
-      grid-row: 2;
-      justify-self: start;
-      margin-top: 4px;
-    }
-
-    .mys-journal .mys-noted > .wb-report-note {
-      grid-column: 1 / -1;
-      grid-row: 5;
-      justify-content: flex-start;
-      width: auto;
-      min-width: 0;
-      margin-top: 4px;
-      padding-left: 24px;
-    }
-
-    .mys-journal .ui-table tbody td.mys-col-pages,
-    .mys-journal .ui-table tbody td.mys-col-worked,
-    .mys-journal .ui-table tbody tr[aria-hidden] td.mys-col-state {
-      display: none;
-    }
-
-    .mys-journal .mys-phone {
-      display: inline;
-    }
-
-    .mys-journal .mys-when__time {
-      white-space: normal;
-    }
-
-    .mys-journal .ui-table tbody tr.ui-table__detail {
-      display: block;
-      min-height: 0;
-      padding: 0 16px 16px;
-    }
-
-    .mys-journal .ui-table tbody tr.ui-table__row--open {
-      border-bottom: 0;
-    }
-
-    .mys-journal .ui-table tbody tr.ui-table__empty {
-      display: block;
-      padding: 0;
-    }
-
   }
 
-  /* A draft's total, not handed in yet (Hub's shift report). */
-  .mys-pre {
+  /* ------------------------------------------------------- The period in numbers */
+
+  .mys-period {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    margin-top: 8px;
+  }
+
+  .mys-period__title {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-20);
+    line-height: var(--ui-lh-20);
+    font-weight: 600;
+  }
+
+  /*
+   * The sales by day, what they are made of, the best fans: three sheets side by side; on a laptop the days take the
+   * whole width and the other two share the row under them; on a phone one under another.
+   */
+  .mys-period__grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    align-items: stretch;
+  }
+
+  @media (max-width: 1279px) {
+    .mys-period__grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .mys-period__grid > :first-child {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .mys-period__grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* A fan in two lines here (a third of the screen is narrow): the name and the page, the purchases under them. */
+  .mys-period .people-fan {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "rank who   money"
+      "rank count money";
+    row-gap: 0;
+    min-height: 0;
+    padding: 8px 0;
+  }
+
+  .mys-period .people-fan__rank {
+    grid-area: rank;
+    align-self: start;
+  }
+
+  .mys-period .people-fan__who {
+    grid-area: who;
+  }
+
+  .mys-period .people-fan__count {
+    grid-area: count;
+    text-align: left;
+  }
+
+  .mys-period .people-fan > .ui-money,
+  .mys-period .people-fan > .ui-tooltip-anchor {
+    grid-area: money;
+  }
+
+  /* A tile whose number did not come, or is none: said in words, quietly. */
+  .mys-tile-away {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-15);
+    font-weight: 400;
+  }
+
+  .mys-period__lines {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .mys-period .people-split {
+    margin-top: 0;
+  }
+
+  .mys-days {
+    --plot: 156px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    padding-left: 44px;
+  }
+
+  .mys-days__plot {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    height: var(--plot);
+    border-bottom: 1px solid var(--ui-line);
+  }
+
+  .mys-days[data-dense] .mys-days__plot {
+    gap: 2px;
+  }
+
+  /* Two quiet rules of the scale (the best day, its half), their sums at the left edge. */
+  .mys-days__rule {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 1px solid var(--ui-line-soft);
+    pointer-events: none;
+  }
+
+  .mys-days__rule > span {
+    position: absolute;
+    right: 100%;
+    top: -9px;
+    padding-right: 8px;
+    color: var(--ui-text-3);
+    font-size: 12px;
+    line-height: 18px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .mys-days__tip.ui-tooltip-anchor {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+    height: 100%;
+  }
+
+  .mys-days__col {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    min-width: 0;
+    height: 100%;
+    border-radius: 4px 4px 0 0;
+    cursor: default;
+  }
+
+  .mys-days__col:hover {
+    background: var(--ui-hover-soft);
+  }
+
+  .mys-days__col:focus-visible {
+    outline: var(--ui-focus);
+    outline-offset: var(--ui-focus-offset);
+  }
+
+  /* A day's column: its kinds stacked, the first at the bottom, a 2 px gap of the sheet between them. */
+  .mys-days__stack {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 2px;
+    width: 100%;
+    max-width: 40px;
+    min-height: 3px;
+    overflow: hidden;
+    border-radius: 4px 4px 0 0;
+  }
+
+  .mys-days__stack > i {
+    display: block;
+    min-height: 2px;
+  }
+
+  /* A day worked without a sale: a hairline on the floor, not nothing. */
+  .mys-days__zero {
+    width: 100%;
+    max-width: 40px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--ui-line-strong);
+  }
+
+  .mys-days__axis {
+    display: flex;
+    gap: 6px;
+    color: var(--ui-text-3);
+    font-size: 12px;
+    line-height: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mys-days[data-dense] .mys-days__axis {
+    gap: 2px;
+  }
+
+  .mys-days__axis > span {
+    flex: 1 1 0;
+    min-width: 0;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .mys-days__axis > span[data-today] {
+    color: var(--ui-text);
+    font-weight: 600;
+  }
+
+  .mys-days__hint {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 200px;
+  }
+
+  .mys-days__hint-head {
+    font-weight: 600;
+  }
+
+  .mys-days__hint-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  .mys-days__hint-row > span:first-child {
     display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ui-text-2);
+  }
+
+  .mys-days__hint-note {
+    color: var(--ui-text-3);
+  }
+
+  /* -------------------------------------------------------------- The shifts */
+
+  .mys-shifts {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 8px;
+    transition: opacity var(--ui-fast);
+  }
+
+  .mys-shifts[data-refreshing] {
+    opacity: 0.6;
+  }
+
+  .mys-shifts__title {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-20);
+    line-height: var(--ui-lh-20);
+    font-weight: 600;
+  }
+
+  .mys-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /*
+   * A card: when on the left, the money on the right; the shift's line in time beside what its sales are made of;
+   * its numbers; where the report stands and the one step, across the card's foot.
+   */
+  .mys-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+    grid-template-areas:
+      "head   money"
+      "track  kinds"
+      "nums   nums"
+      "note   note"
+      "foot   foot"
+      "report report";
+    column-gap: 40px;
+    padding: 16px 24px 0;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+    /* A card scrolled to (`?report=<day>`) stands under the title bar, not behind it. */
+    scroll-margin-top: calc(var(--wb-bar, 72px) + 16px);
+    transition: border-color var(--ui-fast), box-shadow var(--ui-fast);
+  }
+
+  .mys-card[data-link] {
+    cursor: pointer;
+  }
+
+  .mys-card[data-link]:hover {
+    border-color: var(--ui-line-strong);
+    box-shadow: var(--ui-shadow-raised);
+  }
+
+  .mys-card__head {
+    grid-area: head;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .mys-card__when {
+    display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
+    gap: 2px 12px;
+    min-width: 0;
+  }
+
+  .mys-card__day {
+    color: var(--ui-text);
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+    text-decoration: none;
+  }
+
+  a.mys-card__day:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  a.mys-card__day:focus-visible {
+    border-radius: 4px;
+    outline: var(--ui-focus);
+    outline-offset: var(--ui-focus-offset);
+  }
+
+  .mys-card__time {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ui-text-2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mys-card__time[data-live] {
+    color: var(--ui-good-text);
+  }
+
+  .mys-card__pause {
+    color: var(--ui-text-2);
+  }
+
+  .mys-card__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--ui-good);
+  }
+
+  .mys-card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 16px;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mys-card__meta .ui-page {
+    color: var(--ui-text-2);
+  }
+
+  .mys-card__lost {
+    color: var(--ui-text-3);
+  }
+
+  /* The money: the card's one number, its word under it, the day's accrual under that. */
+  .mys-card__money {
+    grid-area: money;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    text-align: right;
+  }
+
+  .mys-card__sum {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    color: var(--ui-text);
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mys-card__sum .ui-money {
+    font-weight: inherit;
+  }
+
+  /* Before any report the rule's figure: the same place, a quieter ink. */
+  .mys-card__sum--rule {
+    color: var(--ui-text-2);
+    font-weight: 500;
+  }
+
+  .mys-card__sum-word {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    font-weight: 400;
+    letter-spacing: 0;
+  }
+
+  .mys-card__sum-word--pre {
+    color: var(--ui-warn-text);
+  }
+
+  .mys-card__track {
+    grid-area: track;
+    align-self: end;
+    min-width: 0;
+    margin-top: 16px;
+  }
+
+  .mys-card__kinds {
+    grid-area: kinds;
+    align-self: end;
+    min-width: 0;
+    margin-top: 16px;
+  }
+
+  .mys-card__nums {
+    grid-area: nums;
+    margin-top: 16px;
+  }
+
+  .mys-card__note {
+    grid-area: note;
+    margin-top: 8px;
+  }
+
+  .mys-card__note .wb-report-note {
+    justify-content: flex-start;
+    width: auto;
+  }
+
+  /* The report's state and the one step: the card's foot, over a hairline. */
+  .mys-card__foot {
+    grid-area: foot;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+    min-height: 56px;
+    margin-top: 16px;
+    padding: 10px 0;
+    border-top: 1px solid var(--ui-line-soft);
+  }
+
+  .mys-card__state {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px 12px;
+    min-width: 0;
+  }
+
+  .mys-card__state-note {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  /* Colour only where something is to be done: a report handed in keeps its green mark, its words are plain. */
+  .mys-card__state .ui-badge--success {
+    color: var(--ui-text-2);
+  }
+
+  .mys-card__actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  .mys-card__report {
+    grid-area: report;
+    padding: 0 0 16px;
+  }
+
+  .mys-card__report .wb-report {
+    width: auto;
+    min-width: 0;
+    padding-left: 0;
+  }
+
+  .mys-card--skeleton {
+    cursor: default;
+  }
+
+  .mys-card--skeleton .mys-card__head {
+    gap: 6px;
+  }
+
+  /* -------------------------------------------- A shift's line in time (ShiftTrack.tsx) */
+
+  .mys-track {
+    /* The bar and its pause as the lead's ribbon draws them (screens/team/people.css): two steps apart in both themes. */
+    --shift: light-dark(var(--ui-line-strong), var(--ui-series-compare));
+    --pause: light-dark(var(--ui-track), var(--ui-line-strong));
+    --bar: 10px;
+    min-width: 0;
+  }
+
+  .mys-track__line {
+    position: relative;
+    height: 28px;
+  }
+
+  .mys-track__grid {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    width: 1px;
+    background: var(--ui-line-soft);
+  }
+
+  .mys-track__bar {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: var(--bar);
+    overflow: hidden;
+    transform: translateY(-50%);
+    border-radius: calc(var(--bar) / 2);
+    background: var(--shift);
+  }
+
+  .mys-track__bar[data-live] {
+    background: var(--ui-good-line);
+  }
+
+  .mys-track__pause {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--pause);
+  }
+
+  .mys-track__sale {
+    position: absolute;
+    top: 50%;
+    width: var(--bead);
+    height: var(--bead);
+    margin-top: calc(var(--bead) / -2);
+    margin-left: calc(var(--bead) / -2);
+    border-radius: 50%;
+    background: var(--kind);
+    box-shadow: 0 0 0 2px var(--ui-surface);
+    cursor: default;
+  }
+
+  .mys-track__sale[data-overlap] {
+    border: 2px solid var(--kind);
+    background: var(--ui-surface);
+  }
+
+  .mys-track__now {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    right: 0;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--ui-good);
+  }
+
+  .mys-track__hours {
+    position: relative;
+    height: 16px;
+    color: var(--ui-text-3);
+    font-size: 12px;
+    line-height: 16px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mys-track__hours > span {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+  }
+
+  .mys-track__hint {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 280px;
+  }
+
+  .mys-track__hint-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .mys-track__hint-head .ui-money {
+    margin-left: auto;
+  }
+
+  /* -------------------------------------------- What a shift's sales are made of */
+
+  .mys-kinds {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .mys-kinds--none {
+    color: var(--ui-text-3);
+  }
+
+  .mys-kinds__head {
+    color: var(--ui-text-2);
+  }
+
+  .mys-kinds__bar {
+    display: flex;
+    gap: 2px;
+    height: 6px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: var(--ui-track);
+  }
+
+  .mys-kinds__bar > i {
+    display: block;
+    min-width: 3px;
+    height: 100%;
+  }
+
+  .mys-kinds__legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    margin: 0;
+    padding: 0;
+    color: var(--ui-text-2);
+    list-style: none;
+  }
+
+  .mys-kinds__item {
+    display: inline-flex;
+    align-items: center;
     gap: 6px;
     white-space: nowrap;
   }
 
-  .mys-pre__word {
-    color: var(--ui-warn-text);
-    font-size: var(--ui-fs-13);
-    line-height: var(--ui-lh-13);
+  .mys-kinds__item b,
+  .mys-nums b {
+    color: var(--ui-text);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mys-kinds .wb-kind-key {
+    width: 8px;
+    height: 8px;
+  }
+
+  /* -------------------------------------------- A shift's numbers (MyQuality.tsx) */
+
+  .mys-nums {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 24px;
+    margin: 0;
+    padding: 0;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    list-style: none;
+  }
+
+  .mys-nums__pair {
+    white-space: nowrap;
+    cursor: default;
+  }
+
+  /* -------------------------------------------------------------- A phone */
+
+  @media (max-width: 640px) {
+    .mys-card {
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        "head   money"
+        "track  track"
+        "kinds  kinds"
+        "nums   nums"
+        "note   note"
+        "foot   foot"
+        "report report";
+      column-gap: 12px;
+      padding: 12px 16px 0;
+    }
+
+    .mys-card__sum {
+      font-size: 18px;
+      line-height: 24px;
+    }
+
+    .mys-card__kinds {
+      margin-top: 12px;
+    }
+
+    .mys-card__nums {
+      margin-top: 12px;
+    }
+
+    .mys-nums {
+      gap: 4px 16px;
+    }
+
+    .mys-card__foot {
+      padding: 8px 0 12px;
+    }
+
+    /* The step is a finger's: the whole width under the state. */
+    .mys-card__actions {
+      width: 100%;
+      margin-left: 0;
+    }
+
+    .mys-card__actions > * {
+      flex: 1 1 auto;
+      justify-content: center;
+    }
+
+    .mys-days {
+      --plot: 128px;
+      padding-left: 36px;
+    }
+
+    .mys-days__plot,
+    .mys-days__axis {
+      gap: 3px;
+    }
   }
 }

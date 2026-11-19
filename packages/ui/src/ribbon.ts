@@ -74,3 +74,10 @@ export function ribbonRowStart(day: string, clock: RibbonClock): number {
   const sameDay = clock.startHour * 60 + clock.labelAt < DAY_MINUTES;
   return moscowMidnight(day) + (clock.startHour - (sameDay ? 0 : 24)) * HOUR_MS;
 }
+
+/** The diameter of a sale's bead, px: its area grows with the money (the ribbon's rows and a shift's own line). */
+export function beadSize(netMills: number, maxMills: number, density: "roomy" | "medium" | "dense"): number {
+  const [low, high] = density === "dense" ? [6, 12] : density === "medium" ? [6, 14] : [7, 18];
+  if (maxMills <= 0) return low;
+  return low + Math.sqrt(Math.max(0, netMills) / maxMills) * (high - low);
+}

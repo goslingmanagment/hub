@@ -109,6 +109,8 @@ export const chatterStatsSchema = z.object({
     /** The pages the shift worked, the most active first. */
     pages: z.array(z.string()),
     salesNetMills: mills,
+    /** What `salesNetMills` is made of, by kind (its parts add up to it): «Мои смены» draws a shift's sales from it. */
+    byKind: byKindSchema,
     overlapNetMills: mills,
     /** Who else a sale of this one counts for (`overlap`). */
     together: z.array(z.string()),

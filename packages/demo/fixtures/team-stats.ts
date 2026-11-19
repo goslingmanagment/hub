@@ -137,6 +137,7 @@ function statsOf(request: DemoRequest, scope: readonly string[], days: number, u
       pauses: shift.pauses.map((pause) => ({ from: isoAt(pause.from), to: isoAt(pause.to) })),
       pages: workedPages(shift).filter((label) => scope.includes(label)),
       salesNetMills: net(sales),
+      byKind: byKind(sales),
       overlapNetMills: net(sales.filter((sale) => sale.overlap)),
       together: shift.together,
       messages: shift.messages,

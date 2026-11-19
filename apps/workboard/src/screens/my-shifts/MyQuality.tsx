@@ -1,11 +1,14 @@
 /**
  * «Мои смены»: how the person answers and writes (`accountShiftNumbers`, package N). The period's three quality
- * numbers in the header, each with the team's average of the same period in grey; a shift's own three under its row.
- * The team's is one number, never a list of people. The words are Workboard's (shared/metrics.ts).
+ * numbers in the header, each with the team's average of the same period in grey; a shift's own numbers on its card.
+ * The team's is one number, never a list of people. The words are Workboard's (shared/metrics.ts). Every number of a
+ * shift here is this one read's (the person's, all pages): never beside the same number of another read.
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { Tooltip } from "@agency_hub_core/ui";
-import { METRICS, PER_SHIFT_HINT, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
+import { formatCount } from "@agency_hub_core/ui/format";
+import { ruPlural } from "@agency_hub_core/ui/plural";
+import { METRICS, PER_SHIFT_HINT, UNANSWERED_NOW_LABEL, formatAiUnedited, formatReplyMedian, formatUnanswered } from "@/shared/metrics";
 
 type Answer = KernelOperationResponse<"accountShiftNumbers">;
 type Quality = Answer["shifts"][number]["quality"];
@@ -56,9 +59,58 @@ export function PeriodQualityLine({ answer }: { answer: Answer }) {
   );
 }
 
-/** One shift's numbers, opened under its row. */
-export function ShiftQualityLine({ quality }: { quality: Quality }) {
-  return <Cells cells={cellsOf(quality, null, false)} className="mys-quality__list mys-quality__list--shift" />;
+export type ShiftNumbers = Answer["shifts"][number];
+
+/**
+ * A shift's numbers on its card, one compact row: what the person did (messages, PPV sent → bought, fans written to →
+ * paid) and how they answered (the three quality numbers). A number shows only where the read has it.
+ */
+export function ShiftNumbersLine({ shift }: { shift: ShiftNumbers }) {
+  const { numbers, quality } = shift;
+  const items: Array<{ key: string; label: string; value: string; hint: string }> = [
+    {
+      key: "messages", label: ruPlural(numbers.messages, "сообщение", "сообщения", "сообщений"), value: formatCount(numbers.messages),
+      hint: "Личные сообщения фанам за смену, на всех страницах. Рассылки не в счёте.",
+    },
+  ];
+  if (numbers.ppvSent > 0) {
+    items.push({
+      key: "ppv", label: "PPV", value: `${formatCount(numbers.ppvSent)} → ${formatCount(numbers.ppvBought)}`,
+      hint: `Платных сообщений отправлено ${formatCount(numbers.ppvSent)}, из них куплено ${formatCount(numbers.ppvBought)}.`,
+    });
+  }
+  if (numbers.fansWritten > 0) {
+    items.push({
+      key: "fans", label: "Фаны", value: `${formatCount(numbers.fansWritten)} → ${formatCount(numbers.fansPaid)}`,
+      hint: `Вы писали ${formatCount(numbers.fansWritten)} фанам, из них ${formatCount(numbers.fansPaid)} заплатили до конца смены.`,
+    });
+  }
+  if (quality.replyMedianSeconds !== null) {
+    items.push({ key: "reply", label: METRICS.reply.label, value: formatReplyMedian(quality.replyMedianSeconds), hint: METRICS.reply.hint });
+  }
+  items.push({
+    key: "unanswered", label: shift.ongoing ? UNANSWERED_NOW_LABEL : METRICS.unanswered.label, value: formatUnanswered(quality.unansweredAtEnd),
+    hint: METRICS.unanswered.hint,
+  });
+  if (quality.aiUneditedShare !== null) {
+    items.push({ key: "ai", label: METRICS.aiUnedited.label, value: formatAiUnedited(quality.aiUneditedShare), hint: METRICS.aiUnedited.hint });
+  }
+  return (
+    <ul className="mys-nums" aria-label="Числа смены">
+      {items.map((item) => (
+        <li key={item.key} className="mys-nums__item">
+          <Tooltip content={item.hint} align="start">
+            {/* A count reads «121 сообщение»; the rest «PPV 8 → 3», «Ответ, медиана 4 мин 31 с». */}
+            <span className="mys-nums__pair">
+              {item.key === "messages"
+                ? <><b>{item.value}</b> {item.label}</>
+                : <><span className="mys-nums__label">{item.label}</span> <b>{item.value}</b></>}
+            </span>
+          </Tooltip>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** The shift of the answer that is this row's: the same start, else the one that overlaps it most (a start can move between two reads). */

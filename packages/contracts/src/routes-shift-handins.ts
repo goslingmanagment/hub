@@ -289,6 +289,13 @@ export const shiftReportsListItemSchema = z.object({
   totalMills: mills.nullable(),
   /** The person's own shift not handed in yet: the draft's total now (by the rule and their words), «предварительно»; null — handed in, someone else's, or not computed. */
   draftTotalMills: mills.nullable(),
+  /**
+   * The «Отчёт» board's phase of a board shift (the person's right was on when it began): what the person does next on
+   * «Мои смены» («Сдать смену», «Подтвердить»); null — no board (the report goes the old way). Absent from an older server.
+   */
+  phase: shiftReportPhaseEnum.nullable().optional(),
+  /** The reader's own counted board report: its post for «Отчётность» was copied; null — not counted, not one's own, or no board. */
+  postCopied: z.boolean().nullable().optional(),
 });
 
 export const shiftReportsListResponseSchema = z.object({

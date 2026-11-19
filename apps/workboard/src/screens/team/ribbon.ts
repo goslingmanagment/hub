@@ -6,7 +6,7 @@
  * over midnight too — and each sale a bead at its minute. Pure; no React.
  */
 import { sumMills, millsToNumber } from "@agency_hub_core/shared";
-import { RIBBON_STEP_HOURS, ribbonClock, ribbonRowOf, ribbonRowStart, type RibbonClock } from "@agency_hub_core/ui/ribbon";
+import { RIBBON_STEP_HOURS, beadSize, ribbonClock, ribbonRowOf, ribbonRowStart, type RibbonClock } from "@agency_hub_core/ui/ribbon";
 import { shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import type { PersonShift, PersonVisit, ShiftSale } from "./data.js";
 
@@ -14,8 +14,8 @@ const DAY_MINUTES = 1440;
 const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 
-// The clock lives in the design system, shared with the console's cabinet.
-export { RIBBON_STEP_HOURS, ribbonClock, ribbonRowOf, ribbonRowStart, type RibbonClock };
+// The clock and the beads live in the design system, shared with the console's cabinet and «Мои смены».
+export { RIBBON_STEP_HOURS, beadSize, ribbonClock, ribbonRowOf, ribbonRowStart, type RibbonClock };
 
 export interface RibbonPiece {
   /** Index into the shifts. */
@@ -98,12 +98,6 @@ export function ribbonDays(days: readonly string[], shifts: readonly PersonShift
   return [...rows.values()].sort((a, b) => b.day.localeCompare(a.day));
 }
 
-/** The diameter of a sale's bead, px: its area grows with the money. */
-export function beadSize(netMills: number, maxMills: number, density: "roomy" | "medium" | "dense"): number {
-  const [low, high] = density === "dense" ? [6, 12] : density === "medium" ? [6, 14] : [7, 18];
-  if (maxMills <= 0) return low;
-  return low + Math.sqrt(Math.max(0, netMills) / maxMills) * (high - low);
-}
 
 /** The part of the clock the ribbon draws, minutes from a row's start: [from, to). */
 export interface RibbonView {

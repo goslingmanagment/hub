@@ -5,8 +5,10 @@
  * simulation, so the shifts, the numbers, the reports and the statistics of a
  * chatter agree with each other — and with the pages' revenue in world.ts.
  */
+import { millsPercentOf, millsRoundedTo, millsToNumber, sumMills } from "@agency_hub_core/shared";
 import { between, hashString, intBetween, pick, rng, type DemoRequest } from "../core.ts";
 import { DEMO_PAGES, DEMO_USERS, demoDailyNet, demoFans, demoPage, demoUserByRole, type DemoFan, type DemoUser } from "../world.ts";
+import { chatterWorld, type DemoSale as AccountSale } from "./account-model.ts";
 
 export const MIN = 60_000;
 export const HOUR = 60 * MIN;
@@ -406,6 +408,88 @@ function simulateChatter(schedule: Schedule, now: Date, takeBreak: boolean): { s
   return { shifts, visits, since };
 }
 
+/**
+ * The demo chatter (the role «chatter»: alex.k) lives ONE life on every screen: their shifts, pauses, pages, messages and
+ * sales are account-model.ts's — what «Мои смены», the reports and the cabinet show — and the team's screens, the
+ * shift's review and the shift numbers (`accountShiftNumbers`, `teamChatterNumbers`) read the same shifts from here.
+ * What the account model does not keep (replies and their speed, waits, how messages were written) is made here as for
+ * anyone else.
+ */
+function fromAccountModel(schedule: Schedule, now: Date): { shifts: DemoShift[]; visits: DemoVisit[]; since: number } {
+  const user = userOf(schedule.username);
+  const world = chatterWorld(user, now);
+  const saleOfAccount = (sale: AccountSale): DemoSale => ({
+    ref: sale.ref,
+    pageLabel: sale.pageLabel,
+    platform: sale.platform === "onlyfans" ? "onlyfans" : "fansly",
+    kind: sale.kind,
+    fan: sale.fan,
+    netMills: sale.netMills,
+    // The fan paid the net and the platform's cut: 125 % of the net (`millsPercentOf` takes 0…100: the net and its quarter).
+    priceMills: millsToNumber(millsRoundedTo(sumMills([sale.netMills, millsPercentOf(sale.netMills, 25)]), "cent")),
+    at: sale.at,
+    mark: sale.myMark?.mark ?? "mine",
+    shareWith: sale.myMark?.shareWith ? DEMO_USERS.find((one) => one.username === sale.myMark!.shareWith) ?? null : null,
+    ownAmountMills: sale.myMark?.amountMills ?? null,
+    overlap: sale.overlap,
+  });
+  const shifts = world.shifts.filter((one) => !one.visit).map((one): DemoShift => {
+    const random = rng(`team:${schedule.username}:${one.start}`);
+    const minutes = one.pages.reduce((sum, label) => sum + (one.pageMinutes[label] ?? 0), 0) || 1;
+    let assigned = 0;
+    const pages = one.pages.map((label, index) => {
+      const messages = index === one.pages.length - 1 ? one.messages - assigned : Math.round((one.messages * (one.pageMinutes[label] ?? 0)) / minutes);
+      assigned += messages;
+      return { pageLabel: label, activeMinutes: one.pageMinutes[label] ?? 0, messages };
+    }).sort((left, right) => right.messages - left.messages);
+    const sales = one.sales.map(saleOfAccount);
+    const ppv = sales.filter((sale) => sale.kind === "ppv");
+    const replies = Math.round(one.messages * between(random, 0.42, 0.55));
+    const hand = Math.round(one.messages * between(random, 0.48, 0.62));
+    const reply = Math.round(one.messages * between(random, 0.24, 0.32));
+    const fix = Math.round(one.messages * between(random, 0.05, 0.09));
+    const greet = Math.round(one.messages * between(random, 0.02, 0.04));
+    const lastInputAt = one.ongoing ? one.end : one.end - MIN;
+    return {
+      user,
+      startedAt: one.start,
+      endedAt: one.end,
+      ongoing: one.ongoing,
+      workedMinutes: one.workedMinutes,
+      pauses: one.pauses,
+      lastInputAt,
+      lastBeatAt: lastInputAt,
+      pages,
+      messages: one.messages,
+      ppvSent: one.ppvSent,
+      ppvAveragePriceMills: ppv.length > 0 ? millsToNumber(millsRoundedTo(sumMills(ppv.map((sale) => sale.priceMills)) / BigInt(ppv.length), "cent")) : 19_990,
+      fansWritten: one.fansWritten,
+      replies,
+      replyMedianSeconds: intBetween(random, schedule.replyMedian[0], schedule.replyMedian[1]),
+      repliesWithinHour: Math.round(replies * between(random, 0.84, 0.98)),
+      waitingAtEnd: one.ongoing ? intBetween(random, 3, 11) : intBetween(random, 0, 8),
+      composed: { hand, reply, fix, greet, other: Math.max(0, one.messages - hand - reply - fix - greet) },
+      sales,
+      confirmedAt: one.confirmedAt,
+      together: one.together,
+      speed: (schedule.replyMedian[0] + schedule.replyMedian[1]) / 2,
+    };
+  });
+  const visits = world.shifts.filter((one) => one.visit).map((one): DemoVisit => ({
+    user,
+    startedAt: one.start,
+    endedAt: one.end,
+    workedMinutes: one.workedMinutes,
+    messages: one.messages,
+    pageLabel: one.pages[0] ?? schedule.pages[0]![0],
+    sales: one.sales.map(saleOfAccount),
+  }));
+  return { shifts, visits, since: world.activitySince ?? Number.POSITIVE_INFINITY };
+}
+
+/** Whose life is account-model.ts's: the demo's chatter. */
+const ACCOUNT_MODEL_USER = demoUserByRole("chatter").username;
+
 let cache: { key: number; world: DemoTeamWorld } | null = null;
 
 /** The team's shifts and visits up to `now`, newest first. */
@@ -418,14 +502,15 @@ export function teamWorld(now: Date): DemoTeamWorld {
   // One chatter on a shift now is on a break, the extension closed: the first whose shift allows it.
   let onBreak = false;
   for (const schedule of SCHEDULES) {
-    const result = simulateChatter(schedule, now, !onBreak);
+    const result: { shifts: DemoShift[]; visits: DemoVisit[]; since: number } = schedule.username === ACCOUNT_MODEL_USER ? fromAccountModel(schedule, now) : simulateChatter(schedule, now, !onBreak);
     onBreak ||= result.shifts.some((shift) => shift.ongoing && shift.lastBeatAt < shift.endedAt - 3 * MIN);
     shifts.push(...result.shifts);
     visits.push(...result.visits);
     activitySince.set(userOf(schedule.username).id, result.since);
   }
-  // Two chatters on one page at once: who else a shift's sale counts for.
+  // Two chatters on one page at once: who else a shift's sale counts for (the account model's shifts say it themselves).
   for (const shift of shifts) {
+    if (shift.user.username === ACCOUNT_MODEL_USER) continue;
     const labels = new Set(shift.pages.filter((page) => page.messages >= 10).map((page) => page.pageLabel));
     const others = shifts.filter((other) => other.user.id !== shift.user.id
       && other.startedAt < shift.endedAt && other.endedAt > shift.startedAt

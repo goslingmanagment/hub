@@ -211,6 +211,7 @@ export function chatterStats(world: DemoChatterWorld, days: number, until?: stri
       pauses: shift.pauses.map((pause) => ({ from: iso(new Date(pause.from)), to: iso(new Date(pause.to)) })),
       pages: shift.pages,
       salesNetMills: sum(shift.sales, (sale) => sale.netMills),
+      byKind: byKindOf(shift.sales),
       overlapNetMills: sum(shift.sales.filter((sale) => sale.overlap), (sale) => sale.netMills),
       together: shift.together,
       messages: shift.messages,

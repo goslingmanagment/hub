@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { settleSale, streaksOf } from "../apps/runtime/src/services/chatter-stats.ts";
+import { byKindOf, settleSale, streaksOf } from "../apps/runtime/src/services/chatter-stats.ts";
 
 // Whose a sale is when two shifts hold it: who last wrote to the fan; neither — both.
 describe("settleSale", () => {
@@ -40,5 +40,30 @@ describe("streaksOf", () => {
   it("is broken by a whole day without a shift", () => {
     expect(streaksOf(days, "2026-11-04")).toEqual({ current: 0, longest: 4 });
     expect(streaksOf(new Set(), "2026-11-04")).toEqual({ current: 0, longest: 0 });
+  });
+});
+
+// What a shift's sales are made of («Мои смены» draws a card's share bar from it): Hub's sum, never the browser's.
+describe("byKindOf", () => {
+  const sales = [
+    { kind: "message_purchase", netMills: 23_992 },
+    { kind: "tip", netMills: 8_000 },
+    { kind: "stream_tip", netMills: 4_000 },
+    { kind: "subscription", netMills: 7_992 },
+    { kind: "post_purchase", netMills: 9_600 },
+    { kind: "message_purchase", netMills: 15_992 },
+  ];
+
+  it("sums the net of each kind, a stream tip with the tips", () => {
+    expect(byKindOf(sales)).toEqual({ ppv: 39_984, tip: 12_000, subscription: 7_992, post: 9_600 });
+  });
+
+  it("adds up to the shift's sales", () => {
+    const byKind = byKindOf(sales);
+    expect(byKind.ppv + byKind.tip + byKind.subscription + byKind.post).toBe(sales.reduce((sum, sale) => sum + sale.netMills, 0));
+  });
+
+  it("is zero of every kind without sales", () => {
+    expect(byKindOf([])).toEqual({ ppv: 0, tip: 0, subscription: 0, post: 0 });
   });
 });

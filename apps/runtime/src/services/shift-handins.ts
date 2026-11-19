@@ -576,7 +576,11 @@ export async function listShiftReports(
       const handin = handins.get(shift.id) ?? null;
       const version = handin === null ? null : versions.get(handin.id) ?? null;
       const total = version === null ? null : versionTotalFor(version, cutTo);
+      // The board's phase, read as the board reads it (shift-report-board-view.ts): «Мои смены» names the next step by it.
+      const phase = boardOn({ person, shift }) ? phaseOf(handin) : null;
       return {
+        phase,
+        postCopied: own && phase === "counted" ? handin?.postCopiedAt != null : null,
         draftTotalMills: drafts.get(shift.id) ?? null,
         shiftId: shift.id,
         startedAt: shift.startedAt.toISOString(),
