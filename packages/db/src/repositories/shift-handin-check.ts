@@ -191,12 +191,13 @@ export async function listNotesOfSales(db: Database, transactionIds: readonly nu
 }
 
 /**
- * Since when a handed-in report waits for ChatSpace's statement of this OnlyFans page: the earliest hand-in of an open
- * candidate whose check has the page in `statement` (made after `since`); null — none waits.
+ * Since when a handed-in report waits for ChatSpace's statement of this OnlyFans page: the earliest hand-in (`cutoff_at`,
+ * which a candidate re-made by the check keeps — so a re-made one is not a new hand-in) of an open candidate whose check
+ * has the page in `statement` (made after `since`); null — none waits.
  */
 export async function pageStatementAwaitedSince(db: Database, input: { pageLabel: string; since: Date }): Promise<Date | null> {
   const result = await db.execute<Row>(sql`
-    select min(c.made_at) as made_at from shift_handin_candidates c
+    select min(c.cutoff_at) as made_at from shift_handin_candidates c
     where c.superseded_at is null and c.hub_checked_at is null and c.made_at >= ${input.since.toISOString()}::timestamptz
       and c.hub_check @> ${JSON.stringify([{ pageLabel: input.pageLabel, state: "statement" }])}::jsonb`);
   const madeAt = result.rows[0]?.made_at;
