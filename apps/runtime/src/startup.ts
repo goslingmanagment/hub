@@ -1,3 +1,10 @@
+// node:http stays in startup.js's static graph, as when the bundle was one
+// file: Node loads this builtin before any module evaluates, and with it Node's
+// own undici, which takes fetch()'s global dispatcher. Without it npm undici
+// (a static import through @agency_hub_core/shared) would take it first. The
+// binding is used in main() because esbuild drops a bare `import "node:http"`.
+import { STATUS_CODES } from "node:http";
+
 import { createPool } from "@agency_hub_core/db";
 import { loadConfig } from "@agency_hub_core/shared";
 
@@ -50,6 +57,9 @@ async function loadRole(role: ReturnType<typeof resolveRole>) {
 }
 
 export async function main() {
+  if (STATUS_CODES === undefined) {
+    throw new Error("node:http is not loaded");
+  }
   if (process.argv[2] === "print-public-capabilities") {
     // Still loads every role's code (and so every package they import, the
     // native bindings included): CI's capability manifest smoke and the
