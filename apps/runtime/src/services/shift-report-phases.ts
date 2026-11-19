@@ -245,6 +245,25 @@ export function signedLines(input: {
 }
 
 /**
+ * Whether what «Подтверждаю» would sign now is exactly what the person signed at «Сдать смену» (the candidate as handed
+ * in): every sale's amount, every page's sum, every «мимо площадки» with its state. The total and the count alone are
+ * not enough — a decision that moves $100 from one sale to another of the same page or of another page keeps both and
+ * still changes what is paid for. Pure (tests/shift-report-phases.test.ts).
+ */
+export function sameAsSigned(
+  signed: { lines: readonly Pick<HandinVersionLine, "transactionId" | "amountMills">[]; pages: readonly { pageLabel: string; amountMills: number }[]; offPlatform: readonly { id: number; amountMills: number; state: string; pageLabel?: string | null }[] },
+  now: { lines: readonly Pick<HandinVersionLine, "transactionId" | "amountMills">[]; pages: readonly { pageLabel: string; amountMills: number }[]; offPlatform: readonly { id: number; amountMills: number; state: string; pageLabel?: string | null }[] },
+): boolean {
+  const sales = (lines: readonly Pick<HandinVersionLine, "transactionId" | "amountMills">[]) =>
+    lines.filter((line) => line.amountMills !== 0).map((line) => `${line.transactionId ?? "-"}:${line.amountMills}`).sort().join("|");
+  const pages = (rows: readonly { pageLabel: string; amountMills: number }[]) =>
+    rows.filter((row) => row.amountMills !== 0).map((row) => `${row.pageLabel}:${row.amountMills}`).sort().join("|");
+  const off = (rows: readonly { id: number; amountMills: number; state: string; pageLabel?: string | null }[]) =>
+    rows.map((row) => `${row.id}:${row.amountMills}:${row.state}:${row.pageLabel ?? ""}`).sort().join("|");
+  return sales(signed.lines) === sales(now.lines) && pages(signed.pages) === pages(now.pages) && off(signed.offPlatform) === off(now.offPlatform);
+}
+
+/**
  * Whether a line of what is checked or counted holds its sale: it counts it, or it carries the person's word, a dispute
  * or a settlement. A line at $0 with nothing on it («Рядом», nobody's) holds nothing: when the rule gives the sale to the
  * person after the hand-in — a colleague gave it, a decision — it comes «после сдачи» and «Досдать» takes it, as a sale

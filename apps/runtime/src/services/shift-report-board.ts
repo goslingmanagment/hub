@@ -98,7 +98,7 @@ import {
   type Subject,
 } from "./shift-report-draft.ts";
 import {
-  cardSuperseded, checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, PhaseConflictError, proposalDelta, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT,
+  cardSuperseded, checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, PhaseConflictError, proposalDelta, sameAsSigned, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT,
   type BoardAction,
 } from "./shift-report-phases.ts";
 import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
@@ -299,8 +299,10 @@ async function confirmCandidate(
     if ((input.seenTotalMills !== undefined && input.seenTotalMills !== sums.totalMills) || (input.seenCount !== undefined && input.seenCount !== count)) {
       return { done: "changed" as const };
     }
-    // The signature at «Сдать смену» never takes a card of Gengar the person has not seen, money or a note alike.
+    // The signature at «Сдать смену» never takes a card of Gengar the person has not seen, money or a note alike, and
+    // signs only the candidate as handed in: the same sales at the same amounts, not merely the same total and count.
     if (options.bySignature === true && proposals.some((one) => one.state === "proposed")) return { done: "changed" as const };
+    if (options.bySignature === true && !sameAsSigned(candidate, { lines, pages: sums.pages, offPlatform })) return { done: "changed" as const };
     const made = await insertHandinVersion(db, {
       handin: locked, door: actor.door, actorUserId: actor.userId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
       totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: candidate.comment, modelComments: candidate.modelComments, dayPaid, ruleVersion: candidate.ruleVersion,
