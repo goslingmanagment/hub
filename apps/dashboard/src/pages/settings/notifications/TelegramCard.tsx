@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode, type RefObject } from "react";
 import type { NotificationsSettingsResponse } from "@agency_hub_core/contracts";
 import { toast } from "sonner";
-import { useDiscoverTelegramChats, useSendTestMessage, useUpdateNotificationsSettings } from "@/api/queries";
+import { useDiscoverTelegramChats, type useSendTestMessage, type useUpdateNotificationsSettings } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { StatusBadge } from "@/components/ui/StatusBadge";

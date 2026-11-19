@@ -1762,6 +1762,11 @@ COPY apps/workboard/dist /app/apps/workboard/dist
 COPY apps/runtime/dist /app/apps/runtime/dist
 COPY packages/db/dist /app/packages/db/dist
 COPY packages/db/migrations /app/packages/db/migrations
+
+# The base's V8 compile cache was made from the base's dist: drop it and make
+# this dist's, the Dockerfile's runtime-stage warm-up (keep the two the same).
+ENV NODE_COMPILE_CACHE=/app/.node-compile-cache
+RUN rm -rf /app/.node-compile-cache && node apps/runtime/dist/startup.js print-public-capabilities >/dev/null && node apps/runtime/dist/cli.js --help >/dev/null
 EOF
 
   local path

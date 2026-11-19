@@ -13,7 +13,7 @@ export function ToContentops() {
   const [stuck, setStuck] = useState(false);
   useLayoutEffect(() => {
     const key = "hub:to-contentops";
-    let last: string | null = null;
+    let last: string | null;
     try {
       last = sessionStorage.getItem(key);
       sessionStorage.setItem(key, `${address} ${Date.now()}`);

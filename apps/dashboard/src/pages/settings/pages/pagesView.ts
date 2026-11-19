@@ -4,7 +4,7 @@ import type { PageWorker } from "./PageRow.js";
 
 
 export function pagesCount(count: number): string {
-  return count === 0 ? "Страниц нет" : `${count} ${ruPlural(count, "страница", "страницы", "страниц")}`;
+  return count === 0 ? "Страниц нет" : `${count}\u00a0${ruPlural(count, "страница", "страницы", "страниц")}`;
 }
 
 export interface ModelGroup {
