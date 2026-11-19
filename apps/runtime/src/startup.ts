@@ -54,7 +54,9 @@ export async function main() {
     // Still loads every role's code (and so every package they import, the
     // native bindings included): CI's capability manifest smoke and the
     // deploy's candidate probe run this command in the image, the one load of
-    // the whole bundle before any container is swapped.
+    // the whole bundle before any container is swapped, and the image's
+    // compile-cache warm-up (Dockerfile, the dist-only overlay) runs it to
+    // cache every role's chunks.
     await import("./api-runtime.ts");
     await import("./scheduler-runtime.ts");
     await import("./services/compatible-client-sdks.ts");
