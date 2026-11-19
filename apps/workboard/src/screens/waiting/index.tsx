@@ -1,15 +1,18 @@
-import { useLocation, useNavigate, useSearchParams } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, ErrorState, Skeleton } from "@agency_hub_core/ui";
 import { groupOfAnchor } from "@agency_hub_core/ui/waiting/kinds";
 import { WaitingList, waitingSummary, type WaitingContext, type WaitingListProps } from "@agency_hub_core/ui/waiting/WaitingList";
+import { waitingQuery } from "@agency_hub_core/ui/place";
 import { heldSendsQuery, saleQuestionsQuery } from "@/shared/decisions";
-import { mattersListQuery, mattersWaitingQuery } from "@/shared/matters";
+import { kernel } from "@/shared/hub";
+import { mattersListQuery } from "@/shared/myMatters";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { useMe } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePages } from "@/shared/usePages";
+import { useSearchParam } from "@/shared/useSearchParam";
 import { ResolveSendModal } from "../decisions/HeldSends";
 import { DisputeModal, NobodyModal, OffPlatformModal, UnlinkedModal } from "./Disputes";
 import { goLink } from "./links";
@@ -29,13 +32,14 @@ const MINUTE = 60_000;
 export function WaitingScreen() {
   const { isOwner } = useMe();
   const { page, setPage } = usePageFilter();
-  const [search, setSearch] = useSearchParams();
+  const [search, setParam] = useSearchParam();
   const location = useLocation();
   const navigate = useNavigate();
   const pages = usePages();
   const list = useQuery({ ...mattersListQuery, refetchInterval: MINUTE });
-  // «Ждут вас» by its groups: the custom orders, a count without matters, are a line here too.
-  const waitingRead = useQuery({ ...mattersWaitingQuery(), refetchInterval: MINUTE });
+  // «Ждут вас» by its groups, the menu's own read (one answer for the badge and the list): the custom orders, a count
+  // without matters, are a line here too.
+  const waitingRead = useQuery(waitingQuery(kernel));
   const matters = list.data?.matters ?? [];
   const has = (kind: string) => matters.some((matter) => matter.kind === kind);
   const attemptId = search.get("send");
@@ -53,23 +57,11 @@ export function WaitingScreen() {
   ];
   const fanOf = useFanNames(fans);
 
-  const setSend = (value: string | null) => setSearch((current) => {
-    const next = new URLSearchParams(current);
-    if (value === null) next.delete("send");
-    else next.set("send", value);
-    return next;
-  });
-  const setParam = (param: string, value: string | null) => setSearch((current) => {
-    const next = new URLSearchParams(current);
-    if (value === null) next.delete(param);
-    else next.set(param, value);
-    return next;
-  });
   const context: WaitingContext = {
     question: (id) => questions.data?.owner.find((one) => one.id === id),
     held: (id) => held.data?.items.find((one) => one.attemptId === id),
     fanOf,
-    openSend: (id) => setSend(id),
+    openSend: (id) => setParam("send", id),
     open: (param, value) => setParam(param, value),
     link: goLink,
     answerClaim: (claimId) => <ClaimAnswer claimId={claimId} />,
@@ -175,7 +167,7 @@ export function WaitingScreen() {
           serverNow={held.data.serverNow}
           platform={platformOf(openSend.pageLabel)}
           fan={fanOf(openSend)}
-          onClose={() => setSend(null)}
+          onClose={() => setParam("send", null)}
         />
       )}
     </>

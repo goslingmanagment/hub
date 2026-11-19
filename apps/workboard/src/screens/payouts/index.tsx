@@ -1,9 +1,10 @@
-import { useLocation, useSearchParams } from "react-router";
+import { useLocation } from "react-router";
 import { Button, EmptyState, ErrorState, Tabs } from "@agency_hub_core/ui";
 import { carryParams } from "@/shared/links";
 import { useMe } from "@/shared/useMe";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
+import { useSearchParam } from "@/shared/useSearchParam";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { LedgerPayouts, LedgerPersonDrawer, LedgerSkeleton } from "./LedgerPayouts";
 import { ReportsSkeleton, ReportsView } from "./ReportsView";
@@ -35,7 +36,7 @@ export function PayoutsScreen() {
   const { isOwner, fullOwner } = useMe();
   const { period, setPeriod } = usePeriod();
   const { page } = usePageFilter();
-  const [search, setSearch] = useSearchParams();
+  const [search, setParam] = useSearchParam();
   const location = useLocation();
   const view: View = location.pathname.replace(/\/+$/, "").endsWith("/reports") ? "reports" : "debts";
   const questionsOnly = search.get("questions") === "1";
@@ -44,12 +45,6 @@ export function PayoutsScreen() {
   const ledger = useLedgerPayouts(period);
   const reports = useLedgerReports(period, view === "reports");
 
-  const setParam = (name: string, value: string | null) => setSearch((current) => {
-    const next = new URLSearchParams(current);
-    if (value === null) next.delete(name);
-    else next.set(name, value);
-    return next;
-  });
   const personSlug = search.get("person");
   const openPerson = ledger.view?.rows.find((row) => row.person.slug === personSlug) ?? null;
 

@@ -6,6 +6,7 @@ import { withPeriod } from "@agency_hub_core/ui/period";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { PersonLink, shiftPath, useBackState, type BackTarget } from "@/shared/links";
 import { useMe } from "@/shared/useMe";
+import { sentence } from "@/shared/words";
 import { type GridCell, type GridColumn, type GridRow, type JournalShift, type ShiftsModel } from "./data.js";
 
 const WEEKDAY = new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: "UTC" });
@@ -22,11 +23,6 @@ const WHO_COLUMN_WIDTH = 260;
 
 function noon(day: string): Date {
   return new Date(`${day}T12:00:00Z`);
-}
-
-/** A sentence that may end on an abbreviation («…1 нояб.»): one full stop, never two. */
-export function sentence(text: string): string {
-  return text.endsWith(".") ? text : `${text}.`;
 }
 
 function shiftsWord(count: number): string {

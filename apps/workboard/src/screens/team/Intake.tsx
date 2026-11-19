@@ -4,6 +4,7 @@ import { Button, Card, cx } from "@agency_hub_core/ui";
 import { hubPersonPath } from "@agency_hub_core/contracts";
 import { formatDay } from "@agency_hub_core/ui/format";
 import { hubHref } from "@/shared/links";
+import { sentence } from "@/shared/words";
 import { deviceWords } from "@/screens/start/words";
 import type { OwnerCard } from "./registry.js";
 
@@ -49,11 +50,6 @@ function line(step: PersonStartStepId, done: boolean, card: OwnerCard): { title:
         ? { title: "Куда платить", detail: card.payoutDetails.text }
         : { title: "Куда платить: не написано", detail: null };
   }
-}
-
-/** One sentence: «с 11 нояб.» already ends with a dot. */
-function sentence(text: string): string {
-  return text.endsWith(".") ? text : `${text}.`;
 }
 
 function lead(card: OwnerCard): string {

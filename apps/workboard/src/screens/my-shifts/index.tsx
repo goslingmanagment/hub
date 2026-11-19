@@ -23,7 +23,8 @@ import {
 } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange, formatMills, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { addDays, moscowDayOf } from "@agency_hub_core/ui/moscow";
-import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { currentWeek, stepWeek, withPeriod } from "@agency_hub_core/ui/period";
+import { periodWords } from "@agency_hub_core/ui/people/words";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 import { REPORT_DRAFT_NEXT, reportStatusWord } from "@agency_hub_core/ui/shiftReports";
 import { shiftDurationHint, shiftWhen } from "@agency_hub_core/ui/shiftWhen";
@@ -66,14 +67,6 @@ import "./my-shifts.css";
 
 /** What a missing report asks of the chatter. */
 const MISSING_NEXT = "попросите в чате: /smena";
-
-/** «за эту неделю», «за 26 окт. – 1 нояб.», «за 14 дней». */
-function periodWords(period: ResolvedPeriod): string {
-  const { spec } = period;
-  if (spec.kind === "week") return period.current ? "за эту неделю" : `за ${period.label}`;
-  if (spec.kind === "days") return `за ${spec.days} дней`;
-  return `за ${period.label}`;
-}
 
 /** «2 смены без отчёта». */
 function withoutReportWords(count: number): string {

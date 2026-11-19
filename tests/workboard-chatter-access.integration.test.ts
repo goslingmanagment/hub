@@ -16,7 +16,7 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // смены», their shifts with their reports. The app keeps them out of the team's
 // screens, but the wall is Hub's: every read and write the owner's and team
 // leads' screens send (apps/workboard/src/screens/*/data.ts, shared/reads.ts,
-// shared/decisions.ts, shared/matters.ts) refuses a chatter's session, and only their own reads —
+// shared/decisions.ts, the menu's `waitingQuery`) refuses a chatter's session, and only their own reads —
 // `accountChatterStats` and `accountReports` — answer it.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));

@@ -4,7 +4,8 @@ import { Link, useLocation, useSearchParams } from "react-router";
 import { Button, EmptyState, ErrorState, LinkButton, Notice } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { addDays, daysInRange } from "@agency_hub_core/ui/moscow";
-import { currentWeek, stepWeek, withPeriod, type ResolvedPeriod } from "@agency_hub_core/ui/period";
+import { currentWeek, stepWeek, withPeriod } from "@agency_hub_core/ui/period";
+import { periodWords } from "@agency_hub_core/ui/people/words";
 import { usePeopleIndex } from "@/shared/people";
 import { CHATTER_NUMBERS_KEY, SHIFT_SALES_KEY } from "@/shared/reads";
 import { placeNotes } from "@/shared/reportNotes";
@@ -14,21 +15,14 @@ import { ShiftsTabs } from "@/shared/ShiftsTabs";
 import { usePageFilter } from "@/shared/usePageFilter";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
+import { sentence } from "@/shared/words";
 import { AuthorlessLine } from "./Authorless.js";
 import { AUTHORSHIP_MAX_DAYS, SHIFTS_MAX_DAYS, buildModel, shiftsWindow, useShiftNotes, useShiftsPeriod, windowColumns } from "./data.js";
 import { HowItCounts } from "./HowItCounts.js";
 import { Journal } from "./Journal.js";
 import { NowOnShift } from "./NowOnShift.js";
-import { WeekGrid, sentence } from "./WeekGrid.js";
+import { WeekGrid } from "./WeekGrid.js";
 import "./shifts.css";
-
-/** «за эту неделю», «за 26 окт. – 1 нояб.», «за 14 дней». */
-function periodWords(period: ResolvedPeriod): string {
-  const { spec } = period;
-  if (spec.kind === "week") return period.current ? "за эту неделю" : `за ${period.label}`;
-  if (spec.kind === "days") return `за ${spec.days} дней`;
-  return `за ${period.label}`;
-}
 
 /**
  * The viewer's own logins, for `?mine=1` («Мои смены» of the owner or a team
