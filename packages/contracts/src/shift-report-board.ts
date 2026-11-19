@@ -373,6 +373,16 @@ export const shiftReportCandidateSchema = z.object({
   }),
   /** A correction or a re-check made a newer one: «Подтверждаю» on this one is refused. */
   superseded: z.boolean(),
+  /**
+   * The person signed it at «Сдать смену» (what they saw equals it): a check that changes nothing counts it by itself.
+   * Absent — false (an older server).
+   */
+  signed: z.boolean().optional(),
+  /**
+   * The hand-in was signed and the check changed the report (Gengar's card, a sale Hub found, a colleague's answer): the
+   * signature is not applied, «Проверка нашла изменения: проверьте и подтвердите». Absent — false.
+   */
+  signatureDeclined: z.boolean().optional(),
 });
 
 export const shiftReportBoardSchema = z.object({

@@ -479,6 +479,18 @@ export const shiftReportAskParamsSchema = z.object({ shiftId: shiftIdParam, tran
 export const shiftReportProposalParamsSchema = z.object({ shiftId: shiftIdParam, proposalId: shiftIdParam });
 export const shiftReportSightingParamsSchema = z.object({ shiftId: shiftIdParam, sightingId: shiftIdParam });
 
+/**
+ * «Сдать смену»: what the person saw on the draft's bar. When it equals what the candidate holds, the hand-in is the
+ * person's signature: a check that changes nothing counts the report by it, with no second press. Absent (an older
+ * client) or different — the person confirms with «Подтверждаю» as before.
+ */
+export const shiftReportSubmitBodySchema = z.object({
+  /** The total the bar showed («Сдать смену» = подтверждаю: 18 продаж на $461.40). */
+  seenTotalMills: mills.optional(),
+  /** The count the bar showed. */
+  seenCount: z.number().int().nonnegative().optional(),
+}).strict();
+
 /** «Подтверждаю»: signs one exact candidate — and what the board showed of it. */
 export const shiftReportConfirmBodySchema = z.object({
   candidateId: intId,
@@ -653,6 +665,7 @@ export const agentShiftReportCheckResponseSchema = z.object({
 });
 
 export type ShiftReportConfirmResponse = z.infer<typeof shiftReportConfirmResponseSchema>;
+export type ShiftReportSubmitBody = z.infer<typeof shiftReportSubmitBodySchema>;
 export type ShiftReportCurrentResponse = z.infer<typeof shiftReportCurrentResponseSchema>;
 export type ShiftReportAskBody = z.infer<typeof shiftReportAskBodySchema>;
 export type ClientSaleSightingsBody = z.infer<typeof clientSaleSightingsBodySchema>;
@@ -900,10 +913,14 @@ export const shiftHandinRouteSchemas = {
   },
   shiftReportSubmit: {
     auth: { kind: "any" }, tags: ["client"],
-    summary: "«Сдать смену»: the draft as it is now becomes the report's next version",
-    description: `${ANY} Own shift, switched on; a shift still going may be handed in. A version handed in after the ledger paid `
-      + "the day is kept and raises a matter for the owner.",
+    summary: "«Сдать смену»: the draft as it is now becomes the report's next candidate, signed by the person when it is what they saw",
+    description: `${ANY} Own shift, switched on; a shift still going may be handed in. Hub and Gengar check the candidate; `
+      + "with `seenTotalMills` and `seenCount` equal to the candidate's it is signed, and a check that changes nothing makes "
+      + "the version by that signature (no «Подтверждаю»). Unsigned, or changed by the check — the person confirms. A version "
+      + "made after the ledger paid the day is kept and raises a matter for the owner.",
     params: shiftReportParamsSchema,
+    // No body at all (an older client, a test, `inject` without payload) reaches the route as null: the same as none.
+    body: shiftReportSubmitBodySchema.nullish(),
     response: { 200: shiftReportResponseSchema, ...personErrors },
   },
   agentShiftReport: {

@@ -70,6 +70,12 @@ export class PhaseConflictError extends ConflictError {
 }
 
 /**
+ * The event of a signature at «Сдать смену» the server did not apply (the check changed the report, or the
+ * confirmation refused): the board then says «Проверка нашла изменения: проверьте и подтвердите».
+ */
+export const SHIFT_REPORT_SIGNATURE_DECLINED_EVENT = "shift_report.signature_declined";
+
+/**
  * Whether the check lets the person confirm: Hub has no page still reading and Gengar answered (or nobody reviews the
  * shift's pages) — or the server's timer: 10 minutes since the hand-in, whatever is still running.
  */
@@ -236,6 +242,25 @@ export function signedLines(input: {
   });
   return confirmedLines(settled, input.proposals)
     .map((line) => (line.transactionId !== null && input.oldWay.has(line.transactionId) && line.settled === undefined ? lineWithWord(line, { statement: "not_mine" }) : line));
+}
+
+/**
+ * Whether what «Подтверждаю» would sign now is exactly what the person signed at «Сдать смену» (the candidate as handed
+ * in): every sale's amount, every page's sum, every «мимо площадки» with its state. The total and the count alone are
+ * not enough — a decision that moves $100 from one sale to another of the same page or of another page keeps both and
+ * still changes what is paid for. Pure (tests/shift-report-phases.test.ts).
+ */
+export function sameAsSigned(
+  signed: { lines: readonly Pick<HandinVersionLine, "transactionId" | "amountMills">[]; pages: readonly { pageLabel: string; amountMills: number }[]; offPlatform: readonly { id: number; amountMills: number; state: string; pageLabel?: string | null }[] },
+  now: { lines: readonly Pick<HandinVersionLine, "transactionId" | "amountMills">[]; pages: readonly { pageLabel: string; amountMills: number }[]; offPlatform: readonly { id: number; amountMills: number; state: string; pageLabel?: string | null }[] },
+): boolean {
+  const sales = (lines: readonly Pick<HandinVersionLine, "transactionId" | "amountMills">[]) =>
+    lines.filter((line) => line.amountMills !== 0).map((line) => `${line.transactionId ?? "-"}:${line.amountMills}`).sort().join("|");
+  const pages = (rows: readonly { pageLabel: string; amountMills: number }[]) =>
+    rows.filter((row) => row.amountMills !== 0).map((row) => `${row.pageLabel}:${row.amountMills}`).sort().join("|");
+  const off = (rows: readonly { id: number; amountMills: number; state: string; pageLabel?: string | null }[]) =>
+    rows.map((row) => `${row.id}:${row.amountMills}:${row.state}:${row.pageLabel ?? ""}`).sort().join("|");
+  return sales(signed.lines) === sales(now.lines) && pages(signed.pages) === pages(now.pages) && off(signed.offPlatform) === off(now.offPlatform);
 }
 
 /**

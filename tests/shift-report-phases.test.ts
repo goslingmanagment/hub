@@ -10,6 +10,7 @@ import {
   holdsSale,
   lineWithWord,
   mayAct,
+  sameAsSigned,
   signedLines,
   silenceSettles,
   withSettlementsNow,
@@ -258,3 +259,27 @@ describe("a settlement outranks Gengar's card (round 2, N3)", () => {
   });
 });
 
+describe("the signature at «Сдать смену» signs the candidate as handed in", () => {
+  const signed = {
+    lines: [{ transactionId: 1, amountMills: 100_000 }, { transactionId: 2, amountMills: 0 }],
+    pages: [{ pageLabel: "mia-2", amountMills: 100_000 }, { pageLabel: "mia-3", amountMills: 0 }],
+    offPlatform: [{ id: 7, amountMills: 20_000, state: "pending", pageLabel: null }],
+  };
+
+  it("holds when nothing changed", () => {
+    expect(sameAsSigned(signed, structuredClone(signed))).toBe(true);
+  });
+
+  it("refuses a decision that moved the money to another sale of the same total and count", () => {
+    const swapped = { ...signed, lines: [{ transactionId: 1, amountMills: 0 }, { transactionId: 2, amountMills: 100_000 }] };
+    expect(sameAsSigned(signed, swapped)).toBe(false);
+  });
+
+  it("refuses the same sales split between pages otherwise", () => {
+    expect(sameAsSigned(signed, { ...signed, pages: [{ pageLabel: "mia-2", amountMills: 0 }, { pageLabel: "mia-3", amountMills: 100_000 }] })).toBe(false);
+  });
+
+  it("refuses a «мимо площадки» the owner decided since", () => {
+    expect(sameAsSigned(signed, { ...signed, offPlatform: [{ id: 7, amountMills: 20_000, state: "confirmed", pageLabel: "mia-2" }] })).toBe(false);
+  });
+});

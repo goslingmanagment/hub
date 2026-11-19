@@ -69,7 +69,8 @@ export type Write =
   | { op: "comment"; comment: string; modelSlug?: string }
   | { op: "ask"; transactionId: number; statement: "mine" | "share"; shareWithUserId: number | null; note: string }
   | { op: "unask"; transactionId: number }
-  | { op: "submit" }
+  /** «Сдать смену» with what the bar showed: equal to what Hub hands in, it is the person's signature (no «Подтверждаю» after a clean check). */
+  | { op: "submit"; seenTotalMills: number; seenCount: number }
   | { op: "confirm"; candidateId: number; seenTotalMills: number; seenCount: number }
   | { op: "reopen" }
   | { op: "reopenCancel" }
@@ -89,7 +90,7 @@ function send(kernel: KernelClient, shiftId: number, write: Write): Promise<unkn
     case "comment": return kernel.shiftReportCommentSet({ params, body: write.modelSlug === undefined ? { comment: write.comment } : { comment: write.comment, modelSlug: write.modelSlug } });
     case "ask": return kernel.shiftReportAsk({ params, body: { transactionId: write.transactionId, statement: write.statement, shareWithUserId: write.shareWithUserId, note: write.note } });
     case "unask": return kernel.shiftReportAskWithdraw({ params: { shiftId, transactionId: write.transactionId } });
-    case "submit": return kernel.shiftReportSubmit({ params });
+    case "submit": return kernel.shiftReportSubmit({ params, body: { seenTotalMills: write.seenTotalMills, seenCount: write.seenCount } });
     case "confirm": return kernel.shiftReportConfirm({ params, body: { candidateId: write.candidateId, seenTotalMills: write.seenTotalMills, seenCount: write.seenCount } });
     case "reopen": return kernel.shiftReportReopen({ params });
     case "reopenCancel": return kernel.shiftReportReopenCancel({ params });

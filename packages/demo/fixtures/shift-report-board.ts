@@ -219,6 +219,10 @@ interface State {
   submittedMills: number;
   submittedCount: number;
   candidates: number;
+  /** «Сдать смену» carried what the bar showed and it was the report: a check that finds nothing counts it by itself. */
+  signed: boolean;
+  /** Signed, and the check found something: «Подтвердите» with «Проверка нашла изменения». */
+  signatureDeclined: boolean;
   wasMills: number | null;
   counted: boolean;
   countedAt: string | null;
@@ -251,7 +255,7 @@ function fresh(): State {
   return {
     phase: "draft", own: new Map(), ok: new Map(), notes: new Map(Object.entries(MY_NOTES).map(([id, text]) => [Number(id), { text, by: "person" as const }])),
     asks: new Map(), incoming: null, proposals: new Map(), gNote: null, lost: false, lostAdded: false, late: false, lateAdded: false, extra: [],
-    pages: ["m2", "m3", "fr", "vip"], mode: "found", gengar: null, submittedAtMs: null, submittedMills: 0, submittedCount: 0, candidates: 0,
+    pages: ["m2", "m3", "fr", "vip"], mode: "found", gengar: null, submittedAtMs: null, submittedMills: 0, submittedCount: 0, candidates: 0, signed: false, signatureDeclined: false,
     wasMills: null, counted: false, countedAt: null, countedMills: 0, countedAtMs: null, gWait: false, snapshot: null, comment: "", modelComments: {}, offPlatform: [],
     hubFinds: false, found: false, post: { copiedAt: null, seen: false, changedSinceCopy: false, late: false }, postCopies: {}, preview: false, copiedAtMs: null, split: false,
   };
@@ -435,6 +439,8 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
         proposals, notes: state.gNote ? 1 : 0,
       },
       superseded: false,
+      signed: state.signed,
+      signatureDeclined: state.phase === "confirm" && state.signatureDeclined,
     } : null,
     totals: { count, nowMills, wasMills: state.wasMills },
     waiting,
@@ -502,9 +508,11 @@ function gengarAnswers(state: State) {
   state.gengar = state.proposals.size > 0 || state.gNote ? "found" : "clean";
 }
 
-/** «Сдать смену» (and «Сдать заново»): a candidate, the check begins. */
-function handIn(state: State, nowMs: number) {
+/** «Сдать смену» (and «Сдать заново»): a candidate, the check begins; `signed` — the bar's totals were the report's. */
+function handIn(state: State, nowMs: number, signed = false) {
   const again = state.phase === "fixing";
+  state.signed = signed;
+  state.signatureDeclined = false;
   // «Сдать заново»: «Было» is the report before the correction.
   state.wasMills = again ? state.wasMills : null;
   state.submittedMills = totalOf(state);
@@ -529,6 +537,12 @@ function advance(state: State, nowMs: number) {
     gengarAnswers(state);
     if (state.wasMills === null) state.wasMills = state.submittedMills;
     state.phase = "confirm";
+    // Hub's rule: the signature counts a report the check left as it was; a card of Gengar sends it to the person.
+    if (state.signed && state.proposals.size === 0 && state.gNote === null) confirm(state, nowMs);
+    else if (state.signed) {
+      state.signed = false;
+      state.signatureDeclined = true;
+    }
   }
   if (state.phase === "counted" && state.gWait && state.countedAtMs !== null && nowMs - state.countedAtMs >= GENGAR_LATE_MS) {
     state.gWait = false;
@@ -558,11 +572,11 @@ function confirm(state: State, nowMs: number) {
   state.wasMills = null;
 }
 
-/** Hand in and check: the prototype's `confirmScn`. */
-function confirmState(mode: "found" | "clean" | "silent"): State {
+/** Hand in and check: the prototype's `confirmScn`; `signed` — the hand-in was the person's signature. */
+function confirmState(mode: "found" | "clean" | "silent", signed = false): State {
   const state = fresh();
   state.mode = mode;
-  handIn(state, 0);
+  handIn(state, 0, signed);
   advance(state, GENGAR_PAUSE_MS);
   return state;
 }
@@ -591,12 +605,15 @@ const SCENARIOS: Record<Scenario, (nowMs: number) => State> = {
     return state;
   },
   notInHub: () => ({ ...fresh(), lost: true }),
+  // Signed at «Сдать смену», and the check finds nothing: «Учтён» by itself, no «Подтверждаю».
   checking: (nowMs) => {
     const state = fresh();
-    handIn(state, nowMs);
+    state.mode = "clean";
+    handIn(state, nowMs, true);
     return state;
   },
-  gengarFound: () => confirmState("found"),
+  // Signed, and Gengar found edits: the signature is not applied, the person confirms what the board is now.
+  gengarFound: () => confirmState("found", true),
   // The first «Подтверждаю» meets Hub's late re-read: one more sale, the board changed, the person presses again.
   gengarClean: () => ({ ...confirmState("clean"), hubFinds: true }),
   gengarSilent: () => confirmState("silent"),
@@ -760,7 +777,9 @@ export function demoBoardWrite(request: DemoRequest, operation: "lineSet" | "com
     }
     if (operation === "submit") {
       if (!editing(state)) return refused("Not a draft");
-      handIn(state, request.now.getTime());
+      // What the bar showed, as Hub compares it: equal to the report, the hand-in is the person's signature.
+      const seen = (request.body ?? {}) as { seenTotalMills?: number; seenCount?: number };
+      handIn(state, request.now.getTime(), seen.seenTotalMills === totalOf(state) && seen.seenCount === countOf(state));
       return null;
     }
     // lineSet

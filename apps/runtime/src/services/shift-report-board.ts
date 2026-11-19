@@ -8,6 +8,7 @@ import type {
   ShiftReportResponse,
 } from "@agency_hub_core/contracts";
 import {
+  clearCandidateSignature,
   closeMatter,
   findHandinById,
   findHandinByShift,
@@ -39,6 +40,9 @@ import {
   listOpenMattersOfKinds,
   listHandinSalesByIds,
   listSaleClaims,
+  listSignedConfirmHandins,
+  listUserPageAssignments,
+  listUserRoles,
   lockSaleSettlements,
   openMatter,
   reopenSaleClaim,
@@ -64,7 +68,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
-import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
+import { AppError, BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { reportSums } from "./sale-claim-rules.ts";
 import { runSaleClaims } from "./sale-claims.ts";
 import { SALE_RULE } from "./sale-rule.ts";
@@ -93,7 +97,10 @@ import {
   type PageCatalog,
   type Subject,
 } from "./shift-report-draft.ts";
-import { cardSuperseded, checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, PhaseConflictError, proposalDelta, type BoardAction } from "./shift-report-phases.ts";
+import {
+  cardSuperseded, checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, PhaseConflictError, proposalDelta, sameAsSigned, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT,
+  type BoardAction,
+} from "./shift-report-phases.ts";
 import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
 
 export { PhaseConflictError } from "./shift-report-phases.ts";
@@ -105,8 +112,11 @@ export { PhaseConflictError } from "./shift-report-phases.ts";
  * and who may do what are shift-report-phases.ts; the board as it is read, shift-report-board-view.ts.
  *
  * «Сдать смену» records a CANDIDATE (the draft as it is at `cutoff_at`) and makes no version; «Подтверждаю» makes the
- * version from the named candidate with Gengar's proposals that are not declined, under `lockSaleSettlements`. The
- * ledger's feed keeps serving versions only. Nothing here sends anything to anyone.
+ * version from the named candidate with Gengar's proposals that are not declined, under `lockSaleSettlements`. When the
+ * person's hand-in carried what they saw and it equals the candidate, the hand-in is their signature: a check that
+ * changes nothing makes the version by it through the same confirmation (`applyHandInSignature`); one that changes
+ * anything clears it and the person confirms by hand. The ledger's feed keeps serving versions only. Nothing here sends
+ * anything to anyone.
  */
 
 type BoardApp = Pick<AppContext, "db" | "config" | "logger">;
@@ -140,13 +150,21 @@ async function boardFor(app: BoardApp, actor: HandinActor, shiftId: number, acti
 
 // ── «Сдать смену»: a candidate ───────────────────────────────────────────────
 
+/** What the person saw on the draft's bar at «Сдать смену»: its total and its count. */
+export interface SeenTotals {
+  seenTotalMills?: number | undefined;
+  seenCount?: number | undefined;
+}
+
 /**
  * «Сдать смену» / «Сдать заново»: the draft as it is now becomes the report's next CANDIDATE — not a version; a shift
  * still going may be handed in (sales after `cutoff_at` are «после сдачи»). The check starts (Hub's pages, Gengar);
- * when nothing checks it, the person confirms at once. The agent's «со слов» hand-in records a candidate too and the
- * person still confirms on the board.
+ * when nothing checks it, the report waits for «Подтверждаю» at once. The person's own hand-in that carries what they
+ * saw — and it is exactly the candidate's total and count, the numbers «Подтверждаю» compares — is their signature: a
+ * check that changes nothing counts the report by it (`applyHandInSignature`). The agent's «со слов» hand-in is never
+ * signed: the person confirms on the board.
  */
-export async function handInShiftReport(app: BoardApp, actor: HandinActor, input: { shiftId: number }, now: Date = new Date()): Promise<ShiftReportResponse> {
+export async function handInShiftReport(app: BoardApp, actor: HandinActor, input: { shiftId: number } & SeenTotals, now: Date = new Date()): Promise<ShiftReportResponse> {
   if (actor.kind === "agent" && actor.sourceRef === null) throw new BadRequestError("A report is handed in «со слов» only with the message", { reason: "source_ref_required" });
   const { subject, catalog } = await boardFor(app, actor, input.shiftId, "handIn");
   const who = writer(actor);
@@ -155,6 +173,7 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
   // Hub's own check of each page (shift-handin-check.ts): its first states, and the wallet reads asked after the commit.
   const check = await startHubCheck(app.db, { subject, catalog });
   const hubWaits = check.pages.some((page) => page.state === "running" || page.state === "statement");
+  let signed = false;
 
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
@@ -169,35 +188,48 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
     const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
     const sums = reportSums(lines, facts.pages, offPlatform);
     const hubCheck: CandidateHubPage[] = check.pages;
+    // The signature: the person's own door, and what they saw is what «Подтверждаю» would compare against this candidate
+    // were nothing to change (`signableOf`: its total, its lines that count). A board that showed anything else — a «нет в
+    // Hub» row added (it counts on the draft, never in a candidate), a sale that came since the board was drawn — is not
+    // signed, and the person confirms by hand.
+    const count = lines.filter((line) => line.amountMills > 0).length;
+    signed = actor.kind === "person" && input.seenTotalMills !== undefined && input.seenCount !== undefined
+      && input.seenTotalMills === sums.totalMills && input.seenCount === count;
     const made = await insertCandidateWithin(db, {
       handinId: handin.id, door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
       telegramMessageRef: actor.kind === "agent" ? actor.sourceRef : null, telegramSenderId: actor.kind === "agent" ? actor.telegramUserId : null,
       cutoffAt: now, totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: handin.comment, modelComments: handin.modelComments, ruleVersion: SALE_RULE.version,
-      hubCheck, at: now,
+      hubCheck, signed: signed ? { totalMills: sums.totalMills, count } : null, at: now,
     });
     const next = checkLetsConfirm({ handedInAt: now, now, hubPending: hubWaits, gengarPending: reviewed }) ? "confirm" : "checking";
     if (!(await setHandinPhase(db, { handinId: handin.id, phase: next, at: now, from: [handin.phase] }))) throw new PhaseConflictError(subject.shift.id, was);
     await insertHandinEvent(db, {
       handinId: handin.id, event: "shift_report.handed_in", door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
       onBehalfOfUserId: actor.kind === "agent" ? subject.shift.userId : null,
-      changes: { candidate: made.number, lines: lines.length, ...(actor.kind === "agent" ? { sourceRef: actor.sourceRef, telegramUserId: actor.telegramUserId } : {}) },
+      changes: {
+        candidate: made.number, lines: lines.length, ...(signed ? { signed: true } : {}),
+        ...(actor.kind === "agent" ? { sourceRef: actor.sourceRef, telegramUserId: actor.telegramUserId } : {}),
+      },
       at: now,
     });
   });
   await check.ask().catch((error: unknown) => warn(app, error, "asking the wallets' read after a hand-in"));
   await closeMatter(app.db, { key: `${SHIFT_REPORT_MISSING_KIND}:${subject.shift.id}`, how: "resolved", writer: "server" }, SYSTEM, now).catch(() => undefined);
+  // Nothing checks it (no reviewer, no page Hub can ask): «Подтвердите» at once, and the signature counts it now.
+  if (signed) await applyHandInSignature(app, { shiftId: subject.shift.id }, now).catch((error: unknown) => warn(app, error, "the signature after a hand-in"));
   await syncBoardMatters(app, now).catch((error: unknown) => warn(app, error, "the board's matters after a hand-in"));
   return readSubject(app, actor, subject, now);
 }
 
 /**
  * `shiftReportSubmit` (and the agent's «со слов»): «Сдать смену» on the «Отчёт» board records a candidate and makes no
- * version (shift-report-board.ts `handInShiftReport`); «Подтверждаю» makes the version. One service behind every door.
+ * version (`handInShiftReport`); «Подтверждаю» makes the version, or the person's signature at the hand-in does when the
+ * check changes nothing (`applyHandInSignature`). One service behind every door.
  */
 export async function submitShiftReport(
   app: HandinApp,
   actor: HandinActor,
-  input: { shiftId: number },
+  input: { shiftId: number } & SeenTotals,
 ): Promise<ShiftReportResponse> {
   return handInShiftReport(app, actor, input, new Date());
 }
@@ -215,21 +247,40 @@ export async function confirmShiftReport(
   app: BoardApp,
   actor: HandinPersonActor,
   input: { shiftId: number; candidateId: number; seenTotalMills?: number | undefined; seenCount?: number | undefined },
-  options: { now?: Date; dayPaid?: (input: { personCode: string | null; reportDate: string }) => Promise<boolean | null> } = {},
+  options: { now?: Date; dayPaid?: DayPaid } = {},
 ): Promise<ShiftReportConfirmResponse> {
   const now = options.now ?? new Date();
+  const outcome = await confirmCandidate(app, actor, input, { ...options, now });
+  // Not in «Подтвердите» (checked again, corrected, counted already): the fresh board, nothing made.
+  const report = outcome.subject === null ? await readShiftReport(app, actor, input.shiftId, now) : await readSubject(app, actor, outcome.subject, now);
+  return { confirmed: outcome.done === "confirmed", refused: outcome.done === "confirmed" ? null : outcome.done, report };
+}
+
+type DayPaid = (input: { personCode: string | null; reportDate: string }) => Promise<boolean | null>;
+
+/**
+ * The confirmation itself, one path for «Подтверждаю» and for the signature at «Сдать смену» (`bySignature`, the
+ * version's event says so): the version from the named candidate when it is what the person saw, else the reason it is
+ * not. `subject` — null when the report was not in «Подтвердите» to begin with.
+ */
+async function confirmCandidate(
+  app: BoardApp,
+  actor: HandinPersonActor,
+  input: { shiftId: number; candidateId: number; seenTotalMills?: number | undefined; seenCount?: number | undefined },
+  options: { now: Date; dayPaid?: DayPaid | undefined; bySignature?: boolean },
+): Promise<{ done: "confirmed" | "superseded" | "not_ready" | "changed"; subject: Subject | null }> {
+  const now = options.now;
   // Due by now (Gengar's 10 minutes up, the checks done): «Подтвердите» before the press is judged, not at the next pass.
   await moveWhenDue(app.db, { shiftId: input.shiftId, catalog: await pageCatalog(app.db) }, now);
   let board: Board;
   try {
     board = await boardFor(app, actor, input.shiftId, "confirm");
   } catch (error) {
-    // Not in «Подтвердите» (checked again, corrected, counted already): the fresh board, nothing made.
-    if (error instanceof ConflictError) return { confirmed: false, refused: "not_ready", report: await readShiftReport(app, actor, input.shiftId, now) };
+    if (error instanceof ConflictError) return { done: "not_ready", subject: null };
     throw error;
   }
   const { subject, catalog, handin } = board;
-  if (handin === null) return { confirmed: false, refused: "not_ready", report: await readShiftReport(app, actor, input.shiftId, now) };
+  if (handin === null) return { done: "not_ready", subject: null };
   const paidDay = reportDateOf(subject.shift, handin);
   const dayPaid = await (options.dayPaid ?? ((one) => ledgerDayPaid(app, one)))({ personCode: subject.person?.code ?? null, reportDate: paidDay });
   const outcome = await app.db.transaction(async (tx) => {
@@ -248,6 +299,10 @@ export async function confirmShiftReport(
     if ((input.seenTotalMills !== undefined && input.seenTotalMills !== sums.totalMills) || (input.seenCount !== undefined && input.seenCount !== count)) {
       return { done: "changed" as const };
     }
+    // The signature at «Сдать смену» never takes a card of Gengar the person has not seen, money or a note alike, and
+    // signs only the candidate as handed in: the same sales at the same amounts, not merely the same total and count.
+    if (options.bySignature === true && proposals.some((one) => one.state === "proposed")) return { done: "changed" as const };
+    if (options.bySignature === true && !sameAsSigned(candidate, { lines, pages: sums.pages, offPlatform })) return { done: "changed" as const };
     const made = await insertHandinVersion(db, {
       handin: locked, door: actor.door, actorUserId: actor.userId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
       totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: candidate.comment, modelComments: candidate.modelComments, dayPaid, ruleVersion: candidate.ruleVersion,
@@ -263,7 +318,10 @@ export async function confirmShiftReport(
     await setHandinPhase(db, { handinId: locked.id, phase: "counted", at: now });
     await insertHandinEvent(db, {
       handinId: locked.id, event: "shift_report.submitted", door: actor.door, actorUserId: actor.userId, agentKeyId: null, onBehalfOfUserId: null,
-      changes: { version: made.version, candidate: candidate.number, lines: lines.length, proposals: proposals.filter((one) => one.state === "proposed").length },
+      changes: {
+        version: made.version, candidate: candidate.number, lines: lines.length, proposals: proposals.filter((one) => one.state === "proposed").length,
+        ...(options.bySignature === true ? { signedAtHandIn: true } : {}),
+      },
       at: now,
     });
     return { done: "confirmed" as const, made, pages: sums.pages.map((page) => page.pageLabel) };
@@ -274,8 +332,78 @@ export async function confirmShiftReport(
     await syncCheckMatters(app, now).catch((error: unknown) => warn(app, error, "the check's matters after a confirmation"));
     await afterPersonVersion(app, { subject, catalog, version: outcome.made, pages: outcome.pages, paidDay, dayPaid }, now);
   }
-  const report = await readSubject(app, actor, subject, now);
-  return { confirmed: outcome.done === "confirmed", refused: outcome.done === "confirmed" ? null : outcome.done, report };
+  return { done: outcome.done, subject };
+}
+
+// ── The signature at «Сдать смену» ──────────────────────────────────────────
+
+/**
+ * The person's signature at «Сдать смену», applied by the server once the report stands in «Подтвердите»: its open
+ * candidate (newest, not superseded, not confirmed) signed, and no card of Gengar on it waiting for an answer — then the
+ * SAME confirmation as «Подтверждаю», as that person (the login that signed, through the door they signed at), with what
+ * they signed as what they saw: a check that changed nothing makes the version; anything else is refused there. A card
+ * waiting, or any refusal (`changed`, `not_ready`, `superseded`, the board closed to them), clears the signature with an
+ * event saying why: the person confirms by hand, and no pass tries it again (the ledger is asked whether the day is paid
+ * once per signature, never each minute). A re-made candidate (Hub found more) is never signed: the person confirms.
+ * Called after a hand-in, by the minute pass and by a read of the board. True — counted by the signature.
+ */
+export async function applyHandInSignature(app: BoardApp, input: { shiftId: number }, now: Date): Promise<boolean> {
+  const handin = await findHandinByShift(app.db, input.shiftId);
+  if (handin === null || phaseOf(handin) !== "confirm") return false;
+  const candidate = (await listHandinCandidates(app.db, handin.id)).filter((one) => one.supersededAt === null && one.confirmedAt === null).at(-1);
+  if (candidate === undefined || candidate.signed === null) return false;
+  const signed = candidate.signed;
+  const decline = async (why: string) => {
+    if (!(await clearCandidateSignature(app.db, { candidateId: candidate.id }))) return;
+    await insertHandinEvent(app.db, {
+      handinId: handin.id, event: SHIFT_REPORT_SIGNATURE_DECLINED_EVENT, door: "system", actorUserId: null, agentKeyId: null, onBehalfOfUserId: null,
+      changes: { candidate: candidate.number, why, signedTotalMills: signed.totalMills, signedCount: signed.count }, at: now,
+    });
+  };
+  // Only the person signs; the database refuses a signed «со слов» candidate too.
+  if (candidate.door === "telegram" || candidate.actorUserId === null) {
+    await decline("not_person");
+    return false;
+  }
+  // Gengar's card waits for the person's answer: the report is not what they signed.
+  if ((await listHandinProposals(app.db, handin.id)).some((one) => one.candidateId === candidate.id && one.state === "proposed")) {
+    await decline("proposals");
+    return false;
+  }
+  const actor = await signerOf(app, { userId: candidate.actorUserId, door: candidate.door });
+  let done: Awaited<ReturnType<typeof confirmCandidate>>["done"];
+  try {
+    done = (await confirmCandidate(app, actor, { shiftId: input.shiftId, candidateId: candidate.id, seenTotalMills: signed.totalMills, seenCount: signed.count }, { now, bySignature: true })).done;
+  } catch (error) {
+    // The board refused the person (the right off, the shift gone), or the confirmation failed: never again by itself —
+    // the person confirms by hand, and the ledger is not asked each minute.
+    const refused = error instanceof AppError && error.statusCode < 500;
+    await decline(refused ? "refused" : "error");
+    if (refused) return false;
+    throw error;
+  }
+  if (done === "confirmed") return true;
+  await decline(done);
+  return false;
+}
+
+/** The person who signed, as the board's person door: their login, its role and pages, the door of the hand-in. */
+async function signerOf(app: BoardApp, input: { userId: number; door: "workboard" | "extension" }): Promise<HandinPersonActor> {
+  const role = (await listUserRoles(app.db, [input.userId])).get(input.userId) ?? "chatter";
+  const pageIds = (await listUserPageAssignments(app.db, input.userId)).map((page) => page.pageId);
+  return { kind: "person", userId: input.userId, role, pageIds, door: input.door };
+}
+
+/**
+ * The board as the reader reads it (`shiftReport`, `shiftReportCurrent`), with what is due on it done first: a report
+ * the read itself moved to «Подтвердите» (`moveWhenDue`) and the person signed is counted now, not at the next pass —
+ * the person watching «Проверка» sees «Учтён», never a «Подтвердите» that counts itself a minute later.
+ */
+export async function readShiftReportBoard(app: BoardApp, actor: HandinActor, shiftId: number, now: Date = new Date()): Promise<ShiftReportResponse> {
+  const report = await readShiftReport(app, actor, shiftId, now);
+  if (report.board?.phase !== "confirm" || report.board.candidate?.signed !== true) return report;
+  await applyHandInSignature(app, { shiftId }, now).catch((error: unknown) => warn(app, error, "the signature on a read"));
+  return readShiftReport(app, actor, shiftId, now);
 }
 
 /**
@@ -808,9 +936,10 @@ export async function answerShiftReportCheck(
 /**
  * Each minute (with the claims pass): a report in «Проверка» goes to «Подтвердите» when Hub's check is done and
  * Gengar answered (or nobody reviews its pages) — or 10 minutes after the hand-in, whatever still runs: the Mac with
- * Gengar may sleep, the person is never held longer. Then the board's matters are made what they are.
+ * Gengar may sleep, the person is never held longer. A report the person signed at «Сдать смену» is then counted by the
+ * signature, or the signature is cleared (`applyHandInSignature`). Then the board's matters are made what they are.
  */
-export async function runShiftReportBoardPass(app: Pick<AppContext, "db" | "logger">, now: Date = new Date()): Promise<{ moved: number; matters: number }> {
+export async function runShiftReportBoardPass(app: BoardApp, now: Date = new Date()): Promise<{ moved: number; matters: number }> {
   const { db } = app;
   let moved = 0;
   // «Нет в Hub» that Hub now holds, Hub's check of every page, a shift cancelled or merged, the «после сдачи» mark.
@@ -822,6 +951,10 @@ export async function runShiftReportBoardPass(app: Pick<AppContext, "db" | "logg
   // The backstop: a read or «Подтверждаю» moves a report when it is due (`moveWhenDue`); this catches the rest.
   for (const one of await listCheckingHandins(db, { limit: 500 })) {
     if (await moveWhenDue(db, { shiftId: one.shiftId, catalog }, now)) moved += 1;
+  }
+  // Before the matters: a report counted by its signature never asks the person «Подтвердите отчёт».
+  for (const one of await listSignedConfirmHandins(db, { limit: 100 })) {
+    await applyHandInSignature(app, { shiftId: one.shiftId }, now).catch((error: unknown) => warn(app, error, "the signature at «Сдать смену»"));
   }
   const matters = await syncBoardMatters(app, now) + await syncCheckMatters(app, now).catch((error: unknown) => {
     warn(app, error, "the check's matters");
@@ -908,7 +1041,7 @@ export async function readCurrentShiftReport(app: BoardApp, principal: HumanAuth
   const actor = handinActorOf(principal);
   const current = await currentShiftOf(app, actor.userId, now);
   if (current === null) return { report: null, phase: null, serverNow: now.toISOString() };
-  const report = await readShiftReport(app, actor, current.shiftId, now);
+  const report = await readShiftReportBoard(app, actor, current.shiftId, now);
   return { report, phase: report.board?.phase ?? null, serverNow: now.toISOString() };
 }
 

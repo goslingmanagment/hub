@@ -10,6 +10,7 @@ import {
 import { deciderOf, personsOfLogins, teamFactsFor } from "./teams.ts";
 import {
   findHandinPersonOfUser,
+  hasHandinEventSince,
   listPreviousShiftComments,
   hasShiftReportReviewer,
   listHandinMarks,
@@ -50,7 +51,9 @@ import { reportSums } from "./sale-claim-rules.ts";
 import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-report-draft.ts";
 import { SALE_RULE } from "./sale-rule.ts";
 import { commentText, modelComment, shiftWords } from "./shift-handin-rules.ts";
-import { CLAIM_SILENCE_MS, cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor } from "./shift-report-phases.ts";
+import {
+  CLAIM_SILENCE_MS, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT, cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor,
+} from "./shift-report-phases.ts";
 
 /**
  * The «Отчёт» board as a reader sees it (products plan 2026-11-13, package R; the contract shift-report-board.ts): a
@@ -650,6 +653,12 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     .sort((a, b) => a.pageLabel.localeCompare(b.pageLabel));
 
   const reviewed = candidate === null ? false : await hasShiftReportReviewer(db, pageIds);
+  // «Проверка нашла изменения»: the person signed the hand-in and the check changed the report — Hub re-made the
+  // candidate with what it found (a re-made one is never signed), or the signature was not applied (Gengar's card, a
+  // colleague's answer, a decision since). The same hand-in: the candidates of its cutoff, the events since it.
+  const signatureDeclined = own && phase === "confirm" && candidate !== null && handin !== null && candidate.signed === null
+    && (candidates.some((one) => one.signed !== null && one.cutoffAt.getTime() === candidate.cutoffAt.getTime())
+      || await hasHandinEventSince(db, { handinId: handin.id, event: SHIFT_REPORT_SIGNATURE_DECLINED_EVENT, since: candidate.cutoffAt }));
   const candidateWire = candidate === null ? null : {
     id: candidate.id,
     number: candidate.number,
@@ -668,6 +677,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       notes: ofCandidate.filter((one) => one.kind === "note").length,
     },
     superseded: candidate.supersededAt !== null,
+    signed: candidate.signed !== null,
+    signatureDeclined,
   };
 
   const flat = columns.flatMap((column) => column.rows);
