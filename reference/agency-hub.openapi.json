@@ -2162,6 +2162,38 @@
                                 "minimum": -9007199254740991,
                                 "maximum": 9007199254740991
                               },
+                              "byKind": {
+                                "type": "object",
+                                "properties": {
+                                  "ppv": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "tip": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "subscription": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "post": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "ppv",
+                                  "tip",
+                                  "subscription",
+                                  "post"
+                                ],
+                                "additionalProperties": false
+                              },
                               "overlapNetMills": {
                                 "type": "integer",
                                 "minimum": -9007199254740991,
@@ -2261,6 +2293,7 @@
                               "pauses",
                               "pages",
                               "salesNetMills",
+                              "byKind",
                               "overlapNetMills",
                               "together",
                               "messages",
@@ -2855,6 +2888,38 @@
                                     "minimum": -9007199254740991,
                                     "maximum": 9007199254740991
                                   },
+                                  "byKind": {
+                                    "type": "object",
+                                    "properties": {
+                                      "ppv": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "tip": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "subscription": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "post": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "ppv",
+                                      "tip",
+                                      "subscription",
+                                      "post"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "overlapNetMills": {
                                     "type": "integer",
                                     "minimum": -9007199254740991,
@@ -2954,6 +3019,7 @@
                                   "pauses",
                                   "pages",
                                   "salesNetMills",
+                                  "byKind",
                                   "overlapNetMills",
                                   "together",
                                   "messages",
@@ -3385,6 +3451,29 @@
                                       {
                                         "type": "null"
                                       }
+                                    ]
+                                  },
+                                  "phase": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "draft",
+                                          "checking",
+                                          "confirm",
+                                          "counted",
+                                          "fixing"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "postCopied": {
+                                    "type": [
+                                      "boolean",
+                                      "null"
                                     ]
                                   }
                                 },
@@ -4294,6 +4383,38 @@
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
                           },
+                          "byKind": {
+                            "type": "object",
+                            "properties": {
+                              "ppv": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tip": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "subscription": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "post": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "ppv",
+                              "tip",
+                              "subscription",
+                              "post"
+                            ],
+                            "additionalProperties": false
+                          },
                           "overlapNetMills": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -4393,6 +4514,7 @@
                           "pauses",
                           "pages",
                           "salesNetMills",
+                          "byKind",
                           "overlapNetMills",
                           "together",
                           "messages",
@@ -303611,6 +303733,29 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "phase": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "draft",
+                                  "checking",
+                                  "confirm",
+                                  "counted",
+                                  "fixing"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "postCopied": {
+                            "type": [
+                              "boolean",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -388281,6 +388426,38 @@
                                     "minimum": -9007199254740991,
                                     "maximum": 9007199254740991
                                   },
+                                  "byKind": {
+                                    "type": "object",
+                                    "properties": {
+                                      "ppv": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "tip": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "subscription": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "post": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "ppv",
+                                      "tip",
+                                      "subscription",
+                                      "post"
+                                    ],
+                                    "additionalProperties": false
+                                  },
                                   "overlapNetMills": {
                                     "type": "integer",
                                     "minimum": -9007199254740991,
@@ -388380,6 +388557,7 @@
                                   "pauses",
                                   "pages",
                                   "salesNetMills",
+                                  "byKind",
                                   "overlapNetMills",
                                   "together",
                                   "messages",
