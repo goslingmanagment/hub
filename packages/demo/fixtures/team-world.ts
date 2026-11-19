@@ -5,6 +5,7 @@
  * simulation, so the shifts, the numbers, the reports and the statistics of a
  * chatter agree with each other — and with the pages' revenue in world.ts.
  */
+import { millsPercentOf, millsRoundedTo, millsToNumber, sumMills } from "@agency_hub_core/shared";
 import { between, hashString, intBetween, pick, rng, type DemoRequest } from "../core.ts";
 import { DEMO_PAGES, DEMO_USERS, demoDailyNet, demoFans, demoPage, demoUserByRole, type DemoFan, type DemoUser } from "../world.ts";
 import { chatterWorld, type DemoSale as AccountSale } from "./account-model.ts";
@@ -424,7 +425,7 @@ function fromAccountModel(schedule: Schedule, now: Date): { shifts: DemoShift[];
     kind: sale.kind,
     fan: sale.fan,
     netMills: sale.netMills,
-    priceMills: Math.round(sale.netMills / 0.8 / 10) * 10,
+    priceMills: millsToNumber(millsRoundedTo(millsPercentOf(sale.netMills, 125), "cent")),
     at: sale.at,
     mark: sale.myMark?.mark ?? "mine",
     shareWith: sale.myMark?.shareWith ? DEMO_USERS.find((one) => one.username === sale.myMark!.shareWith) ?? null : null,
@@ -460,7 +461,7 @@ function fromAccountModel(schedule: Schedule, now: Date): { shifts: DemoShift[];
       pages,
       messages: one.messages,
       ppvSent: one.ppvSent,
-      ppvAveragePriceMills: ppv.length > 0 ? Math.round(ppv.reduce((sum, sale) => sum + sale.priceMills, 0) / ppv.length / 10) * 10 : 19_990,
+      ppvAveragePriceMills: ppv.length > 0 ? millsToNumber(millsRoundedTo(sumMills(ppv.map((sale) => sale.priceMills)) / BigInt(ppv.length), "cent")) : 19_990,
       fansWritten: one.fansWritten,
       replies,
       replyMedianSeconds: intBetween(random, schedule.replyMedian[0], schedule.replyMedian[1]),
