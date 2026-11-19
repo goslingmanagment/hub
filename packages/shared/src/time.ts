@@ -180,6 +180,18 @@ export function toBusinessDate(date: Date, timeZone = MOSCOW_TIME_ZONE): string 
   return `${parts.year}-${month}-${day}`;
 }
 
+/** Moscow keeps UTC+3 all year: no clock change since 2014-10-26, and Hub holds no data older than that. */
+export const MOSCOW_UTC_OFFSET_MS = 3 * 3_600_000;
+
+/**
+ * The agency's day of an instant (epoch ms): the Moscow `YYYY-MM-DD`, without a formatter. The one home of this
+ * arithmetic: look's `moscowDayOf`, the shifts' `moscowDayOf` (chatter-shifts.ts) and the rules call it. An invalid
+ * instant throws `RangeError`, as the Intl form does.
+ */
+export function moscowDayOfMs(at: number): string {
+  return new Date(at + MOSCOW_UTC_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 function readBusinessDate(value: string): Pick<DateParts, "year" | "month" | "day"> | null {
   if (!BUSINESS_DATE_PATTERN.test(value)) {
     return null;

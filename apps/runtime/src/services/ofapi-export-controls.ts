@@ -5,6 +5,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, ServiceUnavailableError } from "./errors.ts";
 import { parseOfapiExportCursor, parseOfapiExportTarget, type parseCapturedOfapiExportQuote, type ExportQuoteTarget } from "./ofapi-export-quotes.ts";
 import { requireTypedExportJob } from "./ofapi-typed-exports.ts";
+import { asRecord as object } from "./ofapi-payloads.ts";
 
 export async function prepareOwnerOfapiExportControl(app: AppContext, input: { jobId: string; action: "cancel" | "retry"; expectedRowVersion: number; expectedPolicyRevision: number; approvedMaxCredits: number; reason: string; dryRun: boolean }, actorUserId: number) {
   return app.db.transaction(async tx => {
@@ -75,7 +76,6 @@ export async function resumeOfapiExportCancellationStatus(app: AppContext) {
     }
   });
 }
-function object(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
 export function parseOfapiExportInventory(body: unknown) {
   const data = object(object(body)?.data), meta = object(data?.meta);
   if (!Array.isArray(data?.data) || data.data.length > 100 || !meta || !Number.isSafeInteger(meta.current_page) || !Number.isSafeInteger(meta.last_page)) throw new BadRequestError("Vendor export inventory shape changed");

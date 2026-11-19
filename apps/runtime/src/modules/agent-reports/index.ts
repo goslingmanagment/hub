@@ -7,7 +7,7 @@ import {
   readReport,
   readReportsList,
 } from "../../services/agent-reports.ts";
-import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
+import { beginAgentRequest, settleAgentRequest as settled, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -39,17 +39,6 @@ export function registerAgentReportRoutes(server: ApiServer, ctx: ApiModuleConte
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: ["write:reports"] });
     return { principal, scope };
-  }
-
-  async function settled<T>(scope: { finish(rows: number): Promise<void> }, body: () => Promise<T>, rows: (result: T) => number) {
-    let delivered = 0;
-    try {
-      const result = await body();
-      delivered = rows(result);
-      return result;
-    } finally {
-      await scope.finish(delivered);
-    }
   }
 
   server.put("/api/v1/agent/reports/:slug", { schema: routeSchemas.agentReportPut }, async (request) => {

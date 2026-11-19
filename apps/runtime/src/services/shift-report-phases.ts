@@ -1,6 +1,7 @@
 import { SHIFT_REPORT_ASK_SILENCE_HOURS, SHIFT_REPORT_CHECK_MINUTES, type ShiftReportPhase } from "@agency_hub_core/contracts";
 import type { HandinStatement, HandinVersionLine, ProposalRow } from "@agency_hub_core/db";
 
+import { ConflictError } from "./errors.ts";
 import { lineAmount, type Statement } from "./shift-handin-rules.ts";
 import type { SaleHomeKind } from "./sale-rule.ts";
 
@@ -56,6 +57,16 @@ export function mayAct(actor: BoardActor, action: BoardAction, phase: ShiftRepor
   if (actor.access !== "own" || !actor.enabled) return false;
   if (actor.kind === "agent") return AGENT_ACTIONS.includes(action) && (phase === "draft" || phase === "fixing");
   return PERSON_ACTIONS[phase].includes(action);
+}
+
+/**
+ * A change the phase does not take now (ticks and «чья» in «Проверка», «Подтвердите», «Учтён»): the route answers 409
+ * with the fresh board; «Исправить» is the way back to editing.
+ */
+export class PhaseConflictError extends ConflictError {
+  constructor(readonly shiftId: number, phase: ShiftReportPhase) {
+    super(`Not now: the report is in «${phase}»; «Исправить» first`, { reason: "phase" });
+  }
 }
 
 /**

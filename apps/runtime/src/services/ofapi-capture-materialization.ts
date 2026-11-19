@@ -19,6 +19,7 @@ import {
   parseStrictOfapiMessagePage,
 } from "./ofapi-capture-contract.ts";
 import { serveOfapiMessageMaterialPage } from "./ofapi-message-material-serving.ts";
+import { asRecord } from "./ofapi-payloads.ts";
 
 /** The non-sentinel conflict classes Wave 1 deliberately keeps (amendment 3:
  * "conflicts barely exist" must become a measured number). */
@@ -51,12 +52,6 @@ const PENDING_MATERIALIZER_VERSION = 2;
 const SWEEP_PAGE_SIZE = 100;
 const SWEEP_MAX_PAGES = 10;
 const SWEEP_ITEM_BUDGET = 5_000;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
 
 function asString(value: unknown) {
   return typeof value === "string" && value.length > 0 ? value : null;

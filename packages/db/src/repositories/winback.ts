@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { AWAITING_MASS_MIN_CHATS } from "./spender-stats.ts";
+import { AWAITING_MASS_MIN_CHATS, clockHourTextBurstSql } from "./spender-stats.ts";
 
 // Win back (Chat Memory week 3, 0309, docs/plans/2026-10-24-chat-memory/week-3.md
 // §2–3): who to win back on a page, the owner's approaches, a chatter's pick,
@@ -93,17 +93,7 @@ export async function listWinBackCandidates(
           where m.account_id = ${page} and m.conversation_ref = th.platform_conversation_id
             and m.is_sent_by_me and m.deleted_at is null and coalesce(m.message_type, 1) <> 2
             and m.occurred_at > s.source_created_at + interval '2 minutes'
-            and (
-              select count(*) from (
-                select distinct b.conversation_ref from message_archive b
-                where b.account_id = m.account_id and b.is_sent_by_me
-                  and b.occurred_at >= date_trunc('hour', m.occurred_at)
-                  and b.occurred_at < date_trunc('hour', m.occurred_at) + interval '1 hour'
-                  and coalesce(b.text_plain, '') = coalesce(m.text_plain, '')
-                  and coalesce(b.price_mills, 0) = coalesce(m.price_mills, 0)
-                limit ${AWAITING_MASS_MIN_CHATS}
-              ) burst
-            ) < ${AWAITING_MASS_MIN_CHATS}
+            and ${clockHourTextBurstSql("m", AWAITING_MASS_MIN_CHATS)} < ${AWAITING_MASS_MIN_CHATS}
         )
       group by s.fan_id
     ),
