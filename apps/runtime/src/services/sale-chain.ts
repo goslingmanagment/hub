@@ -33,6 +33,7 @@ import { readTeamLedgerPayoutPerson } from "./ledger-person-pay.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
 import { SALE_HOME_REASON_TEXT, SALE_RULE, type SaleHomeReason } from "./sale-rule.ts";
 import { dayWords, shiftWords } from "./shift-handin-rules.ts";
+import { CLAIM_SILENCE_MS } from "./shift-report-phases.ts";
 
 /**
  * Цепочка продажи (ecosystem plan 2026-11-12, package T): from one sale, where its money is — whose it is (the home of
@@ -321,7 +322,7 @@ export async function readSaleChain(
   const decision = (await listActiveSaleDecisions(db, [sale.transactionId])).get(sale.transactionId) ?? null;
   const names = await listHandinNames(db, [...people, ...claims.flatMap((claim) => [claim.claimantUserId, claim.sideUserId].filter((one): one is number => one !== null)),
     ...(decision?.shares.map((share) => share.userId) ?? [])]);
-  const home = homeLinkOf({ sale, names, decision, claims, ownerReads: viewer.kind === "owner", silenceMs: 24 * 3_600_000 });
+  const home = homeLinkOf({ sale, names, decision, claims, ownerReads: viewer.kind === "owner", silenceMs: CLAIM_SILENCE_MS });
 
   // The people the home gives a share: a chatter only their own.
   const shown = viewer.kind === "chatter" ? people.filter((userId) => ownLogins.includes(userId)) : people;

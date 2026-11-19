@@ -68,7 +68,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { moscowWeekStart, refreshSaleHomes } from "./sale-homes.ts";
-import { silenceSettles } from "./shift-report-phases.ts";
+import { CLAIM_SILENCE_MS, silenceSettles } from "./shift-report-phases.ts";
 import {
   claimStands,
   claimTitle,
@@ -90,6 +90,7 @@ import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, halvesOf, type SaleHomeRe
 import { realmOf, testUserIds } from "./sandbox/realm.ts";
 import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, teamFactsFor, type Decider } from "./teams.ts";
 import { dayWords } from "./shift-handin-rules.ts";
+import { POT_OFFER_KIND } from "./shift-handin-check.ts";
 import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, pageCatalog, saleLineFacts, type HandinActor } from "./shift-report-draft.ts";
 
 /**
@@ -133,8 +134,6 @@ const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 /** How far back the pass reads reports: older claims keep their state. */
 const LOOKBACK_DAYS = 14;
-/** How long the other side has to answer before the owner hears of it. */
-export const CLAIM_SILENCE_MS = 24 * HOUR_MS;
 const SYSTEM: MatterActor = { door: "system" };
 const OPEN_STATES = ["asked", "agreed", "owner"] as const;
 
@@ -1734,13 +1733,11 @@ async function decidePotOffer(app: ClaimsApp, principal: HumanAuthPrincipal, inp
     },
   }, sale, now);
   // Answered: the owner's matter leaves «Ждут вас» at once, as a dispute's does (the minute pass would close it later).
-  await closeMatter(db, { key: `${POT_OFFER_MATTER_KIND}:${offer.transactionId}`, how: "resolved", writer: "server" }, SYSTEM, now).catch((error: unknown) => {
+  await closeMatter(db, { key: `${POT_OFFER_KIND}:${offer.transactionId}`, how: "resolved", writer: "server" }, SYSTEM, now).catch((error: unknown) => {
     app.logger.warn({ transactionId: offer.transactionId, err: error instanceof Error ? error.message : String(error) }, "pot offer: the matter did not close; the next pass will");
   });
   return { decided: true, versions: applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })), savedAt: now.toISOString() };
 }
-
-const POT_OFFER_MATTER_KIND = "sale.pot_offer";
 
 /**
  * An offer of the pot the owner already answered: the window re-read after the press shows what was decided, not a
