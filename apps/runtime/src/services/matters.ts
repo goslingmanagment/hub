@@ -46,14 +46,20 @@ import {
   listMatterChecks,
   listMatterPageLabels,
   listMatterUsernames,
+  listOpenMattersOfKinds,
   listVisibleMatters,
+  matterChanges,
   MatterWriterConflictError,
   openMatter,
   listTestPageIds,
+  touchMatters,
+  type MatterActor,
   type MatterCheckRow,
+  type MatterOpenInput,
   type MatterOwner,
   type MatterOwnerRole,
   type MatterRow,
+  type MatterSource,
   type MatterViewer,
 } from "@agency_hub_core/db";
 
@@ -198,6 +204,62 @@ export function buildWaitingProducts(groups: MattersWaitingResponse["groups"], m
     });
   }
   return products;
+}
+
+// ── A server writer's kinds, made what its findings say ─────────────────────
+
+const SYSTEM: MatterActor = { door: "system" };
+
+/**
+ * The one reconcile of a writer's matters («one writer per kind, closes itself when the cause is gone»): every input
+ * opened, updated or reopened by its key (the first of a key counts; one that would change nothing is only touched,
+ * all of them in one batch), and every open matter of `kinds` that is not among them closed as «cause gone» — unless
+ * `keep` holds it — by `closeAs`, or by the writer it was opened by. One that cannot be written does not stop the
+ * rest: the writer's `onOpenError` / `onCloseError` says it. The read of the open matters and the touch throw.
+ */
+export async function reconcileKindMatters(
+  app: Pick<AppContext, "db">,
+  input: {
+    kinds: readonly string[];
+    inputs: readonly MatterOpenInput[];
+    keep?: ((key: string) => boolean) | undefined;
+    closeAs?: MatterSource;
+    onOpenError: (error: unknown, key: string) => void;
+    onCloseError: (error: unknown, key: string) => void;
+  },
+  now: Date,
+): Promise<{ opened: number; closed: number }> {
+  const open = new Map((await listOpenMattersOfKinds(app.db, input.kinds)).map((matter) => [matter.key, matter]));
+  const seen = new Set<string>();
+  const touched: string[] = [];
+  let opened = 0;
+  let closed = 0;
+  for (const matter of input.inputs) {
+    if (seen.has(matter.key)) continue;
+    seen.add(matter.key);
+    const existing = open.get(matter.key);
+    if (existing !== undefined && matterChanges(existing, matter).length === 0) {
+      touched.push(matter.key);
+      continue;
+    }
+    try {
+      const result = await openMatter(app.db, matter, SYSTEM, now);
+      if (result.transition === "opened" || result.transition === "reopened") opened += 1;
+    } catch (error) {
+      input.onOpenError(error, matter.key);
+    }
+  }
+  for (const [key, matter] of open) {
+    if (seen.has(key) || input.keep?.(key)) continue;
+    try {
+      const result = await closeMatter(app.db, { key, how: "cause_gone", writer: input.closeAs ?? matter.source }, SYSTEM, now);
+      if (result.transition === "closed") closed += 1;
+    } catch (error) {
+      input.onCloseError(error, key);
+    }
+  }
+  await touchMatters(app.db, touched, now);
+  return { opened, closed };
 }
 
 // ── The doors ───────────────────────────────────────────────────────────────
