@@ -79,6 +79,9 @@ async function buildPackage(packageDir, entryPoints, options = {}) {
   if (options.banner) {
     args.push(`--banner:js=${options.banner}`);
   }
+  if (options.splitting) {
+    args.push("--splitting", "--chunk-names=chunks/[name]-[hash]");
+  }
 
   const { stdout, stderr } = await execFileAsync(pnpmBin, [
     "exec",
@@ -119,7 +122,9 @@ await buildPackage("packages/db/dist", {
 
 // Production runs only `startup.js <role>` and `cli.js`; `src/api.ts` and
 // `src/worker.ts` are local dev entry points (`pnpm api`, `pnpm worker`).
+// Split into shared chunks (`dist/chunks/`): startup.ts imports a role's
+// module only when it starts that role, so each role loads only its graph.
 await buildPackage("apps/runtime/dist", {
   cli: "apps/runtime/src/cli.ts",
   startup: "apps/runtime/src/startup.ts",
-});
+}, { splitting: true });
