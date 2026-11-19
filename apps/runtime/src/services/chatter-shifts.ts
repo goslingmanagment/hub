@@ -29,6 +29,7 @@ import {
   type Database,
   type ShiftSale,
 } from "@agency_hub_core/db";
+import { moscowDayOfMs as moscowDayOf } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireApiKeyUser, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
@@ -362,10 +363,8 @@ export function middleOfWork(work: { startedAt: number; endedAt: number }): numb
   return Math.floor((work.startedAt + work.endedAt - 1) / 2);
 }
 
-/** The Moscow `YYYY-MM-DD` of an instant (Moscow has no DST: UTC+3). Pure. */
-export function moscowDayOf(at: number): string {
-  return new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
-}
+/** The Moscow `YYYY-MM-DD` of an instant (Moscow has no DST: UTC+3): shared's `moscowDayOfMs`, under the name its importers use. Pure. */
+export { moscowDayOf };
 
 /** The Moscow day a piece of work belongs to. Pure. */
 export function dayOfWork(work: { startedAt: number; endedAt: number }): string {

@@ -10,7 +10,7 @@ import {
   readMattersWaiting,
   type AgentMatterScope,
 } from "../../services/matters.ts";
-import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
+import { beginAgentRequest, settleAgentRequest as settled, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -49,17 +49,6 @@ export function registerMatterRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: ["write:matters"] });
     const matterScope: AgentMatterScope = { principal, pages: scope.pages.map((page) => ({ id: page.id, pageLabel: page.pageLabel })) };
     return { principal, scope, matterScope };
-  }
-
-  async function settled<T>(scope: { finish(rows: number): Promise<void> }, body: () => Promise<T>) {
-    let delivered = 0;
-    try {
-      const result = await body();
-      delivered = 1;
-      return result;
-    } finally {
-      await scope.finish(delivered);
-    }
   }
 
   server.post("/api/v1/agent/matters", { schema: routeSchemas.agentMatterOpen }, async (request) => {

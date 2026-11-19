@@ -15,7 +15,7 @@
 // the monthly credits still to come, and the half-hourly check pages the owner
 // once when it runs out within aiBalanceWarnDays (ai-balance-watch.ts).
 
-import type { AiAccountCredits } from "@agency_hub_core/shared";
+import { moscowDayOfMs, type AiAccountCredits } from "@agency_hub_core/shared";
 import type { AiProviderAccountCreditRow, AiProviderAccountRow } from "@agency_hub_core/db";
 
 export const DAY_MS = 86_400_000;
@@ -53,7 +53,7 @@ export function renewalsFrom(day: number, now: Date, count: number): Date[] {
 
 /** The Moscow date (YYYY-MM-DD) of a renewal: the cycle's name. */
 export function moscowDate(at: Date): string {
-  return new Date(at.getTime() + MSK_OFFSET_MS).toISOString().slice(0, 10);
+  return moscowDayOfMs(at.getTime());
 }
 
 type Anchor = { microUsd: number; at: Date; zero: boolean };

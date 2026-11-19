@@ -2,7 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import { inLast30BusinessDates } from "../business-day.ts";
 import type { Database } from "../client.ts";
-import { AWAITING_MASS_MIN_CHATS } from "./spender-stats.ts";
+import { AWAITING_MASS_MIN_CHATS, clockHourTextBurstSql } from "./spender-stats.ts";
 
 // Fan queues (0333, docs/plans/2026-10-29-fan-queues/spec.md): the fans of one
 // page gathered by a rule or a list, kept here and handed out to the page's
@@ -887,15 +887,7 @@ export async function countFanQueueMassMessages(
     from chats c
     join message_archive m on m.account_id = ${input.pageId} and m.conversation_ref = c.ref
     where m.is_sent_by_me and m.deleted_at is null and m.occurred_at > ${ts(input.now)} - make_interval(days => ${input.days})
-      and (coalesce(m.message_type, 1) = 2 or (
-        select count(*) from (
-          select distinct b.conversation_ref from message_archive b
-          where b.account_id = m.account_id and b.is_sent_by_me
-            and b.occurred_at >= date_trunc('hour', m.occurred_at) and b.occurred_at < date_trunc('hour', m.occurred_at) + interval '1 hour'
-            and coalesce(b.text_plain, '') = coalesce(m.text_plain, '') and coalesce(b.price_mills, 0) = coalesce(m.price_mills, 0)
-          limit ${AWAITING_MASS_MIN_CHATS}
-        ) burst
-      ) >= ${AWAITING_MASS_MIN_CHATS})
+      and (coalesce(m.message_type, 1) = 2 or ${clockHourTextBurstSql("m", AWAITING_MASS_MIN_CHATS)} >= ${AWAITING_MASS_MIN_CHATS})
     group by c.fan_id`);
   for (const row of result.rows) out.set(Number(row.fan_id), { count: Number(row.n), lastAt: toDate(row.last_at) });
   return out;
