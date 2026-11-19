@@ -10,8 +10,6 @@
 import {
   findActiveOfapiPageForLiveConsumer,
   findPageSubscription,
-  listOfapiWebhookEventsForDmProjection,
-  markOfapiWebhookEventProjection,
   refreshPageSubscriberCount,
   upsertFanPageExternalPresences,
   upsertFanPages,
@@ -25,6 +23,10 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  settleOfapiJournalProjection,
+  sweepOfapiJournalProjection,
+} from "./ofapi-journal-projection.ts";
+import {
   asRecord,
   idToString,
   ofapiWebhookEnvelopeSchema,
@@ -36,9 +38,6 @@ export const OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES = [
   "subscriptions.renewed",
   "subscriptions.expired",
 ] as const;
-
-export const OFAPI_SUBSCRIPTION_PROJECTION_MAX_ATTEMPTS = 5;
-const OFAPI_SUBSCRIPTION_PROJECTION_SWEEP_LIMIT = 200;
 
 export function isOfapiSubscriptionProjectionEventType(eventType: string) {
   return (OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES as readonly string[]).includes(eventType);
@@ -257,37 +256,13 @@ export async function runOfapiSubscriptionProjectionForSettledRow(
     return;
   }
 
-  try {
-    const outcome = await projectOfapiSubscriptionEvent(app, row);
-    await markOfapiWebhookEventProjection(app.db, {
-      id: row.id,
-      status: outcome.status,
-      error: outcome.status === "skipped" ? outcome.reason : null,
-    });
-  } catch (error) {
-    app.logger.warn(
-      { err: error, eventId: row.id, eventType: row.eventType },
-      "OFAPI subscription projection failed; the sweep will retry",
-    );
-    await markOfapiWebhookEventProjection(app.db, {
-      id: row.id,
-      status: "failed",
-      error: error instanceof Error ? error.message : String(error),
-    }).catch(() => undefined);
-  }
+  await settleOfapiJournalProjection(app, row, {
+    project: () => projectOfapiSubscriptionEvent(app, row),
+    failureLog: "OFAPI subscription projection failed; the sweep will retry",
+  });
 }
 
 /** Minutely sweep: re-projects pending/failed subscription rows (cap 5 attempts). */
 export async function sweepOfapiSubscriptionProjections(app: AppContext) {
-  const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
-    eventTypes: OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES,
-    maxAttempts: OFAPI_SUBSCRIPTION_PROJECTION_MAX_ATTEMPTS,
-    limit: OFAPI_SUBSCRIPTION_PROJECTION_SWEEP_LIMIT,
-  });
-
-  for (const row of rows) {
-    await runOfapiSubscriptionProjectionForSettledRow(app, row);
-  }
-
-  return rows.length;
+  return sweepOfapiJournalProjection(app, OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES, runOfapiSubscriptionProjectionForSettledRow);
 }

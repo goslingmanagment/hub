@@ -16,7 +16,6 @@ import {
   getSyncStreamsForPlatform,
   listOfapiMappedPages,
   pausePageSyncForAuth,
-  listOfapiWebhookEventsForDmProjection,
   markOfapiWebhookEventProjection,
 } from "@agency_hub_core/db";
 
@@ -24,6 +23,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { asRecord } from "./ofapi-payloads.ts";
 import { OFAPI_ACCOUNT_HEALTH_EVENT_TYPES, ofapiAccountLifecycleTime } from "./ofapi-lifecycle-contract.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
+import { sweepOfapiJournalProjection } from "./ofapi-journal-projection.ts";
 import {
   notifyOfapiAuthIncident,
   notifyOfapiGlobalIncident,
@@ -268,9 +268,5 @@ export async function runOfapiAccountHealthProjectionForSettledRow(app: AppConte
 }
 
 export async function sweepOfapiAccountHealthProjections(app: AppContext) {
-  const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
-    eventTypes: OFAPI_ACCOUNT_HEALTH_EVENT_TYPES, maxAttempts: 5, limit: 200,
-  });
-  for (const row of rows) await runOfapiAccountHealthProjectionForSettledRow(app, row);
-  return rows.length;
+  return sweepOfapiJournalProjection(app, OFAPI_ACCOUNT_HEALTH_EVENT_TYPES, runOfapiAccountHealthProjectionForSettledRow);
 }

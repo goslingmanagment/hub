@@ -1,17 +1,8 @@
 import { MATTER_PERSON_START_KINDS, hubPersonPath, teamPersonHref, type MatterPersonStartKind, type PersonStart, type PersonStartStepId } from "@agency_hub_core/contracts";
-import {
-  closeMatter,
-  listOpenMattersOfKinds,
-  listPersonRows,
-  matterChanges,
-  openMatter,
-  touchMatters,
-  type MatterActor,
-  type MatterOpenInput,
-  type PersonRow,
-} from "@agency_hub_core/db";
+import { listPersonRows, type MatterOpenInput, type PersonRow } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { reconcileKindMatters } from "../matters.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 import { teamFactsFor } from "../teams.ts";
 import { isNewcomerRow, loadStartFacts, personStart } from "./start.ts";
@@ -27,8 +18,6 @@ import { isNewcomerRow, loadStartFacts, personStart } from "./start.ts";
  */
 
 export const PEOPLE_START_QUEUE = "people.start";
-
-const SYSTEM: MatterActor = { door: "system" };
 
 /** The owner's words for the place a newcomer stands on. */
 const PLACE_WORD: Readonly<Record<PersonStartStepId, string>> = {
@@ -94,41 +83,16 @@ export async function runPeopleStartTick(app: Pick<AppContext, "db" | "logger">,
     const workingPageIds = team.working.filter((one) => one.personId === row.id).map((one) => one.pageId);
     return mine ? [{ row, start: personStart(row, mine, now), workingPageIds }] : [];
   }));
-  const open = new Map((await listOpenMattersOfKinds(app.db, [...MATTER_PERSON_START_KINDS])).map((matter) => [matter.key, matter]));
-  const seen = new Set<string>();
-  const touched: string[] = [];
-  const tally: PeopleStartTally = { opened: 0, closed: 0 };
-  for (const finding of want) {
-    if (seen.has(finding.key)) continue;
-    seen.add(finding.key);
-    const input: MatterOpenInput = {
+  return reconcileKindMatters(app, {
+    kinds: MATTER_PERSON_START_KINDS,
+    inputs: want.map((finding): MatterOpenInput => ({
       key: finding.key, kind: finding.kind, source: "server", title: finding.title.slice(0, 300),
       object: { type: "person", id: finding.code }, pageIds: finding.pageIds, owner: finding.owner, money: false,
       evidence: finding.evidence, link: finding.link,
-    };
-    const existing = open.get(finding.key);
-    if (existing !== undefined && matterChanges(existing, input).length === 0) {
-      touched.push(finding.key);
-      continue;
-    }
-    try {
-      const result = await openMatter(app.db, input, SYSTEM, now);
-      if (result.transition === "opened" || result.transition === "reopened") tally.opened += 1;
-    } catch (error) {
-      app.logger.error({ err: error, key: finding.key }, "people start: a matter could not be opened");
-    }
-  }
-  for (const [key, matter] of open) {
-    if (seen.has(key)) continue;
-    try {
-      const result = await closeMatter(app.db, { key, how: "cause_gone", writer: matter.source }, SYSTEM, now);
-      if (result.transition === "closed") tally.closed += 1;
-    } catch (error) {
-      app.logger.error({ err: error, key }, "people start: a matter could not be closed");
-    }
-  }
-  await touchMatters(app.db, touched, now);
-  return tally;
+    })),
+    onOpenError: (error, key) => app.logger.error({ err: error, key }, "people start: a matter could not be opened"),
+    onCloseError: (error, key) => app.logger.error({ err: error, key }, "people start: a matter could not be closed"),
+  }, now);
 }
 
 export async function ensurePeopleStartQueue(boss: QueueCreationClient, createdQueues?: Set<string>) {

@@ -10,25 +10,27 @@ import {
 import { sql } from "drizzle-orm";
 
 import type { AppContext } from "../bootstrap.ts";
-import { isOfapiDmProjectionEventType } from "./ofapi-dm-projection.ts";
+import { OFAPI_DM_PROJECTION_EVENT_TYPES } from "./ofapi-dm-projection.ts";
+import {
+  OFAPI_ACCOUNT_HEALTH_EVENT_TYPES,
+  OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES,
+} from "./ofapi-lifecycle-contract.ts";
 import { ofapiWebhookEnvelopeSchema } from "./ofapi-payloads.ts";
-import { isOfapiPresenceProjectionEventType } from "./ofapi-presence-projection.ts";
-import { isOfapiSubscriptionProjectionEventType } from "./ofapi-subscription-projection.ts";
+import { OFAPI_PRESENCE_PROJECTION_EVENT_TYPES } from "./ofapi-presence-projection.ts";
+import { OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES } from "./ofapi-subscription-projection.ts";
 
 export const OFAPI_EPHEMERAL_EVENT_TYPES: ReadonlySet<string> = new Set([
   "users.typing", "users.online", "users.offline",
 ]);
 
-function projectionStatus(eventType: string): "pending" | "none" {
-  return isOfapiDmProjectionEventType(eventType) ||
-      isOfapiSubscriptionProjectionEventType(eventType) ||
-      isOfapiPresenceProjectionEventType(eventType) ||
-      eventType.startsWith("accounts.") ||
-      eventType.startsWith("media_uploads.") ||
-      eventType.startsWith("data_exports.")
-    ? "pending"
-    : "none";
-}
+/** The event types some journal projection sweeps; the receiver stores them `pending`. */
+const OFAPI_JOURNAL_PROJECTED_EVENT_TYPES: ReadonlySet<string> = new Set([
+  ...OFAPI_DM_PROJECTION_EVENT_TYPES,
+  ...OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES,
+  ...OFAPI_PRESENCE_PROJECTION_EVENT_TYPES,
+  ...OFAPI_ACCOUNT_HEALTH_EVENT_TYPES,
+  ...OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES,
+]);
 
 async function assertObservationHash(
   db: AppContext["db"],
@@ -163,7 +165,7 @@ export async function finalizeOfapiWebhookRaw(
       eventType: acceptedEnvelope.event,
       ofapiAccountId: acceptedEnvelope.account_id ?? null,
       payload: parsedBody as Record<string, unknown>,
-      projectionStatus: projectionStatus(acceptedEnvelope.event),
+      projectionStatus: OFAPI_JOURNAL_PROJECTED_EVENT_TYPES.has(acceptedEnvelope.event) ? "pending" : "none",
     });
     if (!won) return;
     const observation = await insertObservation(db, {

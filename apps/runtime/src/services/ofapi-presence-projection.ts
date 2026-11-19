@@ -10,13 +10,15 @@
 import {
   findActiveOfapiPageForLiveConsumer,
   findPlatformFan,
-  listOfapiWebhookEventsForDmProjection,
-  markOfapiWebhookEventProjection,
   upsertFanPageExternalPresences,
 } from "@agency_hub_core/db";
 import { OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import {
+  settleOfapiJournalProjection,
+  sweepOfapiJournalProjection,
+} from "./ofapi-journal-projection.ts";
 import {
   asRecord,
   idToString,
@@ -28,9 +30,6 @@ export const OFAPI_PRESENCE_PROJECTION_EVENT_TYPES = [
   "users.online",
   "users.offline",
 ] as const;
-
-export const OFAPI_PRESENCE_PROJECTION_MAX_ATTEMPTS = 5;
-const OFAPI_PRESENCE_PROJECTION_SWEEP_LIMIT = 200;
 
 export function isOfapiPresenceProjectionEventType(eventType: string) {
   return (OFAPI_PRESENCE_PROJECTION_EVENT_TYPES as readonly string[]).includes(eventType);
@@ -146,37 +145,13 @@ export async function runOfapiPresenceProjectionForSettledRow(
     return;
   }
 
-  try {
-    const outcome = await projectOfapiPresenceEvent(app, row);
-    await markOfapiWebhookEventProjection(app.db, {
-      id: row.id,
-      status: outcome.status,
-      error: outcome.status === "skipped" ? outcome.reason : null,
-    });
-  } catch (error) {
-    app.logger.warn(
-      { err: error, eventId: row.id, eventType: row.eventType },
-      "OFAPI presence projection failed; the sweep will retry",
-    );
-    await markOfapiWebhookEventProjection(app.db, {
-      id: row.id,
-      status: "failed",
-      error: error instanceof Error ? error.message : String(error),
-    }).catch(() => undefined);
-  }
+  await settleOfapiJournalProjection(app, row, {
+    project: () => projectOfapiPresenceEvent(app, row),
+    failureLog: "OFAPI presence projection failed; the sweep will retry",
+  });
 }
 
 /** Minutely sweep: re-projects pending/failed presence rows (cap 5 attempts). */
 export async function sweepOfapiPresenceProjections(app: AppContext) {
-  const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
-    eventTypes: OFAPI_PRESENCE_PROJECTION_EVENT_TYPES,
-    maxAttempts: OFAPI_PRESENCE_PROJECTION_MAX_ATTEMPTS,
-    limit: OFAPI_PRESENCE_PROJECTION_SWEEP_LIMIT,
-  });
-
-  for (const row of rows) {
-    await runOfapiPresenceProjectionForSettledRow(app, row);
-  }
-
-  return rows.length;
+  return sweepOfapiJournalProjection(app, OFAPI_PRESENCE_PROJECTION_EVENT_TYPES, runOfapiPresenceProjectionForSettledRow);
 }

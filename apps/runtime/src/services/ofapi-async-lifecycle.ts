@@ -1,10 +1,8 @@
-import {
-  listOfapiWebhookEventsForDmProjection,
-  markOfapiWebhookEventProjection,
-} from "@agency_hub_core/db";
+import { markOfapiWebhookEventProjection } from "@agency_hub_core/db";
 import { sql } from "drizzle-orm";
 import type { AppContext } from "../bootstrap.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
+import { sweepOfapiJournalProjection } from "./ofapi-journal-projection.ts";
 import { OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES, lifecycleTimestamp } from "./ofapi-lifecycle-contract.ts";
 
 export interface OfapiAsyncLifecycle {
@@ -74,11 +72,7 @@ export async function runOfapiAsyncLifecycleForSettledRow(app: AppContext, row: 
 }
 
 export async function sweepOfapiAsyncLifecycles(app: AppContext) {
-  const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
-    eventTypes: OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES, maxAttempts: 5, limit: 200,
-  });
-  for (const row of rows) await runOfapiAsyncLifecycleForSettledRow(app, row);
-  return rows.length;
+  return sweepOfapiJournalProjection(app, OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES, runOfapiAsyncLifecycleForSettledRow);
 }
 
 /** DB-only status read for an already-owned resource. Callers enforce principal/page
