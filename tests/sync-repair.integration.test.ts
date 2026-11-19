@@ -136,12 +136,12 @@ async function seedPage(): Promise<number> {
   return pageId;
 }
 
-/** A socket connection row, `*AgoMs` before now (null: not set). */
+/** A page browser's socket connection row, `*AgoMs` before now (null: not set). */
 async function connection(pageId: number, input: { gapAgoMs: number; verifiedAgoMs: number | null; closedAgoMs?: number | null; guardAgoMs?: number }) {
   const id = randomUUID();
   await testDb!.pool.query(
-    `insert into fansly_ws_connections (id, page_id, generation, started_at, gap_since, verified_at, last_guard_at, closed_at, stop_reason)
-     values ($1, $2, $3,
+    `insert into fansly_ws_connections (id, page_id, generation, origin, browser_connection_id, started_at, gap_since, verified_at, last_guard_at, closed_at, stop_reason)
+     values ($1, $2, $3, 'browser', gen_random_uuid(),
              clock_timestamp() - ($4::double precision - 500) * interval '1 millisecond',
              clock_timestamp() - $4::double precision * interval '1 millisecond',
              case when $5::double precision is null then null else clock_timestamp() - $5::double precision * interval '1 millisecond' end,

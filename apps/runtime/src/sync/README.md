@@ -34,7 +34,7 @@ Since S4-19 the executor holds nothing of Fansly either: `services/sync/` has no
 provider hold (R04) or import of the Fansly HTTP package, and the owner's `/account/me` levers (page verify, a
 credentials or proxy change) have no legacy sender behind them. `onlyfans/boundary.ts` is where that executor's
 platform set is read from; the planner and the executor scope every page-sync query with it and assert it before they
-wake or run a page (tests/sync-onlyfans-boundary.test.ts is the ratchet).
+wake or run a page.
 Since S4-20 no legacy sender of a Fansly page is left at all (I13): the Fansly adapter's HTTP, the endpoint and replay
 probe CLIs (`sync probe` is the engine's), the alias backfill CLI (`sync work enqueue --resource
 fan-profiles.alias-backfill`) and the describer's guarded CDN hop are deleted, and the app context builds no Fansly
@@ -216,8 +216,7 @@ fan (I12): the plan closes such a work, and the actor's idle wait does not count
 `history_requests_unavailable_on_page`, so in step 2 the class is empty. Intake, cancel, the admission and the apply
 take `sync_work` rows before `history_requests` before `history_request_items`; intake takes the chats its fans
 reference (`page_dm_threads`) before any work row, as the DM apply holds the chat it writes before its works, and the
-hook takes the chat's history work itself before any request (a `.head` or `.catchup` read does not hold it)
-(`tests/sync-history-lock-order.integration.test.ts`). A fan erasure settles the requests whose fans it removed. The ETA (`requests/eta.ts`) reads thread columns only and
+hook takes the chat's history work itself before any request (a `.head` or `.catchup` read does not hold it). A fan erasure settles the requests whose fans it removed. The ETA (`requests/eta.ts`) reads thread columns only and
 always gives a lower bound and an estimate; `pnpm cli sync history eta-backtest` measures it on the journal. Its time
 (step 3b ruling 11) is the reads at the tightest budget a history read draws on — the page's slots, the `/message`
 route (lower after a 429's slowdown) and the messaging family — each shared by the cycle's turns (U 5, R 4, P 1), the
@@ -257,8 +256,7 @@ The lever map is the registry's (`fansly/registry.ts`, `FANSLY_LEVER_STREAMS`): 
 line (the identity checks, the socket and its repair, live deletions, the alias backfill,
 the probes, media download) is addressed by its own name. `services/sync-status-engine.ts` says which lever streams
 each Settings block shows and moves (`ENGINE_BLOCK_STREAMS`), `services/sync-engine-levers.ts` which ones a "sync now"
-scope names (`FANSLY_ENGINE_SCOPE_STREAMS`). tests/sync-lever-map.test.ts pins the three and that every registry key is
-placed. The streams of two blocks share no key (`engineBlockKeys`; S4-35): a block's buttons move its own keys, so a
+scope names (`FANSLY_ENGINE_SCOPE_STREAMS`). The streams of two blocks share no key (`engineBlockKeys`; S4-35): a block's buttons move its own keys, so a
 pause of one block is never half undone by a resume of another. The chat list (`dm-conversations.*`, with
 `fan-profiles.probe`) and the chat messages (`dm-messages.*`, `.catchup` among them) are such two sets.
 
@@ -275,8 +273,7 @@ off until the route opens (`deferForRoute`: the row stores `pacer`, due then). A
 evaluator about that row as "why" does (`routePutOffUntil`, `engine/status.ts`), and the stop ends when the row is due
 again, or with the hold if that is sooner. The row is read for the keys that work per page (one row a key, already among
 the status facts); a key that works per subject is judged by its routes alone — `dm-conversations.find` is the only one
-that reads several, and each of its routes is the one route of another key of its stream (pinned in
-tests/sync-engine-stream-state.test.ts). A route's own pace is no stop (work it puts off is queued). The route holds are
+that reads several, and each of its routes is the one route of another key of its stream. A route's own pace is no stop (work it puts off is queued). The route holds are
 read from the page's hold set alone — no read of the attempt journal — so the verdict costs the status reads nothing. A
 stream or a block is `stopped` `none` / `some` / `all` of its keys, and `nextDueAt` is the earliest due time of open
 work of a key nothing stops: a paused or held key has no next read while its stop stands. "Reading" is said only of keys
@@ -297,27 +294,13 @@ reports it unhealthy with the one issue `engine:not_live` and no `engine` block;
 with the reason `fansly_sync_engine_off`; its summary reads "Not syncing"; a block lever, a trigger scope and the
 follower reconcile levers answer 409 `legacy_sync_retired`; the insights `engine` block is `null`.
 
-In the dashboard each engine has its Settings tab (S4-28). «Синк» (`?tab=engine`, `pages/settings/engine/`) lists the
-Fansly pages as the engine reads them — owner, holds, socket, the pause and how it was kept, the queue by class with
-the hour's requests, from `/api/v1/sync/pages`; the open history requests with their fans, reads and the ETA's two
-numbers, from `/api/v1/sync/history-requests` — and a page's detail there carries the five Settings blocks with their
-buttons. «Синхронизация» (`?tab=sync`) lists the legacy executor's pages only. `syncSettingsTab` (`lib/navigation.ts`)
-names a page's tab from its platform, and every link to a page's sync goes through it; a page opened on the other tab
-is pointed to its own. The engine's words live in one table, `engine/engineDisplay.ts`: a waiting reason
-(`engineWaitWords`), a stop (`engineStopText`) and the one thing that is true of a stream or a block
-(`engineReadingState`: not running without an owner, paused, page held, held, needs attention, partly paused or held,
-reading, idle) — Russian for the «Синк» tab, English for the analytics Coverage panel, which reads the insights
-`engine` block. "Reading" takes a host that runs the page, open work and keys nothing stops; everything else is named.
-
-The «Синк» tab is in one language and has its own block cards (`engine/EngineBlocks.tsx`, worded by
-`engine/engineBlockDisplay.ts`; S4-35): the cards «Синхронизация» keeps know nothing of the engine. A block card says
-what stops the block's keys and until when, omits "next" while nothing of it is due, and shows a partial pause as
-partial (each button says how many keys it moves). "Sync now" is offered for a block with a poll the owner has not
-paused; the requeue only for quarantined rows of the block, which it names; refused credentials point to the
-credentials form. A toast is built from the lever's answer (`engineLeverNotice`): what moved, "nothing moved" when
-nothing did, and a warning when nothing of the block will be sent anyway (no owner, a hold of every key). A page
-without a running owner does not look live: its mode chip reads `live · нет владельца` in the warning colour. After a
-lever the tab refreshes the engine's status and requests with the blocks.
+In the dashboard the engine's pages are on «Система → Сбор данных» (`/system/collection`,
+`apps/dashboard/src/pages/system/collection/`): a page's detail carries its blocks with their buttons
+(`EngineBlocksTable.tsx`; a lever's toast is built from its answer by `engineLeverNotice`), and the open history
+requests are on «Система → Заявки на историю» (`/system/history-requests`). The engine's words live in
+`apps/dashboard/src/pages/settings/engine/`: `engineDisplay.ts` — a waiting reason (`engineWaitWords`), a stop
+(`engineStopText`) and the one thing that is true of a stream or a block (`engineReadingState`) — and
+`engineBlockDisplay.ts`, the lines of the block table.
 
 Not for a Fansly page at all: the legacy monitor (`pnpm cli sync status` — the rows are the
 legacy executor's pages and streams, the events and `/api/v1/sync/requests` its journal as it stands; `sync page
@@ -337,8 +320,7 @@ for a key with the `owner` trigger on a live page; `--subject` only for a key th
 
 `requests/urgent.ts` is how the API and the CLIs ask the actor for a read instead of calling Fansly: `enqueueAndWait`
 upserts the work of a registry key with the `api` trigger and waits up to 15–30 s for `applied_revision` to reach the
-revision it raised (woken by `fansly_sync_work_done`, which `settleWork` sends for live rows, and re-reading every
-250 ms), then answers `done`, or `queued` with the work's status link. A page that is not `live` answers `not_live`
+revision it raised (re-reading the row every 250 ms), then answers `done`, or `queued` with the work's status link. A page that is not `live` answers `not_live`
 before anything is written, so in step 2 every call does; its callers (`page verify`, AI describe) refuse on it. A
 work carrying secret parameters is created fresh or refused, never merged into another open row of its key.
 
@@ -683,45 +665,13 @@ the page row FOR NO KEY UPDATE (the lock of every actor transaction) and fences 
 **The page row holds nothing, and it has no hold column** (step 4, S4-33, the last of the three releases below). The
 hold writers write the rows and lock the page row without writing it, and no statement of this build names the old
 hold columns of `sync_pages`: the hold slot of 0228 (its kind, end, start and detail) and the resource-hold map beside
-it, where the route state lived too. `tests/sync-old-hold-columns.test.ts` pins it over `apps`, `packages` and
-`scripts`: the one line there that names any of them is the deploy's search for them in the running images (below).
-`0245_sync_pages_drop_old_hold_columns.sql` dropped those five columns and the slot's two CHECKs: one catalog-only
-`ALTER TABLE`, its lock wait bounded to 5 s. **Read a page's holds from `sync_holds` or `sync page status`**: a query
-that selects one of the old columns fails. The page row keeps its counter of consecutive network failures, which is no
-hold.
+it, where the route state lived too. `0245_sync_pages_drop_old_hold_columns.sql` dropped those five columns and the
+slot's two CHECKs: one catalog-only `ALTER TABLE`, its lock wait bounded to 5 s. **Read a page's holds from
+`sync_holds` or `sync page status`**: a query that selects one of the old columns fails. The page row keeps its counter
+of consecutive network failures, which is no hold.
 
-**Rollback targets from this release on.**
-
-- **The release before this one** (S4-32) is a safe rollback target, and the only one. No statement of it reads the
-  dropped columns, its drizzle table does not map them, and it reads and writes the page row by named columns, never
-  by `*`. It writes one of them, in one statement: whenever it acquires a page it leaves a marker in the resource-hold
-  map (a route-state version the hold-set release cannot read, so that release refuses the page rather than open it
-  by stale columns). That statement is made on its own inside the acquisition and goes on where the column is gone:
-  the page is taken all the same, and there is nothing left to mark. So the migration is in
-  `ROLLBACK_COMPATIBLE_MIGRATIONS`. `tests/sync-hold-set.integration.test.ts` runs that acquisition as that image
-  makes it, every statement that writes a page row, the hold writes and the readers on a Postgres whose pages went
-  through the drop with holds in the old columns.
-- **Every image older than that is NOT a rollback target any more.** S4-31 ends every hold write by rewriting the
-  dropped columns from the rows, in the write's transaction: each hold write fails there, so a page can neither take
-  a hold nor lift one, **and it keeps sending meanwhile** (the actor's commit fails, the host restarts it, and a 200
-  needs no hold, so every health gate stays green). The hold-set release (S4-30, the one that brought `sync_holds`)
-  selects them whenever it acquires a page, and an older image knows a page's holds from them alone: neither runs at
-  all.
-- So this release is deployed onto the previous one, once that one has been deployed and has run its hour, **never in
-  the deploy that brings S4-32, and never over an older image** (after a rollback to S4-31, say). S4-32 has no
-  migration of its own, so `ROLLBACK_COMPATIBLE_MIGRATIONS` cannot tell those deploys apart: with the drop its only
-  pending migration the automatic rollback would be armed and would return to S4-31, and the S4-31 `sync`, which
-  keeps working while the new api applies the migration, would be on the migrated table at once. **The deploy checks
-  it itself.** While the drop is still to be applied, `verify_running_images_run_without_old_hold_columns`
-  (`scripts/deploy-production.sh`) searches the built code of the image of every running `api`, `worker`, `scheduler`
-  and `sync` container for the columns of the hold slot, and stops, before anything is quiesced or migrated, if one
-  names them or cannot be searched (`tests/deploy-old-hold-columns-gate.test.ts`). The way past a refusal is to
-  deploy S4-32 first, from a checkout of its commit, and to let it run its hour. (Removed on 2026-11-10 with
-  `ROLLBACK_COMPATIBLE_MIGRATIONS`: the drop is applied on production, so neither could act again; a deploy of an
-  older commit runs that commit's own copy of the script.)
-- `0240_sync_holds.sql` and `0243_sync_pages_drop_hold_step.sql` stay out of `ROLLBACK_COMPATIBLE_MIGRATIONS`, which
-  keeps the automatic rollback off in a deploy that still has one of them to apply (the image such a deploy would
-  roll back to reads the columns).
+**Rollback targets.** The five old hold columns were dropped by 0245 (S4-33, applied on production); a page's holds
+are its `sync_holds` rows only.
 
 **A hold changed by hand is changed in the rows**, and only there.
 
@@ -835,7 +785,7 @@ than 10 samples: count and max), no open incident but a route's own (D5 `route_l
 whatever its code). A page is `fail`, `inconclusive` (the window still open, a 429's recovery unproven, a small sample,
 a pair the send audit could not judge), `owner_review` (429s on two or more routes), `accepted_with_route_429` or
 `pass`; exit 0 every page accepted, 1 a page failed, 2 otherwise. The report is JSON on stdout (`--out` keeps a copy):
-the runbook reads it there. Its fixtures: tests/sync-live-hour.integration.test.ts.
+the runbook reads it there.
 
 The switch itself is history. Step 3 took the six pages over with `sync switch` (handover, guard hand-over, legacy stop
 confirmed, final chain rebuild, legacy import, live) and could give one back with its rollback until step 4 S4-10; they
@@ -880,8 +830,7 @@ branch. On a live page:
 the messages a read shows reach the readers through `message_archive` only. The rows legacy stored before a page went
 live stay as they were, and `dm-live.deletions` keeps marking them (`markFanslyWsHotDeletion`, sticky), so the frozen
 snapshot never shows a deleted message as live. OnlyFans keeps writing the table (`services/ofapi-dm-projection.ts`,
-the OnlyFans PPV backfill). `tests/page-dm-messages-boundary.test.ts` pins every file that names the table, every
-write statement on it and every caller of its writers; inside `sync/` the deletion mark is the only one. A revert of
+the OnlyFans PPV backfill); inside `sync/` the deletion mark is the only write on it. A revert of
 S4-13 brings the inserts back; the gap since is not refilled, and a live page's readers read the archive anyway.
 
 ## Invariants
@@ -906,15 +855,15 @@ Each is enforced in exactly one place and pinned by a test (design §1). The fir
 | I14 | Shadow mode is gone (step 4 S4-23): an actor runs a `live` page only, nothing writes a row with `shadow = true` or the outcome `shadow`, and no reader of a page's queue or journal sees the rows it left. (Until S4-23: shadow never sent and never wrote observations, domain tables, receipts or the overlay.) | `engine/host.ts` (`#runs`) + `engine/actor.ts` (`#ownershipExit`) + `repositories/sync/work.ts`, `attempts.ts` (`not shadow`); tests/sync-registry-coverage.test.ts, tests/sync-engine-core.integration.test.ts |
 | I15 | The erasure fence is taken in every apply that writes fan material. | `engine/commit.ts` |
 | I16 | The command outbox semantics are untouched (Fansly has no sends). | — |
-| I17 | No live sender by accident: `LIVE_LOOP_ENABLED`, mode `live` (a page is born live by onboarding's `createLiveSyncPage`, refused for any page with a legacy footprint; no lever moves an existing page to `shadow`, `handover` or `live`, or out of `handover`/`live` — `setSyncPageMode` knows `shadow → off` alone since step 4 S4-23), the guard row owned by the engine, and the import mark (stamped at birth) — independent gates. | `engine/host.ts` + `lockOwnedPage` + `repositories/sync/pages.ts` (`setSyncPageMode`, `createLiveSyncPage`); tests/sync-engine-repositories.test.ts |
+| I17 | No live sender by accident: `LIVE_LOOP_ENABLED`, mode `live` (a page is born live by onboarding's `createLiveSyncPage`, refused for any page with a legacy footprint; no lever moves an existing page to `shadow`, `handover` or `live`, or out of `handover`/`live` — `setSyncPageMode` knows `shadow → off` alone since step 4 S4-23), the guard row owned by the engine, and the import mark (stamped at birth) — independent gates. | `engine/host.ts` + `lockOwnedPage` + `repositories/sync/pages.ts` (`setSyncPageMode`, `createLiveSyncPage`) |
 | I18 | Every WS receipt of a `handover`/`live` page routes its demand exactly once, in the transaction that acks it. | `fansly/ws/route-receipt.ts` |
 | I19 | Between two actual sends of one page on one route (or one family): ≥ the interval of its effective rate, counted from the actual send in the journal the page runs (the legacy send log too on a live page; an unknown outcome at its upper bound); no burst, no borrowing. | `engine/route-policy.ts` (`RouteClocks`) + `engine/actor.ts` (pick exclusion, final check) |
 | I20 | One page-hold rule: a credentials hold clears only by an identity proof sent after its latest refusal, written with the apply; under it only one verify per changed digest passes (step 3b ruling 5, A3). | `packages/shared/src/fansly-page-holds.ts` (gate, final admission, status, alerts) + `engine/commit.ts` (`recordIdentityProof`) |
-| I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and nothing gives a page back to it. The platform set is a required argument of every query that picks work — the one fence in them since S4-21, with the Fansly rows parked `retired` (0239) beside it — and the planner and the executor assert it before a wake-up or a run; `services/sync/` holds no Fansly handler, error class or Fansly HTTP import (S4-19). | `onlyfans/boundary.ts` (`legacyExecutorPlatforms`, `assertLegacyExecutorPage`) over `platforms/registry.ts` + `repositories/page-sync.ts` (`PageSyncPlatformScope`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`); tests/sync-onlyfans-boundary.test.ts, tests/sync-legacy-fence.test.ts |
+| I21 | The legacy page-sync executor serves only the platforms whose adapter declares streams (OnlyFans since step 4 S4-10): no Fansly page's legacy state is seeded, scheduled, woken, leased or requested, and nothing gives a page back to it. The platform set is a required argument of every query that picks work — the one fence in them since S4-21, with the Fansly rows parked `retired` (0239) beside it — and the planner and the executor assert it before a wake-up or a run; `services/sync/` holds no Fansly handler, error class or Fansly HTTP import (S4-19). | `onlyfans/boundary.ts` (`legacyExecutorPlatforms`, `assertLegacyExecutorPage`) over `platforms/registry.ts` + `repositories/page-sync.ts` (`PageSyncPlatformScope`) + `services/sync/planner.ts` + `services/sync/executor.ts` + `services/sync-control.ts` (`assertLegacyExecutorServes`) |
 | I22 | The engine opens no Fansly WebSocket (the Node socket source is deleted, 2026-10-25); no worker, lane or script opens one. A page's socket is the site's own, opened in its browser and let go by its operator (variant Б: observed, never admitted); the page's source (`fansly/ws/browser-source.ts`) only takes the operator's events and sends nothing. The engine's one socket is its RPC to the page's operator (`ws:` on pb-control, never Fansly). | `fansly/ws/browser-source.ts`; tests/fansly-send-guard-boundary.test.ts |
-| I23 | The Sync Engine writes no `page_dm_messages` row: a live page's messages go to `message_archive`; the engine only marks the deletion of rows legacy stored (`markFanslyWsHotDeletion`, sticky). | `fansly/resources/dm-messages.ts` + `fansly/resources/dm-live.ts`, pinned by `tests/page-dm-messages-boundary.test.ts` |
-| I24 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. The rows are a page's whole hold state: the page row has no hold column — the old ones were dropped, so the one rollback target is the release before the drop, and the deploy refused the drop under an image older than it until the drop was applied (step 4, owner decision №26; S4-33). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers); tests/sync-hold-evaluator.test.ts, tests/sync-hold-set.integration.test.ts, tests/sync-old-hold-columns.test.ts, tests/deploy-old-hold-columns-gate.test.ts |
-| I26 | One sender per page: its own browser (`sync_pages.transport` is `browser` for every row, 0315; the Node sender is deleted, 2026-10-25). The host builds the browser slot only; a new owner of the page sends nothing before the operator's `quiesced`, and its first request goes under I5. The deploy refuses a rollback to an image that does not know the page transport — read from the image's own label `agency-hub.sync-page-transport`, never from the schema's history: such an image would send every page through Node. | `engine/host.ts` (`#acquire`) + `fansly/browser-page.ts` + `scripts/deploy-production.sh` (`verify_rollback_target_runs_no_browser_page`); tests/sync-browser-host.integration.test.ts, tests/sync-live-gate.integration.test.ts, tests/deploy-browser-rollback-gate.test.ts |
+| I23 | The Sync Engine writes no `page_dm_messages` row: a live page's messages go to `message_archive`; the engine only marks the deletion of rows legacy stored (`markFanslyWsHotDeletion`, sticky). | `fansly/resources/dm-messages.ts` + `fansly/resources/dm-live.ts` |
+| I24 | One hold evaluator over one hold set: what holds a request — the page, its subject, its resource file, its route — is `whyHeld`'s answer over the page's `sync_holds` rows; rows it cannot read keep the page closed. The rows are a page's whole hold state: the page row has no hold column — the old ones were dropped, so the one rollback target is the release before the drop, and the deploy refused the drop under an image older than it until the drop was applied (step 4, owner decision №26; S4-33). | `engine/admission.ts` + `repositories/sync/pages.ts` (the four hold writers); tests/sync-hold-evaluator.test.ts |
+| I26 | One sender per page: its own browser (`sync_pages.transport` is `browser` for every row, 0315; the Node sender is deleted, 2026-10-25). The host builds the browser slot only; a new owner of the page sends nothing before the operator's `quiesced`, and its first request goes under I5. The deploy refuses a rollback to an image that does not know the page transport — read from the image's own label `agency-hub.sync-page-transport`, never from the schema's history: such an image would send every page through Node. | `engine/host.ts` (`#acquire`) + `fansly/browser-page.ts` + `scripts/deploy-production.sh` (`verify_rollback_target_runs_no_browser_page`); tests/sync-browser-host.integration.test.ts |
 | I25 | A chat's unavailability episode has one writer, the page's actor: only a head read (no `before`) of `dm-messages.head`/`.catchup`/`.history` that Fansly refuses with its own error envelope counts; it is established at its own 5th refusal, never by the work's breaker; while it is established no key reads the chat's head before `retry_not_before`, every head read that went out and does not end it moves that boundary and settles its own work (one demand, one read; only a work row settles itself — another row decides in its own plan), and no background read is planned; an applied head read ends it. The capture is never lost to it (savepoint). | `fansly/resources/dm-messages.ts` (`outcomeInCapture`, the plan's wait, the apply's end) + `repositories/sync/chat-unavailability.ts`; tests/sync-chat-unavailability.integration.test.ts |
 
 What the pacer guarantees, concretely: the slot opens at `max(last send + ceil(S × (1 + u)), last completion,
@@ -1040,7 +989,7 @@ deleted on 2026-10-25 (owner); Hub stores no session it sends with.
 - **The RPC client** (`services/egress/page-browser-rpc.ts`): hello with the page's token and generation, ping/pong
   and link loss, reconnects, a newer owner superseding an older one for good, bodies reassembled from their binary
   frames, `recover`. Its types mirror the operator's (`services/egress/page-browser-protocol.ts`); the engine never
-  loads the page-browser app, and tests/page-browser-protocol-drift.test.ts keeps the two the same.
+  loads the page-browser app.
 - **The site's socket** (`fansly/ws/browser-source.ts`): the connection rows (`fansly_ws_connections.origin =
   'browser'`, the operator's connection id) from the operator's `ws.open`/`ws.close`. Their guard and the down timer
   (`fansly/ws/browser-guard.ts`, PR 14): while the link to the operator is up,
@@ -1368,7 +1317,7 @@ page is judged by `sync check live-hour` (above) and, continuously, by the alert
 | How fresh a resource is | one line in `fansly/registry.ts` |
 | A route's budget (a calibration step) | one entry in `fansly/routes.ts` (`ROUTE_BUDGETS` / `FAMILY_BUDGETS`) + the pinned table in `tests/sync-route-policy.test.ts` |
 | How fresh a resource is on one page, without a deploy | `pnpm cli sync page override --page <label> --resource <key>` with `--period-ms` (a poll), `--period-ms`/`--full-period-ms` (`catalog.vault`) or `--tiers '<json>'` (`media-stats.walk`); owner decision №6 keys need `--owner-approved` |
-| Class order or shares | `engine/scheduler.ts` + `tests/sync-scheduler-cycle.test.ts` |
+| Class order or shares | `engine/scheduler.ts` |
 | The reaction to 429 / 5xx / network | `engine/errors.ts` + `tests/sync-engine-errors.test.ts` |
 | A new Fansly endpoint in a known domain | the spec in `packages/fansly/src/wire/specs.ts`, the resource, a registry row, a test |
 | Where the describer's downloads of a live page stand | `sync_work` of `media-download.fetch` (subject `desc:<id>`), `sync_media_handoff` (bytes awaiting the worker) |
@@ -1382,6 +1331,6 @@ page is judged by `sync check live-hour` (above) and, continuously, by the alert
 | A backfill / fresh walk on a live page | `pnpm cli sync work enqueue --page <label> --resource <key>` (keys with the `owner` trigger) |
 | What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
 | An alert's threshold or condition | one constant or rule in `engine/alerts.ts` + `tests/sync-alerts.test.ts` |
-| A page browser's alert | one constant or line in `engine/browser-alerts.ts` + `tests/sync-browser-alerts.test.ts` |
+| A page browser's alert | one constant or line in `engine/browser-alerts.ts` |
 | Stop, start, self-test a page's browser; pin its exit IP | `pnpm cli sync browser stop <page>` (or `--all`), `start`, `selftest`, `pin-ip` (audited); `sync browser status [--page <label>]`; its stops and starts over a window: `sync browser history <page> [--since <iso>]` |
 | A page's first hour on the engine, and the pace audit of both journals | `pnpm cli sync check live-hour --page <label> [--page <label> …] --since <iso> [--out <path>]` (read-only; exit 0 accepted, 1 failed, 2 open) |

@@ -557,7 +557,6 @@ export async function submitHistoryRequest(
   const items: NewHistoryItem[] = [];
   const needWork = new Map<string, { thread: HistoryThreadFacts; dueAt: Date | null }>();
   const estimates: ItemReadsEstimate[] = [];
-  let unanchored = 0;
   for (const entry of resolved) {
     const base = {
       ordinal: entry.input.ordinal,
@@ -605,7 +604,6 @@ export async function submitHistoryRequest(
     // shows the fan `blocked` through the work (`effectiveItemState`).
     const estimate = itemEstimate({ depth, anchor }, thread, now);
     estimates.push(estimate);
-    if (anchor === null) unanchored += 1;
     needWork.set(thread.groupId, { thread, dueAt: null });
     items.push({
       ...base,
@@ -626,7 +624,6 @@ export async function submitHistoryRequest(
   const eta = await pageEtaContext(ctx, input.pageId);
   const requestEta = estimateRequest({
     items: estimates,
-    unanchoredItems: unanchored,
     capacity: eta.capacity,
     k: runnableRequestCount(eta, estimates.length > 0 ? 1 : 0),
   });
@@ -1234,7 +1231,6 @@ async function historyRequestViewsWithPages(
     const stored = counts.get(request.id)!;
     for (const state of ["ready", "refused", "cancelled"] as const) byState[state] = stored.byState[state];
     const estimates: ItemReadsEstimate[] = [];
-    let unanchored = 0;
     let runnable = false;
     for (const item of open) {
       const work = item.workId === null ? undefined : inputs.works.get(item.workId);
@@ -1244,11 +1240,9 @@ async function historyRequestViewsWithPages(
       const thread = item.threadId === null ? undefined : inputs.facts.get(item.threadId);
       if (thread === undefined) continue;
       estimates.push(itemEstimate(item, thread, now));
-      if (belowAnchor(item.anchor, thread) === null) unanchored += 1;
     }
     const requestEta: RequestEta = estimateRequest({
       items: estimates,
-      unanchoredItems: unanchored,
       capacity: eta.capacity,
       k: runnableRequestCount(eta, 0),
     });

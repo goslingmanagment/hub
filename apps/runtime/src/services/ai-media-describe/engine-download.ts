@@ -1,7 +1,7 @@
 import { consumeSyncMediaHandoff, latestClosedWorkForKey, type Database } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
-import type { Clock, Wake } from "../../sync/engine/ports.ts";
+import type { Clock } from "../../sync/engine/ports.ts";
 import {
   MEDIA_DOWNLOAD_KEY,
   mediaDownloadSubject,
@@ -30,8 +30,6 @@ export const ENGINE_DOWNLOAD_REUSE_MS = 60 * 60_000;
 export interface EngineDownloadContext {
   db: Database;
   config: Pick<AppConfig, "encryptionKey" | "encryptionKeyVersion">;
-  /** The work-done wake (none in the worker: the wait re-reads every 250 ms). */
-  workDone?: Wake | null;
   clock?: Clock;
   waitMs?: number;
   /** Which URLs may be enqueued. Default: a Fansly media CDN URL (the engine
@@ -111,7 +109,7 @@ export async function downloadThroughSyncEngine(
   let waited;
   try {
     waited = await enqueueAndWait(
-      { db: ctx.db, ...(ctx.workDone === undefined ? {} : { workDone: ctx.workDone }), ...(ctx.clock === undefined ? {} : { clock: ctx.clock }) },
+      { db: ctx.db, ...(ctx.clock === undefined ? {} : { clock: ctx.clock }) },
       {
         pageId: input.pageId,
         resource: MEDIA_DOWNLOAD_KEY,

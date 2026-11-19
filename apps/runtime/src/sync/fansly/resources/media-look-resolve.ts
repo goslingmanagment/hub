@@ -118,7 +118,6 @@ export const mediaLookResolveModule: ResourceModule = {
     const closed = (result: Record<string, unknown>, closeReason: string): ApplyResult => ({
       work: { satisfiesRevision: true, close: "done", closeReason, result },
       followups: [],
-      canonicalized: true,
       counters: { [closeReason.split(":", 1)[0]!]: 1 },
     });
     const lookId = lookIdOfSubject(input.work.subject);
