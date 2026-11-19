@@ -46,8 +46,9 @@ export interface OwnShiftsWindow {
 }
 
 /**
- * The window of `days` Moscow days ending on `until` (default today), as `accountChatterStats` reads it
- * (chatter-stats.ts `statsWindow`): a later `until` keeps today inside and lists the days to come empty. Pure.
+ * The window of `days` Moscow days ending on `until` (default today): a later `until` keeps today inside and lists the
+ * days to come empty. The ONE window: chatter-stats.ts `statsWindow` and team-shift-sales.ts `shiftSalesWindow` (the
+ * owner's «Смены», the notes beside them) cut it at `now` from here, so a chatter's week is the owner's. Pure.
  */
 export function ownShiftsWindow(input: { days: number; until?: string | undefined; now: number }): OwnShiftsWindow {
   const today = moscowDayOfMs(input.now);

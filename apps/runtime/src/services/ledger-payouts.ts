@@ -214,6 +214,30 @@ export async function ledgerGet(
   }
 }
 
+/** What changed in a ledger answer Hub does not know, for the log: its first five issues, `path: message` each. */
+export function ledgerShapeIssues(error: z.ZodError): string[] {
+  return error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`);
+}
+
+/**
+ * A ledger read's answer (`ledgerGet` of `path`), checked: a changed shape is a 503, never a wrong number, and the log
+ * (`logMessage`, a warning) says what changed.
+ */
+export function ledgerChecked<T extends z.ZodTypeAny>(
+  logger: Pick<AppContext["logger"], "warn"> | undefined,
+  schema: T,
+  body: unknown,
+  path: string,
+  logMessage: string,
+): z.output<T> {
+  const parsed = schema.safeParse(body);
+  if (!parsed.success) {
+    logger?.warn({ issues: ledgerShapeIssues(parsed.error) }, logMessage);
+    throw new ServiceUnavailableError(`The ledger's GET ${path} answered in a shape Hub does not know`);
+  }
+  return parsed.data as z.output<T>;
+}
+
 export async function readLedgerPayouts(
   app: LedgerApp,
   query: { from: string; to: string },
@@ -221,12 +245,7 @@ export async function readLedgerPayouts(
 ): Promise<TeamLedgerPayoutsResponse> {
   checkWindow(query.from, query.to);
   const body = await ledgerGet(app, "/v1/payouts", { from: query.from, to: query.to }, { ...options, notFound: NO_PAYOUT_TAB });
-  const parsed = ledgerPayoutsSchema.safeParse(body);
-  if (!parsed.success) {
-    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger payouts: unexpected answer");
-    throw new ServiceUnavailableError("The ledger's GET /v1/payouts answered in a shape Hub does not know");
-  }
-  const ledger = parsed.data;
+  const ledger = ledgerChecked(app.logger, ledgerPayoutsSchema, body, "/v1/payouts", "ledger payouts: unexpected answer");
   const now = options.now ?? new Date();
 
   const hubUserOf = hubUsersOf(await listUsers(app.db));
@@ -293,12 +312,7 @@ export async function readLedgerPayoutPrepare(
   options: { fetchImpl?: typeof fetch } = {},
 ): Promise<TeamLedgerPayoutPrepareResponse> {
   const body = await ledgerGet(app, "/v1/payouts/prepare", { person: query.person }, { ...options, notFound: NO_PAYOUT_TAB });
-  const parsed = ledgerPrepareSchema.safeParse(body);
-  if (!parsed.success) {
-    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "ledger payout prepare: unexpected answer");
-    throw new ServiceUnavailableError("The ledger's GET /v1/payouts/prepare answered in a shape Hub does not know");
-  }
-  const brief = parsed.data;
+  const brief = ledgerChecked(app.logger, ledgerPrepareSchema, body, "/v1/payouts/prepare", "ledger payout prepare: unexpected answer");
   return {
     slug: brief.slug,
     name: brief.name,

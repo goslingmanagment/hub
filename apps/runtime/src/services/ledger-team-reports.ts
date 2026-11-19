@@ -13,8 +13,7 @@ import {
 import { listUsers } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { ServiceUnavailableError } from "./errors.ts";
-import { checkWindow, hubUsersOf, ledgerGet, list, micros, millsOf } from "./ledger-payouts.ts";
+import { checkWindow, hubUsersOf, ledgerChecked, ledgerGet, list, micros, millsOf } from "./ledger-payouts.ts";
 import { accountReportOf, draftPages, parseLedgerReportDays, parseLedgerReports, reportPageOf, type LedgerReport } from "./ledger-reports.ts";
 
 /**
@@ -76,15 +75,6 @@ export function telegramPostLink(peer: string, topic: number, msgId: number): st
   return topic > 1 ? `https://t.me/c/${match[1]}/${topic}/${msgId}` : `https://t.me/c/${match[1]}/${msgId}`;
 }
 
-function checked<T extends z.ZodTypeAny>(app: Pick<AppContext, "logger">, schema: T, body: unknown, path: string, what: string): z.output<T> {
-  const parsed = schema.safeParse(body);
-  if (!parsed.success) {
-    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, `${what}: unexpected answer`);
-    throw new ServiceUnavailableError(`The ledger's GET ${path} answered in a shape Hub does not know`);
-  }
-  return parsed.data as z.output<T>;
-}
-
 /** The posts' refusal is said in the log once per process: it stays until the ledger opens them to Hub. */
 let postsClosedSaid = false;
 
@@ -135,7 +125,7 @@ export async function readTeamLedgerReportsWithBreakdowns(
     postsClosedSaid = true;
     app.logger.info({}, "ledger report posts: GET /v1/report-posts is not open to Hub's key yet; no unparsed posts are shown");
   }
-  const posts = postsRead ? checked(app, ledgerPostsSchema, postsBody, "/v1/report-posts", "ledger report posts").posts.filter((post) => post.current !== false) : [];
+  const posts = postsRead ? ledgerChecked(app.logger, ledgerPostsSchema, postsBody, "/v1/report-posts", "ledger report posts: unexpected answer").posts.filter((post) => post.current !== false) : [];
 
   // Who is who: a person's Hub user id from their drafts (the agent saves it), the name match after.
   const hubUserOf = hubUsersOf(await listUsers(app.db));

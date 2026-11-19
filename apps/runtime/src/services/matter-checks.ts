@@ -28,7 +28,7 @@ import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { ServiceUnavailableError } from "./errors.ts";
-import { ledgerGet, list, micros, millsOf, type LedgerReadApp } from "./ledger-payouts.ts";
+import { ledgerChecked, ledgerGet, list, micros, millsOf, type LedgerReadApp } from "./ledger-payouts.ts";
 import { reconcileMatters, type MirrorItem } from "./matters-mirror.ts";
 import { readLinkUnboundItems } from "./traffic-link-matters.ts";
 
@@ -395,12 +395,7 @@ const LEDGER_CLIENT = "matters-checks";
 export async function readLedgerChecks(app: LedgerReadApp, options: { fetchImpl?: typeof fetch } = {}): Promise<LedgerChecksAnswer> {
   const body = await ledgerGet(app, "/v1/payouts/checks", {}, { client: LEDGER_CLIENT, absentOn: [403, 404], ...options });
   if (body === undefined) throw new ServiceUnavailableError("The ledger does not open GET /v1/payouts/checks to Hub's key");
-  const parsed = ledgerChecksSchema.safeParse(body);
-  if (!parsed.success) {
-    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "matter checks: unexpected answer of the ledger's checks");
-    throw new ServiceUnavailableError("The ledger's GET /v1/payouts/checks answered in a shape Hub does not know");
-  }
-  return parsed.data;
+  return ledgerChecked(app.logger, ledgerChecksSchema, body, "/v1/payouts/checks", "matter checks: unexpected answer of the ledger's checks");
 }
 
 /** How long a red check waits before it is a matter. */
@@ -475,12 +470,7 @@ export type LedgerDecisions = z.output<typeof ledgerDecisionsSchema>;
 
 export async function readLedgerOpenDecisions(app: LedgerReadApp, options: { fetchImpl?: typeof fetch } = {}): Promise<LedgerDecisions> {
   const body = await ledgerGet(app, "/v1/decisions", { open: "1" }, { client: LEDGER_CLIENT, ...options });
-  const parsed = ledgerDecisionsSchema.safeParse(body);
-  if (!parsed.success) {
-    app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "matter checks: unexpected answer of the ledger's decisions");
-    throw new ServiceUnavailableError("The ledger's GET /v1/decisions answered in a shape Hub does not know");
-  }
-  return parsed.data;
+  return ledgerChecked(app.logger, ledgerDecisionsSchema, body, "/v1/decisions", "matter checks: unexpected answer of the ledger's decisions");
 }
 
 /** A ledger moment: a day (`YYYY-MM-DD`, Moscow) or a time. */

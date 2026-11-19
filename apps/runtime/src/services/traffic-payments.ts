@@ -4,7 +4,7 @@ import type { OfLinkContractorPaid, OfLinkPayment } from "@agency_hub_core/contr
 import { trafficLedgerNameKey } from "@agency_hub_core/db";
 
 import { ServiceUnavailableError } from "./errors.ts";
-import { ledgerGet, list, micros, payMillsOf, type LedgerReadApp } from "./ledger-payouts.ts";
+import { ledgerGet, ledgerShapeIssues, list, micros, payMillsOf, type LedgerReadApp } from "./ledger-payouts.ts";
 
 /**
  * What is paid to a traffic contractor («Трафик → Источники»): the ledger's journal keeps the money; Hub reads it by
@@ -68,7 +68,7 @@ export function ledgerPaymentsReader(app: LedgerReadApp, options: { fetchImpl?: 
     if (body === undefined) return { state: "unavailable" };
     const parsed = ledgerPaymentsSchema.safeParse(body);
     if (!parsed.success) {
-      app.logger.warn({ issues: parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`) }, "traffic payments: unexpected answer");
+      app.logger.warn({ issues: ledgerShapeIssues(parsed.error) }, "traffic payments: unexpected answer");
       return { state: "unavailable" };
     }
     // A cut list would be a smaller sum served as the whole.
