@@ -2,17 +2,11 @@ import { z } from "zod";
 
 import { MATTER_SERVER_KINDS, ROUTINE_PERIOD_MAX_SECONDS } from "@agency_hub_core/contracts";
 import {
-  closeMatter,
-  listOpenMattersOfKinds,
   listSystemCopies,
   listSystemReporters,
   listSystemRoutines,
   markReporterUnchecked,
-  matterChanges,
-  openMatter,
   readScheduleRuns,
-  touchMatters,
-  type MatterActor,
   type MatterOpenInput,
   type ScheduleRunRow,
   type SystemCopyRow,
@@ -23,6 +17,7 @@ import { MOSCOW_TIME_ZONE } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { ledgerGet } from "./ledger-payouts.ts";
+import { reconcileKindMatters } from "./matters.ts";
 import { opsLiveRevision } from "./ops-live.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 import {
@@ -262,7 +257,6 @@ export async function readLedger(app: Pick<AppContext, "config" | "logger">, now
 
 // ── Matters ────────────────────────────────────────────────────────────────
 
-const SYSTEM: MatterActor = { door: "system" };
 const LINK = "/system/state";
 const PLACE_WORD = { server: "Сервер", mac: "Мак", pc: "ПК" } as const;
 
@@ -355,40 +349,16 @@ export interface SystemMattersTally {
 
 /** Makes the matters of «Состояние» what the findings say: opens or updates, closes what went (cause gone). */
 export async function reconcileSystemMatters(app: Pick<AppContext, "db" | "logger">, findings: { want: Finding[]; keep: Set<string> }, now: Date): Promise<SystemMattersTally> {
-  const open = new Map((await listOpenMattersOfKinds(app.db, [...MATTER_SERVER_KINDS])).map((matter) => [matter.key, matter]));
-  const seen = new Set<string>();
-  const touched: string[] = [];
-  const tally: SystemMattersTally = { opened: 0, closed: 0 };
-  for (const finding of findings.want) {
-    if (seen.has(finding.key)) continue;
-    seen.add(finding.key);
-    const input: MatterOpenInput = {
+  return reconcileKindMatters(app, {
+    kinds: MATTER_SERVER_KINDS,
+    inputs: findings.want.map((finding): MatterOpenInput => ({
       key: finding.key, kind: finding.kind, source: "server", title: finding.title.slice(0, 300), object: finding.object,
       pageIds: [], owner: { role: "owner" }, money: false, evidence: finding.evidence, link: LINK,
-    };
-    const existing = open.get(finding.key);
-    if (existing !== undefined && matterChanges(existing, input).length === 0) {
-      touched.push(finding.key);
-      continue;
-    }
-    try {
-      const result = await openMatter(app.db, input, SYSTEM, now);
-      if (result.transition === "opened" || result.transition === "reopened") tally.opened += 1;
-    } catch (error) {
-      app.logger.error({ err: error, key: finding.key }, "system state: a matter could not be opened");
-    }
-  }
-  for (const [key, matter] of open) {
-    if (seen.has(key) || findings.keep.has(key)) continue;
-    try {
-      const result = await closeMatter(app.db, { key, how: "cause_gone", writer: matter.source }, SYSTEM, now);
-      if (result.transition === "closed") tally.closed += 1;
-    } catch (error) {
-      app.logger.error({ err: error, key }, "system state: a matter could not be closed");
-    }
-  }
-  await touchMatters(app.db, touched, now);
-  return tally;
+    })),
+    keep: (key) => findings.keep.has(key),
+    onOpenError: (error, key) => app.logger.error({ err: error, key }, "system state: a matter could not be opened"),
+    onCloseError: (error, key) => app.logger.error({ err: error, key }, "system state: a matter could not be closed"),
+  }, now);
 }
 
 /** One pass: Hub's own facts reported, the ledger's jobs as its reporter, then the matters made what they are now. */
