@@ -67,6 +67,15 @@ function ofType(drafts: CanonicalEventDraft[], type: string): CanonicalEventDraf
 
 const accountStats = () => fixture("stats-account-daily.json");
 
+describe("fansly-stats type codes", () => {
+  it("raises no unknown-type anomaly for the codes the label table names", () => {
+    const seen: string[] = [];
+    const drafts = collect("account_stats", accountStats(), { record: (code) => seen.push(code) });
+    expect(drafts.some((draft) => draft.data.subjectKind === "account_media")).toBe(true);
+    expect(seen).toEqual([]);
+  });
+});
+
 describe("fansly-stats shape gate — drift stays unstamped", () => {
   const reject = (kind: string, payload: unknown) =>
     diagnoseFanslyStatsObservationRejection(observation(kind, payload));

@@ -1,6 +1,5 @@
-import type { ClientFanCardResponse, ClientFanCustomChangeBody, ClientHandoffResponse, CustomOrderCard } from "@agency_hub_core/contracts";
+import type { ClientFanCardResponse, ClientHandoffResponse } from "@agency_hub_core/contracts";
 import {
-  findCustomOrder,
   listCustomOrdersOfFans,
   listPageCustomOrdersInWork,
   type CustomOrderRow,
@@ -9,29 +8,26 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "../auth.ts";
-import { ConflictError } from "../errors.ts";
 import {
-  applyCustomStep,
   customLeaderContext,
   customViewerOf,
   leaderWire,
   deliveryCandidatesOf,
-  notAllowed,
   paymentCandidatesOf,
-  recordCustomOrder,
-  type CustomStep,
 } from "./index.ts";
-import { cardOf, extensionStateOf, extensionStepOf, mayTakeStep, overdueDaysOf, priceMillsOf, priceTextOf, STEP_FROM, type CustomViewer } from "./rules.ts";
+import { cardOf, extensionStateOf, extensionStepOf, mayTakeStep, overdueDaysOf, priceMillsOf, STEP_FROM, type CustomViewer } from "./rules.ts";
 import type { CustomLeaderContext } from "./index.ts";
 
 /**
- * The released extension's block «Кастомы» (Chat Memory week 4: the tab
- * «Память», «Записать кастом», «Это оплата?», «Отдали: это он?», «Отменить»)
- * served from the custom orders, on its old routes and in its old shapes. The
- * extension knows four states: an order maps to the nearest
- * (rules.ts `extensionStateOf`); its description is the card's task, its price
- * the card's «Оплата» when that is one sum. The extension's hints stay what
- * they were: the fan's tips no order took, the page's media after the payment.
+ * The released extension's block «Кастомы» (Chat Memory week 4, the tab
+ * «Память») read from the custom orders, in its old shapes: the fan card's
+ * `customs` and `customPayments` and the handoff's customs. The extension
+ * records and gives an order through the board's own routes with its narrow
+ * token (customOrderCreate, customOrderAct). The extension knows four states:
+ * an order maps to the nearest (rules.ts `extensionStateOf`); its description
+ * is the card's task, its price the card's «Оплата» when that is one sum. The
+ * extension's hints stay what they were: the fan's tips no order took, the
+ * page's media after the payment.
  */
 
 type ExtApp = Pick<AppContext, "db">;
@@ -110,69 +106,6 @@ export async function extensionCardCustoms(
       paymentRef: String(payment.transactionId), amountMills: payment.grossMills, at: payment.at.toISOString(), note: payment.note,
     })),
   };
-}
-
-/** «Записать кастом»: a recorded order (paid by a suggested tip, or waiting for its payment) accepted by the chatter. */
-export async function extensionRecordCustom(
-  app: ExtApp,
-  principal: HumanAuthPrincipal,
-  input: { pageId: number; fanId: number; personIds: readonly number[]; conversationRef: string | null; description: string; priceMills: number | null; paymentRef: string | undefined },
-): Promise<void> {
-  const now = new Date();
-  let payment: number | null = null;
-  if (input.paymentRef !== undefined) {
-    const offered = await paymentCandidatesOf(app.db, { pageId: input.pageId, fanId: input.fanId }, EXTENSION_PAYMENT_KINDS, now, 50);
-    const found = offered.find((one) => String(one.transactionId) === input.paymentRef);
-    if (found === undefined) throw new ConflictError("The payment is not suggested for this fan", { reason: "not_suggested" });
-    payment = found.transactionId;
-  }
-  await recordCustomOrder(app, {
-    pageId: input.pageId, fanId: input.fanId, buyer: null, conversationRef: input.conversationRef,
-    card: { task: input.description, ...(input.priceMills === null ? {} : { price: priceTextOf(input.priceMills) }) },
-    deadlineOn: null, acceptedByUserId: principal.user.id, origin: "extension", paymentTransactionId: payment,
-    actor: { door: "extension", userId: principal.user.id }, now,
-  });
-}
-
-/**
- * «Это оплата?», «Отдали: это он?», «Отменить», a correction — from the extension. A step the order's state takes
- * no more (an ended custom) answers `false`, as the old routes answered a final custom: the extension shows the
- * order as it is. A step that is not this person's — the released panel offers «Отменить» on every order in work,
- * another chatter's too, at the model or shot as well — is refused in so many words (409 `not_allowed`, which the
- * panel shows), as the board refuses it; their own order they cancel at any step, as on the board.
- */
-export async function extensionChangeCustom(
-  app: ExtApp,
-  principal: HumanAuthPrincipal,
-  input: { orderId: number; body: ClientFanCustomChangeBody },
-): Promise<boolean> {
-  const now = new Date();
-  const order = (await findCustomOrder(app.db, input.orderId))!;
-  const viewer = await customViewerOf(app, principal);
-  const body = input.body;
-  let step: CustomStep;
-  if (body.action === "paid") {
-    const offered = await paymentCandidatesOf(app.db, order, EXTENSION_PAYMENT_KINDS, now, 50);
-    const found = offered.find((one) => String(one.transactionId) === body.paymentRef);
-    if (found === undefined) throw new ConflictError("The payment is not suggested for this custom", { reason: "not_suggested" });
-    step = { action: "payment", transactionId: found.transactionId };
-  } else if (body.action === "delivered") {
-    const offered = await deliveryCandidatesOf(app.db, order, 50);
-    const found = offered.find((one) => one.messageRef === body.messageRef);
-    if (found === undefined) throw new ConflictError("The message is not suggested for this custom", { reason: "not_suggested" });
-    step = { action: "given", messageRef: found.messageRef, at: found.at };
-  } else if (body.action === "cancel") {
-    step = { action: "cancel" };
-  } else {
-    const card: CustomOrderCard = { ...cardOf(order.card), task: body.description };
-    if (body.priceMills === null) delete card.price;
-    else card.price = priceTextOf(body.priceMills);
-    step = { action: "edit", card, by: "person" };
-  }
-  // The old routes knew one rule: an ended custom changes no more (`changed: false`).
-  if (!STEP_FROM[step.action].includes(order.state)) return false;
-  if (!mayTakeStep(viewer, order, step.action)) throw notAllowed("This step of the order is not yours: it is its chatter's, or the customs lead's");
-  return applyCustomStep(app, { orderId: order.id, step, actor: { door: "extension", userId: principal.user.id }, viewer, now });
 }
 
 /** «Передача»: the page's orders in work with a known fan, the oldest payment first. */

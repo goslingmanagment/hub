@@ -13,8 +13,7 @@ This file replaces the seventeen Fansly runbooks of this directory (`fansly-*.md
 
 - **Commands** are written `pnpm cli …` (a checkout with the app's environment). On production the same command runs
   in the `api` container: `docker compose --env-file .env.production -f docker-compose.production.yml exec -T api
-  node apps/runtime/dist/cli.js sync page status`. Every `pnpm cli` line in a code block of this file is parsed
-  against the real CLI by `tests/sync-runbook.test.ts`.
+  node apps/runtime/dist/cli.js sync page status`.
 - **Reading is free.** `sync page status`, `sync why`, `sync work list`, `sync alerts status`, `sync ownership
   status`, `sync history status | list`, `sync check live-hour`, `sync excluded report` (without `--record`) and
   `sync chats unavailable` change nothing.
@@ -31,8 +30,7 @@ This file replaces the seventeen Fansly runbooks of this directory (`fansly-*.md
   `fansly_ws_connections`, `fansly_ws_decode_receipts`, `dm_live_messages`, `fansly_send_log`,
   `fansly_page_send_guards`, `observations`; checked 2026-10-04). It does not read `sync_work`, chats, money or
   incidents: a block marked *owner's session* needs a connection that can, still inside a `READ ONLY` transaction;
-  never change a role's grants to run one. `tests/sync-runbook-sql.integration.test.ts` runs every SQL block of this
-  file in a `READ ONLY` transaction on the migrated schema.
+  never change a role's grants to run one.
 
 ## Status and why
 

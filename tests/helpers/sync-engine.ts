@@ -56,7 +56,7 @@ import {
   onHistoryWorkClosed,
 } from "../../apps/runtime/src/sync/requests/history.ts";
 import { seededRandom } from "./sync-fakes.ts";
-import { quietLogger, setModeDirect, testSpec } from "./sync-engine-host.ts";
+import { quietLogger, reportedAt, setModeDirect, testSpec } from "./sync-engine-host.ts";
 
 export { FakeClock, SeededRng, seededRandom } from "./sync-fakes.ts";
 
@@ -73,13 +73,15 @@ export { FakeClock, SeededRng, seededRandom } from "./sync-fakes.ts";
 // - The harness transport and registry: a stand-in for the page's browser
 //   (`SyncHostOptions.liveTransportFactory`) — every API request of the page
 //   one GET of the fake origin through the page egress (`resolveEgress`), by
-//   the wire layer's single-request send with the admission's check at
-//   undici's `onRequestStart`; the REST request kinds as test-only keys.
+//   the wire layer's single-request send with the engine's grant asked at
+//   undici's `onRequestStart` and that instant reported as the send
+//   (`transport_reported`, as the browser reports it); the REST request kinds
+//   as test-only keys.
 // - The actor runner and the child process.
 //
 // The fake origin speaks plain HTTP behind the CONNECT proxy, as the step-1
 // network helpers do: the tunnel (and with it the "long connect before the
-// headers") is the proxy's, and the send check runs at undici's
+// headers") is the proxy's, and the grant is asked at undici's
 // `onRequestStart` after it either way; TLS would only need a trust root a
 // test worker cannot add after it started.
 
@@ -707,7 +709,7 @@ export class FakeChats {
     const answer = this.answer(new URL(req.url));
     if (answer === null) throw new Error(`FakeChats: unexpected request ${req.url}`);
     const bodyText = JSON.stringify({ success: true, response: answer });
-    return { kind: "response", status: 200, headers: {}, bodyText, bodyBytes: bodyText.length, sendMark: "request_start" };
+    return { kind: "response", status: 200, headers: {}, bodyText, bodyBytes: bodyText.length, sendMark: "transport_reported" };
   }
 
   #chat(groupId: string) {
@@ -795,10 +797,11 @@ export function harnessCdnUrlAllowed(url: URL): boolean {
 /**
  * The page's transport for the harness, a stand-in for its browser: each API
  * request one GET of the fake origin through the page egress, the wire
- * layer's single-request send with the admission's check at undici's
- * `onRequestStart`; no session headers (the fake origin reads none). Its
- * requests carry the harness credentials digest; nothing but the API host is
- * sendable.
+ * layer's single-request send; it asks the engine's grant at undici's
+ * `onRequestStart` and reports that instant as the release and the send
+ * (`transport_reported`), as the browser reports its `sent`. No session
+ * headers (the fake origin reads none). Its requests carry the harness
+ * credentials digest; nothing but the API host is sendable.
  */
 export async function createHarnessTransport(
   ctx: { db: Database; config: AppConfig },
@@ -823,7 +826,20 @@ export async function createHarnessTransport(
         credentialsGeneration: HARNESS_CREDENTIALS_GENERATION,
       };
     },
-    send: (req, hooks, signal) => sendFanslyWireRequest(dispatcher, req, hooks, signal),
+    async send(req, hooks, signal) {
+      let sentMono = null as number | null;
+      const outcome = await sendFanslyWireRequest(dispatcher, req, {
+        check: () => {
+          const refusal = hooks.grant();
+          if (refusal === null) {
+            sentMono = performance.now();
+            hooks.released?.(sentMono);
+          }
+          return refusal;
+        },
+      }, signal);
+      return sentMono === null ? outcome : reportedAt(outcome, sentMono);
+    },
     storedCredentialsGeneration: async () => HARNESS_CREDENTIALS_GENERATION,
     async close() {
       await egress.close().catch(() => undefined);

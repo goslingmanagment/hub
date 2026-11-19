@@ -11,7 +11,6 @@ import { toDate, toRequiredDate } from "./values.ts";
 // `setResourceHold`, `writeSyncRouteState`), under the page row's lock.
 
 export const SYNC_HOLD_SCOPES = ["page", "route", "resource"] as const;
-export type SyncHoldScope = (typeof SYNC_HOLD_SCOPES)[number];
 
 /** What stops every request of a page: its credentials hold (`auth`,
  *  `identity_mismatch`: at most one) and its network back-off. */
@@ -25,7 +24,6 @@ export const SYNC_ROUTE_HOLD_KINDS = ["route_hold", "route_budget"] as const;
 export const SYNC_RESOURCE_HOLD_KIND = "resource_breaker";
 
 export const SYNC_HOLD_KINDS = [...SYNC_PAGE_HOLD_KINDS, ...SYNC_ROUTE_HOLD_KINDS, SYNC_RESOURCE_HOLD_KIND] as const;
-export type SyncHoldKind = (typeof SYNC_HOLD_KINDS)[number];
 
 /** `sync_holds.key` of a page-scope row. */
 export const SYNC_PAGE_HOLD_KEY = "";

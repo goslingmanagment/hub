@@ -280,8 +280,6 @@ export class PartLane {
     let outcome: TransportOutcome;
     try {
       outcome = await d.transport.send(request, {
-        // Never sent from this process: a part goes through the page's browser.
-        check: () => new FanslySendRefusedError("lease_inactive"),
         grant,
         ...(confirmWrite === undefined ? {} : { confirmWrite }),
       }, signals.abort, { attemptId: admission.attemptId, ownerGeneration: d.generation, issuedMono, sendDeadlineMono });

@@ -6,6 +6,7 @@ import { createFanslyPage, createModel, createOnlyFansPage, upsertTransaction } 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { assignPageToUser, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { armNoOutboundTrap } from "./helpers/no-outbound.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -113,7 +114,7 @@ describe("the fan's card across pages", () => {
     await testDb?.stop();
   });
 
-  it("writes a custom paid by a suggested tip and marks it delivered by a suggested media message", async (context) => {
+  it("shows a custom paid by a suggested tip with its delivery candidates, and the custom given by one of them", async (context) => {
     if (!testDb || !server) return context.skip();
     const tipAt = new Date(Date.now() - 2 * 86_400_000);
     await upsertTransaction(app.db, {
@@ -131,29 +132,32 @@ describe("the fan's card across pages", () => {
        values ($1, 'fansly', '8800000001', '9800000001', 'model', true, now() - interval '1 hour', 'here it is babe', '[{"type":"video"}]'::jsonb)`,
       [pages["ari-1"]],
     );
-    const post = (url: string, payload: object) => server!.inject({
-      method: "POST", url, headers: { authorization: `Bearer ${token}`, "x-client-version": VERSION }, payload,
-    });
     const card = await get("7000000001");
     expect(card.customPayments.map((payment) => payment.amountMills)).toEqual([120_000]);
     const paymentRef = card.customPayments[0]!.paymentRef;
-    expect((await post("/api/v1/client/pages/ari-1/fans/7000000001/customs", { description: "5 мин в душе", paymentRef: "999999" })).statusCode).toBe(409);
 
-    const created = await post("/api/v1/client/pages/ari-1/fans/7000000001/customs", { description: "5 мин в душе", priceMills: 120_000, paymentRef });
-    expect(created.statusCode, created.body).toBe(200);
-    const custom = created.json().card.customs[0];
-    expect(custom).toMatchObject({ description: "5 мин в душе", state: "paid", paymentMills: 120_000, granted: true, createdBy: "vanya", code: `K-${custom.id}`, stepLabel: "Оплачен" });
-    expect(custom.deliveryCandidates.map((message: { messageRef: string }) => message.messageRef)).toEqual(["9800000001"]);
+    // «Записать кастом» (the board's form in the panel's frame): the order paid by the suggested tip, accepted by the chatter.
+    const vanya = await fixtureUserId(app, "vanya");
+    const id = await recordCustomOrder(app, {
+      pageId: pages["ari-1"]!, fanId: fans.rick!, buyer: null, conversationRef: null, card: { task: "5 мин в душе", price: "120$" },
+      deadlineOn: null, acceptedByUserId: vanya, origin: "extension", paymentTransactionId: Number(paymentRef), actor: { door: "extension", userId: vanya },
+    });
+    const recorded = await get("7000000001");
+    const custom = recorded.customs[0]!;
+    expect(custom).toMatchObject({ id, description: "5 мин в душе", state: "paid", paymentMills: 120_000, granted: true, createdBy: "vanya", code: `K-${id}`, stepLabel: "Оплачен" });
+    expect(custom.deliveryCandidates.map((message) => message.messageRef)).toEqual(["9800000001"]);
     // The tip is taken: it is no longer offered.
-    expect(created.json().card.customPayments).toEqual([]);
+    expect(recorded.customPayments).toEqual([]);
 
-    const url = `/api/v1/client/pages/ari-1/fans/7000000001/customs/${custom.id}`;
-    expect((await post(url, { action: "delivered", messageRef: "9800000002" })).statusCode).toBe(409);
-    const delivered = await post(url, { action: "delivered", messageRef: "9800000001" });
-    expect(delivered.json()).toMatchObject({ changed: true });
-    expect(delivered.json().card.customs[0]).toMatchObject({ state: "delivered", deliveredMessageRef: "9800000001", stepLabel: "Отдан фану" });
-    // Delivered is final.
-    expect((await post(url, { action: "cancel" })).json()).toMatchObject({ changed: false });
+    // The fan panel's «Отдан»: the board's step by the extension's own token, only by a suggested message.
+    const give = (messageRef: string) => server!.inject({
+      method: "POST", url: `/api/v1/custom-orders/K-${id}`, headers: { authorization: `Bearer ${token}`, "x-client-version": VERSION },
+      payload: { action: "given", messageRef },
+    });
+    expect((await give("9800000002")).statusCode).toBe(409);
+    const given = await give("9800000001");
+    expect(given.statusCode, given.body).toBe(200);
+    expect((await get("7000000001")).customs[0]).toMatchObject({ state: "delivered", deliveredMessageRef: "9800000001", stepLabel: "Отдан фану" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("shows another page's alias and money, suggests the same person, and takes the chatter's decision", async (context) => {

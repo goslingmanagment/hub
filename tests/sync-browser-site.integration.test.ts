@@ -230,9 +230,8 @@ describe("the hand-over: the operator's quiesced", () => {
 });
 
 // Variant Б (plan-b-browser-host §4.2): an operator of protocol minor 4 lets
-// the site's own requests go and tells the engine what left (`siteSent`),
-// how it ended (`siteEnded`) and whose account the site's own `/account/me`
-// named (`siteIdentity`). Nothing of the site is admitted or refused.
+// the site's own requests go and tells the engine what left (`siteSent`) and
+// how it ended (`siteEnded`). Nothing of the site is admitted or refused.
 describe("variant Б: the site's own traffic, observed", () => {
   async function pageRow(pageId: number) {
     const result = await testDb!.pool.query<{ credentialsGeneration: string | null; identityAccountId: string | null }>(
@@ -249,29 +248,6 @@ describe("variant Б: the site's own traffic, observed", () => {
     );
     return result.rows[0] ?? null;
   }
-
-  it("a site account read sent before the refusal cannot clear its hold even when journaled with a larger attempt id", async () => {
-    const r = await rig();
-    // Own work must not supply another identity proof during this scenario.
-    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
-    const { made } = await actorOn(r);
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const now = monoMs();
-    const failed = r.operator.siteSent({ path: "/api/v1/polls", sentMono: now - 1_000 });
-    r.operator.siteEnded(failed, { status: 401 });
-    await until(async () => (await credentialsHold(r.page.pageId)) !== null, 5_000, "the credentials refusal");
-    const held = await credentialsHold(r.page.pageId);
-
-    // Arrives at the engine later, but its request left BEFORE the refusal.
-    const stale = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me", sentMono: now - 2_000 });
-    r.operator.siteEnded(stale, { status: 200 });
-    r.operator.siteIdentity(stale, HARNESS_OWN_REF);
-    await until(async () => (made.deps.metrics as RecordingMetrics).get("sync_site_identity") === 1, 5_000, "the stale proof processed");
-    const rows = await attempts(r.page.pageId);
-    expect(rows.find((row) => row.browserRequestId === stale.siteRequestId)!.id)
-      .toBeGreaterThan(rows.find((row) => row.browserRequestId === failed.siteRequestId)!.id);
-    expect(await credentialsHold(r.page.pageId)).toEqual(held);
-  }, 30_000);
 
   async function verifyStatuses(pageId: number): Promise<Array<number | null>> {
     const result = await testDb!.pool.query<{ httpStatus: number | null }>(
@@ -414,21 +390,41 @@ describe("variant Б: the site's own traffic, observed", () => {
     expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
   }, 30_000);
 
-  it("journals the site's send and its end, and the site's own account read proves the page's identity under the browser's session", async () => {
+  it("the engine's own verify sent before the site's refusal was journaled cannot clear its hold: one more verify does", async () => {
     const r = await rig();
-    // Not trusted yet: the proof is the site's.
+    // Not trusted yet: the engine's own verify goes at once.
     await testDb!.pool.query("update sync_pages set credentials_generation = null, identity_account_id = null, identity_checked_at = null where page_id = $1", [r.page.pageId]);
+    let release!: () => void;
+    const answer = new Promise<void>((resolve) => (release = resolve));
+    let verifies = 0;
+    // The first verify's answer waits, after its send, until the site's refusal is committed.
+    r.operator.beforeResult = async (send) => {
+      if (!new URL(send.url).pathname.endsWith("/account/me")) return;
+      verifies += 1;
+      if (verifies === 1) await answer;
+    };
+    await actorOn(r);
+    await until(async () => verifies === 1, 10_000, "the first verify sent");
+    // The site's request left before that verify and is told late: refused.
+    const refused = r.operator.siteSent({ path: "/api/v1/polls", sentMono: monoMs() - 5_000 });
+    r.operator.siteEnded(refused, { status: 401 });
+    await until(async () => (await credentialsHold(r.page.pageId)) !== null, 5_000, "the site's refusal");
+    release();
+    await until(async () => (await clearedAudit(r.page.pageId)).length === 1, 15_000, "the proof that clears");
+    // The first verify left before the hold's episode began: only the second one's proof clears it.
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200, 200]);
+    expect(await credentialsHold(r.page.pageId)).toBeNull();
+  }, 40_000);
+
+  it("journals the site's send and its end", async () => {
+    const r = await rig();
     await actorOn(r);
     await until(async () => r.operator.links.includes(true), 5_000, "the link");
     const sent = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
     r.operator.siteEnded(sent, { status: 200 });
-    r.operator.siteIdentity(sent, HARNESS_OWN_REF);
     await until(async () => (await attempts(r.page.pageId)).some((row) => row.browserRequestId === sent.siteRequestId && row.outcome === "response"), 5_000, "the observed attempt and its end");
     const row = (await attempts(r.page.pageId)).find((a) => a.browserRequestId === sent.siteRequestId)!;
     expect(row).toMatchObject({ origin: "site", class: "site", operation: "account.me", httpStatus: 200, sendMark: "transport_reported" });
-    const expected = await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A);
-    await until(async () => (await pageRow(r.page.pageId)).credentialsGeneration === expected, 5_000, "the identity proof");
-    expect((await pageRow(r.page.pageId)).identityAccountId).toBe(HARNESS_OWN_REF);
     // The site socket's handshake is told as a send of route ws.upgrade: its row is class urgent.
     const upgrade = r.operator.siteSent({ host: "wsv3.fansly.com", path: "/", route: "ws.upgrade" });
     r.operator.siteEnded(upgrade, { status: 101 });
@@ -438,27 +434,17 @@ describe("variant Б: the site's own traffic, observed", () => {
     expect(r.operator.siteAnswers).toEqual([]);
   }, 30_000);
 
-  it("an account other than the page's proves nothing; the site's 429 holds the route for the engine's own requests", async () => {
+  it("the site's 429 holds the route for the engine's own requests", async () => {
     const r = await rig();
-    await testDb!.pool.query("update sync_pages set credentials_generation = null, identity_account_id = null, identity_checked_at = null where page_id = $1", [r.page.pageId]);
-    // The engine's own verify names the page's account and proves the page by right: it stays
-    // in flight here, so what the assertions read is what the site's reads did.
-    r.operator.beforeRelease = () => new Promise<void>(() => {});
     await actorOn(r);
     await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const foreign = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
-    r.operator.siteEnded(foreign, { status: 200 });
-    r.operator.siteIdentity(foreign, "999999999999999999");
     const limited = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
     r.operator.siteEnded(limited, { status: 429, retryAfter: "60" });
     await until(async () => {
       const held = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'route' and key = 'account.me' and kind = 'route_hold' and until > now()", [r.page.pageId]);
       return held.rows.length === 1;
     }, 5_000, "the route hold of the site's 429");
-    expect((await attempts(r.page.pageId)).filter((a) => a.origin === "site").map((a) => a.httpStatus)).toEqual([200, 429]);
-    const page = await pageRow(r.page.pageId);
-    expect(page.credentialsGeneration).toBeNull();
-    expect(page.identityAccountId).toBeNull();
+    expect((await attempts(r.page.pageId)).filter((a) => a.origin === "site").map((a) => a.httpStatus)).toEqual([429]);
   }, 30_000);
 });
 

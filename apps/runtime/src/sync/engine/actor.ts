@@ -1,6 +1,5 @@
 import {
   ensurePollRows,
-  findObservedSiteRequest,
   getSyncAttempt,
   getSyncPage,
   hasRunnableWork,
@@ -15,7 +14,6 @@ import {
   pickRequests,
   pickUrgent,
   readRouteJournal,
-  recordObservedSiteIdentity,
   SYNC_WORK_PICK_LIMIT,
   type Database,
   type SyncPageMode,
@@ -32,14 +30,12 @@ import {
   capture,
   captureSendOf,
   commitNoHttp,
-  commitSiteIdentity,
   deferAfterPlanError,
   deferForRoute,
   drainDueApplies,
   ensureCredentialsVerify,
   errorName,
   isAnswerInMemory,
-  markSentBestEffort,
   recoverUnfinished,
   settleNotSent,
   SyncCrashFault,
@@ -302,12 +298,11 @@ export class SyncActor {
    *  slot open — once per hop, however often it is told; an end that holds
    *  (its 429, 401, 403, a 5xx naming `Retry-After`) only once its hold
    *  committed (`Pacer.observeForeignEnd`). Then, in order, the
-   *  journal: the attempt, its end with the holds it sets, the identity proof
-   *  — each hop once by its row (0289), and each fact acknowledged once
-   *  committed (the operator keeps it until then and tells it again). An end
-   *  or an identity whose send's attempt is not journaled yet commits
-   *  nothing and is not acknowledged: the operator tells the send again
-   *  first. */
+   *  journal: the attempt, then its end with the holds it sets — each hop
+   *  once by its row (0289), and each fact acknowledged once committed (the
+   *  operator keeps it until then and tells it again). An end whose send's
+   *  attempt is not journaled yet commits nothing and is not acknowledged:
+   *  the operator tells the send again first. */
   #onSiteObserved(event: SiteObservation): void {
     const d = this.#d;
     const hop = `${event.key.requestKey}#${event.key.hop}`;
@@ -321,11 +316,7 @@ export class SyncActor {
         // A route the catalogue does not know is the site's other read.
         const route: FanslyRoute = isFanslyRoute(event.route) ? event.route : SITE_OTHER_ROUTE;
         this.#journalObserved(`${hop}:sent`, event.ack, async () => {
-          // Bind the send to this settings snapshot before a later identity
-          // message can see a changed proxy or session.
-          const credentialsGeneration = event.sessionFingerprint === null ? null
-            : await d.transport.siteCredentialsGeneration?.(event.sessionFingerprint) ?? null;
-          const { recorded } = await recordObservedSiteSend(d, { ...event, route, settingMs: FANSLY_PAUSE_MIN_MS, credentialsGeneration });
+          const { recorded } = await recordObservedSiteSend(d, { ...event, route, settingMs: FANSLY_PAUSE_MIN_MS });
           if (!recorded) d.metrics.increment("sync_site_observed_repeated", { kind: "sent" });
           return true;
         });
@@ -336,15 +327,13 @@ export class SyncActor {
         const end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }> = event.status !== null
           ? { kind: "response", status: event.status, retryAfterMs: event.retryAfterMs }
           : { kind: "transport_error", sent: true, message: event.error ?? "no answer" };
-        // An end that holds (the commit's own rule: observed, exempt only as
-        // the manual login, whose session is not the page's trusted one yet)
-        // keeps the own slots closed until its hold commits — a
-        // failed commit keeps them closed until the operator tells it again.
-        const manualLogin = event.manualLogin === true;
-        const holds = siteAnswerEffect(end, manualLogin).kind !== "none";
+        // An end that holds (the commit's own rule) keeps the own slots
+        // closed until its hold commits — a failed commit keeps them closed
+        // until the operator tells it again.
+        const holds = siteAnswerEffect(end, false).kind !== "none";
         d.pacer.observeForeignEnd(event.id, holds ? hop : undefined);
         this.#journalObserved(`${hop}:ended`, event.ack, async () => {
-          const committed = await commitObservedSiteEnd(d, { key: event.key, end, error: event.error, settingMs: FANSLY_PAUSE_MIN_MS, manualLogin });
+          const committed = await commitObservedSiteEnd(d, { key: event.key, end, error: event.error, settingMs: FANSLY_PAUSE_MIN_MS });
           if (committed === "committed") {
             if (holds) d.pacer.foreignHoldJournaled(hop);
             return true;
@@ -354,29 +343,6 @@ export class SyncActor {
         });
         return;
       }
-      case "identity":
-        this.#journalObserved(`${hop}:identity`, event.ack, async () => {
-          const generationOf = d.transport.siteCredentialsGeneration;
-          if (generationOf === undefined) return true;
-          const sent = await findObservedSiteRequest(d.db, { pageId: d.pageId, ...event.key });
-          if (sent?.attemptId == null) {
-            d.metrics.increment("sync_site_observed_early", { kind: "identity" });
-            return false;
-          }
-          if (sent.identityRecordedAt !== null) return true;
-          const currentGeneration = await generationOf.call(d.transport, event.sessionFingerprint);
-          const credentialsGeneration = sent.credentialsGeneration;
-          const outcome = credentialsGeneration === null || currentGeneration !== credentialsGeneration || event.sessionFingerprint !== sent.sessionFingerprint
-            ? "superseded_settings"
-            : await commitSiteIdentity(d, { attemptId: sent.attemptId, accountId: event.accountId, credentialsGeneration, sentNotBefore: event.sentNotBeforeWall });
-          await recordObservedSiteIdentity(d.db, { pageId: d.pageId, ...event.key });
-          d.metrics.increment("sync_site_identity", { outcome });
-          if (outcome !== "recorded") {
-            d.logger.warn({ pageId: d.pageId, outcome, attemptId: sent.attemptId }, "Fansly sync actor: the site's own account read proves nothing of this page");
-          }
-          return true;
-        });
-        return;
     }
   }
 
@@ -770,15 +736,8 @@ export class SyncActor {
     const d = this.#d;
     try {
       return await d.transport.send(request, {
-        check: () => {
-          const refusal = d.pacer.check(armed);
-          if (refusal === null && armed.sentWall !== null) {
-            markSentBestEffort(d, armed.attemptId, armed.sentWall);
-          }
-          return refusal;
-        },
-        // A sender outside the process (a page's browser): the same check
-        // without the send mark — the pacer marks the send at the instant
+        // The sender outside the process (a page's browser): the pacer's
+        // check without a send mark — the pacer marks the send at the instant
         // the transport reports, or at the completion (I1).
         grant: () => d.pacer.checkRemoteGrant(armed),
         released: (mono) => d.pacer.noteReleased(armed, mono),

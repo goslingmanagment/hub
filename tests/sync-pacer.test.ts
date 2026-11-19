@@ -24,8 +24,7 @@ import type { TransportOutcome } from "../apps/runtime/src/sync/engine/ports.ts"
 import { FakeClock, FakeOwnership, FakePauseSource, ScriptedRng, SeededRng } from "./helpers/sync-fakes.ts";
 
 // The pacer's rules one by one (design §3.3; invariants I1, I2, I4, I5), on a
-// virtual clock. The randomized run over a million admissions is
-// tests/sync-pacer-property.test.ts.
+// virtual clock.
 
 const S = 2_000;
 
@@ -45,33 +44,33 @@ function setup(options: { settingMs?: number; rng?: { next(): number }; minSetti
 
 const live = () => new AbortController().signal;
 
-const response = (sendMark: "request_start" | "completion_fallback" = "request_start"): TransportOutcome => ({
-  kind: "response",
-  status: 200,
-  headers: {},
-  bodyText: "{}",
-  bodyBytes: 2,
-  sendMark,
-});
+/** An answer whose sender reported when the request left (a page's browser). */
+const reported = (sentMono: number): TransportOutcome => ({ kind: "response", status: 200, headers: {}, bodyText: "{}", bodyBytes: 2, sendMark: "transport_reported", sentMono });
+
+/** An answer without a reported send instant. */
+const unmarked = (): TransportOutcome => ({ kind: "response", status: 200, headers: {}, bodyText: "{}", bodyBytes: 2, sendMark: "completion_fallback" });
 
 /** One admission as the actor runs it: slot → issue → (tx 1) → arm → the
- *  transport calls the check → completion. Returns the admission. */
+ *  page's browser asks the grant once it is connected and sends at once,
+ *  reporting that instant → completion. Returns the admission and the
+ *  instant the request actually left. */
 async function sendOne(
   ctx: ReturnType<typeof setup>,
   options: { attemptId?: number; admitMs?: number; connectMs?: number; responseMs?: number } = {},
-): Promise<{ grant: SlotGrant; admission: Admission; refusal: FanslySendRefusedError | null }> {
+): Promise<{ grant: SlotGrant; admission: Admission; refusal: FanslySendRefusedError | null; leftAt: number }> {
   const grant = await ctx.pacer.waitForSlot(live());
   const issued = ctx.clock.monoNow();
   ctx.clock.advance(options.admitMs ?? 5);
   const admission = ctx.pacer.arm(grant, options.attemptId ?? 1, issued);
   ctx.clock.advance(options.connectMs ?? 0);
-  const refusal = ctx.pacer.check(admission);
+  const refusal = ctx.pacer.checkRemoteGrant(admission);
+  const leftAt = ctx.clock.monoNow();
   ctx.clock.advance(options.responseMs ?? 300);
   ctx.pacer.complete(
     admission,
-    refusal === null ? response() : { kind: "aborted_before_send", refusal: refusal.reason },
+    refusal === null ? reported(leftAt) : { kind: "aborted_before_send", refusal: refusal.reason },
   );
-  return { grant, admission, refusal };
+  return { grant, admission, refusal, leftAt };
 }
 
 describe("sync pacer: admission preconditions", () => {
@@ -152,7 +151,7 @@ describe("sync pacer: admission preconditions", () => {
     const grant = await ctx.pacer.waitForSlot(live());
     const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
     ctx.pacer.stop();
-    expect(ctx.pacer.check(admission)?.reason).toBe("lease_inactive");
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("lease_inactive");
     ctx.pacer.complete(admission, { kind: "aborted_before_send", refusal: "lease_inactive" });
     await expect(ctx.pacer.waitForSlot(live())).rejects.toBeInstanceOf(PacerStoppedError);
   });
@@ -169,7 +168,7 @@ describe("sync pacer: the pause rule (I1, I2, I4)", () => {
     expect(second.grant.pauseMs).toBe(Math.ceil(S * 1.05));
     expect(second.admission.sentMono! - first.admission.sentMono!).toBeGreaterThanOrEqual(second.grant.pauseMs);
     expect(second.admission.gapPrevMs).toBe(second.admission.sentMono! - first.admission.sentMono!);
-    expect(second.admission.sendMark).toBe("request_start");
+    expect(second.admission.sendMark).toBe("transport_reported");
   });
 
   it("the gap is measured at the actual send, so a slow admission or proxy never shortens it", async () => {
@@ -177,6 +176,7 @@ describe("sync pacer: the pause rule (I1, I2, I4)", () => {
     ctx.pacer.initTakeover(0);
     const first = await sendOne(ctx, { admitMs: 400, connectMs: 4_000, responseMs: 10 });
     const second = await sendOne(ctx, { attemptId: 2, admitMs: 0, connectMs: 0 });
+    expect(second.leftAt - first.leftAt).toBeGreaterThanOrEqual(S);
     expect(second.admission.sentMono! - first.admission.sentMono!).toBeGreaterThanOrEqual(S);
   });
 
@@ -198,8 +198,8 @@ describe("sync pacer: the pause rule (I1, I2, I4)", () => {
     await expect(ctx.pacer.waitForSlot(live())).rejects.toMatchObject({ reason: "in_flight" });
     expect(() => ctx.pacer.arm(grant, 2, ctx.clock.monoNow())).toThrow(/in_flight/);
     expect(() => ctx.pacer.initTakeover(0)).toThrow(/in_flight/);
-    ctx.pacer.check(admission);
-    ctx.pacer.complete(admission, response());
+    ctx.pacer.checkRemoteGrant(admission);
+    ctx.pacer.complete(admission, reported(ctx.clock.monoNow()));
     await expect(ctx.pacer.waitForSlot(live())).resolves.toMatchObject({ settingMs: S });
   });
 
@@ -211,7 +211,7 @@ describe("sync pacer: the pause rule (I1, I2, I4)", () => {
     expect(idle2.jitterU).toBe(idle1.jitterU);
     // A refused dispatch sends nothing: u stays.
     const refusedAdmission = ctx.pacer.arm(idle2, 1, ctx.clock.monoNow() - SEND_WINDOW_MS);
-    expect(ctx.pacer.check(refusedAdmission)?.reason).toBe("send_deadline_passed");
+    expect(ctx.pacer.checkRemoteGrant(refusedAdmission)?.reason).toBe("send_deadline_passed");
     ctx.pacer.complete(refusedAdmission, { kind: "aborted_before_send", refusal: "send_deadline_passed" });
     expect(ctx.pacer.snapshot().pendingU).toBeCloseTo(0.18, 12);
     const sent = await sendOne(ctx, { attemptId: 2 });
@@ -260,32 +260,34 @@ describe("sync pacer: the pause rule (I1, I2, I4)", () => {
   });
 });
 
-describe("sync pacer: the send check", () => {
+describe("sync pacer: the grant (checkRemoteGrant)", () => {
   async function armed(ctx: ReturnType<typeof setup>) {
     const grant = await ctx.pacer.waitForSlot(live());
     return ctx.pacer.arm(grant, 7, ctx.clock.monoNow());
   }
 
-  it("passes once; a second dispatch of the same admission is refused (lease_used)", async () => {
+  it("passes once; a second grant of the same admission is refused (lease_used)", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);
     const admission = await armed(ctx);
-    expect(ctx.pacer.check(admission)).toBeNull();
-    const sentAt = admission.sentMono;
+    expect(ctx.pacer.checkRemoteGrant(admission)).toBeNull();
+    const grantedAt = admission.grantedMono;
     ctx.clock.advance(3_000);
-    const hop = ctx.pacer.check(admission);
+    const hop = ctx.pacer.checkRemoteGrant(admission);
     expect(hop).toBeInstanceOf(FanslySendRefusedError);
     expect(hop?.reason).toBe("lease_used");
-    expect(admission.sentMono).toBe(sentAt);
-    expect(ctx.pacer.snapshot().lastSendMono).toBe(sentAt);
+    expect(admission.grantedMono).toBe(grantedAt);
+    expect(admission.sentMono).toBeNull();
+    expect(ctx.pacer.snapshot().lastSendMono).toBeNull();
   });
 
-  it("refuses after the lock session is gone (lease_inactive)", async () => {
+  it("refuses after the lock session is gone (lease_inactive): a lost ownership never reaches a grant", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);
     const admission = await armed(ctx);
     ctx.ownership.isAlive = false;
-    expect(ctx.pacer.check(admission)?.reason).toBe("lease_inactive");
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("lease_inactive");
+    expect(admission.grantedMono).toBeNull();
     expect(admission.sentMono).toBeNull();
     expect(admission.refusal).toBe("lease_inactive");
   });
@@ -298,8 +300,9 @@ describe("sync pacer: the send check", () => {
     ctx.clock.advance(4_000); // a slow admission transaction
     const admission = ctx.pacer.arm(grant, 1, issued);
     expect(admission.sendDeadlineMono).toBe(issued + SEND_WINDOW_MS);
-    ctx.clock.advance(SEND_WINDOW_MS - 4_000); // the proxy tunnel took the rest
-    expect(ctx.pacer.check(admission)?.reason).toBe("send_deadline_passed");
+    ctx.clock.advance(SEND_WINDOW_MS - 4_000); // the browser took the rest
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("send_deadline_passed");
+    expect(admission.grantedMono).toBeNull();
   });
 
   it("refuses before the takeover floor (takeover_floor)", () => {
@@ -307,16 +310,16 @@ describe("sync pacer: the send check", () => {
     ctx.pacer.initTakeover(5_000);
     const grant: SlotGrant = { settingMs: S, jitterU: 0, pauseMs: S, earliestMono: 0 };
     const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
-    expect(ctx.pacer.check(admission)?.reason).toBe("takeover_floor");
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("takeover_floor");
   });
 
-  it("refuses a dispatch closer than the pause to the previous send (pace: a belt that fires only on a bug)", async () => {
+  it("refuses a grant closer than the pause to the previous send (pace: a belt that fires only on a bug)", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);
     await sendOne(ctx, { responseMs: 10 });
     const grant: SlotGrant = { settingMs: S, jitterU: 0, pauseMs: S, earliestMono: 0 };
     const admission = ctx.pacer.arm(grant, 2, ctx.clock.monoNow());
-    expect(ctx.pacer.check(admission)?.reason).toBe("pace");
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("pace");
   });
 
   it("refuses a stale admission that is no longer in flight", async () => {
@@ -324,20 +327,20 @@ describe("sync pacer: the send check", () => {
     ctx.pacer.initTakeover(0);
     const admission = await armed(ctx);
     ctx.pacer.complete(admission, { kind: "aborted_before_send", refusal: "lease_inactive" });
-    expect(ctx.pacer.check(admission)?.reason).toBe("lease_inactive");
-    expect(() => ctx.pacer.complete(admission, response())).toThrow(/foreign_admission/);
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("lease_inactive");
+    expect(() => ctx.pacer.complete(admission, reported(ctx.clock.monoNow()))).toThrow(/foreign_admission/);
   });
 });
 
 describe("sync pacer: completions", () => {
-  it("a response without an onRequestStart mark counts as sent at its completion (safe upper bound)", async () => {
+  it("a response without a reported send instant counts as sent at its completion (safe upper bound)", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);
     const grant = await ctx.pacer.waitForSlot(live());
     const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
     ctx.clock.advance(1_500);
     const completedAt = ctx.clock.monoNow();
-    ctx.pacer.complete(admission, response("completion_fallback"));
+    ctx.pacer.complete(admission, unmarked());
     expect(admission.sentMono).toBe(completedAt);
     expect(admission.sendMark).toBe("completion_fallback");
     const next = await ctx.pacer.waitForSlot(live());
@@ -363,7 +366,7 @@ describe("sync pacer: completions", () => {
     const grant = await ctx.pacer.waitForSlot(live());
     const admission = ctx.pacer.arm(grant, 2, ctx.clock.monoNow());
     ctx.ownership.isAlive = false;
-    expect(ctx.pacer.check(admission)?.reason).toBe("lease_inactive");
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("lease_inactive");
     ctx.pacer.complete(admission, { kind: "aborted_before_send", refusal: "lease_inactive" });
     const after = ctx.pacer.snapshot();
     expect(after.lastSendMono).toBe(first.admission.sentMono);
@@ -382,28 +385,14 @@ describe("sync pacer: completions", () => {
     expect(ctx.pacer.snapshot().lastCompletionMono).toBe(ctx.clock.monoNow());
   });
 
-  it("an answer after a passed check keeps the check instant as the send", async () => {
-    const ctx = setup();
-    ctx.pacer.initTakeover(0);
-    const grant = await ctx.pacer.waitForSlot(live());
-    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
-    expect(ctx.pacer.check(admission)).toBeNull();
-    const sentAt = ctx.clock.monoNow();
-    ctx.clock.advance(600);
-    ctx.pacer.complete(admission, response());
-    expect(admission.sentMono).toBe(sentAt);
-    expect(ctx.pacer.snapshot().lastCompletionMono).toBe(sentAt + 600);
-  });
 });
 
 // Project Browser (plan §3.2, §4.2 step 5; stage 3 PR 12): a sender outside
-// the process — the page's browser — is granted the admission (the check's
-// every condition, no send mark), sends later, and reports when the request
-// left. The pause runs from that instant (I1).
+// the process — the page's browser — is granted the admission (no send
+// mark), sends later, and reports when the request left. The pause runs from
+// that instant (I1).
 describe("sync pacer: a send the transport reports (transport_reported)", () => {
-  const reported = (sentMono: number): TransportOutcome => ({ kind: "response", status: 200, headers: {}, bodyText: "{}", bodyBytes: 2, sendMark: "transport_reported", sentMono });
-
-  it("the grant checks like the send check but marks nothing; the reported instant is the send, the pause runs from it", async () => {
+  it("the grant marks nothing; the reported instant is the send, the pause runs from it", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);
     const first = await sendOne(ctx);
@@ -517,36 +506,6 @@ describe("sync pacer: a send the transport reports (transport_reported)", () => 
     expect(after.lastSendMono).toBe(first.admission.sentMono);
     expect(after.lastCompletionMono).toBe(before.lastCompletionMono);
   });
-
-  it("one grant per admission: a second is refused (lease_used), as a second dispatch is", async () => {
-    const ctx = setup();
-    ctx.pacer.initTakeover(0);
-    const grant = await ctx.pacer.waitForSlot(live());
-    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
-    expect(ctx.pacer.checkRemoteGrant(admission)).toBeNull();
-    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("lease_used");
-    expect(ctx.pacer.check(admission)?.reason).toBe("lease_used");
-  });
-
-  it("a grant past the send window is refused", async () => {
-    const ctx = setup();
-    ctx.pacer.initTakeover(0);
-    const grant = await ctx.pacer.waitForSlot(live());
-    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
-    ctx.clock.advance(SEND_WINDOW_MS);
-    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("send_deadline_passed");
-    expect(admission.grantedMono).toBeNull();
-  });
-
-  it("a grant after the lock session is gone is refused (lease_inactive): a lost ownership never reaches a grant", async () => {
-    const ctx = setup();
-    ctx.pacer.initTakeover(0);
-    const grant = await ctx.pacer.waitForSlot(live());
-    const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
-    ctx.ownership.isAlive = false;
-    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("lease_inactive");
-    expect(admission.grantedMono).toBeNull();
-  });
 });
 
 describe("sync pacer: takeover (I5)", () => {
@@ -609,8 +568,6 @@ describe("sync pacer: constants and the test-only floor", () => {
 });
 
 describe("sync pacer: sends of the page's browser on its own (variant Б, owner decision Б2)", () => {
-  const reported = (sentMono: number): TransportOutcome => ({ kind: "response", status: 200, headers: {}, bodyText: "{}", bodyBytes: 2, sendMark: "transport_reported", sentMono });
-
   it("the next own slot opens S after the site's last send, as after an own one", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);
@@ -660,13 +617,13 @@ describe("sync pacer: sends of the page's browser on its own (variant Б, owner 
     expect(ctx.clock.monoNow()).toBe(lastSiteSend + grant.pauseMs);
   });
 
-  it("the check refuses an own send when the site sent within the pause or has a request in flight", async () => {
+  it("the grant refuses an own send when the site sent within the pause or has a request in flight", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);
     const grant = await ctx.pacer.waitForSlot(live());
     const admission = ctx.pacer.arm(grant, 1, ctx.clock.monoNow());
     ctx.pacer.observeForeignSend("site-1", ctx.clock.monoNow());
-    expect(ctx.pacer.check(admission)?.reason).toBe("pace");
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("pace");
     ctx.pacer.complete(admission, { kind: "aborted_before_send", refusal: "pace" });
     // In flight, past the pause: still refused.
     ctx.clock.advance(3_000);
@@ -693,7 +650,7 @@ describe("sync pacer: sends of the page's browser on its own (variant Б, owner 
     expect(grant.earliestMono).toBeLessThanOrEqual(ctx.clock.monoNow());
   });
 
-  it("the check refuses an own send while an end's hold is not journaled; an end that holds nothing opens the slot", async () => {
+  it("the grant refuses an own send while an end's hold is not journaled; an end that holds nothing opens the slot", async () => {
     const ctx = setup();
     ctx.pacer.initTakeover(0);
     const admission = ctx.pacer.arm(await ctx.pacer.waitForSlot(live()), 1, ctx.clock.monoNow());

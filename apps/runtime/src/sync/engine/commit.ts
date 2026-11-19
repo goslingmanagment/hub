@@ -24,7 +24,6 @@ import {
   markApplied,
   markAttemptQuarantined,
   markHistoryTurnServed,
-  markAttemptSent,
   markDeferred,
   markWorkRunning,
   OwnershipLostError,
@@ -238,14 +237,6 @@ export const defaultCaptureCodec: CaptureCodec = {
   },
 };
 
-/** Inline canonicalization of the captured observation inside tx 3 (the
- *  capture seam). Without one, the minutely canonicalization sweep picks the
- *  observation up as it does for every journaled fact. */
-export type ObservationCanonicalizer = (
-  tx: Database,
-  input: { pageId: number; ownRef: string | null; observationId: number; receivedAt: Date },
-) => Promise<void>;
-
 /** The history-request hook of tx 3 (`history_*` last in the lock order). */
 export type ThreadChainChangedHook = (tx: Database, input: { pageId: number; threadId: number }) => Promise<void>;
 
@@ -276,7 +267,6 @@ export interface CommitDeps {
   metrics: Metrics;
   logger: SyncLogger;
   capture?: CaptureCodec;
-  canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
   onWorkClosed?: WorkClosedHook;
   onChatUnavailable?: ChatUnavailableHook;
@@ -617,14 +607,6 @@ export async function admit(
       request,
       credentialsGeneration: prepared?.credentialsGeneration ?? null,
     };
-  });
-}
-
-/** Best effort right after `onRequestStart` (never awaited by the send): the
- *  send instant, so a takeover after a crash sees it. */
-export function markSentBestEffort(d: CommitDeps, attemptId: number, sentAt: Date): void {
-  markAttemptSent(d.db, { attemptId, sentAt }).catch((error: unknown) => {
-    d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync: best-effort send mark failed");
   });
 }
 
@@ -1825,14 +1807,6 @@ export async function apply(
         ...(d.settings === undefined ? {} : { settings: d.settings }),
         secrets: d.secrets ?? null,
       });
-      if (d.canonicalize !== undefined && result.canonicalized !== true) {
-        await d.canonicalize(tx, {
-          pageId: d.pageId,
-          ownRef: d.ownRef,
-          observationId: attempt.observationId!,
-          receivedAt: attempt.observationReceivedAt!,
-        });
-      }
       return settleApplied(tx, d, { attempt, work, spec, page, result });
     });
     if (applied === "nothing") return "nothing";
@@ -1969,7 +1943,7 @@ async function recordIdentityProofOf(
   tx: Database,
   d: CommitDeps,
   page: SyncPageRow,
-  facts: { attemptId: number; resource: string; accountId: string; credentialsGeneration: string | null; sentAt: Date; observed?: boolean },
+  facts: { attemptId: number; resource: string; accountId: string; credentialsGeneration: string | null; sentAt: Date },
 ): Promise<IdentityProofWrite> {
   const { attemptId, sentAt } = facts;
   const recorded = await recordSyncPageIdentityProof(tx, {
@@ -2008,40 +1982,6 @@ async function recordIdentityProofOf(
     },
   });
   return { ...proof, cleared: held.kind };
-}
-
-/**
- * Variant Б (plan-b §4.2.3): the proof of the site's own `GET /account/me` —
- * observed by the page's browser, answered from the network (not a cache or
- * a service worker), whole, 200, under the live session it names — judged as
- * an applied identity read of the engine's own: the page's identity and the
- * credentials generation of the browser under that session, sent no earlier
- * than `sentNotBefore` (a lower bound: a fence after it is not passed). Its
- * attempt is the site's observed one: only its send lower bound orders it
- * against a credentials failure, never its after-the-fact id. An account
- * other than the page's proves nothing (the engine's own read then meets
- * the mismatch).
- */
-export async function commitSiteIdentity(
-  d: CommitDeps,
-  input: { attemptId: number; accountId: string; credentialsGeneration: string; sentNotBefore: Date },
-): Promise<"recorded" | "superseded" | "foreign_account" | "no_account_ref"> {
-  if (d.ownRef === null) return "no_account_ref";
-  if (input.accountId !== d.ownRef) return "foreign_account";
-  return inTx(d.db, async (tx) => {
-    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    const page = await getSyncPage(tx, d.pageId);
-    if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-    const written = await recordIdentityProofOf(tx, d, page, {
-      attemptId: input.attemptId,
-      resource: "site",
-      accountId: input.accountId,
-      credentialsGeneration: input.credentialsGeneration,
-      sentAt: input.sentNotBefore,
-      observed: true,
-    });
-    return written.superseded ? "superseded" : "recorded";
-  });
 }
 
 async function recordApplyError(d: CommitDeps, attemptId: number, error: unknown): Promise<ApplyErrorKind> {

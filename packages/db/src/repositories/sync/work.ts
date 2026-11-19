@@ -74,11 +74,6 @@ export const SYNC_WORK_PARAM_IDS_CAP = 1_000;
 /** LISTEN/NOTIFY channel that wakes a page's actor; the payload is the page id. */
 export const SYNC_WORK_NOTIFY_CHANNEL = "fansly_sync_work";
 
-/** LISTEN/NOTIFY channel a settled work row announces itself on
- *  (`settleWork`), payload `<workId>:<appliedRevision>`: the wake of the
- *  "enqueue work and wait" wrapper (design §7.3). */
-export const SYNC_WORK_DONE_NOTIFY_CHANNEL = "fansly_sync_work_done";
-
 /** Candidates a class pick reads at once (design §3.4). */
 export const SYNC_WORK_PICK_LIMIT = 20;
 
@@ -896,9 +891,8 @@ export interface SettleWorkResult {
  * Settle a work row after a step (apply, no-HTTP plan, failed attempt). The
  * row closes only when the step asked to AND no demand newer than
  * `servedRevision` arrived during the step; otherwise it stays open and runs
- * again (I11). A closing row drops its `secret_params`. The row announces
- * the settle on `fansly_sync_work_done` (delivered at commit). Null: the row
- * is not open or running any more (erased, superseded).
+ * again (I11). A closing row drops its `secret_params`. Null: the row is
+ * not open or running any more (erased, superseded).
  */
 export async function settleWork(db: Database, input: SettleWorkInput): Promise<SettleWorkResult | null> {
   const close = input.close ?? null;
@@ -950,7 +944,6 @@ export async function settleWork(db: Database, input: SettleWorkInput): Promise<
   `);
   const row = result.rows[0];
   if (!row) return null;
-  await db.execute(sql`select pg_notify(${SYNC_WORK_DONE_NOTIFY_CHANNEL}, ${`${input.workId}:${row.appliedRevision}`})`);
   return {
     state: row.state,
     demandRevision: Number(row.demandRevision),
