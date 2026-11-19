@@ -20,8 +20,8 @@ import { errorResponseSchema } from "./primitives.ts";
 // Заказ кастома (custom-orders.ts): the board «Кастомы» of Workboard by any
 // session (the lead and the owner every order, a team lead and a chatter the
 // orders of their pages), and the agent key's door (write:customs). The
-// extension keeps its own routes (clientFanCustomCreate, clientFanCustomChange,
-// clientFanCard's `customs`), served from the same orders. Database only.
+// extension records and gives an order through these routes with its narrow
+// token and reads the orders in clientFanCard's `customs`. Database only.
 
 const sessionErrors = {
   400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema,

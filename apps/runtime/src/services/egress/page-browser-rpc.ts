@@ -35,14 +35,10 @@ import {
   type Result,
   type Send,
   type Sent,
-  type SiteAdmitResult,
-  type SiteDone,
   type SiteEnded,
   type SiteIdentity,
   type SiteSent,
   type State,
-  type WsAdmitResult,
-  type WsDone,
 } from "./page-browser-protocol.ts";
 
 // The engine's RPC client to a page's operator (Project Browser, plan §4.13;
@@ -75,20 +71,17 @@ import {
 //   A result whose body did not arrive whole is asked for again once
 //   (`recover`), then handed over without it.
 // - `recover`: the operator resends the outcomes it holds of the attempts
-//   named, then answers with the state of each; the results — and the site
-//   path's ends, `siteDone` and `wsDone` — resent on the way are collected
-//   for the caller.
+//   named, then answers with the state of each; the results resent on the
+//   way are collected for the caller.
 // - The event stream (plan §4.4, PR 13): `events.subscribe` and `ack` with
 //   the buffer's id; each `events` batch goes to the intake's listener with
 //   the bodies its site responses name (their frames come before the batch,
 //   reassembled and checked as a result's), `events.refused` to its own.
-// - `state`, `alarm`, `quiesced`: kept and told to listeners. Messages of the
-//   site path (siteAdmit, wsAdmit) go to a listener when one is registered
-//   (`onOtherMessage`), and are dropped otherwise: the operator's own waits
-//   refuse what nobody admits. Their answers (`answerSiteAdmit`,
-//   `answerWsAdmit`) go only on the connection they were asked on. A
-//   `siteDone`/`wsDone` goes to the site path's claim (`onEnd`, PR 14); one
-//   it does not claim is an outcome nobody waits for (`onUnclaimedOutcome`).
+// - `state`, `alarm`, `quiesced`: kept and told to listeners. The admission
+//   messages of the site (`siteAdmit`, `wsAdmit`, `admissionCancel`) and
+//   their ends (`siteDone`, `wsDone`) are parsed and dropped with a debug
+//   line: the engine admits nothing of the site since variant Б (minor 4),
+//   and the operator's own waits refuse what nobody admits.
 // - Variant Б (minor 4): `siteSent`, `siteEnded`, `siteIdentity` — the site's
 //   own traffic an operator let go and observed — go to their own listener
 //   (`onSiteObserved`), never to the site path's.
@@ -205,9 +198,6 @@ export interface RecoverAnswer {
   states: Map<number, RecoverResult["attempts"][number]["state"]>;
   /** The outcomes resent for the attempts asked about, on the way. */
   results: Map<number, DeliveredResult>;
-  /** The site path's ends resent on the way (a site request's `siteDone`, a
-   *  site socket's `wsDone`). */
-  ends: Map<number, SiteDone | WsDone>;
 }
 
 /** A body an event names, as it arrived: whole and checked, or why not. */
@@ -289,9 +279,6 @@ type OtherMessage = Exclude<OperatorToEngine, { type: "helloResult" | "quiesced"
 /** What an operator of minor 4 tells of the site's own traffic (variant Б). */
 export type SiteObservedMessage = SiteSent | SiteEnded | SiteIdentity;
 
-/** `Omit` over each member of a union. */
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-
 interface Assembly {
   parts: Buffer[];
   next: number;
@@ -302,7 +289,6 @@ interface Assembly {
 interface PendingRecover {
   ids: Set<number>;
   results: Map<number, DeliveredResult>;
-  ends: Map<number, SiteDone | WsDone>;
   resolve: (answer: RecoverAnswer) => void;
   reject: (error: Error) => void;
 }
@@ -348,7 +334,7 @@ export class PageBrowserRpcClient {
   #recover: PendingRecover | null = null;
   readonly #recoverQueue: PendingRecover[] = [];
   /** Bytes of outcomes received over every connection: body frames, results
-   *  and the site path's ends — what a delivery moves. Never falls. */
+   *  and the ends of site admissions — what a delivery moves. Never falls. */
   #outcomeBytes = 0;
   /** When the recover asked now was written, or a byte of an outcome last
    *  came (`#now`). */
@@ -357,12 +343,9 @@ export class PageBrowserRpcClient {
   readonly #alarmListeners = new Set<(alarm: Alarm) => void>();
   readonly #linkListeners = new Set<(status: LinkStatus) => void>();
   #unclaimed: ((delivered: DeliveredResult) => void) | null = null;
-  #unclaimedEnd: ((end: SiteDone | WsDone) => void) | null = null;
   #events: ((delivered: DeliveredEvents) => void) | null = null;
   #eventsRefused: ((refused: EventsRefused) => void) | null = null;
-  #other: ((message: OtherMessage) => void) | null = null;
   #observed: ((message: SiteObservedMessage) => void) | null = null;
-  #endClaim: ((end: SiteDone | WsDone) => boolean) | null = null;
   readonly #quiescedListeners = new Set<(quiesced: Quiesced) => void>();
   /** Commands awaiting their result, by id. */
   readonly #commands = new Map<string, (result: CommandResult | null) => void>();
@@ -471,13 +454,6 @@ export class PageBrowserRpcClient {
     this.#unclaimed = listener;
   }
 
-  /** A site request's or a site socket's end (`siteDone`, `wsDone`) when no
-   *  site path listens (`onOtherMessage`): an outcome the operator holds that
-   *  nothing waits for (PR 13). Without one it is dropped, never acked. */
-  onUnclaimedOutcome(listener: ((end: SiteDone | WsDone) => void) | null): void {
-    this.#unclaimedEnd = listener;
-  }
-
   /** The event stream's batches, with their bodies (PR 13). Without a
    *  listener a batch is dropped, never acked: it comes again. */
   onEvents(listener: ((delivered: DeliveredEvents) => void) | null): void {
@@ -494,18 +470,6 @@ export class PageBrowserRpcClient {
    *  listener (nothing waits for them). */
   onSiteObserved(listener: ((message: SiteObservedMessage) => void) | null): void {
     this.#observed = listener;
-  }
-
-  /** The site path's messages: `siteAdmit`, `wsAdmit` (PR 14). */
-  onOtherMessage(listener: ((message: OtherMessage) => void) | null): void {
-    this.#other = listener;
-  }
-
-  /** A site request's or a site socket's end, offered to the site path
-   *  first (PR 14): true — it is the site path's (an admission it waits
-   *  for); false — an outcome nobody waits for (`onUnclaimedOutcome`). */
-  onEnd(claim: ((end: SiteDone | WsDone) => boolean) | null): void {
-    this.#endClaim = claim;
   }
 
   /** The operator's `quiesced` for this owner (plan §4.7): told once it
@@ -534,20 +498,6 @@ export class PageBrowserRpcClient {
       this.#commands.set(commandId, settle);
       if (!this.#write({ type: "command", ownerGeneration: this.#generation, commandId, notAfterMono, command })) settle(null);
     });
-  }
-
-  /** The answer to a `siteAdmit` asked on the connection of `epoch` (PR 14).
-   *  False: that connection is gone — the operator refuses every admission
-   *  asked on it — or nothing could be written. */
-  answerSiteAdmit(epoch: number, answer: DistributiveOmit<SiteAdmitResult, "type" | "ownerGeneration">): boolean {
-    if (epoch !== this.#epoch) return false;
-    return this.#write({ ...answer, type: "siteAdmitResult", ownerGeneration: this.#generation } as SiteAdmitResult);
-  }
-
-  /** The answer to a `wsAdmit` asked on the connection of `epoch` (PR 14). */
-  answerWsAdmit(epoch: number, answer: DistributiveOmit<WsAdmitResult, "type" | "ownerGeneration">): boolean {
-    if (epoch !== this.#epoch) return false;
-    return this.#write({ ...answer, type: "wsAdmitResult", ownerGeneration: this.#generation } as WsAdmitResult);
   }
 
   start(): void {
@@ -640,7 +590,7 @@ export class PageBrowserRpcClient {
   /** The outcomes the operator holds of `attemptIds`, resent, and the state
    *  of each. Rejects when the link goes before the answer. */
   /** Bytes of outcomes received over every connection (body frames, results,
-   *  the site path's ends): a delivery under way moves it. Never falls. */
+   *  the ends of site admissions): a delivery under way moves it. Never falls. */
   get outcomeBytes(): number {
     return this.#outcomeBytes;
   }
@@ -662,7 +612,7 @@ export class PageBrowserRpcClient {
 
   recover(attemptIds: readonly number[]): Promise<RecoverAnswer> {
     return new Promise((resolve, reject) => {
-      const pending: PendingRecover = { ids: new Set(attemptIds), results: new Map(), ends: new Map(), resolve, reject };
+      const pending: PendingRecover = { ids: new Set(attemptIds), results: new Map(), resolve, reject };
       this.#recoverQueue.push(pending);
       this.#nextRecover();
     });
@@ -911,7 +861,10 @@ export class PageBrowserRpcClient {
         return;
       case "siteDone":
       case "wsDone":
-        return this.#onEnd(message);
+        // The end of a site admission (of an older engine's): an outcome
+        // delivered, taken by nobody.
+        this.#outcomeMoved(1);
+        return this.#toOther(message);
       case "siteSent":
       case "siteEnded":
       case "siteIdentity":
@@ -925,41 +878,10 @@ export class PageBrowserRpcClient {
     }
   }
 
-  /** A site request's or a site socket's end: kept for a recover that asked
-   *  about it, then the site path's — or, with none listening, an outcome
-   *  nothing waits for. */
-  #onEnd(message: SiteDone | WsDone): void {
-    this.#outcomeMoved(1);
-    const recovering = this.#recover;
-    if (recovering !== null && recovering.ids.has(message.attemptId)) recovering.ends.set(message.attemptId, message);
-    if (this.#endClaim !== null) {
-      const claim = this.#endClaim;
-      let claimed = false;
-      safely(() => {
-        claimed = claim(message);
-      });
-      if (claimed) return;
-      if (this.#unclaimedEnd !== null) {
-        const listener = this.#unclaimedEnd;
-        safely(() => listener(message));
-        return;
-      }
-    }
-    if (this.#other === null && this.#unclaimedEnd !== null) {
-      const listener = this.#unclaimedEnd;
-      safely(() => listener(message));
-      return;
-    }
-    this.#toOther(message);
-  }
-
+  /** A message of the site's admission (`siteAdmit`, `wsAdmit`,
+   *  `admissionCancel`, `siteDone`, `wsDone`): parsed, then dropped. */
   #toOther(message: OtherMessage): void {
-    if (this.#other !== null) {
-      const other = this.#other;
-      safely(() => other(message));
-    } else {
-      this.#log.debug({ url: this.#o.url, type: message.type }, "page browser link: a message nobody takes yet");
-    }
+    this.#log.debug({ url: this.#o.url, type: message.type }, "page browser link: a message nobody takes yet");
   }
 
   #onHelloResult(message: Extract<OperatorToEngine, { type: "helloResult" }>, digest: string): void {
@@ -1203,7 +1125,7 @@ export class PageBrowserRpcClient {
     if (pending === null) return this.#protocolError("a recoverResult nobody asked for");
     const states = new Map<number, RecoverResult["attempts"][number]["state"]>();
     for (const attempt of message.attempts) states.set(attempt.attemptId, attempt.state);
-    pending.resolve({ states, results: pending.results, ends: pending.ends });
+    pending.resolve({ states, results: pending.results });
     this.#nextRecover();
   }
 }

@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ShiftSale } from "@agency_hub_core/db";
+import { workRef } from "../apps/runtime/src/services/agent-team-sales.ts";
 import type { ComputedWork, PersonPiece } from "../apps/runtime/src/services/chatter-shifts.ts";
 import {
-  homeCredit, peopleLoginsOf, piecesByUser, ruleWorkRef, ruledWork, type ScreenHome, type ScreensRule,
+  homeCredit, peopleLoginsOf, piecesByUser, ruledWork, type ScreenHome, type ScreensRule,
 } from "../apps/runtime/src/services/sale-rule-screens.ts";
 import { SALE_HOME_KINDS } from "../apps/runtime/src/services/sale-rule.ts";
 import {
@@ -91,7 +92,7 @@ function caseOf(seed: number) {
     const shares = people.map((userId, at) => {
       const own = shiftsOf(userId);
       const named = own.length > 0 && r.next() < 0.6 ? r.pick(own) : null;
-      return { userId, workRef: named === null ? null : ruleWorkRef(userId, named.work), mills: at === 0 ? first : net - first };
+      return { userId, workRef: named === null ? null : workRef(userId, named.work), mills: at === 0 ? first : net - first };
     });
     homes.set(sale.transactionId, { transactionId: sale.transactionId, kind, reason: "owner_split", shares });
   }

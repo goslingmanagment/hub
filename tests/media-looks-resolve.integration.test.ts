@@ -243,7 +243,7 @@ describe("a look of a published post: one read, then the image", () => {
     await expect(ask({ postRef: "500", fresh: true })).rejects.toMatchObject({ code: "media_look_in_flight" });
 
     const { result, observation } = await engineReads(first.wire.lookId, postAnswer());
-    expect(result).toMatchObject({ canonicalized: true, work: { close: "done", closeReason: "look_resolved" } });
+    expect(result).toMatchObject({ work: { close: "done", closeReason: "look_resolved" } });
     expect(JSON.stringify(result)).not.toContain("fansly.com");
     // Journaled, never canonicalized.
     expect(await sql("select parse_version from observations where id = $1", [observation.observationId]))

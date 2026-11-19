@@ -102,7 +102,7 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
       main = (
         <>
           {totals}
-          <Memo actions={actions} />
+          <Memos actions={actions} />
           {lost && <button type="button" className="hint is-amb" onClick={() => show(lost.key)}><Ico name="plus" size={13} />Нет в Hub: {lost.fan.name} {plus(lost.netMills)}</button>}
           {bareList.length > 0 && (
             <button type="button" className="hint" title="Открыть комментарий у следующей" onClick={() => {
@@ -122,7 +122,7 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
         </>
       );
     } else {
-      main = <>{totals}<CommentText text={report.view?.comment ?? ""} /><span className="grow" /></>;
+      main = <>{totals}<CommentText report={report} /><span className="grow" /></>;
     }
   } else if (board.phase === "checking") {
     main = (
@@ -154,7 +154,7 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
           void actions.commitNote().then(() => actions.confirm(candidate.id));
         }}>Подтверждаю</button>
       </>
-    ) : <>{totals}<CommentText text={report.view?.comment ?? ""} /><span className="grow" /></>;
+    ) : <>{totals}<CommentText report={report} /><span className="grow" /></>;
   } else {
     const incoming = allRows(board).find((row) => row.incoming?.state === "asked") ?? null;
     const late = allRows(board).find(isLateOpen) ?? null;
@@ -165,7 +165,7 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
     else if (own && late) what = <span className="nq"><Ico name="plus" size={14} />После сдачи пришла продажа {late.fan.name} {usd(late.netMills)}{link(late, "Показать")}</span>;
     else if (own && lateCards.length > 0) what = <span className="nq"><Ico name="pen" size={14} />Генгар дочитал: {lateCards.length} {plural(lateCards.length, "правка", "правки", "правок")}{link(lateCards[0]!, "Показать")}</span>;
     else if (candidate?.gengar.state === "silent") what = <span className="nq is-q"><Ico name="clock" size={14} />Подтверждён по проверке Hub. Генгар дочитает позже, его проверка придёт сюда же.</span>;
-    else if (!own && (report.view?.comment ?? "") !== "") what = <CommentText text={report.view?.comment ?? ""} />;
+    else if (!own && commentParts(report).length > 0) what = <CommentText report={report} />;
     // The post in «Отчётность»: quiet lines over the bar.
     const post = own ? board.post ?? null : null;
     const postLines: ReactNode[] = [];
@@ -211,9 +211,21 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
   );
 }
 
-/** The comment for the next shift (one per shift): saved on Enter, on leaving the field, and after a pause in typing. */
-function Memo({ actions }: { actions: BoardActions }) {
-  const saved = actions.report.view?.comment ?? "";
+type ModelComment = NonNullable<BoardActions["report"]["view"]>["comments"][number];
+
+/**
+ * The comments for the next shift: one field per post (a model's), each saving its own model; a report with no page
+ * yet — the one general field. Two models or more: each field named by its model.
+ */
+function Memos({ actions }: { actions: BoardActions }) {
+  const comments = actions.report.view?.comments ?? [];
+  if (comments.length === 0) return <Memo actions={actions} model={null} named={false} />;
+  return <>{comments.map((model) => <Memo key={model.modelSlug} actions={actions} model={model} named={comments.length > 1} />)}</>;
+}
+
+/** One comment for the next shift (a model's, or the general one): saved on Enter, on leaving the field, and after a pause in typing. */
+function Memo({ actions, model, named }: { actions: BoardActions; model: ModelComment | null; named: boolean }) {
+  const saved = model?.comment ?? actions.report.view?.comment ?? "";
   const [text, setText] = useState(saved);
   const last = useRef(saved);
   const timer = useRef<number | null>(null);
@@ -232,10 +244,11 @@ function Memo({ actions }: { actions: BoardActions }) {
     timer.current = null;
     if (value === last.current) return;
     last.current = value;
-    void actions.run({ op: "comment", comment: value });
+    void actions.run(model === null ? { op: "comment", comment: value } : { op: "comment", comment: value, modelSlug: model.modelSlug });
   };
-  return (
-    <input className="fld memo" value={text} placeholder="Комментарий для следующей смены" autoComplete="off" maxLength={2000} aria-label="Комментарий для следующей смены"
+  const field = (
+    <input className={named ? "fld" : "fld memo"} value={text} placeholder="Комментарий для следующей смены" autoComplete="off" maxLength={2000}
+      aria-label={named && model !== null ? `Комментарий для следующей смены: ${model.modelName}` : "Комментарий для следующей смены"}
       onChange={(event) => {
         const value = event.target.value;
         setText(value);
@@ -250,11 +263,32 @@ function Memo({ actions }: { actions: BoardActions }) {
         }
       }} />
   );
+  // The model's name stays beside the field, typed in or not.
+  return named && model !== null ? <label className="memo memo-n"><span className="memo-k">{model.modelName}</span>{field}</label> : field;
 }
 
-/** A reader's bar: the shift's comment, for the next shift. */
-function CommentText({ text }: { text: string }) {
-  return text.trim() === "" ? null : <span className="memo-ro" title={text}><b>Комментарий:</b> {text}</span>;
+/** What a reader reads of the comments: one text (one model, or the same for all), else each model's that is written. */
+function commentParts(report: BoardActions["report"]): Array<{ name: string | null; text: string }> {
+  const comments = report.view?.comments ?? [];
+  const texts = comments.map((one) => ({ name: one.modelName, text: one.comment.trim() }));
+  if (texts.length === 0) {
+    const general = report.view?.comment.trim() ?? "";
+    return general === "" ? [] : [{ name: null, text: general }];
+  }
+  if (texts.every((one) => one.text === texts[0]!.text)) return texts[0]!.text === "" ? [] : [{ name: null, text: texts[0]!.text }];
+  return texts.filter((one) => one.text !== "");
+}
+
+/** A reader's bar: the shift's comment for the next shift; of two models, each with its model's name. */
+function CommentText({ report }: { report: BoardActions["report"] }) {
+  const parts = commentParts(report);
+  if (parts.length === 0) return null;
+  const title = parts.map((one) => (one.name === null ? one.text : `${one.name}: ${one.text}`)).join(" · ");
+  return (
+    <span className="memo-ro" title={title}><b>Комментарий:</b>{parts.map((one, index) => (
+      <span key={one.name ?? index}>{index > 0 && " ·"} {one.name !== null && <b>{one.name}:</b>} {one.text}</span>
+    ))}</span>
+  );
 }
 
 /** «Ещё»: a small menu over the bar, and its two panels in the board's look. */

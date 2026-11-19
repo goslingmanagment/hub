@@ -277,29 +277,11 @@ export function ruleDecisionOf(decision: DecisionView): { resolution: Array<{ us
 
 export type OwnerOutcome = "first" | "second" | "half" | "nobody";
 
-/**
- * The owner's answer as a decision: «первому» — the claimant whole, «второму» — the other side whole, «пополам» — the
- * two in halves (the odd mill as the rule gives it: to the lower user id), «никому». The shares in user-id order. Pure.
- */
-export function decisionOfOutcome(outcome: OwnerOutcome, first: number, second: number | null): { kind: "split" | "nobody"; shares: Array<{ userId: number; percent: number }> } {
-  if (outcome === "nobody") return { kind: "nobody", shares: [] };
-  if (outcome === "first") return { kind: "split", shares: [{ userId: first, percent: 100 }] };
-  if (second === null) throw new Error("this dispute has no second side");
-  if (outcome === "second") return { kind: "split", shares: [{ userId: second, percent: 100 }] };
-  const [low, high] = first < second ? [first, second] : [second, first];
-  return { kind: "split", shares: [{ userId: low, percent: 50 }, { userId: high, percent: 50 }] };
-}
-
-/** What a person's share of a sale is after a decision or an agreement: the rule's own arithmetic. Pure. */
-export function shareAfter(input: { netMills: number; userId: number; outcome: OwnerOutcome | "agreed"; first: number; second: number | null; statement: "mine" | "share" | null }): number {
+/** What a person's share of a sale is after an agreement: the rule's own arithmetic. Pure. */
+export function shareAfter(input: { netMills: number; userId: number; outcome: "agreed"; first: number; second: number | null; statement: "mine" | "share" | null }): number {
   const { netMills: net, userId } = input;
-  if (input.outcome === "agreed") {
-    if (input.statement === "share" && input.second !== null) return halvesOf(net, input.first, input.second).find((half) => half.userId === userId)?.mills ?? 0;
-    return userId === input.first ? net : 0;
-  }
-  const decision = decisionOfOutcome(input.outcome, input.first, input.second);
-  if (decision.kind === "nobody") return 0;
-  return splitShares(net, decision.shares).find((share) => share.userId === userId)?.mills ?? 0;
+  if (input.statement === "share" && input.second !== null) return halvesOf(net, input.first, input.second).find((half) => half.userId === userId)?.mills ?? 0;
+  return userId === input.first ? net : 0;
 }
 
 /**

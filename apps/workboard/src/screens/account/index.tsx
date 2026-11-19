@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
-import { Badge, Button, Card, Disclosure, ErrorState, Field, Skeleton, SkeletonText, Table, TextInput, type Column } from "@agency_hub_core/ui";
+import { Badge, Button, Card, Disclosure, ErrorState, Field, SkeletonText, Table, TextInput, type Column } from "@agency_hub_core/ui";
 import {
   START_GUIDE_URL,
   USAGE_WINDOW_DAYS,
@@ -285,15 +285,5 @@ function Spend() {
           )}
       </div>
     </Card>
-  );
-}
-
-/** While `me` is read: the header and two sheets. */
-export function AccountFallback() {
-  return (
-    <div className="wb-content account-grid">
-      <Skeleton width={240} height={28} radius={6} />
-      <Card><SkeletonText lines={3} /></Card>
-    </div>
   );
 }

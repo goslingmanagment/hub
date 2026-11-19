@@ -1,8 +1,8 @@
 # Identity rights matrix
 
 One login is not one set of rights. Every person in the
-agency has a single account and signs in to the dashboard, the Fansly extension
-and the OnlyFans desktop app with the same login and password — but what that
+agency has a single account and signs in to the dashboard and the chat
+extension with the same login and password — but what that
 account can actually reach depends on five independent axes, and "the chatter
 has an account" answers none of them. This document is the map, and
 `tests/rights-matrix.integration.test.ts` is its proof: every row below names
@@ -19,8 +19,9 @@ remain bound to the original ID. See
 
 ## The five axes
 
-1. **Role** — `owner`, `team_lead`, `chatter`. Set at invitation, changed only
-   by the owner. (`content_manager` is historical — see *Honest boundaries*.)
+1. **Role** — `owner`, `team_lead`, `chatter`, `content_manager`. Set at
+   invitation, changed only by the owner. (`content_manager` signs in for
+   ContentOps alone — see *Honest boundaries*.)
 2. **Sign-in method** — a cookie session (the browser) or a device token (both
    clients, minted by `POST /auth/device-tokens/password`). There is no third:
    the API-key lane is gone. The method is a right in
@@ -31,26 +32,24 @@ remain bound to the original ID. See
    next call without a re-login or a re-issued credential.
 4. **Device rights** — which sign-ins exist on which machines, and which of the
    four revocation operations has been used on them.
-5. **The client's local cache** — the desktop's SQLite and the extension's
-   `storage.local`. The hub does not own this axis at all; see *Honest
-   boundaries*.
+5. **The client's local cache** — the extension's `storage.local`. The hub
+   does not own this axis at all; see *Honest boundaries*.
 
 ## Role × sign-in method
 
 What each combination reaches. "Assigned" means the page-scoped routes of the
 pages that account is granted; the owner is granted every page implicitly.
 
-| Surface (policy kind) | owner, cookie | owner, device token | team_lead, cookie | team_lead, device token | chatter, cookie | chatter, device token | `content_manager` (historical) | chat-extension token (any role) |
+| Surface (policy kind) | owner, cookie | owner, device token | team_lead, cookie | team_lead, device token | chatter, cookie | chatter, device token | `content_manager` (ContentOps) | chat-extension token (any role) |
 |---|---|---|---|---|---|---|---|---|
-| Sign in at all (`login`, password sign-in) | yes | yes | yes | yes | yes | yes | **no — 401 on both lanes** | yes (password sign-in, `client`) |
+| Sign in at all (`login`, password sign-in) | yes | yes | yes | yes | yes | yes | **cookie session only** (`login`, and ContentOps' `sso/password`); device token 403 | yes (password sign-in, `client`) |
 | Owner console — `/admin/*` (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 | A page browser's login and screen — `/page-browser/pages/{label}/login*`, `/screen/*` and its WebSocket (`owner-session`; the WebSocket checks the cookie session and its Origin itself) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 | A new page's onboarding through its browser — `/page-browser/profiles*` (its proxy, pin, login, screen and its WebSocket), `/page-browser/drafts*` and `/page-browser/proxy-check` (a page's browser started in the dashboard: its proxy pasted and checked, its environment confirmed) (`owner-session`; the WebSocket checks the cookie session and its Origin itself) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
-| Dashboard — `/models`, revenue (`session`) | yes | no (403) | **yes** | no (403) | no (403) | no (403) | — | no (403) |
-| Cabinet `/account` — `/auth/devices`, `/auth/usage` (`any-session`) | yes | no (403) | yes | no (403) | **yes** | no (403) | — | no (403) |
-| `/auth/me` (`any`) | yes | yes | yes | yes | yes | yes | — | yes |
+| Dashboard — `/models`, revenue (`session`) | yes | no (403) | **no (403)** — the console's own reads (`team-lead-reads.ts`) | no (403) | no (403) | no (403) | — | no (403) |
+| Cabinet `/account` — `/auth/devices`, `/auth/usage` (`any-session`) | yes | no (403) | yes | no (403) | **yes** | no (403) | `/auth/devices` yes, `/auth/usage` no (403) | no (403) |
+| `/auth/me` (`any`) | yes | yes | yes | yes | yes | yes | yes, `products: ["contentops"]` | yes |
 | Clients — `/pages`, `/pages/{label}/…` (`any` + page scope) | every page | every page | assigned | assigned | assigned | **assigned** | — | **listed reads only**, by the role's reach; `/pages` no (403) |
-| Desktop read gateway — `/ofapi/read/*` (`apiKey`) | no (403) | yes, assigned | no (403) | yes, assigned | no (403) | **yes, assigned** | — | no (403) |
 | Chat-extension bootstrap — `/client/bootstrap` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension shared recaps — `/client/pages/{label}/conversations/{fan}/recaps` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Chat-extension archive feed — `/client/pages/{label}/conversations/{fan}/feed` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
@@ -71,7 +70,6 @@ pages that account is granted; the owner is granted every page implicitly.
 | Win-back results by approach and chatter — `/team/win-back/results` (`session`) | **yes, every page** | no (403) | **yes, assigned** | no (403) | no (403) | no (403) | — | no (403) |
 | The owner's list of win-back approaches — `/team/win-back/approaches` (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 | The shift handoff of a page — `/client/pages/{label}/handoff` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
-| Write a custom into the fan's record and mark it paid / delivered / cancelled — `/client/pages/{label}/fans/{fan}/customs[/{id}]` (`apiKey` + page scope; only a custom of a page the caller works) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | Own draft shift report: read, mark a sale, confirm — `/account/shift-report[/marks\|/confirm]` (`any-session`; only the caller's shifts and sales shared with them) | yes | no (403) | yes | no (403) | **yes** | no (403) | — | no (403) |
 | The eight numbers of each chatter's shifts and week — `/team/chatter-numbers` (`session`) | **yes, every page** | no (403) | **yes, assigned** | no (403) | no (403) | no (403) | — | no (403) |
 | Shift-report disputes and the payout export — `/team/shift-reports/disputes`, `/team/shift-reports/export` (`session`) | **yes, every page** | no (403) | **yes, assigned** | no (403) | no (403) | no (403) | — | no (403) |
@@ -83,6 +81,11 @@ pages that account is granted; the owner is granted every page implicitly.
 | Publications (wall posts) — `/admin/publications*`: drafts, approval, cancel, the answer to "unknown", each page's publishing settings, uploaded files (`/admin/publications/files*`) (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 | Agent keys — `/agent/keys` (issue, list), `/agent/keys/{id}` (PATCH: a live key's capabilities), `/agent/keys/{id}/replace`, `/agent/keys/{id}/revoke` (`owner-session`; an agent key is refused too) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 
+In the `content_manager` column «—» is a 403: such a login reaches only the
+operations of `CONTENT_MANAGER_OPERATIONS`
+(`apps/runtime/src/services/content-manager-operations.ts`), whatever a route's
+own declaration admits — see *Honest boundaries*.
+
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
 the owner switches it on (the audited `chatExtension*` settings). Its
@@ -90,10 +93,12 @@ the owner switches it on (the audited `chatExtension*` settings). Its
 those pages, so a binding never reveals a page the caller is not granted, and
 only when the host holds accounts of that page's platform (an OnlyMonster
 account binds an OnlyFans page, never a Fansly one). A
-live agent key is refused with 403 even on a page it is granted. Its row is
-held by `client-bootstrap.integration`: every cell of it, plus the agent key,
-in both auth-policy modes; the switches and bindings by
-`client-owner-switches.integration`.
+live agent key is refused with 403 even on a page it is granted. Its own
+suite was removed on 2026-10-20; what holds it now: the chat-extension token's
+bootstrap (assigned pages only) in `rights-matrix.integration` › *chatter,
+chat-extension token*, the route walk of
+`device-token-client-profile.integration`, and the switches and bindings in
+`client-features.test.ts`.
 
 Publications (docs/plans/2026-10-23-wall-posts) are the owner's: only the
 owner's cookie session drafts, approves, cancels, answers "unknown" and sets a
@@ -213,9 +218,7 @@ every chat-extension page route) answers both `409 client_feature_disabled`
 with the reason `not_granted`, which does not tell a missing page from another
 person's.
 
-Its row is held by `client-recaps.integration`: every cell, the agent key, a
-page that is not granted and one that does not exist, in both auth-policy
-modes, and two chatters of one page reading the same recap.
+No test holds its row now: its suite was removed on 2026-10-20.
 
 The archive feed (chat-extension H-9c) is the route on which a device token
 reads a conversation's **messages from the hub's own stores**. The dashboard's
@@ -248,10 +251,8 @@ Its cursor adds no right and tells nothing: it is signed and bound to the page,
 the fan and the person, so one chatter's cursor opens nothing for another; it
 is checked after the page and the switch, never in their place; and its state
 is sealed, so its holder cannot read from it the hub-wide row ids that bound a
-walk (they would say how many messages the whole hub holds). Its row is held by
-`client-feed.integration`: every cell, the agent key, a page that is not
-granted and one that does not exist, in both auth-policy modes, and a cursor
-presented by another person, for another fan and for another page.
+walk (they would say how many messages the whole hub holds). No test holds
+its row now: its suite was removed on 2026-10-20.
 
 The dossier save from a stored generation (chat-extension H-5) writes the
 fan's dossier, as the older `PUT …/fans/{fan}/profile` does, with one
@@ -276,10 +277,7 @@ is narrower than the page grant on purpose:
   client_feature_disabled` / `not_granted` in `log` mode).
 
 The chat-extension token saves a dossier this way only: the older write is
-not on its list. Its row is held by `client-profile-from-generation.integration`:
-every cell, the agent key, a page that is not granted and one that does not
-exist, in both auth-policy modes, and another person's generation refused for
-every role.
+not on its list. No test holds its row now: its suite was removed on 2026-10-20.
 
 Fresh text (chat-extension H-4c, `liveTextContext` on the AI feature stream;
 Fansly since R20 HF-8б) adds no right and no route. A caller who may generate for a page may send the
@@ -299,8 +297,7 @@ inside what the caller could already do:
   (R20 HF-8б) the page's own socket overlay is read too, and only the
   request's page's: it adds no page to what the caller may read.
 
-Held by `client-ai-live-text.integration` (a chatter of two pages, the owner,
-a page that is not the chatter's) and `client-ai-live-text-lookup.integration`.
+No test holds it now: its two suites were removed on 2026-10-20.
 
 The own-AI-spend read (chat-extension H-15) answers the **caller's own**
 ledger rows on the page of the path, by day, and nothing else: an owner's
@@ -326,10 +323,8 @@ not ignored. It waits for the owner's `stats` switch on the page (OnlyFans
 only) and the extension's version, and a page that is not the caller's answers
 as on the shared recaps. An answer is kept in the process for up to 60 seconds
 and shared between callers; the checks above run on **every** request, before
-the kept answer is looked at, so a caller the hub refuses never reads one. Its
-row is held by `client-spender-stats-route.integration`: every cell, the agent
-key, and a page that is not granted, tombstoned or missing, in both auth-policy
-modes.
+the kept answer is looked at, so a caller the hub refuses never reads one. No
+test holds its row now: its suite was removed on 2026-10-20.
 
 The awaiting-reply queue (chat-extension H-8c) lists **one page's** payers
 whose fan wrote after the page's last message, biggest spender first, the same
@@ -346,10 +341,8 @@ on the shared recaps, and nothing is kept between requests. Its cursor adds no
 right: it is signed and bound to the page and the person for an hour, so one
 chatter's cursor opens nothing for another, and it is checked after the page
 and the switch, never in their place. Its state is sealed, so its holder reads
-nothing from it, the hub's own id of a fan included. Its row is held by
-`client-spender-awaiting-reply.integration`: every cell, the agent key, a page
-that is not granted, tombstoned or missing, in both auth-policy modes, and a
-cursor presented by another person and for another page.
+nothing from it, the hub's own id of a fan included. No test holds its row
+now: its suite was removed on 2026-10-20.
 
 The greeting lease and send custody (chat-extension H-7b) let a person
 granted a page hold a fan's first greeting for themselves and report a send
@@ -439,9 +432,10 @@ resolved by hand. It is the resolve's right and no wider:
   is queued and nothing is written, the audit trail included. No
   chat-extension switch gates it.
 
-Its row is held by `client-held-sends.integration`: every cell, the agent
-key, a page that is not the viewer's and one that does not exist, in both
-auth-policy modes. How to judge a held send is
+Its own suite was removed on 2026-10-20; what holds it now: the
+chat-extension token's 403 in `rights-matrix.integration` › *chatter,
+chat-extension token*, and a chatter's session refused in
+`workboard-chatter-access.integration`. How to judge a held send is
 [the held-sends runbook](runbooks/client-held-sends.md).
 
 The "new subscribers" list (chat-extension H-7c) answers who subscribed to a
@@ -467,10 +461,7 @@ subscribers, and only of those of the window:
 
 Its cursor adds no right: it is signed and bound to the page and the person,
 so one chatter's cursor opens nothing for another, and it is checked after the
-page and the switch, never in their place. Its row is held by
-`client-audience-new.integration`: every cell, the agent key, a page that is
-not granted and one that does not exist, in both auth-policy modes, and a
-cursor presented by another person and for another page.
+page and the switch, never in their place. No test holds its row now: its suite was removed on 2026-10-20.
 
 The **chat-extension token** (chat-extension H-3) is a device token the
 extension asks for at password sign-in with `client: "chat-extension"`. The
@@ -494,7 +485,9 @@ into hourly rollups that hold no user, page or fan (the `client_health_*_hourly`
 tables) and drops the report; with `chatExtensionHealthIngestEnabled` off (or
 the master switch off) it accepts the report and keeps nothing, and the
 bootstrap does not list `client-health-perf-v1`, so the extension does not send
-one. Held by `client-health-intake.integration`. The owner reads the rollups at
+one. Held by `client-sdk-compat.integration` (a report folded, never
+journaled), `client-token-scopes.test.ts` (the token's two capture kinds) and
+`client-features.test.ts` (kept only with both switches on). The owner reads the rollups at
 `GET /api/v1/admin/client-health` (chat-extension H-11c), an `owner-session`
 route like the rest of the owner console: no device token reaches it, the
 extension's own included. It names no person, since the rollups hold none: the
@@ -504,8 +497,8 @@ percentile. That floor is on the range of one read and no narrower: the mean
 and the maximum of a few observations can be worked out from two reads of
 larger ranges, so it keeps a thin figure from being read as the version's and
 does not seal a small group off. Contract verdicts and counters are counts of
-reports and events and are shown at any size. Held by
-`client-health-view.integration`. Its AI generations wait for
+reports and events and are shown at any size. No test holds this read now:
+its suite was removed on 2026-10-20. Its AI generations wait for
 the owner's switches (`chatExtensionEnabled`, the Coach / Recap / Review flags) and its
 version for `chatExtensionMinVersion`, and each generation record is labelled
 `clientProfile: "chat-extension"`. A full device token of the same person is
@@ -538,22 +531,20 @@ someone:
 | Event | What must happen | How it is verified |
 |---|---|---|
 | Assigned a Fansly page | `GET /pages` and `/auth/me` for the device token carry it on the next request; the page's operations open | `rights-matrix.integration` › *row «assigned a Fansly page»* |
-| Assigned an OnlyFans page | `GET /ofapi/read/accounts` for the device token carries the `acct_…` id; one principal spans both platforms | `rights-matrix.integration` › *row «assigned an OnlyFans page»*. The rail appears in the desktop after its rebaseline/restart — **manual** |
-| Assignment removed | The Fansly page's operations answer 403 (404 for a label that never existed); the OnlyFans account leaves the rail and its per-account reads 404 before a credit is spent; the pages that remain still work | `rights-matrix.integration` › *row «assignment removed»* |
+| Assignment removed | The Fansly page's operations answer 403 (404 for a label that never existed); the removed pages leave `GET /pages`; the pages that remain still work | `rights-matrix.integration` › *row «assignment removed»* |
 | Revoked one sign-in | The other device of the same person keeps working; the revoked one answers 401 `reason: token_revoked` | `rights-matrix.integration` › *row «revoked one sign-in»*; the reason itself: `auth-unauthorized-reason.integration` |
 | Revoked every device | Every device token 401s; **the cookie session stays alive** | `rights-matrix.integration` › *row «revoked every device»* |
-| Terminated all access | Device tokens, reservations, sessions and active links all die; a fresh `login` with the same valid password still works | `rights-matrix.integration` › *row «terminated all access»*; the counts: `auth-devices.integration` |
+| Terminated all access | Device tokens, sessions and active links all die; a fresh `login` with the same valid password still works | `rights-matrix.integration` › *row «terminated all access»*; the counts: `auth-devices.integration` |
 | Password reset by link | The old password 401s and the new one 200s; every prior device token and session 401s | `rights-matrix.integration` › *row «password reset by link»*; the link lifecycle: `account-links.integration` |
 | Deactivated | Every credential 401s and both sign-in lanes refuse **with no oracle** — byte-identical answers for a disabled account and for one that never existed | `rights-matrix.integration` › *row «deactivated»*; the tombstone and the frozen mutations: `user-deactivation.integration` |
 | Deleted and login reused | Old credentials/links and old-ID actions fail; a new account has a new ID and only newly assigned access; old audit/spend attribution survives | `user-identity-reuse.integration` |
-| Stale username route or old card | It cannot resolve to a replacement user, including numeric logins | `user-identity-reuse.integration`; `team-account-lifecycle` |
-| Persona edited | Only the owner by cookie, through `/admin/ai/personas`: every change is compare-and-set on the version (a stale tab gets 409) and commits an `ai_persona.created` / `updated` / `archived` audit row with no prompt text in the same transaction. The legacy `/ai/personas` writes are retired (409 for the owner, 403 for every bearer) | `rights-matrix.integration` › *row «persona edited»*; the lane in depth: `ai-persona-admin.integration` |
+| Stale username route or old card | It cannot resolve to a replacement user, including numeric logins | `user-identity-reuse.integration` |
+| Persona edited | Only the owner by cookie, through `/admin/ai/personas`: every change is compare-and-set on the version (a stale tab gets 409) and commits an `ai_persona.created` / `updated` / `archived` audit row with no prompt text in the same transaction. The legacy `/ai/personas` writes are retired (409 for the owner, 403 for every bearer) | `rights-matrix.integration` › *row «persona edited»* |
 | Persona prompts are owner content | Every device token — fresh or legacy, full or the chat-extension's narrow one, any role, the owner's included — and a chatter's cookie session answer 403 on the full-text list, the legacy writes and the raw prompt gateway; nothing changes and no AI spend is booked; the catalog still answers 200 to every device token without prompt text | `rights-matrix.integration` › *row «persona prompts are owner content»*; both enforcement modes: `auth-policy.integration` |
 | Client AI keeps working | A chatter's device token, a legacy one included, still streams through `/ai/features/{feature}` | `rights-matrix.integration` › *row «client AI keeps working»* |
-| Roles | owner: every page, console by cookie only; team_lead: dashboard but not the console, clients by assignment; chatter: cabinet and clients, never the dashboard; `content_manager`: cannot sign in anywhere | `rights-matrix.integration` › *§7 — roles* (four cases). The declarative policy grid per module: `auth-policy.integration` |
-| Another person signs in on the same PC | The principal and the assigned pages are the new person's; the previous person's local data is hidden but still on the disk | **manual + documented** (D23 of the desktop repo, #145) |
-| No pages of that platform | The extension shows CG-HUB-05; the desktop shows an empty state instead of reconnecting forever | **unit tests in the clients** |
-| An assignment is removed while a stream is open | The open SSE stream re-checks authorisation and closes within 60 s | **documented, not automated** — `SSE_AUTH_REVALIDATE_INTERVAL_MS = 60_000`, `apps/runtime/src/modules/events/index.ts` |
+| Roles | owner: every page, console by cookie only; team_lead: Workboard by cookie, not the console's own reads (`team-lead-reads.ts`) nor the owner's routes, clients by assignment; chatter: cabinet and clients, never the dashboard; `content_manager`: a cookie session that opens ContentOps alone, every operation off `content-manager-operations.ts` 403, no device token | `rights-matrix.integration` › *§7 — roles* (five cases). The declarative policy grid per module: `auth-policy.integration` |
+| Another person signs in on the same PC | The principal and the assigned pages are the new person's; what the extension kept in the browser profile's `storage.local` stays there | **not the hub's** — see *Honest boundaries* |
+| No pages of that platform | The extension shows CG-HUB-05 | **unit tests in the client** |
 
 `auth-policy.integration.test.ts` is deliberately **not** extended with the
 roles row: it pins the declarative policy layer against the legacy in-handler
@@ -570,7 +561,7 @@ control.
   into Fansly in their own Firefox regardless of every revocation here. Signing
   them out of Fansly is a manual step of the offboarding runbook.
 - **"Revoke all devices" is not "this person is out."** By design (§4.4) it
-  touches device tokens and reservations only: the cookie session survives. Use
+  touches device tokens only: the cookie session survives. Use
   **«Завершить все входы»** (terminate all access) for a real cut-off, and
   deactivation to close the account. (A legacy API key used to survive it
   too; that half of the trap is gone with the lane.)
@@ -584,21 +575,18 @@ control.
   null and revoked_at is null and expires_at > now()`) and revoke each one in
   the cabinet (the person's card, «Завершить вход на устройстве»); the
   extension signs in again after the forward deploy.
-- **Streams lag by up to 60 seconds.** A revoked assignment closes an already
-  open SSE stream at the next revalidation tick, not instantly.
-- **The desktop's local cache outlives the account.** Removing an assignment or
-  the whole account hides the data in the app; the SQLite file on the machine is
-  erased only by a purge run there (D23, #145). Nothing the hub does reaches it.
-- **The account list empties quietly.** `GET /ofapi/read/accounts` answers
-  `200 []` after the last OnlyFans assignment is removed — it is a list, not a
-  page-scoped operation. The 403/404 shows up on the per-account reads.
-- **`content_manager` accounts are historical.** The role is out of the wire
-  enum as well: it is not creatable, cannot sign in, and cannot be
-  serialized to any client. The PG enum value stays (migrations are
-  forward-only), so a historical row remains readable by raw SQL — and the admin
-  user list fails closed rather than publishing a role no client can parse.
-  Production had zero such rows when the role was retired; that count was the
-  merge gate.
+- **The extension's local data outlives the account.** What the extension
+  keeps in the browser profile's `storage.local` stays on the machine when an
+  assignment or the whole account is removed. Nothing the hub does reaches it.
+- **A `content_manager` login opens ContentOps alone.** It signs in by cookie
+  (Hub's `login`, or ContentOps' own form through `sso/password`) and Hub hands
+  it on to ContentOps. Every operation outside `CONTENT_MANAGER_OPERATIONS`
+  (`apps/runtime/src/services/content-manager-operations.ts`: who am I, its own
+  sign-ins and password) answers 403 before its handler runs, so an operation
+  added later stays closed to it until it is written there. It gets no device
+  token (403), and ContentOps' form refuses the owner's login before any check.
+  Held by `rights-matrix.integration` › *content_manager: a session that opens
+  ContentOps alone*.
 
 ## Where this is enforced
 

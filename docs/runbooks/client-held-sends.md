@@ -5,8 +5,9 @@ outcome the hub never learned, and what each answer does. The rights behind the
 page are in `docs/identity-rights-matrix.md`; the rules a send follows are
 chat-extension `docs/architecture.md` §6.7.7–§6.7.8.
 
-The console is «Зависшие отправки» in the sidebar (`/held-sends`), for the
-owner on every page and for a team lead on the pages assigned to them. A
+The screen is Workboard «Ждут вас», the group «Зависшие отправки»
+(`/workboard/waiting#held`; a send's resolve opens at `?send=<attempt>`), for
+the owner on every page and for a team lead on the pages assigned to them. A
 chatter does not see it.
 
 ## What a held send is
@@ -153,9 +154,9 @@ page (the list refreshes every 30 seconds while it is open).
 
 Code: `apps/runtime/src/services/client-held-sends.ts`,
 `packages/db/src/repositories/client-send-custody-list.ts`, the resolve in
-`apps/runtime/src/services/client-claim.ts`; the page in
-`apps/dashboard/src/pages/ClientHeldSendsPage.tsx`. Tests:
-`tests/client-held-sends.integration.test.ts`,
-`tests/client-held-sends-contract.test.ts`,
-`tests/dashboard-client-held-sends.test.ts`, and the resolve in
+`apps/runtime/src/services/client-claim.ts`; the screen in
+`apps/workboard/src/screens/waiting/index.tsx` (the list) and
+`apps/workboard/src/screens/decisions/HeldSends.tsx` (the resolve window).
+Tests: `tests/held-sends-resolve-form.test.ts`,
+`tests/client-send-custody-archive.integration.test.ts`, and the resolve in
 `tests/client-claim-routes.integration.test.ts`.

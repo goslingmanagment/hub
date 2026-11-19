@@ -4,7 +4,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import {
   acquireSyncPageOwnership,
-  ensurePostRepliesWalkRow,
   insertPageBrowser,
   readFanslyWsGapPass,
   readSyncLivePathFacts,
@@ -751,7 +750,12 @@ describe("the review of PR 13", () => {
        values ($1, 'fansly', $2, 'a post', now() - interval '1 day', now() - interval '1 day', now(), repeat('d', 64), 0, 1, 1, 1)`,
       [pageId, postId],
     );
-    await ensurePostRepliesWalkRow(db(), { pageId, subjectRef: postId, dueAt: new Date(Date.now() + 86_400_000) });
+    await testDb!.pool.query(
+      `insert into subject_refresh_state (page_id, plane, subject_ref, refresh_class, next_due_at)
+       values ($1, 'post_replies', $2, 'fresh', $3)
+       on conflict (page_id, plane, subject_ref) do nothing`,
+      [pageId, postId, new Date(Date.now() + 86_400_000)],
+    );
   }
 
   async function backfills(pageId: number): Promise<Array<{ resource: string; subject: string }>> {
@@ -782,7 +786,7 @@ describe("the review of PR 13", () => {
     expect(queue.rows).toEqual([{ refreshClass: "dirty", dirtyReason: "browser_site_incomplete" }]);
   }, 60_000);
 
-  it("the repair takes a page browser's verified gap opened up to a week ago (its buffer replays up to 72 h); the engine's own socket's a day", async (context) => {
+  it("the repair takes a page browser's verified gap opened up to a week ago (its buffer replays up to 72 h), and only a page browser's", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     const insert = (origin: "node" | "browser", hoursAgo: number) => testDb!.pool.query(

@@ -234,25 +234,45 @@ export const pollsRequest: RequestPlan = { spec: "polls", params: {} };
 
 export function okResponse(response: unknown = { polls: [] }): FanslyWireOutcome {
   const bodyText = JSON.stringify({ success: true, response });
-  return { kind: "response", status: 200, headers: {}, bodyText, bodyBytes: bodyText.length, sendMark: "request_start" };
+  return { kind: "response", status: 200, headers: {}, bodyText, bodyBytes: bodyText.length, sendMark: "transport_reported" };
 }
 
 export function statusResponse(status: number, body: unknown = { success: false }): FanslyWireOutcome {
   const bodyText = JSON.stringify(body);
-  return { kind: "response", status, headers: {}, bodyText, bodyBytes: bodyText.length, sendMark: "request_start" };
+  return { kind: "response", status, headers: {}, bodyText, bodyBytes: bodyText.length, sendMark: "transport_reported" };
 }
 
 /**
- * A live transport that never opens a socket: it asks the send check exactly
- * where undici would, records each request that passed it (the test's "origin
- * arrival log", monotonic), waits `latencyMs` and answers from `respond`.
+ * An outcome as a page's browser reports it (`fansly/browser-transport.ts`):
+ * a request that went carries the instant it left, `sentMono`, on the
+ * engine's monotonic clock (`transport_reported`). An answer without a send
+ * mark (`completion_fallback`) and one that never left stay as they are.
+ */
+export function reportedAt(outcome: FanslyWireOutcome, sentMono: number): FanslyWireOutcome {
+  switch (outcome.kind) {
+    case "response":
+      return outcome.sendMark === "completion_fallback" ? outcome : { ...outcome, sendMark: "transport_reported", sentMono };
+    case "transport_error":
+    case "timeout":
+      return outcome.sent ? { ...outcome, sentMono } : outcome;
+    default:
+      return outcome;
+  }
+}
+
+/**
+ * A live transport that never opens a socket, sending as a page's browser
+ * does: it asks the engine's grant right before the request would go,
+ * records each request it let go at that instant (the test's "origin arrival
+ * log", monotonic), reports that instant as the release and the send
+ * (`transport_reported`), waits `latencyMs` and answers from `respond`.
  */
 export class ScriptedLiveTransport implements PageTransport {
   readonly hits: Array<{ mono: number; wall: Date; spec: string }> = [];
   refusals = 0;
   latencyMs = 0;
   respond: (req: FanslyWireRequest, index: number) => FanslyWireOutcome = () => okResponse();
-  /** Runs right after a request passed the check (the child-process variant
+  /** Runs right after a request was granted (the child-process variant
    *  records it in the database). */
   onHit: ((req: FanslyWireRequest) => Promise<void>) | null = null;
   closed = false;
@@ -268,15 +288,17 @@ export class ScriptedLiveTransport implements PageTransport {
 
   async send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome> {
     await sleep(0);
-    const refusal = hooks.check();
+    const refusal = hooks.grant();
     if (refusal !== null) {
       this.refusals += 1;
       return { kind: "aborted_before_send", refusal: refusal.reason };
     }
-    this.hits.push({ mono: performance.now(), wall: new Date(), spec: req.spec });
+    const mono = performance.now();
+    hooks.released?.(mono);
+    this.hits.push({ mono, wall: new Date(), spec: req.spec });
     if (this.onHit !== null) await this.onHit(req);
     if (this.latencyMs > 0) await sleep(this.latencyMs, undefined, { signal }).catch(() => undefined);
-    return this.respond(req, this.hits.length - 1);
+    return reportedAt(this.respond(req, this.hits.length - 1), mono);
   }
 
   async close(): Promise<void> {

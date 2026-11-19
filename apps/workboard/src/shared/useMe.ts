@@ -10,7 +10,6 @@ export type Role = "owner" | "team_lead" | "chatter";
  * Hub refuses a chatter every team read anyway.
  */
 export const TEAM: readonly Role[] = ["owner", "team_lead"];
-export const OWNER: readonly Role[] = ["owner"];
 export const CHATTER: readonly Role[] = ["chatter"];
 
 /** Where Workboard opens: «Сегодня», every role's home (products plan §2.3); the role changes what is in it. */

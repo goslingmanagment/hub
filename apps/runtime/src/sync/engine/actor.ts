@@ -39,7 +39,6 @@ import {
   ensureCredentialsVerify,
   errorName,
   isAnswerInMemory,
-  markSentBestEffort,
   recoverUnfinished,
   settleNotSent,
   SyncCrashFault,
@@ -68,8 +67,8 @@ import {
   type TransportOutcome,
   type Wake,
 } from "./ports.ts";
-import { isSiteSocket, siteAnswerEffect, SiteTurns, transportOutcomeOfSite, type ClassifiedSiteRequest } from "./site-admission.ts";
-import { admitSite, commitObservedSiteEnd, commitSiteEnd, recordObservedSiteSend, settleSiteDecision, siteContextOf, siteEnd } from "./site-slot.ts";
+import { siteAnswerEffect } from "./site-admission.ts";
+import { commitObservedSiteEnd, recordObservedSiteSend } from "./site-slot.ts";
 import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 import {
   beforeGateKeys,
@@ -165,8 +164,8 @@ export interface ActorDeps extends CommitDeps {
   transport: PageTransport;
   ownership: OwnershipSession;
   wake: Wake;
-  /** The page browser's site admission (Project Browser, plan §3.2): the
-   *  site's own requests it holds paused. Absent or null: a page without a
+  /** The page browser's word on the site's own traffic it let go (variant
+   *  Б: observed, never admitted). Absent or null: a page without a
    *  browser — nothing of the site path runs. */
   site?: SiteAdmissionPort | null;
   /** TESTS ONLY: the route budgets' time scale (`RoutePolicyOptions`); the
@@ -236,8 +235,6 @@ function isAbort(error: unknown, signal: AbortSignal): boolean {
 export class SyncActor {
   readonly #d: ActorDeps;
   #lastPollsMono = Number.NEGATIVE_INFINITY;
-  /** The site's share of the slots (Project Browser): one per cycle. */
-  readonly #siteTurns = new SiteTurns();
   /** The diagnostic of the unreadable hold rows last logged (null: the hold
    *  set reads). */
   #holdSetProblem: string | null = null;
@@ -249,7 +246,7 @@ export class SyncActor {
   readonly #emptyLaps = new Map<string, number>();
   #emptyLapLoggedMono = Number.NEGATIVE_INFINITY;
   #admittedThisLap = false;
-  #lapState = { workId: null as string | null, resource: null as string | null, prepare: "not_run", siteCandidate: false, phase: "idle" as ActorPhase };
+  #lapState = { workId: null as string | null, resource: null as string | null, prepare: "not_run", phase: "idle" as ActorPhase };
   /** Steps admitted by this actor (tests, status). */
   admissions = 0;
   /** Variant Б: what the pacer was told of each observed hop, oldest first. */
@@ -289,11 +286,11 @@ export class SyncActor {
    *  a send keeps failing. A `SyncCrashFault` (tests) rejects. */
   async run(signals: ActorSignals): Promise<ActorExit> {
     const site = this.#d.site;
-    site?.onObserved?.((event) => this.#onSiteObserved(event));
+    site?.onObserved((event) => this.#onSiteObserved(event));
     try {
       return await this.#runOwned(signals);
     } finally {
-      site?.onObserved?.(null);
+      site?.onObserved(null);
       await this.#observedChain;
     }
   }
@@ -487,7 +484,7 @@ export class SyncActor {
 
   async #lap(signals: ActorSignals): Promise<ActorExit | null> {
     this.#admittedThisLap = false;
-    this.#lapState = { workId: null, resource: null, prepare: "not_run", siteCandidate: false, phase: "idle" };
+    this.#lapState = { workId: null, resource: null, prepare: "not_run", phase: "idle" };
     try {
       return await this.#lapWork(signals);
     } finally {
@@ -497,7 +494,7 @@ export class SyncActor {
   }
 
   #noteEmptyLap(): void {
-    const state = { ...this.#lapState, siteTurns: this.#siteTurns.snapshot() };
+    const state = { ...this.#lapState };
     // What a work's preparation said (its transport, its credentials) is
     // logged as it changes; a lap that prepared nothing, once in a while.
     if (state.prepare !== "not_run") {
@@ -541,15 +538,8 @@ export class SyncActor {
       await stepBeforeGate(d, owned, signals.stop);
     }
 
-    // The site's waiting requests are judged every lap: what must be refused
-    // now is, whatever the gate says (spec §3).
-    const siteCandidate = d.site ? await this.#siteSweep(owned) : null;
-    this.#lapState.siteCandidate = siteCandidate !== null;
     const gate = await this.#gate(owned);
     if (!gate.open) {
-      // The owner's manual login passes the page's pause and a credentials
-      // hold (plan §3.2): a slot for its request alone.
-      if (siteCandidate !== null) return this.#siteOnlySlot(signals);
       this.#phase("idle");
       await d.wake.wait(d.pageId, Math.max(0, Math.min(gate.waitMs, ACTOR_IDLE_WAIT_MS)), signals.stop);
       return null;
@@ -599,10 +589,6 @@ export class SyncActor {
     const exclusions = this.#lane.width() > 0
       ? { ...pageExclusions, excludeResources: [...new Set([...pageExclusions.excludeResources, PART_LANE_KEY])].sort() }
       : pageExclusions;
-    if (d.site && (this.#siteTurns.due() || d.site.pending().some(isSiteSocket))) {
-      const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals, !this.#siteTurns.due());
-      if (served !== "none") return served;
-    }
     let picked: PickedWork | PickWait | null = null;
     if (underCredentials) {
       picked = await this.#pickCredentialsCheck(page, gate.checks?.verify === true);
@@ -629,11 +615,6 @@ export class SyncActor {
       confirmingSession ? "browser_loaded" : "credentials_changed", unverified ?? await this.#storedDigest())) {
       if (confirmingSession) d.logger.info({ pageId: d.pageId }, "Fansly sync actor: identity verify raised for the current browser start");
       return null;
-    }
-    if (picked === null && d.site) {
-      // A slot the engine leaves empty is the site's.
-      const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals);
-      if (served !== "none") return served;
     }
     if (picked === null) {
       // Idle until the next work this pick could take: a paused, switched-off,
@@ -718,14 +699,6 @@ export class SyncActor {
         d.metrics.increment("sync_transport_unavailable", { pageId: d.pageId });
         this.#lapState.prepare = error.code;
         this.#transportUnavailable(error.reason);
-        // A fresh Chrome can learn its session only through an admitted
-        // site GET. This same unused slot may bootstrap it, even while an
-        // urgent/planned engine work keeps being picked. All site gates,
-        // route budgets and the common pacer still apply.
-        if (error.code === "session_unknown" && d.site) {
-          const served = await this.#trySite(grant, page, holds, clocks, d.clock.wallNow(), checksOnly, signals);
-          if (served !== "none") return served;
-        }
         this.#phase("idle");
         await this.#sleep(Math.max(0, Math.min(error.retryInMs, LIVE_GATE_RECHECK_MS)), signals.stop);
         return null;
@@ -768,7 +741,6 @@ export class SyncActor {
     if (admission === null) return null;
     this.#admittedThisLap = true;
     this.admissions += 1;
-    this.#siteTurns.engineAdmitted();
     await this.#fault("after_admit");
 
     const armed = d.pacer.arm(grant, admission.attemptId, issuedMono);
@@ -788,143 +760,6 @@ export class SyncActor {
     return this.#commitOutcome(admission, armed, outcome, module);
   }
 
-  // ── a page's own site requests (Project Browser, plan §3.2; PR 8) ─────────
-
-  /** The site's waiting requests at this lap: what must be refused now is
-   *  refused; the request a slot would admit, if any. Nothing is admitted. */
-  async #siteSweep(page: SyncPageRow): Promise<ClassifiedSiteRequest | null> {
-    const d = this.#d;
-    // Nothing waits: nothing to judge, and no reads for it.
-    if (d.site!.pending().length === 0) return null;
-    const now = d.clock.wallNow();
-    const holds = holdSetOf(page.holds);
-    const clocks = holds.routes.ok ? await this.#routeClocks(holds.routes.state) : null;
-    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null || d.transport.needsSessionConfirmation?.() === true;
-    const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, bootstrapOnly: d.transport.needsSiteBootstrap?.() === true, now });
-    return settleSiteDecision(d, d.site!, ctx);
-  }
-
-  /** A slot for the manual login while the gate is closed to the engine (the
-   *  owner's pause, a credentials hold): the pacer's pause still holds. */
-  async #siteOnlySlot(signals: ActorSignals): Promise<ActorExit | null> {
-    const d = this.#d;
-    let grant: SlotGrant;
-    this.#phase("slot");
-    try {
-      grant = await d.pacer.waitForSlot(signals.stop, {
-        onWaiting: () => d.stall?.progress("slot"),
-        onLongWait: (waitMs) => d.logger.warn({ pageId: d.pageId, waitMs }, "Fansly sync actor: the site's traffic has delayed the engine's own slot for over five minutes"),
-      });
-    } catch (error) {
-      if (isAbort(error, signals.stop)) return { kind: "stopped" };
-      throw error;
-    }
-    if (signals.stop.aborted) return { kind: "stopped" };
-    this.#phase("pick");
-    const page = await getSyncPage(d.db, d.pageId);
-    if (page === null) return { kind: "mode_changed", mode: null };
-    const holds = holdSetOf(page.holds);
-    if (!holds.routes.ok) {
-      await this.#sleep(ROUTE_STATE_RECHECK_MS, signals.stop);
-      return null;
-    }
-    const clocks = await this.#routeClocks(holds.routes.state);
-    const checksOnly = (await this.#unverifiedStoredDigest(page)) !== null || d.transport.needsSessionConfirmation?.() === true;
-    const served = await this.#trySite(grant, page, holds, clocks, d.clock.wallNow(), checksOnly, signals);
-    return served === "none" ? null : served;
-  }
-
-  /** The site's slot: the oldest request admissible now, if any ("none":
-   *  nothing to admit, the slot is free). */
-  async #trySite(
-    grant: SlotGrant,
-    page: SyncPageRow,
-    holds: HoldSet,
-    clocks: RouteClocks,
-    now: Date,
-    checksOnly: boolean,
-    signals: ActorSignals,
-    urgentOnly = false,
-  ): Promise<ActorExit | null | "none"> {
-    const d = this.#d;
-    const site = d.site!;
-    if (site.pending().length === 0) return "none";
-    const ctx = await siteContextOf(d, { page, holds, clocks, specs: d.registry.specs, checksOnly, bootstrapOnly: d.transport.needsSiteBootstrap?.() === true, now });
-    const classified = settleSiteDecision(d, site, ctx, urgentOnly);
-    this.#lapState.siteCandidate = classified !== null;
-    if (classified === null) return "none";
-    // What the route check just applied, recorded on the attempt (I19).
-    const intervals = clocks.intervals(classified.route);
-
-    this.#phase("admit");
-    if ((await d.ownership.ping(PING_TIMEOUT_MS)) === "timeout") {
-      d.metrics.increment("sync_ping_timeouts", { pageId: d.pageId });
-      if (!(await d.ownership.stillHolds(d.pageId))) return { kind: "ownership_lost", foreign: false };
-      return null;
-    }
-    // A cancellation or a new RPC epoch during the ownership ping must
-    // not admit a dead choice (including a re-ask of the same id).
-    if (!site.pending().includes(classified.request)) return "none";
-    // The send window starts BEFORE the admission commit (SK16).
-    const issuedMono = d.clock.monoNow();
-    let attemptId: number;
-    try {
-      ({ attemptId } = await admitSite(d, { classified, grant, intervals }));
-    } catch (error) {
-      if (error instanceof LiveGateClosedError) {
-        d.metrics.increment("sync_live_gate_closed", { pageId: d.pageId, reason: error.reason });
-        await this.#sleep(LIVE_GATE_RECHECK_MS, signals.stop);
-        return null;
-      }
-      // A hold or the pause written since the decision: the request keeps
-      // waiting (or is refused by the next lap's decision).
-      if (error instanceof AdmissionHeldError) return null;
-      throw error;
-    }
-    this.#admittedThisLap = true;
-    d.metrics.increment("sync_site_admitted", { origin: classified.origin, route: classified.route });
-    if (isSiteSocket(classified.request)) {
-      d.logger.info({ pageId: d.pageId, requestId: classified.request.id, attemptId, class: "urgent", waitMs: d.clock.monoNow() - classified.request.askedMono, waitRemainingMs: classified.request.waitDeadlineMono === undefined ? null : classified.request.waitDeadlineMono - d.clock.monoNow(), settingMs: grant.settingMs }, "Fansly sync actor: socket admitted ahead of site reads through the common pacer");
-    }
-    const armed = d.pacer.arm(grant, attemptId, issuedMono);
-    // The final word before the browser may send: the same check an engine
-    // send passes at `onRequestStart` (ownership alive, within the window,
-    // past the floor and the pause), without its send mark (Astra's review
-    // of PR 8: a lost ownership must never reach a grant).
-    const refusal = d.pacer.checkRemoteGrant(armed);
-    let end: SiteRequestEnd;
-    if (refusal !== null) {
-      site.refuse(classified.request.id, "lease", classified.request);
-      d.metrics.increment("sync_site_refused", { reason: "lease" });
-      end = { kind: "aborted_before_send", reason: refusal.reason };
-    } else {
-      const granted = site.grant(classified.request.id, { attemptId, sendWithinMs: Math.max(0, armed.sendDeadlineMono - d.clock.monoNow()) }, classified.request);
-      this.#phase("send");
-      end = granted === false ? { kind: "aborted_before_send", reason: "request_cancelled" } : await siteEnd(site, classified.request.id, signals.abort);
-    }
-    // The send counts at the instant the browser reported (PR 12), else at
-    // the completion when it may have gone out (the safe upper bound).
-    d.pacer.complete(armed, transportOutcomeOfSite(end));
-    // A grant is not a send: late/cancelled admissions leave the site's
-    // turn intact, as they leave the common pacer's send floor intact.
-    if (!isSiteSocket(classified.request) && (end.kind === "response" || (end.kind === "transport_error" && end.sent))) this.#siteTurns.siteAdmitted();
-    this.#phase("commit");
-    const committed = await this.#committed(() => commitSiteEnd(d, { attemptId, send: captureSendOf(d, armed), end, classified }));
-    if (!committed.ok) {
-      if (committed.exit.kind === "failed") {
-        await markAttemptCommitFailed(d.db, { attemptId, errorClass: `commit_failed:${committed.exit.error}` }).catch(() => false);
-      }
-      return committed.exit;
-    }
-    // Committed: the browser may drop the end it kept (PR 14).
-    try {
-      site.settled?.(classified.request.id, attemptId);
-    } catch (error) {
-      d.logger.debug({ attemptId, err: errorName(error) }, "Fansly sync actor: the site path's settle failed");
-    }
-    return null;
-  }
-
   async #send(
     request: Awaited<ReturnType<PageTransport["prepare"]>>,
     armed: Admission,
@@ -934,15 +769,8 @@ export class SyncActor {
     const d = this.#d;
     try {
       return await d.transport.send(request, {
-        check: () => {
-          const refusal = d.pacer.check(armed);
-          if (refusal === null && armed.sentWall !== null) {
-            markSentBestEffort(d, armed.attemptId, armed.sentWall);
-          }
-          return refusal;
-        },
-        // A sender outside the process (a page's browser): the same check
-        // without the send mark — the pacer marks the send at the instant
+        // The sender outside the process (a page's browser): the pacer's
+        // check without a send mark — the pacer marks the send at the instant
         // the transport reports, or at the completion (I1).
         grant: () => d.pacer.checkRemoteGrant(armed),
         released: (mono) => d.pacer.noteReleased(armed, mono),

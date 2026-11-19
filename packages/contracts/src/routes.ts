@@ -581,11 +581,6 @@ export const pageRevenueQuerySchema = z.union([
   customPageRevenueQuerySchema,
 ]);
 
-export const transactionListQuerySchema = paginationQuerySchema.extend({
-  type: transactionTypeEnum.optional(),
-  state: transactionStateEnum.optional(),
-});
-
 export const fanListQuerySchema = paginationQuerySchema.extend({
   query: z.string().min(1).optional(),
 });
@@ -1020,37 +1015,6 @@ export const transactionFanSchema = z.object({
   displayName: z.string().nullable(),
 }).nullable();
 
-const pageTransactionFanSchema = z.object({
-  platformUserId: z.string(),
-  pageAlias: z.string().nullable(),
-  username: z.string().nullable(),
-  displayName: z.string().nullable(),
-}).nullable();
-
-export const transactionItemSchema = z.object({
-  transactionId: z.string(),
-  rawType: z.union([z.number().int(), z.string()]),
-  canonicalType: transactionTypeEnum,
-  transactionState: transactionStateEnum,
-  amountMills: mills,
-  destinationAmountMills: mills,
-  netAmountMills: mills,
-  walletId: z.string().nullable(),
-  correlationId: z.string().nullable(),
-  correlationAccountId: z.string().nullable(),
-  occurredAt: isoTimestamp,
-  sourceUpdatedAt: isoTimestamp.nullable(),
-  fan: pageTransactionFanSchema,
-});
-
-export const transactionListResponseSchema = z.object({
-  page: assignedPageSchema,
-  items: z.array(transactionItemSchema),
-  limit: z.number().int(),
-  offset: z.number().int(),
-  total: z.number().int(),
-});
-
 export const subscriberItemSchema = z.object({
   platformSubscriptionId: z.string(),
   platformUserId: z.string(),
@@ -1066,23 +1030,12 @@ export const subscriberItemSchema = z.object({
   lastTransactionAt: isoTimestamp.nullable(),
 });
 
-export const subscriberDailyItemSchema = z.object({
-  businessDate: businessDate,
-  newSubscribers: z.number().int(),
-  activeSubscribers: z.number().int(),
-});
-
 export const subscriberListResponseSchema = z.object({
   page: assignedPageSchema,
   items: z.array(subscriberItemSchema),
   limit: z.number().int(),
   offset: z.number().int(),
   total: z.number().int(),
-});
-
-export const subscriberDailyResponseSchema = z.object({
-  page: assignedPageSchema,
-  items: z.array(subscriberDailyItemSchema),
 });
 
 export const followerItemSchema = z.object({
@@ -1114,23 +1067,12 @@ export const followerItemSchema = z.object({
   }),
 });
 
-export const followerDailyItemSchema = z.object({
-  businessDate: businessDate,
-  newFollowers: z.number().int(),
-  knownTotalFollowers: z.number().int().nullable(),
-});
-
 export const followerListResponseSchema = z.object({
   page: assignedPageSchema,
   items: z.array(followerItemSchema),
   limit: z.number().int(),
   offset: z.number().int(),
   total: z.number().int(),
-});
-
-export const followerDailyResponseSchema = z.object({
-  page: assignedPageSchema,
-  items: z.array(followerDailyItemSchema),
 });
 
 export const fanListItemSchema = z.object({
@@ -6764,19 +6706,6 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
-  pageTransactions: {
-    auth: { kind: "session", scope: "page" },
-    tags: ["transactions"],
-    summary: "List transactions for one page",
-    params: pageParamsSchema,
-    querystring: transactionListQuerySchema,
-    response: {
-      200: transactionListResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   pageSubscribers: {
     auth: { kind: "any", scope: "page" },
     tags: ["subscribers"],
@@ -6790,19 +6719,6 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
-  pageSubscribersDaily: {
-    auth: { kind: "any", scope: "page" },
-    tags: ["subscribers"],
-    summary: "List daily subscriber rollups for one page",
-    params: pageParamsSchema,
-    querystring: revenueQuerySchema,
-    response: {
-      200: subscriberDailyResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   pageFollowers: {
     auth: { kind: "any", scope: "page" },
     tags: ["followers"],
@@ -6811,19 +6727,6 @@ const baseRouteSchemas = {
     querystring: followerListQuerySchema,
     response: {
       200: followerListResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  pageFollowersDaily: {
-    auth: { kind: "any", scope: "page" },
-    tags: ["followers"],
-    summary: "List daily follower rollups for one page",
-    params: pageParamsSchema,
-    querystring: revenueQuerySchema,
-    response: {
-      200: followerDailyResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
       404: errorResponseSchema,
@@ -8587,7 +8490,6 @@ export type CrossPageFanDetailResponse = z.infer<typeof crossPageFanDetailRespon
 export type FanListQuery = z.infer<typeof fanListQuerySchema>;
 export type FanListResponse = z.infer<typeof fanListResponseSchema>;
 export type FanLookupParams = z.infer<typeof fanLookupParamsSchema>;
-export type FollowerDailyResponse = z.infer<typeof followerDailyResponseSchema>;
 export type FollowerListQuery = z.infer<typeof followerListQuerySchema>;
 export type FollowerListResponse = z.infer<typeof followerListResponseSchema>;
 export type LoginBody = z.infer<typeof loginBodySchema>;
@@ -8616,11 +8518,8 @@ export type PageRevenueDailyQuery = z.infer<typeof pageRevenueDailyQuerySchema>;
 export type RevenueDailyItem = z.infer<typeof revenueDailyItemSchema>;
 export type RevenueDailyTypedItem = z.infer<typeof revenueDailyTypedItemSchema>;
 export type RevenueDailyResponse = z.infer<typeof revenueDailyResponseSchema>;
-export type SubscriberDailyResponse = z.infer<typeof subscriberDailyResponseSchema>;
 export type SubscriberListQuery = z.infer<typeof subscriberListQuerySchema>;
 export type SubscriberListResponse = z.infer<typeof subscriberListResponseSchema>;
-export type TransactionListQuery = z.infer<typeof transactionListQuerySchema>;
-export type TransactionListResponse = z.infer<typeof transactionListResponseSchema>;
 export type CrossPageTransactionItem = z.infer<typeof crossPageTransactionItemSchema>;
 export type CrossPageTransactionListQuery = z.infer<typeof crossPageTransactionListQuerySchema>;
 export type CrossPageTransactionListResponse = z.infer<typeof crossPageTransactionListResponseSchema>;

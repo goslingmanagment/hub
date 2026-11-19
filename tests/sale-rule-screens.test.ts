@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import { workRef } from "../apps/runtime/src/services/agent-team-sales.ts";
 import { oldShiftCounts } from "../apps/runtime/src/services/chatter-stats.ts";
 import {
-  LOGINS_ALONE, homeCredit, openWindowFrom, peopleLoginsOf, piecesByUser, ruleWorkRef, ruledWork, salesToCompute, standOverrides, type ScreenHome,
+  LOGINS_ALONE, homeCredit, openWindowFrom, peopleLoginsOf, piecesByUser, ruledWork, salesToCompute, standOverrides, type ScreenHome,
 } from "../apps/runtime/src/services/sale-rule-screens.ts";
 
 // The screens' side of the one rule: a stand's switch never applies in production; a share finds the screen's work
@@ -39,12 +40,12 @@ describe("the screen's work a share credits", () => {
   }).shares[0]!;
 
   it("is the same work, or the person's work holding the start the rule named", () => {
-    expect(landOf({ userId: 7, workRef: ruleWorkRef(7, shift) }).piece?.userId).toBe(7);
+    expect(landOf({ userId: 7, workRef: workRef(7, shift) }).piece?.userId).toBe(7);
     // A look-in before it joined it since the home was stored: its start moved earlier.
     expect(landOf({ userId: 7, workRef: `7:${new Date(at("2026-11-10T06:10:00Z")).toISOString()}` }).piece?.work).toBe(shift);
     // The rule named a work this read does not have: another window's, not this one's.
     expect(landOf({ userId: 7, workRef: `7:${new Date(at("2026-11-10T14:00:00Z")).toISOString()}` })).toMatchObject({ piece: null, elsewhere: true });
-    expect(landOf({ userId: 9, workRef: ruleWorkRef(9, shift) })).toMatchObject({ piece: null, elsewhere: true });
+    expect(landOf({ userId: 9, workRef: workRef(9, shift) })).toMatchObject({ piece: null, elsewhere: true });
   });
 
   it("lands a share the rule gave no work on the person's shift that holds the sale, or on nobody's work: theirs, of the sale's day", () => {
@@ -67,14 +68,14 @@ describe("the screen's work a share credits", () => {
   });
 
   it("gives a work the screens' cut does not count nothing: its share is the person's own", () => {
-    const credit = homeCredit({ home: { kind: "shift", shares: [{ userId: 7, workRef: ruleWorkRef(7, shift), mills: 30_000 }] }, sale, pieces, logins: LOGINS_ALONE, counts: () => false });
+    const credit = homeCredit({ home: { kind: "shift", shares: [{ userId: 7, workRef: workRef(7, shift), mills: 30_000 }] }, sale, pieces, logins: LOGINS_ALONE, counts: () => false });
     expect(credit.shares[0]).toMatchObject({ piece: null, elsewhere: false });
   });
 
   it("puts the whole of a home of no person on its line, the rest of a «моё» below the net on nobody's, and nothing of what an old shift counts", () => {
     expect(homeCredit({ home: { kind: "decide", shares: [] }, sale, pieces, logins: LOGINS_ALONE })).toEqual({ shares: [], outside: { line: "decide", mills: 30_000 }, old: false });
     expect(homeCredit({ home: { kind: "before_rule", shares: [] }, sale, pieces, logins: LOGINS_ALONE }).outside).toEqual({ line: "nobody", mills: 30_000 });
-    const own = homeCredit({ home: { kind: "shift", shares: [{ userId: 7, workRef: ruleWorkRef(7, shift), mills: 12_000 }] }, sale, pieces, logins: LOGINS_ALONE });
+    const own = homeCredit({ home: { kind: "shift", shares: [{ userId: 7, workRef: workRef(7, shift), mills: 12_000 }] }, sale, pieces, logins: LOGINS_ALONE });
     expect(own.outside).toEqual({ line: "nobody", mills: 18_000 });
     expect(homeCredit({ home: { kind: "shift", shares: [] }, sale, pieces, logins: LOGINS_ALONE, oldCounted: true })).toEqual({ shares: [], outside: null, old: true });
   });

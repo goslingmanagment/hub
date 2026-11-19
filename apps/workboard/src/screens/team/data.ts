@@ -113,15 +113,6 @@ export interface PersonSummary {
   aiSpendMicroUsd: number | null | undefined;
 }
 
-/** A person outside the table: no shift in the period. */
-export interface PersonRef {
-  userId: number;
-  username: string;
-  state: PersonState;
-  disabledAt: string | null;
-  role: PersonRole;
-}
-
 /** One sale of a shift: a bead on the ribbon. */
 export interface ShiftSale {
   at: string;
@@ -358,13 +349,16 @@ function workOf(chatter: ShiftSales["chatters"][number]): PeriodWork {
 
 // ─────────────────────────────────────────────── «Люди»
 
+/** A login of the list: its work of the period and its quality, as a card's `PersonSummary` has them. */
+interface ListedLogin {
+  userId: number;
+  work: PeriodWork;
+  quality: PeriodQuality | null | undefined;
+}
+
 export interface PeopleList {
   /** Everyone with a shift in the period or the window before (and not switched off without one now). */
-  rows: PersonSummary[];
-  /** Active people without a shift in either window (the owner sees them). */
-  idle: PersonRef[];
-  /** Switched off, without a shift in the period. */
-  disabled: PersonRef[];
+  rows: ListedLogin[];
   /** The team's middle, for the outliers: the median of the people's averages. */
   team: { replyMedianSeconds: number | null; unansweredAtEnd: number | null };
   /** Someone has a whole window before to compare with; false — nobody (Hub has not counted shifts that long). */
@@ -438,43 +432,18 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
   const qualityState = stateOfRead(numbers, numbersWindow(period) !== null);
   const spendState = stateOfRead(spend, fullOwner);
 
-  const rows: PersonSummary[] = [];
-  const disabled: PersonRef[] = [];
-  const listed = new Set<number>();
+  const rows: ListedLogin[] = [];
   for (const chatter of sales.data?.chatters ?? []) {
     const user = byId.get(chatter.userId);
-    const state = user ? stateOf(user) : null;
-    listed.add(chatter.userId);
-    if (state === "disabled" && chatter.shifts === 0) {
-      disabled.push({ userId: chatter.userId, username: chatter.username, state, disabledAt: user!.disabledAt, role: (ROLES.has(user!.role) ? user!.role : "chatter") as PersonRole });
-      continue;
-    }
+    // A login switched off, without a shift in the period, is not a row (the owner's accounts tell it).
+    if (user && stateOf(user) === "disabled" && chatter.shifts === 0) continue;
     const counted = numbersOfLogin(chatter.userId);
     rows.push({
       userId: chatter.userId,
-      username: chatter.username,
-      role: user && ROLES.has(user.role) ? (user.role as PersonRole) : null,
-      state,
-      disabledAt: user?.disabledAt ?? null,
-      pages: user?.assignedPages.map((ref) => ref.label) ?? [],
-      now: nowOf(chatter.userId, now.data?.shifts, periodShifts, reach),
       work: workOf(chatter),
       quality: qualityState !== "ready" ? undefined : counted && counted.length > 0 ? qualityOf(counted) : null,
-      aiSpendMicroUsd: spendState === "ready" ? (spend.data!.get(String(chatter.userId)) ?? null) : undefined,
     });
   }
-
-  const idle: PersonRef[] = [];
-  for (const user of users) {
-    if (listed.has(user.id) || user.deletedAt || user.role === "owner") continue;
-    // Under a page filter, only the people of that page.
-    if (page !== null && !user.assignedPages.some((ref) => ref.label === page)) continue;
-    const ref: PersonRef = { userId: user.id, username: user.username, state: stateOf(user), disabledAt: user.disabledAt, role: (ROLES.has(user.role) ? user.role : "chatter") as PersonRole };
-    if (ref.state === "disabled") disabled.push(ref);
-    else idle.push(ref);
-  }
-  idle.sort((a, b) => a.username.localeCompare(b.username, "ru"));
-  disabled.sort((a, b) => (b.disabledAt ?? "").localeCompare(a.disabledAt ?? ""));
 
   const working = rows.filter((row) => row.quality);
   const team = {
@@ -484,10 +453,8 @@ export function usePeopleList(period: ResolvedPeriod, page: string | null): Peop
 
   return {
     rows,
-    idle,
-    disabled,
     team,
-    comparable: sales.data === undefined || (sales.data.previous !== null && rows.some((row) => row.work?.previous)),
+    comparable: sales.data === undefined || (sales.data.previous !== null && rows.some((row) => row.work.previous)),
     knownSince: sales.data?.knownSince ? moscowDayOf(sales.data.knownSince) : null,
     main: stateOfRead(sales, salesWindow(period) !== null),
     quality: qualityState,

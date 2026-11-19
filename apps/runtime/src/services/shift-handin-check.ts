@@ -51,9 +51,10 @@ import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { clientCaptureProducer } from "./ingest-observations.ts";
+import { reportSums } from "./sale-claim-rules.ts";
 import { SALE_RULE } from "./sale-rule.ts";
 import { disputeDecider, phaseOf, postPagesDiffer } from "./shift-report-board-view.ts";
-import { draftFacts, draftLines, linesPageSums, pageCatalog, postPagesOf, subjectOf, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { draftFacts, draftLines, pageCatalog, postPagesOf, subjectOf, type PageCatalog, type Subject } from "./shift-handins.ts";
 
 /**
  * «Hub сверяет суммы» and «Нет в Hub» (products plan 2026-11-13, package R §5, brief R1b): Hub's own check of every page
@@ -247,12 +248,12 @@ async function remakeAt(db: Database, input: { subject: Subject; catalog: PageCa
     const marks = await listHandinMarks(txDb, handin.id);
     const facts = await draftFacts(txDb, input.subject, handin, input.catalog, input.previous.cutoffAt, marks);
     const lines = draftLines(facts, marks);
-    const sums = linesPageSums(lines, facts.pages, input.previous.offPlatform);
+    const sums = reportSums(lines, facts.pages, input.previous.offPlatform);
     return insertHandinCandidate(txDb, {
       handinId: handin.id, door: input.previous.door, actorUserId: input.previous.actorUserId, agentKeyId: input.previous.agentKeyId,
       telegramMessageRef: input.previous.telegramMessageRef, telegramSenderId: input.previous.telegramSenderId, cutoffAt: input.previous.cutoffAt,
       totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform: input.previous.offPlatform, comment: handin.comment,
-      ruleVersion: SALE_RULE.version, hubCheck: input.previous.hubCheck, at: input.now,
+      modelComments: handin.modelComments, ruleVersion: SALE_RULE.version, hubCheck: input.previous.hubCheck, at: input.now,
     });
   });
 }
@@ -426,7 +427,7 @@ async function moveToMerged(db: Database, input: { handinId: number; from: numbe
     const counts = latest !== undefined && versionCountsMoney(latest);
     const system = (outcome: "merged" | "moved") => ({
       door: latest!.door === "telegram" ? "workboard" as const : latest!.door, actorUserId: latest!.actorUserId ?? handin.userId, agentKeyId: null,
-      telegramMessageRef: null, telegramSenderId: null, comment: latest!.comment, dayPaid: null, ruleVersion: latest!.ruleVersion,
+      telegramMessageRef: null, telegramSenderId: null, comment: latest!.comment, modelComments: latest!.modelComments, dayPaid: null, ruleVersion: latest!.ruleVersion,
       madeFor: { kind: "decision" as const, decisionId: null, transactionId: null, outcome }, reportDate: latest!.reportDate ?? handin.reportDate, at: now,
     });
     if (counts) {
@@ -469,7 +470,7 @@ export async function settleGoneShifts(app: CheckApp, now: Date): Promise<number
         await insertHandinVersion(txDb, {
           handin, door: latest.door === "telegram" ? "workboard" : latest.door, actorUserId: latest.actorUserId ?? one.userId, agentKeyId: null,
           telegramMessageRef: null, telegramSenderId: null, totalMills: 0, pages: latest.pages.map((page) => ({ pageLabel: page.pageLabel, amountMills: 0 })),
-          lines: [], offPlatform: [], comment: latest.comment, dayPaid: null, ruleVersion: SALE_RULE.version,
+          lines: [], offPlatform: [], comment: latest.comment, modelComments: latest.modelComments, dayPaid: null, ruleVersion: SALE_RULE.version,
           madeFor: { kind: "decision", decisionId: null, transactionId: null, outcome: "cancelled" }, reportDate: latest.reportDate ?? handin.reportDate, at: now,
         });
         await setHandinPhase(txDb, { handinId: one.handinId, phase: "counted", at: now });

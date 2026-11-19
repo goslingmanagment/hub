@@ -53,7 +53,6 @@ import {
   type CurrentReport,
   type Database,
   type HandinDoor,
-  type HandinPerson,
   type HandinSaleRow,
   type HandinVersionLine,
   type HandinVersionMadeFor,
@@ -141,14 +140,6 @@ const OPEN_STATES = ["asked", "agreed", "owner"] as const;
 
 const moscowDay = (at: number) => new Date(at + 3 * HOUR_MS).toISOString().slice(0, 10);
 
-/** A long text cut for a title: at the last word that fits, with «…», never mid-word. */
-export function cutAtWord(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  if (flat.length <= max) return flat;
-  const cut = flat.slice(0, max);
-  const at = cut.lastIndexOf(" ");
-  return `${(at > max * 0.6 ? cut.slice(0, at) : cut).replace(/[\s,;:.—–-]+$/u, "")}…`;
-}
 const money = (mills: number) => formatUsdFromMills(mills);
 
 function viewOf(report: CurrentReport): ReportView {
@@ -647,6 +638,7 @@ async function settleReport(
     lines: made.lines,
     offPlatform: current.offPlatform,
     comment: current.comment,
+    modelComments: current.modelComments,
     dayPaid,
     ruleVersion: SALE_RULE.version,
     madeFor: input.madeFor,
@@ -1323,7 +1315,7 @@ export async function decideOffPlatformLine(
     const sums = reportSums(current.lines, reportPages, offPlatform);
     const version = await insertHandinVersion(txDb, {
       handin, door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null,
-      totalMills: sums.totalMills, pages: sums.pages, lines: current.lines, offPlatform, comment: current.comment, dayPaid,
+      totalMills: sums.totalMills, pages: sums.pages, lines: current.lines, offPlatform, comment: current.comment, modelComments: current.modelComments, dayPaid,
       ruleVersion: SALE_RULE.version, madeFor: { kind: "off_platform", offPlatformId: row.id, decision: state },
       // The report's own date, the one the ledger was asked about above: only the person's hand-in dates a report.
       reportDate: handin.reportDate, at: now,
@@ -1887,9 +1879,4 @@ export async function readAgentSaleClaims(
     }),
     serverNow: now.toISOString(),
   };
-}
-
-/** A person by login, for the import: the registry's code to a login. */
-export async function personOfUser(db: Database, userId: number): Promise<HandinPerson | null> {
-  return findHandinPersonOfUser(db, userId);
 }

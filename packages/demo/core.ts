@@ -146,21 +146,3 @@ export function iso(date: Date): string {
 export function isoDay(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
-
-/** The last `count` days, oldest first, as UTC YYYY-MM-DD. */
-export function lastDays(now: Date, count: number): string[] {
-  return Array.from({ length: count }, (_, index) => isoDay(daysAgo(now, count - 1 - index)));
-}
-
-/** Days in a console period ("today" | "7d" | "30d" | "90d" | "180d" | "all"). */
-export function periodDays(period: string | undefined, fallback = 7): number {
-  switch (period) {
-    case "today": return 1;
-    case "7d": return 7;
-    case "30d": return 30;
-    case "90d": return 90;
-    case "180d": return 180;
-    case "all": return 365;
-    default: return fallback;
-  }
-}

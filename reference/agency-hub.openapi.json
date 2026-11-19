@@ -190376,6 +190376,30 @@
                           "comment": {
                             "type": "string"
                           },
+                          "comments": {
+                            "default": [],
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "modelSlug": {
+                                  "type": "string"
+                                },
+                                "modelName": {
+                                  "type": "string"
+                                },
+                                "comment": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "modelSlug",
+                                "modelName",
+                                "comment"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "colleagues": {
                             "type": "array",
                             "items": {
@@ -190411,6 +190435,7 @@
                           "pages",
                           "lines",
                           "comment",
+                          "comments",
                           "colleagues"
                         ],
                         "additionalProperties": false
@@ -191425,6 +191450,11 @@
                   "comment": {
                     "type": "string",
                     "maxLength": 2000
+                  },
+                  "modelSlug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
                   },
                   "shiftId": {
                     "type": "integer",
@@ -192448,6 +192478,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -192493,6 +192547,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -197521,6 +197576,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -197566,6 +197645,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -228704,1888 +228784,6 @@
                     "custody",
                     "serverNow",
                     "flagRevision"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/customs": {
-      "post": {
-        "summary": "A chatter writes a custom into the fan's record, paid by one of the suggested tips or not yet",
-        "tags": [
-          "client"
-        ],
-        "description": "Database-only. A device token's, for an active page granted to the caller. `paymentRef` must be one of the card's `customPayments` (else 409 `not_suggested`); without it the custom waits for its payment. Answers the card after it.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "description": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 500
-                  },
-                  "priceMills": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 9007199254740991
-                  },
-                  "paymentRef": {
-                    "type": "string",
-                    "pattern": "^[1-9]\\d{0,29}$"
-                  }
-                },
-                "required": [
-                  "description"
-                ],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 120
-            },
-            "in": "path",
-            "name": "pageLabel",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^[1-9]\\d{0,29}$"
-            },
-            "in": "path",
-            "name": "fanRef",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "changed": {
-                      "type": "boolean"
-                    },
-                    "card": {
-                      "type": "object",
-                      "properties": {
-                        "pageLabel": {
-                          "type": "string"
-                        },
-                        "fanRef": {
-                          "type": "string",
-                          "pattern": "^[1-9]\\d{0,29}$"
-                        },
-                        "known": {
-                          "type": "boolean"
-                        },
-                        "accounts": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "platform": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "fanRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "username": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "displayName": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "gone": {
-                                "type": "boolean"
-                              },
-                              "linkedBy": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              }
-                            },
-                            "required": [
-                              "platform",
-                              "fanRef",
-                              "username",
-                              "displayName",
-                              "gone",
-                              "linkedBy"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "pages": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "pageLabel": {
-                                "type": "string"
-                              },
-                              "platform": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "modelName": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "fanRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "granted": {
-                                "type": "boolean"
-                              },
-                              "alias": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "subscribed": {
-                                "type": "boolean"
-                              },
-                              "subscribedSince": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "subscriptionEndsAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "spentMills": {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              "last30Mills": {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "additionalProperties": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "lastPurchaseAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              }
-                            },
-                            "required": [
-                              "pageLabel",
-                              "platform",
-                              "modelName",
-                              "fanRef",
-                              "granted",
-                              "alias",
-                              "subscribed",
-                              "subscribedSince",
-                              "subscriptionEndsAt",
-                              "spentMills",
-                              "last30Mills",
-                              "lastPurchaseAt"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "suggestions": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "platform": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "fanRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "username": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "displayName": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "gone": {
-                                "type": "boolean"
-                              },
-                              "reason": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "shared": {
-                                "type": "string"
-                              },
-                              "sharedOn": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "pages": {
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "pageLabel": {
-                                      "type": "string"
-                                    },
-                                    "platform": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 64
-                                    },
-                                    "modelName": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    },
-                                    "fanRef": {
-                                      "type": "string",
-                                      "pattern": "^[1-9]\\d{0,29}$"
-                                    },
-                                    "granted": {
-                                      "type": "boolean"
-                                    },
-                                    "alias": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    },
-                                    "subscribed": {
-                                      "type": "boolean"
-                                    },
-                                    "subscribedSince": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    },
-                                    "subscriptionEndsAt": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    },
-                                    "spentMills": {
-                                      "type": "integer",
-                                      "minimum": -9007199254740991,
-                                      "maximum": 9007199254740991
-                                    },
-                                    "last30Mills": {
-                                      "type": "object",
-                                      "propertyNames": {
-                                        "type": "string"
-                                      },
-                                      "additionalProperties": {
-                                        "type": "integer",
-                                        "minimum": -9007199254740991,
-                                        "maximum": 9007199254740991
-                                      }
-                                    },
-                                    "lastPurchaseAt": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    }
-                                  },
-                                  "required": [
-                                    "pageLabel",
-                                    "platform",
-                                    "modelName",
-                                    "fanRef",
-                                    "granted",
-                                    "alias",
-                                    "subscribed",
-                                    "subscribedSince",
-                                    "subscriptionEndsAt",
-                                    "spentMills",
-                                    "last30Mills",
-                                    "lastPurchaseAt"
-                                  ],
-                                  "additionalProperties": false
-                                }
-                              }
-                            },
-                            "required": [
-                              "platform",
-                              "fanRef",
-                              "username",
-                              "displayName",
-                              "gone",
-                              "reason",
-                              "shared",
-                              "sharedOn",
-                              "pages"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "facts": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 9007199254740991
-                              },
-                              "kind": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "text": {
-                                "type": "string"
-                              },
-                              "pageLabel": {
-                                "type": "string"
-                              },
-                              "granted": {
-                                "type": "boolean"
-                              },
-                              "conversationRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "messageRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "messageAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "source": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "author": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "createdAt": {
-                                "type": "string"
-                              },
-                              "quote": {
-                                "anyOf": [
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "text": {
-                                        "type": "string"
-                                      },
-                                      "from": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 64
-                                      },
-                                      "at": {
-                                        "type": "string"
-                                      },
-                                      "media": {
-                                        "type": "boolean"
-                                      }
-                                    },
-                                    "required": [
-                                      "text",
-                                      "from",
-                                      "at",
-                                      "media"
-                                    ],
-                                    "additionalProperties": false
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "kind",
-                              "text",
-                              "pageLabel",
-                              "granted",
-                              "conversationRef",
-                              "messageRef",
-                              "messageAt",
-                              "source",
-                              "author",
-                              "createdAt"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "customs": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 9007199254740991
-                              },
-                              "pageLabel": {
-                                "type": "string"
-                              },
-                              "granted": {
-                                "type": "boolean"
-                              },
-                              "description": {
-                                "type": "string"
-                              },
-                              "priceMills": {
-                                "anyOf": [
-                                  {
-                                    "type": "integer",
-                                    "minimum": -9007199254740991,
-                                    "maximum": 9007199254740991
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "state": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "paymentMills": {
-                                "anyOf": [
-                                  {
-                                    "type": "integer",
-                                    "minimum": -9007199254740991,
-                                    "maximum": 9007199254740991
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "paidAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "deliveredMessageRef": {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "pattern": "^[1-9]\\d{0,29}$"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "deliveredAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "createdBy": {
-                                "type": "string"
-                              },
-                              "createdAt": {
-                                "type": "string"
-                              },
-                              "deliveryCandidates": {
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "messageRef": {
-                                      "type": "string",
-                                      "pattern": "^[1-9]\\d{0,29}$"
-                                    },
-                                    "at": {
-                                      "type": "string"
-                                    },
-                                    "mediaCount": {
-                                      "type": "integer",
-                                      "minimum": 0,
-                                      "maximum": 9007199254740991
-                                    },
-                                    "priceMills": {
-                                      "anyOf": [
-                                        {
-                                          "type": "integer",
-                                          "minimum": -9007199254740991,
-                                          "maximum": 9007199254740991
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    }
-                                  },
-                                  "required": [
-                                    "messageRef",
-                                    "at",
-                                    "mediaCount",
-                                    "priceMills"
-                                  ],
-                                  "additionalProperties": false
-                                }
-                              },
-                              "code": {
-                                "type": "string"
-                              },
-                              "stepLabel": {
-                                "type": "string"
-                              },
-                              "stepAt": {
-                                "type": "string"
-                              },
-                              "orderState": {
-                                "type": "string"
-                              },
-                              "deadlineOn": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "overdueDays": {
-                                "anyOf": [
-                                  {
-                                    "type": "integer",
-                                    "minimum": -9007199254740991,
-                                    "maximum": 9007199254740991
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "leader": {
-                                "anyOf": [
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "name": {
-                                        "type": [
-                                          "string",
-                                          "null"
-                                        ]
-                                      },
-                                      "product": {
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [
-                                      "name",
-                                      "product"
-                                    ],
-                                    "additionalProperties": false
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "mayGive": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "pageLabel",
-                              "granted",
-                              "description",
-                              "priceMills",
-                              "state",
-                              "paymentMills",
-                              "paidAt",
-                              "deliveredMessageRef",
-                              "deliveredAt",
-                              "createdBy",
-                              "createdAt",
-                              "deliveryCandidates"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "customPayments": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "paymentRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "amountMills": {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              "at": {
-                                "type": "string"
-                              },
-                              "note": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              }
-                            },
-                            "required": [
-                              "paymentRef",
-                              "amountMills",
-                              "at",
-                              "note"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "serverNow": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "pageLabel",
-                        "fanRef",
-                        "known",
-                        "accounts",
-                        "pages",
-                        "suggestions",
-                        "facts",
-                        "customs",
-                        "customPayments",
-                        "serverNow"
-                      ],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": [
-                    "changed",
-                    "card"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/customs/{customId}": {
-      "post": {
-        "summary": "A chatter marks a custom paid, delivered, cancelled, or edits it",
-        "tags": [
-          "client"
-        ],
-        "description": "Database-only. A device token's; the custom must be of the fan's card and of a page the caller works. `paid` takes a tip of `customPayments`, `delivered` a message of the custom's `deliveryCandidates` (else 409 `not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`. A step that is not the caller's — cancelling or editing an order another person took — is 409 `not_allowed`, as on the board; their own order they cancel at any step before it is given.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "oneOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "paid"
-                        ]
-                      },
-                      "paymentRef": {
-                        "type": "string",
-                        "pattern": "^[1-9]\\d{0,29}$"
-                      }
-                    },
-                    "required": [
-                      "action",
-                      "paymentRef"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "delivered"
-                        ]
-                      },
-                      "messageRef": {
-                        "type": "string",
-                        "pattern": "^[1-9]\\d{0,29}$"
-                      }
-                    },
-                    "required": [
-                      "action",
-                      "messageRef"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "cancel"
-                        ]
-                      }
-                    },
-                    "required": [
-                      "action"
-                    ],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "action": {
-                        "type": "string",
-                        "enum": [
-                          "edit"
-                        ]
-                      },
-                      "description": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 500
-                      },
-                      "priceMills": {
-                        "anyOf": [
-                          {
-                            "type": "integer",
-                            "minimum": 0,
-                            "maximum": 9007199254740991
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      }
-                    },
-                    "required": [
-                      "action",
-                      "description",
-                      "priceMills"
-                    ],
-                    "additionalProperties": false
-                  }
-                ]
-              }
-            }
-          }
-        },
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 120
-            },
-            "in": "path",
-            "name": "pageLabel",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^[1-9]\\d{0,29}$"
-            },
-            "in": "path",
-            "name": "fanRef",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
-            },
-            "in": "path",
-            "name": "customId",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "changed": {
-                      "type": "boolean"
-                    },
-                    "card": {
-                      "type": "object",
-                      "properties": {
-                        "pageLabel": {
-                          "type": "string"
-                        },
-                        "fanRef": {
-                          "type": "string",
-                          "pattern": "^[1-9]\\d{0,29}$"
-                        },
-                        "known": {
-                          "type": "boolean"
-                        },
-                        "accounts": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "platform": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "fanRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "username": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "displayName": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "gone": {
-                                "type": "boolean"
-                              },
-                              "linkedBy": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              }
-                            },
-                            "required": [
-                              "platform",
-                              "fanRef",
-                              "username",
-                              "displayName",
-                              "gone",
-                              "linkedBy"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "pages": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "pageLabel": {
-                                "type": "string"
-                              },
-                              "platform": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "modelName": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "fanRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "granted": {
-                                "type": "boolean"
-                              },
-                              "alias": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "subscribed": {
-                                "type": "boolean"
-                              },
-                              "subscribedSince": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "subscriptionEndsAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "spentMills": {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              "last30Mills": {
-                                "type": "object",
-                                "propertyNames": {
-                                  "type": "string"
-                                },
-                                "additionalProperties": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "lastPurchaseAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              }
-                            },
-                            "required": [
-                              "pageLabel",
-                              "platform",
-                              "modelName",
-                              "fanRef",
-                              "granted",
-                              "alias",
-                              "subscribed",
-                              "subscribedSince",
-                              "subscriptionEndsAt",
-                              "spentMills",
-                              "last30Mills",
-                              "lastPurchaseAt"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "suggestions": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "platform": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "fanRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "username": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "displayName": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "gone": {
-                                "type": "boolean"
-                              },
-                              "reason": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "shared": {
-                                "type": "string"
-                              },
-                              "sharedOn": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "pages": {
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "pageLabel": {
-                                      "type": "string"
-                                    },
-                                    "platform": {
-                                      "type": "string",
-                                      "minLength": 1,
-                                      "maxLength": 64
-                                    },
-                                    "modelName": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    },
-                                    "fanRef": {
-                                      "type": "string",
-                                      "pattern": "^[1-9]\\d{0,29}$"
-                                    },
-                                    "granted": {
-                                      "type": "boolean"
-                                    },
-                                    "alias": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    },
-                                    "subscribed": {
-                                      "type": "boolean"
-                                    },
-                                    "subscribedSince": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    },
-                                    "subscriptionEndsAt": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    },
-                                    "spentMills": {
-                                      "type": "integer",
-                                      "minimum": -9007199254740991,
-                                      "maximum": 9007199254740991
-                                    },
-                                    "last30Mills": {
-                                      "type": "object",
-                                      "propertyNames": {
-                                        "type": "string"
-                                      },
-                                      "additionalProperties": {
-                                        "type": "integer",
-                                        "minimum": -9007199254740991,
-                                        "maximum": 9007199254740991
-                                      }
-                                    },
-                                    "lastPurchaseAt": {
-                                      "type": [
-                                        "string",
-                                        "null"
-                                      ]
-                                    }
-                                  },
-                                  "required": [
-                                    "pageLabel",
-                                    "platform",
-                                    "modelName",
-                                    "fanRef",
-                                    "granted",
-                                    "alias",
-                                    "subscribed",
-                                    "subscribedSince",
-                                    "subscriptionEndsAt",
-                                    "spentMills",
-                                    "last30Mills",
-                                    "lastPurchaseAt"
-                                  ],
-                                  "additionalProperties": false
-                                }
-                              }
-                            },
-                            "required": [
-                              "platform",
-                              "fanRef",
-                              "username",
-                              "displayName",
-                              "gone",
-                              "reason",
-                              "shared",
-                              "sharedOn",
-                              "pages"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "facts": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 9007199254740991
-                              },
-                              "kind": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "text": {
-                                "type": "string"
-                              },
-                              "pageLabel": {
-                                "type": "string"
-                              },
-                              "granted": {
-                                "type": "boolean"
-                              },
-                              "conversationRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "messageRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "messageAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "source": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "author": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "createdAt": {
-                                "type": "string"
-                              },
-                              "quote": {
-                                "anyOf": [
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "text": {
-                                        "type": "string"
-                                      },
-                                      "from": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 64
-                                      },
-                                      "at": {
-                                        "type": "string"
-                                      },
-                                      "media": {
-                                        "type": "boolean"
-                                      }
-                                    },
-                                    "required": [
-                                      "text",
-                                      "from",
-                                      "at",
-                                      "media"
-                                    ],
-                                    "additionalProperties": false
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "kind",
-                              "text",
-                              "pageLabel",
-                              "granted",
-                              "conversationRef",
-                              "messageRef",
-                              "messageAt",
-                              "source",
-                              "author",
-                              "createdAt"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "customs": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "id": {
-                                "type": "integer",
-                                "exclusiveMinimum": 0,
-                                "maximum": 9007199254740991
-                              },
-                              "pageLabel": {
-                                "type": "string"
-                              },
-                              "granted": {
-                                "type": "boolean"
-                              },
-                              "description": {
-                                "type": "string"
-                              },
-                              "priceMills": {
-                                "anyOf": [
-                                  {
-                                    "type": "integer",
-                                    "minimum": -9007199254740991,
-                                    "maximum": 9007199254740991
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "state": {
-                                "type": "string",
-                                "minLength": 1,
-                                "maxLength": 64
-                              },
-                              "paymentMills": {
-                                "anyOf": [
-                                  {
-                                    "type": "integer",
-                                    "minimum": -9007199254740991,
-                                    "maximum": 9007199254740991
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "paidAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "deliveredMessageRef": {
-                                "anyOf": [
-                                  {
-                                    "type": "string",
-                                    "pattern": "^[1-9]\\d{0,29}$"
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "deliveredAt": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "createdBy": {
-                                "type": "string"
-                              },
-                              "createdAt": {
-                                "type": "string"
-                              },
-                              "deliveryCandidates": {
-                                "type": "array",
-                                "items": {
-                                  "type": "object",
-                                  "properties": {
-                                    "messageRef": {
-                                      "type": "string",
-                                      "pattern": "^[1-9]\\d{0,29}$"
-                                    },
-                                    "at": {
-                                      "type": "string"
-                                    },
-                                    "mediaCount": {
-                                      "type": "integer",
-                                      "minimum": 0,
-                                      "maximum": 9007199254740991
-                                    },
-                                    "priceMills": {
-                                      "anyOf": [
-                                        {
-                                          "type": "integer",
-                                          "minimum": -9007199254740991,
-                                          "maximum": 9007199254740991
-                                        },
-                                        {
-                                          "type": "null"
-                                        }
-                                      ]
-                                    }
-                                  },
-                                  "required": [
-                                    "messageRef",
-                                    "at",
-                                    "mediaCount",
-                                    "priceMills"
-                                  ],
-                                  "additionalProperties": false
-                                }
-                              },
-                              "code": {
-                                "type": "string"
-                              },
-                              "stepLabel": {
-                                "type": "string"
-                              },
-                              "stepAt": {
-                                "type": "string"
-                              },
-                              "orderState": {
-                                "type": "string"
-                              },
-                              "deadlineOn": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              },
-                              "overdueDays": {
-                                "anyOf": [
-                                  {
-                                    "type": "integer",
-                                    "minimum": -9007199254740991,
-                                    "maximum": 9007199254740991
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "leader": {
-                                "anyOf": [
-                                  {
-                                    "type": "object",
-                                    "properties": {
-                                      "name": {
-                                        "type": [
-                                          "string",
-                                          "null"
-                                        ]
-                                      },
-                                      "product": {
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": [
-                                      "name",
-                                      "product"
-                                    ],
-                                    "additionalProperties": false
-                                  },
-                                  {
-                                    "type": "null"
-                                  }
-                                ]
-                              },
-                              "mayGive": {
-                                "type": "boolean"
-                              }
-                            },
-                            "required": [
-                              "id",
-                              "pageLabel",
-                              "granted",
-                              "description",
-                              "priceMills",
-                              "state",
-                              "paymentMills",
-                              "paidAt",
-                              "deliveredMessageRef",
-                              "deliveredAt",
-                              "createdBy",
-                              "createdAt",
-                              "deliveryCandidates"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "customPayments": {
-                          "type": "array",
-                          "items": {
-                            "type": "object",
-                            "properties": {
-                              "paymentRef": {
-                                "type": "string",
-                                "pattern": "^[1-9]\\d{0,29}$"
-                              },
-                              "amountMills": {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              "at": {
-                                "type": "string"
-                              },
-                              "note": {
-                                "type": [
-                                  "string",
-                                  "null"
-                                ]
-                              }
-                            },
-                            "required": [
-                              "paymentRef",
-                              "amountMills",
-                              "at",
-                              "note"
-                            ],
-                            "additionalProperties": false
-                          }
-                        },
-                        "serverNow": {
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "pageLabel",
-                        "fanRef",
-                        "known",
-                        "accounts",
-                        "pages",
-                        "suggestions",
-                        "facts",
-                        "customs",
-                        "customPayments",
-                        "serverNow"
-                      ],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": [
-                    "changed",
-                    "card"
                   ],
                   "additionalProperties": false
                 }
@@ -269523,358 +267721,6 @@
         }
       }
     },
-    "/api/v1/pages/{pageLabel}/followers/daily": {
-      "get": {
-        "summary": "List daily follower rollups for one page",
-        "tags": [
-          "followers"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "enum": [
-                "custom"
-              ]
-            },
-            "in": "query",
-            "name": "period",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-            },
-            "in": "query",
-            "name": "windowAt",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-            },
-            "in": "query",
-            "name": "from",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-            },
-            "in": "query",
-            "name": "to",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "in": "path",
-            "name": "pageLabel",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "cookieAuth": []
-          },
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "page": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "label": {
-                          "type": "string"
-                        },
-                        "platform": {
-                          "type": "string",
-                          "enum": [
-                            "fansly",
-                            "onlyfans",
-                            "telegram"
-                          ]
-                        },
-                        "modelSlug": {
-                          "type": "string"
-                        },
-                        "modelName": {
-                          "type": "string"
-                        },
-                        "username": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "displayName": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "followerCount": {
-                          "type": "object",
-                          "properties": {
-                            "value": {
-                              "anyOf": [
-                                {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "available": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "value",
-                            "available"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "subscriberCount": {
-                          "type": "object",
-                          "properties": {
-                            "value": {
-                              "anyOf": [
-                                {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "available": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "value",
-                            "available"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "lastLightSyncAt": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "lastFollowerSyncAt": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "capabilities": {
-                          "type": "object",
-                          "properties": {
-                            "voiceNotes": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "voiceNotes"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "label",
-                        "platform",
-                        "modelSlug",
-                        "modelName",
-                        "username",
-                        "displayName",
-                        "followerCount",
-                        "subscriberCount",
-                        "lastLightSyncAt",
-                        "lastFollowerSyncAt"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "items": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "businessDate": {
-                            "type": "string",
-                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-                          },
-                          "newFollowers": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "knownTotalFollowers": {
-                            "anyOf": [
-                              {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "required": [
-                          "businessDate",
-                          "newFollowers",
-                          "knownTotalFollowers"
-                        ],
-                        "additionalProperties": false
-                      }
-                    }
-                  },
-                  "required": [
-                    "page",
-                    "items"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/pages/{pageLabel}/mass-messages": {
       "get": {
         "summary": "The page's mass messages with delivery, reads, tips and sales, as Fansly's stats lists show them",
@@ -279878,351 +277724,6 @@
         }
       }
     },
-    "/api/v1/pages/{pageLabel}/subscribers/daily": {
-      "get": {
-        "summary": "List daily subscriber rollups for one page",
-        "tags": [
-          "subscribers"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "enum": [
-                "custom"
-              ]
-            },
-            "in": "query",
-            "name": "period",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "format": "date-time",
-              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-            },
-            "in": "query",
-            "name": "windowAt",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-            },
-            "in": "query",
-            "name": "from",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-            },
-            "in": "query",
-            "name": "to",
-            "required": true
-          },
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "in": "path",
-            "name": "pageLabel",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "cookieAuth": []
-          },
-          {
-            "bearerAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "page": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "label": {
-                          "type": "string"
-                        },
-                        "platform": {
-                          "type": "string",
-                          "enum": [
-                            "fansly",
-                            "onlyfans",
-                            "telegram"
-                          ]
-                        },
-                        "modelSlug": {
-                          "type": "string"
-                        },
-                        "modelName": {
-                          "type": "string"
-                        },
-                        "username": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "displayName": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "followerCount": {
-                          "type": "object",
-                          "properties": {
-                            "value": {
-                              "anyOf": [
-                                {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "available": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "value",
-                            "available"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "subscriberCount": {
-                          "type": "object",
-                          "properties": {
-                            "value": {
-                              "anyOf": [
-                                {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "available": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "value",
-                            "available"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "lastLightSyncAt": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "lastFollowerSyncAt": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "capabilities": {
-                          "type": "object",
-                          "properties": {
-                            "voiceNotes": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "voiceNotes"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "label",
-                        "platform",
-                        "modelSlug",
-                        "modelName",
-                        "username",
-                        "displayName",
-                        "followerCount",
-                        "subscriberCount",
-                        "lastLightSyncAt",
-                        "lastFollowerSyncAt"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "items": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "businessDate": {
-                            "type": "string",
-                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
-                          },
-                          "newSubscribers": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "activeSubscribers": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          }
-                        },
-                        "required": [
-                          "businessDate",
-                          "newSubscribers",
-                          "activeSubscribers"
-                        ],
-                        "additionalProperties": false
-                      }
-                    }
-                  },
-                  "required": [
-                    "page",
-                    "items"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/pages/{pageLabel}/sync/blocks": {
       "get": {
         "summary": "Get all sync blocks for one visible page",
@@ -285006,496 +282507,6 @@
                     "generatedAt",
                     "page",
                     "block"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": {
-                      "type": "string"
-                    },
-                    "message": {
-                      "type": "string"
-                    },
-                    "statusCode": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "reason": {
-                      "type": "string"
-                    },
-                    "statusUrl": {
-                      "type": "string"
-                    }
-                  },
-                  "required": [
-                    "error",
-                    "message",
-                    "statusCode"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pages/{pageLabel}/transactions": {
-      "get": {
-        "summary": "List transactions for one page",
-        "tags": [
-          "transactions"
-        ],
-        "parameters": [
-          {
-            "schema": {
-              "default": 50,
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 200
-            },
-            "in": "query",
-            "name": "limit",
-            "required": false
-          },
-          {
-            "schema": {
-              "default": 0,
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 9007199254740991
-            },
-            "in": "query",
-            "name": "offset",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
-              "enum": [
-                "subscription",
-                "tip",
-                "message_purchase",
-                "post_purchase",
-                "stream_tip",
-                "chargeback",
-                "refund",
-                "payout_reversal",
-                "other"
-              ]
-            },
-            "in": "query",
-            "name": "type",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
-              "enum": [
-                "pending",
-                "posted",
-                "unknown"
-              ]
-            },
-            "in": "query",
-            "name": "state",
-            "required": false
-          },
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            },
-            "in": "path",
-            "name": "pageLabel",
-            "required": true
-          }
-        ],
-        "security": [
-          {
-            "cookieAuth": []
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Default Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "page": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "integer",
-                          "exclusiveMinimum": 0,
-                          "maximum": 9007199254740991
-                        },
-                        "label": {
-                          "type": "string"
-                        },
-                        "platform": {
-                          "type": "string",
-                          "enum": [
-                            "fansly",
-                            "onlyfans",
-                            "telegram"
-                          ]
-                        },
-                        "modelSlug": {
-                          "type": "string"
-                        },
-                        "modelName": {
-                          "type": "string"
-                        },
-                        "username": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "displayName": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "followerCount": {
-                          "type": "object",
-                          "properties": {
-                            "value": {
-                              "anyOf": [
-                                {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "available": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "value",
-                            "available"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "subscriberCount": {
-                          "type": "object",
-                          "properties": {
-                            "value": {
-                              "anyOf": [
-                                {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "available": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "value",
-                            "available"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "lastLightSyncAt": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "lastFollowerSyncAt": {
-                          "type": [
-                            "string",
-                            "null"
-                          ]
-                        },
-                        "capabilities": {
-                          "type": "object",
-                          "properties": {
-                            "voiceNotes": {
-                              "type": "boolean"
-                            }
-                          },
-                          "required": [
-                            "voiceNotes"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "id",
-                        "label",
-                        "platform",
-                        "modelSlug",
-                        "modelName",
-                        "username",
-                        "displayName",
-                        "followerCount",
-                        "subscriberCount",
-                        "lastLightSyncAt",
-                        "lastFollowerSyncAt"
-                      ],
-                      "additionalProperties": false
-                    },
-                    "items": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "transactionId": {
-                            "type": "string"
-                          },
-                          "rawType": {
-                            "anyOf": [
-                              {
-                                "type": "integer",
-                                "minimum": -9007199254740991,
-                                "maximum": 9007199254740991
-                              },
-                              {
-                                "type": "string"
-                              }
-                            ]
-                          },
-                          "canonicalType": {
-                            "type": "string",
-                            "enum": [
-                              "subscription",
-                              "tip",
-                              "message_purchase",
-                              "post_purchase",
-                              "stream_tip",
-                              "chargeback",
-                              "refund",
-                              "payout_reversal",
-                              "other"
-                            ]
-                          },
-                          "transactionState": {
-                            "type": "string",
-                            "enum": [
-                              "pending",
-                              "posted",
-                              "unknown"
-                            ]
-                          },
-                          "amountMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "destinationAmountMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "netAmountMills": {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          "walletId": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "correlationId": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "correlationAccountId": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "occurredAt": {
-                            "type": "string"
-                          },
-                          "sourceUpdatedAt": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "fan": {
-                            "anyOf": [
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "platformUserId": {
-                                    "type": "string"
-                                  },
-                                  "pageAlias": {
-                                    "type": [
-                                      "string",
-                                      "null"
-                                    ]
-                                  },
-                                  "username": {
-                                    "type": [
-                                      "string",
-                                      "null"
-                                    ]
-                                  },
-                                  "displayName": {
-                                    "type": [
-                                      "string",
-                                      "null"
-                                    ]
-                                  }
-                                },
-                                "required": [
-                                  "platformUserId",
-                                  "pageAlias",
-                                  "username",
-                                  "displayName"
-                                ],
-                                "additionalProperties": false
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          }
-                        },
-                        "required": [
-                          "transactionId",
-                          "rawType",
-                          "canonicalType",
-                          "transactionState",
-                          "amountMills",
-                          "destinationAmountMills",
-                          "netAmountMills",
-                          "walletId",
-                          "correlationId",
-                          "correlationAccountId",
-                          "occurredAt",
-                          "sourceUpdatedAt",
-                          "fan"
-                        ],
-                        "additionalProperties": false
-                      }
-                    },
-                    "limit": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "offset": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
-                    "total": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    }
-                  },
-                  "required": [
-                    "page",
-                    "items",
-                    "limit",
-                    "offset",
-                    "total"
                   ],
                   "additionalProperties": false
                 }
@@ -310569,6 +307580,30 @@
                                     "comment": {
                                       "type": "string"
                                     },
+                                    "comments": {
+                                      "default": [],
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "modelSlug": {
+                                            "type": "string"
+                                          },
+                                          "modelName": {
+                                            "type": "string"
+                                          },
+                                          "comment": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "modelSlug",
+                                          "modelName",
+                                          "comment"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
                                     "pages": {
                                       "type": "array",
                                       "items": {
@@ -310614,6 +307649,7 @@
                                     "lines",
                                     "offPlatform",
                                     "comment",
+                                    "comments",
                                     "pages",
                                     "totalMills",
                                     "cut",
@@ -314949,6 +311985,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -314994,6 +312054,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -319342,6 +316403,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -319387,6 +316472,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -323643,6 +320729,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -323688,6 +320798,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -327833,6 +324944,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -327878,6 +325013,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -332134,6 +329270,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -332179,6 +329339,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -335892,6 +333053,11 @@
                   "comment": {
                     "type": "string",
                     "maxLength": 2000
+                  },
+                  "modelSlug": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
                   }
                 },
                 "required": [
@@ -336912,6 +334078,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -336957,6 +334147,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -341523,6 +338714,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -341568,6 +338783,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -346251,6 +343467,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -346296,6 +343536,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -350642,6 +347883,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -350687,6 +347952,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -354989,6 +352255,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -355034,6 +352324,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -359336,6 +356627,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -359381,6 +356696,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -363708,6 +361024,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -363753,6 +361093,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -368065,6 +365406,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -368110,6 +365475,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",
@@ -372366,6 +369732,30 @@
                                 "comment": {
                                   "type": "string"
                                 },
+                                "comments": {
+                                  "default": [],
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "modelSlug": {
+                                        "type": "string"
+                                      },
+                                      "modelName": {
+                                        "type": "string"
+                                      },
+                                      "comment": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "modelSlug",
+                                      "modelName",
+                                      "comment"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "pages": {
                                   "type": "array",
                                   "items": {
@@ -372411,6 +369801,7 @@
                                 "lines",
                                 "offPlatform",
                                 "comment",
+                                "comments",
                                 "pages",
                                 "totalMills",
                                 "cut",
@@ -376546,6 +373937,30 @@
                             "comment": {
                               "type": "string"
                             },
+                            "comments": {
+                              "default": [],
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "modelSlug": {
+                                    "type": "string"
+                                  },
+                                  "modelName": {
+                                    "type": "string"
+                                  },
+                                  "comment": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "modelSlug",
+                                  "modelName",
+                                  "comment"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "pages": {
                               "type": "array",
                               "items": {
@@ -376591,6 +374006,7 @@
                             "lines",
                             "offPlatform",
                             "comment",
+                            "comments",
                             "pages",
                             "totalMills",
                             "cut",

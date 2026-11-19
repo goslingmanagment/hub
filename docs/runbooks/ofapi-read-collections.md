@@ -24,7 +24,7 @@ Selections name a catalog `id`, with `:numeric-id` only for a detail operation; 
 
 ## OnlyFans payout requests
 
-The scheduled `balances` run reads the newest page of `payouts/payout-requests` (offset 0, limit 50). OnlyFans keeps the whole history and documents only limit/offset; the response `marker` is never used as a request cursor, so a scheduled run makes exactly one call for it. Older requests are a bounded one-off `balances` job with explicit selectors, for example `payout_requests?offset=50`, then `?offset=100`. A policy created before this change with `maxCallsPerRun: 3` ends every run at `scheduled_run_exhausted:job_limit` before its fourth step (subscriber statistics): raise it to 4 in Settings → Сбор for each OnlyFans page.
+The scheduled `balances` run reads the newest page of `payouts/payout-requests` (offset 0, limit 50). OnlyFans keeps the whole history and documents only limit/offset; the response `marker` is never used as a request cursor, so a scheduled run makes exactly one call for it. Older requests are a bounded one-off `balances` job with explicit selectors, for example `payout_requests?offset=50`, then `?offset=100`. A policy created before this change with `maxCallsPerRun: 3` ends every run at `scheduled_run_exhausted:job_limit` before its fourth step (subscriber statistics): raise it to 4 in «Система → OnlyFans API → Правила сбора» (`/system/onlyfans-api#collection`) for each OnlyFans page.
 
 Agents read the result as the OnlyFans-only dataset `ofapi_payout_requests` (`read:datasets` + `read:money`, claim field `ofapiPayoutRequest`): one row per invoice (`payoutRef`), the latest observation wins, with `amountMills`, `currency`, `state`, `rejectReason`, `requestedAt`, `lastObservedAt` and `observationRef`. The window and the capture floor run on `requestedAt`, so the floor is the oldest request Hub holds. `amount` is taken as US dollars like the balance snapshot (`payoutAvailable` 247.46 → 247460 mills); confirm it against the OnlyFans payout page on the first real capture.
 
@@ -34,7 +34,7 @@ The chat extension's "New" panel shows whether the page's automatic welcome
 message is on, has text or media, and its price. Hub reads it as the
 `account_settings` category: one `GET settings/welcome-message` per run (1
 credit), stored like any other read snapshot. The category is off until the
-owner applies it per OnlyFans page in Settings → Сбор: mode **Scheduled**,
+owner applies it per OnlyFans page in «Система → OnlyFans API → Правила сбора» (`/system/onlyfans-api#collection`): mode **Scheduled**,
 interval **1440** minutes, daily credit limit **1**, calls per run **1**.
 Nothing is applied by deployment.
 
@@ -67,8 +67,8 @@ Nothing is applied by deployment.
 - Rollback: an image older than this category does not know
   `account_settings`. Once the owner has turned it on or run it as a one-off,
   the newest collection jobs include `account_settings` runs, and the older
-  image's collection page (`GET /api/v1/admin/ofapi/collection`, Settings →
-  Сбор) fails response validation with a `500` until a roll-forward, even if
+  image's collection page (`GET /api/v1/admin/ofapi/collection`,
+  «Правила сбора») fails response validation with a `500` until a roll-forward, even if
   the category was turned off before the rollback. Other categories keep
   collecting; stored snapshots and device clients are unaffected.
 
@@ -152,7 +152,7 @@ timeouts, limits, accounting certainty or retry authorization.
 
 When a paused periodic GET cannot usefully resume (for example, a retained `401`
 or a rejected response contract), the owner can choose **Завершить неполный
-проход** in Collection. Confirm the page and category. The confirmation explains
+запуск** in «Система → OnlyFans API → Правила сбора» (`/system/onlyfans-api#collection`). Confirm the page and category. The confirmation explains
 that data, the saved cursor and uncertain charges remain, and the next run follows
 the enabled schedule. The action marks only the outer run `failed`; it does not
 claim complete coverage, resolve an unknown charge, dispatch a request, reset a
@@ -228,9 +228,9 @@ Four default-off, explicit lookup paths support the desktop composer (the Giphy 
 
 Four explicit selectors complete durable list reads: `user_lists`, `user_list:friends`, `user_list_users:friends`, and `user_list_pinned_users:friends`. Numeric list IDs work as well. All four belong to `profile_notifications` and are absent from its default scheduled selection. Existing desktop list/index reads retain their previous gateway admission; the new collector always passes a collection context. No list creation, update, deletion, member add/remove, or pin mutation is included.
 
-The owner can open Settings → Collect → create a one-off job on the selected page, choose `profile_notifications`, enter `user_list:friends` and `user_list_users:friends` on separate selection lines, and approve explicit call, credit, and byte ceilings. The first call reads metadata; subsequent calls read member pages until a terminal marker or cap. Start with a three-call ceiling and inspect stored continuation before authorizing more. Use `user_list_pinned_users:friends` in a separate job to inspect only pinned members. These selectors do not enable recurring list fanout; authorizing the category's schedule does not implicitly iterate every list. Nothing was enabled in production.
+The owner can open «Система → OnlyFans API → Правила сбора» (`/system/onlyfans-api#collection`) → create a one-off job on the selected page, choose `profile_notifications`, enter `user_list:friends` and `user_list_users:friends` on separate selection lines, and approve explicit call, credit, and byte ceilings. The first call reads metadata; subsequent calls read member pages until a terminal marker or cap. Start with a three-call ceiling and inspect stored continuation before authorizing more. Use `user_list_pinned_users:friends` in a separate job to inspect only pinned members. These selectors do not enable recurring list fanout; authorizing the category's schedule does not implicitly iterate every list. Nothing was enabled in production.
 
-Settings → Collect → “Сохранённые данные и участники списков” reads the local SDK report only. It displays captured source, observation time, requested window, query, and coverage alongside list membership, contactability, last local reply and local spend when present. List metadata's `users[]` is a preview; `usersCount` is a separate provider number. Membership and pinned membership are separate response scopes. Historical partial responses never remove members or prove whole-list absence. Rebuild uses canonical snapshots and performs no vendor request.
+«Система → OnlyFans API → События и ключ» (`/system/onlyfans-api#tools`) → «Сохранённые ответы и участники списков» reads the local SDK report only. It displays captured source, observation time, requested window, query, and coverage alongside list membership, contactability, last local reply and local spend when present. List metadata's `users[]` is a preview; `usersCount` is a separate provider number. Membership and pinned membership are separate response scopes. Historical partial responses never remove members or prove whole-list absence. Rebuild uses canonical snapshots and performs no vendor request.
 
 Live documentation verified 2026-09-06: [list index](https://docs.onlyfansapi.com/api-reference/user-list-collections/list-user-lists) returns `data[]`, limit 10–50, offset, optional `view=queue`, and no terminal marker in its example; coverage stays unknown. [list detail](https://docs.onlyfansapi.com/api-reference/user-list-collections/get-user-list) returns a metadata object with nested preview users. [members](https://docs.onlyfansapi.com/api-reference/user-list-collections/list-user-list-users) and [pinned members](https://docs.onlyfansapi.com/api-reference/user-list-collections/list-pinned-users-in-user-list) return `data.list`, limit 1–100, offset and `hasMore`/`nextOffset`. An empty page with continuation is followed. Named list IDs and string member IDs survive normalization; unsafe numeric IDs fail shape validation. A nested preview does not certify full membership; the implementation preserves the live envelope and its uncertainty rather than deriving counts from preview length.
 
@@ -238,7 +238,7 @@ Validation: targeted `ofapi-user-list-reads`, `ofapi-read-coverage`, `ofapi-read
 
 ## Free webhook event inventory (S3 audit closure)
 
-Settings → Collect → Events and recovery → Provider event catalog reads the last retained catalog response. “Обновить каталог · бесплатно” dispatches exactly one `GET /api/webhooks/events`, captures its response as `ofapi_webhook_event_catalog`, and exposes event name/description, current requested membership, Hub support and optional group. The GET diagnostics endpoint is DB-only. New provider events stay unrequested; neither refresh nor UI polling changes registration or policy. Invalid/duplicate identities retain their raw response and display `invalid`, instead of replacing uncertainty with a successful empty catalog.
+«Система → OnlyFans API → События и ключ» (`/system/onlyfans-api#tools`) → «События и восстановление» → «Каталог событий» reads the last retained catalog response. “Обновить каталог · бесплатно” dispatches exactly one `GET /api/webhooks/events`, captures its response as `ofapi_webhook_event_catalog`, and exposes event name/description, current requested membership, Hub support and optional group. The GET diagnostics endpoint is DB-only. New provider events stay unrequested; neither refresh nor UI polling changes registration or policy. Invalid/duplicate identities retain their raw response and display `invalid`, instead of replacing uncertainty with a successful empty catalog.
 
 The [live endpoint](https://docs.onlyfansapi.com/api-reference/webhooks/list-available-events) documents no query parameters, a `data` array of `{value,description}`, and zero credits. Its illustrative response contains only 13 names despite the separate 32-event catalog; the code accepts the returned inventory rather than using that example as an authoritative fixed event set. Zero-cost fallback remains unestimated and diagnostics remain available with pending accounting receipts. Validation uses mocked provider responses, with exact transport, capture, owner authorization, local reread, malformed response, unknown-event and unchanged-registration regressions.
 

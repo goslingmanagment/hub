@@ -12,13 +12,12 @@ import type { Clock, OwnershipSession, PauseSource, Rng, TransportOutcome } from
 // §3.3, invariants I1, I2, I4, I5). Between the actual sends of any two
 // requests of one page there is at least S × (1 + u), u ∈ [0, 0.2), where S is
 // the owner's setting read at the admission of the later request — a strict
-// minimum, not an average. "Actual send" is undici's `onRequestStart`, the
-// instant right before the request headers are written, measured on the
-// monotonic clock — or, for a sender outside the process (a page's browser,
-// Project Browser plan §3.2), the instant it reported the request left
-// (`transport_reported`); where neither is known, the completion instant is
-// used instead (a safe upper bound). One request is in flight at a time; the
-// first send after a takeover waits for a floor computed in the database.
+// minimum, not an average. "Actual send" is the instant the page's browser
+// reported the request left (`transport_reported`, Project Browser plan
+// §3.2), on the monotonic clock and never before the grant that let it go;
+// where it is not known, the completion instant is used instead (a safe
+// upper bound). One request is in flight at a time; the first send after a
+// takeover waits for a floor computed in the database.
 //
 // Every doubt closes admission: an unreadable or unusable setting throws, a
 // pacer used before its takeover floor is set throws, a second dispatch of one
@@ -26,7 +25,7 @@ import type { Clock, OwnershipSession, PauseSource, Rng, TransportOutcome } from
 // was lost is refused. Refusals never write a byte.
 //
 // Changing the jitter rule is one line here plus the invariant tests
-// (tests/sync-pacer.test.ts, tests/sync-pacer-property.test.ts), plan §12.
+// (tests/sync-pacer.test.ts), plan §12.
 
 /** u ∈ [0, 0.2): each pause is S × (1 + u), 2.0 to 2.4 s at S = 2 s. */
 export const JITTER_MAX = 0.2;
@@ -40,7 +39,7 @@ export const SETTING_RECHECK_MS = 1_000;
  *  pause or opens an own slot early. Once per wait, after five minutes. */
 export const SLOT_WAIT_WARN_MS = 5 * 60_000;
 /** Admission issue (monotonic, taken before the admission transaction) →
- *  `onRequestStart`. Later than this, the dispatch is refused: no bytes. */
+ *  the grant. Later than this, the grant is refused: no bytes. */
 export const SEND_WINDOW_MS = 15_000;
 /** Total budget of one request: connect and proxy tunnel, headers and the
  *  whole body (`AbortSignal.timeout`), plan §8 SIGTERM budget. */
@@ -77,15 +76,16 @@ export interface Admission extends SlotGrant {
   /** Monotonic instant taken by the actor BEFORE the admission transaction. */
   issuedMono: number;
   sendDeadlineMono: number;
-  /** One-shot: the first dispatch asks the check, any further one is refused. */
+  /** One-shot: the first grant is checked, any further one is refused. */
   used: boolean;
   /** The actual send (monotonic), or null while nothing was sent. */
   sentMono: number | null;
   sentWall: Date | null;
-  /** How the send instant was taken: at `onRequestStart`; as the sender
-   *  outside the process reported it (`transport_reported`, a page's
-   *  browser); or the completion instant as the safe upper bound when the
-   *  transport gave no such mark. */
+  /** How the send instant was taken: as the page's browser reported it
+   *  (`transport_reported`), or the completion instant as the safe upper
+   *  bound when the transport gave no such mark. `request_start` (undici's
+   *  `onRequestStart`) was the removed Node sender's: no admission gets it
+   *  now, old attempts keep it. */
   sendMark: "request_start" | "completion_fallback" | "transport_reported" | null;
   /** The instant `checkRemoteGrant` let a sender outside the process go
    *  (monotonic), or null: such a sender never sends before it. */
@@ -343,47 +343,16 @@ export class Pacer {
   }
 
   /**
-   * The synchronous send check, composed onto the dispatcher for this request
-   * only and called by undici at `onRequestStart`, immediately before the
-   * header bytes are written. A non-null result aborts the dispatch: nothing
-   * is written. Passing it IS the actual send.
-   */
-  check(admission: Admission): FanslySendRefusedError | null {
-    if (admission.used) {
-      // A redirect hop, a hidden re-send, a programming error: one admission
-      // is one physical request (I3).
-      return this.#refuse(admission, "lease_used");
-    }
-    admission.used = true;
-    if (this.#st.inFlight !== admission) return this.#refuse(admission, "lease_inactive");
-    if (this.#stopping || !this.#deps.ownership.alive()) return this.#refuse(admission, "lease_inactive");
-    const now = this.#deps.clock.monoNow();
-    if (now >= admission.sendDeadlineMono) return this.#refuse(admission, "send_deadline_passed");
-    if (now < this.#st.floorMono) return this.#refuse(admission, "takeover_floor");
-    // Belts: `waitForSlot` already waited for both. They fire only on a bug.
-    if (this.#st.lastCompletionMono !== null && now < this.#st.lastCompletionMono) {
-      return this.#refuse(admission, "pace");
-    }
-    if (this.#st.lastSendMono !== null && now - this.#st.lastSendMono < admission.pauseMs) {
-      return this.#refuse(admission, "pace");
-    }
-    // A send of the browser on its own still in flight (variant Б).
-    if (this.#foreignUntil() > now) return this.#refuse(admission, "pace");
-    this.#markSent(admission, now, "request_start");
-    return null;
-  }
-
-  /**
    * The send check of an admission the page's browser sends (Project
    * Browser: a site request, or the engine's own request through the
-   * browser transport), right before the browser is told it may send: every
-   * condition of `check` — one grant per admission, in flight, not stopping,
-   * ownership alive, within the send window, past the takeover floor and the
-   * pause — but no send mark. The browser sends later, within the window it
-   * is given (it may not send at all: a session that changed, a deadline the
-   * gate passed); `complete` marks the send at the instant the browser
-   * reports (`transport_reported`), else at the completion (the safe upper
-   * bound) when the request may have gone out.
+   * browser transport), right before the browser is told it may send: one
+   * grant per admission, in flight, not stopping, ownership alive, within
+   * the send window, past the takeover floor and the pause — but no send
+   * mark. The browser sends later, within the window it is given (it may
+   * not send at all: a session that changed, a deadline the gate passed);
+   * `complete` marks the send at the instant the browser reports
+   * (`transport_reported`), else at the completion (the safe upper bound)
+   * when the request may have gone out.
    */
   checkRemoteGrant(admission: Admission): FanslySendRefusedError | null {
     if (admission.used) return this.#refuse(admission, "lease_used");
@@ -417,9 +386,9 @@ export class Pacer {
    * After the response body was read, or the request failed or was aborted.
    * A request whose sender reported when it left (`transport_reported`: a
    * page's browser) is marked sent at that instant — never before this
-   * process let it go (its grant or check), never after now. One that may
-   * have reached the wire without either mark is counted as sent at this
-   * instant (the safe upper bound).
+   * process let it go (its grant), never after now. One that may have
+   * reached the wire without that mark is counted as sent at this instant
+   * (the safe upper bound).
    */
   complete(admission: Admission, outcome: TransportOutcome): void {
     if (this.#st.inFlight !== admission) throw new PacerInvariantError("foreign_admission");
@@ -432,13 +401,6 @@ export class Pacer {
       this.#markSent(admission, Math.min(Math.max(reported, floor), now), "transport_reported", now);
     } else if (admission.sentMono === null && mayHaveSent) {
       this.#markSent(admission, now, "completion_fallback");
-    } else if (outcome.kind === "response" && outcome.sendMark === "completion_fallback") {
-      // The transport says it had no `onRequestStart` mark although the check
-      // passed: trust the later instant.
-      this.#st.lastSendMono = now;
-      admission.sentMono = now;
-      admission.sentWall = this.#deps.clock.wallNow();
-      admission.sendMark = "completion_fallback";
     }
     if (admission.sentMono !== null || outcome.kind === "transport_error" || outcome.kind === "timeout") {
       this.#st.lastCompletionMono = now;
@@ -450,7 +412,8 @@ export class Pacer {
   }
 
   /** The monotonic instant the next slot opens at for `settingMs`, assuming
-   *  the pending u (or the largest one when none is drawn yet). For status. */
+   *  the pending u (or the largest one when none is drawn yet). Read by the
+   *  site tests (the bound of a foreign hold not yet journaled). */
   slotOpensAtMono(settingMs: number): number {
     const u = this.#st.pendingU ?? JITTER_MAX;
     return this.#earliestMono(Math.ceil(Math.max(this.#minSettingMs, settingMs) * (1 + u)));
@@ -526,7 +489,7 @@ export class Pacer {
   #markSent(
     admission: Admission,
     at: number,
-    mark: "request_start" | "completion_fallback" | "transport_reported",
+    mark: "completion_fallback" | "transport_reported",
     now: number = at,
   ): void {
     admission.gapPrevMs = admission.prevSendMono === null ? null : at - admission.prevSendMono;

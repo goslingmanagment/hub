@@ -20,7 +20,7 @@ import {
 } from "../requests/history.ts";
 import type { HistoryFanInput } from "../requests/history-rules.ts";
 import { pageLabel, parseDurationMs } from "./chain.ts";
-import { isoDate, json, nonNegativeInt, positiveInt } from "./args.ts";
+import { DEFAULT_CHAIN_JOURNAL_SINCE, isoDate, json, nonNegativeInt, positiveInt } from "./args.ts";
 
 // Owner CLI `pnpm cli sync history …` (design §7.6): file, read, cancel and
 // list history requests, and the ETA backtest over the legacy journal. The
@@ -43,8 +43,6 @@ const defaultDeps: SyncHistoryCliDeps = {
     process.exitCode = code;
   },
 };
-
-const DEFAULT_SINCE = "2026-07-05T00:00:00Z";
 
 function collect(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -213,7 +211,7 @@ export function registerSyncHistoryCommands(sync: Command, deps: SyncHistoryCliD
         + "(design §7.2.4); not between 00:00 and 05:00 UTC unless forced",
     )
     .option("--page <label>", "one page (default: every Fansly page)")
-    .option("--since <iso>", "journal rows captured since", isoDate, new Date(DEFAULT_SINCE))
+    .option("--since <iso>", "journal rows captured since", isoDate, new Date(DEFAULT_CHAIN_JOURNAL_SINCE))
     .option("--batch-rows <n>", "journal rows per read", positiveInt, 500)
     .option("--sleep-ms <n>", "pause between batches", nonNegativeInt, 200)
     .option("--max-duration <duration>", "stop after this long (90s, 30m, 2h)", parseDurationMs)

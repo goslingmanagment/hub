@@ -2,9 +2,9 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
-// What is left of the old customs' reads (Chat Memory week 4): two look-ups in a fan's chat that the custom orders
-// use. Neither reads the table `fan_customs` (0310), which has no reader or writer left — a custom is a custom order
-// (`custom-orders.ts`). It stays in the database, empty; only erasure still goes over it (services/erasure).
+// What is left of the old customs' reads (Chat Memory week 4): a look-up in a fan's chat that the custom orders
+// use. It does not read the table `fan_customs` (0310), which has no reader or writer left — a custom is a custom
+// order (`custom-orders.ts`). The table stays in the database, empty; only erasure still goes over it (services/erasure).
 
 const num = (value: string | number | null) => (value === null ? null : Number(value));
 
@@ -35,13 +35,4 @@ export async function listCustomDeliverySuggestions(
     mediaCount: Number(row.media),
     priceMills: num(row.price_mills),
   }));
-}
-
-/** The fan's chat on the page: the thread with the newest message (on Fansly the group). */
-export async function findFanConversationRef(db: Database, pageId: number, fanId: number): Promise<string | null> {
-  const result = await db.execute<{ conversation: string }>(sql`
-    select platform_conversation_id as conversation from page_dm_threads
-    where platform_account_id = ${pageId} and fan_id = ${fanId}
-    order by last_message_at desc nulls last limit 1`);
-  return result.rows[0]?.conversation ?? null;
 }

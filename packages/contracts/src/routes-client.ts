@@ -2933,26 +2933,6 @@ export const clientFanFactChangeParamsSchema = z.object({
   factId: z.coerce.number().int().positive(),
 });
 
-export const clientFanCustomCreateBodySchema = z.object({
-  description: z.string().trim().min(1).max(500),
-  priceMills: mills.nonnegative().optional(),
-  /** A tip of `customPayments`: the custom is paid by it. */
-  paymentRef: clientNumericIdSchema.optional(),
-}).strict();
-
-export const clientFanCustomChangeBodySchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("paid"), paymentRef: clientNumericIdSchema }).strict(),
-  z.object({ action: z.literal("delivered"), messageRef: clientNumericIdSchema }).strict(),
-  z.object({ action: z.literal("cancel") }).strict(),
-  z.object({ action: z.literal("edit"), description: z.string().trim().min(1).max(500), priceMills: mills.nonnegative().nullable() }).strict(),
-]);
-
-export const clientFanCustomParamsSchema = z.object({
-  pageLabel: pageLabelSchema,
-  fanRef: clientFanRefSchema,
-  customId: z.coerce.number().int().positive(),
-});
-
 export const clientFanFactChangeResponseSchema = z.object({
   /** false — the fact was no longer active (changed by someone else first): nothing changed. */
   changed: z.boolean(),
@@ -4602,44 +4582,6 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
-  clientFanCustomCreate: {
-    auth: { kind: "apiKey", scope: "page" },
-    tags: ["client"],
-    summary: "A chatter writes a custom into the fan's record, paid by one of the suggested tips or not yet",
-    description: "Database-only. A device token's, for an active page granted to the caller. `paymentRef` must be one "
-      + "of the card's `customPayments` (else 409 `not_suggested`); without it the custom waits for its payment. "
-      + "Answers the card after it.",
-    params: clientPageFanParamsSchema,
-    body: clientFanCustomCreateBodySchema,
-    response: {
-      200: clientFanFactChangeResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-      409: errorResponseSchema,
-    },
-  },
-  clientFanCustomChange: {
-    auth: { kind: "apiKey", scope: "page" },
-    tags: ["client"],
-    summary: "A chatter marks a custom paid, delivered, cancelled, or edits it",
-    description: "Database-only. A device token's; the custom must be of the fan's card and of a page the caller works. "
-      + "`paid` takes a tip of `customPayments`, `delivered` a message of the custom's `deliveryCandidates` (else 409 "
-      + "`not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`. A step that is "
-      + "not the caller's — cancelling or editing an order another person took — is 409 `not_allowed`, as on the board; "
-      + "their own order they cancel at any step before it is given.",
-    params: clientFanCustomParamsSchema,
-    body: clientFanCustomChangeBodySchema,
-    response: {
-      200: clientFanFactChangeResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-      409: errorResponseSchema,
-    },
-  },
   accountShiftNumbers: {
     auth: { kind: "any-session" },
     tags: ["client"],
@@ -4875,8 +4817,6 @@ export type TeamSalesQuery = z.infer<typeof teamSalesQuerySchema>;
 export type TeamSalesPpvResponse = z.infer<typeof teamSalesPpvResponseSchema>;
 export type TeamSalesRepliesResponse = z.infer<typeof teamSalesRepliesResponseSchema>;
 export type ClientFanCustom = z.infer<typeof clientFanCustomSchema>;
-export type ClientFanCustomCreateBody = z.infer<typeof clientFanCustomCreateBodySchema>;
-export type ClientFanCustomChangeBody = z.infer<typeof clientFanCustomChangeBodySchema>;
 export type ClientHandoffResponse = z.infer<typeof clientHandoffResponseSchema>;
 export type ClientWinBackResponse = z.infer<typeof clientWinBackResponseSchema>;
 export type ClientWinBackAttemptBody = z.infer<typeof clientWinBackAttemptBodySchema>;

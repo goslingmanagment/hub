@@ -32,7 +32,7 @@ export const CREATOR_SHARE = 0.8;
 /** OnlyFans collection through the vendor stopped this many days ago (2026-11-01). */
 
 export type AssignedPage = KernelOperationResponse<"pageSubscribers">["page"];
-export type CanonicalType = KernelOperationResponse<"pageTransactions">["items"][number]["canonicalType"];
+export type CanonicalType = KernelOperationResponse<"crossPageTransactions">["items"][number]["canonicalType"];
 
 // --- Pages ---
 
@@ -413,22 +413,6 @@ export function fanTransactions(page: DemoPage, fan: DemoFan): DemoTx[] {
   }
   out.sort((left, right) => left.hoursAgo - right.hoursAgo);
   txCache.set(key, out);
-  return out;
-}
-
-const pageTxCache = new Map<string, { item: PageFan; tx: DemoTx }[]>();
-
-/** Every transaction of the page, newest first. */
-export function pageTransactionsOf(page: DemoPage): { item: PageFan; tx: DemoTx }[] {
-  const cached = pageTxCache.get(page.label);
-  if (cached) return cached;
-  const out: { item: PageFan; tx: DemoTx }[] = [];
-  for (const item of pagePopulation(page)) {
-    if (item.fan.totalSpent <= 0) continue;
-    for (const tx of fanTransactions(page, item.fan)) out.push({ item, tx });
-  }
-  out.sort((left, right) => left.tx.hoursAgo - right.tx.hoursAgo);
-  pageTxCache.set(page.label, out);
   return out;
 }
 

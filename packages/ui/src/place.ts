@@ -81,12 +81,6 @@ export interface CarriedFilters {
   days: 14 | 30 | null;
 }
 
-/** Workboard's period in its address (`?days=14|30`), as the carried one. */
-export function workboardDays(search: URLSearchParams): 14 | 30 | null {
-  const days = search.get("days");
-  return days === "14" ? 14 : days === "30" ? 30 : null;
-}
-
 /** The console's period as the carried one. */
 export function consoleDays(period: PeriodKey | null): 14 | 30 | null {
   return period === "14d" ? 14 : period === "30d" ? 30 : null;

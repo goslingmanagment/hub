@@ -8,7 +8,6 @@ import {
   autostopPagePublishing,
   getFanslyWriteFileFacts,
   getOfapiKeyDeclaration,
-  getOnlyfansVaultAlbumRun,
   getOnlyfansVaultUpload,
   getPagePublishingSettings,
   getPublication,
@@ -1185,9 +1184,4 @@ async function autostopOn(ctx: RunContext, record: PublicationRecord, errorCode:
   }).catch((error: unknown) => {
     ctx.app.logger?.warn({ error, pageId: record.pageId }, "publications: autostop notice failed");
   });
-}
-
-/** The run of an album, for a card or a CLI (later PRs read it). */
-export async function getOnlyfansVaultAlbumProgress(app: AppContext, publicationId: number): Promise<OnlyfansVaultAlbumRun | null> {
-  return getOnlyfansVaultAlbumRun(app.db, publicationId);
 }

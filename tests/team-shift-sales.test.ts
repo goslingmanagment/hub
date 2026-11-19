@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { ShiftSale } from "@agency_hub_core/db";
+import { workRef } from "../apps/runtime/src/services/agent-team-sales.ts";
 import type { ComputedWork } from "../apps/runtime/src/services/chatter-shifts.ts";
-import { ruleWorkRef, type ScreenHome, type ScreensRule } from "../apps/runtime/src/services/sale-rule-screens.ts";
+import type { ScreenHome, ScreensRule } from "../apps/runtime/src/services/sale-rule-screens.ts";
 import {
   contestedSales, outsideByRule, outsideMoney, outsideMoneyByRule, salesNoShiftHolds, salesOfWork, settleOutsideShifts, shiftSalesWindow, teamShiftMoney,
   teamShiftMoneyOf, type HeldShift, type RuledShiftsInput,
@@ -170,7 +171,7 @@ describe("teamShiftMoney by the one rule", () => {
   const RULED: ScreensRule = { from: "2026-11-04", live: false };
   const homeOf = (sale: ShiftSale, kind: ScreenHome["kind"], shares: Array<{ userId: number; shift: ComputedWork }> = []): [number, ScreenHome] => [
     sale.transactionId,
-    { transactionId: sale.transactionId, kind, reason: kind === "decide" ? "no_last_writer" : "holder", shares: shares.map(({ userId, shift }) => ({ userId, workRef: ruleWorkRef(userId, shift), mills: sale.netMills })) },
+    { transactionId: sale.transactionId, kind, reason: kind === "decide" ? "no_last_writer" : "holder", shares: shares.map(({ userId, shift }) => ({ userId, workRef: workRef(userId, shift), mills: sale.netMills })) },
   ];
   const ruleOf = (sales: readonly ShiftSale[], homes: Array<[number, ScreenHome]>, rule = RULED): RuledShiftsInput => ({
     rule, homes: new Map(homes), sales: new Map(sales.map((one) => [one.transactionId, one])), visits: [],

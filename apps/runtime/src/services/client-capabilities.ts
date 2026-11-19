@@ -140,7 +140,8 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   "win-back-v1",
   // Chat Memory week 3: GET …/handoff.
   "handoff-v1",
-  // Chat Memory week 4: POST …/fans/:fanRef/customs and …/customs/:customId.
+  // Chat Memory week 4: the customs in GET …/fans/:fanRef/card; the extension records and gives an order through
+  // the board's routes (customOrderCreate, customOrderAct).
   "fan-customs-v1",
   // «Онлайн»: GET …/online, POST …/online/presence (Fansly and OnlyFans), …/online/probe (OnlyFans, the owner's
   // `onlineProbe`) and …/online/attempts.

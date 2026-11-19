@@ -63,12 +63,11 @@ import {
   estimateSlotOpensAt,
   explainWork,
   ownerRunning,
-  type StatusWork,
   type WaitingReason,
 } from "../engine/status.ts";
 import { FANSLY_RESOURCE_SPECS } from "../fansly/registry.ts";
 import { HISTORY_OLDER_REFUSED_REASON, parseDmMessagesCursor } from "../fansly/resources/dm-messages.ts";
-import { statusPageOf } from "../status-rows.ts";
+import { statusPageOf, statusWorkOf } from "../status-rows.ts";
 import {
   budgetUseOf,
   estimateItemReads,
@@ -558,7 +557,6 @@ export async function submitHistoryRequest(
   const items: NewHistoryItem[] = [];
   const needWork = new Map<string, { thread: HistoryThreadFacts; dueAt: Date | null }>();
   const estimates: ItemReadsEstimate[] = [];
-  let unanchored = 0;
   for (const entry of resolved) {
     const base = {
       ordinal: entry.input.ordinal,
@@ -606,7 +604,6 @@ export async function submitHistoryRequest(
     // shows the fan `blocked` through the work (`effectiveItemState`).
     const estimate = itemEstimate({ depth, anchor }, thread, now);
     estimates.push(estimate);
-    if (anchor === null) unanchored += 1;
     needWork.set(thread.groupId, { thread, dueAt: null });
     items.push({
       ...base,
@@ -627,7 +624,6 @@ export async function submitHistoryRequest(
   const eta = await pageEtaContext(ctx, input.pageId);
   const requestEta = estimateRequest({
     items: estimates,
-    unanchoredItems: unanchored,
     capacity: eta.capacity,
     k: runnableRequestCount(eta, estimates.length > 0 ? 1 : 0),
   });
@@ -1074,23 +1070,6 @@ function iso(date: Date | null | undefined): string | null {
   return date === null || date === undefined || isIndefinite(date) ? null : date.toISOString();
 }
 
-/** Unlike `../status-rows.ts`'s `statusWorkOf`, sets no `http` (absent:
- *  a key that sends) whatever the work's key. */
-function statusWorkOf(work: SyncWorkRow): StatusWork {
-  return {
-    id: work.id,
-    resource: work.resource,
-    subject: work.subject,
-    class: work.class,
-    state: work.state,
-    dueAt: work.dueAt,
-    breakerUntil: work.breakerUntil,
-    blockedByVendorAt: work.blockedByVendorAt,
-    waitingReason: work.waitingReason,
-    waitingUntil: work.waitingUntil,
-  };
-}
-
 /** What a request waits for as a whole: the page (an owner pause, no running
  *  live owner, a page hold, a route state this build cannot read), or the
  *  hold of the route every history read takes, else nothing. The pause is
@@ -1252,7 +1231,6 @@ async function historyRequestViewsWithPages(
     const stored = counts.get(request.id)!;
     for (const state of ["ready", "refused", "cancelled"] as const) byState[state] = stored.byState[state];
     const estimates: ItemReadsEstimate[] = [];
-    let unanchored = 0;
     let runnable = false;
     for (const item of open) {
       const work = item.workId === null ? undefined : inputs.works.get(item.workId);
@@ -1262,11 +1240,9 @@ async function historyRequestViewsWithPages(
       const thread = item.threadId === null ? undefined : inputs.facts.get(item.threadId);
       if (thread === undefined) continue;
       estimates.push(itemEstimate(item, thread, now));
-      if (belowAnchor(item.anchor, thread) === null) unanchored += 1;
     }
     const requestEta: RequestEta = estimateRequest({
       items: estimates,
-      unanchoredItems: unanchored,
       capacity: eta.capacity,
       k: runnableRequestCount(eta, 0),
     });

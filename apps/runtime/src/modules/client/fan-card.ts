@@ -6,9 +6,7 @@ import {
 } from "@agency_hub_core/contracts";
 
 import {
-  changeClientFanCustom,
   changeClientFanFact,
-  createClientFanCustom,
   decideClientFanLink,
   readClientFanCard,
 } from "../../services/fan-card.ts";
@@ -52,22 +50,6 @@ export function registerClientFanCardRoutes(server: ApiServer, ctx: ApiModuleCon
       fanRef: request.params.fanRef,
       factId: request.params.factId,
       body: request.body,
-    });
-  });
-
-  server.post("/api/v1/client/pages/:pageLabel/fans/:fanRef/customs", {
-    schema: routeSchemas.clientFanCustomCreate,
-  }, async (request): Promise<ClientFanFactChangeResponse> => {
-    const principal = await requirePrincipal(request);
-    return createClientFanCustom(appContext, principal, { pageLabel: request.params.pageLabel, fanRef: request.params.fanRef, body: request.body });
-  });
-
-  server.post("/api/v1/client/pages/:pageLabel/fans/:fanRef/customs/:customId", {
-    schema: routeSchemas.clientFanCustomChange,
-  }, async (request): Promise<ClientFanFactChangeResponse> => {
-    const principal = await requirePrincipal(request);
-    return changeClientFanCustom(appContext, principal, {
-      pageLabel: request.params.pageLabel, fanRef: request.params.fanRef, customId: request.params.customId, body: request.body,
     });
   });
 }

@@ -398,27 +398,25 @@ describe("Fansly live overlay apply (plan §7.2)", () => {
 });
 
 describe("passive parity and golden signals", () => {
-  it("confirms against the legacy stores, field by field, defers a row the window passed without a copy, and reports excluded chats apart", async () => {
+  it("confirms against the archive, field by field, defers a row the window passed without a copy, and reports excluded chats apart", async () => {
     const f = await fixture();
     const fans = await upsertFans(f.app.db, [FAN, OTHER_FAN].map((platformUserId) => ({ platform: "fansly" as const, platformUserId })));
     const fanId = (ref: string) => fans.find((fan) => fan.platformUserId === ref)!.id;
-    const thread = (await query<{ id: string }>(`insert into page_dm_threads(platform_account_id, fan_id, platform_conversation_id)
-      values ($1, $2, $3) returning id`, [f.page.id, fanId(FAN), GROUP]))[0]!.id;
+    await testDb.pool.query(`insert into page_dm_threads(platform_account_id, fan_id, platform_conversation_id)
+      values ($1, $2, $3)`, [f.page.id, fanId(FAN), GROUP]);
     await testDb.pool.query(`insert into page_dm_threads(platform_account_id, fan_id, platform_conversation_id, metadata)
       values ($1, $2, $3, '{"messageSyncExcludedReason":"partner_missing_from_aggregation_accounts"}')`,
     [f.page.id, fanId(OTHER_FAN), OTHER_GROUP]);
-    const hot = message({ content: "same" });
+    const same = message({ content: "same" });
     const archived = message({ content: "socket text" });
     const missing = message();
     const excluded = message({ senderId: OTHER_FAN, groupId: OTHER_GROUP });
     const young = message();
-    await f.apply(await f.capture(created(hot, archived, missing, excluded, young)));
-    await testDb.pool.query(`insert into page_dm_messages(conversation_id, platform_account_id, platform_message_id,
-      sender_platform_user_id, sender_role, created_at, content) values ($1, $2, $3, $4, 'fan', to_timestamp($5), 'same')`,
-    [thread, f.page.id, hot.id, FAN, Math.floor(hot.createdAt)]);
+    await f.apply(await f.capture(created(same, archived, missing, excluded, young)));
     await testDb.pool.query(`insert into message_archive(account_id, platform, conversation_ref, message_ref, is_sent_by_me,
-      occurred_at, text_plain) values ($1, 'fansly', $2, $3, false, to_timestamp($4), 'rest text')`,
-    [f.page.id, GROUP, archived.id, archived.createdAt]);
+      occurred_at, text_plain) values ($1, 'fansly', $2, $3, false, to_timestamp($4), 'same'),
+      ($1, 'fansly', $2, $5, false, to_timestamp($6), 'rest text')`,
+    [f.page.id, GROUP, same.id, Math.floor(same.createdAt), archived.id, archived.createdAt]);
     await testDb.pool.query("update dm_live_messages set confirm_due_at = now() - interval '1 second'");
     await testDb.pool.query(`update dm_live_messages set first_visible_at = now() - interval '25 hours'
       where platform_message_id in ($1, $2)`, [missing.id, excluded.id]);
@@ -429,7 +427,7 @@ describe("passive parity and golden signals", () => {
       confirm_wait_reason, confirmed_at is not null as confirmed, confirm_due_at > now() as later,
       confirm_due_at is null as no_look from dm_live_messages`);
     const byId = new Map(verdicts.map((row) => [row.id, row]));
-    expect(byId.get(hot.id)).toMatchObject({ confirm_outcome: "match", confirm_source: "page_dm_messages", confirmed: true,
+    expect(byId.get(same.id)).toMatchObject({ confirm_outcome: "match", confirm_source: "message_archive", confirmed: true,
       confirm_wait_reason: null });
     expect(byId.get(archived.id)).toMatchObject({ confirm_outcome: "mismatch", confirm_source: "message_archive",
       mismatch_fields: ["text"] });

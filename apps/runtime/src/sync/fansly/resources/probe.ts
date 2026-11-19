@@ -215,7 +215,6 @@ export const probeExcludedChatModule: ResourceModule = {
     return {
       work: { satisfiesRevision: true, close: "done", closeReason: "served", result },
       followups: [],
-      canonicalized: true,
       counters: { excluded_chat_served: 1 },
     };
   },

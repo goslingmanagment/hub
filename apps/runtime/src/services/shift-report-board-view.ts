@@ -10,7 +10,7 @@ import {
 import { deciderOf, personsOfLogins, teamFactsFor } from "./teams.ts";
 import {
   findHandinPersonOfUser,
-  findPreviousShiftComment,
+  listPreviousShiftComments,
   hasShiftReportReviewer,
   listHandinMarks,
   listOffPlatform,
@@ -43,7 +43,8 @@ import {
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
-import { draftFacts, draftLines, linesPageSums, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-handins.ts";
+import { commentText, modelComment } from "./shift-handin-rules.ts";
 import { cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor } from "./shift-report-phases.ts";
 
 /**
@@ -627,7 +628,10 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     : phase === "fixing" && latest !== null && latest.totalMills !== nowMills ? latest.totalMills : null;
   const canConfirm = own && mayAct(actor, "confirm", phase) && candidate !== null && candidate.supersededAt === null;
   const lateCards = proposals.some((one) => one.state === "late");
-  const previousComment = await findPreviousShiftComment(db, { shiftId: subject.shift.id, pageLabels: shiftLabels, before: subject.shift.startedAt });
+  const previousComment = previousShiftComment(
+    await listPreviousShiftComments(db, { shiftId: subject.shift.id, pageLabels: shiftLabels, before: subject.shift.startedAt, limit: 10 }),
+    modelsOfPages(catalog, shiftLabels),
+  );
   const previousNames = previousComment === null ? new Map<number, string>() : await listHandinNames(db, [previousComment.userId]);
   const moscowToday = new Date(now.getTime() + 3 * HOUR_MS).toISOString().slice(0, 10);
   const reportDay = latest?.reportDate ?? handin?.reportDate ?? subject.shift.reportDate;
@@ -670,6 +674,21 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       late: Date.parse(`${moscowToday}T00:00:00Z`) - Date.parse(`${reportDay}T00:00:00Z`) > DAY_MS,
     },
   };
+}
+
+/**
+ * «От прошлой смены» (0432): the latest earlier shift whose comment speaks to one of this shift's models — its own, else
+ * its general one (`modelComment`) — and what it says to them: one text for one model or the same text for all, else
+ * «Model: text» of each model joined by « · ». A shift that holds only model B never reads what was written for model A.
+ * `rows` the newest first. Pure.
+ */
+export function previousShiftComment<T extends { comment: string; modelComments: Readonly<Record<string, string>> }>(
+  rows: readonly T[],
+  models: ReadonlyArray<{ slug: string; name: string }>,
+): (T & { comment: string }) | null {
+  const found = rows.find((row) => models.some((model) => modelComment(row, model.slug).trim() !== ""));
+  if (found === undefined) return null;
+  return { ...found, comment: commentText(found, models, { line: (name, text) => `${name}: ${text}`, separator: " · " }) };
 }
 
 /** Whether two versions' page sums differ (what a post's lines say). Pure. */
@@ -753,6 +772,6 @@ export async function signableOf(db: Database, input: { subject: Subject; catalo
   const oldWay = await oldWayGives(db, applied);
   const lines = signedLines({ candidate: candidate.lines, draft, proposals, notes: new Map(marks.map((mark) => [mark.transactionId, mark.note])), oldWay });
   const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
-  const sums = linesPageSums(lines, candidate.pages.map((page) => page.pageLabel), offPlatform);
+  const sums = reportSums(lines, candidate.pages.map((page) => page.pageLabel), offPlatform);
   return { lines, offPlatform, sums, count: lines.filter((line) => line.amountMills > 0).length, proposals, applied, oldWay };
 }

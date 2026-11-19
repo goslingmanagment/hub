@@ -45,7 +45,6 @@ import {
   type AiGatewayProviderBody,
   type AnthropicGatewayOutputFormat,
 } from "./ai-gateway-anthropic.ts";
-import { estimateOpenrouterGatewayRequestCost } from "./ai-gateway-openrouter-provider.ts";
 import { reconcileAiProviderTerminalIncident } from "./ai-gateway-incidents.ts";
 import { aiGatewayProviderForModel } from "./ai-gateway-pricing.ts";
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey } from "./page-context.ts";
@@ -77,7 +76,7 @@ export interface AiGatewayProviderInput {
   signal: AbortSignal;
   /** Server-derived, off the wire: disables adaptive summarized thinking so a
    * tight maxTokens stays a pure output budget (fan-summary short recap). The
-   * Anthropic provider honors it; OpenRouter has no thinking block to disable. */
+   * Anthropic provider honors it. */
   disableAdaptiveThinking?: boolean;
   /** Server-only: the bounded completion trim pass must not retry SDK calls. */
   disableRetries?: boolean;
@@ -95,8 +94,7 @@ export interface AiGatewayProviderInput {
   /** Server-derived, off the wire: structured-outputs schema for a request
    * whose consumer parses JSON. No caller sets it today — the internal
    * completion lane that did was removed with the Workboard —
-   * but the knob stays wired: the Anthropic provider honors it; OpenRouter
-   * ignores it. */
+   * but the knob stays wired: the Anthropic provider honors it. */
   outputFormat?: AnthropicGatewayOutputFormat;
 }
 
@@ -187,14 +185,15 @@ export function buildAiGatewayTerminalRecord(
   };
 }
 
-/** Model prefix routes the provider — "openrouter:*" to the
- * second provider, everything else to Anthropic. */
+/** Model prefix routes the provider: everything to Anthropic but an
+ * "openrouter:*" model, which has no provider and so answers the same 503 as
+ * an unconfigured gateway. */
 export function selectAiGatewayProvider(
-  app: Pick<AppContext, "aiGatewayProvider" | "aiGatewayOpenrouterProvider">,
+  app: Pick<AppContext, "aiGatewayProvider">,
   model: string,
 ): AiGatewayProvider | undefined {
   return aiGatewayProviderForModel(model) === "openrouter"
-    ? app.aiGatewayOpenrouterProvider
+    ? undefined
     : app.aiGatewayProvider;
 }
 
@@ -506,9 +505,7 @@ export async function prepareAiGatewayStream(
   );
   let estimatedRequestCostMicroUsd: number;
   try {
-    estimatedRequestCostMicroUsd = provider.provider === "openrouter"
-      ? estimateOpenrouterGatewayRequestCost(input).costMicroUsd
-      : estimateAnthropicGatewayRequestCost(input).costMicroUsd;
+    estimatedRequestCostMicroUsd = estimateAnthropicGatewayRequestCost(input).costMicroUsd;
   } catch {
     throw new BadRequestError("Unsupported ChatMuse AI gateway model");
   }
@@ -642,9 +639,7 @@ export async function prepareAiGatewayStream(
       estimateCostMicroUsd: (prompt) => {
         const body = trimBody(prompt, trimCompletion.maxTokens);
         try {
-          return provider.provider === "openrouter"
-            ? estimateOpenrouterGatewayRequestCost(body).costMicroUsd
-            : estimateAnthropicGatewayRequestCost(body).costMicroUsd;
+          return estimateAnthropicGatewayRequestCost(body).costMicroUsd;
         } catch {
           return 0;
         }
@@ -721,9 +716,7 @@ export async function prepareAiGatewayStream(
       let resolvedUsage = record.usage;
       if (!resolvedUsage && record.estimateCostOnMissingUsage) {
         try {
-          const estimate = provider.provider === "openrouter"
-            ? estimateOpenrouterGatewayRequestCost(input)
-            : estimateAnthropicGatewayRequestCost(input);
+          const estimate = estimateAnthropicGatewayRequestCost(input);
           resolvedUsage = {
             inputTokens: 0,
             outputTokens: 0,
@@ -1085,7 +1078,8 @@ export class AiGatewayTerminalStreamConsumer {
   }
 }
 
-/** A provider stop that ends a whole answer: Anthropic's and OpenRouter's. */
+/** A provider stop that ends a whole answer: Anthropic's `end_turn` and the
+ * OpenAI-style `stop`. */
 const NATURAL_STOP_REASONS = new Set(["end_turn", "stop"]);
 /** Silence the extension tolerates is 45 s (its llm-idle timeout); while the
  * content is held back an empty reasoning_delta keeps the stream alive, as any

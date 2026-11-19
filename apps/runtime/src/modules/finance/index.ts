@@ -44,7 +44,6 @@ import {
   getOverviewRevenueReport,
   getPageRevenueReport,
   getPageSummary,
-  getPageTransactionsReport,
   groupPageIdsByPlatform,
   serializeRawType,
   summarizeRevenueRows,
@@ -152,22 +151,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
       now,
       period: query.period,
       ...(query.period === "custom" ? { custom: { from: query.from, to: query.to }, utcDays: query.utcDays === true } : {}),
-    });
-  });
-
-  server.get("/api/v1/pages/:pageLabel/transactions", {
-    schema: routeSchemas.pageTransactions,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const query = request.query;
-    await requirePageAccess(principal, request.params.pageLabel);
-    enforceRevenueRouteRoleScope(principal);
-
-    return getPageTransactionsReport(appContext, request.params.pageLabel, {
-      limit: query.limit,
-      offset: query.offset,
-      type: query.type,
-      state: query.state,
     });
   });
 

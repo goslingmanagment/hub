@@ -1,6 +1,6 @@
 # A local hub for client development
 
-How a client developer (chat-extension, desktop, Fansly extension) runs the hub
+How a client developer (chat-extension) runs the hub
 on their own machine with believable OnlyFans data, no OFAPI key and no AI
 spend. Everything here touches only a local Docker database; the seed refuses
 any other.
@@ -147,4 +147,4 @@ preflight. A run that fails for any other reason prints `Failed: …` and may
 have written part of the seed; fix the cause and re-run.
 
 Code: `scripts/dev-seed-client.ts`, `scripts/dev-fake-ai-provider.mjs`. Tests:
-`tests/client-dev-seed-guards.test.ts`, `tests/client-dev-seed.integration.test.ts`.
+`tests/client-dev-seed-guards.test.ts`.

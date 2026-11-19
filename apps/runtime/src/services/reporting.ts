@@ -3,7 +3,6 @@ import type {
   CrossPageFanDetailResponse,
   FanListQuery,
   FanListResponse,
-  FollowerDailyResponse,
   FollowerListQuery,
   FollowerListResponse,
   ModelListItem,
@@ -14,11 +13,8 @@ import type {
   PageFanDetailResponse,
   PageRevenueResponse,
   PlatformRevenueWindow,
-  SubscriberDailyResponse,
   SubscriberListQuery,
   SubscriberListResponse,
-  TransactionListQuery,
-  TransactionListResponse,
 } from "@agency_hub_core/contracts";
 import {
   findFanOnPage,
@@ -30,15 +26,12 @@ import {
   getRevenueBreakdownForScope,
   getRevenuePageTotals,
   listFansForPage,
-  listFollowerDailyForPage,
   listFollowersForPage,
   listFollowerTotalsForPages,
   listFanPageContexts,
   listDeletedFansForPage,
   listSubscribersForPage,
-  listSubscriberDailyForPage,
   listSubscriberTotalsForPages,
-  listTransactionsForPage,
   listRevenueModels,
   listRevenuePages,
   listVisibleModels,
@@ -760,50 +753,6 @@ export async function getModelRevenueReport(
   };
 }
 
-export async function getPageTransactionsReport(
-  app: AppContext,
-  pageLabel: string,
-  input: TransactionListQuery,
-): Promise<TransactionListResponse> {
-  const page = await getPageSummary(app, pageLabel);
-  const rows = await listTransactionsForPage(app.db, {
-    pageId: page.id,
-    limit: input.limit,
-    offset: input.offset,
-    ...(input.type === undefined ? {} : { canonicalType: input.type }),
-    ...(input.state === undefined ? {} : { transactionState: input.state }),
-  });
-
-  return {
-    page: serializePage(page),
-    items: rows.items.map((row) => ({
-      transactionId: row.transactionId,
-      rawType: serializeRawType(page.platform, row.rawType),
-      canonicalType: row.canonicalType,
-      transactionState: row.transactionState,
-      amountMills: millsToNumber(row.amountMills),
-      destinationAmountMills: millsToNumber(row.destinationAmountMills),
-      netAmountMills: millsToNumber(row.netAmountMills),
-      walletId: row.walletId,
-      correlationId: row.correlationId,
-      correlationAccountId: row.correlationAccountId,
-      occurredAt: serializeTimestamp(row.occurredAt)!,
-      sourceUpdatedAt: serializeTimestamp(row.sourceUpdatedAt),
-      fan: row.fanPlatformUserId
-        ? {
-          platformUserId: row.fanPlatformUserId,
-          pageAlias: row.fanPageAlias,
-          username: row.fanUsername,
-          displayName: row.fanDisplayName,
-        }
-        : null,
-    })),
-    limit: input.limit,
-    offset: input.offset,
-    total: rows.total,
-  };
-}
-
 export async function getPageSubscribersReport(
   app: AppContext,
   pageLabel: string,
@@ -840,30 +789,6 @@ export async function getPageSubscribersReport(
     limit: input.limit,
     offset: input.offset,
     total: rows.total,
-  };
-}
-
-export async function getPageSubscribersDailyReport(
-  app: AppContext,
-  pageLabel: string,
-  input: PeriodInput,
-): Promise<SubscriberDailyResponse> {
-  const page = await getPageSummary(app, pageLabel);
-  const range = resolveBusinessDateRangeForPlatform(
-    page.platform,
-    input.period,
-    input.now ?? new Date(),
-    input.custom,
-  );
-  const items = await listSubscriberDailyForPage(app.db, {
-    pageId: page.id,
-    fromBusinessDate: range.from,
-    toBusinessDate: range.toExclusive,
-  });
-
-  return {
-    page: serializePage(page),
-    items,
   };
 }
 
@@ -917,30 +842,6 @@ export async function getPageFollowersReport(
     limit: input.limit,
     offset: input.offset,
     total: rows.total,
-  };
-}
-
-export async function getPageFollowersDailyReport(
-  app: AppContext,
-  pageLabel: string,
-  input: PeriodInput,
-): Promise<FollowerDailyResponse> {
-  const page = await getPageSummary(app, pageLabel);
-  const range = resolveBusinessDateRangeForPlatform(
-    page.platform,
-    input.period,
-    input.now ?? new Date(),
-    input.custom,
-  );
-  const items = await listFollowerDailyForPage(app.db, {
-    pageId: page.id,
-    fromBusinessDate: range.from,
-    toBusinessDate: range.toExclusive,
-  });
-
-  return {
-    page: serializePage(page),
-    items,
   };
 }
 

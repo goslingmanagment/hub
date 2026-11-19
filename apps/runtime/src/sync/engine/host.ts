@@ -39,7 +39,6 @@ import {
   errorName,
   type CaptureCodec,
   type ChatUnavailableHook,
-  type ObservationCanonicalizer,
   type SyncFaultHook,
   type SyncLogger,
   type ThreadChainChangedHook,
@@ -150,7 +149,6 @@ export interface SyncHostOptions {
   /** Default: one PgWake on `fansly_sync_work`. */
   wake?: Wake & { start?(): Promise<void>; close?(): Promise<void> };
   capture?: CaptureCodec;
-  canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
   onWorkClosed?: WorkClosedHook;
   onChatUnavailable?: ChatUnavailableHook;
@@ -554,7 +552,6 @@ export class SyncEngineHost {
       wake: this.#wake,
       settings: this.#settings,
       ...(this.#o.capture === undefined ? {} : { capture: this.#o.capture }),
-      ...(this.#o.canonicalize === undefined ? {} : { canonicalize: this.#o.canonicalize }),
       ...(this.#o.onThreadChainChanged === undefined ? {} : { onThreadChainChanged: this.#o.onThreadChainChanged }),
       ...(this.#o.onWorkClosed === undefined ? {} : { onWorkClosed: this.#o.onWorkClosed }),
       ...(this.#o.onChatUnavailable === undefined ? {} : { onChatUnavailable: this.#o.onChatUnavailable }),
