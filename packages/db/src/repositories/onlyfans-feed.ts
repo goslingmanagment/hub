@@ -304,8 +304,14 @@ export interface OnlyfansFeedPollLease {
  *
  * `awaitedSince`: a handed-in shift report waits for this page's statement since then (the board «Отчёт» asked the
  * read at once). The poll is lent to whoever asks, out of turn, if nobody was lent it since — one read a hand-in;
- * before, the always-on tab kept it and the person watched «Ждём выписку» for up to ten minutes (19.11).
+ * before, the always-on tab kept it and the person watched «Ждём выписку» for up to ten minutes (19.11). Never while
+ * a pass lent before the hand-in is still reading (granted within `IN_FLIGHT_MS`, not reported yet): its report comes
+ * after the hand-in and covers it, and two tabs never read ChatSpace at once. The out-of-turn grant is stamped no
+ * earlier than the hand-in, so a hand-in that landed between the ask's clock and this decision is not lent twice.
  */
+/** A pass lent this recently and not reported yet is still reading (a pass takes seconds: two lists, a page or a few). */
+const IN_FLIGHT_MS = 2 * 60_000;
+
 export async function takeOnlyfansFeedPoll(
   db: Database,
   input: { pageId: number; userId: number; server: boolean; now: Date; everyMs: number; serverHoldMs: number; awaitedSince?: Date | null },
@@ -316,19 +322,24 @@ export async function takeOnlyfansFeedPoll(
   `);
   const [row] = (await db.execute<{
     user_id: string | null; server: boolean; next_at: Date | string; server_seen_at: Date | string | null;
-    granted_at: Date | string | null; subscribers_cursor: string | null; ledger_cursor: string | null;
+    granted_at: Date | string | null; ledger_passed_at: Date | string | null; failed_at: Date | string | null;
+    subscribers_cursor: string | null; ledger_cursor: string | null;
   }>(sql`
-    select user_id::text, server, next_at, server_seen_at, granted_at, subscribers_cursor, ledger_cursor
+    select user_id::text, server, next_at, server_seen_at, granted_at, ledger_passed_at, failed_at, subscribers_cursor, ledger_cursor
     from onlyfans_feed_poll_leases where platform_account_id = ${input.pageId} for update
   `)).rows;
   const nextAt = new Date(row!.next_at);
   const serverSeen = row!.server_seen_at === null ? null : new Date(row!.server_seen_at);
   const serverPresent = serverSeen !== null && input.now.getTime() - serverSeen.getTime() <= input.serverHoldMs;
   const due = input.now.getTime() >= nextAt.getTime();
-  const grantedAt = row!.granted_at === null ? null : new Date(row!.granted_at);
-  const awaited = input.awaitedSince ?? null;
-  const outOfTurn = awaited !== null && (grantedAt === null || grantedAt.getTime() < awaited.getTime());
+  const at = (value: Date | string | null) => (value === null ? null : new Date(value).getTime());
+  const grantedAt = at(row!.granted_at);
+  const reportedAt = Math.max(at(row!.ledger_passed_at) ?? 0, at(row!.failed_at) ?? 0);
+  const inFlight = grantedAt !== null && reportedAt < grantedAt && input.now.getTime() - grantedAt < IN_FLIGHT_MS;
+  const awaited = input.awaitedSince?.getTime() ?? null;
+  const outOfTurn = awaited !== null && !inFlight && (grantedAt === null || grantedAt < awaited);
   const granted = (due && (input.server || !serverPresent)) || outOfTurn;
+  const grantAt = outOfTurn && awaited !== null && awaited > input.now.getTime() ? new Date(awaited) : input.now;
   const cursors = { subscribers: row!.subscribers_cursor, ledger: row!.ledger_cursor };
   if (!granted) {
     if (input.server) {
@@ -339,7 +350,7 @@ export async function takeOnlyfansFeedPoll(
   const next = new Date(input.now.getTime() + input.everyMs);
   await db.execute(sql`
     update onlyfans_feed_poll_leases set
-      user_id = ${input.userId}, server = ${input.server}, granted_at = ${input.now}, next_at = ${next},
+      user_id = ${input.userId}, server = ${input.server}, granted_at = ${grantAt}, next_at = ${next},
       server_seen_at = case when ${input.server} then ${input.now} else server_seen_at end,
       updated_at = now()
     where platform_account_id = ${input.pageId}

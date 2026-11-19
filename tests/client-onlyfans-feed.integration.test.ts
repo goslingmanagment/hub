@@ -244,17 +244,30 @@ describe("the OnlyFans feed route", () => {
     const [grisha, always] = [await userId("grisha"), await userId("chatspace-server")];
     const take = (awaitedSince: Date | null) =>
       takeOnlyfansFeedPoll(app.db, { pageId, userId: grisha, server: false, now: new Date(), everyMs: 600_000, serverHoldMs: 15 * 60_000, awaitedSince });
-    // The always-on tab was lent the poll a minute ago and is here: a chatter's tab waits its turn.
-    await testDb!.pool.query(
-      "update onlyfans_feed_poll_leases set user_id = $2, server = true, granted_at = now() - interval '1 minute', next_at = now() + interval '9 minutes', server_seen_at = now() where platform_account_id = $1",
+    const lease = (granted: string, passed: string | null) => testDb!.pool.query(
+      `update onlyfans_feed_poll_leases set user_id = $2, server = true, granted_at = now() - interval '${granted}',
+         ledger_passed_at = ${passed === null ? "null" : `now() - interval '${passed}'`}, failed_at = null,
+         next_at = now() + interval '9 minutes', server_seen_at = now() where platform_account_id = $1`,
       [pageId, always],
     );
+    // The always-on tab read the page a minute ago and is here: a chatter's tab waits its turn.
+    await lease("1 minute", "58 seconds");
     expect((await take(null)).granted).toBe(false);
     // A report handed in now waits for the page's statement: the board's ask is lent at once (19.11: ten minutes of «Ждём выписку»).
     const handedIn = new Date();
     expect(await take(handedIn)).toMatchObject({ granted: true, holder: "tab" });
     // One read a hand-in: the same wait does not lend it again.
     expect((await take(handedIn)).granted).toBe(false);
+
+    // A pass lent before the hand-in is still reading: its report covers the hand-in, a second tab is not lent the read.
+    await lease("20 seconds", null);
+    expect((await take(new Date())).granted).toBe(false);
+
+    // A hand-in later than the ask's clock: the grant is stamped at the hand-in, so the next ask is not lent it again.
+    await lease("5 minutes", "5 minutes");
+    const later = new Date(Date.now() + 5_000);
+    expect((await take(later)).granted).toBe(true);
+    expect((await take(later)).granted).toBe(false);
   });
 
   it("refuses a report whose account is not the page's", async () => {
