@@ -14,9 +14,7 @@ import {
   getExistingPageDmMessageIds,
   isDmArchiveScopeFenced,
   tryAcquireDmArchiveWriterFenceLock,
-  listOfapiWebhookEventsForDmProjection,
   listPageDmConversationsByPlatformConversationIds,
-  markOfapiWebhookEventProjection,
   markPageDmMessagePurchased,
   raisePageDmMessageTipAmount,
   refreshPageDmConversationWindow,
@@ -35,6 +33,12 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import {
+  OFAPI_JOURNAL_PROJECTION_MAX_ATTEMPTS,
+  settleOfapiJournalProjection,
+  sweepOfapiJournalProjection,
+  type OfapiJournalProjectionOutcome,
+} from "./ofapi-journal-projection.ts";
+import {
   asRecord,
   extractMessageIdFromNotification,
   idToString,
@@ -50,8 +54,7 @@ export const OFAPI_DM_PROJECTION_EVENT_TYPES = [
   "tips.received",
 ] as const;
 
-export const OFAPI_DM_PROJECTION_MAX_ATTEMPTS = 5;
-const OFAPI_DM_PROJECTION_SWEEP_LIMIT = 200;
+export const OFAPI_DM_PROJECTION_MAX_ATTEMPTS = OFAPI_JOURNAL_PROJECTION_MAX_ATTEMPTS;
 const DM_PREVIEW_MAX_LENGTH = 280;
 
 type OfapiDmProjectionEventType = (typeof OFAPI_DM_PROJECTION_EVENT_TYPES)[number];
@@ -66,12 +69,7 @@ export interface OfapiDmProjectableRow {
   receivedAt: Date;
 }
 
-export type OfapiDmProjectionOutcome =
-  | { status: "projected" }
-  | { status: "skipped"; reason: string }
-  /** PR4: an erasure holds the fence lock — the caller leaves the journal
-   * row pending (no attempt burned); the sweep retries post-erasure. */
-  | { status: "deferred" };
+export type OfapiDmProjectionOutcome = OfapiJournalProjectionOutcome;
 
 export function isOfapiDmProjectionEventType(
   eventType: string,
@@ -532,38 +530,12 @@ export async function runOfapiDmProjectionForSettledRow(
     return;
   }
 
-  try {
-    const outcome = await projectOfapiDmEvent(app, row);
-    if (outcome.status === "deferred") {
-      // Erasure fence lock held: leave the row pending/failed unchanged —
-      // the sweep retries after the erasure commits, no attempt burned.
-      app.logger.info(
-        { eventId: row.id, eventType: row.eventType },
-        "OFAPI DM projection deferred behind an erasure fence lock; sweep retries",
-      );
-      return;
-    }
-    await markOfapiWebhookEventProjection(app.db, {
-      id: row.id,
-      status: outcome.status,
-      error: outcome.status === "skipped" ? outcome.reason : null,
-    });
-  } catch (error) {
-    app.logger.warn(
-      { err: error, eventId: row.id, eventType: row.eventType },
-      "OFAPI DM projection failed; sweep will retry",
-    );
-    await markOfapiWebhookEventProjection(app.db, {
-      id: row.id,
-      status: "failed",
-      error: error instanceof Error ? error.message : String(error),
-    }).catch((markError) => {
-      app.logger.warn(
-        { err: markError, eventId: row.id },
-        "Failed to record OFAPI DM projection failure",
-      );
-    });
-  }
+  await settleOfapiJournalProjection(app, row, {
+    project: () => projectOfapiDmEvent(app, row),
+    failureLog: "OFAPI DM projection failed; sweep will retry",
+    deferredLog: "OFAPI DM projection deferred behind an erasure fence lock; sweep retries",
+    markFailureLog: "Failed to record OFAPI DM projection failure",
+  });
 }
 
 /**
@@ -572,15 +544,5 @@ export async function runOfapiDmProjectionForSettledRow(
  * attempt cap.
  */
 export async function sweepOfapiDmProjections(app: AppContext) {
-  const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
-    eventTypes: OFAPI_DM_PROJECTION_EVENT_TYPES,
-    maxAttempts: OFAPI_DM_PROJECTION_MAX_ATTEMPTS,
-    limit: OFAPI_DM_PROJECTION_SWEEP_LIMIT,
-  });
-
-  for (const row of rows) {
-    await runOfapiDmProjectionForSettledRow(app, row);
-  }
-
-  return rows.length;
+  return sweepOfapiJournalProjection(app, OFAPI_DM_PROJECTION_EVENT_TYPES, runOfapiDmProjectionForSettledRow);
 }

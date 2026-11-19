@@ -1,7 +1,7 @@
 import { millsFromCents, millsToDollarsNumber } from "@agency_hub_core/shared";
 import { ofapiAccountActionSchema, type OfapiAccountAction } from "../../../../packages/contracts/src/ofapi-actions-account.ts";
 import { ofapiWireId } from "./ofapi-command-composer.ts";
-import { negativeReceipt } from "./ofapi-payloads.ts";
+import { asRecord as object, negativeReceipt } from "./ofapi-payloads.ts";
 import type { OfapiActionRequest } from "./ofapi-actions-types.ts";
 
 const readPaths = {
@@ -54,7 +54,6 @@ export function ofapiAccountRequest(input: OfapiAccountAction, accountId: string
   }
 }
 
-function object(value: unknown): Record<string, unknown> | null { return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null; }
 function resourceId(value: unknown): string | null { const id = object(value)?.id; return typeof id === "string" && /^\d+$/.test(id) ? id : typeof id === "number" && Number.isSafeInteger(id) && id >= 0 ? String(id) : null; }
 
 /** A confirmed withdrawal means an accepted request; it never means money reached the bank. */

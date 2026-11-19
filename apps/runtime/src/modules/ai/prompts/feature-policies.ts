@@ -11,36 +11,28 @@ import type {
   ModelSelectableFeature,
   PromptMode,
   ReasoningEffort,
-  ResultKind,
 } from './types.ts';
 
 /** Features that run as a single operation. 'compare' orchestrates fast-reply per personality card. */
 export type OperationFeature = Exclude<FeatureType, 'compare'>;
 
-export type FeatureSurface = 'ai-dock' | 'panel-tab';
-export type FeatureTimeoutBucket = 'quick' | 'deep';
 export type FeatureMessageCountBucket = 'quick' | 'ping' | 'improve' | 'deep' | 'hi';
-/** 'regenerate' re-runs the same prompt; 'refresh' forces regeneration (drops any cache). */
-export type FeatureRerunAction = 'regenerate' | 'refresh';
 
 export interface FeaturePolicy {
-  surface: FeatureSurface;
-  resultKind: ResultKind;
   promptMode: PromptMode;
-  timeoutBucket: FeatureTimeoutBucket;
   messageCountBucket: FeatureMessageCountBucket;
   /** Model/reasoning selection delegation (improve-draft & hi-greeting → fast-reply). */
   modelFeature: ModelSelectableFeature;
   includesEarnings: boolean;
   /** 0 = no gate; deep features require MIN_MESSAGES_FOR_DEEP (CG-FLOW-03). */
   minMessages: number;
-  rerunAction: FeatureRerunAction;
   supportsReplyMode: boolean;
   /** Split by capability (chat-extension H-10, architecture.md D-15): the
    * feature takes replyMode only when the request advertises `split-all-v1` on
    * a page whose owner switched the `splitAll` flag on. Released clients send
    * replyMode on every feature, so replyMode alone never turns it on. The
-   * builder's PROMPT_POLICIES carries the same flag. */
+   * builder's PROMPT_POLICIES takes this flag from here, with promptMode,
+   * requiresDraft, supportsReplyMode, supportsReplyTone and usesPingSegment. */
   supportsSplitAll: boolean;
   supportsReplyTone: boolean;
   requiresDraft: boolean;
@@ -149,15 +141,11 @@ export const OPERATION_FEATURES = [
 
 export const FEATURE_POLICIES = {
   'fast-reply': {
-    surface: 'ai-dock',
-    resultKind: 'reply',
     promptMode: 'reply',
-    timeoutBucket: 'quick',
     messageCountBucket: 'quick',
     modelFeature: 'fast-reply',
     includesEarnings: true,
     minMessages: 0,
-    rerunAction: 'regenerate',
     supportsReplyMode: true,
     supportsSplitAll: false,
     supportsReplyTone: true,
@@ -168,15 +156,11 @@ export const FEATURE_POLICIES = {
     usesImageNotes: true,
   },
   'improve-draft': {
-    surface: 'ai-dock',
-    resultKind: 'single-reply',
     promptMode: 'reply',
-    timeoutBucket: 'quick',
     messageCountBucket: 'improve',
     modelFeature: 'fast-reply',
     includesEarnings: true,
     minMessages: 0,
-    rerunAction: 'regenerate',
     supportsReplyMode: true,
     supportsSplitAll: false,
     supportsReplyTone: false,
@@ -187,15 +171,11 @@ export const FEATURE_POLICIES = {
     usesImageNotes: true,
   },
   'help-me': {
-    surface: 'panel-tab',
-    resultKind: 'xml',
     promptMode: 'analysis',
-    timeoutBucket: 'quick',
     messageCountBucket: 'quick',
     modelFeature: 'help-me',
     includesEarnings: true,
     minMessages: 0,
-    rerunAction: 'regenerate',
     supportsReplyMode: false,
     supportsSplitAll: false,
     supportsReplyTone: false,
@@ -206,15 +186,11 @@ export const FEATURE_POLICIES = {
     usesImageNotes: true,
   },
   'fan-summary': {
-    surface: 'panel-tab',
-    resultKind: 'single-reply',
     promptMode: 'analysis',
-    timeoutBucket: 'deep',
     messageCountBucket: 'deep',
     modelFeature: 'fan-summary',
     includesEarnings: true,
     minMessages: MIN_MESSAGES_FOR_DEEP,
-    rerunAction: 'refresh',
     supportsReplyMode: false,
     supportsSplitAll: false,
     supportsReplyTone: false,
@@ -225,15 +201,11 @@ export const FEATURE_POLICIES = {
     usesImageNotes: false,
   },
   'chat-review': {
-    surface: 'panel-tab',
-    resultKind: 'xml',
     promptMode: 'analysis',
-    timeoutBucket: 'deep',
     messageCountBucket: 'deep',
     modelFeature: 'chat-review',
     includesEarnings: true,
     minMessages: MIN_MESSAGES_FOR_DEEP,
-    rerunAction: 'refresh',
     supportsReplyMode: false,
     supportsSplitAll: false,
     supportsReplyTone: false,
@@ -244,15 +216,11 @@ export const FEATURE_POLICIES = {
     usesImageNotes: true,
   },
   'ping': {
-    surface: 'ai-dock',
-    resultKind: 'reply',
     promptMode: 'reply',
-    timeoutBucket: 'quick',
     messageCountBucket: 'ping',
     modelFeature: 'ping',
     includesEarnings: true,
     minMessages: PING_MIN_MESSAGES,
-    rerunAction: 'regenerate',
     supportsReplyMode: false,
     supportsSplitAll: true,
     supportsReplyTone: false,
@@ -263,15 +231,11 @@ export const FEATURE_POLICIES = {
     usesImageNotes: true,
   },
   'hi-greeting': {
-    surface: 'ai-dock',
-    resultKind: 'reply',
     promptMode: 'reply',
-    timeoutBucket: 'quick',
     messageCountBucket: 'hi',
     modelFeature: 'fast-reply',
     includesEarnings: false,
     minMessages: 0,
-    rerunAction: 'regenerate',
     supportsReplyMode: false,
     supportsSplitAll: true,
     supportsReplyTone: false,
@@ -282,15 +246,11 @@ export const FEATURE_POLICIES = {
     usesImageNotes: true,
   },
   'coach-chat': {
-    surface: 'panel-tab',
-    resultKind: 'text',
     promptMode: 'analysis',
-    timeoutBucket: 'quick',
     messageCountBucket: 'quick',
     modelFeature: 'coach-chat',
     includesEarnings: true,
     minMessages: 0,
-    rerunAction: 'regenerate',
     supportsReplyMode: false,
     supportsSplitAll: true,
     supportsReplyTone: false,
@@ -306,15 +266,11 @@ export const FEATURE_POLICIES = {
   // script step (UX decision 2026-07-18), so the template carries
   // {toneInstructions}. No earnings, no dossier, no ping segment.
   'voice-script': {
-    surface: 'panel-tab',
-    resultKind: 'single-reply',
     promptMode: 'reply',
-    timeoutBucket: 'quick',
     messageCountBucket: 'quick',
     modelFeature: 'fast-reply',
     includesEarnings: false,
     minMessages: 0,
-    rerunAction: 'regenerate',
     supportsReplyMode: false,
     supportsSplitAll: false,
     supportsReplyTone: true,
@@ -334,15 +290,11 @@ export const FEATURE_POLICIES = {
   // fan's own bio counts as his statement. No image notes: an automatic image
   // description is not a fact the fan stated.
   'fan-notes-fill': {
-    surface: 'panel-tab',
-    resultKind: 'text',
     promptMode: 'analysis',
-    timeoutBucket: 'deep',
     messageCountBucket: 'deep',
     modelFeature: 'fan-notes-fill',
     includesEarnings: true,
     minMessages: MIN_MESSAGES_FOR_NOTES_FILL,
-    rerunAction: 'regenerate',
     supportsReplyMode: false,
     supportsSplitAll: false,
     supportsReplyTone: false,

@@ -422,6 +422,7 @@ export {
   hydrationRemedy,
   operationPlanesFor,
   retentionLimitFor,
+  settleAgentRequest,
   threadCaptureFloor,
   threadCoverage,
   withAgentTimeout,

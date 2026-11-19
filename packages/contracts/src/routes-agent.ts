@@ -2252,15 +2252,20 @@ export const agentHistoryFanRefSchema = z.union([
   z.object({ kind: z.literal("chat_url"), url: agentHistoryRefSchema }).strict(),
 ]);
 
+/** At most this many fans in one history request. */
+export const AGENT_HISTORY_MAX_FANS = 1000;
+/** The largest `latest` depth of a history request. */
+export const AGENT_HISTORY_LATEST_MAX = 1_000_000;
+
 /** REQUIRED: `all` reads to the first message and proves it; `latest` reads the
  *  newest N messages of the chat (fan's and model's) counted from the anchor. */
 export const agentHistoryDepthSchema = z.union([
   z.object({ kind: z.literal("all") }).strict(),
-  z.object({ kind: z.literal("latest"), count: z.number().int().min(1).max(1_000_000) }).strict(),
+  z.object({ kind: z.literal("latest"), count: z.number().int().min(1).max(AGENT_HISTORY_LATEST_MAX) }).strict(),
 ]);
 
 /** The ref of one fan entry, as the server de-duplicates it (kind + trimmed ref). */
-function agentHistoryFanKey(fan: z.infer<typeof agentHistoryFanRefSchema>): string {
+export function agentHistoryFanKey(fan: z.infer<typeof agentHistoryFanRefSchema>): string {
   const ref = fan.kind === "fan" ? fan.platformUserId : fan.kind === "conversation" ? fan.conversationRef : fan.url;
   return `${fan.kind}\u0000${ref.trim()}`;
 }
@@ -2283,7 +2288,7 @@ export function agentHistoryFanIssues(value: {
 
 /** The body both create routes share (spread, never `.merge`d: Zod v4 trap). */
 export const agentHistoryRequestBodyShape = {
-  fans: z.array(agentHistoryFanRefSchema).min(1).max(1000),
+  fans: z.array(agentHistoryFanRefSchema).min(1).max(AGENT_HISTORY_MAX_FANS),
   depth: agentHistoryDepthSchema,
   /** Stored as a digest only. */
   reason: z.string().min(1).max(1000),

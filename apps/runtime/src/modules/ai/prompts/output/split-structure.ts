@@ -42,7 +42,7 @@ export function describeSplitOutput(
 }
 
 /** The Coach template allows at most two ```draft blocks in one answer, each
- * under 1500 characters (templates/coach-chat.md, "## Rules"). */
+ * under 1500 characters (COACH_CHAT_TEMPLATE, "## Rules"). */
 export const COACH_DRAFT_BLOCKS_MAX = 2;
 /** The size both readers of the grammar accept, in code points of the block's
  * body (fansly-chat COACH_DRAFT_MAX_CHARS, chat-extension

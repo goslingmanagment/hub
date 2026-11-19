@@ -15,6 +15,8 @@ import {
   publicationItems,
 } from "../apps/runtime/src/services/matters-mirror.ts";
 import { contentopsAddress, contentScreenOf, pageOf, postOf } from "../apps/runtime/src/services/content-screens-moved.ts";
+import { offTeamItem } from "../apps/runtime/src/services/matter-checks.ts";
+import type { PeopleCheckSnapshot } from "@agency_hub_core/db";
 
 // The mirror of «Ждут вас» (package D) holds the rules of what waits. Two of
 // them still have a twin in the console — «Публикации» says which Fansly pages
@@ -141,5 +143,25 @@ describe("a post's matters wait for the content manager of its page (products pl
     const [notOut, other] = failureItems([incident, { ...incident, id: 6, kind: "auth_blocked" }], { loginPages: new Set(), ofapiOff: false });
     expect(notOut?.owner).toBeUndefined();
     expect(other?.owner).toBeUndefined();
+  });
+});
+
+describe("the teams' gaps of the people registry", () => {
+  // The database takes a reason key only as «kind:…» (matters_reason_key_check): a bare kind was refused on every
+  // pass, so the matter never opened.
+  it("opens one matter under a reason key of its kind", () => {
+    const now = new Date("2026-11-19T12:00:00Z");
+    const snapshot = {
+      pages: [
+        { id: 10, label: "a-of", modelId: 1, modelName: "A" },
+        { id: 20, label: "b-of", modelId: 2, modelName: "B" },
+      ],
+      logins: [{ userId: 7, personId: 70 }],
+      people: [{ id: 70, kind: "human", state: "working", role: "chatter", code: "p70", displayName: "P" }],
+      workingPages: new Map([[70, [10]]]),
+      lastInput: new Map([["7:20", new Date("2026-11-18T12:00:00Z")]]),
+    } as unknown as PeopleCheckSnapshot;
+    const item = offTeamItem(snapshot, now);
+    expect(item?.key.startsWith("people.off_team:")).toBe(true);
   });
 });

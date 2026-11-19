@@ -10,7 +10,6 @@ import {
   type TeamLedgerReportsResponse,
 } from "@agency_hub_core/contracts";
 import {
-  closeMatter,
   listAgentHydrationRequests,
   listClientSendCustody,
   listContentManagerLoginsByPage,
@@ -20,20 +19,16 @@ import {
   listChatterLoginsOfPeople,
   listOpenMattersOfKinds,
   listSyncPages,
-  matterChanges,
   MatterWriterConflictError,
-  openMatter,
   recordMatterCheckAnswered,
   recordMatterCheckFailed,
-  touchMatters,
-  type MatterActor,
   type MatterCheckRow,
   type MatterOpenInput,
   type MatterOwner,
   type MatterSource,
 } from "@agency_hub_core/db";
 import { formatDay, incidentKindWord } from "@agency_hub_core/look";
-import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
+import { MOSCOW_TIME_ZONE, moscowDayOfMs, toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { readSyncPageLoginViews } from "../sync/inspect.ts";
@@ -41,7 +36,7 @@ import { readClientHealthCounters } from "./client-health-view.ts";
 import { readLedgerPayouts } from "./ledger-payouts.ts";
 import { readTeamLedgerQuestions } from "./ledger-questions.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
-import { matterMirrorPeriodMs, matterWeight } from "./matters.ts";
+import { matterMirrorPeriodMs, matterWeight, reconcileKindMatters } from "./matters.ts";
 import { listPublicationsWire } from "./publications.ts";
 import { getSyncBlocksOverview } from "./sync-blocks.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
@@ -85,7 +80,6 @@ function kindMeta(kind: MatterMirrorKind): { source: MatterSource; owner: Matter
   return { source: kind.startsWith("ledger.") ? "ledger" : "server", owner: { role: MATTER_MIRROR_KIND_ROLES[kind] } };
 }
 
-const SYSTEM: MatterActor = { door: "system" };
 /** The most publications of one status the mirror reads. */
 const PUBLICATIONS_LIMIT = 1000;
 const HELD_LIMIT = 1000;
@@ -263,10 +257,9 @@ export function saleQuestionItems(owner: readonly TeamLedgerQuestion[]): MirrorI
   }));
 }
 
-const MSK_OFFSET_MS = 3 * 3_600_000;
 function moscowDay(iso: string): string | null {
   const at = Date.parse(iso);
-  return Number.isNaN(at) ? null : new Date(at + MSK_OFFSET_MS).toISOString().slice(0, 10);
+  return Number.isNaN(at) ? null : moscowDayOfMs(at);
 }
 
 /**
@@ -422,51 +415,25 @@ export async function reconcileMatters(
   idOf: ReadonlyMap<string, number>,
   now: Date,
 ): Promise<{ opened: number; closed: number }> {
-  const meta = { source: answer.source, owner: answer.owner };
-  const open = new Map((await listOpenMattersOfKinds(app.db, [answer.kind])).map((matter) => [matter.key, matter]));
-  const seen = new Set<string>();
-  const touched: string[] = [];
-  let opened = 0;
-  let closed = 0;
-  for (const item of answer.items) {
-    if (seen.has(item.key)) continue;
-    seen.add(item.key);
-    const input: MatterOpenInput = {
-      key: item.key,
-      kind: answer.kind,
-      source: meta.source,
-      title: item.title.slice(0, 300),
-      object: item.object,
-      pageIds: [...new Set(item.pageLabels.map((label) => idOf.get(label)).filter((id): id is number => id !== undefined))],
-      owner: item.owner ?? meta.owner,
-      money: item.money,
-      evidence: item.evidence,
-      link: item.link,
-    };
-    const existing = open.get(item.key);
-    if (existing !== undefined && matterChanges(existing, input).length === 0) {
-      touched.push(item.key);
-      continue;
-    }
-    try {
-      const result = await openMatter(app.db, input, SYSTEM, now);
-      if (result.transition === "opened" || result.transition === "reopened") opened += 1;
-    } catch (error) {
-      // One item that cannot be kept does not stop the rest: the count read back says it is missing.
-      app.logger.error({ err: error, kind: answer.kind, key: item.key, writer: error instanceof MatterWriterConflictError ? error.heldBy : undefined }, "matters mirror: a matter could not be opened");
-    }
-  }
-  for (const [key, matter] of open) {
-    if (seen.has(key)) continue;
-    try {
-      const result = await closeMatter(app.db, { key, how: "cause_gone", writer: matter.source }, SYSTEM, now);
-      if (result.transition === "closed") closed += 1;
-    } catch (error) {
-      app.logger.error({ err: error, kind: answer.kind, key }, "matters mirror: a matter could not be closed");
-    }
-  }
-  await touchMatters(app.db, touched, now);
-  return { opened, closed };
+  const inputs = answer.items.map((item): MatterOpenInput => ({
+    key: item.key,
+    kind: answer.kind,
+    source: answer.source,
+    title: item.title.slice(0, 300),
+    object: item.object,
+    pageIds: [...new Set(item.pageLabels.map((label) => idOf.get(label)).filter((id): id is number => id !== undefined))],
+    owner: item.owner ?? answer.owner,
+    money: item.money,
+    evidence: item.evidence,
+    link: item.link,
+  }));
+  return reconcileKindMatters(app, {
+    kinds: [answer.kind],
+    inputs,
+    // One item that cannot be kept does not stop the rest: the count read back says it is missing.
+    onOpenError: (error, key) => app.logger.error({ err: error, kind: answer.kind, key, writer: error instanceof MatterWriterConflictError ? error.heldBy : undefined }, "matters mirror: a matter could not be opened"),
+    onCloseError: (error, key) => app.logger.error({ err: error, kind: answer.kind, key }, "matters mirror: a matter could not be closed"),
+  }, now);
 }
 
 const errorText = (error: unknown) => (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 300);

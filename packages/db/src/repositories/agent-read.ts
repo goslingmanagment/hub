@@ -2209,6 +2209,10 @@ function datasetSortExpression(column: string, kind: string): SQL {
   }
 }
 
+// The column the `[from, to)` window applies to: every dataset's source exposes
+// it (the internal vocabulary in agent-dataset-map.ts's header).
+const DATASET_WINDOW_COLUMN = "k_occurred_at";
+
 export async function queryAgentDataset(
   db: Database,
   input: {
@@ -2233,7 +2237,7 @@ export async function queryAgentDataset(
     throw new Error(`unmapped agent dataset: ${input.dataset}`);
   }
   const source = sql.raw(mapping.source);
-  const windowColumn = sql.raw(`src.${mapping.windowColumn}`);
+  const windowColumn = sql.raw(`src.${DATASET_WINDOW_COLUMN}`);
 
   // A capture floor is a page-scoped fact about the store, never about the
   // request's window or filters. Run the unbounded minimum independently before
@@ -2412,7 +2416,7 @@ export async function summarizeAgentTransactionDataset(
   }
 
   const source = sql.raw(mapping.source);
-  const windowColumn = sql.raw(`src.${mapping.windowColumn}`);
+  const windowColumn = sql.raw(`src.${DATASET_WINDOW_COLUMN}`);
   const matchedClauses: SQL[] = [
     sql`(${windowColumn} is null or (${windowColumn} >= ${input.from} and ${windowColumn} < ${input.to}))`,
   ];

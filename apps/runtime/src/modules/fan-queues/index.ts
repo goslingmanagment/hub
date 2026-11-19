@@ -16,7 +16,7 @@ import {
   updateFanQueueForAgent,
   type FanQueuePage,
 } from "../../services/fan-queues.ts";
-import { beginAgentRequest, staticNotFound, withAgentTimeout, writeAgentAudit } from "../agent-read/index.ts";
+import { beginAgentRequest, settleAgentRequest as settled, staticNotFound, withAgentTimeout, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -40,17 +40,6 @@ export function registerFanQueueRoutes(server: ApiServer, ctx: ApiModuleContext)
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: ["write:fan_queues"] });
     const pages: FanQueuePage[] = scope.pages.map((page) => ({ id: page.id, label: page.pageLabel, platform: page.platform }));
     return { principal, scope, pages };
-  }
-
-  async function settled<T>(scope: { finish(rows: number): Promise<void> }, body: () => Promise<T>, rows: (result: T) => number) {
-    let delivered = 0;
-    try {
-      const result = await body();
-      delivered = rows(result);
-      return result;
-    } finally {
-      await scope.finish(delivered);
-    }
   }
 
   const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");

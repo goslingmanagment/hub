@@ -90,7 +90,7 @@ import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, halvesOf, type SaleHomeRe
 import { realmOf, testUserIds } from "./sandbox/realm.ts";
 import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, teamFactsFor, type Decider } from "./teams.ts";
 import { dayWords } from "./shift-handin-rules.ts";
-import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, pageCatalog, saleLineFacts, type HandinActor } from "./shift-handins.ts";
+import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, pageCatalog, saleLineFacts, type HandinActor } from "./shift-report-draft.ts";
 
 /**
  * Заявки и договорённости (ecosystem plan 2026-11-12, package G): what people

@@ -1,7 +1,7 @@
 import { ofapiPublishingActionSchema, type OfapiPublishingAction } from "../../../../packages/contracts/src/ofapi-actions-publishing.ts";
 import { millsFromCents, millsToDollarsNumber } from "@agency_hub_core/shared";
 import { ofapiWireId } from "./ofapi-command-composer.ts";
-import { negativeReceipt } from "./ofapi-payloads.ts";
+import { asRecord as object, negativeReceipt } from "./ofapi-payloads.ts";
 import type { OfapiActionRequest } from "./ofapi-actions-types.ts";
 
 const usd = (cents: number) => millsToDollarsNumber(millsFromCents(cents));
@@ -79,7 +79,6 @@ export function ofapiPublishingRequest(command: OfapiPublishingAction, accountId
   }
 }
 
-const object = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const responseId = (value: unknown): string | null => {
   if (typeof value === "number") return Number.isSafeInteger(value) && value > 0 ? String(value) : null;
   return typeof value === "string" && /^[1-9]\d{0,19}$/.test(value) ? value : null;

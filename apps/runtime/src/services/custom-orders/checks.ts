@@ -9,8 +9,6 @@ import {
   listOnShiftUsersByPage,
   listOpenMattersOfKinds,
   listUsersWithPersonRight,
-  matterChanges,
-  openMatter,
   touchMatters,
   type CustomLookalikeRow,
   type CustomOrderRow,
@@ -22,6 +20,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
+import { reconcileKindMatters } from "../matters.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 import { applyCustomStep } from "./index.ts";
 import { CUSTOM_UNRECORDED_KIND, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
@@ -210,40 +209,17 @@ export function unrecordedFindings(input: { sales: readonly CustomLookalikeRow[]
 
 /** Makes the server's matters of `kind` what the findings say: open or update them, close the rest (cause gone). */
 async function reconcile(app: Pick<AppContext, "db" | "logger">, kind: CustomOrderCheckKind, findings: readonly Finding[], now: Date, keep?: (key: string) => boolean) {
-  const open = new Map((await listOpenMattersOfKinds(app.db, [kind])).map((matter) => [matter.key, matter]));
-  const seen = new Set<string>();
-  const touched: string[] = [];
-  let opened = 0;
-  let closed = 0;
-  for (const finding of findings) {
-    if (seen.has(finding.key)) continue;
-    seen.add(finding.key);
-    const input: MatterOpenInput = {
+  return reconcileKindMatters(app, {
+    kinds: [kind],
+    inputs: findings.map((finding): MatterOpenInput => ({
       key: finding.key, kind, source: "server", title: finding.title.slice(0, 300), object: finding.object, pageIds: finding.pageIds,
       owner: finding.owner, money: false, evidence: finding.evidence, link: finding.link,
-    };
-    const existing = open.get(finding.key);
-    if (existing !== undefined && matterChanges(existing, input).length === 0) {
-      touched.push(finding.key);
-      continue;
-    }
-    try {
-      const result = await openMatter(app.db, input, SYSTEM, now);
-      if (result.transition === "opened" || result.transition === "reopened") opened += 1;
-    } catch (error) {
-      app.logger.error({ err: error, kind, key: finding.key }, "custom checks: a matter could not be opened");
-    }
-  }
-  for (const key of open.keys()) {
-    if (seen.has(key) || keep?.(key)) continue;
-    try {
-      if ((await closeMatter(app.db, { key, how: "cause_gone", writer: "server" }, SYSTEM, now)).transition === "closed") closed += 1;
-    } catch (error) {
-      app.logger.error({ err: error, kind, key }, "custom checks: a matter could not be closed");
-    }
-  }
-  await touchMatters(app.db, touched, now);
-  return { opened, closed };
+    })),
+    keep,
+    closeAs: "server",
+    onOpenError: (error, key) => app.logger.error({ err: error, kind, key }, "custom checks: a matter could not be opened"),
+    onCloseError: (error, key) => app.logger.error({ err: error, kind, key }, "custom checks: a matter could not be closed"),
+  }, now);
 }
 
 const CARD_KIND = "custom.card_without_order";
