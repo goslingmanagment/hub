@@ -7,7 +7,6 @@
     "noUnusedLocals": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
       "@agency_hub_core/shared": ["../../packages/shared/src/browser.ts"],
