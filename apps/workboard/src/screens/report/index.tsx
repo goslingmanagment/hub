@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Navigate, useParams, useSearchParams } from "react-router";
 import { createClient } from "@kernel/sdk";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
+import { Gate, useFramePort } from "@/shared/frame";
 import { kernel as sessionKernel } from "@/shared/hub";
 import { ReportBoard, type Host } from "./Board";
 import { BoardKernel, useCurrentReport, useReport } from "./data";
 import { frameState } from "./model";
-import { acceptPort, portTransport, takeFrameKey, type PortTransport } from "./transport";
+import type { PortTransport } from "./transport";
 import type { ShiftReportResponse } from "@agency_hub_core/contracts";
 import "./board.css";
 
@@ -18,20 +19,6 @@ import "./board.css";
  */
 
 const TITLE = "Отчёт смены";
-
-/** A board that cannot be drawn: one sentence in the middle of the window, in the board's look. */
-function Gate({ children, waiting = false }: { children: ReactNode; waiting?: boolean }) {
-  return (
-    <div className="rb">
-      <div className="view">
-        <div className="gate" role={waiting ? "status" : undefined}>
-          {waiting && <i className="spin" />}
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function Failed({ error, host, retry }: { error: unknown; host: Host; retry: () => void }) {
   const status = hubErrorStatus(error);
@@ -109,28 +96,11 @@ export function ReportScreen() {
 export function FrameReportScreen() {
   const [search] = useSearchParams();
   const shiftId = numberOf(search.get("shift"));
-  const [link, setLink] = useState<{ kind: "waiting" } | { kind: "none" } | { kind: "version"; port: MessagePort | null } | { kind: "port"; transport: PortTransport }>({ kind: "waiting" });
   useEffect(() => {
     document.title = TITLE;
-    let alive = true;
-    let held: PortTransport | null = null;
-    // The key is read once and leaves the address at once.
-    const key = takeFrameKey(window);
-    void acceptPort(window, key).then((result) => {
-      if (!alive) {
-        if (result.kind !== "none") result.port?.close();
-        return;
-      }
-      if (result.kind === "port") {
-        held = portTransport(result.port);
-        setLink({ kind: "port", transport: held });
-      } else setLink(result);
-    });
-    return () => {
-      alive = false;
-      held?.close();
-    };
   }, []);
+  // The extension's port (shared/frame.tsx); the board never touches Workboard's own client.
+  const link = useFramePort({ client: false });
   // The board's API client in the frame: no credentials, every request over the port.
   const transport = link.kind === "port" ? link.transport : null;
   const kernel = useMemo(() => (transport ? createClient({ baseUrl: "", fetch: transport.fetch }) : null), [transport]);
