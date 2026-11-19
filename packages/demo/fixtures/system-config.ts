@@ -1,17 +1,57 @@
 /**
  * «Конфигурация» and «Функции»: the hub's effective configuration across its
  * three processes (api, worker, sync), as the demo agency runs it. The
- * descriptors are the hub's own registry (system-config-registry.ts); the
- * values below are what a production hub of this agency would hold.
+ * descriptors are the hub's own registry (packages/shared/src/config-registry.ts);
+ * the values below are what a production hub of this agency would hold.
  */
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 
+import { CONFIG_DESCRIPTORS } from "../../shared/src/config-registry.ts";
 import { hoursAgo, iso, type DemoRequest } from "../core.ts";
-import { DEMO_CONFIG_DESCRIPTORS, type DemoConfigDescriptor } from "./system-config-registry.ts";
 
 type ConfigView = KernelOperationResponse<"adminConfig">;
 type ConfigItem = ConfigView["subsystems"][number]["items"][number];
 type Scalar = string | number | boolean | null;
+
+interface DemoConfigDescriptor {
+  key: string;
+  envName: string;
+  configField: string | null;
+  kind: "boolean" | "number" | "string" | "url" | "secret" | "derived" | "complex";
+  subsystem: string;
+  label: string;
+  default: string;
+  editability: "never" | "editable";
+  runtimeApply: "live" | "boot" | "none";
+  comparable: boolean;
+  note: string | null;
+  costWarning: string | null;
+  destructive: boolean;
+}
+
+/** Where the registry names the real agency, the demo agency's own text: no real invite hash, no real page labels. */
+const DEMO_DESCRIPTOR_TEXTS: Readonly<Record<string, Partial<Pick<DemoConfigDescriptor, "default" | "note">>>> = {
+  fanslyBlocklistInvite: { default: "(demo invite)" },
+  fanFactsPages: { note: "Comma-separated exact page labels the facts lane reads (mia-1,nova-1). FAILS CLOSED: empty or unknown labels read nothing. Read live every minute." },
+};
+
+/** The hub's registry with the server's fallbacks (app-config-service.ts), in its order. */
+const DEMO_CONFIG_DESCRIPTORS: readonly DemoConfigDescriptor[] = CONFIG_DESCRIPTORS.map((descriptor) => ({
+  key: descriptor.key,
+  envName: descriptor.envName,
+  configField: descriptor.configField,
+  kind: descriptor.kind,
+  subsystem: descriptor.subsystem,
+  label: descriptor.label,
+  default: descriptor.default,
+  editability: descriptor.editability,
+  runtimeApply: descriptor.runtimeApply,
+  comparable: descriptor.comparable,
+  note: descriptor.note ?? null,
+  costWarning: descriptor.costWarning ?? null,
+  destructive: descriptor.destructive ?? false,
+  ...DEMO_DESCRIPTOR_TEXTS[descriptor.key],
+}));
 
 /** The image every process runs: the deployed commit. */
 const IMAGE_TAG = "d97546581";
