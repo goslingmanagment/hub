@@ -3301,41 +3301,68 @@ export interface LinkStatSeriesHealthRow {
   lastAttemptReason: string | null;
 }
 
-/** The freshness of the link series, for every active OnlyFans page and both
- * kinds — mapped or not: a page the reconcile cannot read is part of the
- * series' population and of its signals. Each pair is answered by index-order
- * lookups on (page, kind, pulled_at), so the newest usable row is found
- * without reading the pair's history. */
-export async function listLinkStatSeriesHealth(db: Database): Promise<LinkStatSeriesHealthRow[]> {
+/** A row of linkPairStatesSql, as the database returns it. */
+export type LinkPairStatesSqlRow = {
+  platformAccountId: number | string;
+  pageLabel: string;
+  pageCreatedAt: Date | string;
+  ofapiAccountId: string | null;
+  ofapiAuthStatus: string | null;
+  linkKind: LinkStatKind;
+  usableId: number | string | null;
+  usableAt: Date | string | null;
+  usableRows: number | null;
+  firstAttemptAt: Date | string | null;
+  lastId: number | string | null;
+  lastAt: Date | string | null;
+  lastWindowAt: Date | string | null;
+  lastAttemptNo: number | null;
+  lastStatus: LinkStatRunStatus | null;
+  lastReason: string | null;
+  lastApiPages: number | null;
+  lastRawItems: number | null;
+  lastWrittenRows: number | null;
+  lastUsable: boolean | null;
+};
+
+/** Where each (page, kind) of the link series stands — its latest usable
+ * result, its first and its latest attempt — for both kinds of every page
+ * `where` keeps (`p` is the page). The one read of a pair's state: the series
+ * monitor (listLinkStatSeriesHealth) and «Ссылки OnlyFans»
+ * (listLinkSeriesPairStates) both run it, so the same stale rule judges the
+ * same rows. Each pair is answered by index-order lookups on (page, kind,
+ * pulled_at), so the newest usable row is found without reading the pair's
+ * history. */
+export function linkPairStatesSql(where: SQL): SQL {
   const run = sql.raw("r");
-  const result = await db.execute<{
-    platformAccountId: number | string;
-    pageLabel: string;
-    pageCreatedAt: Date | string;
-    ofapiAccountId: string | null;
-    ofapiAuthStatus: string | null;
-    linkKind: LinkStatKind;
-    lastUsableAt: Date | string | null;
-    firstAttemptAt: Date | string | null;
-    lastAttemptAt: Date | string | null;
-    lastAttemptStatus: LinkStatRunStatus | null;
-    lastAttemptReason: string | null;
-  }>(sql`
+  return sql`
     select p.id as "platformAccountId",
            p.label as "pageLabel",
            p.created_at as "pageCreatedAt",
            p.ofapi_account_id as "ofapiAccountId",
            p.ofapi_auth_status as "ofapiAuthStatus",
            kind.link_kind as "linkKind",
-           usable.pulled_at as "lastUsableAt",
+           usable.id as "usableId",
+           usable.pulled_at as "usableAt",
+           usable.written_rows as "usableRows",
            first_attempt.pulled_at as "firstAttemptAt",
-           last_attempt.pulled_at as "lastAttemptAt",
-           last_attempt.status as "lastAttemptStatus",
-           last_attempt.reason as "lastAttemptReason"
+           last_attempt.id as "lastId",
+           last_attempt.pulled_at as "lastAt",
+           last_attempt.window_at as "lastWindowAt",
+           last_attempt.attempt as "lastAttemptNo",
+           last_attempt.status as "lastStatus",
+           last_attempt.reason as "lastReason",
+           last_attempt.api_pages as "lastApiPages",
+           last_attempt.raw_items as "lastRawItems",
+           last_attempt.written_rows as "lastWrittenRows",
+           -- The latest attempt is usable exactly when it is the latest usable
+           -- result (same order, unique id): no second evaluation of the rule.
+           case when last_attempt.id is not null
+             then usable.id is not distinct from last_attempt.id end as "lastUsable"
     from pages p
     cross join (values ('tracking'), ('trial')) as kind(link_kind)
     left join lateral (
-      select r.pulled_at
+      select r.id, r.pulled_at, r.written_rows
       from page_link_stat_runs r
       where r.platform_account_id = p.id
         and r.link_kind = kind.link_kind
@@ -3351,15 +3378,25 @@ export async function listLinkStatSeriesHealth(db: Database): Promise<LinkStatSe
       limit 1
     ) first_attempt on true
     left join lateral (
-      select r.pulled_at, r.status, r.reason
+      select r.id, r.pulled_at, r.window_at, r.attempt, r.status, r.reason,
+             r.api_pages, r.raw_items, r.written_rows
       from page_link_stat_runs r
       where r.platform_account_id = p.id and r.link_kind = kind.link_kind
       order by r.pulled_at desc, r.id desc
       limit 1
     ) last_attempt on true
-    where p.platform = 'onlyfans' and p.status = 'active' and ${livePageSql(sql`p.id`)}
+    where ${where}
     order by p.id, kind.link_kind
-  `);
+  `;
+}
+
+/** The freshness of the link series, for every active OnlyFans page and both
+ * kinds — mapped or not: a page the reconcile cannot read is part of the
+ * series' population and of its signals (linkPairStatesSql). */
+export async function listLinkStatSeriesHealth(db: Database): Promise<LinkStatSeriesHealthRow[]> {
+  const result = await db.execute<LinkPairStatesSqlRow>(
+    linkPairStatesSql(sql`p.platform = 'onlyfans' and p.status = 'active' and ${livePageSql(sql`p.id`)}`),
+  );
   return result.rows.map((row) => ({
     platformAccountId: Number(row.platformAccountId),
     pageLabel: row.pageLabel,
@@ -3367,11 +3404,11 @@ export async function listLinkStatSeriesHealth(db: Database): Promise<LinkStatSe
     ofapiAccountId: row.ofapiAccountId,
     ofapiAuthStatus: row.ofapiAuthStatus,
     linkKind: row.linkKind,
-    lastUsableAt: toDateOrNull(row.lastUsableAt),
+    lastUsableAt: toDateOrNull(row.usableAt),
     firstAttemptAt: toDateOrNull(row.firstAttemptAt),
-    lastAttemptAt: toDateOrNull(row.lastAttemptAt),
-    lastAttemptStatus: row.lastAttemptStatus,
-    lastAttemptReason: row.lastAttemptReason,
+    lastAttemptAt: toDateOrNull(row.lastAt),
+    lastAttemptStatus: row.lastStatus,
+    lastAttemptReason: row.lastReason,
   }));
 }
 
