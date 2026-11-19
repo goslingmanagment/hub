@@ -820,6 +820,20 @@ describe("WP-S1 agent datasets: the generated SQL runs and labels what it reads"
     expect([...new Set(result.rows.map((row) => row.f_source_label))]).toEqual(["fyp", "direct"]);
   });
 
+  it("keeps a media with no sale stats null, never zero", async (context) => {
+    if (!requireServer(context)) return;
+    // `saleStats` was null on 83 of 85 live media: written as null, read as null.
+    const result = await testDb!.pool.query(
+      `with src as (${AGENT_DATASET_SQL.media_stats!.source})
+       select src.f_sales_count, src.f_sales_net_mills, src.f_sales_gross_mills_derived
+       from src where src.k_page_id = $1 and src.f_media_offer_ref = 'media-2'`,
+      [pageId],
+    );
+    expect(result.rows).toEqual([
+      { f_sales_count: null, f_sales_net_mills: null, f_sales_gross_mills_derived: null },
+    ]);
+  });
+
   it("labels revenue codes with their era, and names an unmapped one", async (context) => {
     if (!requireServer(context)) return;
     const result = await testDb!.pool.query<{
