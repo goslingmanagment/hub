@@ -12,11 +12,7 @@ import {
   type SettleWorkInput,
 } from "@agency_hub_core/db";
 
-import {
-  createWorkDoneWake,
-  enqueueAndWait,
-  URGENT_WORK_DONE_APPLICATION_NAME,
-} from "../apps/runtime/src/sync/requests/urgent.ts";
+import { enqueueAndWait } from "../apps/runtime/src/sync/requests/urgent.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -25,7 +21,6 @@ import {
 import {
   changedTables,
   countRows,
-  quietLogger,
   seedSyncPage,
   tableCounts,
   waitFor,
@@ -35,8 +30,8 @@ import {
 // CLIs put work on the page's queue and wait for the actor instead of calling
 // Fansly. A page that is not live answers `not_live` before anything is
 // written (every page in step 2); on a live page the waiter is answered by the
-// actor's settle — through `fansly_sync_work_done`, or by its 250 ms re-read
-// when the NOTIFY is lost — or gives up with the work's status link.
+// actor's settle — seen by its 250 ms re-read — or gives up with the work's
+// status link.
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -128,45 +123,35 @@ describe("enqueue and wait: a page that is not live", () => {
 });
 
 describe("enqueue and wait: a live page", () => {
-  it("writes the registry's work and is answered by the actor's settle through NOTIFY", async (context) => {
+  it("writes the registry's work and is answered by the actor's settle", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await livePage();
-    const wake = createWorkDoneWake({ connectionString: testDb.connectionString, logger: quietLogger });
-    await wake.start();
-    try {
-      expect(await countRows(testDb.pool,
-        "select count(*)::int as n from pg_stat_activity where application_name = $1 and datname = current_database()",
-        [URGENT_WORK_DONE_APPLICATION_NAME])).toBe(1);
-      const pending = enqueueAndWait({ db: db(), workDone: wake }, {
-        pageId,
-        resource: "account.verify",
-        params: { requestedBy: "test" },
-        waitMs: 20_000,
-      });
-      const workId = await openWork(pageId, "account.verify");
-      const row = await getSyncWork(db(), workId);
-      expect(row).toMatchObject({
-        kind: "trigger",
-        class: "urgent",
-        subject: "",
-        demandRevision: 1,
-        appliedRevision: 0,
-        params: { requestedBy: "test" },
-      });
-      // The registry's result SLO (30 s) is the deadline.
-      expect(row!.deadlineAt).not.toBeNull();
-      expect(row!.deadlineAt!.getTime() - row!.createdAt.getTime()).toBeGreaterThan(25_000);
+    const pending = enqueueAndWait({ db: db() }, {
+      pageId,
+      resource: "account.verify",
+      params: { requestedBy: "test" },
+      waitMs: 20_000,
+    });
+    const workId = await openWork(pageId, "account.verify");
+    const row = await getSyncWork(db(), workId);
+    expect(row).toMatchObject({
+      kind: "trigger",
+      class: "urgent",
+      subject: "",
+      demandRevision: 1,
+      appliedRevision: 0,
+      params: { requestedBy: "test" },
+    });
+    // The registry's result SLO (30 s) is the deadline.
+    expect(row!.deadlineAt).not.toBeNull();
+    expect(row!.deadlineAt!.getTime() - row!.createdAt.getTime()).toBeGreaterThan(25_000);
 
-      const settledAt = Date.now();
-      await settle({ workId, servedRevision: 1, satisfiesRevision: true, close: "done", closeReason: "applied", result: { accountId: "own" } });
-      const result = await pending;
-      expect(result).toEqual({ state: "done", workId, satisfied: true, result: { accountId: "own" }, closeReason: "applied" });
-      // Woken by the notification, well before a few re-reads.
-      expect(Date.now() - settledAt).toBeLessThan(1_000);
-      expect(wake.notifications).toBeGreaterThanOrEqual(1);
-    } finally {
-      await wake.close();
-    }
+    const settledAt = Date.now();
+    await settle({ workId, servedRevision: 1, satisfiesRevision: true, close: "done", closeReason: "applied", result: { accountId: "own" } });
+    const result = await pending;
+    expect(result).toEqual({ state: "done", workId, satisfied: true, result: { accountId: "own" }, closeReason: "applied" });
+    // Seen by the next re-read (every 250 ms), well within the wait.
+    expect(Date.now() - settledAt).toBeLessThan(1_000);
   }, 30_000);
 
   it("an older read never answers a newer demand (I11)", async (context) => {

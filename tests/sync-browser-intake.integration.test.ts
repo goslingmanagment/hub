@@ -786,7 +786,7 @@ describe("the review of PR 13", () => {
     expect(queue.rows).toEqual([{ refreshClass: "dirty", dirtyReason: "browser_site_incomplete" }]);
   }, 60_000);
 
-  it("the repair takes a page browser's verified gap opened up to a week ago (its buffer replays up to 72 h); the engine's own socket's a day", async (context) => {
+  it("the repair takes a page browser's verified gap opened up to a week ago (its buffer replays up to 72 h), and only a page browser's", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     const insert = (origin: "node" | "browser", hoursAgo: number) => testDb!.pool.query(

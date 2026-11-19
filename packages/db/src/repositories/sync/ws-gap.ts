@@ -9,8 +9,6 @@ import { textArrayParam, timestampParam, toDate } from "./values.ts";
 // parameters, which an open row keeps from its first demand — and stamps them
 // once the chats and the money the gap may have hidden were read again.
 
-/** A connection older than this is not reconciled any more (history, not a gap). */
-export const SYNC_WS_GAP_LOOKBACK_HOURS = 24;
 /** A site socket's connection on a page's browser (Project Browser, PR 13)
  *  is verified when the engine takes its events from the operator's buffer,
  *  which keeps them up to 72 h (spec §5) — its gap is still a gap that long
@@ -28,13 +26,13 @@ export interface FanslyWsGapPass {
 }
 
 /**
- * The connections a new repair pass reconciles (read-only): verified, not yet
- * reconciled, and the instant the pass reads back to — the earliest gap they
- * record, 60 s earlier. A connection's gap is the one it opened with
- * (`gap_since`: started within the last day — a page browser's within the
- * week its buffer may replay) and, on a page's browser, a loss found on it
- * since (`loss_since`, 0276), whatever the connection's age and however old
- * the loss: a connection with a loss is never left out. A connection whose
+ * The connections a new repair pass reconciles (read-only): a page browser's
+ * (the only socket a page has), verified, not yet reconciled, and the instant
+ * the pass reads back to — the earliest gap they record, 60 s earlier. A
+ * connection's gap is the one it opened with (`gap_since`: started within the
+ * week its buffer may replay) and a loss found on it since (`loss_since`,
+ * 0276), whatever the connection's age and however old the loss: a
+ * connection with a loss is never left out. A connection whose
  * opening gap was reconciled before (`transient_unknown` set) reads back
  * from its loss alone. A page browser's connection reads back a week at
  * most: an older mark (`least()` keeps the earliest) is clamped to the
@@ -44,17 +42,15 @@ export async function readFanslyWsGapPass(db: Database, input: { pageId: number 
   const browserCutoff = sql`clock_timestamp() - ${SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS}::double precision * interval '1 hour'`;
   const result = await db.execute<{ targets: string[] | null; since: Date | string | null }>(sql`
     select array_agg(c.id::text order by c.started_at, c.id) as targets,
-           min(case when c.origin <> 'browser' then c.gap_since
-                    when c.transient_unknown is not null and c.loss_since is not null then greatest(c.loss_since, ${browserCutoff})
+           min(case when c.transient_unknown is not null and c.loss_since is not null then greatest(c.loss_since, ${browserCutoff})
                     else greatest(least(c.gap_since, coalesce(c.loss_since, c.gap_since)), ${browserCutoff}) end)
              - ${SYNC_WS_GAP_MARGIN_MS}::double precision * interval '1 millisecond' as since
       from fansly_ws_connections c
      where c.page_id = ${input.pageId}
+       and c.origin = 'browser'
        and c.verified_at is not null
        and c.state_reconciled_at is null
-       and (c.started_at > clock_timestamp() - (case when c.origin = 'browser'
-              then ${SYNC_WS_GAP_BROWSER_LOOKBACK_HOURS} else ${SYNC_WS_GAP_LOOKBACK_HOURS} end)::double precision * interval '1 hour'
-            or c.loss_since is not null)
+       and (c.started_at > ${browserCutoff} or c.loss_since is not null)
   `);
   const row = result.rows[0];
   return { targets: row?.targets ?? [], since: toDate(row?.since ?? null) };

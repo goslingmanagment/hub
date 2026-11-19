@@ -309,8 +309,6 @@ export interface RequestEta {
   etaEstimateMs: number | null;
   /** Reads an hour this request gets while it is not held. */
   ratePerHour: number;
-  /** "Свежие сообщения всех фанов": the first round's head reads. */
-  firstRoundMs: number;
 }
 
 /**
@@ -320,7 +318,6 @@ export interface RequestEta {
  */
 export function estimateRequest(input: {
   items: readonly ItemReadsEstimate[];
-  unanchoredItems: number;
   capacity: RequestsCapacity;
   k: number;
 }): RequestEta {
@@ -340,6 +337,5 @@ export function estimateRequest(input: {
     etaMinMs: Math.round(remainingMin * perReadMs),
     etaEstimateMs: remainingEstimate === null ? null : Math.round(remainingEstimate * perReadMs),
     ratePerHour: Math.round((3_600_000 / perReadMs) * 10) / 10,
-    firstRoundMs: Math.round(input.unanchoredItems * perReadMs),
   };
 }

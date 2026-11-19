@@ -3,15 +3,12 @@ import { sql } from "drizzle-orm";
 import {
   getSyncPage,
   getSyncWork,
-  SYNC_WORK_DONE_NOTIFY_CHANNEL,
   upsertDemand,
   type Database,
   type SyncWorkRow,
 } from "@agency_hub_core/db";
 
-import { PgWake } from "../engine/host-ports.ts";
-import type { SyncLogger } from "../engine/commit.ts";
-import { systemClock, type Clock, type Wake } from "../engine/ports.ts";
+import { systemClock, type Clock } from "../engine/ports.ts";
 import { demandToUpsert } from "../engine/resource.ts";
 import { fanslyResourceSpec, type ResourceSpec } from "../fansly/registry.ts";
 
@@ -34,9 +31,8 @@ import { fanslyResourceSpec, type ResourceSpec } from "../fansly/registry.ts";
 export const URGENT_WAIT_DEFAULT_MS = 15_000;
 /** The longest a caller may wait (plan §3: «до 15–30 с»). */
 export const URGENT_WAIT_MAX_MS = 30_000;
-/** The re-read period while waiting: a lost NOTIFY costs at most this. */
+/** The re-read period while waiting. */
 export const URGENT_POLL_MS = 250;
-export const URGENT_WORK_DONE_APPLICATION_NAME = "fansly-sync-work-done";
 
 /** The registry trigger that lets the API and the CLIs enqueue a key. */
 const API_TRIGGER = "api";
@@ -66,9 +62,6 @@ export class UrgentWorkRefusedError extends Error {
 
 export interface UrgentContext {
   db: Database;
-  /** The work-done wake (`createWorkDoneWake`); without it a wait re-reads
-   *  the row every `URGENT_POLL_MS`. */
-  workDone?: Wake | null;
   clock?: Clock;
 }
 
@@ -187,8 +180,7 @@ function settled(row: SyncWorkRow | null, workId: number, revision: number): Enq
 /**
  * Put `resource` on the page's queue and wait for the actor to serve this
  * demand (`applied_revision ≥` the revision this call raised), up to
- * `waitMs`. Woken by `fansly_sync_work_done` (sent by `settleWork` at commit)
- * and re-reading the row every 250 ms, so a lost NOTIFY costs at most that.
+ * `waitMs`, re-reading the row every 250 ms.
  */
 export async function enqueueAndWait(ctx: UrgentContext, input: EnqueueAndWaitInput): Promise<EnqueueAndWaitResult> {
   const spec = apiResourceSpec(input.resource);
@@ -225,33 +217,6 @@ export async function enqueueAndWait(ctx: UrgentContext, input: EnqueueAndWaitIn
     const remaining = deadline - clock.monoNow();
     if (remaining <= 0 || signal.aborted) return queued;
     const slice = Math.min(URGENT_POLL_MS, remaining);
-    if (ctx.workDone) {
-      await ctx.workDone.wait(enqueued.workId, slice, signal);
-    } else {
-      await clock.sleep(slice, signal).catch(() => undefined);
-    }
+    await clock.sleep(slice, signal).catch(() => undefined);
   }
-}
-
-/** The payload of `fansly_sync_work_done` is `<workId>:<appliedRevision>`. */
-export function workIdOfDonePayload(payload: string): number | null {
-  const workId = Number(payload.split(":", 1)[0]);
-  return Number.isSafeInteger(workId) && workId > 0 ? workId : null;
-}
-
-/**
- * The work-done wake of a process that calls `enqueueAndWait` (the API, a CLI):
- * one dedicated LISTEN client on `fansly_sync_work_done`, keyed by work id.
- * A notification nobody waits for is dropped (every live settle is announced;
- * the waiter re-reads its row anyway). Start it once, close it at shutdown.
- */
-export function createWorkDoneWake(input: { connectionString: string; logger: SyncLogger }): PgWake {
-  return new PgWake({
-    connectionString: input.connectionString,
-    logger: input.logger,
-    channel: SYNC_WORK_DONE_NOTIFY_CHANNEL,
-    applicationName: URGENT_WORK_DONE_APPLICATION_NAME,
-    keyOf: workIdOfDonePayload,
-    keepUnclaimed: false,
-  });
 }

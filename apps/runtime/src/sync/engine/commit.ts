@@ -237,14 +237,6 @@ export const defaultCaptureCodec: CaptureCodec = {
   },
 };
 
-/** Inline canonicalization of the captured observation inside tx 3 (the
- *  capture seam). Without one, the minutely canonicalization sweep picks the
- *  observation up as it does for every journaled fact. */
-export type ObservationCanonicalizer = (
-  tx: Database,
-  input: { pageId: number; ownRef: string | null; observationId: number; receivedAt: Date },
-) => Promise<void>;
-
 /** The history-request hook of tx 3 (`history_*` last in the lock order). */
 export type ThreadChainChangedHook = (tx: Database, input: { pageId: number; threadId: number }) => Promise<void>;
 
@@ -275,7 +267,6 @@ export interface CommitDeps {
   metrics: Metrics;
   logger: SyncLogger;
   capture?: CaptureCodec;
-  canonicalize?: ObservationCanonicalizer;
   onThreadChainChanged?: ThreadChainChangedHook;
   onWorkClosed?: WorkClosedHook;
   onChatUnavailable?: ChatUnavailableHook;
@@ -1816,14 +1807,6 @@ export async function apply(
         ...(d.settings === undefined ? {} : { settings: d.settings }),
         secrets: d.secrets ?? null,
       });
-      if (d.canonicalize !== undefined && result.canonicalized !== true) {
-        await d.canonicalize(tx, {
-          pageId: d.pageId,
-          ownRef: d.ownRef,
-          observationId: attempt.observationId!,
-          receivedAt: attempt.observationReceivedAt!,
-        });
-      }
       return settleApplied(tx, d, { attempt, work, spec, page, result });
     });
     if (applied === "nothing") return "nothing";
