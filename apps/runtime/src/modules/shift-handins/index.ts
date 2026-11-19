@@ -25,6 +25,7 @@ import {
   readCurrentShiftReport,
   markShiftReportPostCopied,
   PhaseConflictError,
+  readShiftReportBoard,
   readShiftReportChecks,
   reopenShiftReport,
   resendShiftReport,
@@ -81,7 +82,8 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
   });
 
   server.get("/api/v1/shift-reports/:shiftId", { schema: routeSchemas.shiftReport }, async (request) => {
-    return readShiftReport(appContext, await person(request), request.params.shiftId);
+    // The board's read (shift-report-board.ts): a report it moved to «Подтвердите» and the person signed is counted first.
+    return readShiftReportBoard(appContext, await person(request), request.params.shiftId);
   });
 
   server.get("/api/v1/shift-reports/:shiftId/claimable", { schema: routeSchemas.shiftReportClaimable }, async (request) => {
@@ -110,7 +112,10 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
   });
 
   server.post("/api/v1/shift-reports/:shiftId/submit", { schema: routeSchemas.shiftReportSubmit }, async (request) => {
-    return submitShiftReport(appContext, await person(request), { shiftId: request.params.shiftId });
+    // What the person saw on the bar: equal to the candidate, the hand-in is their signature (an older client sends none).
+    return submitShiftReport(appContext, await person(request), {
+      shiftId: request.params.shiftId, seenTotalMills: request.body?.seenTotalMills, seenCount: request.body?.seenCount,
+    });
   });
 
   // --- The «Отчёт» board (package R): shift-report-board.ts --------------------

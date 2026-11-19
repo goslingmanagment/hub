@@ -195000,6 +195000,12 @@
                                     },
                                     "superseded": {
                                       "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [
@@ -200149,6 +200155,12 @@
                                       "additionalProperties": false
                                     },
                                     "superseded": {
+                                      "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
                                       "type": "boolean"
                                     }
                                   },
@@ -307707,6 +307719,12 @@
                                             },
                                             "superseded": {
                                               "type": "boolean"
+                                            },
+                                            "signed": {
+                                              "type": "boolean"
+                                            },
+                                            "signatureDeclined": {
+                                              "type": "boolean"
                                             }
                                           },
                                           "required": [
@@ -312163,6 +312181,12 @@
                                       "additionalProperties": false
                                     },
                                     "superseded": {
+                                      "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
                                       "type": "boolean"
                                     }
                                   },
@@ -316634,6 +316658,12 @@
                                     },
                                     "superseded": {
                                       "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [
@@ -321011,6 +321041,12 @@
                                           "additionalProperties": false
                                         },
                                         "superseded": {
+                                          "type": "boolean"
+                                        },
+                                        "signed": {
+                                          "type": "boolean"
+                                        },
+                                        "signatureDeclined": {
                                           "type": "boolean"
                                         }
                                       },
@@ -325279,6 +325315,12 @@
                                     },
                                     "superseded": {
                                       "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [
@@ -329656,6 +329698,12 @@
                                           "additionalProperties": false
                                         },
                                         "superseded": {
+                                          "type": "boolean"
+                                        },
+                                        "signed": {
+                                          "type": "boolean"
+                                        },
+                                        "signatureDeclined": {
                                           "type": "boolean"
                                         }
                                       },
@@ -334517,6 +334565,12 @@
                                         },
                                         "superseded": {
                                           "type": "boolean"
+                                        },
+                                        "signed": {
+                                          "type": "boolean"
+                                        },
+                                        "signatureDeclined": {
+                                          "type": "boolean"
                                         }
                                       },
                                       "required": [
@@ -339204,6 +339258,12 @@
                                           "additionalProperties": false
                                         },
                                         "superseded": {
+                                          "type": "boolean"
+                                        },
+                                        "signed": {
+                                          "type": "boolean"
+                                        },
+                                        "signatureDeclined": {
                                           "type": "boolean"
                                         }
                                       },
@@ -344010,6 +344070,12 @@
                                     },
                                     "superseded": {
                                       "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [
@@ -348478,6 +348544,12 @@
                                     },
                                     "superseded": {
                                       "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [
@@ -352902,6 +352974,12 @@
                                     },
                                     "superseded": {
                                       "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [
@@ -357325,6 +357403,12 @@
                                       "additionalProperties": false
                                     },
                                     "superseded": {
+                                      "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
                                       "type": "boolean"
                                     }
                                   },
@@ -361775,6 +361859,12 @@
                                     },
                                     "superseded": {
                                       "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [
@@ -366209,6 +366299,12 @@
                                     },
                                     "superseded": {
                                       "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
+                                      "type": "boolean"
                                     }
                                   },
                                   "required": [
@@ -370587,6 +370683,12 @@
                                         },
                                         "superseded": {
                                           "type": "boolean"
+                                        },
+                                        "signed": {
+                                          "type": "boolean"
+                                        },
+                                        "signatureDeclined": {
+                                          "type": "boolean"
                                         }
                                       },
                                       "required": [
@@ -371099,11 +371201,34 @@
     },
     "/api/v1/shift-reports/{shiftId}/submit": {
       "post": {
-        "summary": "«Сдать смену»: the draft as it is now becomes the report's next version",
+        "summary": "«Сдать смену»: the draft as it is now becomes the report's next candidate, signed by the person when it is what they saw",
         "tags": [
           "client"
         ],
-        "description": "Any session (the narrow one the extension opens included) or the chat extension's device token: the person's own report to write; a reader's to read. Database only. Own shift, switched on; a shift still going may be handed in. A version handed in after the ledger paid the day is kept and raises a matter for the owner.",
+        "description": "Any session (the narrow one the extension opens included) or the chat extension's device token: the person's own report to write; a reader's to read. Database only. Own shift, switched on; a shift still going may be handed in. Hub and Gengar check the candidate; with `seenTotalMills` and `seenCount` equal to the candidate's it is signed, and a check that changes nothing makes the version by that signature (no «Подтверждаю»). Unsigned, or changed by the check — the person confirms. A version made after the ledger paid the day is kept and raises a matter for the owner.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "seenTotalMills": {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  "seenCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
         "parameters": [
           {
             "schema": {
@@ -374843,6 +374968,12 @@
                                       "additionalProperties": false
                                     },
                                     "superseded": {
+                                      "type": "boolean"
+                                    },
+                                    "signed": {
+                                      "type": "boolean"
+                                    },
+                                    "signatureDeclined": {
                                       "type": "boolean"
                                     }
                                   },

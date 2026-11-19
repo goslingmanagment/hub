@@ -70,6 +70,12 @@ export class PhaseConflictError extends ConflictError {
 }
 
 /**
+ * The event of a signature at «Сдать смену» the server did not apply (the check changed the report, or the
+ * confirmation refused): the board then says «Проверка нашла изменения: проверьте и подтвердите».
+ */
+export const SHIFT_REPORT_SIGNATURE_DECLINED_EVENT = "shift_report.signature_declined";
+
+/**
  * Whether the check lets the person confirm: Hub has no page still reading and Gengar answered (or nobody reviews the
  * shift's pages) — or the server's timer: 10 minutes since the hand-in, whatever is still running.
  */

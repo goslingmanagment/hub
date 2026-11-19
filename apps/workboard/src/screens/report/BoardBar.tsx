@@ -97,11 +97,14 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
     );
   } else if (board.phase === "draft" || board.phase === "fixing") {
     if (editing) {
+      const fixing = board.phase === "fixing";
+      // The press is the person's signature (owner, 19.11): what it signs, said before it is pressed. Hub counts the
+      // report by it when the check changes nothing.
+      const signs = <span className="k"><Ico name="pen" size={14} />«{fixing ? "Сдать заново" : "Сдать смену"}» = подтверждаю: {salesCount(count)} на {usd(total)}, за корректность отвечаю материально</span>;
       // Three people asked on the first days whether screenshots go with the report (19.11).
-      if (board.phase === "draft") status = <span className="k"><Ico name="check" size={14} />Скрины не нужны: продажи и суммы доска берёт из Hub</span>;
+      status = fixing ? signs : <>{signs}<span className="k"><Ico name="check" size={14} />Скрины не нужны: продажи и суммы доска берёт из Hub</span></>;
       const lost = allRows(board).find(isLost) ?? null;
       const bareList = bareRows(board);
-      const fixing = board.phase === "fixing";
       main = (
         <>
           {totals}
@@ -120,7 +123,9 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
           <span className="grow" />
           {fixing && <button type="button" className="btn btn--quiet btn--lg" disabled={pending} onClick={() => void run({ op: "reopenCancel" })}>Отмена</button>}
           <button type="button" className="btn btn--main btn--lg" disabled={pending} onClick={() => {
-            void actions.commitNote().then(() => run({ op: "submit" }));
+            // What the bar shows now is what the person signs.
+            const seen = { seenTotalMills: total, seenCount: count };
+            void actions.commitNote().then(() => run({ op: "submit", ...seen }));
           }}>{fixing ? "Сдать заново" : "Сдать смену"}</button>
         </>
       );
@@ -128,6 +133,9 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
       main = <>{totals}<CommentText report={report} /><span className="grow" /></>;
     }
   } else if (board.phase === "checking") {
+    // Signed at «Сдать смену»: nothing found, Hub counts it by itself; something found, the person is called to confirm.
+    const signed = own && candidate?.signed === true;
+    if (signed) status = <span className="k"><Ico name="check" size={14} />{host === "frame" ? "Можно свернуть" : "Можно закрыть"}. Ничего не найдём: отчёт учтётся сам. Найдём продажу или правку: позовём подтвердить</span>;
     main = (
       <>
         <span className="tot">Сдано в {candidate ? clock(candidate.madeAt) : ""} · продаж: {count}, <b>{usd(total)}</b></span>
@@ -135,13 +143,15 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
         {gengarLine()}
         <span className="grow" />
         {/* The second step is easy to miss (19.11: a person closed the board while it checked and never confirmed). */}
-        {own && <span className="hint">{host === "frame" ? "Можно свернуть. " : ""}Дальше «Подтверждаю»: без него отчёт не учтён</span>}
+        {own && !signed && <span className="hint">{host === "frame" ? "Можно свернуть. " : ""}Дальше «Подтверждаю»: без него отчёт не учтён</span>}
       </>
     );
   } else if (board.phase === "confirm") {
     const waiting = waitingRows(board);
     status = (
       <>
+        {/* The signature at «Сдать смену» was not applied: the check changed the report, the person signs what it is now. */}
+        {own && candidate?.signatureDeclined === true && <span className="k is-amb"><Ico name="pen" size={14} />Проверка нашла изменения: проверьте и подтвердите</span>}
         {hubLine()}
         {gengarLine()}
         {waiting.length > 0 && <span className="k is-amb"><Ico name="people" size={14} />Ждут ответа, в сумму не входят:{links(waiting)}</span>}

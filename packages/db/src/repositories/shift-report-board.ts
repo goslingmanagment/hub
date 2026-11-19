@@ -93,11 +93,17 @@ export interface CandidateRow {
   supersededBy: number | null;
   confirmedVersion: number | null;
   confirmedAt: Date | null;
+  /**
+   * The person's signature at «Сдать смену» (0433): the total and count they saw, equal to the candidate's then. Null —
+   * not signed (an agent's «со слов», a re-made candidate, a board that differed), or cleared because the check changed it.
+   */
+  signed: { totalMills: number; count: number; at: Date } | null;
 }
 
 const CANDIDATE_COLUMNS = sql`c.id, c.handin_id, c.number, c.made_at, c.door, c.actor_user_id, c.agent_key_id, c.telegram_message_ref,
   c.telegram_sender_id, c.cutoff_at, c.total_mills, c.pages, c.lines, c.off_platform, c.comment, c.model_comments, c.rule_version, c.hub_check,
-  c.hub_checked_at, c.gengar_answered_at, c.gengar_clean, c.superseded_at, c.superseded_by, c.confirmed_version, c.confirmed_at`;
+  c.hub_checked_at, c.gengar_answered_at, c.gengar_clean, c.superseded_at, c.superseded_by, c.confirmed_version, c.confirmed_at,
+  c.signed_total_mills, c.signed_count, c.signed_at`;
 
 function candidateOf(row: Row): CandidateRow {
   return {
@@ -126,12 +132,16 @@ function candidateOf(row: Row): CandidateRow {
     supersededBy: nullableNum(row.superseded_by),
     confirmedVersion: nullableNum(row.confirmed_version),
     confirmedAt: nullableDate(row.confirmed_at),
+    signed: row.signed_at === null || row.signed_at === undefined
+      ? null
+      : { totalMills: num(row.signed_total_mills), count: num(row.signed_count), at: date(row.signed_at) },
   };
 }
 
 /**
  * A new candidate of the report, the next number; every earlier one not confirmed and not superseded yet is superseded
- * by it. Run in the caller's transaction after the report's lock.
+ * by it. `signed` — the person's signature at «Сдать смену» (only their own door, only what equals the candidate). Run
+ * in the caller's transaction after the report's lock.
  */
 export async function insertHandinCandidate(
   db: Database,
@@ -151,19 +161,21 @@ export async function insertHandinCandidate(
     modelComments: Readonly<Record<string, string>>;
     ruleVersion: string;
     hubCheck: readonly CandidateHubPage[];
+    signed?: { totalMills: number; count: number } | null;
     at: Date;
   },
 ): Promise<CandidateRow> {
   const at = input.at.toISOString();
+  const signed = input.signed ?? null;
   const result = await db.execute<Row>(sql`
     insert into shift_handin_candidates (handin_id, number, made_at, door, actor_user_id, agent_key_id, telegram_message_ref, telegram_sender_id,
-      cutoff_at, total_mills, pages, lines, off_platform, comment, model_comments, rule_version, hub_check)
+      cutoff_at, total_mills, pages, lines, off_platform, comment, model_comments, rule_version, hub_check, signed_total_mills, signed_count, signed_at)
     values (${input.handinId},
       (select coalesce(max(number), 0) + 1 from shift_handin_candidates where handin_id = ${input.handinId}),
       ${at}::timestamptz, ${input.door}, ${input.actorUserId}, ${input.agentKeyId}, ${input.telegramMessageRef}, ${input.telegramSenderId},
       ${input.cutoffAt.toISOString()}::timestamptz, ${input.totalMills}, ${JSON.stringify(input.pages)}::jsonb, ${JSON.stringify(input.lines)}::jsonb,
       ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment}, ${JSON.stringify(input.modelComments)}::jsonb, ${input.ruleVersion},
-      ${JSON.stringify(input.hubCheck)}::jsonb)
+      ${JSON.stringify(input.hubCheck)}::jsonb, ${signed?.totalMills ?? null}, ${signed?.count ?? null}, ${signed === null ? null : at}::timestamptz)
     returning ${sql.raw(CANDIDATE_COLUMNS_RAW)}`);
   const made = candidateOf(result.rows[0]!);
   await db.execute(sql`
@@ -174,7 +186,8 @@ export async function insertHandinCandidate(
 
 const CANDIDATE_COLUMNS_RAW = `id, handin_id, number, made_at, door, actor_user_id, agent_key_id, telegram_message_ref,
   telegram_sender_id, cutoff_at, total_mills, pages, lines, off_platform, comment, model_comments, rule_version, hub_check,
-  hub_checked_at, gengar_answered_at, gengar_clean, superseded_at, superseded_by, confirmed_version, confirmed_at`;
+  hub_checked_at, gengar_answered_at, gengar_clean, superseded_at, superseded_by, confirmed_version, confirmed_at,
+  signed_total_mills, signed_count, signed_at`;
 
 /** Every candidate of a report, oldest first. */
 export async function listHandinCandidates(db: Database, handinId: number): Promise<CandidateRow[]> {
@@ -224,6 +237,41 @@ export async function setCandidateGengarAnswer(db: Database, input: { candidateI
     update shift_handin_candidates set gengar_answered_at = ${input.at.toISOString()}::timestamptz, gengar_clean = ${input.clean}
     where id = ${input.candidateId} and gengar_answered_at is null`);
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * The person's signature is not applied (the check changed the report, or the confirmation refused): cleared, so the
+ * person confirms by hand and nothing tries it again. A confirmed candidate keeps its signature (what counted it).
+ * False — it was not signed (any more), or it is confirmed.
+ */
+export async function clearCandidateSignature(db: Database, input: { candidateId: number }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update shift_handin_candidates set signed_total_mills = null, signed_count = null, signed_at = null
+    where id = ${input.candidateId} and signed_at is not null and confirmed_at is null`);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * Reports in «Подтвердите» whose open candidate (not superseded, not confirmed) the person signed at «Сдать смену»: the
+ * server applies the signature or clears it (shift-report-board.ts `applyHandInSignature`). Oldest first.
+ */
+export async function listSignedConfirmHandins(db: Database, input: { limit: number }): Promise<Array<{ handinId: number; shiftId: number }>> {
+  const result = await db.execute<Row>(sql`
+    select h.id, h.shift_id from shift_handins h
+    join shift_handin_candidates c on c.handin_id = h.id
+    where h.phase = 'confirm' and c.signed_at is not null and c.superseded_at is null and c.confirmed_at is null
+    order by h.phase_at nulls first, h.id limit ${input.limit}`);
+  return result.rows.map((row) => ({ handinId: num(row.id), shiftId: num(row.shift_id) }));
+}
+
+/** Whether the report has an event of this name since the moment (`object_events`, by the object's index). */
+export async function hasHandinEventSince(db: Database, input: { handinId: number; event: string; since: Date }): Promise<boolean> {
+  const result = await db.execute<Row>(sql`
+    select 1 from object_events
+    where object_type = 'shift_report' and object_id = ${String(input.handinId)} and event = ${input.event}
+      and created_at >= ${input.since.toISOString()}::timestamptz
+    limit 1`);
+  return result.rows.length > 0;
 }
 
 /** «Подтверждаю» made `version` from the candidate. */
