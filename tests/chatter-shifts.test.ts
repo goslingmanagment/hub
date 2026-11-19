@@ -9,6 +9,8 @@ import {
   type ComputedWork,
   type SentMinute,
 } from "../apps/runtime/src/services/chatter-shifts.ts";
+import type { RuleSlot } from "../apps/runtime/src/services/sale-rule.ts";
+import { scheduleSpansOf, slotOccurrencesOf } from "../apps/runtime/src/services/schedule-slots.ts";
 
 // The one definition of a shift (services/chatter-shifts.ts). The cases are the
 // real ones of the first ten days of data: a browser restart, a look-in at noon,
@@ -263,6 +265,111 @@ describe("workOfMinutes", () => {
 
   it("has no work for an extension that was only open", () => {
     expect(workOfMinutes(minutes(0, 90, []), [], FAR_LATER)).toEqual([]);
+  });
+});
+
+describe("a break inside the person's own schedule slot (owner, 2026-11-19)", () => {
+  // The same helpers, moved to 08:00 Moscow of a day: minute 0 is 08:00, 480 is 16:00.
+  const from = (day: string) => Date.parse(`${day}T08:00:00+03:00`) - T0;
+  const on = (day: string) => ({
+    at: (minute: number) => at(minute) + from(day),
+    minutes: (...args: Parameters<typeof minutes>) => minutes(...args).map((one) => ({ ...one, at: one.at + from(day) })),
+    sends: (...args: Parameters<typeof sends>) => sends(...args).map((one) => ({ ...one, at: one.at + from(day) })),
+  });
+  const day = on("2026-11-20");
+  const LATER = day.at(10 * 24 * 60);
+  /** A slot of 08:00–16:00 that day. */
+  const slot = [{ start: day.at(0), end: day.at(480) }];
+  // Work 08:00–11:00, the extension closed for lunch, back at 13:22 (a break of 142 minutes), work to 16:00.
+  const lunch = (of = day) => ({
+    minutes: [...of.minutes(0, 182, range(0, 181)), ...of.minutes(322, 480, range(322, 480))],
+    sent: [...of.sends(0, 181, 100), ...of.sends(322, 480, 100)],
+  });
+
+  it("is one shift with the break as a pause, and the break's sales are the shift's", () => {
+    const { minutes: open, sent } = lunch();
+    const work = workOfMinutes(open, sent, LATER, slot);
+    expect(bounds(work)).toEqual([["shift", day.at(0), day.at(480)]]);
+    // The work before ends 2 minutes after the extension's last open minute; the rest of the break is a pause.
+    expect(work[0]).toMatchObject({ ongoing: false, workedMinutes: 341, pauses: [{ from: day.at(183), to: day.at(322) }] });
+    expect(totalMessages(work[0]!)).toBe(200);
+    expect(workHoldsSale(work[0]!, { pageLabel: "ari-1", at: day.at(250) })).toBe(true);
+    // The extension left open through lunch: its first 10 idle minutes are work, the rest a pause, as in any break.
+    const openLunch = workOfMinutes([...day.minutes(0, 322, range(0, 181)), ...day.minutes(322, 480, range(322, 480))], sent, LATER, slot);
+    expect(openLunch).toMatchObject([{ kind: "shift", startedAt: day.at(0), endedAt: day.at(480), pauses: [{ from: day.at(190), to: day.at(322) }] }]);
+    // No slot, the same day: two shifts, as before the rule.
+    expect(bounds(workOfMinutes(open, sent, LATER))).toEqual([
+      ["shift", day.at(0), day.at(182)],
+      ["shift", day.at(322), day.at(480)],
+    ]);
+  });
+
+  it("cuts a break begun before the rule as before: earlier days never change", () => {
+    const before = on("2026-11-18");
+    const { minutes: open, sent } = lunch(before);
+    expect(bounds(workOfMinutes(open, sent, LATER, [{ start: before.at(0), end: before.at(480) }]))).toEqual([
+      ["shift", before.at(0), before.at(182)],
+      ["shift", before.at(322), before.at(480)],
+    ]);
+    // A night slot over the rule's midnight (18:00–04:00): a break from 23:00 to 01:00 begun before it still cuts.
+    const night = on("2026-11-18");
+    const nightSlot = [{ start: night.at(600), end: night.at(1200) }];
+    const nightOpen = [...night.minutes(600, 902, range(600, 901)), ...night.minutes(1020, 1200, range(1020, 1200))];
+    const nightSent = [...night.sends(600, 901, 100), ...night.sends(1020, 1200, 100)];
+    expect(bounds(workOfMinutes(nightOpen, nightSent, LATER, nightSlot))).toEqual([
+      ["shift", night.at(600), night.at(902)],
+      ["shift", night.at(1020), night.at(1200)],
+    ]);
+    // The same night a day later, the break begun after the rule: one shift.
+    const next = on("2026-11-19");
+    const nextOpen = [...next.minutes(600, 902, range(600, 901)), ...next.minutes(1020, 1200, range(1020, 1200))];
+    const nextSent = [...next.sends(600, 901, 100), ...next.sends(1020, 1200, 100)];
+    expect(bounds(workOfMinutes(nextOpen, nextSent, LATER, [{ start: next.at(600), end: next.at(1200) }]))).toEqual([["shift", next.at(600), next.at(1200)]]);
+  });
+
+  it("leaves a return after the slot's end a work of its own, as before", () => {
+    // Back at 16:30, after the slot of 08:00–16:00.
+    const open = [...day.minutes(0, 182, range(0, 181)), ...day.minutes(510, 700, range(510, 700))];
+    const sent = [...day.sends(0, 181, 100), ...day.sends(510, 700, 100)];
+    expect(bounds(workOfMinutes(open, sent, LATER, slot))).toEqual([
+      ["shift", day.at(0), day.at(182)],
+      ["shift", day.at(510), day.at(700)],
+    ]);
+  });
+
+  it("keeps the shift going, paused, through the break while the slot runs, and closes it at its last action once the slot is over", () => {
+    const open = day.minutes(0, 182, range(0, 181));
+    const sent = day.sends(0, 181, 100);
+    // 12:30, an hour and a half after the last action: going, the break so far a pause.
+    const [lunchtime] = workOfMinutes(open, sent, day.at(270), slot);
+    expect(lunchtime).toMatchObject({ kind: "shift", ongoing: true, startedAt: day.at(0), endedAt: day.at(270), pauses: [{ from: day.at(183), to: day.at(270) }] });
+    expect(workHoldsSale(lunchtime!, { pageLabel: "ari-1", at: day.at(250) })).toBe(true);
+    expect(workOfMinutes(open, sent, day.at(479), slot)).toMatchObject([{ ongoing: true, endedAt: day.at(479) }]);
+    // 16:00, the slot over and nobody back: closed at the last action plus the idle that counts, as without the rule.
+    expect(workOfMinutes(open, sent, day.at(480), slot)).toMatchObject([{ kind: "shift", ongoing: false, endedAt: day.at(182), pauses: [] }]);
+    // Without a slot it closed an hour after the last action.
+    expect(workOfMinutes(open, sent, day.at(270))).toMatchObject([{ kind: "shift", ongoing: false, endedAt: day.at(182) }]);
+  });
+
+  it("ends the shift at a break the person was taken off for by a swap, and bridges one a «cover» line fills", () => {
+    const { minutes: open, sent } = lunch();
+    const line = (extra: Partial<RuleSlot>): RuleSlot => ({
+      personId: 7, pageId: null, startMinute: 8 * 60, endMinute: 16 * 60, weekdays: null, validFrom: null, validTo: null, ...extra,
+    });
+    const schedule = (slots: readonly RuleSlot[]) => scheduleSpansOf(slotOccurrencesOf(slots, {
+      userIds: new Set([7]), from: day.at(-480), to: day.at(1440), pagesOfAll: [11],
+    }));
+    // Off on page 11 from 11:00 to 14:00 (a colleague took those hours): the break lies in no one run of the slot.
+    const off = line({ pageId: 11, startMinute: 11 * 60, endMinute: 14 * 60, validFrom: "2026-11-20", validTo: "2026-11-20", day: "off" });
+    expect(bounds(workOfMinutes(open, sent, LATER, schedule([line({}), off])))).toEqual([
+      ["shift", day.at(0), day.at(182)],
+      ["shift", day.at(322), day.at(480)],
+    ]);
+    // Their own slot 08:00–12:00 and a colleague's hours 12:00–16:00 covered that day: one schedule, one shift.
+    const own = line({ endMinute: 12 * 60 });
+    const cover = line({ pageId: 11, startMinute: 12 * 60, validFrom: "2026-11-20", validTo: "2026-11-20", day: "cover" });
+    expect(bounds(workOfMinutes(open, sent, LATER, schedule([own])))).toHaveLength(2);
+    expect(bounds(workOfMinutes(open, sent, LATER, schedule([own, cover])))).toEqual([["shift", day.at(0), day.at(480)]]);
   });
 });
 

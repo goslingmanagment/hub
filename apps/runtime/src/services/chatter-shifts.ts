@@ -10,6 +10,7 @@ import {
   CHATTER_SHIFT_MIN_WORKED_MINUTES,
   CHATTER_SHIFT_PAGE_MIN_MESSAGES,
   CHATTER_SHIFT_PIECE_MIN_MESSAGES,
+  CHATTER_SHIFT_SLOT_PAUSE_SINCE,
   CHATTER_SHIFTS_MAX_WINDOW_DAYS,
   type ClientActivityBody,
   type ClientActivityResponse,
@@ -33,6 +34,7 @@ import { moscowDayOfMs as moscowDayOf } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireApiKeyUser, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
+import { registryScheduleSpans, type ScheduleSpan } from "./schedule-slots.ts";
 import { requireTeamReader } from "./teams.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 
@@ -61,6 +63,16 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
  *   CHATTER_SHIFT_CLOSED_SILENT_MINUTES or more (closed, the computer asleep),
  *   the work ends at its last open minute plus CHATTER_SHIFT_CLOSED_GRACE_MINUTES
  *   (owner, 2026-11-08): the time with it closed is no work.
+ * - A break inside the person's own schedule slot is a pause, however long,
+ *   not the end (owner, 2026-11-19): one slot, one shift, one report. A gap of
+ *   CHATTER_SHIFT_END_IDLE_MINUTES or more ends nothing when its last action
+ *   before and first action after lie in one occurrence of the person's
+ *   schedule (`registryScheduleSpans`, schedule-slots.ts: their lines on any of
+ *   their pages, a swap's «off» taken out, a «cover» added, the runs that touch
+ *   joined); the stretch goes on, paused, while that occurrence runs, and with
+ *   no action before its end it ends at its last action, as any. A gap begun
+ *   before CHATTER_SHIFT_SLOT_PAUSE_SINCE cuts as before: earlier days never
+ *   change. A sale in such a break is the shift's like any in a pause.
  * - With CHATTER_SHIFT_MIN_WORKED_MINUTES of work and
  *   CHATTER_SHIFT_MIN_MESSAGES messages it is a SHIFT; else a VISIT, a look-in
  *   that is not counted as one. A stretch still going is a shift once it has
@@ -154,12 +166,12 @@ export interface ComputedWork {
   salesSince: Map<string, number>;
 }
 
-/** Splits an ascending list where `apart` says two neighbours are. Pure. */
-function splitWhere(values: readonly number[], apart: (gap: number) => boolean): number[][] {
+/** Splits an ascending list where `apart` says two neighbours (`before`, `after`, `gap` between them) are. Pure. */
+function splitWhere(values: readonly number[], apart: (gap: number, before: number, after: number) => boolean): number[][] {
   const parts: number[][] = [];
   let part: number[] = [];
   for (const value of values) {
-    if (part.length > 0 && apart(value - part.at(-1)!)) {
+    if (part.length > 0 && apart(value - part.at(-1)!, part.at(-1)!, value)) {
       parts.push(part);
       part = [];
     }
@@ -185,12 +197,22 @@ function addTo(map: Map<string, number>, key: string, by: number) {
   map.set(key, (map.get(key) ?? 0) + by);
 }
 
+/** From when a break inside the person's own slot is a pause (CHATTER_SHIFT_SLOT_PAUSE_SINCE), ms. */
+const SLOT_PAUSE_SINCE = Date.parse(CHATTER_SHIFT_SLOT_PAUSE_SINCE);
+
 /**
  * The work of one person from their minutes (any order, any pages; one row per
  * page and minute) and their messages (any order), oldest first. `now` decides
- * whether the last stretch still goes. Pure.
+ * whether the last stretch still goes. `schedule` — the person's schedule as
+ * disjoint intervals (`registryScheduleSpans`); none, no break is a slot's
+ * pause. Pure.
  */
-export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly SentMinute[], now: number): ComputedWork[] {
+export function workOfMinutes(
+  minutes: readonly ActivityMinute[],
+  sent: readonly SentMinute[],
+  now: number,
+  schedule: readonly ScheduleSpan[] = [],
+): ComputedWork[] {
   const activeAt = new Map<number, string[]>();
   const openAt = new Set<number>();
   for (const minute of minutes) {
@@ -298,14 +320,22 @@ export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly
     return kept;
   };
 
+  /**
+   * A break from the action at `from` to `until` (the next action, or now) lies in the person's own slot: one occurrence
+   * of their schedule holds both, and it began on or after SLOT_PAUSE_SINCE (owner, 2026-11-19).
+   */
+  const inOwnSlot = (from: number, until: number) => from >= SLOT_PAUSE_SINCE && schedule.some((span) => span.start <= from && until < span.end);
+
   /** A piece of work before it is computed: its active minutes and its end. */
   type Segment = { kind: ComputedWork["kind"]; part: number[]; end: number; ongoing: boolean };
-  const stretches = splitWhere(inputs, (gap) => gap >= endAfter);
+  // An hour with no action ends a stretch, unless the break lies in the person's own slot: then it is a pause of it.
+  const stretches = splitWhere(inputs, (gap, before, after) => gap >= endAfter && !inOwnSlot(before, after));
   const segments: Segment[] = [];
   stretches.forEach((stretch, index) => {
     const lastInput = stretch.at(-1)!;
-    // Still going: the last stretch, under an hour since its last action, whether the extension beats now or not (a break).
-    const going = index === stretches.length - 1 && now - lastInput < endAfter;
+    // Still going: the last stretch, under an hour since its last action, whether the extension beats now or not (a break),
+    // or in a break inside the person's own slot while the slot runs.
+    const going = index === stretches.length - 1 && (now - lastInput < endAfter || inOwnSlot(lastInput, now));
     const pieces = splitWhere(stretch, (gap) => gap > pauseAfter);
     const sent = pieces.map((piece, at) => messagesIn(piece[0]!, pieces[at + 1]?.[0] ?? (going ? now + 1 : piece.at(-1)! + pauseAfter)));
     // The body: from the first to the last piece with enough messages (once it is over; while it goes, to now).
@@ -473,10 +503,12 @@ export async function readPeopleWork(
   const person = input.userId === undefined ? {} : { userId: input.userId };
   const readMinutes = () => listChatterActivityMinutes(db, { from: input.from, to: input.to, pages: "all", ...person });
   const readSends = () => countAuthoredSendsByMinute(db, { from: input.from, to: input.to, pages: "all", ...person });
+  // The people's schedule around the window: a break inside a person's own slot is a pause of the shift.
+  const readSchedule = () => registryScheduleSpans(db, { from: new Date(input.from.getTime() - DAY_MS), to: new Date(input.to.getTime() + DAY_MS) });
   // `inTurn`: `db` is the caller's transaction, one connection — no Promise.all on it.
-  const [allMinutes, sends, owners, testLogins] = options?.inTurn === true
-    ? [await readMinutes(), await readSends(), await listOwnerLoginIds(db), await listTestUserIds(db)]
-    : await Promise.all([readMinutes(), readSends(), listOwnerLoginIds(db), listTestUserIds(db)]);
+  const [allMinutes, sends, owners, testLogins, schedule] = options?.inTurn === true
+    ? [await readMinutes(), await readSends(), await listOwnerLoginIds(db), await listTestUserIds(db), await readSchedule()]
+    : await Promise.all([readMinutes(), readSends(), listOwnerLoginIds(db), listTestUserIds(db), readSchedule()]);
   // One person's work, or named pages, decide by themselves: a person works pages of one realm.
   const realm = input.pages === "all" && input.userId === undefined ? input.realm ?? "live" : "both";
   const test = new Set(testLogins);
@@ -495,7 +527,7 @@ export async function readPeopleWork(
 
   const out = new Map<number, PersonWork>();
   for (const [userId, known] of people) {
-    const all = workOfMinutes(known.minutes, known.sent, input.now.getTime());
+    const all = workOfMinutes(known.minutes, known.sent, input.now.getTime(), schedule.get(userId));
     const cut = scope === null ? all : all.flatMap((one) => workOnPages(one, labels) ?? []);
     // The owner is not a chatter: their work stays work, but holds no sale (owner, 2026-11-12).
     const work = owners.has(userId) ? cut.map((one) => ({ ...one, salesSince: new Map<string, number>() })) : cut;

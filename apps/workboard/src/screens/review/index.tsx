@@ -533,7 +533,7 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
       <Link className="review-title__name review-title__link" to={personPath(shift.userId, location.search)} state={toPerson}>{shift.username}</Link>
       <span className="review-title__when">{when.days} {when.time}</span>
       {idle !== null && (
-        <Tooltip content={shiftIdleTitle(shift)} align="start">
+        <Tooltip content={shiftIdleTitle(shift, shift.serverNow)} align="start">
           <span className="review-title__idle">{idle}</span>
         </Tooltip>
       )}

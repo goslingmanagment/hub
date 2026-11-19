@@ -3,6 +3,7 @@ import { Badge, Duration, EmptyState, Facts, LinkButton, Money, Skeleton, Toolti
 import { formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { addDays, moscowToday } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { shiftPauseText } from "@agency_hub_core/ui/shiftLive";
 import { shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { perHourMills } from "@/shared/metrics";
@@ -65,10 +66,11 @@ function MyShift({ rows, loading, failed }: { rows: readonly MyShiftRow[] | unde
   } else {
     const shift = row.shift;
     const when = shiftWhen({ startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: shift.ongoing, workedMinutes: shift.workedMinutes });
+    const pause = shiftPauseText(shift);
     body = (
       <>
         <p className="today-shift__when">
-          {shift.ongoing ? <>Идёт с {formatTimeOfDay(shift.startedAt)}</> : <>Последняя: {when.label}</>}
+          {shift.ongoing ? <>Идёт с {formatTimeOfDay(shift.startedAt)}{pause !== null && `, ${pause}`}</> : <>Последняя: {when.label}</>}
           {" · "}<Duration minutes={shift.workedMinutes} />
           {shift.pages.length > 0 && <span className="ui-muted"> · {shift.pages.join(", ")}</span>}
         </p>

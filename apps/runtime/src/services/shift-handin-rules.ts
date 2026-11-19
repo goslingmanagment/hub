@@ -1,6 +1,7 @@
-import { formatUsdFromMills, millsPercentOf, millsRoundedTo, millsToNumber, moscowDayOfMs as moscowDay } from "@agency_hub_core/shared";
+import { formatUsdFromMills, millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
 
-import { weekdayOfDay, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
+import type { RuleSlot, SaleHomeKind, SaleHomeReason } from "./sale-rule.ts";
+import { slotOccurrencesOf } from "./schedule-slots.ts";
 
 /**
  * Отчёт смены (ecosystem plan 2026-11-12, package F): which sales a shift's
@@ -167,66 +168,16 @@ export function slotWindowOf(
   slots: readonly RuleSlot[],
   input: { userIds: ReadonlySet<number>; startedAt: number; endedAt: number; pagesOfAll?: readonly number[] },
 ): { from: number; to: number; pageIds: Array<number | null> } | null {
-  const own = slots.filter((slot) => input.userIds.has(slot.personId));
-  if (own.length === 0) return null;
-  // Each line's runs over the days around the shift. A swap's `off` line widens nothing: it takes its own hours out of
-  // the person's standing lines of its page that day (sale-rule.ts `slotRuns`); a `cover` line runs as a line of its own.
-  const runs: Array<{ slot: RuleSlot; start: number; end: number }> = [];
-  const first = moscowDay(input.startedAt - DAY_MS);
-  for (let day = first; Date.parse(`${day}T00:00:00+03:00`) <= input.endedAt; day = moscowDay(Date.parse(`${day}T12:00:00+03:00`) + DAY_MS)) {
-    const midnight = Date.parse(`${day}T00:00:00+03:00`);
-    const weekday = weekdayOfDay(day);
-    for (const slot of own) {
-      if ((slot.validFrom !== null && day < slot.validFrom) || (slot.validTo !== null && day > slot.validTo)) continue;
-      if (slot.weekdays !== null && !slot.weekdays.includes(weekday)) continue;
-      const minutes = (slot.endMinute - slot.startMinute + MINUTES_OF_DAY) % MINUTES_OF_DAY || (slot.endMinute === MINUTES_OF_DAY ? MINUTES_OF_DAY - slot.startMinute : 0);
-      if (minutes <= 0) continue;
-      const start = midnight + slot.startMinute * MINUTE_MS;
-      runs.push({ slot, start, end: start + minutes * MINUTE_MS });
-    }
-  }
-  const offs = runs.filter((run) => run.slot.day === "off");
-  let from = Number.POSITIVE_INFINITY;
-  let to = Number.NEGATIVE_INFINITY;
-  const pageIds = new Set<number | null>();
-  const pagesOfAll = input.pagesOfAll !== undefined && input.pagesOfAll.length > 0 ? input.pagesOfAll : null;
-  for (const run of runs) {
-    if (run.slot.day === "off") continue;
-    // A line of every page runs on each of the person's pages, each cut by its own `off` (a page's swap does not take
-    // the person off the other pages).
-    const onPages: Array<number | null> = run.slot.pageId === null && run.slot.day === undefined && pagesOfAll !== null ? [...pagesOfAll] : [run.slot.pageId];
-    for (const pageId of onPages) {
-      const pieces = run.slot.day === "cover" ? [{ start: run.start, end: run.end }]
-        : withoutHours({ start: run.start, end: run.end }, offs.filter((off) => off.slot.pageId === pageId));
-      for (const piece of pieces) {
-        if (piece.end <= input.startedAt || piece.start >= input.endedAt) continue;
-        from = Math.min(from, piece.start);
-        to = Math.max(to, piece.end);
-        pageIds.add(pageId);
-      }
-    }
-  }
-  return Number.isFinite(from) ? { from, to, pageIds: [...pageIds] } : null;
+  // The runs of the person's lines that overlap the shift (schedule-slots.ts: a swap's `off` takes its own hours out of
+  // the person's lines of its page, a `cover` runs as a line of its own), each on its page.
+  const runs = slotOccurrencesOf(slots, { userIds: input.userIds, from: input.startedAt, to: input.endedAt, pagesOfAll: input.pagesOfAll });
+  if (runs.length === 0) return null;
+  return {
+    from: Math.min(...runs.map((run) => run.start)),
+    to: Math.max(...runs.map((run) => run.end)),
+    pageIds: [...new Set(runs.map((run) => run.pageId))],
+  };
 }
-
-/** An interval with the hours of others taken out: what is left of it, in order. Pure. */
-function withoutHours(run: { start: number; end: number }, out: ReadonlyArray<{ start: number; end: number }>): Array<{ start: number; end: number }> {
-  let left = [run];
-  for (const cut of out) {
-    left = left.flatMap((piece) => {
-      if (cut.end <= piece.start || cut.start >= piece.end) return [piece];
-      return [
-        ...(cut.start > piece.start ? [{ start: piece.start, end: cut.start }] : []),
-        ...(cut.end < piece.end ? [{ start: cut.end, end: piece.end }] : []),
-      ];
-    });
-  }
-  return left;
-}
-
-const DAY_MS = 86_400_000;
-const MINUTE_MS = 60_000;
-const MINUTES_OF_DAY = 1440;
 
 export type Statement = "mine" | "not_mine" | "share" | "give" | "pot";
 

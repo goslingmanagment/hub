@@ -3,6 +3,7 @@ import { useLocation } from "react-router";
 import { Duration, Money, PageLabels, Skeleton, StatusDot, Table, Tooltip, type Column } from "@agency_hub_core/ui";
 import { formatMills } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { shiftPauseText } from "@agency_hub_core/ui/shiftLive";
 import { shiftDurationHint, shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { shiftPath, useRowBackState } from "@/shared/links";
 import { formatAiUnedited, formatReplyMedian, formatUnanswered, METRICS, UNANSWERED_NOW_LABEL } from "@/shared/metrics";
@@ -67,6 +68,7 @@ export function ShiftTable({ card, userId, canOpen }: { card: PersonCard; userId
       sortFirst: "desc",
       cell: (row) => {
         const when = whenOf(row);
+        const pause = shiftPauseText(row);
         return (
           <span className="people-shift">
             <span className="people-shift__day">
@@ -77,6 +79,7 @@ export function ShiftTable({ card, userId, canOpen }: { card: PersonCard; userId
               {row.ongoing && <StatusDot tone="success" label="Идёт сейчас" />}
               {when.time}
             </span>
+            {pause !== null && <span className="people-shift__pause">{pause}</span>}
           </span>
         );
       },

@@ -402541,6 +402541,28 @@
                                         "startedAt": {
                                           "type": "string"
                                         },
+                                        "endedAt": {
+                                          "type": "string"
+                                        },
+                                        "pauses": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "from": {
+                                                "type": "string"
+                                              },
+                                              "to": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "from",
+                                              "to"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
                                         "pages": {
                                           "type": "array",
                                           "items": {
@@ -402552,6 +402574,8 @@
                                         "userId",
                                         "name",
                                         "startedAt",
+                                        "endedAt",
+                                        "pauses",
                                         "pages"
                                       ],
                                       "additionalProperties": false

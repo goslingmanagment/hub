@@ -4,6 +4,7 @@ import { isMatterInfoKind, waitingGroupOf, type KernelOperationResponse } from "
 import { Duration, Skeleton } from "@agency_hub_core/ui";
 import { formatTimeOfDay, formatWeekdayDay } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { shiftPauseText } from "@agency_hub_core/ui/shiftLive";
 import { ShiftLink } from "@/shared/links";
 import { mattersListQuery } from "@/shared/myMatters";
 import { useMe } from "@/shared/useMe";
@@ -72,12 +73,17 @@ function TeamCard({ team, owner }: { team: Team["teams"][number]; owner: boolean
       <h3 className="today-card__head">Сейчас на смене</h3>
       {team.onShift.length === 0 ? <p className="ui-muted">Сейчас никто не на смене.</p> : (
         <ul className="today-list">
-          {team.onShift.map((one) => (
-            <li key={`${one.userId}:${one.startedAt}`} className="today-list__row">
-              <span className="today-list__who">{one.name}</span>
-              <span className="today-list__what">с {formatTimeOfDay(one.startedAt)}{one.pages.length > 0 ? ` · ${one.pages.join(", ")}` : ""}</span>
-            </li>
-          ))}
+          {team.onShift.map((one) => {
+            const pause = shiftPauseText({ ...one, ongoing: true });
+            return (
+              <li key={`${one.userId}:${one.startedAt}`} className="today-list__row">
+                <span className="today-list__who">{one.name}</span>
+                <span className="today-list__what">
+                  с {formatTimeOfDay(one.startedAt)}{pause !== null ? `, ${pause}` : ""}{one.pages.length > 0 ? ` · ${one.pages.join(", ")}` : ""}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
       {team.absent.length > 0 && (

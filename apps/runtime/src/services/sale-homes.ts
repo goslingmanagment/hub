@@ -2,9 +2,6 @@ import type { AgentTeamSale, AgentTeamSalesResponse, AgentTeamWork } from "@agen
 import {
   listActiveSaleDecisions,
   listCurrentReportsOfSales,
-  listPersonLoginRows,
-  listPersonDayLineRows,
-  listPersonScheduleSlotRows,
   listSaleClaims,
   listShiftRows,
   listUserLeaveFacts,
@@ -12,8 +9,6 @@ import {
   listVisiblePages,
   upsertSaleHomes,
   type Database,
-  type PersonLoginRow,
-  type PersonScheduleSlotRow,
   type SaleHomeRow,
   type ShiftRowRecord,
   type UserLeaveFacts,
@@ -24,17 +19,15 @@ import { readAgentTeamSales } from "./agent-team-sales.ts";
 import { moscowDayOf } from "./chatter-shifts.ts";
 import { ruleDecisionOf, ruleMarksOf, type ClaimView, type ReportView } from "./sale-claim-rules.ts";
 import {
-  RULE_WEEKDAYS,
   SALE_RULE,
   homesOfSales,
   type RuleMark,
   type RuleSale,
-  type RuleSlot,
-  type RuleWeekday,
   type RuleWork,
   type SaleHome,
   type SaleRuleConfig,
 } from "./sale-rule.ts";
+import { NO_SLOTS, registrySlots, type SaleSlotProvider } from "./schedule-slots.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 /**
@@ -56,62 +49,9 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 const DAY_MS = 86_400_000;
 
-/**
- * Where the people's schedule slots come from (sale-rule.ts `RuleSlot`): the people registry (`registrySlots`), or
- * none — then a junction nobody wrote to waits for the owner, as ledger's Go. A registry with no slot gives none.
- */
-export interface SaleSlotProvider {
-  slotsFor(input: { from: Date; to: Date }): Promise<readonly RuleSlot[]>;
-}
-
-export const NO_SLOTS: SaleSlotProvider = { slotsFor: async () => [] };
-
-const WEEKDAYS: ReadonlySet<string> = new Set(RULE_WEEKDAYS);
-
-/**
- * The registry's slots (0384 `person_schedule_slots`) as the rule reads them: a person's slot holds for every Hub login
- * of theirs (`person_logins`), so it is given once per login; a person with no login has none. Only the slots valid on
- * some day of [from − 1 day, to] (Moscow; a slot that began the day before still runs past midnight). Pure.
- */
-export function ruleSlotsOf(input: {
-  slots: readonly PersonScheduleSlotRow[];
-  logins: ReadonlyArray<Pick<PersonLoginRow, "personId" | "userId">>;
-  from: Date;
-  to: Date;
-}): RuleSlot[] {
-  const first = moscowDayOf(input.from.getTime() - DAY_MS);
-  const last = moscowDayOf(input.to.getTime());
-  const loginsOf = new Map<number, number[]>();
-  for (const login of input.logins) loginsOf.set(login.personId, [...(loginsOf.get(login.personId) ?? []), login.userId]);
-  return input.slots
-    .filter((slot) => (slot.validFrom === null || slot.validFrom <= last) && (slot.validTo === null || first <= slot.validTo))
-    .flatMap((slot) => (loginsOf.get(slot.personId) ?? []).map((userId): RuleSlot => ({
-      personId: userId,
-      pageId: slot.pageId,
-      startMinute: slot.startMinute,
-      endMinute: slot.endMinute,
-      weekdays: slot.weekdays === null ? null : slot.weekdays.filter((day): day is RuleWeekday => WEEKDAYS.has(day)),
-      validFrom: slot.validFrom,
-      validTo: slot.validTo,
-      ...(slot.kind === null ? {} : { day: slot.kind }),
-    })));
-}
-
-/**
- * The people registry's schedule slots, read through `db` in turn: the standing lines and the swaps' one-day lines of the
- * window (0422) — who is scheduled on a day is both.
- */
-export function registrySlots(db: Database): SaleSlotProvider {
-  return {
-    slotsFor: async ({ from, to }) => {
-      const standing = await listPersonScheduleSlotRows(db);
-      const days = await listPersonDayLineRows(db, { from: moscowDayOf(from.getTime() - DAY_MS), to: moscowDayOf(to.getTime()) });
-      const slots = [...standing, ...days];
-      if (slots.length === 0) return [];
-      return ruleSlotsOf({ slots, logins: await listPersonLoginRows(db), from, to });
-    },
-  };
-}
+// The registry's slots as the rule reads them: schedule-slots.ts's (a leaf, the cut of a shift reads them too), under
+// the names their importers know.
+export { NO_SLOTS, registrySlots, ruleSlotsOf, type SaleSlotProvider } from "./schedule-slots.ts";
 
 /**
  * When a user left the team, null — still in it: the first of their login disabled, deleted, and their person in the

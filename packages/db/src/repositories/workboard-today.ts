@@ -19,16 +19,25 @@ function labelsOf(value: unknown): string[] {
   return list.flatMap((page) => (typeof page === "object" && page !== null && typeof (page as { pageLabel?: unknown }).pageLabel === "string" ? [(page as { pageLabel: string }).pageLabel] : []));
 }
 
+/** A row's pauses as the shift rows write them (ISO, shift-rows.ts). */
+function pausesOf(value: unknown): Array<{ from: string; to: string }> {
+  const list: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  return Array.isArray(list) ? list as Array<{ from: string; to: string }> : [];
+}
+
 export interface TodayShiftRow {
   id: number;
   userId: number;
   username: string;
   state: "going" | "closed";
   startedAt: Date;
+  /** A going shift's: the last time the shift rows' job looked. */
   endedAt: Date;
   workedMinutes: number;
   reportDate: string;
   pageLabels: string[];
+  /** Its pauses so far, ISO; a break going on now is the last one, up to `endedAt`. */
+  pauses: Array<{ from: string; to: string }>;
 }
 
 function shiftOf(row: Row): TodayShiftRow {
@@ -42,11 +51,12 @@ function shiftOf(row: Row): TodayShiftRow {
     workedMinutes: Number(row.worked_minutes),
     reportDate: String(row.report_date),
     pageLabels: labelsOf(row.pages),
+    pauses: pausesOf(row.pauses),
   };
 }
 
 const SHIFT_SELECT = sql`select s.id, s.user_id, u.username, s.state, s.started_at, s.ended_at, s.worked_minutes,
-  to_char(s.report_date, 'YYYY-MM-DD') as report_date, s.pages
+  to_char(s.report_date, 'YYYY-MM-DD') as report_date, s.pages, s.pauses
   from shifts s join users u on u.id = s.user_id`;
 
 /** The shifts going on now (every login): «Сейчас на смене». */
@@ -82,7 +92,7 @@ export async function listHandoverComments(db: Database, input: {
   if (input.pageLabels.length === 0) return [];
   const realm = input.realm === "test" ? testUserSql(sql`s.user_id`) : liveUserSql(sql`s.user_id`);
   const result = await db.execute<Row>(sql`select s.id, s.user_id, u.username, s.state, s.started_at, s.ended_at, s.worked_minutes,
-      to_char(s.report_date, 'YYYY-MM-DD') as report_date, s.pages, h.comment, h.model_comments
+      to_char(s.report_date, 'YYYY-MM-DD') as report_date, s.pages, s.pauses, h.comment, h.model_comments
     from shift_handins h join shifts s on s.id = h.shift_id join users u on u.id = s.user_id
     where s.state in ('going', 'closed') and s.ended_at >= ${input.since.toISOString()}::timestamptz
       and (btrim(h.comment) <> '' or exists (select 1 from jsonb_each_text(h.model_comments) as own where btrim(own.value) <> '')) and not (s.user_id = any(${ids(input.exceptUserIds)})) and ${realm}

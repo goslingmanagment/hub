@@ -2405,6 +2405,14 @@ export const clientFanNoteAttributionsResponseSchema = z.object({
 //   with the extension then silent CHATTER_SHIFT_CLOSED_SILENT_MINUTES or more
 //   (closed, the computer asleep), the work ends at its last open minute plus
 //   CHATTER_SHIFT_CLOSED_GRACE_MINUTES.
+// - A break inside the person's own schedule slot is a pause, however long, not
+//   the end (the owner, 2026-11-19): one slot, one shift, one report. A gap of
+//   CHATTER_SHIFT_END_IDLE_MINUTES or more whose last action before it and first
+//   after it lie in one occurrence of the person's slots (the people registry's
+//   lines on any page of theirs, a swap's «off» taken out, its «cover» added)
+//   ends nothing, and the stretch goes on, paused, while that occurrence runs;
+//   with no action before its end it ends at its last action, as any other. A
+//   gap begun before CHATTER_SHIFT_SLOT_PAUSE_SINCE cuts as before.
 // - A stretch with CHATTER_SHIFT_MIN_WORKED_MINUTES of work and
 //   CHATTER_SHIFT_MIN_MESSAGES messages is a SHIFT; anything less is a VISIT, a
 //   look-in that is not counted as a shift. A stretch still going is a shift
@@ -2442,6 +2450,12 @@ export const CHATTER_SHIFT_CLOSED_SILENT_MINUTES = 10;
 export const CHATTER_SHIFT_CLOSED_GRACE_MINUTES = 2;
 /** Minutes without activity that end a stretch of work, the extension open or not. */
 export const CHATTER_SHIFT_END_IDLE_MINUTES = 60;
+/**
+ * From when a break inside the person's own schedule slot is a pause, not the end of the shift (the owner's rule,
+ * 2026-11-19): a gap that began before it cuts as before, so the shifts, numbers and reports of earlier days never
+ * change.
+ */
+export const CHATTER_SHIFT_SLOT_PAUSE_SINCE = "2026-11-19T00:00:00+03:00";
 /** Less work than this is a visit, not a shift. */
 export const CHATTER_SHIFT_MIN_WORKED_MINUTES = 120;
 /** Fewer messages than this is a visit, not a shift, however long the extension was in use. */
@@ -2563,8 +2577,9 @@ export const teamShiftSchema = z.object({
   /** Still going: the end is the hub's now. */
   endedAt: isoTimestamp,
   /**
-   * Under CHATTER_SHIFT_END_IDLE_MINUTES since its last action, the extension open or not: a break is no end. A shift that
-   * truly ended is still «going» for that hour; `lastInputAt` says how long nothing has happened.
+   * Under CHATTER_SHIFT_END_IDLE_MINUTES since its last action, the extension open or not, or while the occurrence of the
+   * person's schedule slot its last action fell in runs: a break is no end. A shift that truly ended is still «going»
+   * for that hour, or to its slot's end; `lastInputAt` says how long nothing has happened.
    */
   ongoing: z.boolean(),
   workedMinutes: z.number().int().nonnegative(),

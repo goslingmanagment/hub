@@ -29,7 +29,8 @@ export function HowItCounts({ page, ruleFrom }: { page: string | null; ruleFrom:
       <div className="shifts-how wb-readable">
         <p>
           <b>Смена</b> — по расширению ChatGoose: от первого действия чаттера на странице (клавиша, клик, прокрутка) до
-          {" "}{formatDuration(CHATTER_SHIFT_END_IDLE_MINUTES)} без действий. Сменой считается работа от
+          {" "}{formatDuration(CHATTER_SHIFT_END_IDLE_MINUTES)} без действий. Перерыв внутри своего слота по графику считается паузой,
+          сколько бы он ни длился: одна смена на слот. Сменой считается работа от
           {" "}{formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений, меньше — заход, его здесь нет.
           Кусок работы ближе {formatDuration(CHATTER_SHIFT_EDGE_NEAR_MINUTES)} к смене — её часть, если в нём есть сообщение; заход до смены
           от {CHATTER_SHIFT_PIECE_MIN_MESSAGES} сообщений — её начало.
