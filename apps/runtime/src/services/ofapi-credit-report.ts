@@ -42,9 +42,7 @@ import {
   utcDayStart,
   webhookAccrualCredits,
 } from "./ofapi-credits.ts";
-import { isOfapiCreditFloorBlocking } from "./sync/ofapi-dm-sync.ts";
-
-const DEFAULT_CREDIT_FLOOR = 500;
+import { DEFAULT_CREDIT_FLOOR, isOfapiCreditFloorBlocking } from "./ofapi-rest-guard.ts";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 // Trailing window (days) the runway forecast averages spend over.
