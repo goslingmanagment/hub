@@ -39,9 +39,6 @@ export type ReplyMode = 'default' | 'preferSplit';
 /** Safety-preamble selector: in-character reply features vs analysis/coaching features. */
 export type PromptMode = 'reply' | 'analysis';
 
-/** Shape of a feature's output: multi-part reply, single message, XML document, or free text (coach-chat — no parsing). */
-export type ResultKind = 'reply' | 'single-reply' | 'xml' | 'text';
-
 export type PingSegment = 'segment-a' | 'segment-b' | 'active';
 
 /** PPV purchase state as rendered in transcript labels. */
