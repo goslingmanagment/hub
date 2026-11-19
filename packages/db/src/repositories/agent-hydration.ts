@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { livePageSql } from "./realm.ts";
+import { clockHourTextBurstSql } from "./spender-stats.ts";
 import type {
   AgentHydrationCostNote,
   AgentHydrationLane,
@@ -751,17 +752,7 @@ export async function listAutoApprovableOnlyfansHydrationRequests(
             where o.account_id = r.page_id and o.conversation_ref = r.conversation_ref and o.is_sent_by_me
               and o.occurred_at > fan.at
               and coalesce(o.message_type, 1) <> 2
-              and (
-                select count(*) from (
-                  select distinct b.conversation_ref from message_archive b
-                  where b.account_id = o.account_id and b.is_sent_by_me
-                    and b.occurred_at >= date_trunc('hour', o.occurred_at)
-                    and b.occurred_at < date_trunc('hour', o.occurred_at) + interval '1 hour'
-                    and coalesce(b.text_plain, '') = coalesce(o.text_plain, '')
-                    and coalesce(b.price_mills, 0) = coalesce(o.price_mills, 0)
-                  limit ${input.burstMinChats}
-                ) burst
-              ) < ${input.burstMinChats}
+              and ${clockHourTextBurstSql("o", input.burstMinChats)} < ${input.burstMinChats}
           )
       )
     order by r.created_at asc, r.id asc

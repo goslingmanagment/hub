@@ -224,6 +224,28 @@ export const AWAITING_PERSONAL_WINDOW_DAYS = 30;
 /** One text (with its price and files) sent to this many chats of a page within a clock hour is a mass message. */
 export const AWAITING_MASS_MIN_CHATS = 5;
 
+/**
+ * How many chats of the page, `minChats` at most, got the text and price of the page's message_archive row aliased
+ * `alias` within its clock hour: the per-message probe of «one text to `minChats` chats of the page in its clock hour is
+ * a mass message» («Онлайн», fan queues, win-back, the OnlyFans history auto-approve). Each reader compares it with
+ * `minChats` itself.
+ */
+export function clockHourTextBurstSql(alias: string, minChats: number): SQL {
+  if (!/^[a-z_][a-z0-9_]*$/.test(alias)) throw new Error(`Invalid SQL alias: ${alias}`);
+  const m = sql.raw(alias);
+  return sql`(
+    select count(*) from (
+      select distinct b.conversation_ref from message_archive b
+      where b.account_id = ${m}.account_id and b.is_sent_by_me
+        and b.occurred_at >= date_trunc('hour', ${m}.occurred_at)
+        and b.occurred_at < date_trunc('hour', ${m}.occurred_at) + interval '1 hour'
+        and coalesce(b.text_plain, '') = coalesce(${m}.text_plain, '')
+        and coalesce(b.price_mills, 0) = coalesce(${m}.price_mills, 0)
+      limit ${minChats}
+    ) burst
+  )`;
+}
+
 export interface AwaitingScope {
   pageId: number;
   /** Every fan who wrote in the last AWAITING_PERSONAL_WINDOW_DAYS, not only payers. */

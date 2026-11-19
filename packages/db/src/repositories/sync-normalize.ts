@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import { SYNC_STREAMS, type SyncStream } from "./page-sync.ts";
+import { SYNC_STREAMS, type SyncStream } from "./sync-streams.ts";
 
 // Row normalizers of the legacy (OnlyFans) executor's repositories, shared by
 // `page-sync.ts` and `sync.ts`. Not re-exported by the package. The two
