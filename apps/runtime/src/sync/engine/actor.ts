@@ -36,7 +36,6 @@ import {
   ensureCredentialsVerify,
   errorName,
   isAnswerInMemory,
-  markSentBestEffort,
   recoverUnfinished,
   settleNotSent,
   SyncCrashFault,
@@ -737,15 +736,8 @@ export class SyncActor {
     const d = this.#d;
     try {
       return await d.transport.send(request, {
-        check: () => {
-          const refusal = d.pacer.check(armed);
-          if (refusal === null && armed.sentWall !== null) {
-            markSentBestEffort(d, armed.attemptId, armed.sentWall);
-          }
-          return refusal;
-        },
-        // A sender outside the process (a page's browser): the same check
-        // without the send mark — the pacer marks the send at the instant
+        // The sender outside the process (a page's browser): the pacer's
+        // check without a send mark — the pacer marks the send at the instant
         // the transport reports, or at the completion (I1).
         grant: () => d.pacer.checkRemoteGrant(armed),
         released: (mono) => d.pacer.noteReleased(armed, mono),

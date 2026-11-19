@@ -188,9 +188,17 @@ describe("two sync processes on one page", () => {
   it("a stopped owner whose session was cut is not taken over until confirmed; resumed, it cannot send", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedLivePage();
-    const a = await spawnSyncHost({ SYNC_TEST_HOSTNAME: "sync-host-a" });
+    // A's answers take 250 ms: a request of it stays in flight long enough to
+    // be frozen there.
+    const a = await spawnSyncHost({ SYNC_TEST_HOSTNAME: "sync-host-a", SYNC_TEST_LATENCY_MS: "250" });
     await waitFor(async () => ((await owner(pageId)).pid === a.pid ? true : null), 20_000, "process A owns the page");
     await firstSendOfGeneration(pageId, 1);
+    // Frozen with a request in flight (an attempt stays `admitted` from its
+    // grant to its capture), not inside one of its transactions: a frozen
+    // transaction would hold the page's row and B could not even start.
+    await waitFor(async () => (await countRows(testDb!.pool,
+      "select count(*)::int as n from sync_attempts where page_id = $1 and owner_generation = 1 and outcome = 'admitted'",
+      [pageId])) > 0 ? true : null, 20_000, "a request of A in flight");
 
     a.process.kill("SIGSTOP");
     // Its lock session ends (as when a frozen process's connection is dropped).

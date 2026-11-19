@@ -29,6 +29,13 @@ function jsonArray<T>(value: unknown): T[] {
   return [];
 }
 
+/** A report's `model_comments` (0432): model slug → text; anything that is not a text is dropped. */
+export function modelCommentsOf(value: unknown): Record<string, string> {
+  const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+  return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
 // ── The shift ────────────────────────────────────────────────────────────────
 
 export interface HandinShift {
@@ -102,6 +109,8 @@ export interface HandinRow {
   reportDate: string;
   state: HandinState;
   comment: string;
+  /** Each model's own comment (0432), model slug → text; a model without a key reads `comment`. */
+  modelComments: Record<string, string>;
   currentVersion: number | null;
   submittedAt: Date | null;
   draftUpdatedAt: Date | null;
@@ -121,7 +130,7 @@ export interface HandinRow {
 export type HandinPhase = "draft" | "checking" | "confirm" | "counted" | "fixing";
 
 const HANDIN_COLUMNS = sql`h.id, h.shift_id, h.user_id, h.person_id, to_char(h.report_date, 'YYYY-MM-DD') as report_date, h.state, h.comment,
-  h.current_version, h.submitted_at, h.draft_updated_at, h.phase, h.phase_at, h.fixing_from, h.post_copied_at, h.post_copied_version, h.late_sales`;
+  h.model_comments, h.current_version, h.submitted_at, h.draft_updated_at, h.phase, h.phase_at, h.fixing_from, h.post_copied_at, h.post_copied_version, h.late_sales`;
 
 function handinOf(row: Row): HandinRow {
   return {
@@ -132,6 +141,7 @@ function handinOf(row: Row): HandinRow {
     reportDate: String(row.report_date),
     state: row.state as HandinState,
     comment: String(row.comment ?? ""),
+    modelComments: modelCommentsOf(row.model_comments),
     currentVersion: nullableNum(row.current_version),
     submittedAt: nullableDate(row.submitted_at),
     draftUpdatedAt: nullableDate(row.draft_updated_at),
@@ -182,9 +192,16 @@ export async function listHandinsOfShifts(db: Database, shiftIds: readonly numbe
   }));
 }
 
-export async function setHandinComment(db: Database, input: { handinId: number; comment: string; at: Date }): Promise<void> {
+/**
+ * The draft's comment. With a model: that model's own (0432), the rest left as it is. Without one: the general comment,
+ * and every model's own is dropped (one comment for every post again).
+ */
+export async function setHandinComment(db: Database, input: { handinId: number; comment: string; modelSlug?: string | null; at: Date }): Promise<void> {
+  const change = input.modelSlug == null
+    ? sql`comment = ${input.comment}, model_comments = '{}'::jsonb`
+    : sql`model_comments = model_comments || jsonb_build_object(${input.modelSlug}::text, ${input.comment}::text)`;
   await db.execute(sql`
-    update shift_handins set comment = ${input.comment}, draft_updated_at = ${input.at.toISOString()}::timestamptz,
+    update shift_handins set ${change}, draft_updated_at = ${input.at.toISOString()}::timestamptz,
       updated_at = clock_timestamp()
     where id = ${input.handinId}`);
 }
@@ -419,6 +436,8 @@ export interface HandinVersionRow {
   lines: HandinVersionLine[];
   offPlatform: HandinVersionOffPlatform[];
   comment: string;
+  /** Each model's own comment, as the draft had it (0432). */
+  modelComments: Record<string, string>;
   dayPaid: boolean | null;
   ruleVersion: string;
   /** Made by the system on a decision; null — handed in by the person. */
@@ -428,7 +447,7 @@ export interface HandinVersionRow {
 }
 
 const VERSION_COLUMNS = sql`v.id, v.handin_id, v.version, v.submitted_at, v.door, v.actor_user_id, v.agent_key_id, v.telegram_message_ref,
-  v.telegram_sender_id, v.total_mills, v.pages, v.lines, v.off_platform, v.comment, v.day_paid, v.rule_version, v.made_for,
+  v.telegram_sender_id, v.total_mills, v.pages, v.lines, v.off_platform, v.comment, v.model_comments, v.day_paid, v.rule_version, v.made_for,
   to_char(v.report_date, 'YYYY-MM-DD') as version_report_date`;
 
 function versionOf(row: Row): HandinVersionRow {
@@ -447,6 +466,7 @@ function versionOf(row: Row): HandinVersionRow {
     lines: jsonArray<HandinVersionLine>(row.lines),
     offPlatform: jsonArray<HandinVersionOffPlatform>(row.off_platform),
     comment: String(row.comment ?? ""),
+    modelComments: modelCommentsOf(row.model_comments),
     dayPaid: row.day_paid === null || row.day_paid === undefined ? null : Boolean(row.day_paid),
     ruleVersion: String(row.rule_version),
     madeFor: madeForOf(row.made_for),
@@ -478,6 +498,8 @@ export async function insertHandinVersion(
     lines: readonly HandinVersionLine[];
     offPlatform: readonly HandinVersionOffPlatform[];
     comment: string;
+    /** Each model's own comment (0432): the draft's, the candidate's or the version's it is made from. */
+    modelComments: Readonly<Record<string, string>>;
     dayPaid: boolean | null;
     ruleVersion: string;
     /** Made by the system on a decision (0404); absent — the person handed it in. */
@@ -492,13 +514,14 @@ export async function insertHandinVersion(
   const madeFor = input.madeFor == null ? null : JSON.stringify(input.madeFor);
   const result = await db.execute<Row>(sql`
     insert into shift_handin_versions (handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for, report_date, shift_id)
+      telegram_sender_id, total_mills, pages, lines, off_platform, comment, model_comments, day_paid, rule_version, made_for, report_date, shift_id)
     values (${input.handin.id}, ${version}, ${at}::timestamptz, ${input.door}, ${input.actorUserId}, ${input.agentKeyId},
       ${input.telegramMessageRef}, ${input.telegramSenderId}, ${input.totalMills}, ${JSON.stringify(input.pages)}::jsonb,
-      ${JSON.stringify(input.lines)}::jsonb, ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment}, ${input.dayPaid},
+      ${JSON.stringify(input.lines)}::jsonb, ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment},
+      ${JSON.stringify(input.modelComments)}::jsonb, ${input.dayPaid},
       ${input.ruleVersion}, ${madeFor}::jsonb, ${input.reportDate}::date, ${input.handin.shiftId})
     returning id, handin_id, version, submitted_at, door, actor_user_id, agent_key_id, telegram_message_ref,
-      telegram_sender_id, total_mills, pages, lines, off_platform, comment, day_paid, rule_version, made_for,
+      telegram_sender_id, total_mills, pages, lines, off_platform, comment, model_comments, day_paid, rule_version, made_for,
       to_char(report_date, 'YYYY-MM-DD') as version_report_date`);
   // The report's date is its newest version's: the one place every reader takes it from once it is handed in.
   await db.execute(sql`

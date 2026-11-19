@@ -201,7 +201,7 @@ describe("«Скопировать пост» on a shift of two models", () => {
       handin, door: "workboard", actorUserId: anna, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null, totalMills: 50_000,
       pages: [{ pageLabel: "ari-1", amountMills: 50_000 }, { pageLabel: "lilly-1", amountMills: 0 }],
       lines: [line(own, "ari-1", "mine", 50_000, 50_000), line(near, "lilly-1", "near", 0, 30_000)],
-      offPlatform: [], comment: "", dayPaid: null, ruleVersion: "test", reportDate: startedAt.toISOString().slice(0, 10), at: new Date(),
+      offPlatform: [], comment: "", modelComments: {}, dayPaid: null, ruleVersion: "test", reportDate: startedAt.toISOString().slice(0, 10), at: new Date(),
     });
     expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${only}/post-copied?model=ari`)).statusCode).toBe(200);
     expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${only}/post-copied?model=lilly`)).statusCode).toBe(400);

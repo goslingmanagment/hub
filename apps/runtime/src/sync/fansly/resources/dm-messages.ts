@@ -943,7 +943,6 @@ async function applyMessagesPage(variant: DmMessagesVariant, tx: Database, input
     work: workOutcome(variant, { done, resolution, chain: fold.chain, cursor: next, now: input.now }),
     followups,
     counters,
-    canonicalized: true,
     // Every history read runs the request hook (anchors after a head read
     // that moved nothing, satisfaction, the work's close); other reads only
     // when the chain moved.
@@ -998,7 +997,6 @@ async function applySkippedThread(tx: Database, input: ApplyInput, skipped: {
     work: { satisfiesRevision: true, close: "done", closeReason: skipped.skip },
     followups: [],
     counters,
-    canonicalized: true,
   };
 }
 

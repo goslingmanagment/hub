@@ -118,7 +118,7 @@ export interface Wake {
  *  of the process: advisory lock `(58215, pageId)`). */
 export interface OwnershipSession {
   /** False after the client emitted `error` or `end` (a synchronous flag, read
-   *  by the send check right before the headers are written). */
+   *  by the grant right before the sender is told it may send). */
   alive(): boolean;
   /** `select 1` on the lock session; one in flight per host, a result younger
    *  than 1 s is shared by all actors. A timeout is NOT ownership loss: it
@@ -177,20 +177,15 @@ export const noopMetrics: Metrics = {
 
 // ── transport ───────────────────────────────────────────────────────────────
 
-/** The hooks of one admission. `check` is synchronous and runs at undici's
- *  `onRequestStart`, immediately before the request headers are written; a
- *  non-null result aborts the dispatch and writes nothing. Passing it IS the
- *  send.
- *
- *  `grant` is the same check for a sender outside the process (a page's
- *  browser, Project Browser plan §3.2): every condition of `check`, asked
- *  synchronously right before the sender is told it may send, but no send
- *  mark — the sender may still not send (a session that changed, a deadline
- *  passed on its side), and the send counts at the instant it reports
- *  (`transport_reported`) or at the completion. A transport asks one of the
- *  two, once per admission: a second ask is refused (`lease_used`). */
+/** The hooks of one admission. `grant` is the send check for the sender
+ *  outside the process (a page's browser, Project Browser plan §3.2), asked
+ *  synchronously right before the sender is told it may send; a non-null
+ *  result refuses it and nothing is sent. It marks no send — the sender may
+ *  still not send (a session that changed, a deadline passed on its side),
+ *  and the send counts at the instant it reports (`transport_reported`) or
+ *  at the completion. A transport asks it once per admission: a second ask
+ *  is refused (`lease_used`). */
 export interface SendHooks {
-  check: FanslySendCheck;
   grant: FanslySendCheck;
   /** A sender outside the process (a page's browser) tells when it let the
    *  request go after its own sight of the page's quiet (plan-b Б12), on
@@ -234,8 +229,8 @@ export interface SendAdmission {
 export type TransportOutcome = FanslyWireOutcome;
 
 /** Builds the request of a plan and sends it — the actor's view of a page's
- *  transport. Implemented by `fansly/transport.ts`, built only by the host's
- *  live loop. */
+ *  transport. Implemented by `fansly/browser-transport.ts`, built only by the
+ *  host's live loop. */
 export interface PageTransport {
   /** The request of one plan, built right before its admission; `context`
    *  names the work it is for (a CDN hop reads the work's secret URL). Throws
@@ -244,8 +239,7 @@ export interface PageTransport {
    *  (nothing is admitted either way). */
   prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest>;
   /** At most one physical request, under `admission`; the transport asks
-   *  `hooks.check` (it writes the request itself) or `hooks.grant` (a sender
-   *  outside the process writes it), never both. */
+   *  `hooks.grant` before the sender outside the process writes it. */
   send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal, admission: SendAdmission): Promise<TransportOutcome>;
   /** The outcome of `attemptId` is committed (captured, or settled as not
    *  sent): a sender that keeps outcomes until they are acknowledged (a

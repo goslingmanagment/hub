@@ -23,10 +23,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-87 routes marked "yes", and every route marked "no" refuses it with 403.
+85 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (572)
+## Routes (567)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -365,8 +365,6 @@ A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/card` | `clientFanCard` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaimStatus` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaim` | `apiKey` | — | page | yes |
-| POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/customs` | `clientFanCustomCreate` | `apiKey` | — | page | yes |
-| POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/customs/:customId` | `clientFanCustomChange` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/deleted-messages` | `clientDeletedMessages` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/facts/:factId` | `clientFanFactChange` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/links` | `clientFanLinkDecide` | `apiKey` | — | page | yes |
@@ -467,7 +465,6 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/transactions` | `pageFanTransactions` | `any-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/worked-with` | `pageFanWorkedWith` | `any-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/followers` | `pageFollowers` | `any` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/followers/daily` | `pageFollowersDaily` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/mass-messages` | `pageMassMessages` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/money/payouts` | `moneyPayouts` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/money/revenue-mix` | `moneyRevenueMix` | `owner-session` | — | page | no |
@@ -487,10 +484,8 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/stats/media` | `statsMedia` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/tags` | `statsTags` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/subscribers` | `pageSubscribers` | `any` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/subscribers/daily` | `pageSubscribersDaily` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/sync/blocks` | `pageSyncBlocks` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/sync/blocks/messages` | `pageMessagesBlock` | `any` | — | page | no |
-| GET | `/api/v1/pages/:pageLabel/transactions` | `pageTransactions` | `session` | — | page | no |
 | POST | `/api/v1/pages/:pageLabel/voice-notes` | `voiceNoteCreate` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page | yes |

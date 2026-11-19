@@ -397,6 +397,39 @@ export function missingTitle(startedAt: Date, endedAt: Date): string {
   return `Сдайте смену ${shiftWords(startedAt, endedAt)}`;
 }
 
+// ── The comment for the next shift, per model ───────────────────────────────
+
+/** A report's comments (0432): the general one and each model's own, by model slug. */
+export interface ReportComments {
+  comment: string;
+  modelComments: Readonly<Record<string, string>>;
+}
+
+/**
+ * The comment of model `modelSlug` in a report: the model's own when it is written — an empty one too, an explicit
+ * «nothing for this model» — else the general one. Every report written before per-model comments, and every write that
+ * names no model, is the general one for every model. Pure.
+ */
+export function modelComment(report: ReportComments, modelSlug: string): string {
+  return Object.hasOwn(report.modelComments, modelSlug) ? report.modelComments[modelSlug]! : report.comment;
+}
+
+/**
+ * A report's comments as one text, for a reader of one text (the ledger's feed, «От прошлой смены»): the general one
+ * when no model of `models` has its own; the one text when every model's comment (`modelComment`) is the same; else each
+ * model's comment that is not empty as `format.line(name, text)`, joined by `format.separator`. Pure.
+ */
+export function commentText(
+  report: ReportComments,
+  models: ReadonlyArray<{ slug: string; name: string }>,
+  format: { line: (name: string, text: string) => string; separator: string },
+): string {
+  if (!models.some((model) => Object.hasOwn(report.modelComments, model.slug))) return report.comment;
+  const texts = models.map((model) => ({ name: model.name, text: modelComment(report, model.slug).trim() }));
+  if (texts.every((one) => one.text === texts[0]!.text)) return texts[0]!.text;
+  return texts.filter((one) => one.text !== "").map((one) => format.line(one.name, one.text)).join(format.separator);
+}
+
 // ── The post in «Отчётность» ────────────────────────────────────────────────
 
 export interface PostPage {
@@ -451,7 +484,7 @@ function postDate(day: string): string {
 /**
  * The report as today's post in «Отчётность», one text per model (a shift on two models' pages is two posts, as
  * the team posts them): the date, the person's #tag, the accounts with their sums, the total, the sales by fan
- * with links and notes, the comment. Off-platform money goes to the comment of the first post, said to wait for
+ * with links and notes, the model's comment (`modelComment`). Off-platform money goes to the comment of the first post, said to wait for
  * the owner, never into the sums; a disputed «моё» goes to its model's comment, «спорно, ждёт решения», never into the
  * sums or the sales either (review R2b-2). The ledger's post reader reads it as it reads the posts written by hand. Pure.
  */
@@ -461,6 +494,8 @@ export function postTexts(input: {
   pages: readonly PostPage[];
   lines: readonly PostLine[];
   comment: string;
+  /** Each model's own comment (0432): a model's post carries its own, else the general `comment`. */
+  modelComments: Readonly<Record<string, string>>;
   /** A confirmed one is already in its page's sum (package G); a pending one is said to wait. */
   offPlatform: ReadonlyArray<{ amountMills: number; fromWhom: string; whatFor: string; state?: string; pageLabel?: string | null }>;
   /**
@@ -518,7 +553,8 @@ export function postTexts(input: {
       out.push(`${fanLink(fan.platform, fan.fan)}${kinds !== "" ? ` - ${kinds}` : ""}${notes !== "" ? `. ${notes}` : ""}`);
     }
     out.push("", "📝 Комментарий:");
-    if (input.comment.trim() !== "") out.push(input.comment.trim());
+    const comment = modelComment(input, model.slug).trim();
+    if (comment !== "") out.push(comment);
     out.push(...claims);
     if (index === 0) {
       for (const line of input.offPlatform) {

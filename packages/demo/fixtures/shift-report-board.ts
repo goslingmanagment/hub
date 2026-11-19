@@ -4,13 +4,15 @@ import {
 } from "@agency_hub_core/contracts";
 import { millsFromDollars, millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 
-import { demoError, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
+import { demoError, queryString, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
 
 /**
  * The «Отчёт» board (package R) in the demo: one board per scenario of the approved prototype
  * (`8-docs/2026-11-13-products/report-panel-mockups/columns.html`), with the prototype's own invented data — model
  * Mia, pages Mia-2, Mia-3, Mia-4, Mia Free, Mia VIP, Mia Promo; the chatter Lev, his shift of 12 Nov 18:00–02:00;
- * colleagues Oleg (the shift before) and Seva; the same sales, times, sums and reasons as its `baseRows()`.
+ * colleagues Oleg (the shift before) and Seva; the same sales, times, sums and reasons as its `baseRows()`. One scenario
+ * more than the prototype (`twoModels`): the shift holds two OnlyFans pages of a second model, Nova — two posts, a
+ * comment for each.
  *
  * Each scenario has a stable shift id (`DEMO_BOARD_SHIFTS`): `/workboard/report/<id>`. The board is clickable through
  * the whole flow like the prototype: every write changes the scenario's board in memory (a tick, a word, a comment, a
@@ -40,6 +42,8 @@ export const DEMO_BOARD_SHIFTS = {
   emptyPage: 9_120_015,
   /** A person without the board yet (`submits_shift` off): the read-only preview (the response's `enabled: false`). */
   preview: 9_120_016,
+  /** A shift on two models' pages (Mia on Fansly, Nova on OnlyFans): a comment field and a post for each model. */
+  twoModels: 9_120_017,
 } as const;
 export type DemoBoardScenario = keyof typeof DEMO_BOARD_SHIFTS;
 type Scenario = DemoBoardScenario;
@@ -64,13 +68,18 @@ type Who = keyof typeof WHO;
 const whoOf = (userId: number | null | undefined): Who | null => (userId === OLEG.userId ? "oleg" : userId === SEVA.userId ? "seva" : null);
 const person = (one: { userId: number; name: string }) => ({ ...one, forms: personNameForms(one.name) });
 
+const MODELS = { mia: "Mia", nova: "Nova" } as const;
+type ModelId = keyof typeof MODELS;
 const PAGES = [
-  { id: "m2", label: "Mia-2", platform: "fansly", handle: "mia.two" },
-  { id: "m3", label: "Mia-3", platform: "fansly", handle: "mia.three" },
-  { id: "m4", label: "Mia-4", platform: "fansly", handle: "mia.four", extra: "more" },
-  { id: "fr", label: "Mia Free", platform: "onlyfans", handle: null },
-  { id: "vip", label: "Mia VIP", platform: "onlyfans", handle: null },
-  { id: "pr", label: "Mia Promo", platform: "onlyfans", handle: null, extra: "empty" },
+  { id: "m2", label: "Mia-2", platform: "fansly", handle: "mia.two", model: "mia" },
+  { id: "m3", label: "Mia-3", platform: "fansly", handle: "mia.three", model: "mia" },
+  { id: "m4", label: "Mia-4", platform: "fansly", handle: "mia.four", model: "mia", extra: "more" },
+  { id: "fr", label: "Mia Free", platform: "onlyfans", handle: null, model: "mia" },
+  { id: "vip", label: "Mia VIP", platform: "onlyfans", handle: null, model: "mia" },
+  { id: "pr", label: "Mia Promo", platform: "onlyfans", handle: null, model: "mia", extra: "empty" },
+  // The second model of `twoModels`: its OnlyFans pages carry the sales of Mia's (the same fans, ids + 40).
+  { id: "nf", label: "Nova Free", platform: "onlyfans", handle: null, model: "nova" },
+  { id: "nv", label: "Nova VIP", platform: "onlyfans", handle: null, model: "nova" },
 ] as const;
 type PageId = (typeof PAGES)[number]["id"];
 
@@ -121,6 +130,8 @@ const BASE: Base[] = [
   mk(40, "vip", 12, "20:20", "sub", "Bram", "bram_h", 16, 20, "", "me", "подписался после вашего сообщения"),
   mk(41, "vip", 12, "14:45", "tip", "Soren", "soren_w", 8, 10, "", "", "", { before: true }),
 ];
+/** Nova's pages in `twoModels`: the sales of Mia's OnlyFans pages, on Nova's. */
+BASE.push(...BASE.filter((row) => row.page === "fr" || row.page === "vip").map((row) => ({ ...row, id: row.id + 40, page: row.page === "fr" ? "nf" as const : "nv" as const })));
 /** «Найти продажу»: sales of the days before on the shift's pages that no report of Lev's holds. */
 const CLAIMABLE: Base[] = [
   mk(60, "m2", 11, "23:14", "tip", "Rowan/Canada", "rowan_k", 15, 0, "981329101442210831", "none", "фану никто не писал"),
@@ -140,6 +151,11 @@ const FANSLY_WORDS = { media: "Media Sale to", sub: "Subscription Sale to", tip:
 const OF_WORDS = { media: "Payment for message from", sub: "Subscription from", tip: "Tip from" } as const;
 const KIND = { media: "message_purchase", sub: "subscription", tip: "tip" } as const;
 const pageOf = (id: PageId) => PAGES.find((page) => page.id === id)!;
+const modelOfLabel = (label: string): ModelId => PAGES.find((page) => page.label === label)?.model ?? "mia";
+/** The models of the board's pages, each once, in the pages' order: one post and one comment each. */
+const modelsOf = (state: State): ModelId[] => [...new Set(state.pages.map((id) => pageOf(id).model))];
+/** A model's comment, as Hub's rule says it: its own when written (an empty one too), else the general one. */
+const commentOf = (state: State, model: ModelId) => (Object.hasOwn(state.modelComments, model) ? state.modelComments[model]! : state.comment);
 
 /** 12 Nov 2026, Moscow (UTC+3). */
 const at = (day: number, time: string) => new Date(Date.UTC(2026, 10, day, Number(time.slice(0, 2)) - 3, Number(time.slice(3)))).toISOString();
@@ -207,11 +223,15 @@ interface State {
   found: boolean;
   /** The post in «Отчётность», as Hub would watch it (`post-copied` is not a demo operation yet: set by the scenario). */
   post: { copiedAt: string | null; seen: boolean; changedSinceCopy: boolean; late: boolean };
+  /** Of two models: each model's «Скопировать пост», by model. */
+  postCopies: Partial<Record<ModelId, string>>;
   /** «Скопировать пост» pressed (real time): the post «arrives» in «Отчётность» a little later. */
   copiedAtMs: number | null;
   /** A person without the board: read only. */
   preview: boolean;
+  /** The general comment; each model's own (Hub 0432) in `modelComments`. */
   comment: string;
+  modelComments: Partial<Record<ModelId, string>>;
   offPlatform: OffPlatform[];
 }
 
@@ -220,8 +240,8 @@ function fresh(): State {
     phase: "draft", own: new Map(), ok: new Map(), notes: new Map(Object.entries(MY_NOTES).map(([id, text]) => [Number(id), { text, by: "person" as const }])),
     asks: new Map(), incoming: null, proposals: new Map(), gNote: null, lost: false, lostAdded: false, late: false, lateAdded: false, extra: [],
     pages: ["m2", "m3", "fr", "vip"], mode: "found", gengar: null, submittedAtMs: null, submittedMills: 0, submittedCount: 0, candidates: 0,
-    wasMills: null, counted: false, countedAt: null, countedMills: 0, countedAtMs: null, gWait: false, snapshot: null, comment: "", offPlatform: [],
-    hubFinds: false, found: false, post: { copiedAt: null, seen: false, changedSinceCopy: false, late: false }, preview: false, copiedAtMs: null,
+    wasMills: null, counted: false, countedAt: null, countedMills: 0, countedAtMs: null, gWait: false, snapshot: null, comment: "", modelComments: {}, offPlatform: [],
+    hubFinds: false, found: false, post: { copiedAt: null, seen: false, changedSinceCopy: false, late: false }, postCopies: {}, preview: false, copiedAtMs: null,
   };
 }
 
@@ -231,7 +251,7 @@ function clone(state: State): State {
     own: new Map(state.own), ok: new Map(state.ok), notes: new Map(state.notes), asks: new Map(state.asks),
     incoming: state.incoming && { ...state.incoming }, proposals: new Map([...state.proposals].map(([id, one]) => [id, { ...one }])),
     gNote: state.gNote && { ...state.gNote }, extra: [...state.extra], pages: [...state.pages], offPlatform: state.offPlatform.map((one) => ({ ...one })),
-    post: { ...state.post },
+    post: { ...state.post }, postCopies: { ...state.postCopies }, modelComments: { ...state.modelComments },
     snapshot: null,
   };
 }
@@ -358,7 +378,7 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
     const shift = all.filter((row) => !row.before).map((row) => rowOf(state, row, own));
     const before = all.filter((row) => row.before).map((row) => rowOf(state, row, own));
     return {
-      pageLabel: page.label, platform: page.platform, pageHandle: page.handle, modelName: "Mia",
+      pageLabel: page.label, platform: page.platform, pageHandle: page.handle, modelName: MODELS[page.model],
       rows: shift,
       before: { count: before.length, until: SHIFT_START, people: before.length ? [person(OLEG)] : [], rows: before },
       marked: shift.filter((row) => row.ticked).length,
@@ -414,22 +434,34 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
     preview: state.preview ? true : undefined,
     previous: own ? { user: person(OLEG), comment: PREVIOUS.comment, at: at(12, PREVIOUS.at) } : null,
     post: own && state.counted
-      ? { ...state.post, models: [{ modelSlug: "mia", modelName: "Mia", copiedAt: state.post.copiedAt, changedSinceCopy: state.post.changedSinceCopy }] }
+      ? {
+        ...state.post,
+        models: modelsOf(state).map((model, _, all) => ({
+          modelSlug: model, modelName: MODELS[model], copiedAt: all.length === 1 ? state.post.copiedAt : state.postCopies[model] ?? null, changedSinceCopy: state.post.changedSinceCopy,
+        })),
+      }
       : null,
   };
 }
 
-/** The prototype's `postText()`: the counted report as today's post in «Отчётность». */
-function postOf(state: State, board: ShiftReportBoard): string {
+/** The prototype's `postText()`: the counted report as today's post in «Отчётность», one per model with its own comment. */
+function postOf(state: State, board: ShiftReportBoard, model: ModelId): string {
   const money = (mills: number) => `$${(mills / 1000).toFixed(2).replace(".", ",")}`;
   const word = (row: ShiftReportRow) => (row.kind === "message_purchase" ? "ппв" : row.kind === "tip" ? "тип" : row.netMills >= 20_000 ? "тир" : "саб");
+  const columns = board.columns.filter((column) => modelOfLabel(column.pageLabel) === model);
   const fans = new Map<string, ShiftReportRow[]>();
-  board.columns.flatMap((column) => column.rows).filter((row) => row.ticked).sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
+  columns.flatMap((column) => column.rows).filter((row) => row.ticked).sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
     .forEach((row) => fans.set(row.pageLabel + row.fan.username, [...(fans.get(row.pageLabel + row.fan.username) ?? []), row]));
   const lines = [...fans.values()].map((rows) => `${rows[0]!.platform === "fansly" ? "https://fansly.com/" : "https://onlyfans.com/"}${rows[0]!.fan.username} - ${rows[0]!.fan.name}, `
     + rows.map((row) => `${word(row)} ${money(row.amountMills)}${row.owner.kind === "share" ? ` (${row.owner.words})` : ""}${row.note ? ` (${row.note.text})` : ""}`).join(", "));
-  const acc = (platform: "fansly" | "onlyfans") => board.columns.filter((column) => column.platform === platform).map((column) => `• ${column.pageLabel} - ${money(column.sumMills)}`).join("\n");
-  return `🗓 Дата: 12.11.2026\n👤 Чаттер: #lev\n\n📌 Аккаунты:\nFansly\n• Mia-1 - не в смене\n${acc("fansly")}\nOF\n${acc("onlyfans")}\n\n💰 Общий доход: ${money(board.totals.nowMills)}\n\n📈 Основные продажи:\n${lines.join("\n")}\n\n📝 Комментарий:\n${state.comment.trim() || "-"}\n\nОтчёт № 2318`;
+  const acc = (platform: "fansly" | "onlyfans") => columns.filter((column) => column.platform === platform).map((column) => `• ${column.pageLabel} - ${money(column.sumMills)}`).join("\n");
+  // Mia-1 (not held this shift) is Mia's: only her post names it.
+  const accounts = [
+    ...(model === "mia" ? ["Fansly", "• Mia-1 - не в смене", acc("fansly")] : acc("fansly") !== "" ? ["Fansly", acc("fansly")] : []),
+    ...(acc("onlyfans") !== "" ? ["OF", acc("onlyfans")] : []),
+  ].join("\n");
+  const total = columns.reduce((sum, column) => sum + column.sumMills, 0);
+  return `🗓 Дата: 12.11.2026\n👤 Чаттер: #lev\n\n📌 Аккаунты:\n${accounts}\n\n💰 Общий доход: ${money(total)}\n\n📈 Основные продажи:\n${lines.join("\n")}\n\n📝 Комментарий:\n${commentOf(state, model).trim() || "-"}\n\nОтчёт № 2318`;
 }
 
 /** Gengar reads the candidate (the prototype's `gengarRun`): his proposals stand applied, a card under each. */
@@ -567,6 +599,8 @@ const SCENARIOS: Record<Scenario, (nowMs: number) => State> = {
   fivePages: () => ({ ...fresh(), pages: ["m2", "m3", "m4", "fr", "vip"] }),
   emptyPage: () => ({ ...fresh(), pages: ["m2", "m3", "fr", "vip", "pr"] }),
   preview: () => ({ ...fresh(), preview: true }),
+  // Mia's comment written, Nova's not yet: a field per model, each named.
+  twoModels: () => ({ ...fresh(), pages: ["m2", "m3", "nf", "nv"], modelComments: { mia: "Dario ждёт кастом к пятнице" } }),
 };
 
 /** Every scenario's board as it stands, per fresh copy (`hub-demo-board`): kept until the demo server restarts. */
@@ -611,11 +645,12 @@ function reportOf(request: DemoRequest, scenario: Scenario): Report {
     // The board's comment and «мимо площадки» ride on the draft's body until the board carries them itself.
     view: {
       source: "draft", version: null, submittedAt: null, door: null, lines: [], offPlatform: state.offPlatform, comment: state.comment,
+      comments: modelsOf(state).map((model) => ({ modelSlug: model, modelName: MODELS[model], comment: commentOf(state, model) })),
       pages: board.columns.map((column) => ({ pageLabel: column.pageLabel, platform: column.platform, amountMills: column.sumMills })),
       totalMills: board.totals.nowMills, cut: !own, computedAt: request.now.toISOString(),
     },
     afterSubmission: own && late.length ? { count: late.length, mills: late.reduce((sum, row) => sum + row.netMills, 0) } : null,
-    posts: own && state.counted ? [{ modelSlug: "mia", modelName: "Mia", text: postOf(state, board) }] : [],
+    posts: own && state.counted ? modelsOf(state).map((model) => ({ modelSlug: model, modelName: MODELS[model], text: postOf(state, board, model) })) : [],
     colleagues: [OLEG, SEVA],
     claims: [],
     board,
@@ -682,7 +717,16 @@ export function demoBoardWrite(request: DemoRequest, operation: "lineSet" | "com
   let saved = false;
   const answer = write(request, shiftId, (state) => {
     if (operation === "comment") {
-      state.comment = String((request.body as { comment: string }).comment);
+      // With a model: its own comment alone; without: the one comment of every post (Hub's rule, 0432).
+      const body = request.body as { comment: string; modelSlug?: string };
+      if (body.modelSlug === undefined) {
+        state.comment = String(body.comment);
+        state.modelComments = {};
+      } else {
+        const model = modelsOf(state).find((one) => one === body.modelSlug);
+        if (model === undefined) return refused("This model is not one of the report's pages");
+        state.modelComments = { ...state.modelComments, [model]: String(body.comment) };
+      }
       saved = true;
       return null;
     }
@@ -856,6 +900,8 @@ export const shiftReportBoardHandlers: DemoHandlers = {
   }) ?? noBoard(),
   shiftReportPostCopied: (request) => write(request, shiftOf(request), (state) => {
     if (!state.counted) return refused("Nothing counted to copy");
+    const model = modelsOf(state).find((one) => one === queryString(request, "model")) ?? modelsOf(state)[0]!;
+    state.postCopies = { ...state.postCopies, [model]: request.now.toISOString() };
     state.post = { ...state.post, copiedAt: request.now.toISOString(), seen: false, changedSinceCopy: false };
     state.copiedAtMs = request.now.getTime();
     return null;
@@ -867,11 +913,6 @@ export const shiftReportBoardHandlers: DemoHandlers = {
     return null;
   }) ?? noBoard(),
 };
-
-/** For the demo's own checks: a scenario's board as the person sees it. */
-export function demoBoardOf(scenario: Scenario): ShiftReportBoard {
-  return boardOf(SCENARIOS[scenario](0), true, GENGAR_PAUSE_MS);
-}
 
 /**
  * «Мои смены» of the demo's ordinary shifts: the read-only preview board (`preview`) drawn from the shift's existing

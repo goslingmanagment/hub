@@ -31,6 +31,7 @@ const SCENARIOS: ReadonlyArray<{ id: number; name: string; what: string }> = [
   { id: 9_120_014, name: "5 страниц", what: "Колонки уходят вбок" },
   { id: 9_120_015, name: "Страница без продаж", what: "Узкая колонка «За смену продаж нет»" },
   { id: 9_120_016, name: "Просмотр без права", what: "Сдача смены доской не включена: доска только для чтения" },
+  { id: 9_120_017, name: "Две модели", what: "Mia и Nova: комментарий и пост у каждой" },
 ];
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");

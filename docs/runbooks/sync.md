@@ -13,8 +13,7 @@ This file replaces the seventeen Fansly runbooks of this directory (`fansly-*.md
 
 - **Commands** are written `pnpm cli …` (a checkout with the app's environment). On production the same command runs
   in the `api` container: `docker compose --env-file .env.production -f docker-compose.production.yml exec -T api
-  node apps/runtime/dist/cli.js sync page status`. Every `pnpm cli` line in a code block of this file is parsed
-  against the real CLI by `tests/sync-runbook.test.ts`.
+  node apps/runtime/dist/cli.js sync page status`.
 - **Reading is free.** `sync page status`, `sync why`, `sync work list`, `sync alerts status`, `sync ownership
   status`, `sync history status | list`, `sync check live-hour`, `sync excluded report` (without `--record`) and
   `sync chats unavailable` change nothing.
@@ -31,8 +30,7 @@ This file replaces the seventeen Fansly runbooks of this directory (`fansly-*.md
   `fansly_ws_connections`, `fansly_ws_decode_receipts`, `dm_live_messages`, `fansly_send_log`,
   `fansly_page_send_guards`, `observations`; checked 2026-10-04). It does not read `sync_work`, chats, money or
   incidents: a block marked *owner's session* needs a connection that can, still inside a `READ ONLY` transaction;
-  never change a role's grants to run one. `tests/sync-runbook-sql.integration.test.ts` runs every SQL block of this
-  file in a `READ ONLY` transaction on the migrated schema.
+  never change a role's grants to run one.
 
 ## Status and why
 
@@ -1181,8 +1179,8 @@ pnpm cli sync why --page lora-1 --resource probe.manual --subject ''
 A new page is connected through its own server browser: Hub never holds its session, the browser logs in from its
 own device and IP (plan §3.2 «Подключение новой страницы через браузер»).
 
-1. **The browser starts in the dashboard** (owner decision 2026-10-15): Settings → Pages → «Новые страницы через
-   серверный браузер» → «Новый браузер страницы». The owner names the new page (its label, the browser's name on the
+1. **The browser starts in the dashboard** (owner decision 2026-10-15): «Настройки → Модели и страницы → Подключить
+   страницу Fansly» (`/settings/pages/connect`). The owner names the new page (its label, the browser's name on the
    server) and pastes its proxy whole into one field — `host:port:login:password`, `login:password:host:port`,
    `login:password@host:port`, `socks5://…`, `socks5h://…`; an `http(s)://` one is read and said unusable (a page's
    browser goes out through SOCKS5 with a login and a password only), a four-part text that reads both ways asks
@@ -1216,7 +1214,8 @@ own device and IP (plan §3.2 «Подключение новой страниц
    resolve it — `sync browser-profile show --profile <uuid>` in the api container, then, if Hub has none,
    `remove-profile … --page <name> --profile <uuid>`. A profile Hub forgot (removed, or said absent) is never
    registered again: an add still under way is refused.
-3. **The dashboard**: Settings → Pages → «Новые страницы через серверный браузер» → «Подключить»: the proxy from
+3. **The dashboard**: «Настройки → Модели и страницы» → «Незавершённые подключения» → «Подключить»
+   (`/settings/pages/connect/<profile>`): the proxy from
    the draft (checked again here, or replaced in the same one field — the SOCKS5 the container was made for), the
    exit IP pinned (the check's IP is offered; the browser opens its exit only when it sees that IP itself, and says
    what it saw), the login through

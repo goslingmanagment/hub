@@ -328,9 +328,6 @@ describe("the identity proof and checks-only", () => {
 describe("the transport on its own", () => {
   const pollsPlan = { spec: "polls" as const, params: {} };
   const grantingHooks = (onGrant: () => void = () => undefined) => ({
-    check: () => {
-      throw new Error("a browser request is granted, never checked at a write");
-    },
     grant: () => {
       onGrant();
       return null;

@@ -180,19 +180,10 @@ function pageIdOfPayload(payload: string): number | null {
  * page's next wait. The listener reconnects 1 → 30 s after a loss; meanwhile
  * every wait still ends by its timeout (≤ 1 s in the actor), so a lost NOTIFY
  * costs at most that (§8).
- *
- * The same listener serves another channel keyed by another id (the
- * "enqueue and wait" wrapper's `fansly_sync_work_done`, keyed by work id):
- * `channel`, `keyOf` and `keepUnclaimed: false` — an unbounded key space
- * must not keep a notification nobody waits for.
  */
 export class PgWake implements Wake {
   readonly #connectionString: string;
   readonly #logger: SyncLogger;
-  readonly #channel: string;
-  readonly #applicationName: string;
-  readonly #keyOf: (payload: string) => number | null;
-  readonly #keepUnclaimed: boolean;
   readonly #waiters = new Map<number, Set<Waiter>>();
   readonly #pending = new Set<number>();
   #client: pg.Client | null = null;
@@ -200,28 +191,10 @@ export class PgWake implements Wake {
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   #reconnectDelayMs = WAKE_RECONNECT_MIN_MS;
   #closed = false;
-  /** Notifications received (tests). */
-  notifications = 0;
 
-  constructor(input: {
-    connectionString: string;
-    logger: SyncLogger;
-    /** Default `fansly_sync_work`. */
-    channel?: string;
-    applicationName?: string;
-    /** The waiter key a payload names; null ignores it. Default: the page id. */
-    keyOf?: (payload: string) => number | null;
-    /** Keep a notification no one waits for until the key's next wait
-     *  (default true: the actors' bounded page keys). */
-    keepUnclaimed?: boolean;
-  }) {
+  constructor(input: { connectionString: string; logger: SyncLogger }) {
     this.#connectionString = input.connectionString;
     this.#logger = input.logger;
-    this.#channel = input.channel ?? SYNC_WORK_NOTIFY_CHANNEL;
-    if (!/^[a-z_][a-z0-9_]*$/.test(this.#channel)) throw new Error(`Not a LISTEN channel name: ${this.#channel}`);
-    this.#applicationName = input.applicationName ?? SYNC_WAKE_APPLICATION_NAME;
-    this.#keyOf = input.keyOf ?? pageIdOfPayload;
-    this.#keepUnclaimed = input.keepUnclaimed ?? true;
   }
 
   get listening(): boolean {
@@ -249,8 +222,7 @@ export class PgWake implements Wake {
         clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
         waiters.delete(waiter);
-        // A key nobody waits on any more leaves the map: work ids are an
-        // unbounded key space in a long-lived API process.
+        // A page nobody waits on any more leaves the map.
         if (waiters.size === 0 && this.#waiters.get(pageId) === waiters) this.#waiters.delete(pageId);
         resolve(result);
       };
@@ -273,10 +245,9 @@ export class PgWake implements Wake {
   }
 
   #notify(key: number): void {
-    this.notifications += 1;
     const set = this.#waiters.get(key);
     if (set === undefined || set.size === 0) {
-      if (this.#keepUnclaimed) this.#pending.add(key);
+      this.#pending.add(key);
       return;
     }
     for (const waiter of [...set]) waiter.resolve("notified");
@@ -286,7 +257,7 @@ export class PgWake implements Wake {
     if (this.#closed || this.#client !== null) return;
     const client = new pg.Client({
       connectionString: this.#connectionString,
-      application_name: this.#applicationName,
+      application_name: SYNC_WAKE_APPLICATION_NAME,
       connectionTimeoutMillis: OWNERSHIP_SESSION_TIMEOUT_MS,
     });
     const lost = () => {
@@ -298,13 +269,13 @@ export class PgWake implements Wake {
     client.on("error", lost);
     client.on("end", lost);
     client.on("notification", (message) => {
-      if (message.channel !== this.#channel) return;
-      const key = this.#keyOf(message.payload ?? "");
+      if (message.channel !== SYNC_WORK_NOTIFY_CHANNEL) return;
+      const key = pageIdOfPayload(message.payload ?? "");
       if (key !== null) this.#notify(key);
     });
     try {
       await client.connect();
-      await client.query(`listen ${this.#channel}`);
+      await client.query(`listen ${SYNC_WORK_NOTIFY_CHANNEL}`);
       if (this.#closed) {
         await client.end().catch(() => undefined);
         return;

@@ -103,11 +103,11 @@ const refused = (): FanslyWireOutcome => statusResponse(500, GROUP_MESSAGES_500)
 /** A proxy's or a gateway's own page: no Fansly envelope. */
 function proxyPage(status: number): FanslyWireOutcome {
   const bodyText = `<html><head><title>${status} Bad Gateway</title></head><body><center>nginx</center></body></html>`;
-  return { kind: "response", status, headers: { "content-type": "text/html" }, bodyText, bodyBytes: bodyText.length, sendMark: "request_start" };
+  return { kind: "response", status, headers: { "content-type": "text/html" }, bodyText, bodyBytes: bodyText.length, sendMark: "transport_reported" };
 }
 
 function emptyStatus(status: number): FanslyWireOutcome {
-  return { kind: "response", status, headers: {}, bodyText: "", bodyBytes: 0, sendMark: "request_start" };
+  return { kind: "response", status, headers: {}, bodyText: "", bodyBytes: 0, sendMark: "transport_reported" };
 }
 
 function wireMessage(groupId: string, k: number) {

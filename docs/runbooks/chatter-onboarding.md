@@ -5,28 +5,29 @@ reach for when something goes wrong with their sign-in. The reverse direction
 is `docs/runbooks/chatter-offboarding.md`; the rights behind every button are in
 `docs/identity-rights-matrix.md`.
 
-The console is "Настройки → Команда". Account routes use the immutable user ID
+The console screen is «Люди» (`/people`); a person's sign-ins are on their
+card, «Входы и устройства» (`/people/<ref>/logins`). Account routes use the immutable user ID
 returned by the users list; a login is only for creation, sign-in and search.
 An owner cookie session is required for administrative actions.
 
 The console is served on `hub.gosling-agency.ru`; the person you invite lands
-on `chatgoose.gosling-agency.ru`, the chatters' site, which also serves their
-cabinet at `/account`. These are two doors. The
-console's name takes in the owner and team leads only: a chatter login is not
-accepted there (the form answers «Это вход в админку. Аккаунт ChatGoose — на
-chatgoose.gosling-agency.ru»), and no cabinet is served under that name. The
-chatters' site takes any login and shows that login's account.
+on the team's name, `workboard.gosling-agency.ru`, which also serves their
+account page («Аккаунт и устройства», `/workboard/account`; the old `/account`
+leads there). A team lead or a chatter who signs in on the console's name is
+taken to Workboard on the team's name, signed in. A content manager's link and
+sign-in are ContentOps' own.
 
 ## Inviting
 
-1. **Команда → Пригласить**: login, pages (multi-select, grouped by platform).
-   Role (`chatter` by default) and the link's lifetime (7 days) sit under
-   "Дополнительно". Route: `POST /api/v1/admin/users/by-id/<userId>/links` for an
+1. **Люди → Пригласить** (`/people`): login, pages (multi-select, grouped by platform).
+   Role (`chatter` by default) and the link's lifetime (7 days) are on the same
+   form. Route: `POST /api/v1/admin/users/by-id/<userId>/links` for an
    existing account, or the invite operation that creates the account, the page
    grants and the link in **one** transaction — if any page label is wrong,
    nothing is created at all.
 2. The response carries the link **once**:
-   `https://chatgoose.gosling-agency.ru/join#<…>`.
+   `https://workboard.gosling-agency.ru/join#<…>` (a content manager's:
+   `https://contentops.gosling-agency.ru/join#<…>`).
    It is never stored, logged or journalled. Copy it from the dialog and send it
    in Telegram by hand, with the ready-made message template. If you lose it,
    just make a new one (step 4) — the lost one is retired automatically.
@@ -61,10 +62,8 @@ path.
 
 Disabled participants also remain visible under «Отключённые участники» on the
 Team tab. Restoration does not revive old links or sign-ins. If the person
-never set a password, create a new invitation after restoring. If a mandatory
-password change is pending (`mustChangePassword`), create a password-reset
-link before they sign in to a client. Otherwise the old password works again,
-and a reset link is needed only if they forgot it.
+never set a password, create a new invitation after restoring. Otherwise the
+old password works again, and a reset link is needed only if they forgot it.
 
 A deleted account does not appear in the team or block its previous login.
 Old invitation links remain revoked even after that login is reused. A card
@@ -93,11 +92,11 @@ Two things to keep straight, because the names are close:
 ## Checks after the person is in
 
 - Their card lists their devices with a client version and a last-activity time.
-- `/pages` for them shows exactly the pages you granted (the extension and the
-  desktop app both read the same list).
+- `/pages` for them shows exactly the pages you granted (the extension reads
+  the same list).
 - Their AI spend shows up under their own name in the usage report, and to them
-  in their own cabinet at `/account`.
+  on their own «Аккаунт и устройства» (`/workboard/account`).
 
 Pinned by `tests/rights-matrix.integration.test.ts` (*row «assigned a Fansly
-page»*, *row «assigned an OnlyFans page»*, *chatter: the cabinet and the
-clients*) and `tests/account-links.integration.test.ts`.
+page»*, *chatter: the cabinet and the clients*) and
+`tests/account-links.integration.test.ts`.

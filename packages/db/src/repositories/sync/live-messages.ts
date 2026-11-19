@@ -461,10 +461,9 @@ export async function listPendingFanslyWsLiveReceipts(
 
 // ---------------------------------------------------------------------------
 // Passive parity (plan §15 step 1): no HTTP, no work. Each visible overlay row
-// is compared with the legacy engine's REST copy once it appears —
-// page_dm_messages first (raw content, exact sender id), else message_archive
-// — field by field. A row of a chat excluded from message sync is `excluded`
-// once the window has passed (reported apart).
+// is compared with its REST copy in message_archive once it appears, field by
+// field. A row of a chat excluded from message sync is `excluded` once the
+// window has passed (reported apart).
 //
 // A row without a REST copy when the window passes gets no verdict: the
 // window is not evidence that the message is gone (a chat Fansly stopped
@@ -521,12 +520,6 @@ export type DmLiveParityRow = {
   in_reply_to_message_id: string | null;
   field_mask: number;
   age_ms: string;
-  hot_found: boolean;
-  hot_content: string | null;
-  hot_sender: string | null;
-  hot_created_at: Date | string | null;
-  hot_reply: string | null;
-  hot_group: string | null;
   arc_found: boolean;
   arc_text: string | null;
   arc_sent_by_me: boolean | null;
@@ -554,21 +547,13 @@ function timeDiffers(a: Date | string | null, b: Date | string | null) {
  * else `age_without_rest` — unless its chat is excluded from message sync. */
 export function judgeDmLiveParity(row: DmLiveParityRow, windowMs: number): {
   outcome: DmLiveConfirmOutcome | null;
-  source: "page_dm_messages" | "message_archive" | null;
+  source: "message_archive" | null;
   fields: DmLiveMismatchField[];
   waitReason: DmLiveConfirmWaitReason | null;
 } {
   const fields: DmLiveMismatchField[] = [];
   const hasContent = (row.field_mask & FANSLY_WS_LIVE_FIELD.content) !== 0;
   const hasReply = (row.field_mask & FANSLY_WS_LIVE_FIELD.inReplyTo) !== 0;
-  if (row.hot_found) {
-    if (hasContent && (row.content ?? "") !== (row.hot_content ?? "")) fields.push("text");
-    if (row.hot_sender !== null && row.sender_platform_user_id !== row.hot_sender) fields.push("sender");
-    if (timeDiffers(row.created_at, row.hot_created_at)) fields.push("time");
-    if (row.hot_group !== null && row.platform_conversation_id !== row.hot_group) fields.push("group");
-    if (hasReply && (row.in_reply_to_message_id ?? null) !== (row.hot_reply ?? null)) fields.push("reply");
-    return { outcome: fields.length ? "mismatch" : "match", source: "page_dm_messages", fields, waitReason: null };
-  }
   if (row.arc_found) {
     if (hasContent && row.arc_content_pending !== true
       && normalizeDmMessageText(row.content) !== (row.arc_text ?? "")) fields.push("text");
@@ -595,12 +580,10 @@ function retrySeconds(ageMs: number) {
 
 /**
  * One bounded parity pass over due, unconfirmed overlay rows (`skip locked`,
- * so concurrent passes split the work). Reads only Hub's own stores: the hot
- * copy decides where the page's readers read `page_dm_messages`, the archive
- * copy otherwise — and only the archive copy on a page whose readers read the
- * archive (`dmReaderStoreOf`: the engine's live pages, step 4 S4-08). It never
- * writes `not_found`: a row whose window passes without a copy is deferred
- * (see the section header).
+ * so concurrent passes split the work). Reads only Hub's own store: the
+ * archive copy decides (the engine's live pages read the archive, step 4
+ * S4-08). It never writes `not_found`: a row whose window passes without a
+ * copy is deferred (see the section header).
  */
 export async function confirmDmLiveMessages(
   db: Database,
@@ -615,25 +598,12 @@ export async function confirmDmLiveMessages(
       select m.page_id::text as page_id, m.platform_message_id, m.platform_conversation_id,
         m.sender_platform_user_id, m.is_sent_by_page, m.created_at, m.content, m.in_reply_to_message_id,
         m.field_mask, (extract(epoch from (clock_timestamp() - m.first_visible_at)) * 1000)::bigint::text as age_ms,
-        hot.id is not null as hot_found, hot.content as hot_content, hot.sender_platform_user_id as hot_sender,
-        hot.created_at as hot_created_at, hot.in_reply_to_message_id as hot_reply, hot.group_id as hot_group,
         arc.id is not null as arc_found, arc.text_plain as arc_text, arc.is_sent_by_me as arc_sent_by_me,
         arc.occurred_at as arc_occurred_at, arc.in_reply_to_ref as arc_reply, arc.conversation_ref as arc_group,
         arc.content_pending as arc_content_pending,
         coalesce(th.excluded, false) as excluded,
         ${openChatUnavailabilitySql({ pageId: sql`m.page_id`, groupId: sql`m.platform_conversation_id` })} as chat_unavailable
       from dm_live_messages m
-      left join sync_pages reader on reader.page_id = m.page_id
-      left join lateral (
-        select pm.id, pm.content, pm.sender_platform_user_id, pm.created_at, pm.in_reply_to_message_id,
-          t.platform_conversation_id as group_id
-        from page_dm_messages pm
-        join page_dm_threads t on t.id = pm.conversation_id
-        where pm.platform_account_id = m.page_id and pm.platform_message_id = m.platform_message_id
-          and reader.mode is distinct from 'live'
-        order by pm.id
-        limit 1
-      ) hot on true
       left join lateral (
         select a.id, a.text_plain, a.is_sent_by_me, a.occurred_at, a.in_reply_to_ref, a.conversation_ref,
           a.content_pending
@@ -764,8 +734,6 @@ export async function confirmDmLiveMessagesInTransaction(
     select m.page_id::text as page_id, m.platform_message_id, m.platform_conversation_id,
       m.sender_platform_user_id, m.is_sent_by_page, m.created_at, m.content, m.in_reply_to_message_id,
       m.field_mask, (extract(epoch from (clock_timestamp() - m.first_visible_at)) * 1000)::bigint::text as age_ms,
-      false as hot_found, null::text as hot_content, null::text as hot_sender,
-      null::timestamptz as hot_created_at, null::text as hot_reply, null::text as hot_group,
       arc.id is not null as arc_found, arc.text_plain as arc_text, arc.is_sent_by_me as arc_sent_by_me,
       arc.occurred_at as arc_occurred_at, arc.in_reply_to_ref as arc_reply, arc.conversation_ref as arc_group,
       arc.content_pending as arc_content_pending, false as excluded

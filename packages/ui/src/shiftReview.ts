@@ -758,10 +758,6 @@ export function chatMatches(chat: ShiftReviewChat, needle: string): boolean {
   return chat.messages.some((message) => message.text.toLowerCase().includes(query));
 }
 
-export function fanName(chat: ShiftReviewChat): string {
-  return chat.fanDisplayName ?? chat.fanUsername ?? (chat.fanRef ? `фан ${chat.fanRef}` : "фан");
-}
-
 /** A Coach answer as plain text: its markdown marks off, a ```draft block as quoted text. */
 export function plainAiText(text: string): string {
   return text

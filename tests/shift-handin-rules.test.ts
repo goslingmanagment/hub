@@ -240,6 +240,7 @@ describe("the sums add up", () => {
       pages: sums.pages.map((page) => ({ ...page, platform: "fansly", modelSlug: "mia", modelName: "Mia" })),
       lines: lines.map((line) => ({ ...line, platform: "fansly", kind: "tip", fan: { name: "A", username: null, fanRef: "1" }, note: null })),
       comment: "",
+      modelComments: {},
       offPlatform: [],
     });
     const dollars = (text: string) => Math.round(Number(text.replace(/[$,]/g, "")) * 100);
@@ -270,6 +271,7 @@ describe("the post in «Отчётность»", () => {
         { pageLabel: "zoe-1", platform: "fansly", kind: "subscription", amountMills: 0, fan: { name: "D", username: "fan_d", fanRef: "4" }, note: null },
       ],
       comment: "Без оплаты, на следующую смену: фан B ждёт кастом",
+      modelComments: {},
       offPlatform: [{ amountMills: 50_000, fromWhom: "фан E", whatFor: "кастом" }],
     });
     expect(posts.map((post) => post.modelSlug)).toEqual(["mia", "zoe"]);
@@ -297,6 +299,24 @@ describe("the post in «Отчётность»", () => {
     expect(posts[1]!.text).toContain("https://fansly.com/fan_c/posts - ppv x2 $36.00");
     expect(posts[1]!.text).not.toContain("fan_d");
     expect(posts[1]!.text).not.toContain("Мимо площадки");
+  });
+
+  it("writes into each model's post that model's own comment, the general one where a model has none", () => {
+    const post = (comment: string, modelComments: Record<string, string>) => postTexts({
+      reportDate: "2026-11-11",
+      tag: "#alex",
+      pages: [
+        { pageLabel: "mia-1", platform: "fansly", modelSlug: "mia", modelName: "Mia", amountMills: 0 },
+        { pageLabel: "zoe-1", platform: "fansly", modelSlug: "zoe", modelName: "Zoe", amountMills: 0 },
+      ],
+      lines: [],
+      comment,
+      modelComments,
+      offPlatform: [],
+    }).map((one) => one.text.split("📝 Комментарий:\n")[1] ?? "");
+    expect(post("", { mia: "Mia: фан ждёт кастом", zoe: "Zoe: тихо" })).toEqual(["Mia: фан ждёт кастом", "Zoe: тихо"]);
+    expect(post("на обе", {})).toEqual(["на обе", "на обе"]);
+    expect(post("на обе", { zoe: "" })).toEqual(["на обе", ""]);
   });
 });
 
