@@ -95,8 +95,6 @@ describe("route auth declarations", () => {
       "clientFanCard",
       "clientFanClaim",
       "clientFanClaimStatus",
-      "clientFanCustomChange",
-      "clientFanCustomCreate",
       "clientFanFactChange",
       "clientFanLinkDecide",
       "clientFanMarks",
