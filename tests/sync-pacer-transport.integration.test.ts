@@ -202,6 +202,11 @@ describe("every physical request of a page, counted at the origin", () => {
     // Every kind was granted at `onRequestStart` and its send reported there
     // (`transport_reported`): no send was taken at its completion instead.
     expect(sent.filter((attempt) => attempt.send_mark !== "transport_reported")).toEqual([]);
+    // Each of them asked the pacer first: none went without a grant.
+    expect(await scalar(
+      "select count(*)::int as n from sync_attempts where page_id = $1 and not shadow and sent_at is not null and granted_at is null",
+      [pageId],
+    )).toBe(0);
     expectJournalPaced(sent);
     expect(await scalar("select count(*)::int as n from sync_attempts where page_id = $1 and outcome = 'aborted_before_send'", [pageId])).toBe(0);
 
