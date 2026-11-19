@@ -122,6 +122,9 @@ describe("customs of a fan", () => {
     expect((await card()).customs[0]!.deliveryCandidates.map((message) => message.messageRef)).toEqual(["9300000001"]);
     const given = await act(custom, { action: "given", messageRef: "9300000001" });
     expect(given.statusCode, given.body).toBe(200);
+    // «Отдан» is final: the board refuses «Отменить» of a given order, and it stays given.
+    expect((await act(custom, { action: "cancel" })).statusCode).toBe(409);
+    expect(await stateOf(custom)).toBe("given");
 
     // A custom paid by tip B, cancelled: tip B is offered again and another custom takes it.
     const second = await recordPaid("голосовое", tipB);
