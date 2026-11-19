@@ -140,6 +140,11 @@
     color: var(--ui-good-text);
   }
 
+  /* A break going on now, beside the hours: quiet. */
+  .people-shift__pause {
+    color: var(--ui-text-3);
+  }
+
   .people-shifts .ui-page {
     color: var(--ui-text-2);
   }

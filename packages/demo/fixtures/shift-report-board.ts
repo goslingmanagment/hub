@@ -44,6 +44,11 @@ export const DEMO_BOARD_SHIFTS = {
   preview: 9_120_016,
   /** A shift on two models' pages (Mia on Fansly, Nova on OnlyFans): a comment field and a post for each model. */
   twoModels: 9_120_017,
+  /**
+   * A day split by a long break: Lev's morning shift (10:00–13:05) closed without a report holds his $40 PPV; the board
+   * of his evening names it above the columns, and the fold «До 18:00» says the sale is his.
+   */
+  splitDay: 9_120_018,
 } as const;
 export type DemoBoardScenario = keyof typeof DEMO_BOARD_SHIFTS;
 type Scenario = DemoBoardScenario;
@@ -89,6 +94,8 @@ interface Base {
   net: number; gross: number; tx: string; rule: Own; why: string; late?: boolean; lost?: boolean; before?: boolean;
   /** Hub's re-read of the wallet after the hand-in found it (shown only once found). */
   found?: boolean;
+  /** Lev's own sale of his morning shift, not handed in (`splitDay` only): folded before the evening, «моя». */
+  split?: boolean;
 }
 const mk = (id: number, page: PageId, day: 11 | 12 | 13, t: string, kind: Base["kind"], name: string, handle: string, net: number, gross: number, tx: string, rule: Own, why: string, extra: Partial<Base> = {}): Base =>
   ({ id, page, day, t, kind, name, handle, net, gross, tx, rule, why, ...extra });
@@ -129,6 +136,7 @@ const BASE: Base[] = [
   mk(37, "fr", 12, "17:02", "media", "Benno", "benno_k", 16, 20, "", "", "", { before: true }),
   mk(40, "vip", 12, "20:20", "sub", "Bram", "bram_h", 16, 20, "", "me", "подписался после вашего сообщения"),
   mk(41, "vip", 12, "14:45", "tip", "Soren", "soren_w", 8, 10, "", "", "", { before: true }),
+  mk(64, "m2", 12, "12:40", "media", "Dario/Milan", "dario_mi", 40, 0, "981332750118326211", "me", "", { before: true, split: true }),
 ];
 /** Nova's pages in `twoModels`: the sales of Mia's OnlyFans pages, on Nova's. */
 BASE.push(...BASE.filter((row) => row.page === "fr" || row.page === "vip").map((row) => ({ ...row, id: row.id + 40, page: row.page === "fr" ? "nf" as const : "nv" as const })));
@@ -160,6 +168,8 @@ const commentOf = (state: State, model: ModelId) => (Object.hasOwn(state.modelCo
 /** 12 Nov 2026, Moscow (UTC+3). */
 const at = (day: number, time: string) => new Date(Date.UTC(2026, 10, day, Number(time.slice(0, 2)) - 3, Number(time.slice(3)))).toISOString();
 const SHIFT_START = at(12, "18:00");
+/** Lev's morning shift of `splitDay`, closed without a report. The demo holds one shift's sales: its link opens the draft. */
+const MORNING = { shiftId: 9_120_001, from: at(12, "10:00"), to: at(12, "13:05") };
 const SHIFT_END = at(13, "02:00");
 /** The prototype's clocks: handed in 02:04 (again 02:21), counted 02:09 (by Hub's check alone 02:16). */
 const HANDED_IN = [at(13, "02:04"), at(13, "02:21")] as const;
@@ -229,6 +239,8 @@ interface State {
   copiedAtMs: number | null;
   /** A person without the board: read only. */
   preview: boolean;
+  /** Lev's morning shift waits for its report (`splitDay`). */
+  split: boolean;
   /** The general comment; each model's own (Hub 0432) in `modelComments`. */
   comment: string;
   modelComments: Partial<Record<ModelId, string>>;
@@ -241,7 +253,7 @@ function fresh(): State {
     asks: new Map(), incoming: null, proposals: new Map(), gNote: null, lost: false, lostAdded: false, late: false, lateAdded: false, extra: [],
     pages: ["m2", "m3", "fr", "vip"], mode: "found", gengar: null, submittedAtMs: null, submittedMills: 0, submittedCount: 0, candidates: 0,
     wasMills: null, counted: false, countedAt: null, countedMills: 0, countedAtMs: null, gWait: false, snapshot: null, comment: "", modelComments: {}, offPlatform: [],
-    hubFinds: false, found: false, post: { copiedAt: null, seen: false, changedSinceCopy: false, late: false }, postCopies: {}, preview: false, copiedAtMs: null,
+    hubFinds: false, found: false, post: { copiedAt: null, seen: false, changedSinceCopy: false, late: false }, postCopies: {}, preview: false, copiedAtMs: null, split: false,
   };
 }
 
@@ -257,7 +269,8 @@ function clone(state: State): State {
 }
 
 function rowsOf(state: State) {
-  return [...BASE, ...state.extra].filter((row) => state.pages.includes(row.page) && (!row.lost || state.lost) && (!row.late || state.late) && (!row.found || state.found));
+  return [...BASE, ...state.extra].filter((row) => state.pages.includes(row.page) && (!row.lost || state.lost) && (!row.late || state.late) && (!row.found || state.found)
+    && (!row.split || state.split));
 }
 const lostOpen = (state: State, row: Base) => !!row.lost && !state.lostAdded;
 const lateOpen = (state: State, row: Base) => !!row.late && !state.lateAdded;
@@ -329,13 +342,13 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     occurredAt: at(row.day, row.t),
     netMills: m(row.net),
     grossMills: fansly ? null : m(row.gross),
-    rule: { owner: row.before ? ownerOf("oleg") : ownerOf(row.lost ? "me" : row.rule), reason: row.before ? "holder" : "demo", words: row.why },
-    owner: row.before ? ownerOf("oleg") : owner,
+    rule: { owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : ownerOf(row.lost ? "me" : row.rule), reason: row.before ? "holder" : "demo", words: row.why },
+    owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : owner,
     statement: word === row.rule || row.before || row.lost ? null : word === "none" ? "not_mine" : word === "me" ? "mine" : half(word) ? "share" : word === "pot" ? "pot" : "give",
-    reasonWords: row.before ? "смена Олега" : reasonWords,
+    reasonWords: row.split ? "смена 12 нояб., 10:00–13:05, не сдана" : row.before ? "смена Олега" : reasonWords,
     ticked: share > 0,
     amountMills: m(share),
-    before: row.before ? { user: person(OLEG) } : null,
+    before: row.before ? { user: person(row.split ? LEV : OLEG) } : null,
     late: !!row.late,
     ask: ask === null || askTo === null ? null : {
       claimId: ASK_CLAIM_BASE + row.id,
@@ -380,7 +393,7 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
     return {
       pageLabel: page.label, platform: page.platform, pageHandle: page.handle, modelName: MODELS[page.model],
       rows: shift,
-      before: { count: before.length, until: SHIFT_START, people: before.length ? [person(OLEG)] : [], rows: before },
+      before: { count: before.length, until: SHIFT_START, people: before.some((row) => row.owner.kind !== "me") ? [person(OLEG)] : [], rows: before },
       marked: shift.filter((row) => row.ticked).length,
       of: shift.length,
       sumMills: shift.reduce((sum, row) => sum + row.amountMills, 0),
@@ -428,10 +441,13 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
     colleagues: [person(OLEG), person(SEVA)],
     decider: { kind: "owner", user: null, words: "владелец" },
     canConfirm: own && state.phase === "confirm",
-    needsMe: own && (state.phase === "confirm" || waiting.some((one) => one.why === "incoming" || one.why === "late")),
+    needsMe: own && (state.phase === "confirm" || waiting.some((one) => one.why === "incoming" || one.why === "late") || state.split),
     handedInAt: handed ? HANDED_IN[again ? 1 : 0] : null,
     countedAt: state.counted ? state.countedAt : null,
     preview: state.preview ? true : undefined,
+    otherShifts: own && state.split
+      ? [{ shiftId: MORNING.shiftId, startedAt: MORNING.from, endedAt: MORNING.to, ongoing: false, phase: "draft", count: 1, mills: m(40) }]
+      : undefined,
     previous: own ? { user: person(OLEG), comment: PREVIOUS.comment, at: at(12, PREVIOUS.at) } : null,
     post: own && state.counted
       ? {
@@ -601,6 +617,7 @@ const SCENARIOS: Record<Scenario, (nowMs: number) => State> = {
   preview: () => ({ ...fresh(), preview: true }),
   // Mia's comment written, Nova's not yet: a field per model, each named.
   twoModels: () => ({ ...fresh(), pages: ["m2", "m3", "nf", "nv"], modelComments: { mia: "Dario ждёт кастом к пятнице" } }),
+  splitDay: () => ({ ...fresh(), split: true }),
 };
 
 /** Every scenario's board as it stands, per fresh copy (`hub-demo-board`): kept until the demo server restarts. */

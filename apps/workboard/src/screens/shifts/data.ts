@@ -23,7 +23,7 @@
  * Query keys start with "shifts", except the shared reads of src/shared/reads.ts. Polls only while the tab is visible
  * (queryClient's default): a minute for «now» and a current period, never for a closed one.
  */
-import { shiftIdleText, shiftIdleTitle } from "@agency_hub_core/ui/shiftLive";
+import { shiftIdleText, shiftIdleTitle, shiftPauseText } from "@agency_hub_core/ui/shiftLive";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { CHATTER_SHIFT_PAGE_MIN_MESSAGES, type KernelOperationResponse } from "@agency_hub_core/contracts";
 import { addDays, daysInRange, moscowDayEnd, moscowDayOf, moscowDayStart, type MoscowDay } from "@agency_hub_core/ui/moscow";
@@ -76,6 +76,8 @@ export interface JournalShift {
   startedAt: string;
   endedAt: string;
   ongoing: boolean;
+  /** «пауза с 11:02»: going on in a break; null — at work now, or over. */
+  pause: string | null;
   /** The Moscow day holding most of the shift: the payout sheet's day, the grid's column (Hub's, = `when.payDay`). */
   date: MoscowDay;
   /** Its one label and duration (D12): «вс, 1–2 нояб. 21:00–05:49», «8 ч 21 мин», the pauses only for a hint. */
@@ -234,6 +236,7 @@ function journalOf(sales: SalesResponse, numbers: NumbersResponse | undefined): 
         startedAt: shift.startedAt,
         endedAt: shift.endedAt,
         ongoing: shift.ongoing,
+        pause: shiftPauseText(shift),
         date: shift.date,
         when: shiftWhen(shift),
         workedMinutes: shift.workedMinutes,
@@ -506,7 +509,7 @@ export function useNowOnShift(page: string | null) {
           messages: shift.authoredMessages,
           waitingNow: waiting.data ? (found ? qualityOfChatterNumbers(found.numbers).unansweredAtEnd : null) : waiting.isError ? null : undefined,
           idle: shiftIdleText(shift, sales.data!.serverNow),
-          idleHint: shiftIdleTitle(shift),
+          idleHint: shiftIdleTitle(shift, sales.data!.serverNow),
         };
       })
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt));

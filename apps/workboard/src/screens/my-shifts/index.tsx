@@ -26,6 +26,7 @@ import { addDays, moscowDayOf } from "@agency_hub_core/ui/moscow";
 import { currentWeek, stepWeek, withPeriod } from "@agency_hub_core/ui/period";
 import { periodWords } from "@agency_hub_core/ui/people/words";
 import { ruPlural } from "@agency_hub_core/ui/plural";
+import { shiftPauseText } from "@agency_hub_core/ui/shiftLive";
 import { REPORT_DRAFT_NEXT, reportStatusWord } from "@agency_hub_core/ui/shiftReports";
 import { shiftDurationHint, shiftWhen } from "@agency_hub_core/ui/shiftWhen";
 import { ReportBody, useReportEdge } from "@/shared/ReportBody";
@@ -161,8 +162,16 @@ function StateCell({ row }: { row: MyShiftRow }) {
           <span className="mys-state__next">{MISSING_NEXT}</span>
         </span>
       );
-    case "ongoing":
-      return <span className="mys-state"><Badge tone="info" bare className="mys-state__badge">Идёт</Badge></span>;
+    case "ongoing": {
+      // A break going on now, said quietly under the word.
+      const pause = row.shift === null ? null : shiftPauseText(row.shift);
+      return (
+        <span className="mys-state">
+          <Badge tone="info" bare className="mys-state__badge">Идёт</Badge>
+          {pause !== null && <span className="mys-state__was">{pause}</span>}
+        </span>
+      );
+    }
     case "due":
       return (
         <span className="mys-state">
@@ -299,10 +308,14 @@ function FactsSkeleton() {
 
 // ───────────────────────────────────────────────────────────── Now
 
-/** «Сейчас на смене» for oneself (spec §4.1.2, as the owner's row): since when, worked so far, the pages; the report comes after. */
+/**
+ * «Сейчас на смене» for oneself (spec §4.1.2, as the owner's row): since when, worked so far, a break going on now, the
+ * pages; the report comes after.
+ */
 function NowRow({ shift }: { shift: StatsShift }) {
   const when = shiftWhen({ startedAt: shift.startedAt, endedAt: shift.endedAt, ongoing: true, workedMinutes: shift.workedMinutes });
   const hint = shiftDurationHint(when);
+  const pause = shiftPauseText(shift);
   return (
     <section className="mys-now" aria-label="Сейчас на смене">
       <span aria-hidden className="mys-now__dot" />
@@ -311,6 +324,12 @@ function NowRow({ shift }: { shift: StatsShift }) {
         с {formatTimeOfDay(shift.startedAt)}
         <span className="mys-now__sep" aria-hidden>·</span>
         <Tooltip content={hint ?? when.label} align="start"><span>{when.worked} работы</span></Tooltip>
+        {pause !== null && (
+          <>
+            <span className="mys-now__sep" aria-hidden>·</span>
+            <span>{pause}</span>
+          </>
+        )}
       </span>
       {shift.pages.length > 0 && <span className="mys-now__pages"><PageLabels labels={shift.pages} /></span>}
       <span className="mys-now__end">

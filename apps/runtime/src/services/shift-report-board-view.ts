@@ -23,6 +23,8 @@ import {
   listHandinProposals,
   listHandinSaleFans,
   listHandinSalesOnPages,
+  listHandinShifts,
+  listHandinsOfShifts,
   listOpenSaleSightings,
   listSaleClaims,
   listActiveSaleDecisions,
@@ -32,6 +34,7 @@ import {
   type Database,
   type TeamFacts,
   type HandinRow,
+  type HandinShift,
   type HandinVersionLine,
   type HandinVersionRow,
   type ProposalRow,
@@ -39,12 +42,14 @@ import {
   type SaleSightingRow,
   findTestOwnerLogin,
   isTestUser,
+  sumSaleHomesOfShifts,
 } from "@agency_hub_core/db";
 import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
 import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-report-draft.ts";
-import { commentText, modelComment } from "./shift-handin-rules.ts";
+import { SALE_RULE } from "./sale-rule.ts";
+import { commentText, modelComment, shiftWords } from "./shift-handin-rules.ts";
 import { CLAIM_SILENCE_MS, cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor } from "./shift-report-phases.ts";
 
 /**
@@ -89,6 +94,35 @@ export function phaseOf(handin: Pick<HandinRow, "phase" | "state"> | null): Shif
   if (handin === null) return "draft";
   if (handin.phase === "draft" && handin.state === "submitted") return "counted";
   return handin.phase;
+}
+
+/** How far back the person's own shifts are looked for: the week «Отчёт» picks the current shift from. */
+export const OWN_SHIFTS_DAYS = 7;
+
+/**
+ * The person's own shifts of the board: begun after the right was granted and within the last week, going or closed,
+ * newest first, with their reports. The one list «Отчёт» picks the current shift from (`currentShiftOf`) and the board
+ * names the person's other shifts by (`otherShiftsOf`).
+ */
+export async function ownShiftsOf(db: Database, input: { userIds: readonly number[]; since: Date; now: Date }): Promise<{ shifts: HandinShift[]; handins: Map<number, HandinRow> }> {
+  const from = new Date(Math.max(input.since.getTime(), input.now.getTime() - OWN_SHIFTS_DAYS * DAY_MS));
+  const shifts = (await listHandinShifts(db, { userIds: input.userIds, from, to: new Date(input.now.getTime() + 60_000) }))
+    .filter((shift) => shift.state !== "dropped" && shift.state !== "merged" && shift.startedAt.getTime() >= input.since.getTime())
+    .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+  return { shifts, handins: await listHandinsOfShifts(db, shifts.map((shift) => shift.id)) };
+}
+
+/**
+ * The person's other shifts that wait for them, oldest first (pure): one closed whose report is not handed in, waits
+ * for «Подтверждаю» or is reopened for a fix — its sales count only in its own report, never in this one — and the one
+ * going now (the way back to it from an older board). Checking and counted ones wait for nobody.
+ */
+export function otherShiftsOf(input: { shifts: readonly HandinShift[]; handins: ReadonlyMap<number, Pick<HandinRow, "phase" | "state">>; shiftId: number }): Array<{ shift: HandinShift; phase: ShiftReportPhase }> {
+  return input.shifts
+    .filter((shift) => shift.id !== input.shiftId)
+    .map((shift) => ({ shift, phase: phaseOf(input.handins.get(shift.id) ?? null) }))
+    .filter((one) => one.shift.state === "going" || one.phase === "draft" || one.phase === "confirm" || one.phase === "fixing")
+    .sort((a, b) => a.shift.startedAt.getTime() - b.shift.startedAt.getTime());
 }
 
 /** The board's switch for a shift: the person's right, granted before the shift began (a shift begun before is handed in the old way). */
@@ -229,6 +263,20 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   const start = subject.shift.startedAt.getTime();
   const before = (await listHandinSalesOnPages(db, { pageIds, from: new Date(moscowDayStart(start)), to: subject.shift.startedAt, limit: 500 }))
     .filter((sale) => !baseIds.has(sale.transactionId));
+  // The person's own shifts (`ownShiftsOf`): the others that wait for them head the board — a sale of an earlier shift
+  // not handed in counts only in that shift's report, so this board points there — and a sale of theirs folded below
+  // says which of their shifts holds it.
+  const since = subject.person?.submitsShiftSince ?? null;
+  const ownList = own && !preview && since !== null ? await ownShiftsOf(db, { userIds: subject.userIds, since, now }) : null;
+  const others = ownList === null ? [] : otherShiftsOf({ ...ownList, shiftId: subject.shift.id });
+  const othersClosed = others.filter((one) => one.shift.state !== "going");
+  const othersSums = othersClosed.length === 0 ? new Map<number, { count: number; mills: number }>() : await sumSaleHomesOfShifts(db, {
+    shiftIds: othersClosed.map((one) => one.shift.id),
+    userIds: subject.userIds,
+    // A PPV bought before a shift waits for it (SALE_RULE.ppvWaitMs): its home names that shift.
+    from: new Date(Math.min(...othersClosed.map((one) => one.shift.startedAt.getTime())) - SALE_RULE.ppvWaitMs - DAY_MS),
+    to: new Date(now.getTime() + 60_000),
+  });
   // «Нет в Hub»: what the site showed and Hub does not hold, in the shift's window.
   const windowEnd = subject.shift.state === "going" ? now : new Date(subject.shift.endedAt.getTime() + 1);
   const sightings = (await listOpenSaleSightings(db, { pageIds, from: subject.shift.startedAt, to: windowEnd }))
@@ -528,6 +576,12 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     const ref = refs.get(sale.transactionId) ?? null;
     const holder = sale.home?.shares[0]?.userId ?? null;
     const whose = holder === null ? owner("nobody", null, people, me) : subject.userIds.includes(holder) ? owner("me", null, people, me) : owner("user", holder, people, me);
+    // The person's own sale of another shift of theirs: that shift's report holds it, and the words name it.
+    const ownShare = sale.home?.shares.find((share) => subject.userIds.includes(share.userId)) ?? null;
+    const ownShift = ownShare?.shiftId == null ? null : ownList?.shifts.find((shift) => shift.id === ownShare.shiftId) ?? null;
+    const ownWords = ownShare === null ? null : ownShift === null ? "другая ваша смена"
+      : `смена ${shiftWords(ownShift.startedAt, ownShift.endedAt)}${others.some((one) => one.shift.id === ownShift.id && one.phase === "draft") ? ", не сдана" : ""}`;
+    const words = holder === null ? "" : ownWords ?? `смена ${personNameForms(people.nameOf(holder)).gen}`;
     return {
       key: `t${sale.transactionId}`,
       transactionId: sale.transactionId,
@@ -541,10 +595,10 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       occurredAt: sale.occurredAt.toISOString(),
       netMills: sale.netMills,
       grossMills: platform === "fansly" || ref === null ? null : ref.grossMills,
-      rule: { owner: whose, reason: sale.home?.reason ?? "", words: holder === null ? "" : `смена ${personNameForms(people.nameOf(holder)).gen}` },
+      rule: { owner: whose, reason: sale.home?.reason ?? "", words },
       owner: whose,
       statement: null,
-      reasonWords: holder === null ? "" : `смена ${personNameForms(people.nameOf(holder)).gen}`,
+      reasonWords: words,
       ticked: false,
       amountMills: 0,
       before: { user: holder === null ? null : people.person(holder) },
@@ -647,10 +701,19 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     colleagues: colleagues.map((one) => ({ userId: one.userId, name: one.name, forms: personNameForms(one.name) })),
     decider,
     canConfirm,
-    needsMe: own && (phase === "confirm" || flat.some((row) => row.late || (row.incoming?.canAnswer ?? false)) || lateCards),
+    needsMe: own && (phase === "confirm" || flat.some((row) => row.late || (row.incoming?.canAnswer ?? false)) || lateCards || othersClosed.length > 0),
     handedInAt: candidate?.madeAt.toISOString() ?? null,
     countedAt: latest?.submittedAt.toISOString() ?? null,
     preview,
+    otherShifts: others.map(({ shift, phase: otherPhase }) => ({
+      shiftId: shift.id,
+      startedAt: shift.startedAt.toISOString(),
+      endedAt: shift.endedAt.toISOString(),
+      ongoing: shift.state === "going",
+      phase: otherPhase,
+      count: othersSums.get(shift.id)?.count ?? 0,
+      mills: othersSums.get(shift.id)?.mills ?? 0,
+    })),
     previous: previousComment === null ? null : {
       user: { userId: previousComment.userId, name: previousNames.get(previousComment.userId) ?? `#${previousComment.userId}`, forms: personNameForms(previousNames.get(previousComment.userId) ?? `#${previousComment.userId}`) },
       comment: previousComment.comment,

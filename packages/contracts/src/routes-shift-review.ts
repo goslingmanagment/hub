@@ -236,7 +236,7 @@ export const teamShiftReviewResponseSchema = z.object({
     kind: z.enum(["shift", "visit"]),
     startedAt: isoTimestamp,
     endedAt: isoTimestamp,
-    /** As «Смены»: under CHATTER_SHIFT_END_IDLE_MINUTES since its last action, a break included. */
+    /** As «Смены»: under CHATTER_SHIFT_END_IDLE_MINUTES since its last action, or to the end of its slot, a break included. */
     ongoing: z.boolean(),
     workedMinutes: count,
     /** A break going on now is one too, up to the hub's now. */

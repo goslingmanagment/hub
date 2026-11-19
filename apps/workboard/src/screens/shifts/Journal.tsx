@@ -183,6 +183,7 @@ function columnsOf(state: QualityState, norms: TeamNorms, page: string | null, n
           <span className="shifts-journal__when">
             <span className="shifts-journal__day">{shift.when.days}</span>
             <span className={shift.ongoing ? "shifts-journal__span shifts-journal__span--now" : "shifts-journal__span"}>{shift.when.time}</span>
+            {shift.pause !== null && <span className="shifts-journal__pause">{shift.pause}</span>}
           </span>
         </Tooltip>
       ),

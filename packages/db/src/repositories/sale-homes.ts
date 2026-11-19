@@ -96,6 +96,25 @@ export async function listSaleHomes(db: Database, input: { from: Date; to: Date 
   }));
 }
 
+/**
+ * What the homes of the sales in [from, to) give each of these shift rows (`shares[].shiftId`) by these logins: the
+ * sales and the shares' mills. A shift with none is absent.
+ */
+export async function sumSaleHomesOfShifts(
+  db: Database,
+  input: { shiftIds: readonly number[]; userIds: readonly number[]; from: Date; to: Date },
+): Promise<Map<number, { count: number; mills: number }>> {
+  if (input.shiftIds.length === 0 || input.userIds.length === 0) return new Map();
+  const result = await db.execute<{ shift_id: string | number; count: string | number; mills: string | number }>(sql`
+    select (s.share->>'shiftId')::bigint as shift_id, count(distinct h.transaction_id) as count, sum((s.share->>'mills')::bigint) as mills
+    from sale_homes h cross join lateral jsonb_array_elements(h.shares) as s(share)
+    where h.occurred_at >= ${input.from.toISOString()}::timestamptz and h.occurred_at < ${input.to.toISOString()}::timestamptz
+      and (s.share->>'shiftId')::bigint = any(${sql.param(input.shiftIds.map(String))}::bigint[])
+      and (s.share->>'userId')::bigint = any(${sql.param(input.userIds.map(String))}::bigint[])
+    group by 1`);
+  return new Map(result.rows.map((row) => [Number(row.shift_id), { count: Number(row.count), mills: Number(row.mills) }]));
+}
+
 export interface SaleRuleSwitch {
   /** The first Moscow day (YYYY-MM-DD) the screens count by the rule; null — off. */
   screensFrom: string | null;

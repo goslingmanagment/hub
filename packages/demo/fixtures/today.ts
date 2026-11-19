@@ -80,7 +80,9 @@ function workboardToday(request: DemoRequest): Today {
     name: model.name,
     leadName: model.id === 1 ? "Марта" : null,
     people: model.id === 1 ? 3 : 1,
-    onShift: empty || model.id !== 1 ? [] : [{ userId: 4, name: "Алекс", startedAt: iso(now - 3 * HOUR_MS - 12 * 60_000), pages: ["mia-1", "mia-2"] }],
+    onShift: empty || model.id !== 1 ? [] : [{
+      userId: 4, name: "Алекс", startedAt: iso(now - 3 * HOUR_MS - 12 * 60_000), endedAt: iso(now), pauses: [{ from: iso(now - 38 * 60_000), to: iso(now) }], pages: ["mia-1", "mia-2"],
+    }],
     absent: empty || model.id !== 1 ? [] : [{ userId: 7, name: "Оля", start: "14:00", end: "22:00" }],
     gaps: empty ? [] : model.id === 1 ? [{ day: tomorrow, start: "02:00", end: "10:00" }, { day: addDays(today, 2), start: "22:00", end: "24:00" }] : [],
     noSchedule: empty || model.id !== 1,

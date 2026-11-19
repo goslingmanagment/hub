@@ -249,6 +249,8 @@ async function teamPart(
         userId: row.userId,
         name: nameOfLogin(facts, row.userId, row.username),
         startedAt: row.startedAt.toISOString(),
+        endedAt: row.endedAt.toISOString(),
+        pauses: row.pauses,
         pages: row.pageLabels.filter((label) => pageLabels.has(label)),
       })),
       absent: absentNow({ members, slots, rows: scheduled, going: goingLogins, now: input.now }).map(({ member, start, end }) => ({

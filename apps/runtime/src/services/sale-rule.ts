@@ -1,6 +1,7 @@
 import { millsFromInteger, millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 
 import { SALE_LAST_WRITER_HOURS, dayOfWork, moscowDayOf } from "./chatter-shifts.ts";
+import { weekdayOfDay, type RuleWeekday } from "./schedule-slots.ts";
 
 /**
  * Whose a sale is: one rule for the whole of Hub, a pure function of the facts
@@ -157,9 +158,8 @@ export const SALE_HOME_REASON_TEXT: Readonly<Record<SaleHomeReason, string>> = {
   agreed: "по согласию: тот, чья она по правилу, согласился",
 };
 
-/** The days of the week a slot runs on, as the people registry writes them (0384 `person_schedule_slots.weekdays`). */
-export const RULE_WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
-export type RuleWeekday = (typeof RULE_WEEKDAYS)[number];
+/** The days of the week a slot runs on, and a Moscow day's: the registry's schedule (schedule-slots.ts, a leaf). */
+export { RULE_WEEKDAYS, weekdayOfDay, type RuleWeekday } from "./schedule-slots.ts";
 
 /**
  * A person's schedule slot: from `startMinute` to `endMinute` of the Moscow day (minutes from 00:00; a slot whose end
@@ -296,11 +296,6 @@ export function homesOfSales(
 }
 
 const MINUTES_OF_DAY = 1440;
-
-/** The day of the week of a Moscow day (YYYY-MM-DD). Pure. */
-export function weekdayOfDay(day: string): RuleWeekday {
-  return RULE_WEEKDAYS[(new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7]!;
-}
 
 /**
  * Whether a person's schedule slot on a page runs at an instant: a slot that began today or, crossing midnight, the

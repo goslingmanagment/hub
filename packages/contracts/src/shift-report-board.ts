@@ -419,6 +419,21 @@ export const shiftReportBoardSchema = z.object({
    * by the rule, no ticks, no «Сдать смену»; the screen shows the old notice («Сдача смены здесь ещё не включена…»).
    */
   preview: z.boolean().optional(),
+  /**
+   * The person's other shifts of the week that wait for them, oldest first (their own board only): one closed whose
+   * report is not handed in (`draft`), waits for «Подтверждаю» (`confirm`) or a fix (`fixing`) — its sales count only in
+   * its own report — and the one going now (`ongoing`, the way back to it). `count` and `mills` — the person's sales
+   * and share there by the rule (a closed one's; 0 for the going one).
+   */
+  otherShifts: z.array(z.object({
+    shiftId: intId,
+    startedAt: isoTimestamp,
+    endedAt: isoTimestamp,
+    ongoing: z.boolean(),
+    phase: shiftReportPhaseEnum,
+    count: z.number().int().nonnegative(),
+    mills,
+  })).optional(),
   /** The comment of the latest shift before this one on any of its pages, as soon as it is written (a draft's too); null — none. */
   previous: z.object({ user: personSchema, comment: z.string(), at: isoTimestamp }).nullable().optional(),
   /**

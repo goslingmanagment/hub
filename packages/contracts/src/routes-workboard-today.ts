@@ -106,8 +106,16 @@ export const workboardTodayResponseSchema = z.object({
       /** The team's lead; null — none: its matters are the owner's. */
       leadName: z.string().nullable(),
       people: count,
-      /** On a shift now. */
-      onShift: z.array(todayPersonSchema.extend({ startedAt: isoTimestamp, pages: z.array(z.string()) })),
+      /**
+       * On a shift now. `endedAt` — the last time Hub looked at it; `pauses` — its pauses so far: a break going on now is
+       * the last one, up to `endedAt` (a break inside the person's own slot goes on to the slot's end).
+       */
+      onShift: z.array(todayPersonSchema.extend({
+        startedAt: isoTimestamp,
+        endedAt: isoTimestamp,
+        pauses: z.array(z.object({ from: isoTimestamp, to: isoTimestamp })),
+        pages: z.array(z.string()),
+      })),
       /** The schedule names them now (their slot began at least 15 minutes ago) and they are not on a shift. */
       absent: z.array(todayPersonSchema.extend({ start: z.string(), end: z.string() })),
       /** The hours of the next three days (from now) no slot of the team covers, Moscow time. */

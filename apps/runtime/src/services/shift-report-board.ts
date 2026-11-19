@@ -32,8 +32,6 @@ import {
   listHandinPeopleOfUsers,
   listHandinProposals,
   listHandinSaleFans,
-  listHandinShifts,
-  listHandinsOfShifts,
   listHandinVersions,
   listLateProposalHandins,
   listMatterPageLabels,
@@ -71,7 +69,7 @@ import { reportSums } from "./sale-claim-rules.ts";
 import { runSaleClaims } from "./sale-claims.ts";
 import { SALE_RULE } from "./sale-rule.ts";
 import { matchSightings, moveWhenDue, runHubChecks, settleGoneShifts, startHubCheck, syncCheckMatters, syncLateMarks } from "./shift-handin-check.ts";
-import { boardOn, oldWayGives, phaseOf, signableOf } from "./shift-report-board-view.ts";
+import { boardOn, oldWayGives, otherShiftsOf, ownShiftsOf, phaseOf, signableOf } from "./shift-report-board-view.ts";
 import { afterPersonVersion, readShiftReport, readSubject } from "./shift-handins.ts";
 import {
   accessOf,
@@ -887,23 +885,22 @@ async function syncBoardMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
  * The person's own shift that needs them most: the running one, else the newest not counted, else the newest (of the
  * last week, begun after the right was granted). Null — none.
  */
-async function currentShiftOf(app: Pick<AppContext, "db">, userId: number, now: Date): Promise<{ shiftId: number; handin: HandinRow | null } | null> {
+async function currentShiftOf(app: Pick<AppContext, "db">, userId: number, now: Date): Promise<{ shiftId: number; handin: HandinRow | null; othersWaiting: boolean } | null> {
   const person = (await listHandinPeopleOfUsers(app.db, [userId])).get(userId) ?? null;
   const since = person?.submitsShiftSince ?? null;
   if (since === null) return null;
   const userIds = [...new Set([userId, ...(person?.userIds ?? [])])];
-  const shifts = (await listHandinShifts(app.db, { userIds, from: new Date(Math.max(since.getTime(), now.getTime() - 7 * DAY_MS)), to: new Date(now.getTime() + 60_000) }))
-    .filter((shift) => shift.state !== "dropped" && shift.state !== "merged" && shift.startedAt.getTime() >= since.getTime())
-    .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+  const { shifts, handins } = await ownShiftsOf(app.db, { userIds, since, now });
   if (shifts.length === 0) {
     const latest = await findLatestHandinShift(app.db, { userIds, before: now });
-    return latest === null || latest.startedAt.getTime() < since.getTime() ? null : { shiftId: latest.id, handin: await findHandinByShift(app.db, latest.id) };
+    return latest === null || latest.startedAt.getTime() < since.getTime() ? null : { shiftId: latest.id, handin: await findHandinByShift(app.db, latest.id), othersWaiting: false };
   }
-  const handins = await listHandinsOfShifts(app.db, shifts.map((shift) => shift.id));
   const going = shifts.find((shift) => shift.state === "going");
   const open = shifts.find((shift) => phaseOf(handins.get(shift.id) ?? null) !== "counted");
   const pick = going ?? open ?? shifts[0]!;
-  return { shiftId: pick.id, handin: handins.get(pick.id) ?? null };
+  // Another closed shift of theirs still waits for its hand-in, «Подтверждаю» or a fix: the board names it, the dot lights.
+  const othersWaiting = otherShiftsOf({ shifts, handins, shiftId: pick.id }).some((one) => one.shift.state !== "going");
+  return { shiftId: pick.id, handin: handins.get(pick.id) ?? null, othersWaiting };
 }
 
 /** `shiftReportCurrent`: the board of the person's shift that needs them most. */
@@ -929,7 +926,7 @@ export async function pulseReport(app: Pick<AppContext, "db">, userId: number, n
   const late = current.handin === null ? false : (await listHandinProposals(app.db, current.handin.id)).some((one) => one.state === "late");
   // «После сдачи» from the cheap mark the minute pass keeps (`late_sales`): no draft is computed here.
   const afterHandIn = (current.handin?.lateSales ?? 0) > 0;
-  return { shiftId: current.shiftId, phase, needsMe: phase === "confirm" || asked.length > 0 || late || afterHandIn };
+  return { shiftId: current.shiftId, phase, needsMe: phase === "confirm" || asked.length > 0 || late || afterHandIn || current.othersWaiting };
 }
 
 function warn(app: Pick<AppContext, "logger">, error: unknown, what: string) {

@@ -311,6 +311,13 @@
     color: var(--ui-good-text);
   }
 
+  /* A break going on now, under the hours: quiet. */
+  .shifts-journal__pause {
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+  }
+
   .shifts-journal__pages {
     white-space: nowrap;
   }
