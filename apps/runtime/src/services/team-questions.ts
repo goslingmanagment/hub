@@ -47,7 +47,7 @@ import { recordAudit, type AuthPrincipal, type HumanAuthPrincipal } from "./auth
 import { moscowDayOf } from "./chatter-shifts.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { slotMinute, slotTime } from "./people/index.ts";
-import { weekdayOfDay } from "./sale-rule.ts";
+import { standingLinesOn, weekdayOfDay } from "./sale-rule.ts";
 import { pageIsTest, requireSameRealm } from "./sandbox/realm.ts";
 import {
   deciderOf, leadsModel, loginOfPerson, modelOfPageId, pagesOfModels, personOfLogin, personsOfLogins, requireTeamAsker, requireTeamReader, teamFactsFor,
@@ -454,8 +454,7 @@ async function refuseSwapClash(db: QuestionsApp["db"], facts: TeamFacts, swap: T
 /**
  * The absent person's pages (of the team) on which their standing slot runs in a swap's hours: on each page, its own
  * lines valid that day, else the every-page ones — chosen by the dates alone, the weekday read after (the rule's
- * `linesOn` and `slotRuns`: a page's own line for Mondays leaves that page out on a Tuesday) — begun that day or the
- * day before.
+ * `standingLinesOn`: a page's own line for Mondays leaves that page out on a Tuesday) — begun that day or the day before.
  */
 async function slotPagesOf(
   app: QuestionsApp,
@@ -466,13 +465,9 @@ async function slotPagesOf(
   const found: number[] = [];
   for (const pageId of input.pages) {
     if (!input.modelPages.has(pageId)) continue;
-    const runs = daysAround(input.date).slice(0, 2).some((day) => {
-      const valid = standing.filter((line) => (line.validFrom === null || line.validFrom <= day) && (line.validTo === null || day <= line.validTo));
-      const own = valid.filter((line) => line.pageId === pageId);
-      return (own.length > 0 ? own : valid.filter((line) => line.pageId === null))
-        .some((line) => (line.weekdays === null || line.weekdays.includes(weekdayOfDay(day))) && line.startMinute !== line.endMinute
-          && swapHoursOverlap({ date: day, startMinute: line.startMinute, endMinute: line.endMinute }, swap));
-    });
+    const runs = daysAround(input.date).slice(0, 2).some((day) => standingLinesOn(standing, pageId, day)
+      .some((line) => (line.weekdays === null || line.weekdays.includes(weekdayOfDay(day))) && line.startMinute !== line.endMinute
+        && swapHoursOverlap({ date: day, startMinute: line.startMinute, endMinute: line.endMinute }, swap)));
     if (runs) found.push(pageId);
   }
   return found;
