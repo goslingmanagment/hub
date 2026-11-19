@@ -87,7 +87,7 @@ sync/
     browser-intake.ts        a browser page's operator buffer into the engine (PR 13): the event stream, frames by
                              event id, gaps, the site's answers (`browser-site-capture.ts`); built by the slot
     browser-site.ts          the site path over the operator's RPC: what the operator observed of the site's own
-                             traffic (variant Б: `siteSent`/`siteEnded`/`siteIdentity`), keyed and acknowledged
+                             traffic (variant Б: `siteSent`/`siteEnded`), keyed and acknowledged
     browser-page.ts          a page's slot (PR 14): the link, the transport, the site path, the socket rows,
                              the intake; the operator's `quiesced`
     identity-answer.ts       the account a `/account/me` answer names (the browser's check of a profile no page has)
@@ -962,8 +962,8 @@ deleted on 2026-10-25 (owner); Hub stores no session it sends with.
   refusals hold as ever. Each hop is named by the
   operator's key of its request and the hop under it, and taken once (`sync_observed_site_requests`): a send told
   again journals no second attempt, an end commits with its send's attempt or not at all. The operator keeps each
-  observation until the engine confirmed its commit (`siteObservedAck`) and tells it again until then; an operator
-  before minor 6 is never confirmed (its key is the engine's own of the request's id and send). The answer it kept
+  observation until the engine confirmed its commit (`siteObservedAck`) and tells it again until then; one that names
+  no key is dropped (`sync_site_observed_unkeyed`). The answer it kept
   (`site.response`) is linked to the same row by the intake: the attempt, the end and the observation of one hop are
   one row. What the operator keeps unconfirmed is in its state (`page_browsers.site_observed_*`); its oldest waiting
   past 2 min is `browser:site_unconfirmed`; `sync browser status` shows both and the last hour's hops.
