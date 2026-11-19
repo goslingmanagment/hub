@@ -8,8 +8,8 @@ import {
   MOSCOW_TIME_ZONE,
   businessDateToUtcStart,
   isValidBusinessDateString,
+  moscowDayOfMs,
   parseBusinessDate,
-  toBusinessDate,
 } from "@agency_hub_core/shared";
 
 export { MOSCOW_TIME_ZONE };
@@ -23,12 +23,12 @@ export function isMoscowDay(value: string | null | undefined): value is MoscowDa
 
 /** Today in Moscow. */
 export function moscowToday(now: Date = new Date()): MoscowDay {
-  return toBusinessDate(now, MOSCOW_TIME_ZONE);
+  return moscowDayOf(now);
 }
 
 /** The Moscow day an instant falls on. */
 export function moscowDayOf(at: string | number | Date): MoscowDay {
-  return toBusinessDate(new Date(at), MOSCOW_TIME_ZONE);
+  return moscowDayOfMs(new Date(at).getTime());
 }
 
 /** The day `days` after (or before, negative) a day. */

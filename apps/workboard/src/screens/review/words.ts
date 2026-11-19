@@ -1,4 +1,4 @@
-import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import { moscowDayOfMs, normalizeDmMessageText } from "@agency_hub_core/shared";
 import { SHIFT_REVIEW_AI_LOOKBACK_MINUTES, SHIFT_REVIEW_AI_SHARE } from "@agency_hub_core/contracts";
 import { formatDateTime, formatTimeOfDay } from "@agency_hub_core/ui/format";
 import type { ReviewMessage } from "./data.js";
@@ -175,8 +175,7 @@ export function plainText(text: string): string {
 
 /** A moment near the shift: the time alone on the shift's first day, the date too on another. */
 export function momentText(at: number, shiftStart: number): string {
-  const day = (value: number) => new Date(value + 3 * 3_600_000).toISOString().slice(0, 10);
-  return day(at) === day(shiftStart) ? formatTimeOfDay(at) : formatDateTime(new Date(at).toISOString());
+  return moscowDayOfMs(at) === moscowDayOfMs(shiftStart) ? formatTimeOfDay(at) : formatDateTime(new Date(at).toISOString());
 }
 
 export const MARK_WORDS = { dash: "длинное тире", cyrillic: "кириллица", leak: "служебный текст ИИ" } as const;
