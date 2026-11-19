@@ -502,7 +502,7 @@ jobs:
       # The Nightly full suite keeps it on disk.
       - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 6 }})
         env:
-          SYNC_CRITICAL_DB_PARALLELISM: --fileParallelism --maxWorkers=2
+          SYNC_CRITICAL_DB_PARALLELISM: --fileParallelism --maxWorkers=3
           HUB_TEST_PG_TMPFS: "1"
         run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 6 }}
 
