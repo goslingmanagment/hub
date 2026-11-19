@@ -10,6 +10,7 @@ import {
   HubCompositeResult,
   HubNotedResult,
   HubUsageError,
+  boundedMessage,
   findHubCommand,
   type HubCommand,
   type HubOptionValues,
@@ -167,17 +168,6 @@ function blockersOf(data: unknown): string[] {
   }
   const blockers = (conclusion as { blockers?: unknown }).blockers;
   return Array.isArray(blockers) ? blockers.filter((item) => typeof item === "string") : [];
-}
-
-/** Error text is metadata, so it is bounded. A driver or a hub can put an
- *  arbitrary amount of prose in a message; the CLI's job is to name the failure,
- *  not to relay a payload. */
-const HUB_ERROR_MESSAGE_MAX = 500;
-
-function boundedMessage(text: string): string {
-  return text.length <= HUB_ERROR_MESSAGE_MAX
-    ? text
-    : `${text.slice(0, HUB_ERROR_MESSAGE_MAX)}... (truncated)`;
 }
 
 /**

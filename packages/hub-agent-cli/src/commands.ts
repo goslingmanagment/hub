@@ -10,6 +10,9 @@ import {
   agentFanWatchBodySchema,
   agentSaleContextBodySchema,
   agentDatasetFilterOpEnum,
+  AGENT_HISTORY_LATEST_MAX,
+  AGENT_HISTORY_MAX_FANS,
+  agentHistoryFanKey,
   agentHistoryItemStateEnum,
   agentHistoryRequestStateEnum,
   agentMessageDirectionEnum,
@@ -53,6 +56,7 @@ import {
   publicationUpdateBodySchema,
   sortDirEnum,
   millsFromDollars,
+  PAGINATION_LIMIT_MAX,
   MATTER_CLOSED_HOWS,
   MATTER_OWNER_ROLE_NAMES,
   matterKindOfKey,
@@ -154,6 +158,17 @@ export class HubUsageError extends Error {
   constructor(message: string, readonly details?: Record<string, unknown>) {
     super(message);
   }
+}
+
+/** Error text is metadata, so it is bounded. A driver or a hub can put an
+ *  arbitrary amount of prose in a message; the CLI's job is to name the failure,
+ *  not to relay a payload. */
+const HUB_ERROR_MESSAGE_MAX = 500;
+
+export function boundedMessage(text: string): string {
+  return text.length <= HUB_ERROR_MESSAGE_MAX
+    ? text
+    : `${text.slice(0, HUB_ERROR_MESSAGE_MAX)}... (truncated)`;
 }
 
 // --- value readers -------------------------------------------------------
@@ -495,7 +510,7 @@ export interface HubCommand {
 
 const HISTORY_UNAVAILABLE_CODE = "history_requests_unavailable_on_page";
 /** At most this many fans per request (the contract's own ceiling). */
-export const HUB_HISTORY_MAX_FANS = 1000;
+export const HUB_HISTORY_MAX_FANS = AGENT_HISTORY_MAX_FANS;
 const HISTORY_MIN_POLL_SECONDS = 15;
 const MS_PER_SECOND = 1000;
 
@@ -522,16 +537,11 @@ export function parseHubFanRef(raw: string): AgentHistoryFanRef {
   return { kind: "fan", platformUserId: ref };
 }
 
-function fanKey(fan: AgentHistoryFanRef): string {
-  const ref = fan.kind === "fan" ? fan.platformUserId : fan.kind === "conversation" ? fan.conversationRef : fan.url;
-  return `${fan.kind}\u0000${ref.trim()}`;
-}
-
 /** The same fan twice is one fan (the hub refuses a duplicate). */
 function uniqueFans(fans: readonly AgentHistoryFanRef[]): AgentHistoryFanRef[] {
   const seen = new Set<string>();
   return fans.filter((fan) => {
-    const key = fanKey(fan);
+    const key = agentHistoryFanKey(fan);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -564,8 +574,8 @@ function historyDepth(values: HubOptionValues): AgentHistoryDepth {
     throw new HubUsageError("say the depth: --all (to the first message) or --latest <n>");
   }
   if (latest !== undefined) {
-    if (!Number.isInteger(latest) || latest < 1 || latest > 1_000_000) {
-      throw new HubUsageError(`--latest must be an integer in 1..1000000, got "${String(latest)}"`);
+    if (!Number.isInteger(latest) || latest < 1 || latest > AGENT_HISTORY_LATEST_MAX) {
+      throw new HubUsageError(`--latest must be an integer in 1..${AGENT_HISTORY_LATEST_MAX}, got "${String(latest)}"`);
     }
     return { kind: "latest", count: latest };
   }
@@ -607,7 +617,7 @@ function compositeError(error: unknown): Record<string, unknown> {
   return {
     status: error.status,
     code: error.code,
-    message: error.message.length <= 500 ? error.message : `${error.message.slice(0, 500)}... (truncated)`,
+    message: boundedMessage(error.message),
     ...(hint === null ? {} : { hint }),
   };
 }
@@ -766,7 +776,8 @@ export function hubThreadAvailabilityNote(data: AgentThreadAvailabilityResponse)
 
 /** At most this many calls per `cross-spenders --all` (200 fans each). */
 export const HUB_CROSS_SPENDERS_MAX_CALLS = 100;
-const HUB_CROSS_SPENDERS_PAGE = 200;
+/** The route's limit is the shared pagination limit. */
+const HUB_CROSS_SPENDERS_PAGE = PAGINATION_LIMIT_MAX;
 
 /** A dollar flag as whole mills (1000 = $1), through the money codec:
  *  `positive` refuses 0, otherwise only a negative amount is refused. */
@@ -1196,12 +1207,11 @@ function readParallel(values: HubOptionValues): number {
 
 /** Metadata of a failed upload or create, never a body; a bug's error too, so the files that landed still print. */
 function callErrorMeta(error: unknown): Record<string, unknown> {
-  const bounded = (text: string) => (text.length <= 500 ? text : `${text.slice(0, 500)}... (truncated)`);
   if (!(error instanceof KernelApiError)) {
-    return { status: null, code: "unexpected", message: bounded(error instanceof Error ? error.message : String(error)) };
+    return { status: null, code: "unexpected", message: boundedMessage(error instanceof Error ? error.message : String(error)) };
   }
   const hint = publicationHint(error);
-  return { status: error.status, code: error.code, message: bounded(error.message), ...(hint === null ? {} : { hint }) };
+  return { status: error.status, code: error.code, message: boundedMessage(error.message), ...(hint === null ? {} : { hint }) };
 }
 
 /** Files Hub would refuse, named before anything goes up. */
