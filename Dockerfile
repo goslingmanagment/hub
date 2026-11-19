@@ -106,6 +106,17 @@ COPY --from=build /app/apps/runtime/dist ./apps/runtime/dist
 COPY --from=build /app/packages/db/dist ./packages/db/dist
 COPY --from=build /app/packages/db/migrations ./packages/db/migrations
 
+# A V8 compile cache of this image's bundles (`startup.js`, `cli.js` and the
+# packages they import), made here by the image's own Node: every process start
+# (each role, every `cli.js` run) skips compiling them. Node keys the cache by
+# its version and V8 flags and checks each entry against the file's contents,
+# so an entry of another build is recompiled, never run. The dist-only overlay
+# (scripts/deploy-production.sh, create_dist_overlay_context) drops this cache
+# and makes its own from its dist: keep the two warm-ups the same.
+ENV NODE_COMPILE_CACHE=/app/.node-compile-cache
+RUN node apps/runtime/dist/startup.js print-public-capabilities >/dev/null \
+    && node apps/runtime/dist/cli.js --help >/dev/null
+
 # RUN implicitly receives every ARG declared in its stage. Keep release
 # metadata after the browser install so a new revision reuses that layer.
 ARG APP_DEPENDENCY_CHECKSUM=unknown
