@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { NotificationsSettingsResponse } from "@agency_hub_core/contracts";
 import { toast } from "sonner";
-import { useReportHistory, useReportPreview, useSendReport, useUpdateNotificationsSettings } from "@/api/queries";
+import { useReportHistory, useReportPreview, useSendReport, type useUpdateNotificationsSettings } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { Disclosure } from "@/components/ui/Disclosure";
 import { Notice } from "@/components/ui/Notice";

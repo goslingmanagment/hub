@@ -106,7 +106,7 @@ export function OfapiWebhookRecovery({ blocked }: { blocked: string | null }) {
       else if (refreshedPolicy) setReceipt(current => current && refreshedPolicy.version >= current.version ? null : current);
       setMessage(refreshed.isError ? `${result} Обновление экрана не удалось; проверьте состояние перед новым действием.` : result);
     }
-    catch (error) {
+    catch {
       setReadbackRequired({ label, ...(applyBaseline === undefined ? {} : { applyBaseline }) });
       setMessage("Ответ на операцию не получен. Проверьте сохранённое состояние; запрос автоматически не повторяется.");
     }
@@ -128,7 +128,7 @@ export function OfapiWebhookRecovery({ blocked }: { blocked: string | null }) {
       } else {
         setMessage("Повторное чтение не удалось; результат остаётся неизвестным.");
       }
-    } catch (error) {
+    } catch {
       setMessage("Повторное чтение не удалось; результат остаётся неизвестным.");
     } finally { busyRef.current = false; setBusy(false); }
   }

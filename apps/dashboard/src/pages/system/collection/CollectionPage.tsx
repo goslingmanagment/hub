@@ -159,7 +159,7 @@ export function CollectionPage() {
     const now = Date.now();
     return sortRows((overview.data?.pages ?? []).map((page) => collectionRow(page, statusOf(page.pageLabel), ofapi.status, now)));
     // statusOf is rebuilt every render from the engine read; its data is the dependency.
-  }, [overview.data, engines.data, engines.isError, ofapi.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [overview.data, engines.data, engines.isError, ofapi.status]);
 
   const pageLabel = filter.page;
   const rows = pageLabel ? allRows.filter((row) => row.page.pageLabel === pageLabel) : allRows;
