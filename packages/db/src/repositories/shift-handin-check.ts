@@ -190,6 +190,19 @@ export async function listNotesOfSales(db: Database, transactionIds: readonly nu
   return new Map(result.rows.map((row) => [num(row.transaction_id), { note: String(row.note), userId: num(row.user_id) }]));
 }
 
+/**
+ * Since when a handed-in report waits for ChatSpace's statement of this OnlyFans page: the earliest hand-in of an open
+ * candidate whose check has the page in `statement` (made after `since`); null — none waits.
+ */
+export async function pageStatementAwaitedSince(db: Database, input: { pageLabel: string; since: Date }): Promise<Date | null> {
+  const result = await db.execute<Row>(sql`
+    select min(c.made_at) as made_at from shift_handin_candidates c
+    where c.superseded_at is null and c.hub_checked_at is null and c.made_at >= ${input.since.toISOString()}::timestamptz
+      and c.hub_check @> ${JSON.stringify([{ pageLabel: input.pageLabel, state: "statement" }])}::jsonb`);
+  const madeAt = result.rows[0]?.made_at;
+  return madeAt === null || madeAt === undefined ? null : date(madeAt);
+}
+
 /** When ChatSpace's statement of each OnlyFans page was last read back to the newest row Hub holds (0344). */
 export async function listStatementPasses(db: Database, pageIds: readonly number[]): Promise<Map<number, Date>> {
   if (pageIds.length === 0) return new Map();

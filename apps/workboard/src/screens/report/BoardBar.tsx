@@ -60,7 +60,8 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
       }
       // «Можно подтвердить» only where the person can: in «Проверка» there is no «Подтверждаю» yet.
       case "unchecked": return <span className="k is-amb"><Ico name="clock" size={14} />Hub не сверил {named("unchecked")}. {board.phase === "checking" ? "Сверка придёт позже." : "Можно подтвердить, сверка придёт позже."}</span>;
-      case "statement": return <span className="k"><i className="spin" />Ждём выписку {named("statement")}</span>;
+      // ChatSpace reads the statement on the board's ask within a minute or two; the check lets the person confirm after 10.
+      case "statement": return <span className="k"><i className="spin" />Ждём выписку {named("statement")}, не дольше 10 минут</span>;
     }
   };
 
@@ -96,6 +97,8 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
     );
   } else if (board.phase === "draft" || board.phase === "fixing") {
     if (editing) {
+      // Three people asked on the first days whether screenshots go with the report (19.11).
+      if (board.phase === "draft") status = <span className="k"><Ico name="check" size={14} />Скрины не нужны: продажи и суммы доска берёт из Hub</span>;
       const lost = allRows(board).find(isLost) ?? null;
       const bareList = bareRows(board);
       const fixing = board.phase === "fixing";
@@ -131,7 +134,8 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
         {hubLine()}
         {gengarLine()}
         <span className="grow" />
-        {own && <span className="hint">{host === "frame" ? "Доску можно свернуть, ответ придёт сюда" : "Ответ придёт сюда"}</span>}
+        {/* The second step is easy to miss (19.11: a person closed the board while it checked and never confirmed). */}
+        {own && <span className="hint">{host === "frame" ? "Можно свернуть. " : ""}Дальше «Подтверждаю»: без него отчёт не учтён</span>}
       </>
     );
   } else if (board.phase === "confirm") {
@@ -180,6 +184,11 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
       postLines.push(<span className="k is-amb" key="changed"><Ico name="pen" size={14} />Пост изменился. Исправьте прежний пост в «Отчётности», новый не пишите</span>);
     } else if (post && post.copiedAt !== null && post.seen === false) {
       postLines.push(<span className="k" key="unseen"><Ico name="clock" size={14} />Пост в «Отчётность» ещё не пришёл</span>);
+    }
+    // The post is still sent to «Отчётность», screenshots are not (people asked, 19.11): said until every post is copied.
+    const uncopied = own && report.posts.some((one) => post?.models.find((model) => model.modelSlug === one.modelSlug)?.copiedAt == null);
+    if (uncopied && postLines.length === 0) {
+      postLines.push(<span className="k" key="todo"><Ico name="copy" size={14} />Осталось скопировать пост и отправить в «Отчётность». Скрины не нужны</span>);
     }
     status = postLines.length > 0 ? <>{postLines}</> : null;
     main = (

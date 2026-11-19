@@ -12,6 +12,7 @@ const PATHS = {
   copy: <><rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.6" /><path d="M10.5 5.5V4.2A1.2 1.2 0 0 0 9.3 3H4.2A1.2 1.2 0 0 0 3 4.2v5.1a1.2 1.2 0 0 0 1.2 1.2h1.3" /></>,
   pen: <><path d="M10.6 2.9l2.5 2.5-7.6 7.6-3.1.6.6-3.1z" /><path d="M9.2 4.3l2.5 2.5" /></>,
   min: <path d="M3.5 12h9" />,
+  back: <path d="M9.8 3.6L5.4 8l4.4 4.4" />,
 } as const;
 
 export type IconName = keyof typeof PATHS;
