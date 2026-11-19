@@ -12,6 +12,7 @@ import {
   type SettleWorkInput,
 } from "@agency_hub_core/db";
 
+import { PgWake, SYNC_WAKE_APPLICATION_NAME } from "../apps/runtime/src/sync/engine/host-ports.ts";
 import { enqueueAndWait } from "../apps/runtime/src/sync/requests/urgent.ts";
 import {
   resetIntegrationDatabase,
@@ -21,6 +22,7 @@ import {
 import {
   changedTables,
   countRows,
+  quietLogger,
   seedSyncPage,
   tableCounts,
   waitFor,
@@ -31,7 +33,8 @@ import {
 // Fansly. A page that is not live answers `not_live` before anything is
 // written (every page in step 2); on a live page the waiter is answered by the
 // actor's settle — seen by its 250 ms re-read — or gives up with the work's
-// status link.
+// status link. The demand it writes wakes the page's actor through
+// `fansly_sync_work` (the host's `PgWake`).
 
 let testDb: StartedTestDatabase | null = null;
 
@@ -152,6 +155,26 @@ describe("enqueue and wait: a live page", () => {
     expect(result).toEqual({ state: "done", workId, satisfied: true, result: { accountId: "own" }, closeReason: "applied" });
     // Seen by the next re-read (every 250 ms), well within the wait.
     expect(Date.now() - settledAt).toBeLessThan(1_000);
+  }, 30_000);
+
+  it("its demand wakes the page's actor: the actors' wake hears fansly_sync_work", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await livePage();
+    const wake = new PgWake({ connectionString: testDb.connectionString, logger: quietLogger });
+    const abort = new AbortController();
+    await wake.start();
+    try {
+      expect(await countRows(testDb.pool,
+        "select count(*)::int as n from pg_stat_activity where application_name = $1 and datname = current_database()",
+        [SYNC_WAKE_APPLICATION_NAME])).toBe(1);
+      const woken = wake.wait(pageId, 10_000, abort.signal);
+      const result = await enqueueAndWait({ db: db() }, { pageId, resource: "account.verify", waitMs: 300 });
+      expect(result.state).toBe("queued");
+      expect(await woken).toBe("notified");
+    } finally {
+      abort.abort();
+      await wake.close();
+    }
   }, 30_000);
 
   it("an older read never answers a newer demand (I11)", async (context) => {
