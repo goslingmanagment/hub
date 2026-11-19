@@ -4,9 +4,9 @@ import { isMatterInfoKind, waitingProductOf, type Matter } from "@agency_hub_cor
 import { toast } from "@agency_hub_core/ui";
 import { formatDateTime } from "@agency_hub_core/ui/format";
 import { kernel } from "@/shared/hub";
-import { consoleHref } from "@/shared/links";
 import { mattersListQuery } from "@/shared/myMatters";
 import { waitedFor, waitingSince } from "@agency_hub_core/ui/waiting/kinds";
+import { goLink } from "./links";
 
 /**
  * The first lines of what waits for the person themself (their own matters, and a lead's of the teams they lead), on
@@ -15,11 +15,6 @@ import { waitedFor, waitingSince } from "@agency_hub_core/ui/waiting/kinds";
  */
 
 const MINUTE = 60_000;
-
-function Go({ link }: { link: string }) {
-  if (link.startsWith("/workboard/") || link === "/workboard") return <Link to={link.slice("/workboard".length) || "/"} className="wt-go">Открыть</Link>;
-  return <a href={consoleHref(link)} className="wt-go">Открыть</a>;
-}
 
 /** A colleague's question on your sale waits a day for your answer; after a day of silence the sale stays with the one who asked (`silenceSettles`). */
 const CLAIM_KIND = "sale.claim";
@@ -62,7 +57,7 @@ function Row({ matter, now }: { matter: Matter; now: number }) {
         {about.length > 0 && <span className="wt-line__about">{about.join(" · ")}</span>}
       </div>
       <span className="wt-line__age" title={`С ${formatDateTime(since, { yearUnlessCurrent: true })}`}>{waitedFor(since, now)}</span>
-      <span className="wt-line__go">{claimId !== null ? <ClaimAnswer claimId={claimId} /> : matter.link ? <Go link={matter.link} /> : null}</span>
+      <span className="wt-line__go">{claimId !== null ? <ClaimAnswer claimId={claimId} /> : matter.link ? goLink(matter.link, "Открыть") : null}</span>
     </li>
   );
 }

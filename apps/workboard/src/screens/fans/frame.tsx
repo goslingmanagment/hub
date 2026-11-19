@@ -9,6 +9,7 @@ import type { OfapiStatus } from "@agency_hub_core/ui/console/statusWords";
 import { matchScreen, pageFilterOf, type Screen } from "@agency_hub_core/ui/screens";
 import { kernel } from "@/shared/hub";
 import { PageFilter } from "@/shared/PageFilter";
+import { workboardLink } from "@/shared/saleChain";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { usePageFilter as useAddressPage } from "@/shared/usePageFilter";
 import type { HubPage } from "@/shared/usePages";
@@ -204,10 +205,10 @@ export function useViewerOfapi(): { role: "owner" | "team_lead"; ofapi: OfapiSta
 
 export { OfapiOffNotice } from "@agency_hub_core/ui/console/OfapiOffNotice";
 
-/** Цепочка продажи from a fan's operation: the shared component on Workboard's client. */
+/** Цепочка продажи from a fan's operation: the shared component on Workboard's client, its Workboard links inside the app. */
 export function ChainMoney({ pageLabel, transactionRef, children }: { pageLabel: string; transactionRef: string; children: ReactNode }) {
   return (
-    <SaleChainTrigger load={() => kernel.saleChain({ query: { pageLabel, transactionRef } })} align="end">
+    <SaleChainTrigger load={() => kernel.saleChain({ query: { pageLabel, transactionRef } })} renderLink={workboardLink} align="end">
       {children}
     </SaleChainTrigger>
   );
