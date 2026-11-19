@@ -165,7 +165,8 @@ export function offTeamItem(snapshot: PeopleCheckSnapshot, now: Date): MirrorIte
     ...people.map((one) => `${one.name} работал на ${one.model}, не в команде`),
   ];
   return {
-    key: "people.off_team",
+    // A reason key is «kind:…» (matters_reason_key_check): one matter for the whole registry.
+    key: "people.off_team:registry",
     title: `Команды по реестру: ${parts.slice(0, 3).join("; ")}${parts.length > 3 ? ` и ещё ${parts.length - 3}` : ""}`,
     object: null,
     pageLabels: [...new Set([...emptyTeams.flatMap((team) => team.pages), ...people.flatMap((one) => one.pages)])].sort(),
