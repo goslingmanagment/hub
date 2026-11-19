@@ -5,6 +5,7 @@ import {
   type DomainEventInput,
 } from "@agency_hub_core/db";
 import { millsFromDollars } from "@agency_hub_core/shared";
+import { asRecord } from "./ofapi-payloads.ts";
 
 const SIGNED_BIGINT_MAX_MILLS = 9_223_372_036_854_775_807n;
 const MAX_DOLLAR_DECIMAL_LENGTH = 20;
@@ -17,12 +18,6 @@ interface MaterialPageInput {
   originClass: "capture_background" | "capture_interactive" | "export_import" | "harvest_import";
   items: readonly Record<string, unknown>[];
   checkpointDedupKey?: string;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
 }
 
 function asString(value: unknown) {

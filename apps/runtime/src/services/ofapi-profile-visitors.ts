@@ -1,7 +1,7 @@
 import { recordOfapiTypedFacts } from "./projections/ofapi-typed-exports.ts";
 import type { Database } from "@agency_hub_core/db";
 import { BadRequestError } from "./errors.ts";
-const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+import { asRecord as record } from "./ofapi-payloads.ts";
 /** A REST chart is certified as daily only for an explicitly requested single day. */
 export async function materializeOfapiProfileVisitorsRest(db: Database, input: {
   pageId: number; accountId: string; startDate: string; endDate: string; type: "total" | "users" | "guests";

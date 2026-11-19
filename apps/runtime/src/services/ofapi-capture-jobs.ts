@@ -23,7 +23,6 @@ import {
   reserveOfapiRequestAttempt,
   settleOfapiCaptureParse,
   type OfapiCaptureJobRecord,
-  type OfapiHttpOutcome,
   type OfapiMessageCoverageProofReference,
 } from "@agency_hub_core/db";
 import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
@@ -34,6 +33,7 @@ import { clampDraftOccurredAt } from "./canonicalize-drafts.ts";
 import { buildOnlyFansPostDrafts, ONLYFANS_POSTS_CANONICALIZER_VERSION } from "./canonicalize/onlyfans-post-media.ts";
 import {
   capturePayloadResponse,
+  ofapiHttpOutcome,
   parseOfapiJsonBytes,
   parseStrictOfapiMessagePage,
   parseStrictOfapiPostPage,
@@ -272,17 +272,6 @@ function advancePageChainHash(
     nextCursor: input.nextCursor,
     terminal: input.terminal,
   })).digest("hex");
-}
-
-function httpOutcome(status: number): OfapiHttpOutcome {
-  if (status >= 200 && status < 300) return "success";
-  if (status === 404) return "not_found";
-  if (status === 401) return "auth_confirmed";
-  if (status === 403) return "forbidden_unconfirmed";
-  if (status === 429) return "rate";
-  if (status >= 500) return "vendor_5xx";
-  if (status === 400 || status === 409 || status === 422) return "request_rejected";
-  return "unexpected_http";
 }
 
 function retryAfter(headers: Record<string, string>, now: Date) {
@@ -1530,7 +1519,7 @@ export async function executeOfapiCaptureJobChunk(
           fenceToken: reservation.fenceToken,
           responseObservedAt: raw.receivedAt,
           httpStatus: raw.status,
-          httpOutcome: httpOutcome(raw.status),
+          httpOutcome: ofapiHttpOutcome(raw.status),
           responseHeaders: raw.headers,
           bodyBytes: raw.bodyBytes,
           request: requestPlan.request,
