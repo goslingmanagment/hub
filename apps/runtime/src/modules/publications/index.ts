@@ -67,6 +67,7 @@ import {
   beginAgentRequest,
   decodeAgentCursor,
   encodeAgentCursor,
+  settleAgentRequest as settled,
   staticNotFound,
   withAgentTimeout,
   writeAgentAudit,
@@ -511,17 +512,6 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities });
     return { principal, scope };
-  }
-
-  async function settled<T>(scope: { finish(rows: number): Promise<void> }, body: () => Promise<T>, rows: (result: T) => number) {
-    let delivered = 0;
-    try {
-      const result = await body();
-      delivered = rows(result);
-      return result;
-    } finally {
-      await scope.finish(delivered);
-    }
   }
 
   server.post("/api/v1/agent/pages/:pageLabel/publications", { schema: routeSchemas.agentPublicationCreate }, async (request) => {
