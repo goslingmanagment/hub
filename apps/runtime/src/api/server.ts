@@ -15,7 +15,7 @@ import {
   type RouteAuthPolicy,
 } from "../../../../packages/contracts/src/routes.ts";
 import { createLogger } from "@agency_hub_core/shared";
-import Fastify from "fastify";
+import Fastify, { type FastifyRequest } from "fastify";
 import { PgBoss } from "pg-boss";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import {
@@ -857,12 +857,20 @@ export async function buildApiServer(appContext: AppContext) {
   const workboardDist = resolveWorkboardDistPath();
   if (dashboardDist || workboardDist) {
     const fastifyStatic = (await import("@fastify/static")).default;
+    // One wildcard route per app, not a GET+HEAD route per build file (≈400 at every boot). Only a plain path names a
+    // build's file, as when the router knew just those: `//`, a segment starting with a dot (`.`, `..`, a dotfile), a
+    // NUL or a backslash — decoded, or anywhere in the path asked (`/workboard//x`) — goes on to the not-found handler
+    // below instead of @fastify/send normalising it into a file or answering 403/400. The handler's own
+    // `sendFile("index.html")` is no path asked.
+    const isPlainPath = (path: string) => !/\/\/|(^|\/)\.|\0|\\/.test(path);
+    const allowedPath = (pathname: string, _root: string, request: FastifyRequest) =>
+      isPlainPath(pathname) && (!pathname.startsWith("/") || isPlainPath(request.url.split("?")[0] ?? ""));
     if (dashboardDist) {
-      await server.register(fastifyStatic, { root: dashboardDist, prefix: "/", wildcard: false });
+      await server.register(fastifyStatic, { root: dashboardDist, prefix: "/", allowedPath });
     }
     if (workboardDist) {
       // The console's registration decorates reply.sendFile; this one must not again.
-      await server.register(fastifyStatic, { root: workboardDist, prefix: WORKBOARD_PREFIX, wildcard: false, decorateReply: !dashboardDist });
+      await server.register(fastifyStatic, { root: workboardDist, prefix: WORKBOARD_PREFIX, allowedPath, decorateReply: !dashboardDist });
     }
     // A build's file that does not exist (a chunk of another build, asked for
     // around a deploy or rollback) must not get the app shell: nginx marks
