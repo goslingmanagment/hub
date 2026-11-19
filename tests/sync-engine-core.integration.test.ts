@@ -943,13 +943,13 @@ describe("sync_attempts", () => {
 
     const receivedAt = new Date(Date.now() - 2_000);
     const captured = await captureAttempt(db(), {
-      attemptId: a.attemptId, pageId, outcome: "response", sent: true, sentAt, sendMark: "request_start",
+      attemptId: a.attemptId, pageId, outcome: "response", sent: true, sentAt, sendMark: "transport_reported",
       sendMonoOffsetMs: 12.5, gapPrevMs: null, httpStatus: 200, durationMs: 640, responseBytes: 2_048,
       observation: { id: 42, receivedAt }, applyState: "captured",
     });
     expect(captured).toEqual({ captured: true, previousSendAt: null, paceGapMs: null });
     expect(await getSyncAttempt(db(), a.attemptId)).toMatchObject({
-      outcome: "response", sendMark: "request_start", httpStatus: 200, durationMs: 640, responseBytes: 2_048,
+      outcome: "response", sendMark: "transport_reported", httpStatus: 200, durationMs: 640, responseBytes: 2_048,
       observationId: 42, observationReceivedAt: receivedAt, applyState: "captured", sendMonoOffsetMs: 12.5,
     });
     const page = await getSyncPage(db(), pageId);
@@ -965,7 +965,7 @@ describe("sync_attempts", () => {
     const b = await admit(pageId, generation, { ...second, resource: "dm-messages.head", subject: "b", class: "urgent" });
     const closeSend = new Date(sentAt.getTime() + 1_500);
     const close = await captureAttempt(db(), {
-      attemptId: b.attemptId, pageId, outcome: "transport_error", sent: true, sentAt: closeSend, sendMark: "request_start",
+      attemptId: b.attemptId, pageId, outcome: "transport_error", sent: true, sentAt: closeSend, sendMark: "transport_reported",
       errorClass: "network", applyState: "none",
     });
     expect(close).toEqual({ captured: true, previousSendAt: sentAt, paceGapMs: 1_500 });
@@ -1109,7 +1109,7 @@ describe("sync_attempts", () => {
       await query("update sync_work set state = 'open' where id = $1", [work.id]);
       const { attemptId } = await admit(pageId, generation, { ...work, resource: "dm-messages.history", subject: groupId, class: "requests" });
       await captureAttempt(db(), {
-        attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "request_start",
+        attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "transport_reported",
         httpStatus: 500, errorClass: "subject_failure", applyState: "none",
       });
       if (episode) {
@@ -1162,7 +1162,7 @@ describe("sync_attempts", () => {
       const work = await upsertDemand(db(), demand(pageId, { subject }));
       const { attemptId } = await admit(pageId, generation, { ...work, resource: "dm-messages.head", subject, class: "urgent" });
       await captureAttempt(db(), {
-        attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "request_start", httpStatus: 200,
+        attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "transport_reported", httpStatus: 200,
         observation: { id: attemptId, receivedAt: new Date() }, applyState: "captured",
       });
       attempts.push(attemptId);
@@ -1207,7 +1207,7 @@ describe("sync_attempts", () => {
     await markAttemptSent(db(), { attemptId: sent.attemptId, sentAt: new Date() });
     const captured = await make("captured");
     await captureAttempt(db(), {
-      attemptId: captured.attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "request_start",
+      attemptId: captured.attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "transport_reported",
       httpStatus: 200, observation: { id: 7, receivedAt: new Date() }, applyState: "captured",
     });
     await markDeferred(db(), { attemptId: captured.attemptId, error: "erasure_busy", retryInMs: 3_600_000 });
@@ -1311,7 +1311,7 @@ describe("the takeover floor (I5) and the pace audit", () => {
       const work = await upsertDemand(db(), demand(pageId, { subject: `s${index}` }));
       const { attemptId } = await admit(pageId, generation, { ...work, resource: "dm-messages.head", subject: `s${index}`, class: "urgent" });
       await captureAttempt(db(), {
-        attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(base + offset), sendMark: "request_start",
+        attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(base + offset), sendMark: "transport_reported",
         httpStatus: 200, applyState: "none",
       });
       ids.push(attemptId);

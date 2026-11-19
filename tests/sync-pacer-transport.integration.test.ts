@@ -199,9 +199,9 @@ describe("every physical request of a page, counted at the origin", () => {
     expect(gaps(arrivals).filter((gap) => gap < S)).toEqual([]);
     const sent = await sentAttempts(pageId);
     expect(arrivals).toHaveLength(sent.length);
-    // The check ran at `onRequestStart` for every kind: no send was taken at
-    // its completion instead.
-    expect(sent.filter((attempt) => attempt.send_mark !== "request_start")).toEqual([]);
+    // Every kind was granted at `onRequestStart` and its send reported there
+    // (`transport_reported`): no send was taken at its completion instead.
+    expect(sent.filter((attempt) => attempt.send_mark !== "transport_reported")).toEqual([]);
     expectJournalPaced(sent);
     expect(await scalar("select count(*)::int as n from sync_attempts where page_id = $1 and outcome = 'aborted_before_send'", [pageId])).toBe(0);
 
