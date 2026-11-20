@@ -96,6 +96,8 @@ interface Base {
   found?: boolean;
   /** Lev's own sale of his morning shift, not handed in (`splitDay` only): folded before the evening, «моя». */
   split?: boolean;
+  /** A nobody's sale before the shift (a fan bought an old PPV while nobody held the page): «Это моё» on its row. */
+  nobody?: boolean;
 }
 const mk = (id: number, page: PageId, day: 11 | 12 | 13, t: string, kind: Base["kind"], name: string, handle: string, net: number, gross: number, tx: string, rule: Own, why: string, extra: Partial<Base> = {}): Base =>
   ({ id, page, day, t, kind, name, handle, net, gross, tx, rule, why, ...extra });
@@ -117,6 +119,7 @@ const BASE: Base[] = [
   mk(10, "m2", 12, "17:48", "media", "Vee/Spain", "vee_s", 24, 0, "981334726150397284", "", "", { before: true }),
   mk(11, "m2", 12, "16:10", "sub", "Hollis", "hollis_88", 8, 0, "981333801945562019", "", "", { before: true }),
   mk(14, "m2", 12, "15:02", "tip", "Brodie", "brodie_w", 10, 0, "981333205518640227", "", "", { before: true }),
+  mk(65, "m2", 12, "13:50", "media", "Wilder", "wilder_q", 36, 0, "981332906654120464", "none", "ничья: страницу никто не держал", { before: true, nobody: true }),
   mk(20, "m3", 13, "01:47", "sub", "quill", "quill_q", 8, 0, "981340021773350496", "none", "фану никто не писал"),
   mk(21, "m3", 13, "00:58", "sub", "Teo", "teo_r", 4, 0, "981339520048117350", "me", "подписался после вашего сообщения"),
   mk(22, "m3", 12, "22:48", "sub", "kitecat", "kitecat", 120, 0, "981337743906228871", "me", "тир Gold после вашей переписки"),
@@ -273,7 +276,7 @@ function clone(state: State): State {
 }
 
 function rowsOf(state: State) {
-  return [...BASE, ...state.extra].filter((row) => state.pages.includes(row.page) && (!row.lost || state.lost) && (!row.late || state.late) && (!row.found || state.found)
+  return [...BASE.filter((row) => !state.extra.some((one) => one.id === row.id)), ...state.extra].filter((row) => state.pages.includes(row.page) && (!row.lost || state.lost) && (!row.late || state.late) && (!row.found || state.found)
     && (!row.split || state.split));
 }
 const lostOpen = (state: State, row: Base) => !!row.lost && !state.lostAdded;
@@ -346,13 +349,19 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     occurredAt: at(row.day, row.t),
     netMills: m(row.net),
     grossMills: fansly ? null : m(row.gross),
-    rule: { owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : ownerOf(row.lost ? "me" : row.rule), reason: row.before ? "holder" : "demo", words: row.why },
-    owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : owner,
+    rule: {
+      owner: row.split ? ownerOf("me") : row.before ? ownerOf(row.nobody ? "none" : "oleg") : ownerOf(row.lost ? "me" : row.rule),
+      reason: row.nobody ? "no_holder" : row.before ? "holder" : "demo",
+      words: row.why,
+    },
+    owner: row.split ? ownerOf("me") : row.before ? ownerOf(row.nobody ? "none" : "oleg") : owner,
     statement: word === row.rule || row.before || row.lost ? null : word === "none" ? "not_mine" : word === "me" ? "mine" : half(word) ? "share" : word === "pot" ? "pot" : "give",
-    reasonWords: row.split ? "смена 12 нояб., 10:00–13:05, не сдана" : row.before ? "смена Олега" : reasonWords,
+    reasonWords: row.split ? "смена 12 нояб., 10:00–13:05, не сдана" : row.before ? row.nobody ? row.why : "смена Олега" : reasonWords,
     ticked: share > 0,
     amountMills: m(share),
-    before: row.before ? { user: person(row.split ? LEV : OLEG) } : null,
+    before: !row.before ? null : row.nobody
+      ? { user: null, ...(own && !state.preview && state.phase !== "checking" ? { claimable: true } : {}) }
+      : { user: person(row.split ? LEV : OLEG) },
     late: !!row.late,
     ask: ask === null || askTo === null ? null : {
       claimId: ASK_CLAIM_BASE + row.id,
@@ -397,7 +406,7 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
     return {
       pageLabel: page.label, platform: page.platform, pageHandle: page.handle, modelName: MODELS[page.model],
       rows: shift,
-      before: { count: before.length, until: SHIFT_START, people: before.some((row) => row.owner.kind !== "me") ? [person(OLEG)] : [], rows: before },
+      before: { count: before.length, until: SHIFT_START, people: before.some((row) => row.owner.kind === "user") ? [person(OLEG)] : [], rows: before },
       marked: shift.filter((row) => row.ticked).length,
       of: shift.length,
       sumMills: shift.reduce((sum, row) => sum + row.amountMills, 0),
@@ -786,6 +795,12 @@ export function demoBoardWrite(request: DemoRequest, operation: "lineSet" | "com
     const id = Number(request.params.transactionId);
     const body = request.body as { statement: string | null; shareWithUserId?: number | null; toUserId?: number | null; note?: string | null };
     let row = rowById(state, id);
+    if (row !== null && row.nobody && row.before && body.statement === "mine" && editing(state)) {
+      // «Это моё» on a nobody's sale before the shift: the person's line, as Hub's claim makes it.
+      row = { ...row, before: false, nobody: false };
+      state.extra.push(row);
+      state.ok.set(id, "добавили вы");
+    }
     if (row === null) {
       const claimable = CLAIMABLE.find((sale) => sale.id === id);
       if (claimable === undefined || body.statement !== "mine") return demoError(404, "Not Found", "No such sale");

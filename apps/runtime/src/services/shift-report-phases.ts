@@ -21,6 +21,9 @@ import type { SaleHomeKind } from "./sale-rule.ts";
  * may do nothing on it (a colleague answers a question about a sale on their OWN board).
  */
 
+/** How far back a sale may be added by hand («Найти продажу», «Это моё» on a nobody's sale before the shift). */
+export const CLAIMABLE_DAYS = 7;
+
 export type BoardAction =
   | "edit" // a tick, «чья», a «нет в Hub» added
   | "note" // a sale's comment, the shift's comment

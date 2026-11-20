@@ -68,7 +68,7 @@ import { pagesWithLines, reportSums } from "./sale-claim-rules.ts";
 import { claimsOfReport, runSaleClaims, settleDueSilences } from "./sale-claims.ts";
 import { checkReportNow, moveWhenDue, syncCheckMatters } from "./shift-handin-check.ts";
 import { boardOn, phaseOf, readBoard } from "./shift-report-board-view.ts";
-import { holdsSale, PhaseConflictError } from "./shift-report-phases.ts";
+import { CLAIMABLE_DAYS, holdsSale, PhaseConflictError } from "./shift-report-phases.ts";
 import type { SaleHomeKind, SaleHomeReason } from "./sale-rule.ts";
 import {
   commentText,
@@ -727,8 +727,6 @@ export async function setShiftReportLine(
   return { savedAt: now.toISOString() };
 }
 
-/** How far back a sale may be added by hand. */
-export const CLAIMABLE_DAYS = 7;
 const CLAIMABLE_LIMIT = 1000;
 
 /**

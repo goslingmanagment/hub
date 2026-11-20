@@ -27,6 +27,7 @@ import {
   listHandinShifts,
   listHandinsOfShifts,
   listOpenSaleSightings,
+  listReportedSales,
   listSaleClaims,
   listActiveSaleDecisions,
   listUserRoles,
@@ -49,10 +50,10 @@ import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
 import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-report-draft.ts";
-import { SALE_RULE } from "./sale-rule.ts";
-import { commentText, modelComment, shiftWords } from "./shift-handin-rules.ts";
+import { SALE_RULE, type SaleHomeReason } from "./sale-rule.ts";
+import { commentText, modelComment, reasonWords, shiftWords } from "./shift-handin-rules.ts";
 import {
-  CLAIM_SILENCE_MS, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT, cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor,
+  CLAIMABLE_DAYS, CLAIM_SILENCE_MS, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT, cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor,
 } from "./shift-report-phases.ts";
 
 /**
@@ -304,6 +305,22 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     .filter((word) => word.statement === "not_mine" && [...base, ...late].some((line) => line.transactionId === word.transactionId && line.toUserId === word.userId))
     .map((word) => word.transactionId));
   const beforeNotes = await listNotesOfSales(db, before.map((sale) => sale.transactionId));
+  // A nobody's sale before the shift (a fan bought an old PPV while nobody held the page, 20.11): «Это моё» on its own
+  // row, the claim of «Ещё → Найти продажу» (`claimableSales`, shift-handins.ts): of the last CLAIMABLE_DAYS days, in no
+  // report of the person's but this one. Hub takes it as the person's line while the report is edited; a report handed
+  // in opens for «Правка» first (`mayAct` «reopen»).
+  const claimFrom = now.getTime() - CLAIMABLE_DAYS * DAY_MS;
+  const nobodys = own && !preview && (mayAct(actor, "edit", phase) || mayAct(actor, "reopen", phase))
+    ? before.filter((sale) => sale.home?.home === "nobody" && sale.occurredAt.getTime() >= claimFrom)
+    : [];
+  const reportedBefore = nobodys.length === 0 ? new Map<number, { handinId: number }>()
+    : await listReportedSales(db, { userIds: subject.userIds, since: new Date(claimFrom - 3 * DAY_MS).toISOString().slice(0, 10) });
+  const claimable = new Set(nobodys
+    .filter((sale) => {
+      const held = reportedBefore.get(sale.transactionId);
+      return held === undefined || held.handinId === handin?.id;
+    })
+    .map((sale) => sale.transactionId));
   const people: People = {
     nameOf: (userId) => names.get(userId) ?? `#${userId}`,
     person: (userId) => {
@@ -584,7 +601,10 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     const ownShift = ownShare?.shiftId == null ? null : ownList?.shifts.find((shift) => shift.id === ownShare.shiftId) ?? null;
     const ownWords = ownShare === null ? null : ownShift === null ? "другая ваша смена"
       : `смена ${shiftWords(ownShift.startedAt, ownShift.endedAt)}${others.some((one) => one.shift.id === ownShift.id && one.phase === "draft") ? ", не сдана" : ""}`;
-    const words = holder === null ? "" : ownWords ?? `смена ${personNameForms(people.nameOf(holder)).gen}`;
+    const nobody = sale.home?.home === "nobody";
+    const words = holder === null
+      ? nobody ? reasonWords({ group: "near", added: false, reason: sale.home!.reason as SaleHomeReason, homeKind: "nobody", toName: null, senderName: null, alreadyIn: null }) : ""
+      : ownWords ?? `смена ${personNameForms(people.nameOf(holder)).gen}`;
     return {
       key: `t${sale.transactionId}`,
       transactionId: sale.transactionId,
@@ -604,7 +624,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       reasonWords: words,
       ticked: false,
       amountMills: 0,
-      before: { user: holder === null ? null : people.person(holder) },
+      before: { user: holder === null ? null : people.person(holder), ...(claimable.has(sale.transactionId) ? { claimable: true } : {}) },
       late: false,
       ask: null,
       incoming: null,

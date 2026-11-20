@@ -275,8 +275,12 @@ export const shiftReportRowSchema = z.object({
   ticked: z.boolean(),
   /** What the row counts in the person's sum now (0 while a question on it is open). */
   amountMills: mills,
-  /** Before the shift began (folded into «До 18:00: 3 продажи Олега»): whose shift it was; null — not before. */
-  before: z.object({ user: personSchema.nullable() }).nullable(),
+  /**
+   * Before the shift began (folded into «До 18:00: 3 продажи Олега»): whose shift it was; null — not before.
+   * `claimable`: a nobody's sale the person may take into this report with one line of why («Это моё» on the row, the
+   * claim of «Найти продажу»); while the report is handed in, «Это моё» opens it for «Правка» first.
+   */
+  before: z.object({ user: personSchema.nullable(), claimable: z.boolean().optional() }).nullable(),
   /** Came after the hand-in and is the person's by the rule: «после сдачи», «Досдать». */
   late: z.boolean(),
   ask: shiftReportAskSchema.nullable(),
