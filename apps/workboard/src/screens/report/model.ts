@@ -61,15 +61,25 @@ export function offShiftOf(board: Board): string {
   return board.offShift.length === 0 ? "" : `${board.offShift.map((page) => page.pageLabel).join(", ")} не в смене`;
 }
 
-/** «До 18:00: 3 продажи Олега»; with the person's own among them: «До 18:00: 4 продажи: 3 Олега, 1 ваша». */
+/**
+ * «До 18:00: 3 продажи Олега»; with the person's own among them: «До 18:00: 4 продажи: 3 Олега, 1 ваша»; with a nobody's
+ * sale the person may take («Это моё»): «До 18:07: 1 продажа, ничья», «До 18:00: 4 продажи: 3 Олега, 1 ничья».
+ */
 export function beforeWords(before: Board["columns"][number]["before"]): string {
   const whose = before.people.map((one) => one.forms.gen).join(" и ");
   const mine = before.rows.filter((row) => row.owner.kind === "me").length;
+  const free = before.rows.filter((row) => row.before?.claimable === true).length;
   const head = `До ${clock(before.until)}: ${salesCount(before.count)}`;
-  if (mine === 0) return `${head}${whose ? ` ${whose}` : ""}`;
-  const yours = `${mine} ${plural(mine, "ваша", "ваши", "ваших")}`;
+  if (mine === 0 && free === 0) return `${head}${whose ? ` ${whose}` : ""}`;
   if (mine === before.count) return `${head}, ${mine === 1 ? "ваша" : "все ваши"}`;
-  return `${head}: ${before.count - mine}${whose ? ` ${whose}` : " чужих"}, ${yours}`;
+  if (free === before.count) return `${head}, ${free === 1 ? "ничья" : "все ничьи"}`;
+  const rest = before.count - mine - free;
+  const parts = [
+    rest > 0 ? `${rest}${whose ? ` ${whose}` : " чужих"}` : "",
+    mine > 0 ? `${mine} ${plural(mine, "ваша", "ваши", "ваших")}` : "",
+    free > 0 ? `${free} ${plural(free, "ничья", "ничьи", "ничьих")}` : "",
+  ].filter((part) => part !== "");
+  return `${head}: ${parts.join(", ")}`;
 }
 
 /** The person's other shift that waits for them (`board.otherShifts`). */

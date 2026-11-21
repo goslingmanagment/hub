@@ -210,7 +210,16 @@ describe("matter checks (package K)", () => {
     expect(await openKeys("ledger.check:")).toEqual(["ledger.check:copies"]);
     const checks = new Map((await listMatterChecks(app.db)).map((check) => [check.kind, check]));
     expect(checks.get("ledger.check")?.error).toContain("does not open");
-    const owner = mattersWaitingResponseSchema.parse((await asSession("boss", "/api/v1/matters/waiting")).json());
+    // The route judges «проверено» by the clock: read it at the test's own time, not the day CI runs (START is fixed, and
+    // a day later every check of it is stale).
+    vi.useFakeTimers({ toFake: ["Date"], now: refused });
+    let waiting: Awaited<ReturnType<typeof asSession>>;
+    try {
+      waiting = await asSession("boss", "/api/v1/matters/waiting");
+    } finally {
+      vi.useRealTimers();
+    }
+    const owner = mattersWaitingResponseSchema.parse(waiting.json());
     expect(owner.groups.find((group) => group.id === "ledger")).toMatchObject({ checked: false });
     expect(owner.failed).toContain("ledger");
     expect(owner.groups.find((group) => group.id === "people")).toMatchObject({ count: 6, checked: true });

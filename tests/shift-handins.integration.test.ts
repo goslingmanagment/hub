@@ -468,5 +468,60 @@ describe("the shift report: who reads, who writes", () => {
     expect(shiftReportConfirmResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId })).json()).confirmed).toBe(true);
     expect((await checks()).awaitingConfirm.map((one) => one.shiftId)).not.toContain(shiftA);
   });
+
+  it("offers «Это моё» on a nobody's sale before the shift only to the person who last wrote to its fan; taken, it counts whole and leaves the fold", async (context) => {
+    if (!testDb) return context.skip();
+    // 20.11: a fan a chatter had been writing to bought an old PPV at 13:50, nobody on the page; his shift began at 18:07.
+    const cora = await fixtureUserId(app, "cora");
+    const pageId = Number((await testDb.pool.query("select id from pages where label = 'mia-2'")).rows[0].id);
+    const shift = await insertShift(cora, "mia-2", "2026-11-12T15:00:00Z", "2026-11-12T23:00:00Z");
+    const sale = async (ref: string, fanRef: string, at: string) => {
+      const fanId = Number((await testDb!.pool.query("insert into fans (platform, platform_user_id, username) values ('fansly', $1, $2) returning id", [fanRef, `fan_${fanRef}`])).rows[0].id);
+      const id = Number((await testDb!.pool.query(
+        `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+           gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
+         values ($1, $2, $3, 'message_purchase', 'message_purchase', 'posted', 'ok', 20000, 20000, 16000, 4000, $4::timestamptz, 'fansly:rest', 'USD')
+         returning id`,
+        [pageId, fanId, ref, at],
+      )).rows[0].id);
+      await testDb!.pool.query(
+        `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at)
+         values ($1, $2, $3::timestamptz, 16000, 'nobody', 'no_holder', '[]'::jsonb, 'test', now())`,
+        [id, pageId, at],
+      );
+      return id;
+    };
+    const worked = await sale("tx-before-worked", "8800000001", "2026-11-12T10:50:00Z");
+    const organic = await sale("tx-before-organic", "8800000002", "2026-11-12T09:00:00Z");
+    await testDb.pool.query(
+      `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
+       values ('fansly', $1, '9900000001', '8800000001', $2, 'fansly-extension', false, false, '2026-11-11T21:36:00Z', 'hand')`,
+      [pageId, cora],
+    );
+    // The board judges «за 7 дней» by the clock: the morning after the shift.
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-11-13T06:00:00Z") });
+    try {
+      const read = async (who: string) => shiftReportResponseSchema.parse((await asSession(who, "GET", `/api/v1/shift-reports/${shift}`)).json());
+      const fold = async (who: string) => (await read(who)).board!.columns.find((column) => column.pageLabel === "mia-2")!.before.rows
+        .map((row) => ({ id: row.transactionId, claimable: row.before?.claimable === true, words: row.reasonWords }));
+      // Hers to take: she wrote to the fan last. The other one nobody worked for: nobody's, no button.
+      expect(await fold("cora")).toEqual([
+        { id: worked, claimable: true, words: "ничья: страницу никто не держал" },
+        { id: organic, claimable: false, words: "ничья: страницу никто не держал" },
+      ]);
+      // A reader is offered nothing.
+      expect((await fold("boss")).map((row) => row.claimable)).toEqual([false, false]);
+      const taken = await asSession("cora", "PUT", `/api/v1/shift-reports/${shift}/lines/${worked}`, { statement: "mine", note: "мой фан, переписывались вчера" });
+      expect(taken.statusCode, taken.body).toBe(200);
+      const report = await read("cora");
+      expect(report.view?.lines.find((line) => line.transactionId === worked)).toMatchObject({ group: "mine", added: true, statement: "mine", amountMills: 16_000, disputed: false });
+      const column = report.board!.columns.find((one) => one.pageLabel === "mia-2")!;
+      expect(column.rows.find((row) => row.transactionId === worked)).toMatchObject({ ticked: true, amountMills: 16_000, before: null });
+      expect(column.before.rows.map((row) => row.transactionId)).toEqual([organic]);
+      expect(column.sumMills).toBe(16_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 

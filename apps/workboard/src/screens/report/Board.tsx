@@ -98,6 +98,8 @@ export function ReportBoard({ report, host, transport, light }: {
   const [menu, setMenu] = useState<string | null>(null);
   const [ask, setAsk] = useState<{ key: string; choice: Choice; text: string } | null>(null);
   const [edit, setEdit] = useState<{ key: string; draft: string } | null>(null);
+  /** «Это моё» on a nobody's sale before the shift: its one line of why. */
+  const [claimForm, setClaimForm] = useState<{ key: string; text: string } | null>(null);
   /** «Не согласен» with a card of Gengar: the one line of why, sent with it to whoever decides the sale. */
   const [refuse, setRefuse] = useState<{ key: string; proposalId: number; text: string } | null>(null);
   /** The frame is hidden by the extension (after «Свернуть» or a sale's number) until it says `show`. */
@@ -366,6 +368,30 @@ export function ReportBoard({ report, host, transport, light }: {
     if (ok) setAsk(null);
   };
 
+  /** Whether «Это моё» on a nobody's sale before the shift is offered now (Hub's `claimable`, the person's own board). */
+  const canClaim = (row: Row) => row.before?.claimable === true && own && !preview
+    && (board.phase === "draft" || board.phase === "fixing" || board.phase === "confirm" || board.phase === "counted");
+
+  /**
+   * «Это моё» → «Забрать»: the sale becomes the person's line with their line of why (the claim of «Найти продажу»). A
+   * report handed in opens for «Правка» first («Исправить»): the person hands it in again, «Отмена» takes it back.
+   */
+  const sendClaim = async () => {
+    if (claimForm === null) return;
+    const row = rowByKey(board, claimForm.key);
+    const text = claimForm.text.trim();
+    if (!row || row.transactionId === null || text === "") return;
+    await commitNote();
+    const handedIn = board.phase === "confirm" || board.phase === "counted";
+    if (handedIn && !(await run({ op: "reopen" }))) return;
+    const taken = await run({ op: "line", transactionId: row.transactionId, body: { statement: "mine", note: text } },
+      handedIn ? "Продажа в отчёте. Нажмите «Сдать заново»" : "Продажа добавлена в отчёт");
+    if (taken) {
+      setClaimForm(null);
+      show(row.key);
+    }
+  };
+
   // ── keys: Esc closes the menu and the fields, Enter saves them ──
 
   // In the frame, Esc with nothing open collapses the board (the extension relies on it: the frame holds the keys).
@@ -489,8 +515,32 @@ export function ReportBoard({ report, host, transport, light }: {
   };
 
   const underHtml = (row: Row): ReactNode => {
-    // A sale of the shift before: only its comment (the next shift reads it).
-    if (row.before !== null) return row.note ? <div className="ux">{noteLine(row)}</div> : null;
+    // A sale of the shift before: only its comment (the next shift reads it), and a nobody's sale's «Это моё».
+    if (row.before !== null) {
+      const taking = claimForm?.key === row.key && canClaim(row);
+      if (!row.note && !taking) return null;
+      const handedIn = board.phase === "confirm" || board.phase === "counted";
+      return (
+        <div className={`ux${taking ? " is-act" : ""}`}>
+          {noteLine(row)}
+          {taking && (
+            <div className="frm" key="claim">
+              <label className="frm-l" htmlFor={`claim-${row.key}`}>Почему продажа ваша?</label>
+              <div className="frm-r">
+                <input className="fld" id={`claim-${row.key}`} ref={focusField} value={claimForm.text} placeholder="Одной строкой" autoComplete="off" maxLength={300}
+                  onChange={(event) => setClaimForm({ key: row.key, text: event.target.value })}
+                  onKeyDown={(event) => onField(event, () => void sendClaim(), () => setClaimForm(null))} />
+                <button type="button" className="btn btn--line btn--sm" disabled={claimForm.text.trim() === "" || write.isPending} onClick={() => void sendClaim()}>Забрать</button>
+                <button type="button" className="btn btn--quiet btn--sm" onClick={() => setClaimForm(null)}>Отмена</button>
+              </div>
+              <div className="frm-h">{handedIn
+                ? "Отчёт откроется для правки: продажа войдёт в него, потом нажмите «Сдать заново»."
+                : "Продажа ничья: станет вашей и войдёт в отчёт."}</div>
+            </div>
+          )}
+        </div>
+      );
+    }
     const parts: ReactNode[] = [];
     if (miss !== null && miss.key === row.key) parts.push(<div className="miss" key="miss">{miss.words}</div>);
     if (ask?.key === row.key) {
@@ -666,10 +716,21 @@ export function ReportBoard({ report, host, transport, light }: {
       </div>
     );
     if (row.before !== null) {
+      const claimable = canClaim(row);
       return (
         <div className={`r is-dim is-not${lit.includes(row.key) ? " is-hl" : ""}`} data-row={row.key} key={row.key}>
           {checkHtml(row)}{title}{amount}
-          <div className="r2">{whereHtml(row)}<span className="rs">{row.reasonWords}</span></div>
+          <div className={`r2${claimable ? " is-act" : ""}`}>
+            {whereHtml(row)}<span className="rs" title={row.reasonWords || undefined}>{row.reasonWords}</span>
+            {claimable && claimForm?.key !== row.key && (
+              <button type="button" className="btn btn--line btn--xs" disabled={write.isPending} onClick={() => {
+                void commitNote();
+                setAsk(null);
+                setClaimForm({ key: row.key, text: "" });
+                setHl(row.key);
+              }}>Это моё</button>
+            )}
+          </div>
           {underHtml(row)}
         </div>
       );
