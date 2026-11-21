@@ -144,6 +144,10 @@ export * from "./repositories/creator-raw-media.ts";
 // The fans of a page's audience who paid the model's other pages (`hub
 // cross-spenders`, the excluded list of a mass message).
 export * from "./repositories/cross-page-spenders.ts";
+// Заказ кастома, what the checks pass reads and writes by itself (customs facts spec §6, §7): the exact «given».
+export * from "./repositories/custom-deliveries.ts";
+// Заказ кастома, a custom with no order (0436 custom_findings, customs facts spec §8) and the agent's candidates.
+export * from "./repositories/custom-findings.ts";
 // Заказ кастома (0399, package I): orders, their payments and cards, the checks' reads.
 export * from "./repositories/custom-orders.ts";
 export * from "./repositories/dm-material-fingerprint.ts";

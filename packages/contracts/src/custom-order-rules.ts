@@ -353,6 +353,121 @@ export function customOrderFactsOf(input: CustomFactsInput): CustomOrderFacts {
   return { paid: paidFact(input), atModel: atModelFact(input), shot: shotFact(input.state), given: givenFact(input) };
 }
 
+// ── What burns, why, and the forwarding timer (customs facts spec §7, C2, C3) ──
+
+/** A paid card not at the model: the timer is amber after this long, red after that, and the owner hears of it then. */
+export const CUSTOM_FORWARD_AMBER_HOURS = 24;
+export const CUSTOM_FORWARD_RED_HOURS = 48;
+/** Shot and nothing sent this long: it burns. */
+export const CUSTOM_SHOT_UNSENT_HOURS = 12;
+/** Burns by the deadline only past it by more than one full day (C2): from the second day after it. */
+const OVERDUE_BURN_DAYS = 2;
+const HOUR_MS = 3_600_000;
+
+/** What an order's urgency is read from: its row, its four facts and the first sale that pays it. */
+export interface CustomUrgencyInput {
+  state: CustomOrderState;
+  deadlineOn: string | null;
+  deadlineDefault: boolean;
+  stateAt: Date | string;
+  stateNote: string | null;
+  createdAt: Date | string;
+  /** The first sale that pays it, its own time; null — none. */
+  firstPaidAt: Date | string | null;
+  payments: number;
+  paidWord: { at: string } | null;
+  holdReason: string | null;
+  issue: { text: string } | null;
+  fanAskedAt: Date | string | null;
+  sentAt: Date | string | null;
+  facts: CustomOrderFacts;
+}
+
+export interface CustomUrgency {
+  burning: boolean;
+  reason: string | null;
+  timer: { kind: "forwarding"; level: "amber" | "red"; since: string } | null;
+}
+
+const msOf = (value: Date | string) => (value instanceof Date ? value.getTime() : Date.parse(value));
+/** One line: no line breaks, at most 200 characters. */
+const oneLine = (text: string) => {
+  const flat = text.replace(/\s+/gu, " ").trim();
+  const chars = [...flat];
+  return chars.length > 200 ? `${chars.slice(0, 199).join("").trimEnd()}…` : flat;
+};
+
+/**
+ * The forwarding timer (C3): money linked or the owner's word, the card not at the model yet (recorded, paid, checked),
+ * not on hold — counted from the later of the record and the first sale (or the word): amber from 24 h, red from 48 h;
+ * null under 24 h and otherwise. The checks' matters read the same timer (`custom.not_at_model`, the owner's line).
+ */
+export function customForwardTimerOf(input: Omit<CustomUrgencyInput, "facts" | "issue" | "fanAskedAt" | "sentAt" | "stateNote" | "deadlineOn" | "deadlineDefault" | "stateAt">, now: Date): CustomUrgency["timer"] {
+  if (input.holdReason !== null || !BEFORE_MODEL.includes(input.state)) return null;
+  const from = input.payments > 0 ? input.firstPaidAt : input.paidWord?.at ?? null;
+  if (from === null) return null;
+  const since = Math.max(msOf(input.createdAt), msOf(from));
+  const hours = (now.getTime() - since) / HOUR_MS;
+  if (hours < CUSTOM_FORWARD_AMBER_HOURS) return null;
+  return { kind: "forwarding", level: hours >= CUSTOM_FORWARD_RED_HOURS ? "red" : "amber", since: new Date(since).toISOString() };
+}
+
+/**
+ * Whether an order burns and why, or what it waits for, in one line (customs facts spec §7), derived at read time.
+ * Burns: an issue (its sentence is the reason), the fan asked where it is, a reversed payment, the model's refusal,
+ * more than one full day past the deadline, shot and nothing sent for 12 h. An order on hold never burns.
+ */
+export function customOrderUrgencyOf(input: CustomUrgencyInput, now: Date): CustomUrgency {
+  const timer = customForwardTimerOf(input, now);
+  if (!OPEN.includes(input.state)) {
+    const ended: Partial<Record<CustomOrderState, string>> = { given: "Отдан, ждём слово фана", closed: "Закрыт", cancelled: "Отменён" };
+    return { burning: false, reason: ended[input.state] ?? null, timer: null };
+  }
+  if (input.holdReason !== null) return { burning: false, reason: oneLine(`На паузе: ${input.holdReason}`), timer };
+  const dueLeft = dueLeftDaysOf(input, now);
+  const deadline = input.deadlineOn === null ? "" : `${dottedDay(input.deadlineOn)}${input.deadlineDefault ? " (примерно)" : ""}`;
+  const shotHours = input.state === "shot" ? Math.floor((now.getTime() - msOf(input.stateAt)) / HOUR_MS) : 0;
+  const burns: string[] = [];
+  if (input.issue !== null) burns.push(input.issue.text);
+  if (input.fanAskedAt !== null) burns.push("Фан спросил, где заказ");
+  if (input.facts.paid.value === "conflict") burns.push("Возврат оплаты");
+  if (input.state === "refused") burns.push(input.stateNote ? `Отказ модели: ${input.stateNote}` : "Отказ модели");
+  if (dueLeft !== null && dueLeft <= -OVERDUE_BURN_DAYS) burns.push(`Срок прошёл: был ${deadline}`);
+  if (input.state === "shot" && input.sentAt === null && shotHours >= CUSTOM_SHOT_UNSENT_HOURS) burns.push(`Снят ${shotHours} ч назад и не отправлен фану`);
+  if (burns.length > 0) return { burning: true, reason: oneLine(burns[0]!), timer };
+  const due = dueLeft === 0 ? ", срок сегодня" : dueLeft === -1 ? `, срок был вчера (${deadline})` : "";
+  const waits = ((): string => {
+    if (input.facts.given.value === "part") return "Отправлен, фан ещё не открыл";
+    switch (input.state) {
+      case "shot": return "Снят, отдать фану";
+      case "revision": return input.stateNote ? `Правка: ${input.stateNote}` : "Правка у модели";
+      case "partly": return `${input.stateNote ? `Сдан частично: ${input.stateNote}` : "Сдан частично"}${due}`;
+      case "at_model": return `У модели${due}`;
+      default:
+        return input.payments > 0 || input.paidWord !== null ? `Оплата есть, карточка не у модели${due}` : `Ждём оплату${due}`;
+    }
+  })();
+  return { burning: false, reason: oneLine(waits), timer };
+}
+
+// ── How fresh the board is (customs facts spec §9) ──────────────────────────
+
+/**
+ * The reader's routines in «Система → Состояние», as the reader reports them (`PUT /api/v1/agent/system/routines`): the
+ * pass every 30 minutes and the nightly reconciliation. A pass that could not read one of its sources reports a failure,
+ * not a success, so the last success is what the board calls «Сверено». The keys are the reader's and the board's both.
+ */
+export const CUSTOMS_ROUTINES = {
+  reader: { key: "customs-reader", title: "Кастомы: читатель (каждые 30 минут)", periodSeconds: 1800 },
+  nightly: { key: "customs-nightly", title: "Кастомы: ночная сверка", periodSeconds: 86_400 },
+} as const;
+
+/** The reader is stale: never succeeded, or its last success is older than twice its period and ten minutes. */
+export function customsReaderStale(readerAt: Date | string | null, now: Date): boolean {
+  if (readerAt === null) return true;
+  return now.getTime() - msOf(readerAt) > (2 * CUSTOMS_ROUTINES.reader.periodSeconds + 600) * 1000;
+}
+
 /** The stored owner's word on the payment, as the wire carries it; null — none, or a shape the contract does not know. */
 export function paidWordOf(stored: unknown): CustomPaidWord | null {
   if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return null;

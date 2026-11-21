@@ -19,6 +19,7 @@ import { personCustomOrders, personCustomOrderStep } from "../../services/custom
 import { doorPerson, type PersonDoorOperation } from "../../services/person-door.ts";
 import { beginAgentRequest, settleAgentRequest as settled, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+import { registerCustomCandidateRoutes } from "./candidates.ts";
 
 /**
  * Заказ кастома (ecosystem plan 2026-11-12, package I): the board «Кастомы» of
@@ -32,6 +33,8 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
   const { appContext } = ctx;
   const { requirePrincipal, requireAgentKeyPrincipal } = ctx.auth;
   const db = appContext.db;
+  // The reader's candidates of a custom with no order (customs facts spec §8): a file of their own.
+  registerCustomCandidateRoutes(server, ctx);
 
   // «Съёмка» AS THE SIGNED-IN PERSON (package C3): ContentOps' key and the person's grant (services/person-door.ts).
   const as = async (request: { body: { client: string; grant: string } } & Parameters<typeof requireAgentKeyPrincipal>[0], operation: PersonDoorOperation) =>

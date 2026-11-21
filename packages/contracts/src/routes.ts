@@ -45,6 +45,7 @@ import { matterRouteSchemas } from "./routes-matters.ts";
 import { agentReportRouteSchemas } from "./routes-agent-reports.ts";
 import { accountPayRouteSchemas } from "./routes-account-pay.ts";
 import { customOrderRouteSchemas } from "./routes-custom-orders.ts";
+import { customCandidateRouteSchemas } from "./routes-custom-candidates.ts";
 import { agentCustomOrderResponseSchema, agentCustomOrdersResponseSchema, customOrderCodeSchema } from "./custom-orders.ts";
 import { accountReportsRouteSchemas } from "./routes-account-reports.ts";
 import { peopleRouteSchemas } from "./routes-people.ts";
@@ -8130,6 +8131,7 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof signinRouteSchemas
   & typeof systemStateRouteSchemas
   & typeof customOrderRouteSchemas
+  & typeof customCandidateRouteSchemas
   & typeof shiftHandinRouteSchemas
   & typeof peopleMessageRouteSchemas
   & typeof saleClaimRouteSchemas
@@ -8159,6 +8161,7 @@ export const routeSchemas: RouteSchemas = {
   ...signinRouteSchemas,
   ...systemStateRouteSchemas,
   ...customOrderRouteSchemas,
+  ...customCandidateRouteSchemas,
   ...shiftHandinRouteSchemas,
   ...peopleMessageRouteSchemas,
   ...saleClaimRouteSchemas,

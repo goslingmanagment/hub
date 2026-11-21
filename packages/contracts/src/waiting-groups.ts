@@ -71,6 +71,9 @@ export function waitingGroupOf(kind: string): WaitingGroupId {
   if (kind.startsWith("question.")) return "asks";
   // The shift's report: the ledger's posts and paid days, the author's post to fix, «мимо площадки», the hand-in (F).
   if (REPORT_KINDS.has(kind) || kind.startsWith("shift.report")) return "reports";
+  // A custom order's every kind (custom-orders.ts CUSTOM_ORDER_CHECK_KINDS), the findings of a custom with no order
+  // (`custom.finding`, the owner's `custom.findings_owner`) and the owner's line of paid cards not at the model
+  // (`custom.not_at_model_owner`) included: they are decided on Workboard «Кастомы»; only the shooting's are ContentOps'.
   if (kind.startsWith("custom.")) return "customs";
   if (kind === "person.onboarding_stuck") return "newcomers";
   if (kind === "send.held") return "held";

@@ -432,7 +432,7 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
 }
 
 /** The cards no order has: the ones that do belong to an order are answered, the rest become the lead's matters. */
-export async function agentReportCustomCards(app: Pick<AppContext, "db" | "logger">, scope: AgentCustomScope, body: AgentCustomCardsBody, now: Date = new Date()) {
+export async function agentReportCustomCards(app: Pick<AppContext, "db" | "logger" | "config">, scope: AgentCustomScope, body: AgentCustomCardsBody, now: Date = new Date()) {
   const cards = body.cards.map((card) => ({ ...card, telegramRef: parseTelegramRef(card.telegramRef)! }));
   const owners = await listCustomOrderCardOwners(app.db, cards.map((card) => card.telegramRef));
   const matched = [...owners].map(([telegramRef, orderId]) => ({ telegramRef, code: `K-${orderId}` }));

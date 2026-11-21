@@ -1,6 +1,6 @@
 import { sql, type SQL } from "drizzle-orm";
 
-import { livePageSql } from "./realm.ts";
+import { livePageSql, testPageSql, testUserSql } from "./realm.ts";
 import { ppvBoughtSql } from "./shift-sql.ts";
 import type { Database } from "../client.ts";
 
@@ -395,7 +395,8 @@ export async function updateCustomOrderFields(db: Database, orderId: number, pat
   }
   if (patch.sentCleared === true) sets.push(sql`sent_at = null, sent_message_ref = null`);
   if (patch.card !== undefined) sets.push(sql`card = ${JSON.stringify(patch.card)}::jsonb`);
-  if (patch.deadlineOn !== undefined) sets.push(sql`deadline_on = ${patch.deadlineOn}::date`);
+  // A deadline written by an edit is no longer the system's «примерно» (0436).
+  if (patch.deadlineOn !== undefined) sets.push(sql`deadline_on = ${patch.deadlineOn}::date, deadline_default = false`);
   if (patch.pageId !== undefined) sets.push(sql`page_id = ${patch.pageId}`);
   if (patch.fanId !== undefined) sets.push(sql`fan_id = ${patch.fanId}`);
   if (patch.buyer !== undefined) sets.push(sql`buyer = ${patch.buyer}`);
@@ -1170,13 +1171,21 @@ export async function listUsersWithPersonRight(
   return result.rows.map((row) => ({ userId: Number(row.id), username: String(row.username), role: String(row.role), displayName: String(row.display_name) }));
 }
 
-/** The people on a shift now, by page label (shifts, 0379: a going shift, seen in the last half hour). */
+/**
+ * The people on a shift now, by page label (shifts, 0379: a going shift, seen in the last half hour), each page's in
+ * one order — who has been on it longest first, then the lower login — so «чей ход» names the same person on every
+ * read. Of the page's realm only (0414): a test login on a live page's list, or a live one on a test page's, never.
+ */
 export async function listOnShiftUsersByPage(db: Database, now: Date): Promise<Map<string, number[]>> {
   const result = await db.execute<{ user_id: unknown; page_label: string }>(sql`
-    select distinct s.user_id, e->>'pageLabel' as page_label
+    select s.user_id, e->>'pageLabel' as page_label
     from shifts s cross join lateral jsonb_array_elements(s.pages) e
+    join pages p on p.label = e->>'pageLabel'
     where s.state = 'going' and s.ended_at > ${now.toISOString()}::timestamptz - interval '30 minutes'
-      and e->>'pageLabel' is not null`);
+      and e->>'pageLabel' is not null
+      and (${testPageSql(sql`p.id`)}) = (${testUserSql(sql`s.user_id`)})
+    group by s.user_id, e->>'pageLabel'
+    order by e->>'pageLabel', min(s.started_at), s.user_id`);
   const byPage = new Map<string, number[]>();
   for (const row of result.rows) {
     const list = byPage.get(row.page_label) ?? [];

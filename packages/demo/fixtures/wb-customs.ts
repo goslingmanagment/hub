@@ -8,6 +8,7 @@
 import {
   CUSTOM_STATE_WORDS,
   customOrderFactsOf,
+  customOrderUrgencyOf,
   customPhaseOf,
   customPhaseProduct,
   customOrderCode,
@@ -224,10 +225,44 @@ function demoLeader(order: DemoOrder): CustomOrder["leader"] {
   return { name, phase, product: customPhaseProduct(phase) };
 }
 
+/**
+ * Whose move in the demo, by the server's order of rules (leaders.ts `customMoveOf`) over the made-up team: the owner
+ * for a hold, a refusal or a reversed payment; the content manager for a revision; the fan for a sent and unopened
+ * file; whoever is on shift (every third shot order) or the acceptor for a shot one; the model while she shoots.
+ */
+function demoMove(order: DemoOrder, facts: CustomOrder["facts"], fanName: string | null, modelName: string | null): CustomOrder["move"] {
+  if (["given", "closed", "cancelled"].includes(order.state)) return null;
+  if (order.holdReason !== null) return { who: null, whoKind: "owner", what: "решить, когда продолжить" };
+  if (order.state === "refused") return { who: null, whoKind: "owner", what: "решить после отказа модели" };
+  if (facts.paid.value === "conflict") return { who: null, whoKind: "owner", what: "разобраться с возвратом оплаты" };
+  if (order.state === "revision") return { who: order.page === null ? null : "Вера", whoKind: order.page === null ? "owner" : "person", what: "довести правку" };
+  if (facts.given.value === "part") return { who: fanName, whoKind: "fan", what: "открыть присланное" };
+  if (order.state === "shot") {
+    return order.id % 3 === 0
+      ? { who: "Саша", whoKind: "shift", what: "отдать фану" }
+      : { who: nameOf(order.acceptedBy) ?? demoUserByRole("team_lead").name, whoKind: "person", what: "отдать фану" };
+  }
+  if (order.state === "at_model" || order.state === "partly") return { who: modelName, whoKind: "model", what: order.state === "partly" ? "доснять" : "снять" };
+  if (order.payments.length > 0 || order.paidWord !== null) return { who: demoUserByRole("team_lead").name, whoKind: "person", what: "передать модели" };
+  return { who: nameOf(order.acceptedBy) ?? demoUserByRole("team_lead").name, whoKind: "person", what: "получить оплату" };
+}
+
 function wire(order: DemoOrder, now: number): CustomOrder {
   const page = order.page === null ? undefined : DEMO_DATA_PAGES.find((one) => one.label === order.page);
   const fan = order.fanRef === null || order.page === null ? undefined : demoFans(order.page).find((one) => one.platformUserId === order.fanRef);
   const profile = fan ? demoFanProfile(fan) : null;
+  const facts = customOrderFactsOf({
+    state: order.state, priceMills: order.priceMills, payments: order.payments.length,
+    paidGrossMills: order.payments.reduce((sum, payment) => sum + payment.gross, 0), paymentReversed: false, paidWord: order.paidWord,
+    sentAt: order.sentAt === null ? null : isoAt(order.sentAt),
+  });
+  const firstPaid = order.payments.reduce<number | null>((first, payment) => (first === null || payment.at < first ? payment.at : first), null);
+  const urgency = customOrderUrgencyOf({
+    state: order.state, deadlineOn: order.deadlineOn, deadlineDefault: order.deadlineDefault, stateAt: isoAt(order.stateAt), stateNote: order.stateNote,
+    createdAt: isoAt(order.createdAt), firstPaidAt: firstPaid === null ? null : isoAt(firstPaid), payments: order.payments.length,
+    paidWord: order.paidWord, holdReason: order.holdReason, issue: order.issue,
+    fanAskedAt: order.fanAskedAt === null ? null : isoAt(order.fanAskedAt), sentAt: order.sentAt === null ? null : isoAt(order.sentAt), facts,
+  }, new Date(now));
   return {
     id: order.id,
     code: customOrderCode(order.id),
@@ -260,17 +295,15 @@ function wire(order: DemoOrder, now: number): CustomOrder {
     overdueDays: overdueDaysOf(order, new Date(now)),
     dueLeftDays: dueLeftDaysOf(order, new Date(now)),
     deadlineDefault: order.deadlineDefault,
-    facts: customOrderFactsOf({
-      state: order.state, priceMills: order.priceMills, payments: order.payments.length,
-      paidGrossMills: order.payments.reduce((sum, payment) => sum + payment.gross, 0), paymentReversed: false, paidWord: order.paidWord,
-      sentAt: order.sentAt === null ? null : isoAt(order.sentAt),
-    }),
+    facts,
     priceMills: order.priceMills,
     paidWord: order.paidWord,
     holdReason: order.holdReason,
     issue: order.issue,
     fanAskedAt: order.fanAskedAt === null ? null : isoAt(order.fanAskedAt),
     sentAt: order.sentAt === null ? null : isoAt(order.sentAt),
+    move: demoMove(order, facts, profile?.username ?? order.buyer, page?.modelName ?? null),
+    ...urgency,
     partsDone: order.partsDone,
     openRevisions: order.messages.filter((message) => message.kind === "revision" && message.doneAt === null).length,
     version: order.history.length,
@@ -409,6 +442,10 @@ export const wbCustomsHandlers: DemoHandlers = {
       orders: orders.map((order) => wire(order, now)),
       capped: false,
       lookalikes: lookalikes(request).filter((sale) => page === null || sale.pageLabel === page),
+      // The reader checked twelve minutes ago, the nightly pass nine hours ago; with no orders, never (stale).
+      verified: sizeOf(request) === 0
+        ? { readerAt: null, nightlyAt: null, readerStale: true }
+        : { readerAt: isoAt(now - 12 * 60_000), nightlyAt: isoAt(now - 9 * HOUR), readerStale: false },
       serverNow: request.now.toISOString(),
     };
   },

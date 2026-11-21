@@ -1,6 +1,9 @@
 import {
   CUSTOM_STATE_WORDS,
+  CUSTOMS_ROUTINES,
   customOrderCode,
+  customOrderUrgencyOf,
+  customsReaderStale,
   parseCustomOrderCode,
   parseTelegramRef,
   type CustomOrder,
@@ -11,9 +14,11 @@ import {
   type CustomOrderCreateBody,
   type CustomOrderMessage,
   type CustomOrderDetailResponse,
+  type CustomOrderFacts,
   type CustomOrderPayment,
   type CustomOrdersBoardResponse,
   type CustomPaidWordKind,
+  type CustomUrgency,
 } from "@agency_hub_core/contracts";
 import {
   addCustomOrderCard,
@@ -43,7 +48,9 @@ import {
   listCustomOrdersInStates,
   listCustomPaymentCandidates,
   listObjectEvents,
+  listOnShiftUsersByPage,
   listPersonFans,
+  listSystemRoutines,
   listUsersWithPersonRight,
   listCustomOrderMessages,
   listCustomOrderRoundMessages,
@@ -97,7 +104,7 @@ import {
   type CustomViewer,
 } from "./rules.ts";
 import { waitingCustomSaleIds } from "./readers.ts";
-import { boardLeads, customStepLeader, ledPhasesOf, type CustomLeader } from "./leaders.ts";
+import { boardLeads, customMoveOf, customStepLeader, ledPhasesOf, type CustomLeader } from "./leaders.ts";
 import { personOfLogin, teamFactsFor, teamPagesFor } from "../teams.ts";
 
 /**
@@ -188,11 +195,49 @@ export function leaderWire(context: CustomLeaderContext | null, row: CustomOrder
   return { name: step.leader.kind === "owner" ? null : step.leader.name || null, phase: step.phase, product: step.product };
 }
 
+/** Who is on shift now, by page label (`listOnShiftUsersByPage`): whose move a shot order is. */
+export type CustomOnShift = ReadonlyMap<string, readonly number[]>;
+
+/** Whose move on the wire (`customMoveOf`, the one rule); null — nobody's, or the rule's inputs are not at hand. */
+function moveWire(context: CustomLeaderContext | null, row: CustomOrderRow, facts: CustomOrderFacts, onShift: CustomOnShift): CustomOrder["move"] {
+  if (context === null) return null;
+  const onPage = row.pageLabel === null ? [] : onShift.get(row.pageLabel) ?? [];
+  const move = customMoveOf(context.facts, row, { paid: facts.paid.value, given: facts.given.value }, onPage, context.fallback);
+  if (move === null) return null;
+  const { who, what } = move;
+  switch (who.kind) {
+    case "owner": return { who: null, whoKind: "owner", what };
+    case "person": return { who: who.name || null, whoKind: "person", what };
+    case "shift": return { who: who.name || null, whoKind: "shift", what };
+    case "model": return { who: row.modelName, whoKind: "model", what };
+    case "fan": return { who: row.fanUsername ?? row.fanDisplayName ?? row.buyer, whoKind: "fan", what };
+  }
+}
+
+/** Whether the order burns, why, and its forwarding timer (`customOrderUrgencyOf`): the board's and the checks' one reading. */
+export function urgencyOfRow(row: CustomOrderRow, facts: CustomOrderFacts, now: Date): CustomUrgency {
+  const paidWord = paidWordOf(row.paidWord);
+  return customOrderUrgencyOf({
+    state: row.state, deadlineOn: row.deadlineOn, deadlineDefault: row.deadlineDefault, stateAt: row.stateAt, stateNote: row.stateNote,
+    createdAt: row.createdAt, firstPaidAt: row.firstPaidAt, payments: row.payments, paidWord: paidWord === null ? null : { at: paidWord.at },
+    holdReason: row.holdReason, issue: issueOf(row.issue), fanAskedAt: row.fanAskedAt, sentAt: row.sentAt, facts,
+  }, now);
+}
+
+/** The four facts of a row (`customOrderFactsOf`). */
+export function factsOfRow(row: CustomOrderRow): CustomOrderFacts {
+  return customOrderFactsOf({
+    state: row.state, priceMills: row.priceMills, payments: row.payments, paidGrossMills: row.paidGrossMills,
+    paymentReversed: row.paymentReversed, paidWord: paidWordOf(row.paidWord), sentAt: row.sentAt,
+  });
+}
+
 // ── The wire ────────────────────────────────────────────────────────────────
 
-export function orderWire(row: CustomOrderRow, now: Date = new Date(), leaders: CustomLeaderContext | null = null): CustomOrder {
+export function orderWire(row: CustomOrderRow, now: Date = new Date(), leaders: CustomLeaderContext | null = null, onShift: CustomOnShift = new Map()): CustomOrder {
   const card = cardOf(row.card);
   const paidWord = paidWordOf(row.paidWord);
+  const facts = factsOfRow(row);
   return {
     id: row.id,
     code: customOrderCode(row.id),
@@ -227,16 +272,15 @@ export function orderWire(row: CustomOrderRow, now: Date = new Date(), leaders: 
     overdueDays: overdueDaysOf(row, now),
     dueLeftDays: dueLeftDaysOf(row, now),
     deadlineDefault: row.deadlineDefault,
-    facts: customOrderFactsOf({
-      state: row.state, priceMills: row.priceMills, payments: row.payments, paidGrossMills: row.paidGrossMills,
-      paymentReversed: row.paymentReversed, paidWord, sentAt: row.sentAt,
-    }),
+    facts,
     priceMills: row.priceMills,
     paidWord,
     holdReason: row.holdReason,
     issue: issueOf(row.issue),
     fanAskedAt: row.fanAskedAt?.toISOString() ?? null,
     sentAt: row.sentAt?.toISOString() ?? null,
+    move: moveWire(leaders, row, facts, onShift),
+    ...urgencyOfRow(row, facts, now),
     partsDone: row.partsDone,
     openRevisions: row.openRevisions,
     version: row.version,
@@ -252,7 +296,9 @@ export function orderWire(row: CustomOrderRow, now: Date = new Date(), leaders: 
  */
 export function agentOrderBase(row: CustomOrderRow, now: Date, leaders: CustomLeaderContext | null, options: { money?: boolean } = {}) {
   const {
-    paidGrossMills: _gross, paidNetMills: _net, dueLeftDays, deadlineDefault, facts, priceMills, paidWord, holdReason, issue, fanAskedAt, sentAt, ...wire
+    paidGrossMills: _gross, paidNetMills: _net, dueLeftDays, deadlineDefault, facts, priceMills, paidWord, holdReason, issue, fanAskedAt, sentAt,
+    // The board's reading of the order (whose move, what burns, the timer) is the board's only.
+    move: _move, burning: _burning, reason: _reason, timer: _timer, ...wire
   } = orderWire(row, now, leaders);
   if (options.money !== true) return wire;
   return { ...wire, dueLeftDays, deadlineDefault, facts, priceMills, paidWord, holdReason, issue, fanAskedAt, sentAt };
@@ -324,18 +370,20 @@ export async function readCustomOrdersBoard(
   }
   const everything = viewer.lead || viewer.role === "owner";
   const pageIds = pageId !== null ? [pageId] : everything ? "all" as const : viewer.pageIds;
-  const [rows, lookalikes, leaders] = await Promise.all([
+  const [rows, lookalikes, leaders, onShift, verified] = await Promise.all([
     listCustomOrders(app.db, { pageIds, unknownPage: everything || viewer.role === "team_lead", doneSince: new Date(now.getTime() - DONE_DAYS * DAY_MS), limit: BOARD_LIMIT + 1 }),
     // The last week's, and the older ones a matter still waits about: «Записать» or «Не кастом» closes it here.
     listCustomLookalikeSales(app.db, { from: new Date(now.getTime() - DONE_DAYS * DAY_MS), to: now, limit: 200, alsoIds: await waitingCustomSaleIds(app.db) }),
     customLeaderContext(app, principal),
+    listOnShiftUsersByPage(app.db, now),
+    customsVerifiedOf(app, now),
   ]);
   const visible = rows.filter((row) => seesOrder(viewer, row));
   return {
     viewer: { lead: leadsSteps(viewer), owner: viewer.role === "owner" },
     // The header by the one rule, for the models of the pages the viewer sees, of their realm (never a global right).
     leads: boardLeads(leaders.facts, pageIds, viewer.realm?.test === true),
-    orders: visible.slice(0, BOARD_LIMIT).map((row) => orderWire(row, now, leaders)),
+    orders: visible.slice(0, BOARD_LIMIT).map((row) => orderWire(row, now, leaders, onShift)),
     capped: visible.length > BOARD_LIMIT,
     lookalikes: lookalikesFor(viewer, lookalikes)
       .filter((row) => pageId === null || row.pageId === pageId)
@@ -348,8 +396,21 @@ export async function readCustomOrdersBoard(
         grossMills: row.grossMills,
         at: row.at.toISOString(),
       })),
+    verified,
     serverNow: now.toISOString(),
   };
+}
+
+/**
+ * «Сверено N минут назад» (customs facts spec §9): the last success of the reader's two routines in «Система →
+ * Состояние» (`CUSTOMS_ROUTINES`, as the reader reports them), and whether the reader is stale. No table of its own.
+ */
+export async function customsVerifiedOf(app: CustomApp, now: Date): Promise<CustomOrdersBoardResponse["verified"]> {
+  const routines = await listSystemRoutines(app.db);
+  const success = (key: string) => routines.find((routine) => routine.key === key)?.lastSuccessAt ?? null;
+  const readerAt = success(CUSTOMS_ROUTINES.reader.key);
+  const nightlyAt = success(CUSTOMS_ROUTINES.nightly.key);
+  return { readerAt: readerAt?.toISOString() ?? null, nightlyAt: nightlyAt?.toISOString() ?? null, readerStale: customsReaderStale(readerAt, now) };
 }
 
 /** The person's accounts (the fan and the accounts joined to it): the payments and hints are theirs. */
@@ -414,16 +475,17 @@ const IN_WORK: readonly CustomOrderStateRow[] = ["recorded", "paid", "checked", 
 
 async function detailOf(app: CustomApp, viewer: CustomViewer, order: CustomOrderRow, now: Date): Promise<CustomOrderDetailResponse> {
   const working = IN_WORK.includes(order.state);
-  const [payments, offered, deliveries, history, messages, leaders] = await Promise.all([
+  const [payments, offered, deliveries, history, messages, leaders, onShift] = await Promise.all([
     listCustomOrderPayments(app.db, order.id),
     order.state === "cancelled" ? Promise.resolve([]) : paymentCandidatesOf(app.db, order, ["tip", "subscription"], now, 10),
     working ? deliveryCandidatesOf(app.db, order, 10) : Promise.resolve([]),
     historyOf(app.db, order.id),
     orderMessagesOf(app.db, order.id),
     customLeaderContext(app),
+    listOnShiftUsersByPage(app.db, now),
   ]);
   return {
-    order: orderWire(order, now, leaders),
+    order: orderWire(order, now, leaders, onShift),
     cardText: cardTextOf(order),
     sourceText: order.sourceText,
     messages,
