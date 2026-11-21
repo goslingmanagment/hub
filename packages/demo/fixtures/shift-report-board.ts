@@ -472,7 +472,9 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
     offShift: [{ pageLabel: "Mia-1", platform: "fansly" }],
     columns,
     candidate: handed ? {
-      id: 6_000 + state.candidates, number: state.candidates, madeAt: HANDED_IN[again ? 1 : 0], by: LEV.name, door: "workboard", cutoffAt: HANDED_IN[again ? 1 : 0],
+      // While it is checked, handed in now (the board's clock of the check runs from it); after, the prototype's clock.
+      id: 6_000 + state.candidates, number: state.candidates, by: LEV.name, door: "workboard", cutoffAt: HANDED_IN[again ? 1 : 0],
+      madeAt: state.phase === "checking" && state.submittedAtMs !== null ? new Date(state.submittedAtMs).toISOString() : HANDED_IN[again ? 1 : 0],
       count: state.submittedCount, totalMills: state.submittedMills,
       hub: {
         state: !hubDone ? "running" : state.found ? "found" : "matched",
