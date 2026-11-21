@@ -9,7 +9,7 @@ import { z } from "zod";
 import { intId, isoTimestamp, mills } from "./primitives.ts";
 
 /**
- * The kinds of package G's own matters, the server their one writer: the other side's «X считает своей …» (`sale.claim`),
+ * The kinds of package G's own matters, the server their one writer: the other side's notice «X записал себе …» (`sale.claim`),
  * the owner's dispute of a sale (`sale.dispute`), the owner's weekly line of sales nobody claimed (`sale.nobody_week`),
  * a report's «мимо площадки» waiting for the owner (`off_platform.pending`), the decisions carried over from the ledger
  * that wait to be tied to a sale (`sale.decisions.unlinked`). Kept apart from MATTER_SERVER_KINDS (as the shift report's):
@@ -59,7 +59,10 @@ export const saleClaimSchema = z.object({
   answer: saleClaimAnswerEnum.nullable(),
   answerNote: z.string().nullable(),
   answeredAt: isoTimestamp.nullable(),
-  /** Why it went to the owner: disagree, silence (24 hours), no_side, double, imported; null — it did not. */
+  /**
+   * Why it went to the owner: disagree, silence (before the board), no_side, double (another person counts or already
+   * wrote the sale to themself), imported; null — it did not.
+   */
   escalatedWhy: z.enum(["disagree", "silence", "no_side", "double", "imported", "question"]).nullable(),
   /** The owner's decision of the sale; null — none. */
   decision: z.object({
@@ -67,7 +70,7 @@ export const saleClaimSchema = z.object({
     note: z.string().nullable(),
     decidedAt: isoTimestamp,
   }).nullable(),
-  /** When the side may answer it (asked, or gone to the owner by silence and not decided). */
+  /** Null: an answer has no deadline any more (a colleague's word on a sale counts at once); kept for an older client. */
   answerBy: isoTimestamp.nullable(),
   /** A question carried over from the ledger: its words. */
   question: z.string().nullable(),

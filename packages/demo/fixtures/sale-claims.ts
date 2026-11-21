@@ -1,4 +1,4 @@
-import type { KernelOperationResponse, ShiftReportClaim, ShiftReportLine } from "@agency_hub_core/contracts";
+import { SALE_TAKE_NOTICE_DAYS, type KernelOperationResponse, type ShiftReportClaim, type ShiftReportLine } from "@agency_hub_core/contracts";
 import { millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 
 import { demoError, hashString, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
@@ -52,6 +52,8 @@ interface DemoClaim {
   answerNote: string | null;
   answeredAt: number | null;
   escalatedWhy: "disagree" | "silence" | null;
+  /** Settled for the claimant by their word alone (a take, Hub since 2026-11-21): when; null — not so. */
+  takenAt: number | null;
   decision: { outcome: Outcome; note: string | null; decidedAt: number } | null;
   sale: { kind: string; occurredAt: string; netMills: number; fan: ShiftReportLine["fan"]; platform: string };
 }
@@ -110,21 +112,22 @@ function world(now: Date) {
     return [{
       id, transactionId: demoLineId(sale), pageLabel: sale.pageLabel, claimant, side,
       claimantShiftId: demoShiftId(claimantShift, claimant), sideShiftId: demoShiftId(side.id === alex.id ? shift : kateShift(backOf(shift, now)), side),
-      statement: "mine", note: "", claimedAt: at - 3 * HOUR_MS, createdAt: at - 3 * HOUR_MS, state: "asked", answer: null, answerNote: null,
-      answeredAt: null, escalatedWhy: null, decision: null,
+      statement: "mine", note: "", claimedAt: at - 3 * HOUR_MS, createdAt: at - 3 * HOUR_MS, state: "agreed", answer: null, answerNote: null,
+      answeredAt: null, escalatedWhy: null, takenAt: at - 3 * HOUR_MS, decision: null,
       sale: { kind: kindOf(sale), occurredAt: new Date(sale.at).toISOString(), netMills: sale.netMills, platform: sale.platform,
         fan: { fanRef: sale.fan.platformUserId, name: sale.fanName ?? sale.fan.displayName, username: sale.fan.username } },
       ...fields,
     }];
   };
   const claims = [
-    ...claimOf(1001, ofFive[0], five, kate, alex, { note: "фан пришёл с моей рассылки, договорились в «Обучалке»", claimedAt: at - 3 * HOUR_MS, createdAt: at - 3 * HOUR_MS }),
+    // Takes: Катя wrote Алекс's sale to herself, Алекс wrote Катя's half to himself; each counts at once, the other told.
+    ...claimOf(1001, ofFive[0], five, kate, alex, { note: "фан пришёл с моей рассылки, договорились в «Обучалке»", claimedAt: at - 3 * HOUR_MS, createdAt: at - 3 * HOUR_MS, takenAt: at - 3 * HOUR_MS }),
     ...claimOf(1002, ofFive[1], five, kate, alex, {
       note: "вела его весь вечер, купил после моего сообщения", claimedAt: at - 31 * HOUR_MS, createdAt: at - 31 * HOUR_MS,
-      state: "owner", answer: "disagree", answerNote: "фан мой: писал ему последним, PPV тоже моё", answeredAt: at - 27 * HOUR_MS, escalatedWhy: "disagree",
+      state: "owner", answer: "disagree", answerNote: "фан мой: писал ему последним, PPV тоже моё", answeredAt: at - 27 * HOUR_MS, escalatedWhy: "disagree", takenAt: null,
     }),
-    ...claimOf(1003, ofFive[2], five, alex, kate, { statement: "share", note: "вели вдвоём, она начала, я закрыл", claimedAt: at - 2 * HOUR_MS, createdAt: at - 2 * HOUR_MS }),
-    ...claimOf(1004, ofFive[3], five, kate, alex, { note: "мой постоянный, договорились о продлении", claimedAt: at - 29 * HOUR_MS, createdAt: at - 29 * HOUR_MS, state: "owner", escalatedWhy: "silence" }),
+    ...claimOf(1003, ofFive[2], five, alex, kate, { statement: "share", note: "вели вдвоём, она начала, я закрыл", claimedAt: at - 2 * HOUR_MS, createdAt: at - 2 * HOUR_MS, takenAt: at - 2 * HOUR_MS }),
+    ...claimOf(1004, ofFive[3], five, kate, alex, { note: "мой постоянный, договорились о продлении", claimedAt: at - 29 * HOUR_MS, createdAt: at - 29 * HOUR_MS, state: "owner", escalatedWhy: "silence", takenAt: null }),
   ];
   const offs: DemoOff[] = five === null ? [] : [{
     id: 9501, shiftId: demoShiftId(five, alex), user: alex, reportDate: mskDay(five.start), pages: [...new Set(five.sales.map((sale) => sale.pageLabel))].length > 0 ? [...new Set(five.sales.map((sale) => sale.pageLabel))] : five.pages,
@@ -134,8 +137,9 @@ function world(now: Date) {
   return state;
 }
 
-const answerByOf = (claim: DemoClaim) => (claim.state === "asked" || (claim.state === "owner" && claim.escalatedWhy === "silence" && claim.answer === null)
-  ? new Date(claim.createdAt + 24 * HOUR_MS).toISOString() : null);
+/** The side may answer: a take unanswered (no deadline), or one gone to the owner by silence before the board. */
+const answerableOf = (claim: DemoClaim) => claim.state === "asked" || (claim.state === "owner" && claim.escalatedWhy === "silence" && claim.answer === null)
+  || (claim.state === "agreed" && claim.takenAt !== null && claim.answer === null);
 
 function wire(claim: DemoClaim) {
   return {
@@ -155,7 +159,7 @@ function wire(claim: DemoClaim) {
     answeredAt: claim.answeredAt === null ? null : new Date(claim.answeredAt).toISOString(),
     escalatedWhy: claim.escalatedWhy,
     decision: claim.decision === null ? null : { outcome: claim.decision.outcome, note: claim.decision.note, decidedAt: new Date(claim.decision.decidedAt).toISOString() },
-    answerBy: answerByOf(claim),
+    answerBy: null,
     question: null,
   };
 }
@@ -166,7 +170,7 @@ export function demoReportClaims(input: { now: Date; shiftId: number; ownerId: n
     const incoming = claim.side.id === input.ownerId && (claim.sideShiftId === input.shiftId || input.lineIds.has(claim.transactionId));
     const outgoing = claim.claimant.id === input.ownerId && claim.claimantShiftId === input.shiftId;
     if (!incoming && !outgoing) return [];
-    const answerable = claim.state === "asked" || (claim.state === "owner" && claim.escalatedWhy === "silence" && claim.answer === null);
+    const answerable = answerableOf(claim);
     return [{
       ...wire(claim),
       direction: incoming ? "incoming" : "outgoing",
@@ -188,6 +192,13 @@ export function demoLineOutcome(now: Date, transactionId: number, userId: number
   };
   const other = userId === claim.claimant.id ? claim.side : claim.claimant;
   if (claim.state === "agreed") {
+    // A take unanswered: counted as written, the words say who wrote it.
+    if (claim.takenAt !== null && claim.answer === null) {
+      if (claim.statement === "share") return { amountMills: half(userId), mine: true, reason: "agreed", words: `пополам, записал ${claim.claimant.name}`, toName: null };
+      return userId === claim.claimant.id
+        ? { amountMills: net, mine: true, reason: "agreed", words: `по правилу ${claim.side.name}, записали вы`, toName: null }
+        : { amountMills: 0, mine: false, reason: "agreed", words: `записал себе ${claim.claimant.name}`, toName: claim.claimant.name };
+    }
     if (claim.statement === "share") return { amountMills: half(userId), mine: true, reason: "agreed", words: "по согласию второй стороны: пополам", toName: null };
     return userId === claim.claimant.id
       ? { amountMills: net, mine: true, reason: "agreed", words: "по согласию второй стороны", toName: null }
@@ -303,15 +314,16 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
   for (const claim of claims) {
     const day = DAY_MONTH.format(new Date(claim.sale.occurredAt));
     const fan = claim.sale.fan.name ?? (claim.sale.fan.username ? `@${claim.sale.fan.username}` : "фан");
-    if (claim.state === "asked") {
+    // The side's notice of a take, open three days while unanswered (Hub's `SALE_TAKE_NOTICE_DAYS`).
+    if (claim.state === "agreed" && claim.takenAt !== null && claim.answer === null && now.getTime() - claim.takenAt < SALE_TAKE_NOTICE_DAYS * DAY_MS) {
       out.push({
         kind: "sale.claim", key: `sale.claim:${claim.id}`,
         title: claim.statement === "share"
-          ? `${claim.claimant.name} делит с вами пополам: ${KIND_ACC[claim.sale.kind] ?? "продажу"}, ${fan}, ${money(claim.sale.netMills)}, ${day}`
-          : `${claim.claimant.name} считает своей: ${KIND_ACC[claim.sale.kind] ?? "продажу"}, ${fan}, ${money(claim.sale.netMills)}, ${day}`,
+          ? `${claim.claimant.name} записал пополам с вами: ${KIND_ACC[claim.sale.kind] ?? "продажу"}, ${fan}, ${money(claim.sale.netMills)}, ${day}`
+          : `${claim.claimant.name} записал себе: ${KIND_ACC[claim.sale.kind] ?? "продажу"}, ${fan}, ${money(claim.sale.netMills)}, ${day}`,
         pages: [claim.pageLabel], owner: { kind: "user", userId: claim.side.id, username: claim.side.username, displayName: claim.side.name }, money: false,
-        evidence: { claimId: claim.id, transactionId: claim.transactionId, saidAt: new Date(claim.claimedAt).toISOString(), answerBy: answerByOf(claim) },
-        link: `/workboard/report/${claim.sideShiftId}?sale=${claim.transactionId}`, agoMs: now.getTime() - claim.createdAt,
+        evidence: { claimId: claim.id, transactionId: claim.transactionId, statement: claim.statement, note: claim.note, saidAt: new Date(claim.claimedAt).toISOString(), takenAt: new Date(claim.takenAt).toISOString() },
+        link: `/workboard/report/${claim.sideShiftId}?sale=${claim.transactionId}`, agoMs: now.getTime() - claim.takenAt,
       });
     }
     if (claim.state === "owner") {
@@ -453,17 +465,27 @@ export const saleClaimHandlers: DemoHandlers = {
     if (claim === undefined) return demoError(404, "Not Found", "No such claim");
     if (demoUserByRole(request.role).id !== claim.side.id) return demoError(403, "Forbidden", "Only the other side answers a claim");
     const body = request.body as { answer: "agree" | "disagree"; note?: string | null };
+    // «Не согласен» is one press, as Hub's person door (a line of why may come with it).
     const note = body.note?.trim() || null;
-    if (body.answer === "disagree" && note === null) return demoError(400, "Bad Request", "«Не согласен» needs one line of why");
+    if (!answerableOf(claim)) return demoError(409, "Conflict", "This claim is already answered or decided");
+    const wasTaken = claim.state === "agreed";
     claim.answer = body.answer;
     claim.answerNote = note;
     claim.answeredAt = request.now.getTime();
     if (body.answer === "agree") {
+      // «Понятно» on a take: it stands as written, nothing moves; an old question agreed: settled now.
+      if (!wasTaken) settle(claim, request.now, `согласие: ${claim.side.name}`);
       claim.state = "agreed";
-      settle(claim, request.now, `согласие: ${claim.side.name}`);
     } else {
       claim.state = "owner";
       claim.escalatedWhy = "disagree";
+      // A take disputed: the sale is the side's by the rule until the decision, the taker's line waits.
+      if (wasTaken) {
+        for (const hook of hooks) {
+          hook(claim.sideShiftId, { kind: "line", transactionId: claim.transactionId, amountMills: claim.sale.netMills, madeFor: "спор о продаже: до решения по правилу" }, request.now);
+          hook(claim.claimantShiftId, { kind: "line", transactionId: claim.transactionId, amountMills: 0, madeFor: "спор о продаже: до решения по правилу" }, request.now);
+        }
+      }
     }
     return { claim: wire(claim), savedAt: request.now.toISOString() };
   },

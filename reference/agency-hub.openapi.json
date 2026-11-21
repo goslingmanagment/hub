@@ -192996,6 +192996,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -193116,6 +193119,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -194153,6 +194159,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -194273,6 +194282,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -198152,6 +198164,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -198272,6 +198287,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -199309,6 +199327,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -199429,6 +199450,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -305715,6 +305739,9 @@
                                                         },
                                                         "oldWay": {
                                                           "type": "boolean"
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -305835,6 +305862,9 @@
                                                             "string",
                                                             "null"
                                                           ]
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -306872,6 +306902,9 @@
                                                             },
                                                             "oldWay": {
                                                               "type": "boolean"
+                                                            },
+                                                            "taken": {
+                                                              "type": "boolean"
                                                             }
                                                           },
                                                           "required": [
@@ -306992,6 +307025,9 @@
                                                                 "string",
                                                                 "null"
                                                               ]
+                                                            },
+                                                            "taken": {
+                                                              "type": "boolean"
                                                             }
                                                           },
                                                           "required": [
@@ -310178,6 +310214,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -310298,6 +310337,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -311335,6 +311377,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -311455,6 +311500,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -312867,11 +312915,11 @@
     },
     "/api/v1/shift-reports/{shiftId}/asks": {
       "post": {
-        "summary": "«Спросить»: a question from the draft about a sale the rule gives a colleague or the pot",
+        "summary": "«Записать себе» / «Спросить владельца»: a word from the draft about a sale the rule gives a colleague or the pot",
         "tags": [
           "client"
         ],
-        "description": "Any session (the narrow one the extension opens included) or the chat extension's device token: the person's own report to write; a reader's to read. Database only. Own draft. The colleague answers on their board or in «Ждут вас»; the pot is the decider's. While it is open the sale counts in nobody's sum.",
+        "description": "Any session (the narrow one the extension opens included) or the chat extension's device token: the person's own report to write; a reader's to read. Database only. Own draft. A colleague who hands shifts in by the board is told, not asked: the sale counts for the person at once (all or the half), and the colleague may object («Не согласен»). The pot's, a colleague handing in the old way, or a sale someone else already took, disputed or had decided is the decider's: it counts in nobody's sum until decided.",
         "requestBody": {
           "required": true,
           "content": {
@@ -314654,6 +314702,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -314774,6 +314825,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -315811,6 +315865,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -315931,6 +315988,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -319038,6 +319098,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -319158,6 +319221,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -320195,6 +320261,9 @@
                                                         },
                                                         "oldWay": {
                                                           "type": "boolean"
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -320315,6 +320384,9 @@
                                                             "string",
                                                             "null"
                                                           ]
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -321560,7 +321632,7 @@
     },
     "/api/v1/shift-reports/{shiftId}/asks/{transactionId}": {
       "delete": {
-        "summary": "«Отменить» a question asked from the draft",
+        "summary": "«Отменить» a question or a take: the sale back to what the rule gives",
         "tags": [
           "client"
         ],
@@ -323311,6 +323383,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -323431,6 +323506,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -324468,6 +324546,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -324588,6 +324669,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -327695,6 +327779,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -327815,6 +327902,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -328852,6 +328942,9 @@
                                                         },
                                                         "oldWay": {
                                                           "type": "boolean"
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -328972,6 +329065,9 @@
                                                             "string",
                                                             "null"
                                                           ]
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -332561,6 +332657,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -332681,6 +332780,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -333718,6 +333820,9 @@
                                                         },
                                                         "oldWay": {
                                                           "type": "boolean"
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -333838,6 +333943,9 @@
                                                             "string",
                                                             "null"
                                                           ]
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -337255,6 +337363,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -337375,6 +337486,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -338412,6 +338526,9 @@
                                                         },
                                                         "oldWay": {
                                                           "type": "boolean"
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -338532,6 +338649,9 @@
                                                             "string",
                                                             "null"
                                                           ]
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -342066,6 +342186,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -342186,6 +342309,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -343223,6 +343349,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -343343,6 +343472,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -346540,6 +346672,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -346660,6 +346795,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -347697,6 +347835,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -347817,6 +347958,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -350970,6 +351114,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -351090,6 +351237,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -352127,6 +352277,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -352247,6 +352400,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -355400,6 +355556,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -355520,6 +355679,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -356557,6 +356719,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -356677,6 +356842,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -359855,6 +360023,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -359975,6 +360146,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -361012,6 +361186,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -361132,6 +361309,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -364295,6 +364475,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -364415,6 +364598,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -365452,6 +365638,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -365572,6 +365761,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -368679,6 +368871,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -368799,6 +368994,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -369836,6 +370034,9 @@
                                                         },
                                                         "oldWay": {
                                                           "type": "boolean"
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -369956,6 +370157,9 @@
                                                             "string",
                                                             "null"
                                                           ]
+                                                        },
+                                                        "taken": {
+                                                          "type": "boolean"
                                                         }
                                                       },
                                                       "required": [
@@ -372972,6 +373176,9 @@
                                                 },
                                                 "oldWay": {
                                                   "type": "boolean"
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -373092,6 +373299,9 @@
                                                     "string",
                                                     "null"
                                                   ]
+                                                },
+                                                "taken": {
+                                                  "type": "boolean"
                                                 }
                                               },
                                               "required": [
@@ -374129,6 +374339,9 @@
                                                     },
                                                     "oldWay": {
                                                       "type": "boolean"
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [
@@ -374249,6 +374462,9 @@
                                                         "string",
                                                         "null"
                                                       ]
+                                                    },
+                                                    "taken": {
+                                                      "type": "boolean"
                                                     }
                                                   },
                                                   "required": [

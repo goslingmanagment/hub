@@ -87,23 +87,23 @@ describe("whose a sale is", () => {
     const link = homeLinkOf({
       sale: { ...sale, home: { home: "shift", reason: "owner_split", pot: null, shares: [{ userId: 101, workRef: null, shiftId: null, mills: 18_001 }, { userId: 102, workRef: null, shiftId: 4, mills: 18_000 }] } },
       names, decision: { kind: "split", shares: [{ userId: 101, percent: 50 }, { userId: 102, percent: 50 }], pot: null, outcome: "half", source: "dispute", saidBy: null },
-      claims: [], ownerReads: true, silenceMs: 86_400_000,
+      claims: [], ownerReads: true,
     });
     expect(link).toMatchObject({ state: "done", kind: "shift", above: "решение владельца: Аня 50% и Боря 50%", dispute: null });
     expect(link.words).toBe("Аня $18.00, Боря $18.00: раздел владельца");
     const open = homeLinkOf({
       sale: { ...sale, home: { home: "shift", reason: "holder", pot: null, shares: [{ userId: 102, workRef: null, shiftId: 4, mills: 36_000 }] } },
       names, decision: null, claims: [{ state: "asked", sideUserId: 102, claimantUserId: 101, statement: "mine", createdAt: new Date("2026-11-12T10:00:00Z") }],
-      ownerReads: false, silenceMs: 86_400_000,
+      ownerReads: false,
     });
     expect(open).toMatchObject({ state: "open", link: null });
-    expect(open.dispute).toMatch(/^спор открыт: ждёт ответа Боря до 13 нояб\./u);
+    expect(open.dispute).toMatch(/^спор открыт: ждёт ответа Боря/u);
   });
 
   it("says a sale before the rule keeps the old way, and an uncomputed one is unknown", () => {
-    expect(homeLinkOf({ sale: { transactionId: 1, occurredAt: new Date("2026-10-05T10:00:00Z"), home: null }, names, decision: null, claims: [], ownerReads: true, silenceMs: 1 }))
+    expect(homeLinkOf({ sale: { transactionId: 1, occurredAt: new Date("2026-10-05T10:00:00Z"), home: null }, names, decision: null, claims: [], ownerReads: true }))
       .toMatchObject({ state: "none", kind: null });
-    expect(homeLinkOf({ sale: { ...sale, home: null }, names, decision: null, claims: [], ownerReads: true, silenceMs: 1 }))
+    expect(homeLinkOf({ sale: { ...sale, home: null }, names, decision: null, claims: [], ownerReads: true }))
       .toMatchObject({ state: "unknown" });
   });
 });

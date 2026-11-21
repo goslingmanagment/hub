@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { SHIFT_REPORT_QUICK_WORDS, type ShiftReportResponse } from "@agency_hub_core/contracts";
+import { SHIFT_REPORT_QUICK_WORDS, SHIFT_REPORT_TAKE_REASONS, type ShiftReportResponse } from "@agency_hub_core/contracts";
 import { Link } from "react-router";
 import { KernelApiError, hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { shiftPath } from "@/shared/links";
@@ -77,6 +77,7 @@ export const canTick = (row: Row, board: Board, preview: boolean) =>
   row.editable && !preview && (board.phase === "draft" || board.phase === "fixing");
 
 const QUICK = SHIFT_REPORT_QUICK_WORDS;
+const TAKE_REASONS = SHIFT_REPORT_TAKE_REASONS;
 
 export function ReportBoard({ report, host, transport, light }: {
   report: ShiftReportResponse & { board: Board };
@@ -321,8 +322,8 @@ export function ReportBoard({ report, host, transport, light }: {
     setMenu(null);
     if (row.transactionId === null) return;
     const asking = row.ask !== null && row.ask.state === "asked";
-    if (asking && choice.key === keyOfOwner(row.owner)) {
-      await run({ op: "unask", transactionId: row.transactionId }, "Вопрос отменён");
+    if ((asking || row.ask?.taken === true) && choice.key === keyOfOwner(row.owner)) {
+      await run({ op: "unask", transactionId: row.transactionId }, row.ask?.taken === true ? takenBack(row) : "Вопрос отменён");
       return;
     }
     // «Моя» on a sale the rule does not give the person takes one line of why, question or not (the server refuses
@@ -338,8 +339,8 @@ export function ReportBoard({ report, host, transport, light }: {
 
   const tick = async (row: Row) => {
     if (!canTick(row, board, preview) || row.transactionId === null) return;
-    if (row.ask !== null && row.ask.state === "asked") {
-      await run({ op: "unask", transactionId: row.transactionId }, "Вопрос отменён");
+    if (row.ask !== null && (row.ask.state === "asked" || row.ask.taken === true)) {
+      await run({ op: "unask", transactionId: row.transactionId }, row.ask.taken === true ? takenBack(row) : "Вопрос отменён");
       return;
     }
     if (ask?.key === row.key) {
@@ -362,7 +363,9 @@ export function ReportBoard({ report, host, transport, light }: {
     }
     const to = ask.choice.ask;
     const ok = await run({ op: "ask", transactionId: row.transactionId, statement: to.statement, shareWithUserId: to.shareWithUserId, note: text },
-      to.to === "owner" ? `Вопрос ушёл ${(row.decider ?? board.decider).kind === "team_lead" && (row.decider ?? board.decider).user ? (row.decider ?? board.decider).user!.forms.dat : "владельцу"}` : `Вопрос ушёл ${to.forms?.dat ?? ""}`);
+      to.to === "owner" ? `Вопрос ушёл ${(row.decider ?? board.decider).kind === "team_lead" && (row.decider ?? board.decider).user ? (row.decider ?? board.decider).user!.forms.dat : "владельцу"}`
+        // A colleague with the board is told, not asked: the sale is written at once (owner, 2026-11-21).
+        : `${to.statement === "share" ? "Записано пополам" : "Записано вам"}. ${to.forms?.nom ?? ""} узнает`);
     if (ok) setAsk(null);
   };
 
@@ -443,7 +446,9 @@ export function ReportBoard({ report, host, transport, light }: {
     const checked = look === "mix" ? "mixed" : look === "on";
     const label = `${row.siteWords} ${row.fan.name ?? ""}, ${clock(row.occurredAt)}`;
     if (!canTick(row, board, preview)) return <span className={`ck${cls}`} role="checkbox" aria-checked={checked} aria-disabled="true" aria-label={label}>{inner}</span>;
-    const tip = look === "mix" ? "Ждём ответа. Нажмите, чтобы отменить вопрос" : look === "on" ? "В вашем отчёте. Снять галочку" : "Не ваша. Поставить галочку, забрать в отчёт";
+    const tip = look === "mix" ? "Ждём ответа. Нажмите, чтобы отменить вопрос"
+      : row.ask?.taken === true ? `${row.ask.want.kind === "share" ? "Записано пополам" : "Записано вам"}. Снять галочку: вернуть ${row.ask.toUser?.forms.dat ?? "по правилу"}`
+        : look === "on" ? "В вашем отчёте. Снять галочку" : "Не ваша. Поставить галочку, забрать в отчёт";
     return (
       <button type="button" className={`ck${cls}`} role="checkbox" aria-checked={checked} aria-label={label} title={tip} onClick={() => void tick(row)}>
         {inner}
@@ -499,7 +504,9 @@ export function ReportBoard({ report, host, transport, light }: {
       const whom = to === null ? "" : to.to === "owner" ? decider?.acc ?? "владельца" : to.forms?.acc ?? "";
       // The server's own words when it sends the question straight to the decider («Олег сдаёт смену по-старому, решит владелец»).
       const hint = to === null ? "Спрашивать некого: продажа станет вашей сразу."
-        : to.words ?? (to.to === "owner" ? "Решит владелец. До его ответа продажа остаётся в общаке." : `${to.forms?.nom ?? ""} ответит в ChatGoose. Пока он не согласился, продажа его.`);
+        : to.words !== null ? upper(to.words)
+          : to.to === "owner" ? "Решит владелец. До его ответа продажа остаётся в общаке."
+            : `${to.statement === "share" ? "Запишется пополам" : "Запишется вам"} сразу. ${to.forms?.nom ?? ""} узнает и может не согласиться.`;
       parts.push(
         <div className="frm" key="ask">
           <label className="frm-l" htmlFor={`ask-${row.key}`}>Почему продажа ваша?</label>
@@ -507,8 +514,18 @@ export function ReportBoard({ report, host, transport, light }: {
             <input className="fld" id={`ask-${row.key}`} ref={focusField} value={ask.text} placeholder="Одной строкой" autoComplete="off" maxLength={300}
               onChange={(event) => setAsk({ ...ask, text: event.target.value })}
               onKeyDown={(event) => onField(event, () => void sendAsk(), () => setAsk(null))} />
-            <button type="button" className="btn btn--line btn--sm" disabled={ask.text.trim() === "" || write.isPending} onClick={() => void sendAsk()}>{to === null ? "Забрать" : `Спросить ${whom}`}</button>
+            <button type="button" className="btn btn--line btn--sm" disabled={ask.text.trim() === "" || write.isPending} onClick={() => void sendAsk()}>
+              {to === null ? "Забрать" : to.to === "colleague" ? to.statement === "share" ? "Записать пополам" : "Записать себе" : `Спросить ${whom}`}
+            </button>
             <button type="button" className="btn btn--quiet btn--sm" onClick={() => setAsk(null)}>Отмена</button>
+          </div>
+          <div className="qw">
+            {TAKE_REASONS.map((word) => (
+              <button type="button" key={word} onMouseDown={(event) => event.preventDefault()} onClick={() => {
+                const was = ask.text.replace(/[\s,]+$/, "");
+                setAsk({ ...ask, text: was ? `${was}, ${word}` : word });
+              }}>{word}</button>
+            ))}
           </div>
           <div className="frm-h">{hint}</div>
         </div>,
@@ -517,15 +534,33 @@ export function ReportBoard({ report, host, transport, light }: {
     const asked = row.ask;
     if (asked !== null && asked.state === "asked" && row.transactionId !== null) {
       const transactionId = row.transactionId;
+      const decider = (row.decider ?? board.decider).kind === "team_lead" && (row.decider ?? board.decider).user ? (row.decider ?? board.decider).user!.forms.acc : "владельца";
       parts.push(
         <div className="u" key="asked">
           <span className="t">{asked.oldWay
             // The colleague hands in the old way: the question went to the decider at once (the server's words).
             ? <>Вы спросили{said(asked.note)}. {upper(row.reasonWords)}.</>
+            // A colleague's sale someone else already wrote to themself or disputed: the decider's, the rule's until then.
+            : asked.to === "owner" && (row.rule.owner.kind === "user" || row.rule.owner.kind === "share")
+            ? <>Вы спросили {decider}{said(asked.note)}. До ответа продажа {row.rule.owner.words}.</>
             : asked.to === "owner"
             ? <>Вы спросили владельца{said(asked.note)}. До его ответа продажа в общаке.</>
             : <>Вы спросили {asked.toUser?.forms.acc ?? ""}{said(asked.note)}. Согласится, продажа станет {asked.want.kind === "share" ? "пополам" : "вашей"}.</>}</span>
           {own && <button type="button" className="lk" onClick={() => void run({ op: "unask", transactionId }, "Вопрос отменён")}>Отменить</button>}
+        </div>,
+      );
+    }
+    // Written to the person at once (a take): the colleague is told and may object; «Отменить» gives it back.
+    if (asked !== null && asked.taken === true && asked.state === "silence" && row.transactionId !== null) {
+      const transactionId = row.transactionId;
+      const who = asked.toUser?.forms;
+      parts.push(
+        <div className="u" key="taken">
+          <span className="t">
+            {asked.want.kind === "share" ? `Вы записали продажу пополам с ${who?.ins ?? "коллегой"}` : "Вы записали продажу себе"}{said(asked.note)}.
+            {" "}{who?.nom ?? "Коллега"} увидит это у себя и может не согласиться.
+          </span>
+          {own && canTick(row, board, preview) && <button type="button" className="lk" onClick={() => void run({ op: "unask", transactionId }, takenBack(row))}>Отменить</button>}
         </div>,
       );
     }
@@ -538,6 +573,27 @@ export function ReportBoard({ report, host, transport, light }: {
       );
     }
     const claim = row.incoming;
+    // A colleague wrote the person's sale to themself (a take): counted as written; «Понятно» or «Не согласен».
+    if (claim !== null && claim.taken === true && claim.state === "settled" && claim.answer === null) {
+      const claimId = claim.claimId;
+      const decider = (row.decider ?? board.decider).words;
+      parts.push(
+        <div className="u" key="incoming">
+          <span className="t">
+            <b>{claim.from.forms.nom} {claim.statement === "share" ? "записал эту продажу пополам с вами:" : "записал эту продажу себе:"}</b>
+            {claim.note ? <> «{claim.note}».</> : null} Если не согласны, скажите: спор решит {decider}.
+            {claim.canAnswer && (
+              <span className="u-a">
+                <button type="button" className="btn btn--line btn--xs" disabled={write.isPending}
+                  onClick={() => void run({ op: "claim", claimId, answer: "agree" }, "Записано")}>Понятно</button>
+                <button type="button" className="btn btn--line btn--xs" disabled={write.isPending}
+                  onClick={() => void run({ op: "claim", claimId, answer: "disagree" }, `Спор решит ${decider}`)}>Не согласен</button>
+              </span>
+            )}
+          </span>
+        </div>,
+      );
+    }
     if (claim !== null && claim.state !== "settled") {
       const claimId = claim.claimId;
       parts.push(claim.state === "asked" ? (
@@ -557,7 +613,7 @@ export function ReportBoard({ report, host, transport, light }: {
         </div>
       ) : (
         <div className="u" key="incoming">
-          <span className="t">Вы не согласны с {claim.from.forms.ins}. Спор решит {(row.decider ?? board.decider).words}: продажа ждёт, остальное учтено.</span>
+          <span className="t">Вы не согласны с {claim.from.forms.ins}. Спор решит {(row.decider ?? board.decider).words}, до его ответа продажа ваша.</span>
         </div>
       ));
     }
@@ -890,6 +946,8 @@ function lineOf(row: Row): Pick<Write & { op: "line" }, "body">["body"] {
 
 /** The person's own comment of a row, sent along with a new word so the word does not drop it. */
 const personNote = (row: Row) => (row.note?.by === "person" ? row.note.text : null);
+/** A take given back: «Продажа снова Олега». */
+const takenBack = (row: Row) => `Продажа снова ${row.ask?.toUser?.forms.gen ?? row.rule.owner.words}`;
 /** The one line of why after «Вы спросили …»: «: «…»», or nothing when the question carries none (a «пополам» from a handed-in version). */
 const said = (note: string | null | undefined) => (note && note.trim() !== "" ? `: «${note.trim()}»` : "");
 

@@ -15,12 +15,14 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
 
 // Заявки и договорённости (package G): who answers a claim, who decides a dispute, who sees what, and what the
-// settlement writes. The other side alone answers; a colleague, the claimant, a team lead, a chatter of another page
-// and the owner cannot answer for them; an agent «со слов» only with the message and the side as its sender. Only the
-// owner reads and decides a dispute; the decision gives each counting report a new version with what it gives, the odd
-// mill as the rule gives it. A chatter's matters carry only the sale's amount, and a chatter of another page sees
-// nothing of it. A claim withdrawn and made again asks the other side again, in the same row. The pass writes a claim
-// only as it read it: a decision or an answer committed meanwhile is never written over. Money and rights: required.
+// settlement writes. A colleague's sale said «моё» in a handed-in report is a take: counted for the one who said it at
+// once, the other side told (owner, 2026-11-21). The other side alone answers it; a colleague, the claimant, a team
+// lead, a chatter of another page and the owner cannot answer for them; an agent «со слов» only with the message and the
+// side as its sender. Only the owner reads and decides a dispute; the decision gives each counting report a new version
+// with what it gives, the odd mill as the rule gives it. A chatter's matters carry only the sale's amount, and a chatter
+// of another page sees nothing of it. A take withdrawn and said again is a take again, in the same row. The pass writes
+// a claim only as it read it: a decision or an answer committed meanwhile is never written over. Money and rights:
+// required.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -77,15 +79,15 @@ async function bellasSale(ref: string, net: number): Promise<number> {
   return id;
 }
 
-/** anna says «моё» of a sale by hand and hands her shift in: a claim against bella. */
+/** anna says «моё» of a sale by hand and hands her shift in: a take of bella's sale, counted for anna at once. */
 async function annaClaims(sale: number, why: string): Promise<number> {
   const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${sale}`, { statement: "mine", note: why });
   expect(said.statusCode, said.body).toBe(200);
   await handInAndConfirm(asSession, "anna", shiftA);
   await runSaleClaims(app);
-  const claim = await testDb!.pool.query("select id, state, side_user_id from sale_claims where transaction_id = $1", [sale]);
+  const claim = await testDb!.pool.query("select id, state, side_user_id, silence_at from sale_claims where transaction_id = $1", [sale]);
   expect(claim.rows).toHaveLength(1);
-  expect(claim.rows[0]).toMatchObject({ state: "asked" });
+  expect(claim.rows[0]).toMatchObject({ state: "agreed", silence_at: expect.any(Date) });
   expect(Number(claim.rows[0].side_user_id)).toBe(bella);
   return Number(claim.rows[0].id);
 }
@@ -170,12 +172,14 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     await testDb?.stop();
   });
 
-  it("asks the other side alone, and shows a chatter of another page nothing", async (context) => {
+  it("tells the other side alone, and shows a chatter of another page nothing", async (context) => {
     if (!testDb) return context.skip();
     const sale = await bellasSale("tx-claim-one", 16_001);
     const claimId = await annaClaims(sale, "договорились вчера в чате");
+    // Counted for anna at once: her report's next version, made by the system.
+    expect((await newestLine(shiftA, sale))!.line).toMatchObject({ amountMills: 16_001, disputed: false, settled: "agreed" });
 
-    // The other side's matter: the sale's amount, no money of anyone's pay; a chatter of another page sees none.
+    // The other side's notice: the sale's amount, no money of anyone's pay; a chatter of another page sees none.
     const mine = await asSession("bella", "GET", "/api/v1/matters?state=open");
     expect(mine.statusCode, mine.body).toBe(200);
     const matter = mine.json().matters.find((one: { kind: string }) => one.kind === "sale.claim");
@@ -190,7 +194,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     expect((await asSession("cora", "GET", `/api/v1/shift-reports/${shiftB}`)).statusCode).toBe(403);
     // anna sees where her claim stands, and cannot answer it.
     const own = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shiftA}`)).json());
-    expect(own.claims).toEqual([expect.objectContaining({ id: claimId, direction: "outgoing", canAnswer: false, state: "asked" })]);
+    expect(own.claims).toEqual([expect.objectContaining({ id: claimId, direction: "outgoing", canAnswer: false, state: "agreed" })]);
 
     // Nobody but the other side answers: the claimant, a colleague, another page, a team lead, the owner.
     for (const who of ["anna", "dina", "cora", "lead", "boss"]) {
@@ -212,7 +216,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     // Agents read the claims of a sale on their pages only.
     const read = await asKey("reader", "GET", `/api/v1/agent/sale-claims?transactionId=${sale}`);
     expect(read.statusCode, read.body).toBe(200);
-    expect(read.json().claims).toEqual([expect.objectContaining({ id: claimId, state: "asked" })]);
+    expect(read.json().claims).toEqual([expect.objectContaining({ id: claimId, state: "agreed" })]);
     expect((await asKey("elsewhere", "GET", `/api/v1/agent/sale-claims?transactionId=${sale}`)).json().claims).toEqual([]);
     expect((await asKey("none", "GET", `/api/v1/agent/sale-claims?transactionId=${sale}`)).statusCode).toBe(403);
   });
@@ -227,7 +231,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     expect(saleClaimAnswerResponseSchema.parse(answered.json()).claim).toMatchObject({ state: "owner", answer: "disagree", answerNote: null });
     // Answered once: not again.
     expect((await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" })).statusCode).toBe(409);
-    // ONE matter for the owner; the side's matter closed.
+    // ONE matter for the owner; the side's notice closed.
     const matters = await testDb.pool.query("select kind, state, owner_role, money from matters where kind in ('sale.claim', 'sale.dispute') order by kind");
     expect(matters.rows).toEqual([
       { kind: "sale.claim", state: "closed", owner_role: null, money: false },
@@ -240,7 +244,8 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
       expect((await asSession(who, "POST", "/api/v1/sale-disputes/decide", { transactionId: Number(sale), outcome: "first" })).statusCode).toBe(403);
     }
     const dispute = saleDisputeResponseSchema.parse((await asSession("boss", "GET", `/api/v1/sale-disputes/${sale}`)).json());
-    // anna's «моё» counts nothing while it is disputed: it claims the net (review R2b-2).
+    // anna's take, disputed: her report's next version counts it nothing while it waits, claiming the net (review R2b-2).
+    expect((await newestLine(shiftA, Number(sale)))).toMatchObject({ version: 3, made_for: { kind: "claim", outcome: "disputed" } });
     expect(dispute.parties.map((one) => [one.userId, one.role, one.countedMills, one.claimedMills])).toEqual([[anna, "first", 0, 16_001], [bella, "second", null, null]]);
     // Each side whole, the two in halves, as the rule has it, «никому» — each by the people it names (review round 2, N1).
     expect(dispute.outcomes.map((one) => one.outcome)).toEqual(["give", "give", "split", "rule", "nobody"]);
@@ -252,10 +257,11 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
 
     const decided = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: Number(sale), outcome: "half", note: "вели вдвоём" });
     expect(decided.statusCode, decided.body).toBe(200);
-    expect(decided.json().versions).toEqual([{ shiftId: shiftA, version: 2 }]);
+    // anna's report: v1 handed in, v2 the take, v3 the dispute, v4 the decision.
+    expect(decided.json().versions).toEqual([{ shiftId: shiftA, version: 4 }]);
     // anna's report: a new version made by the system, her half, no longer disputed, the reason kept.
     const line = await newestLine(shiftA, Number(sale));
-    expect(line).toMatchObject({ version: 2, door: "workboard", made_for: { kind: "claim", outcome: "half" } });
+    expect(line).toMatchObject({ version: 4, door: "workboard", made_for: { kind: "claim", outcome: "half" } });
     expect(line!.line).toMatchObject({ amountMills: anna === low ? 8_001 : 8_000, disputed: false, settled: "owner" });
     // The page's sum is its lines rounded to the cent: $8.00 either way.
     expect(Number(line!.total_mills)).toBe(8_000);
@@ -268,16 +274,18 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     expect(feed.statusCode, feed.body).toBe(200);
   });
 
-  it("settles a claim when the other side agrees: the claimant's line stops being disputed", async (context) => {
+  it("closes the notice on «Понятно»: the take stands as written, nothing moves", async (context) => {
     if (!testDb) return context.skip();
     const sale = await bellasSale("tx-claim-two", 20_000);
     const claimId = await annaClaims(sale, "мой постоянный");
+    const before = await newestLine(shiftA, sale);
+    expect(before!.made_for).toMatchObject({ kind: "claim", outcome: "taken" });
+    expect(before!.line).toMatchObject({ amountMills: 20_000, disputed: false, settled: "agreed" });
+    expect((await testDb.pool.query("select state from matters where reason_key = $1", [`sale.claim:${claimId}`])).rows).toEqual([{ state: "open" }]);
     const agreed = await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" });
     expect(agreed.statusCode, agreed.body).toBe(200);
     expect(agreed.json().claim).toMatchObject({ state: "agreed", answer: "agree" });
-    const line = await newestLine(shiftA, sale);
-    expect(line!.made_for).toMatchObject({ kind: "claim", outcome: "agreed" });
-    expect(line!.line).toMatchObject({ amountMills: 20_000, disputed: false, settled: "agreed" });
+    expect(await newestLine(shiftA, sale)).toMatchObject({ version: before!.version, line: { amountMills: 20_000, settled: "agreed" } });
     expect((await testDb.pool.query("select state from matters where reason_key = $1", [`sale.claim:${claimId}`])).rows).toEqual([{ state: "closed" }]);
   });
 
@@ -316,7 +324,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     }
   });
 
-  it("asks the other side again when a claim that was withdrawn is made again", async (context) => {
+  it("takes the sale again when a take that was withdrawn is said again", async (context) => {
     if (!testDb) return context.skip();
     const sale = await bellasSale("tx-claim-again", 9_000);
     const claimId = await annaClaims(sale, "мой фан");
@@ -342,20 +350,21 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     expect(await rows()).toEqual([expect.objectContaining({ id: claimId, state: "withdrawn" })]);
     expect(await matter(`sale.dispute:${sale}`)).toBe("closed");
     const before = (await rows())[0]!;
-    // Days pass; she says «моё» again and hands in. The same row is the claim again, asked of bella as a new one is:
-    // the answer and the escalation of its first life are gone, and the day she has to answer counts from now.
+    // Days pass; she says «моё» again and hands in. The same row is the take again, counted at once as a new one is:
+    // the answer and the escalation of its first life are gone, and bella's notice opens again from now.
     await testDb.pool.query("update sale_claims set created_at = created_at - interval '3 days' where id = $1", [claimId]);
     await say({ statement: "mine", note: "всё-таки мой" });
     expect(await rows()).toEqual([expect.objectContaining({
-      id: claimId, state: "asked", claimant_note: "всё-таки мой", answer: null, answer_note: null, answered_at: null,
-      escalated_at: null, escalated_why: null, closed_at: null,
+      id: claimId, state: "agreed", claimant_note: "всё-таки мой", answer: null, answer_note: null, answered_at: null,
+      escalated_at: null, escalated_why: null,
     })]);
     expect(Number((await rows())[0]!.claimant_version)).toBeGreaterThan(Number(before.claimant_version));
     expect(await matter(`sale.claim:${claimId}`)).toBe("open");
     expect(await matter(`sale.dispute:${sale}`)).toBe("closed");
     const report = shiftReportResponseSchema.parse((await asSession("bella", "GET", `/api/v1/shift-reports/${shiftB}`)).json());
-    expect(report.claims.find((claim) => claim.id === claimId)).toMatchObject({ direction: "incoming", canAnswer: true, state: "asked", note: "всё-таки мой" });
-    // She can answer it as any claim.
+    expect(report.claims.find((claim) => claim.id === claimId)).toMatchObject({ direction: "incoming", canAnswer: true, state: "agreed", note: "всё-таки мой" });
+    // Counted for anna at once; bella can answer it as any take.
+    expect((await newestLine(shiftA, sale))!.line).toMatchObject({ amountMills: 9_000, disputed: false, settled: "agreed" });
     const agreed = await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" });
     expect(agreed.statusCode, agreed.body).toBe(200);
     expect((await newestLine(shiftA, sale))!.line).toMatchObject({ amountMills: 9_000, disputed: false, settled: "agreed" });
@@ -363,9 +372,9 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
 
   it("writes a claim only as the pass read it: a decision or an answer committed meanwhile stays", async (context) => {
     if (!testDb) return context.skip();
-    // One claim that stands and was asked more than a day ago: the pass would take it to the owner for silence.
+    // One claim that stands and is still asked (as one written before takes settled at once): the pass would settle it.
     const silent = await annaClaims(await bellasSale("tx-claim-silent", 7_000), "мой");
-    await testDb.pool.query("update sale_claims set created_at = created_at - interval '25 hours' where id = $1", [silent]);
+    await testDb.pool.query("update sale_claims set state = 'asked', silence_at = null, closed_at = null where id = $1", [silent]);
     // And one whose report does not count its sale: the pass would withdraw it.
     const handin = Number((await testDb.pool.query("select id from shift_handins where shift_id = $1", [shiftA])).rows[0].id);
     const gone = (await insertSaleClaim(app.db, {
@@ -387,7 +396,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
       const tally = await pass;
       // What was committed stands, and the pass counts nothing it did not change.
       expect(await states()).toEqual([{ id: silent, state: "agreed" }, { id: gone, state: "decided" }]);
-      expect(tally).toMatchObject({ withdrawn: 0, escalated: 0 });
+      expect(tally).toMatchObject({ withdrawn: 0, escalated: 0, settled: 0 });
     } finally {
       await meanwhile.query("rollback").catch(() => undefined);
       meanwhile.release();
@@ -438,7 +447,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     expect(await counted(shift)).toBe(30_000);
   });
 
-  it("signs a colleague's agreement given while the report waits in «Подтвердите»: «Было 0, стало 10», then «Подтверждаю» goes through", async (context) => {
+  it("signs a colleague's «Не согласен» given while the report waits in «Подтвердите»: «Было 10, стало 0», then «Подтверждаю» goes through", async (context) => {
     if (!testDb) return context.skip();
     const shift = await insertShift(anna, "mia-1", "2026-11-13T15:00:00Z", "2026-11-13T23:00:00Z");
     const sale = await bellasSale("tx-sign-agreed", 10_000);
@@ -446,18 +455,18 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     expect(said.statusCode, said.body).toBe(200);
     await handInAndConfirm(asSession, "anna", shift);
     await runSaleClaims(app);
-    const claim = await testDb.pool.query("select id from sale_claims where transaction_id = $1 and state = 'asked'", [sale]);
+    const claim = await testDb.pool.query("select id from sale_claims where transaction_id = $1 and state = 'agreed'", [sale]);
     expect(claim.rows).toHaveLength(1);
-    // «Исправить», «Сдать смену»: the taken sale counts 0 until bella answers.
+    // «Исправить», «Сдать смену»: the taken sale counts for anna at once.
     expect((await rawSession("anna", "POST", `/api/v1/shift-reports/${shift}/reopen`)).statusCode).toBe(200);
     await handIn(shift);
-    expect((await board(shift)).totals).toMatchObject({ nowMills: 0 });
-    const agreed = await rawSession("bella", "POST", `/api/v1/sale-claims/${Number(claim.rows[0].id)}/answer`, { answer: "agree" });
-    expect(agreed.statusCode, agreed.body).toBe(200);
+    expect((await board(shift)).totals).toMatchObject({ nowMills: 10_000 });
+    const disagreed = await rawSession("bella", "POST", `/api/v1/sale-claims/${Number(claim.rows[0].id)}/answer`, { answer: "disagree" });
+    expect(disagreed.statusCode, disagreed.body).toBe(200);
     const { shown } = await confirmAsShown(shift);
-    expect(shown.totals).toMatchObject({ nowMills: 10_000, wasMills: 0, count: 1 });
-    expect(await counted(shift)).toBe(10_000);
-    expect((await newestLine(shift, sale))!.line).toMatchObject({ amountMills: 10_000, disputed: false, settled: "agreed" });
+    expect(shown.totals).toMatchObject({ nowMills: 0, wasMills: 10_000 });
+    expect(await counted(shift)).toBe(0);
+    expect((await newestLine(shift, sale))!.line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 10_000 });
   });
 
   it("signs a sale's comment written in «Подтвердите»: the board shows it and the counted version keeps it", async (context) => {

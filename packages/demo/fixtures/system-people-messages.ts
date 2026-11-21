@@ -127,7 +127,7 @@ const EXAMPLE: Readonly<Partial<Record<PeopleMessageKind, { text: string; about:
 };
 
 const MISSING: Readonly<Partial<Record<PeopleMessageKind, string>>> = {
-  "claim.confirm": "Заявок «моё / делим» в системе пока нет.",
+  "claim.confirm": "Коллеги ещё не записывали себе чужих продаж.",
   "payout.text": "Пример появится после первого нажатия: текст даёт расчёт выплаты ledger, сейчас он в «Выплате» человека под «Скопировать».",
   "newcomer.invite": "Пример появится после первого нажатия: сейчас текст в окне приглашения под «Скопировать сообщение».",
 };

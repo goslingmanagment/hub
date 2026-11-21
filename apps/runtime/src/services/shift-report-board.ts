@@ -25,6 +25,7 @@ import {
   insertSaleClaim,
   listCandidatesAwaitingCheck,
   listCheckingHandins,
+  listCurrentReportsOfSales,
   listConfirmHandins,
   listHandinCandidates,
   listHandinColleagues,
@@ -70,7 +71,9 @@ import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
 import { AppError, BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { reportSums } from "./sale-claim-rules.ts";
-import { runSaleClaims } from "./sale-claims.ts";
+import {
+  afterTakeSettled, paidDaysOfSale, personSettleBy, runSaleClaims, settleTakeWithin, wordTakenBackWithin, type MadeVersion,
+} from "./sale-claims.ts";
 import { SALE_RULE } from "./sale-rule.ts";
 import { matchSightings, moveWhenDue, runHubChecks, settleGoneShifts, startHubCheck, syncCheckMatters, syncLateMarks } from "./shift-handin-check.ts";
 import { boardOn, oldWayGives, otherShiftsOf, ownShiftsOf, phaseOf, signableOf } from "./shift-report-board-view.ts";
@@ -98,7 +101,7 @@ import {
   type Subject,
 } from "./shift-report-draft.ts";
 import {
-  cardSuperseded, checkLetsConfirm, holdsSale, lineWithProposal, lineWithWord, mayAct, PhaseConflictError, proposalDelta, sameAsSigned, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT,
+  cardSuperseded, checkLetsConfirm, holdsSale, isTake, lineWithProposal, lineWithWord, mayAct, PhaseConflictError, proposalDelta, sameAsSigned, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT,
   type BoardAction,
 } from "./shift-report-phases.ts";
 import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
@@ -576,14 +579,21 @@ export async function resendShiftReport(
 // ── Questions from the draft ─────────────────────────────────────────────────
 
 /**
- * «Почему продажа ваша?» → «Спросить Олега» / «Спросить владельца»: the person's word («моя», «пополам с») is written
- * on the line — it then counts in nobody's sum, disputed — and the claim is born now, from the draft (origin `draft`):
- * the colleague the rule gives it to answers on their board or in «Ждут вас» (whether or not they hand shifts in in
- * Hub); a pot's sale, or one with nobody to ask, is the decider's at once.
+ * «Почему продажа ваша?» → «Записать себе» / «Спросить владельца»: the person's word («моя», «пополам с») is written on
+ * the line and the claim is born now, from the draft (origin `draft`). A colleague the rule gives it to who hands
+ * shifts in by the board is told, not asked (owner, 2026-11-21): the sale is written to the person in this same turn
+ * (`settleTakeWithin`: counted for them, every handed-in report of the two that holds it following by a version), and
+ * the colleague's notice opens (sale-claims.ts). A pot's sale, one with nobody to ask, a colleague who hands shifts in
+ * the old way, or a sale someone else already took, disputed or had decided is the decider's at once: it waits,
+ * counting nothing.
  */
 export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, input: { shiftId: number; body: ShiftReportAskBody }, now: Date = new Date()): Promise<ShiftReportResponse> {
   const { subject, catalog } = await boardFor(app, actor, input.shiftId, "ask");
   const note = input.body.note.trim();
+  // A take settles in the turn below: the ledger is asked of the days of the reports holding the sale before it.
+  const paid = await paidDaysOfSale(app, input.body.transactionId).catch(() => new Map<number, boolean | null>());
+  const by = personSettleBy(actor);
+  let made: MadeVersion[] = [];
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
@@ -594,7 +604,7 @@ export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, in
     if (one === undefined || one.group !== "near") throw new BadRequestError("Only a sale the rule gives someone else is asked about", { reason: "not_asked" });
     // The other side: the sale's holder by the rule; of a sale that waits for its PPV's sender, that colleague.
     const side = one.toUserId ?? (one.sale.home.kind === "waiting" ? facts.senders.get(one.sale.transactionId) ?? null : null);
-    // A colleague without the board (they hand shifts in the old way) is not asked: the decider decides, no silence runs.
+    // A colleague without the board (they hand shifts in the old way) is no take: the decider decides.
     const sidePerson = side === null ? null : await findHandinPersonOfUser(db, side);
     const sideOnBoard = sidePerson?.submitsShiftSince != null && sidePerson.state !== "left";
     if (input.body.statement === "share" && (side === null || input.body.shareWithUserId !== side)) {
@@ -608,40 +618,56 @@ export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, in
     const askable = side !== null && one.sale.home.kind !== "pot" && sideOnBoard;
     const fields = {
       pageId, kind: "claim" as const, claimantVersion: null, statement: input.body.statement, shareWithUserId: input.body.statement === "share" ? side : null,
-      claimantNote: note, claimedAt: now, sideShiftId: null,
+      // The colleague's shift that holds the sale by the rule: their notice opens their board at the row.
+      claimantNote: note, claimedAt: now, sideShiftId: side === null ? null : one.sale.home.shares.find((share) => share.userId === side)?.shiftId ?? null,
       state: askable ? "asked" as const : "owner" as const, escalatedAt: askable ? null : now, escalatedWhy: askable ? null : "no_side" as const,
     };
     const existing = (await listSaleClaims(db, { transactionIds: [input.body.transactionId] }))
       .find((claim) => claim.claimantHandinId === handin.id && (claim.sideUserId ?? 0) === (side ?? 0));
-    // Settled — agreed (by an answer or a day of silence) or decided: its terms made the reports' versions; a new word
-    // here would change one side's share and not the other's. The sale's terms change only by the decider now.
+    // Settled — a take, agreed by both, or decided: its terms made the reports' versions; a new word here would change
+    // one side's share and not the other's. A take is taken back first («Отменить») and written again; else the sale's
+    // terms change only by the decider now.
     const changes = existing !== undefined && (existing.statement !== fields.statement || (existing.shareWithUserId ?? null) !== fields.shareWithUserId);
     if (existing !== undefined && changes && (existing.state === "agreed" || existing.state === "decided")) {
       throw new ConflictError("This sale is already settled: only the decider changes it now", { reason: "claim_settled" });
     }
+    let claimId: number | null = existing?.id ?? null;
     if (existing !== undefined) {
       if (existing.state === "withdrawn") await reopenSaleClaim(db, existing.id, fields, now);
       else await updateSaleClaim(db, existing.id, { claimantNote: note, statement: fields.statement, shareWithUserId: fields.shareWithUserId }, now);
     } else {
-      await insertSaleClaim(db, {
+      claimId = (await insertSaleClaim(db, {
         ...fields, transactionId: input.body.transactionId, claimantUserId: subject.shift.userId, claimantHandinId: handin.id,
         sideUserId: side, origin: "draft",
-      }, now);
+      }, now))?.id ?? null;
     }
+    // Written to the person at once: the take settles in this turn (a word taken back before and said again is a new
+    // take, `reopenSaleClaim`).
+    if (askable && claimId !== null) made = (await settleTakeWithin(db, { claimId, by, paid, now }))?.made ?? [];
   });
+  await afterTakeSettled(app, made, input.body.transactionId, now).catch((error: unknown) => warn(app, error, "the paid days and the home after a take"));
   await runSaleClaims(app, now).catch((error: unknown) => warn(app, error, "the claims pass after a question"));
   return readSubject(app, actor, subject, now);
 }
 
-/** «Отменить»: the question is withdrawn and the line is back to the rule's word. */
+/**
+ * «Отменить» (and the tick taken off a taken row): the word is withdrawn — a question to the decider, or a take while it
+ * is neither disputed nor decided — and the line is back to the rule's word; every handed-in report the take settled, or
+ * that holds the word waiting, follows by a version (`wordTakenBackWithin`). The colleague's notice closes with it.
+ */
 export async function withdrawShiftReportAsk(app: BoardApp, actor: HandinPersonActor, input: { shiftId: number; transactionId: number }, now: Date = new Date()): Promise<ShiftReportResponse> {
   const { subject } = await boardFor(app, actor, input.shiftId, "ask");
+  // Asked of the ledger before the turn, only when a handed-in report holds the sale (a version may follow).
+  const paid = (await listCurrentReportsOfSales(app.db, [input.transactionId])).length === 0 ? new Map<number, boolean | null>()
+    : await paidDaysOfSale(app, input.transactionId).catch(() => new Map<number, boolean | null>());
+  const by = personSettleBy(actor);
+  let made: MadeVersion[] = [];
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
     const handin = await handinFor(db, subject);
-    const mine = (await listSaleClaims(db, { transactionIds: [input.transactionId], states: ["asked", "owner"] }))
-      .filter((claim) => claim.claimantHandinId === handin.id);
+    const mine = (await listSaleClaims(db, { transactionIds: [input.transactionId], states: ["asked", "owner", "agreed"] }))
+      .filter((claim) => claim.claimantHandinId === handin.id && (claim.state !== "agreed" || isTake(claim)));
     if (mine.length === 0) throw new NotFoundError("No question open on this sale");
     // «Не согласен» with Gengar's card is the decider's now: «Отменить» never gives the sale back without them — «Вернуть
     // правку» takes the disagreement back (review round 2, «не проверено»).
@@ -653,7 +679,9 @@ export async function withdrawShiftReportAsk(app: BoardApp, actor: HandinPersonA
       handinId: handin.id, transactionId: input.transactionId, statement: null, shareWithUserId: null, note: mark?.note ?? null,
       byUserId: actor.userId, byAgentKeyId: null, at: now,
     });
+    made = await wordTakenBackWithin(db, { claimId: open[0]!.id, transactionId: input.transactionId, by, paid, now });
   });
+  await afterTakeSettled(app, made, input.transactionId, now).catch((error: unknown) => warn(app, error, "the paid days and the home after «Отменить»"));
   await runSaleClaims(app, now).catch((error: unknown) => warn(app, error, "the claims pass after «Отменить»"));
   return readSubject(app, actor, subject, now);
 }

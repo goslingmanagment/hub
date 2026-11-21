@@ -1011,16 +1011,18 @@ export const shiftHandinRouteSchemas = {
   },
   shiftReportAsk: {
     auth: { kind: "any" }, tags: ["client"],
-    summary: "«Спросить»: a question from the draft about a sale the rule gives a colleague or the pot",
-    description: `${ANY} Own draft. The colleague answers on their board or in «Ждут вас»; the pot is the decider's. `
-      + "While it is open the sale counts in nobody's sum.",
+    summary: "«Записать себе» / «Спросить владельца»: a word from the draft about a sale the rule gives a colleague or the pot",
+    description: `${ANY} Own draft. A colleague who hands shifts in by the board is told, not asked: the sale counts for `
+      + "the person at once (all or the half), and the colleague may object («Не согласен»). The pot's, a colleague handing "
+      + "in the old way, or a sale someone else already took, disputed or had decided is the decider's: it counts in "
+      + "nobody's sum until decided.",
     params: shiftReportParamsSchema,
     body: shiftReportAskBodySchema,
     response: { 200: shiftReportResponseSchema, ...personErrors, 409: shiftReportPhaseConflictSchema },
   },
   shiftReportAskWithdraw: {
     auth: { kind: "any" }, tags: ["client"],
-    summary: "«Отменить» a question asked from the draft",
+    summary: "«Отменить» a question or a take: the sale back to what the rule gives",
     description: ANY,
     params: shiftReportAskParamsSchema,
     response: { 200: shiftReportResponseSchema, ...personErrors, 409: shiftReportPhaseConflictSchema },

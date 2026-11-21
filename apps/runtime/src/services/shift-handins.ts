@@ -65,7 +65,7 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { ledgerGet } from "./ledger-payouts.ts";
 import { parseLedgerReportDays } from "./ledger-reports.ts";
 import { pagesWithLines, reportSums } from "./sale-claim-rules.ts";
-import { claimsOfReport, runSaleClaims, settleDueSilences } from "./sale-claims.ts";
+import { claimsOfReport, runSaleClaims, settleAskedTakes } from "./sale-claims.ts";
 import { checkReportNow, moveWhenDue, syncCheckMatters } from "./shift-handin-check.ts";
 import { boardOn, phaseOf, readBoard } from "./shift-report-board-view.ts";
 import { holdsSale, PhaseConflictError } from "./shift-report-phases.ts";
@@ -264,12 +264,15 @@ export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: st
   if (madeFor.kind === "decision") return madeFor.outcome === "cancelled" ? "решение о продаже отменено" : "решение о продаже, записанное со слов";
   switch (madeFor.outcome) {
     case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;
+    case "taken": return `записал себе${actorName ? ` ${actorName}` : " коллега"}`;
     case "first":
     case "second": return "решение владельца по спору о продаже";
     case "half": return "решение владельца: пополам";
     case "nobody": return "решение владельца: никому";
     case "pot": return "решение владельца: в общак";
     case "rule": return "решение: по правилу";
+    case "withdrawn": return "запись продажи отменена: по правилу";
+    case "disputed": return "спор о продаже: до решения по правилу";
     default: return null;
   }
 }
@@ -367,7 +370,7 @@ async function dueNow(app: HandinApp, input: { handin: HandinRow; subject: Subje
     await checkReportNow(app, { handinId: handin.id, shiftId: subject.shift.id, catalog }, now).catch(logged("Hub's check"));
     await moveWhenDue(app.db, { shiftId: subject.shift.id, catalog }, now).catch(logged("the move to «Подтвердите»"));
   }
-  await settleDueSilences(app, { handinId: handin.id, userIds: subject.userIds }, now).catch(logged("a day of silence"));
+  await settleAskedTakes(app, { handinId: handin.id, userIds: subject.userIds }, now).catch(logged("a take still asked"));
 }
 
 export async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject, now: Date, options: { withPost?: boolean } = {}): Promise<ShiftReportResponse> {
@@ -375,7 +378,7 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
   const catalog = await pageCatalog(db);
   const access = accessOf(actor, subject, catalog);
   // What is due by now happens before the board is drawn (the pass is only the backstop): Hub's check of a report in
-  // «Проверка», its move to «Подтвердите» when Gengar's 10 minutes are up, a day of silence on its questions.
+  // «Проверка», its move to «Подтвердите» when Gengar's 10 minutes are up, a take on its sales still asked.
   const found = await findHandinByShift(db, subject.shift.id);
   if (found !== null) await dueNow(app, { handin: found, subject, catalog }, now);
   const handin = found === null ? null : await findHandinByShift(db, subject.shift.id);

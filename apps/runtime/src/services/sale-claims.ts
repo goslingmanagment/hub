@@ -68,7 +68,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { moscowWeekStart, refreshSaleHomes } from "./sale-homes.ts";
-import { CLAIM_SILENCE_MS, silenceSettles } from "./shift-report-phases.ts";
+import { TAKE_NOTICE_MS, isTake, takeNoticeOpen, takeSettles } from "./shift-report-phases.ts";
 import {
   claimStands,
   claimTitle,
@@ -98,22 +98,30 @@ import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, pageCatal
  * say about a sale reaches the other side and, when they do not agree, the
  * owner. One service for every door.
  *
+ * A take (owner, 2026-11-21): a person's «Моя» / «Пополам с …» on a sale the
+ * rule gives a colleague who hands shifts in by the board counts AT ONCE — the
+ * claim is settled for them as an agreement is (`silence_at`: by their word
+ * alone), every handed-in report of the two that holds the sale gets its new
+ * version, and the colleague is TOLD, not asked: a notice «Макс записал себе:
+ * PPV, фан, $52.00, 19 нояб.» (`sale.claim`) that opens their board at that
+ * line, open three days. «Понятно» closes it; «Не согласен» (no deadline) takes
+ * the sale to the decider and back to the rule's holder until the decision; the
+ * taker's «Отменить» gives it back. One take per sale: a word on a sale someone
+ * else already took, disputed or had decided is the decider's.
+ *
  * The pass (`runSaleClaims`, after each shift-rows pass and after a hand-in):
  *  - reads the newest version of every report handed in in the last 14 days
- *    and the claims they make (sale-claim-rules.ts `deriveClaims`): a new one is
- *    asked of the other side — a matter «Катя считает своей: PPV, фан, $36.00,
- *    11 нояб.» that opens their shift report at that line — or, nobody to ask
- *    (or the other side not handing shifts in in Hub), goes to the owner at
- *    once; a sale counted for more than its net is the owner's at once;
- *  - a claim whose report no longer counts the sale is withdrawn (and asked
- *    again, in the same row, when the report makes it again); one asked 24
- *    hours ago and not answered goes to the owner;
+ *    and the claims they make (sale-claim-rules.ts `deriveClaims`): a new one
+ *    between two chatters is a take, settled at once like the board's; nobody
+ *    to ask (or the other side not handing shifts in in Hub), the pot's, a sale
+ *    counted for more than its net — the owner's at once;
+ *  - a claim whose report no longer counts the sale is withdrawn (and made
+ *    again, in the same row, when the report makes it again);
  *  - the owner's matters: ONE per disputed sale, one per report with «мимо
  *    площадки» waiting, one line a week of the sales nobody claimed on the
  *    days all of whose shifts are handed in, one of the decisions carried over
- *    from the ledger that wait to be tied to a sale.
- * An answer «Согласен» settles a claim; «Не согласен» takes it to the owner;
- * the owner's answer — first, second, halves, nobody — is a decision the rule
+ *    from the ledger that wait to be tied to a sale; the side's notices.
+ * The owner's answer — first, second, halves, nobody — is a decision the rule
  * takes before itself (sale-rule.ts). Every handed-in report that counts the
  * sale then gets a new version made by the system with what the settlement
  * gives (the ledger's feed serves it; the ledger supersedes), and the sale's
@@ -155,6 +163,8 @@ export interface SaleClaimsTally {
   opened: number;
   withdrawn: number;
   escalated: number;
+  /** Takes settled for the one who said it (at once, a colleague told). */
+  settled: number;
   matters: number;
 }
 
@@ -171,13 +181,13 @@ async function sideShiftOf(db: Database, claim: DerivedClaim, sale: HandinSaleRo
 
 export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now: Date = new Date()): Promise<SaleClaimsTally> {
   const { db } = app;
-  const tally: SaleClaimsTally = { claims: 0, opened: 0, withdrawn: 0, escalated: 0, matters: 0 };
+  const tally: SaleClaimsTally = { claims: 0, opened: 0, withdrawn: 0, escalated: 0, settled: 0, matters: 0 };
   const since = moscowDay(now.getTime() - LOOKBACK_DAYS * DAY_MS);
   const recent = await listCurrentReportsSince(db, { since });
   const derived = deriveClaims(recent.map(viewOf));
   tally.claims = derived.length;
 
-  // New claims: asked of the other side, or the owner's at once.
+  // New claims: a take of a colleague's sale (written `asked`, settled at once below), or the owner's at once.
   const derivedSales = [...new Set(derived.map((one) => one.transactionId))];
   const known = new Map((await listSaleClaims(db, { transactionIds: derivedSales })).map((claim) => [claimKey(claim.claimantHandinId, claim.transactionId, claim.sideUserId), claim]));
   const sales = new Map((await listHandinSalesByIds(db, derivedSales)).map((sale) => [sale.transactionId, sale]));
@@ -192,11 +202,10 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     }
     const sale = sales.get(claim.transactionId);
     const side = claim.sideUserId === null ? null : people.get(claim.sideUserId) ?? null;
-    // The side answers on their own board or in «Ждут вас» only when they hand shifts in by the board too: a person who
-    // posts the old way is paid by a post Gengar writes from decisions, never agreements (arena round 3) — so anyone
-    // else, and nobody to ask, is the decider's at once (`no_side`), and no day of silence runs.
-    // A sale of the pot is the owner's alone («по общаку решаю я»): never asked of a colleague, so no «Согласен» and no
-    // day of silence settles it between two chatters.
+    // A take settles between two chatters only when the side hands shifts in by the board too: a person who posts the old
+    // way is paid by a post Gengar writes from decisions, never agreements (arena round 3) — so anyone else, and nobody
+    // to ask, is the decider's at once (`no_side`).
+    // A sale of the pot is the owner's alone («по общаку решаю я»): never taken from a colleague.
     // The home as stored, else as the claimant's version has it (the hourly job may not have stored one yet): a pot's
     // sale, or one whose home nobody knows, is the decider's — never asked of a colleague.
     const home = sale?.home?.home ?? claim.home;
@@ -231,9 +240,9 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     if (inserted !== null) tally.opened += 1;
   }
 
-  // The open claims: withdrawn when the report no longer counts the sale, the owner's after a day of silence. The pass
-  // is outside the settlements' turn: each write goes through only while the claim is in the state read here, so an
-  // answer or a decision committed since is never written over — and only what was really changed is counted.
+  // The open claims: withdrawn when the report no longer counts the sale, a take settled at once. The pass is outside
+  // the settlements' turn: each write goes through only while the claim is in the state read here, so an answer or a
+  // decision committed since is never written over — and only what was really changed is counted.
   const open = await listSaleClaims(db, { states: [...OPEN_STATES], kinds: ["claim", "double"] });
   const openSales = [...new Set(open.flatMap((claim) => (claim.transactionId === null ? [] : [claim.transactionId])))];
   const holding = (await listCurrentReportsOfSales(db, openSales)).map(viewOf);
@@ -269,10 +278,12 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
       if (await updateSaleClaim(db, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "no_side" }, now, { ifState: "asked" })) tally.escalated += 1;
       continue;
     }
-    // A day of silence settles it for the one who asked (R-board §4): the sale stays with them; the side may still
-    // dispute. A question with nobody to ask is the decider's and never settles by silence.
-    if (silenceSettles(claim, now)) {
-      if (await settleBySilence(app, claim, now)) tally.escalated += 1;
+    // A take settles at once for the one who said it (owner, 2026-11-21): the sale counts for them; the side is told and
+    // may still dispute. A question with nobody to ask is the decider's and never settles so.
+    if (takeSettles(claim)) {
+      const outcome = await settleTake(app, claim, now);
+      if (outcome === "settled") tally.settled += 1;
+      else if (outcome === "decider") tally.escalated += 1;
     }
   }
 
@@ -280,7 +291,7 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
   tally.matters += await syncOffPlatformMatters(app, now);
   tally.matters += await syncNobodyWeek(app, now);
   tally.matters += await syncUnlinkedDecisions(app, now);
-  if (tally.opened + tally.withdrawn + tally.escalated > 0) app.logger.info(tally, "sale claims");
+  if (tally.opened + tally.withdrawn + tally.escalated + tally.settled > 0) app.logger.info(tally, "sale claims");
   return tally;
 }
 
@@ -302,10 +313,16 @@ const sideLink = (claim: Pick<SaleClaimRow, "sideShiftId" | "transactionId">) =>
 
 const disputeKey = (claim: Pick<SaleClaimRow, "transactionId" | "id">) => (claim.transactionId === null ? `${SALE_DISPUTE_KIND}:q${claim.id}` : `${SALE_DISPUTE_KIND}:${claim.transactionId}`);
 
-/** The side's matters while asked, the owner's ONE per sale while any claim of it is his; everything else closes. */
+/**
+ * The side's notice of each take while it is open (`takeNoticeOpen`: unanswered, three days), the owner's ONE per sale
+ * while any claim of it is his; everything else closes.
+ */
 async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Date): Promise<number> {
   const { db } = app;
-  const claims = await listSaleClaims(db, { states: ["asked", "owner"] });
+  const claims = [
+    ...await listSaleClaims(db, { states: ["owner"] }),
+    ...(await listSaleClaims(db, { states: ["agreed"], kinds: ["claim"], silenceSince: new Date(now.getTime() - TAKE_NOTICE_MS) })).filter((claim) => takeNoticeOpen(claim, now)),
+  ];
   const sales = new Map((await listHandinSalesByIds(db, [...new Set(claims.flatMap((claim) => (claim.transactionId === null ? [] : [claim.transactionId])))]))
     .map((sale) => [sale.transactionId, sale]));
   const names = await listHandinNames(db, claims.flatMap((claim) => [claim.claimantUserId, claim.sideUserId].filter((id): id is number => id !== null)));
@@ -315,8 +332,9 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
   const wantSide = new Set<string>();
   const wantOwner = new Map<string, SaleClaimRow[]>();
   for (const claim of claims) {
-    // A question the agent asked the chatters is theirs to settle in their chat: no matter of the side.
-    if (claim.state === "asked" && claim.sideUserId !== null && claim.kind !== "question") {
+    // The side is told of a take, never asked (a question the agent asked the chatters is theirs to settle in their
+    // chat: no matter of the side).
+    if (claim.state === "agreed" && claim.sideUserId !== null) {
       const key = `${SALE_CLAIM_KIND}:${claim.id}`;
       wantSide.add(key);
       const sale = claim.transactionId === null ? undefined : sales.get(claim.transactionId);
@@ -338,7 +356,7 @@ async function syncClaimMatters(app: Pick<AppContext, "db" | "logger">, now: Dat
         money: false,
         evidence: {
           claimId: claim.id, transactionId: claim.transactionId, statement: claim.statement, note: claim.claimantNote,
-          saidAt: claim.claimedAt.toISOString(), answerBy: new Date(claim.createdAt.getTime() + CLAIM_SILENCE_MS).toISOString(),
+          saidAt: claim.claimedAt.toISOString(), takenAt: claim.silenceAt?.toISOString() ?? null,
         },
         link: sideLink(claim),
       }, SYSTEM, now);
@@ -613,7 +631,9 @@ async function settleReport(
     const lines = current.lines.map((one) => (one.transactionId === input.transactionId ? next : one));
     made = { lines, ...reportSums(lines, pages, current.offPlatform) };
   } else {
-    if (line.amountMills === input.to.amountMills && !line.disputed) return null;
+    // Nothing to write only when it counts the same and says the same settled it: a decision over a take of the same
+    // share is the decider's line now (a later cancel finds it by that).
+    if (line.amountMills === input.to.amountMills && !line.disputed && (line.settled ?? null) === input.to.settled) return null;
     const settled = settledVersion({
       lines: current.lines, pages, offPlatform: current.offPlatform,
       transactionId: input.transactionId, amountMills: input.to.amountMills, settled: input.to.settled,
@@ -720,15 +740,15 @@ async function refreshHomeOf(app: ClaimsApp, occurredAt: Date | null, now: Date)
 }
 
 /**
- * A day of silence due now on the questions of one report (asked by it, or of its person): settled the moment a board
- * is read, not at the next pass. The pass stays the backstop for everything else.
+ * A take still asked on one report (made by it, or of its person — one written before takes settled at once, or one
+ * the pass has not met yet): settled the moment a board is read, not at the next pass. The pass stays the backstop.
  */
-export async function settleDueSilences(app: Pick<AppContext, "db" | "logger">, input: { handinId: number; userIds: readonly number[] }, now: Date): Promise<number> {
+export async function settleAskedTakes(app: Pick<AppContext, "db" | "logger">, input: { handinId: number; userIds: readonly number[] }, now: Date): Promise<number> {
   let settled = 0;
   for (const claim of await listSaleClaims(app.db, { states: ["asked"] })) {
     const ours = claim.claimantHandinId === input.handinId || (claim.sideUserId !== null && input.userIds.includes(claim.sideUserId));
-    if (!ours || !silenceSettles(claim, now)) continue;
-    if (await settleBySilence(app, claim, now)) settled += 1;
+    if (!ours || !takeSettles(claim)) continue;
+    if ((await settleTake(app, claim, now)) === "settled") settled += 1;
   }
   return settled;
 }
@@ -759,9 +779,9 @@ async function isPotSale(db: Database, transactionId: number, now: Date): Promis
 }
 
 /**
- * One settlement per sale: when a claim on a sale settles (an agreement, a day of silence), every other question still
- * asked on that sale — another person who took it too — goes to the decider. Each alone would give its claimant the
- * whole sale. In the caller's transaction, in the settlements' turn.
+ * One settlement per sale: when a claim on a sale settles (an agreement, a take), every other question still asked on
+ * that sale — another person who took it too — goes to the decider. Each alone would give its claimant the whole sale.
+ * In the caller's transaction, in the settlements' turn.
  */
 async function othersToDecider(db: Database, settled: Pick<SaleClaimRow, "id" | "transactionId">, now: Date): Promise<void> {
   if (settled.transactionId === null) return;
@@ -772,16 +792,17 @@ async function othersToDecider(db: Database, settled: Pick<SaleClaimRow, "id" | 
 }
 
 /**
- * An agreement (an answer «Согласен», a day of silence) written into the reports, in the caller's transaction (the
- * settlements' turn taken): every handed-in report of the claimant or of the side that holds the sale gets what the
- * agreement gives its person — the claimant all (or a half), the side none (or the other half). `netIfNone` — the net
- * when no report line names it.
+ * An agreement (an answer «Согласен», a take) written into the reports, in the caller's transaction (the settlements'
+ * turn taken): every handed-in report of the claimant or of the side that holds the sale gets what the agreement gives
+ * its person — the claimant all (or a half), the side none (or the other half). `netIfNone` — the net when no report
+ * line names it; `outcome` — why the versions were made (`taken`: by the claimant's word alone).
  */
 async function settleAgreedReports(
   txDb: Database,
   input: {
     claim: Pick<SaleClaimRow, "id" | "sideUserId" | "statement"> & { transactionId: number; claimantUserId: number };
     sideIds: readonly number[]; netIfNone: number; by: SettleBy; paid: ReadonlyMap<number, boolean | null>; at: Date;
+    outcome?: "agreed" | "taken";
   },
 ): Promise<MadeVersion[]> {
   const { claim, sideIds } = input;
@@ -798,7 +819,7 @@ async function settleAgreedReports(
     });
     const one = await settleReport(txDb, {
       shiftId: report.shiftId, transactionId: claim.transactionId, to: { amountMills: amount, settled: "agreed" },
-      madeFor: { kind: "claim", claimId: claim.id, transactionId: claim.transactionId, outcome: "agreed" }, by: input.by, at: input.at,
+      madeFor: { kind: "claim", claimId: claim.id, transactionId: claim.transactionId, outcome: input.outcome ?? "agreed" }, by: input.by, at: input.at,
       dayPaid: input.paid.get(report.shiftId) ?? null,
     });
     if (one !== null) made.push(one);
@@ -806,56 +827,171 @@ async function settleAgreedReports(
   return made;
 }
 
+/** The ledger's word on the day of every report that holds a sale, asked before the settlements' turn (never under it). */
+export async function paidDaysOfSale(app: ClaimsApp, transactionId: number): Promise<ReadonlyMap<number, boolean | null>> {
+  return paidDaysOf(app, await listCurrentReportsOfSales(app.db, [transactionId]));
+}
+
+/** Who a person's own press on the board is, for the versions it makes. */
+export const personSettleBy = (actor: { door: HandinDoor; userId: number }): SettleBy =>
+  ({ door: actor.door, actorUserId: actor.userId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null });
+
+export type { MadeVersion, SettleBy };
+
 /**
- * A day of silence: the claim is settled for the one who asked, as an agreement is (the claimant all or the half, the
- * side none or the other half), in the settlements' turn; every counted report holding the sale gets its version made
- * by the system. False — the claim was answered or moved meanwhile.
+ * A take settled at once (owner, 2026-11-21), in the caller's transaction, the settlements' turn taken: a claim asked of
+ * a colleague is settled for the one who said it as an agreement is (`agreed`, `silence_at`: by their word alone, the
+ * side told and free to object), and every handed-in report of the two that holds the sale gets what it gives — the
+ * claimant all (or a half), the side none (or the other half). Not when (`decider`):
+ *  - the sale is settled or disputed already by someone else's word (an agreement or a take of another person, a
+ *    claim waiting for the decider) or ruled by a decision — one take per sale, no ping-pong: the word is the
+ *    decider's, the sale stays as it is; and when the one saying it is the side of an unanswered take of it, it is
+ *    their «Не согласен» to that take as well (`disputeTakeWithin`);
+ *  - a third person's report counts the sale (a half of two holders taken by a third).
+ * Null — the claim is not asked any more (answered, moved, withdrawn). `paid` — the ledger's word on the reports' days.
  */
-async function settleBySilence(app: Pick<AppContext, "db" | "logger">, claim: SaleClaimRow, now: Date): Promise<boolean> {
-  const { db } = app;
-  if (claim.transactionId === null || claim.claimantUserId === null || claim.sideUserId === null) return false;
-  // A sale of the pot is never settled between two chatters: the owner's.
-  if (await isPotSale(db, claim.transactionId, now)) {
-    await updateSaleClaim(db, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "no_side" }, now, { ifState: "asked" });
-    return false;
+export async function settleTakeWithin(
+  txDb: Database,
+  input: { claimId: number; by: SettleBy; paid: ReadonlyMap<number, boolean | null>; now: Date },
+): Promise<{ outcome: "settled" | "decider"; made: MadeVersion[] } | null> {
+  const { now } = input;
+  const claim = await findSaleClaim(txDb, input.claimId, { lock: true });
+  if (claim === null || !takeSettles(claim) || claim.answer !== null || claim.transactionId === null || claim.claimantUserId === null || claim.sideUserId === null) return null;
+  const transactionId = claim.transactionId;
+  const claimantIds = (await findHandinPersonOfUser(txDb, claim.claimantUserId))?.userIds ?? [claim.claimantUserId];
+  const sideIds = (await findHandinPersonOfUser(txDb, claim.sideUserId))?.userIds ?? [claim.sideUserId];
+  const toDecider = () => updateSaleClaim(txDb, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "double" }, now, { ifState: "asked" });
+  // Settled or disputed already by someone else's word, or decided: one take per sale.
+  const before = (await listSaleClaims(txDb, { transactionIds: [transactionId], states: ["agreed", "owner"] }))
+    .filter((one) => one.id !== claim.id && !(one.claimantUserId !== null && claimantIds.includes(one.claimantUserId)));
+  if (before.length > 0 || (await listActiveSaleDecisions(txDb, [transactionId])).has(transactionId)) {
+    await toDecider();
+    const made: MadeVersion[] = [];
+    for (const take of before) {
+      if (take.answer !== null || take.sideUserId === null || !claimantIds.includes(take.sideUserId) || !isTake(take)) continue;
+      made.push(...await disputeTakeWithin(txDb, take, {
+        note: claim.claimantNote, answeredByUserId: input.by.actorUserId, door: input.by.door, by: input.by, paid: input.paid, now,
+      }));
+    }
+    return { outcome: "decider", made };
   }
-  const side = await findHandinPersonOfUser(db, claim.sideUserId);
-  const sideIds = side?.userIds ?? [claim.sideUserId];
-  const paid = await paidDaysOf(app as ClaimsApp, await listCurrentReportsOfSales(db, [claim.transactionId])).catch(() => new Map<number, boolean | null>());
-  const made: MadeVersion[] = [];
+  // Someone else counts the sale too: the two alone cannot settle it — the decider.
+  if (await othersCount(txDb, claim, sideIds)) {
+    await toDecider();
+    await othersToDecider(txDb, claim, now);
+    return { outcome: "decider", made: [] };
+  }
+  await updateSaleClaim(txDb, claim.id, { state: "agreed", closedAt: now, silenceAt: now }, now, { ifState: "asked" });
+  await othersToDecider(txDb, claim, now);
+  const made = await settleAgreedReports(txDb, {
+    claim: { ...claim, transactionId, claimantUserId: claim.claimantUserId }, sideIds, netIfNone: 0, by: input.by, paid: input.paid, at: now, outcome: "taken",
+  });
+  return { outcome: "settled", made };
+}
+
+/**
+ * «Не согласен» to a take that stands, in the caller's transaction (the settlements' turn taken): the claim is the
+ * decider's (`owner`, `disagree`, the side's line of why), the sale's home is computed again without the taker's word,
+ * and every handed-in report the take settled goes back to what its draft says now — the side's to what the rule gives
+ * them, the taker's to their word waiting for the decider (counting nothing, claiming what it claims). Today's dispute,
+ * reached from a settled take (before 2026-11-21 a dispute after a day of silence left the reports as the silence made
+ * them).
+ */
+async function disputeTakeWithin(
+  txDb: Database,
+  take: SaleClaimRow,
+  input: { note: string | null; answeredByUserId: number | null; door: HandinDoor; by: SettleBy; paid: ReadonlyMap<number, boolean | null>; now: Date },
+): Promise<MadeVersion[]> {
+  const { now } = input;
+  const written = await updateSaleClaim(txDb, take.id, {
+    answer: "disagree", answerNote: input.note, answeredAt: now, answerDoor: input.door, answerRef: null, answeredByUserId: input.answeredByUserId,
+    answeredByAgentKeyId: null, state: "owner", escalatedAt: now, escalatedWhy: "disagree",
+  }, now, { ifState: "agreed" });
+  return written ? takeToRuleWithin(txDb, take, { outcome: "disputed", holds: (line) => line.settled === "agreed", by: input.by, paid: input.paid, now }) : [];
+}
+
+/**
+ * A take undone — disputed by the side, or taken back by the one who said it — in the caller's transaction (the
+ * settlements' turn taken, the claim already written): the sale's home computed again, then every handed-in report whose
+ * line of the sale `holds` goes back to what its draft says now (`reportsBackToDraft`, the path «по правилу» takes).
+ */
+async function takeToRuleWithin(
+  txDb: Database,
+  take: Pick<SaleClaimRow, "id" | "transactionId">,
+  input: { outcome: "disputed" | "withdrawn"; holds: (line: HandinVersionLine) => boolean; by: SettleBy; paid: ReadonlyMap<number, boolean | null>; now: Date },
+): Promise<MadeVersion[]> {
+  if (take.transactionId === null) return [];
+  const transactionId = take.transactionId;
+  // No handed-in report to follow (both still drafts): the home is computed again after the commit (`afterTakeSettled`).
+  const held = (await listCurrentReportsOfSales(txDb, [transactionId]))
+    .some((report) => report.lines.some((line) => line.transactionId === transactionId && input.holds(line)));
+  if (!held) return [];
+  await refreshHomeWithin(txDb, (await listHandinSalesByIds(txDb, [transactionId]))[0]?.occurredAt ?? null, input.now);
+  return reportsBackToDraft(txDb, {
+    transactionId, holds: input.holds, madeFor: { kind: "claim", claimId: take.id, transactionId, outcome: input.outcome }, by: input.by, paid: input.paid, at: input.now,
+  });
+}
+
+/**
+ * «Отменить» of a word on a sale, in the caller's transaction (the settlements' turn taken, the claims withdrawn and the
+ * person's word cleared before): every handed-in report whose line of the sale a take settled, or that holds a word
+ * waiting, holds what its draft says now — the rule's share with the person's own words: a take's settlement undone, a
+ * word waiting in a counted version gone (else the pass would make the claim again from it). `claimId` — the claim the
+ * versions are made for.
+ */
+export async function wordTakenBackWithin(
+  txDb: Database,
+  input: { claimId: number; transactionId: number; by: SettleBy; paid: ReadonlyMap<number, boolean | null>; now: Date },
+): Promise<MadeVersion[]> {
+  return takeToRuleWithin(txDb, { id: input.claimId, transactionId: input.transactionId }, {
+    outcome: "withdrawn", holds: (line) => line.settled === "agreed" || line.disputed, by: input.by, paid: input.paid, now: input.now,
+  });
+}
+
+/** After a settlement's commit: the owner's matter of a paid day changed, and the sale's home computed again. */
+export async function afterTakeSettled(app: ClaimsApp, made: readonly MadeVersion[], transactionId: number, now: Date): Promise<void> {
+  await afterPaid(app, made, now);
+  await refreshHomeOf(app, (await listHandinSalesByIds(app.db, [transactionId]))[0]?.occurredAt ?? null, now);
+}
+
+/**
+ * A take the pass meets (one from a handed-in version, or one asked before takes settled at once): settled for the one
+ * who said it in its own turn, the paid days read first. A sale of the pot is never settled between two chatters: the
+ * owner's. The outcome; null — answered or moved meanwhile.
+ */
+async function settleTake(app: Pick<AppContext, "db" | "logger">, claim: SaleClaimRow, now: Date): Promise<"settled" | "decider" | null> {
+  const { db } = app;
+  if (claim.transactionId === null || claim.claimantUserId === null || claim.sideUserId === null) return null;
+  if (await isPotSale(db, claim.transactionId, now)) {
+    const moved = await updateSaleClaim(db, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "no_side" }, now, { ifState: "asked" });
+    return moved ? "decider" : null;
+  }
+  const paid = await paidDaysOfSale(app as ClaimsApp, claim.transactionId).catch(() => new Map<number, boolean | null>());
+  const by: SettleBy = { door: "workboard", actorUserId: claim.claimantUserId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null };
   const done = await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     await lockSaleSettlements(txDb);
-    const locked = await findSaleClaim(txDb, claim.id, { lock: true });
-    if (locked === null || locked.state !== "asked" || locked.answer !== null) return false;
-    // Someone else counts the sale too: silence between two cannot settle it — the decider.
-    if (await othersCount(txDb, locked, sideIds)) {
-      await updateSaleClaim(txDb, locked.id, { state: "owner", escalatedAt: now, escalatedWhy: "double" }, now, { ifState: "asked" });
-      await othersToDecider(txDb, locked, now);
-      return false;
-    }
-    await updateSaleClaim(txDb, locked.id, { state: "agreed", closedAt: now, silenceAt: now }, now, { ifState: "asked" });
-    await othersToDecider(txDb, locked, now);
-    const by: SettleBy = { door: "workboard", actorUserId: claim.claimantUserId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null };
-    made.push(...await settleAgreedReports(txDb, {
-      claim: { ...claim, transactionId: claim.transactionId!, claimantUserId: claim.claimantUserId! }, sideIds, netIfNone: 0, by, paid, at: now,
-    }));
-    return true;
+    return settleTakeWithin(txDb, { claimId: claim.id, by, paid, now });
   });
-  if (done) await afterPaid(app as ClaimsApp, made, now);
-  return done;
+  if (done !== null) await afterTakeSettled(app as ClaimsApp, done.made, claim.transactionId, now);
+  return done?.outcome ?? null;
 }
 
 // ── The other side's answer ──────────────────────────────────────────────────
 
 /**
  * Whether the side may answer now: asked; gone to the owner by silence (before the board) and not decided; or settled
- * by a day's silence for the one who asked — the one who lost may still dispute.
+ * for the one who said it without the side's answer (a take; before, a day's silence) — the side may still dispute,
+ * with no deadline, or say «Понятно».
  */
 const answerable = (claim: SaleClaimRow) => claim.kind === "claim" && claim.answer === null
   && (claim.state === "asked" || (claim.state === "owner" && claim.escalatedWhy === "silence") || (claim.state === "agreed" && claim.silenceAt !== null));
 
-/** `saleClaimAnswer`, `agentSaleClaimAnswer`: «Согласен» settles it; «Не согласен» with a line of why takes it to the owner. */
+/**
+ * `saleClaimAnswer`, `agentSaleClaimAnswer`: «Согласен» («Понятно» on a take: it stands as written, nothing moves)
+ * settles it; «Не согласен» takes it to the decider — on a take, the reports it settled go back as well
+ * (`disputeTakeWithin`'s path).
+ */
 export async function answerSaleClaim(
   app: ClaimsApp,
   actor: HandinActor,
@@ -895,7 +1031,8 @@ export async function answerSaleClaim(
     : { door, actorUserId: null, agentKeyId: actor.agentKeyId, telegramMessageRef: actor.sourceRef, telegramSenderId: actor.telegramUserId };
   const made: MadeVersion[] = [];
   const sale = found.transactionId === null ? undefined : (await listHandinSalesByIds(db, [found.transactionId]))[0];
-  const paid = input.answer !== "agree" || found.transactionId === null ? new Map<number, boolean | null>()
+  // The ledger is asked before the turn whenever the answer may make versions: an agreement, or a take disputed.
+  const paid = (input.answer !== "agree" && found.state !== "agreed") || found.transactionId === null ? new Map<number, boolean | null>()
     : await paidDaysOf(app, await listCurrentReportsOfSales(db, [found.transactionId]));
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
@@ -911,6 +1048,13 @@ export async function answerSaleClaim(
         : { state: "owner" as const, escalatedAt: now, escalatedWhy: thirdHolds ? "double" as const : "disagree" as const }),
     }, now);
     if (thirdHolds) await othersToDecider(txDb, claim, now);
+    // «Не согласен» to a take already counted (or settled by a day of silence), or a third holder met at «Понятно»: the
+    // sale is back with the one the rule gives it to until the decision, the taker's line waits — every report the
+    // settlement made follows by a version.
+    if (claim.state === "agreed" && (input.answer !== "agree" || thirdHolds)) {
+      made.push(...await takeToRuleWithin(txDb, claim, { outcome: "disputed", holds: (line) => line.settled === "agreed", by, paid, now }));
+      return;
+    }
     if (input.answer !== "agree" || thirdHolds || claim.transactionId === null || claim.claimantUserId === null) return;
     await othersToDecider(txDb, claim, now);
     // Agreed: every report that counts the sale gets what the agreement gives — the claimant all (or a half), the side none (or the other half).
@@ -919,7 +1063,7 @@ export async function answerSaleClaim(
     }));
   });
   await afterPaid(app, made, now);
-  if (input.answer === "agree") await refreshHomeOf(app, sale?.occurredAt ?? null, now);
+  if (input.answer === "agree" || found.state === "agreed") await refreshHomeOf(app, sale?.occurredAt ?? null, now);
   await runSaleClaims(app, now).catch((error: unknown) => {
     app.logger.warn({ claimId: input.claimId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the pass after an answer failed; the next one will");
   });
@@ -1490,7 +1634,8 @@ async function claimWires(db: Database, claims: readonly SaleClaimRow[]): Promis
       answeredAt: claim.answeredAt?.toISOString() ?? null,
       escalatedWhy: claim.escalatedWhy,
       decision: decision === null ? null : { outcome: decision.outcome, note: decision.note, decidedAt: decision.decidedAt.toISOString() },
-      answerBy: answerable(claim) ? new Date(claim.createdAt.getTime() + CLAIM_SILENCE_MS).toISOString() : null,
+      // No deadline: a colleague's word counts at once and the side may object whenever (owner, 2026-11-21).
+      answerBy: null,
       question: claim.question,
     };
   });
@@ -1880,8 +2025,10 @@ export async function readAgentSaleClaims(
     claims: wires.map((wire, at) => {
       const sale = claims[at]!.transactionId === null ? undefined : sales.get(claims[at]!.transactionId!);
       const who = wire.claimant?.name ?? "кто-то";
-      const what = wire.statement === "share" ? `делит с ${wire.side?.name ?? "коллегой"}` : wire.kind === "double" ? `и ${wire.side?.name ?? "коллега"} посчитали в отчётах` : `считает своей (против ${wire.side?.name ?? "правила"})`;
-      const state = { asked: "ждёт ответа", agreed: "согласовано", owner: "у владельца", decided: "решено", withdrawn: "снято" }[wire.state];
+      const what = wire.statement === "share" ? `записал пополам с ${wire.side?.name ?? "коллегой"}` : wire.kind === "double" ? `и ${wire.side?.name ?? "коллега"} посчитали в отчётах` : `записал себе (по правилу ${wire.side?.name ?? "ничья"})`;
+      // A take stands without the side's answer: counted as written, the side told.
+      const state = wire.state === "agreed" && wire.answer === null ? "записано, вторая сторона не отвечала"
+        : { asked: "ждёт ответа", agreed: "согласовано", owner: "у владельца", decided: "решено", withdrawn: "снято" }[wire.state];
       return {
         ...wire,
         netMills: sale?.netMills ?? null,

@@ -430,7 +430,12 @@ export interface HandinVersionOffPlatform {
  * the owner — or the owner's word on «мимо площадки». Null — the person handed it in.
  */
 export type HandinVersionMadeFor =
-  | { kind: "claim"; claimId: number; transactionId: number; outcome: "agreed" | "first" | "second" | "half" | "nobody" | "pot" | "rule" }
+  /**
+   * A claim: settled (`agreed` by both; `taken` by the person's word alone, the side told), decided, or undone —
+   * `withdrawn`: the person took their word back, the sale as the rule has it; `disputed`: the side said «Не согласен»
+   * to a take, the sale as the rule has it until the decision, the taker's line waiting.
+   */
+  | { kind: "claim"; claimId: number; transactionId: number; outcome: "agreed" | "taken" | "first" | "second" | "half" | "nobody" | "pot" | "rule" | "withdrawn" | "disputed" }
   | { kind: "off_platform"; offPlatformId: number; decision: "confirmed" | "rejected" }
   /**
    * A decision about the sale recorded «со слов» through the agent's door (review R2b-3): `said` — made, the version

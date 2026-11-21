@@ -52,7 +52,7 @@ import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLi
 import { SALE_RULE } from "./sale-rule.ts";
 import { commentText, modelComment, shiftWords } from "./shift-handin-rules.ts";
 import {
-  CLAIM_SILENCE_MS, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT, cardSuperseded, gengarState, holdsSale, mayAct, signedLines, withSettlementsNow, type BoardActor,
+  SHIFT_REPORT_SIGNATURE_DECLINED_EVENT, cardSuperseded, gengarState, holdsSale, isTake, mayAct, signedLines, takeNoticeOpen, withSettlementsNow, type BoardActor,
 } from "./shift-report-phases.ts";
 
 /**
@@ -287,6 +287,11 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
 
   const ids = [...baseIds, ...late.map((line) => line.transactionId!), ...before.map((sale) => sale.transactionId)];
   const claims = ids.length === 0 ? [] : await listSaleClaims(db, { transactionIds: ids, kinds: ["claim"] });
+  // The sales someone else's word settled or took to the decider (a take, an agreement, a dispute): one take per sale, a
+  // word of the person's on them is the decider's (sale-claims.ts `settleTakeWithin`).
+  const settledElsewhere = new Set((ids.length === 0 ? [] : await listSaleClaims(db, { transactionIds: ids, states: ["agreed", "owner"] }))
+    .filter((claim) => claim.transactionId !== null && claim.claimantHandinId !== handin?.id && !(claim.claimantUserId !== null && subject.userIds.includes(claim.claimantUserId)))
+    .map((claim) => claim.transactionId!));
   const fans = await listHandinSaleFans(db, ids);
   const refs = await listTransactionPlatformRefs(db, ids);
   const colleagues = own ? await listHandinColleagues(db, { pageIds, exceptUserIds: subject.userIds }) : [];
@@ -369,9 +374,15 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     const incoming = incomingOf(id);
     const proposal = proposalOf(id);
     const noteProposal = noteProposalOf(id);
-    // A question nobody was asked of (a card the person disagreed with, a word with no other side) is the decider's
-    // straight away; one with no second side — the owner's (review round 2, N5).
-    const cardDispute = ask !== null && ask.origin === "draft" && ask.escalatedWhy === "disagree" && ask.answer === null;
+    // A question nobody was asked of (a card the person disagreed with, a word with no other side, a word on a sale
+    // someone else's word already settled or disputed) is the decider's straight away; one with no second side — the
+    // owner's (review round 2, N5).
+    const cardDispute = ask !== null && ask.answer === null
+      && ((ask.origin === "draft" && ask.escalatedWhy === "disagree") || (ask.state === "owner" && ask.escalatedWhy === "double"));
+    // A take: the colleague's sale written to the person by their word alone (owner, 2026-11-21); of the person's own
+    // sale, written by a colleague — the reader is told.
+    const taken = ask !== null && isTake(ask);
+    const takenFromMe = incoming !== null && isTake(incoming) && incoming.claimantUserId !== null;
     const rowDecider = ask !== null && ask.sideUserId === null ? ownerDecider : deciderOfLine(line);
     // A card of whose the sale is, outranked by a decision or an agreement made since: «решено иначе», it changes nothing.
     const superseded = proposal !== null && (proposal.state === "proposed" || proposal.state === "late") && cardSuperseded(proposal, line);
@@ -395,9 +406,13 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       current = rule;
       reason = `${people.nameOf(ask.sideUserId)} не согласен, решит ${rowDecider.words}`;
     } else if (ask !== null && ask.state === "agreed" && ask.sideUserId !== null) {
-      reason = ask.silenceAt !== null ? `${people.nameOf(ask.sideUserId)} не ответил за сутки` : `${people.nameOf(ask.sideUserId)} согласился`;
+      reason = taken && ask.answer === null ? `по правилу ${personNameForms(people.nameOf(ask.sideUserId)).gen}, записали вы` : `${people.nameOf(ask.sideUserId)} согласился`;
     } else if (incoming !== null && (incoming.state === "asked" || incoming.state === "owner") && incoming.claimantUserId !== null) {
       reason = `${people.nameOf(incoming.claimantUserId)} оспаривает`;
+    } else if (takenFromMe && incoming !== null && incoming.claimantUserId !== null) {
+      // Whose it counts as now: the colleague's, or half with them.
+      current = owner(incoming.statement === "share" ? "share" : "user", incoming.claimantUserId, people, me);
+      reason = incoming.statement === "share" ? `пополам, записал ${people.nameOf(incoming.claimantUserId)}` : `записал себе ${people.nameOf(incoming.claimantUserId)}`;
     } else if (proposal !== null && !superseded && (proposal.state === "accepted" || (proposal.state === "proposed" && phase === "confirm"))) {
       reason = "поменял Генгар";
     } else if (proposal !== null && proposal.state === "declined" && counted) {
@@ -412,7 +427,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     } else if (amount <= 0) {
       reason = ruleWords;
     }
-    if (current.kind === "share" && amount > 0 && !isLate) reason = `вам ${plainUsd(amount)}`;
+    // A take's own words stand on a half too (never «вам $26» over «записали вы»).
+    if (current.kind === "share" && amount > 0 && !isLate && !(taken && ask?.answer === null) && !takenFromMe) reason = `вам ${plainUsd(amount)}`;
     const askWire = ask === null ? null : {
       claimId: ask.id,
       to: ask.sideUserId === null || cardDispute ? "owner" as const : "colleague" as const,
@@ -421,9 +437,11 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       note: ask.claimantNote ?? "",
       state: askState(ask),
       answerNote: ask.answerNote,
-      answerBy: ask.sideUserId === null || ask.state !== "asked" ? null : new Date(ask.createdAt.getTime() + CLAIM_SILENCE_MS).toISOString(),
+      // No deadline: a colleague is told, never asked (owner, 2026-11-21).
+      answerBy: null,
       decision: ask.decisionId === null ? null : "решение владельца",
       oldWay,
+      ...(taken ? { taken: true } : {}),
     };
     const incomingWire = incoming === null || incoming.claimantUserId === null ? null : {
       claimId: incoming.id,
@@ -433,8 +451,11 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       state: incoming.state === "asked" ? "asked" as const : incoming.state === "owner" ? "disputed" as const : "settled" as const,
       canAnswer: own && incoming.kind === "claim" && incoming.answer === null && (incoming.state === "asked" || (incoming.state === "agreed" && incoming.silenceAt !== null)),
       answer: incoming.answer,
-      answerBy: incoming.state === "asked" ? new Date(incoming.createdAt.getTime() + CLAIM_SILENCE_MS).toISOString() : null,
+      answerBy: null,
+      ...(takenFromMe ? { taken: true } : {}),
     };
+    // The side's notice wants them while it is open (three days, unanswered); «Не согласен» stays under the row after.
+    const noticeOpen = incomingWire !== null && incomingWire.canAnswer && (incoming!.state === "asked" || takeNoticeOpen(incoming!, now));
     const shownProposal = proposal ?? noteProposal;
     const proposalWire = shownProposal === null ? null : {
       id: shownProposal.id,
@@ -451,7 +472,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     };
     const noteText = line.note ?? (noteProposal !== null && noteProposal.state !== "declined" ? noteProposal.note : null);
     const noteBy = line.noteByAgent === true || (line.note === null && noteText !== null) ? "agent" as const : "person" as const;
-    const attention = isLate || (incomingWire?.canAnswer ?? false)
+    const attention = isLate || noticeOpen
       || (phase === "confirm" && shownProposal !== null && shownProposal.state === "proposed" && !superseded)
       || (shownProposal?.state === "late" && !superseded);
     return {
@@ -480,26 +501,34 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       proposal: proposalWire,
       note: noteText === null ? null : { text: noteText, by: noteBy, byName: noteBy === "agent" ? "Генгар" : people.nameOf(me) },
       sighting: null,
-      editable: editable && !isLate,
+      // A sale a colleague wrote to themself: the reader's own words on it change nothing while the take stands (it
+      // counts as written); «Не согласен» under the row is their word.
+      editable: editable && !isLate && !takenFromMe,
       canNote: canNote && !isLate,
       attention,
-      choices: editable && !isLate ? choicesOf(line, current) : [],
+      choices: editable && !isLate && !takenFromMe ? choicesOf(line, current) : [],
       foundByHub: foundIds.has(id),
       decider: rowDecider,
     };
   };
 
-  /** What a row's «чья» menu offers, and whom each choice would ask (R-board §3, §4; arena round 3: the board on both sides). */
+  /**
+   * What a row's «чья» menu offers, and what each choice does (R-board §3, §4; arena round 3: the board on both sides): a
+   * colleague with the board is told, the sale written at once (owner, 2026-11-21); anyone else — the decider.
+   */
   function choicesOf(line: HandinVersionLine, current: ShiftReportOwner): NonNullable<ShiftReportRow["choices"]> {
     const rule = ruleOwner(line, people, me);
     const decider = deciderOfLine(line);
     const is = (one: ShiftReportOwner) => sameOwner(one, current);
     const hintOf = (one: ShiftReportOwner, asks: { words: string } | null) => (sameOwner(one, rule) ? "по правилу" : asks?.words ?? "");
+    // A sale someone else already took, disputed or had decided: one take per sale — the decider decides.
+    const settled = line.transactionId !== null && (settledElsewhere.has(line.transactionId) || decisions.has(line.transactionId));
     const askOf = (userId: number | null, pot: boolean): { to: "colleague" | "decider"; user: ReturnType<People["person"]> | null; words: string } | null => {
       if (pot) return { to: "decider", user: null, words: `решит ${decider.words}` };
       if (userId === null) return null;
       if (!onBoard(userId)) return { to: "decider", user: people.person(userId), words: `${people.nameOf(userId)} сдаёт смену по-старому, решит ${decider.words}` };
-      return { to: "colleague", user: people.person(userId), words: `спросим ${personNameForms(people.nameOf(userId)).acc}` };
+      if (settled) return { to: "decider", user: people.person(userId), words: `решит ${decider.words}` };
+      return { to: "colleague", user: people.person(userId), words: `сообщим ${personNameForms(people.nameOf(userId)).dat}` };
     };
     if (line.group !== "mine") {
       // Someone else's sale: «Моя» and «Пополам с <держатель>» only, each a question (a nobody's sale is mine at once,
@@ -712,7 +741,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     colleagues: colleagues.map((one) => ({ userId: one.userId, name: one.name, forms: personNameForms(one.name) })),
     decider,
     canConfirm,
-    needsMe: own && (phase === "confirm" || flat.some((row) => row.late || (row.incoming?.canAnswer ?? false)) || lateCards || othersClosed.length > 0),
+    needsMe: own && (phase === "confirm" || flat.some((row) => row.late || (row.incoming?.canAnswer === true && row.attention)) || lateCards || othersClosed.length > 0),
     handedInAt: candidate?.madeAt.toISOString() ?? null,
     countedAt: latest?.submittedAt.toISOString() ?? null,
     preview,
@@ -776,7 +805,8 @@ export function postPagesDiffer(a: ReadonlyArray<{ pageLabel: string; amountMill
 function askState(claim: SaleClaimRow): "asked" | "agreed" | "disputed" | "silence" | "decided" | "withdrawn" {
   if (claim.state === "withdrawn") return "withdrawn";
   if (claim.state === "decided") return "decided";
-  if (claim.state === "agreed") return claim.silenceAt !== null ? "silence" : "agreed";
+  // Settled without the colleague's answer (a take; before, a day of silence) until they say «Понятно».
+  if (claim.state === "agreed") return claim.silenceAt !== null && claim.answer === null ? "silence" : "agreed";
   if (claim.state === "owner" && claim.answer === "disagree") return "disputed";
   return "asked";
 }

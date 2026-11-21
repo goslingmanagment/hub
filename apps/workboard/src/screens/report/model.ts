@@ -167,7 +167,7 @@ function formsOf(board: Board, userId: number | null, name: string | null): Pers
 }
 
 export interface Ask {
-  /** colleague — the rule's holder answers; owner — the pot's, or the decider's. */
+  /** colleague — written at once, the rule's holder told (owner, 2026-11-21); owner — the pot's, or the decider's. */
   to: "colleague" | "owner";
   forms: PersonNameForms | null;
   /** The server's words when the question goes straight to the decider («Олег сдаёт смену по-старому, решит владелец»). */
@@ -182,9 +182,9 @@ export interface Choice {
   label: string;
   /** In a sentence: «моя», «пополам с Севой», «Олега», «общак», «ничья». */
   words: string;
-  /** «по правилу», «спросим Олега», «решит владелец». */
+  /** «по правилу», «сообщим Олегу», «решит владелец». */
   hint: string;
-  /** The word makes the person's share larger at someone's cost: a question, not a mark. */
+  /** The word makes the person's share larger at someone's cost: it takes a line of why (a take, or a question to the decider). */
   ask: Ask | null;
   /** The mark it is when it is not a question. */
   line: Pick<ShiftReportLineBody, "statement" | "shareWithUserId" | "toUserId">;
@@ -248,7 +248,7 @@ export function choicesOf(board: Board, row: Row): { groups: Choice[][]; current
       statement: kind === "me" ? "mine" : "share",
       shareWithUserId: kind === "share" ? userId : null,
     };
-    const hint = key === ruleKey ? "по правилу" : ask === null ? "" : ask.to === "owner" ? "решит владелец" : `спросим ${ask.forms!.acc}`;
+    const hint = key === ruleKey ? "по правилу" : ask === null ? "" : ask.to === "owner" ? "решит владелец" : `сообщим ${ask.forms!.dat}`;
     return { key, label, words, hint, ask, line: lineOfKey(key, ruleKey) };
   };
   const me = choice("me", "Моя", "моя");

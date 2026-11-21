@@ -16,8 +16,9 @@ import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in
 // The board's money, the final review's second reader (latent while the board is on for the test team only; each one
 // would lose or double money once pay goes by the counted report). (1) A sale given to a colleague whose report is
 // already counted, and lies in it as «Рядом» at $0, reaches that report: it is «после сдачи» there and «Досдать» takes
-// it. (2) A new question on a claim a day of silence settled does not change its terms: the two reports never count
-// more than the sale. (4) A sale of the pot is never asked between two chatters: the owner decides it. Money: required.
+// it. (2) A new word on a take that stands (settled at once by the person's word) does not change its terms: the two
+// reports never count more than the sale. (4) A sale of the pot is never taken between two chatters: the owner decides
+// it. Money: required.
 //
 // anna really works mia-1 from 30 to 25 hours ago (minutes and messages): the rule gives her the
 // page's sales of those hours. bella hands shifts in on the board too; her shift rows cover some of those hours with no
@@ -190,16 +191,16 @@ describe("the board's money, the final review's second reader", () => {
     expect(await counted(hers, given)).toBe(NET);
   });
 
-  it("does not let a new question change the terms of a claim a day of silence settled: the reports never count more than the sale (2)", async (context) => {
+  it("does not let a new word change the terms of a take that stands: the reports never count more than the sale (2)", async (context) => {
     if (!testDb) return context.skip();
     const shared = await sale(28 * 60);
     const hers = await shiftRow(bella, 28.5, 27.2);
-    // bella asks «пополам» from her draft, hands in; anna's report holds the sale; anna says nothing for a day.
+    // bella writes «пополам» from her draft (counted at once, anna told), hands in; anna's report holds the sale.
     const asked = await ask("bella", hers, { transactionId: shared, statement: "share", shareWithUserId: anna, note: "вели фана вместе" });
     expect(asked.statusCode, asked.body).toBe(200);
     await handInAndConfirm(asSession, "bella", hers);
     await handInAndConfirm(asSession, "anna", worked);
-    await runSaleClaims(app, new Date(Date.now() + 25 * HOUR_MS));
+    await runSaleClaims(app);
     expect((await q("select state from sale_claims where transaction_id = $1", [shared])).rows).toEqual([{ state: "agreed" }]);
     expect(await counted(worked, shared)).toBe(NET / 2);
     expect(await counted(hers, shared)).toBe(NET / 2);
@@ -211,7 +212,7 @@ describe("the board's money, the final review's second reader", () => {
     expect(again.statusCode, again.body).toBe(409);
   });
 
-  it("never asks a sale of the pot between two chatters: it is the owner's, and nobody's «Согласен» or silence settles it (4)", async (context) => {
+  it("never takes a sale of the pot between two chatters: it is the owner's, and nobody's word or «Согласен» settles it (4)", async (context) => {
     if (!testDb) return context.skip();
     const pot = await sale(26.5 * 60, true);
     expect(await homeOf(pot)).toMatchObject({ home: "pot" });

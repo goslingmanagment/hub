@@ -1,4 +1,4 @@
-import { SHIFT_REPORT_ASK_SILENCE_HOURS, SHIFT_REPORT_CHECK_MINUTES, type ShiftReportPhase } from "@agency_hub_core/contracts";
+import { SALE_TAKE_NOTICE_DAYS, SHIFT_REPORT_CHECK_MINUTES, type ShiftReportPhase } from "@agency_hub_core/contracts";
 import type { HandinStatement, HandinVersionLine, ProposalRow } from "@agency_hub_core/db";
 
 import { ConflictError } from "./errors.ts";
@@ -7,8 +7,8 @@ import type { SaleHomeKind } from "./sale-rule.ts";
 
 /**
  * The «Отчёт» board's rules (products plan 2026-11-13, package R), pure: the phases and who may do what in each, when
- * the check lets the person confirm, what a version made at «Подтверждаю» counts with Gengar's proposals, and when a
- * day of silence settles a question. No database (tests/shift-report-phases.test.ts); shift-report-board.ts reads and
+ * the check lets the person confirm, what a version made at «Подтверждаю» counts with Gengar's proposals, and what a
+ * take of a colleague's sale is. No database (tests/shift-report-phases.test.ts); shift-report-board.ts reads and
  * writes.
  *
  *   draft     «Черновик»     the person edits; «Сдать смену» records a candidate
@@ -91,16 +91,30 @@ export function gengarState(input: { reviewed: boolean; answeredAt: Date | null;
   return input.now.getTime() - input.handedInAt.getTime() >= SHIFT_REPORT_CHECK_MINUTES * 60_000 ? "silent" : "reading";
 }
 
-/** How long the other side has to answer a question: the silence that settles it, and every «до …» people are shown. */
-export const CLAIM_SILENCE_MS = SHIFT_REPORT_ASK_SILENCE_HOURS * 3_600_000;
+/** How long the side's notice of a take stays open unanswered («Ждут вас», the board's amber row). */
+export const TAKE_NOTICE_MS = SALE_TAKE_NOTICE_DAYS * 86_400_000;
 
 /**
- * A day of silence (R-board §4): a question to a colleague nobody answered for a day settles for the one who asked. A
- * question with nobody to ask (the pot, the owner's) never settles by silence.
+ * A take (owner, 2026-11-21): a person's «Моя» / «Пополам с …» on a colleague's sale counts at once — no day of silence,
+ * nobody asked. A claim asked of a colleague settles for the one who said it the moment it is met (the board's own
+ * request, else the pass); a question with nobody to ask (the pot, the owner's) is the decider's and never does.
  */
-export function silenceSettles(claim: { kind: string; state: string; sideUserId: number | null; createdAt: Date }, now: Date): boolean {
-  return claim.kind === "claim" && claim.state === "asked" && claim.sideUserId !== null
-    && now.getTime() - claim.createdAt.getTime() >= CLAIM_SILENCE_MS;
+export function takeSettles(claim: { kind: string; state: string; sideUserId: number | null }): boolean {
+  return claim.kind === "claim" && claim.state === "asked" && claim.sideUserId !== null;
+}
+
+/**
+ * A take that stands: settled for the one who said it by their word alone (`silence_at`), neither disputed nor
+ * decided. The side may still say «Понятно» or «Не согласен»; the taker may take it back.
+ */
+export function isTake(claim: { kind: string; state: string; silenceAt: Date | null }): boolean {
+  return claim.kind === "claim" && claim.state === "agreed" && claim.silenceAt !== null;
+}
+
+/** The side's notice of a take is open: the take stands unanswered and is younger than `SALE_TAKE_NOTICE_DAYS`. */
+export function takeNoticeOpen(claim: { kind: string; state: string; silenceAt: Date | null; answer: string | null; sideUserId: number | null }, now: Date): boolean {
+  return isTake(claim) && claim.answer === null && claim.sideUserId !== null
+    && now.getTime() - claim.silenceAt!.getTime() < TAKE_NOTICE_MS;
 }
 
 /** The word a statement is to the arithmetic of a line (`lineAmount`): given away and to the pot count as «не моё». */

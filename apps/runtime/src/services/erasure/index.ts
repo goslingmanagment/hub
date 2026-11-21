@@ -1912,7 +1912,7 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   });
 
   // What waits about him: the kind, the owner, the state and the times stay. The server's title keeps its words before
-  // the colon — who, what kind («Анна считает своей», «Спор о продаже», «Кастом K-123 просрочен»), never the fan — and
+  // the colon — who, what kind («Макс записал себе», «Спор о продаже», «Кастом K-123 просрочен»), never the fan — and
   // says «фан стёрт» after it; its evidence keeps ids, sums and times, its link (a path of ids) stays. Another writer's
   // words are not Hub's: its title is replaced, its evidence emptied, its link dropped. An open matter's mirror writes
   // its own fan-less title again on its next pass.
