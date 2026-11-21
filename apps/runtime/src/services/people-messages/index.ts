@@ -227,7 +227,7 @@ async function reminderOf(app: MessagesApp, matter: MatterRow): Promise<Outgoing
     };
   }
   if (matter.kind === SALE_CLAIM_KIND) {
-    // «Коллега записал продажу себе»: who, the sale's amount and page, the link to the line. No fan, no line of why.
+    // «Коллега записывает продажу себе»: who, the sale's amount and page, the link to the line. No fan, no line of why.
     const claim = await findSaleClaim(app.db, Number(matter.object?.id ?? Number.NaN));
     const sale = claim?.transactionId == null ? undefined : (await listHandinSalesByIds(app.db, [claim.transactionId]))[0];
     if (claim === null || sale === undefined || claim.claimantUserId === null) return null;
@@ -239,8 +239,8 @@ async function reminderOf(app: MessagesApp, matter: MatterRow): Promise<Outgoing
       recipient,
       objectType: "matter",
       objectId: matter.key,
-      about: `записал себе: ${who}, ${what}`,
-      text: `${claim.statement === "share" ? `${who} записал продажу ${what} пополам с вами` : `${who} записал себе продажу ${what}`}. `
+      about: `запись себе: ${who}, ${what}`,
+      text: `${claim.statement === "share" ? `${who} записывает продажу ${what} пополам с вами` : `${who} записывает себе продажу ${what}`}. `
         + `Если не согласны, ответьте в Workboard: ${teamLink(app, matter.link ?? "/workboard/shifts/mine")}`,
       eventAt: matter.openedAt,
     };

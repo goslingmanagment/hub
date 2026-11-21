@@ -264,7 +264,7 @@ export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: st
   if (madeFor.kind === "decision") return madeFor.outcome === "cancelled" ? "решение о продаже отменено" : "решение о продаже, записанное со слов";
   switch (madeFor.outcome) {
     case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;
-    case "taken": return `записал себе${actorName ? ` ${actorName}` : " коллега"}`;
+    case "taken": return `записано по слову${actorName ? `: ${actorName}` : " коллеги"}`;
     case "first":
     case "second": return "решение владельца по спору о продаже";
     case "half": return "решение владельца: пополам";

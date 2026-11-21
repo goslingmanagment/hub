@@ -174,7 +174,7 @@ export const shiftReportAskSchema = z.object({
 export const shiftReportIncomingSchema = z.object({
   claimId: intId,
   from: personSchema,
-  /** mine — «записал эту продажу себе»; share — «записал эту продажу пополам с вами». */
+  /** mine — «записывает эту продажу себе»; share — «записывает эту продажу пополам с вами». */
   statement: z.enum(["mine", "share"]),
   note: z.string().nullable(),
   /** asked — waits for the reader; disputed — the reader said «Не согласен», the decider decides; settled — counted as the colleague wrote it (`taken`), or over. */

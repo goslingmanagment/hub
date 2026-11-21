@@ -194,10 +194,10 @@ export function demoLineOutcome(now: Date, transactionId: number, userId: number
   if (claim.state === "agreed") {
     // A take unanswered: counted as written, the words say who wrote it.
     if (claim.takenAt !== null && claim.answer === null) {
-      if (claim.statement === "share") return { amountMills: half(userId), mine: true, reason: "agreed", words: `пополам, записал ${claim.claimant.name}`, toName: null };
+      if (claim.statement === "share") return { amountMills: half(userId), mine: true, reason: "agreed", words: `пополам по слову: ${claim.claimant.name}`, toName: null };
       return userId === claim.claimant.id
         ? { amountMills: net, mine: true, reason: "agreed", words: `по правилу ${claim.side.name}, записали вы`, toName: null }
-        : { amountMills: 0, mine: false, reason: "agreed", words: `записал себе ${claim.claimant.name}`, toName: claim.claimant.name };
+        : { amountMills: 0, mine: false, reason: "agreed", words: `по слову: ${claim.claimant.name}`, toName: claim.claimant.name };
     }
     if (claim.statement === "share") return { amountMills: half(userId), mine: true, reason: "agreed", words: "по согласию второй стороны: пополам", toName: null };
     return userId === claim.claimant.id
@@ -319,8 +319,8 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
       out.push({
         kind: "sale.claim", key: `sale.claim:${claim.id}`,
         title: claim.statement === "share"
-          ? `${claim.claimant.name} записал пополам с вами: ${KIND_ACC[claim.sale.kind] ?? "продажу"}, ${fan}, ${money(claim.sale.netMills)}, ${day}`
-          : `${claim.claimant.name} записал себе: ${KIND_ACC[claim.sale.kind] ?? "продажу"}, ${fan}, ${money(claim.sale.netMills)}, ${day}`,
+          ? `${claim.claimant.name} записывает пополам с вами: ${KIND_ACC[claim.sale.kind] ?? "продажу"}, ${fan}, ${money(claim.sale.netMills)}, ${day}`
+          : `${claim.claimant.name} записывает себе: ${KIND_ACC[claim.sale.kind] ?? "продажу"}, ${fan}, ${money(claim.sale.netMills)}, ${day}`,
         pages: [claim.pageLabel], owner: { kind: "user", userId: claim.side.id, username: claim.side.username, displayName: claim.side.name }, money: false,
         evidence: { claimId: claim.id, transactionId: claim.transactionId, statement: claim.statement, note: claim.note, saidAt: new Date(claim.claimedAt).toISOString(), takenAt: new Date(claim.takenAt).toISOString() },
         link: `/workboard/report/${claim.sideShiftId}?sale=${claim.transactionId}`, agoMs: now.getTime() - claim.takenAt,

@@ -102,7 +102,7 @@ import { SHIFT_REPORT_AFTER_PAID_KIND, draftLineOfSale, ledgerDayPaid, pageCatal
  * rule gives a colleague who hands shifts in by the board counts AT ONCE — the
  * claim is settled for them as an agreement is (`silence_at`: by their word
  * alone), every handed-in report of the two that holds the sale gets its new
- * version, and the colleague is TOLD, not asked: a notice «Макс записал себе:
+ * version, and the colleague is TOLD, not asked: a notice «Макс записывает себе:
  * PPV, фан, $52.00, 19 нояб.» (`sale.claim`) that opens their board at that
  * line, open three days. «Понятно» closes it; «Не согласен» (no deadline) takes
  * the sale to the decider and back to the rule's holder until the decision; the
@@ -2025,7 +2025,7 @@ export async function readAgentSaleClaims(
     claims: wires.map((wire, at) => {
       const sale = claims[at]!.transactionId === null ? undefined : sales.get(claims[at]!.transactionId!);
       const who = wire.claimant?.name ?? "кто-то";
-      const what = wire.statement === "share" ? `записал пополам с ${wire.side?.name ?? "коллегой"}` : wire.kind === "double" ? `и ${wire.side?.name ?? "коллега"} посчитали в отчётах` : `записал себе (по правилу ${wire.side?.name ?? "ничья"})`;
+      const what = wire.statement === "share" ? `записывает пополам с ${wire.side?.name ?? "коллегой"}` : wire.kind === "double" ? `и ${wire.side?.name ?? "коллега"} посчитали в отчётах` : `записывает себе (по правилу ${wire.side?.name ?? "ничья"})`;
       // A take stands without the side's answer: counted as written, the side told.
       const state = wire.state === "agreed" && wire.answer === null ? "записано, вторая сторона не отвечала"
         : { asked: "ждёт ответа", agreed: "согласовано", owner: "у владельца", decided: "решено", withdrawn: "снято" }[wire.state];

@@ -329,7 +329,7 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
   } else if (ask?.state === "disputed" && ask.to !== "owner") {
     reasonWords = `${WHO[ask.to].name} не согласен, решит владелец`;
   } else if (takenFromMe) {
-    reasonWords = `записал себе ${WHO[incoming.from].name}`;
+    reasonWords = "по правилу ваша";
   } else if (incoming) {
     reasonWords = `${WHO[incoming.from].name} оспаривает`;
   } else if (proposal && (proposal.state === "proposed" || proposal.state === "accepted")) {

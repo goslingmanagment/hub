@@ -412,7 +412,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     } else if (takenFromMe && incoming !== null && incoming.claimantUserId !== null) {
       // Whose it counts as now: the colleague's, or half with them.
       current = owner(incoming.statement === "share" ? "share" : "user", incoming.claimantUserId, people, me);
-      reason = incoming.statement === "share" ? `пополам, записал ${people.nameOf(incoming.claimantUserId)}` : `записал себе ${people.nameOf(incoming.claimantUserId)}`;
+      reason = "по правилу ваша";
     } else if (proposal !== null && !superseded && (proposal.state === "accepted" || (proposal.state === "proposed" && phase === "confirm"))) {
       reason = "поменял Генгар";
     } else if (proposal !== null && proposal.state === "declined" && counted) {

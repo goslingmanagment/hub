@@ -9,7 +9,7 @@ import { z } from "zod";
 import { intId, isoTimestamp, mills } from "./primitives.ts";
 
 /**
- * The kinds of package G's own matters, the server their one writer: the other side's notice «X записал себе …» (`sale.claim`),
+ * The kinds of package G's own matters, the server their one writer: the other side's notice «X записывает себе …» (`sale.claim`),
  * the owner's dispute of a sale (`sale.dispute`), the owner's weekly line of sales nobody claimed (`sale.nobody_week`),
  * a report's «мимо площадки» waiting for the owner (`off_platform.pending`), the decisions carried over from the ledger
  * that wait to be tied to a sale (`sale.decisions.unlinked`). Kept apart from MATTER_SERVER_KINDS (as the shift report's):

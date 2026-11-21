@@ -373,13 +373,13 @@ export function saleKindAccusative(kind: string): string {
 }
 
 /**
- * The other side's notice of a take: «Макс записал себе: PPV, фан, $52.00, 19 нояб.» or «Макс записал пополам с
- * вами: …». `fan` — the fan's name or login, null — not known.
+ * The other side's notice of a take: «Макс записывает себе: PPV, фан, $52.00, 19 нояб.» or «Макс записывает
+ * пополам с вами: …» (the present tense: Hub knows no gender of a person). `fan` — the fan's name or login, null — not known.
  */
 export function claimTitle(input: { claimant: string; statement: "mine" | "share"; kind: string; fan: string | null; netMills: number; day: string }): string {
   const what = [saleKindAccusative(input.kind), input.fan, money(input.netMills), dayWords(input.day)].filter((part): part is string => part !== null && part !== "").join(", ");
-  if (input.statement === "share") return `${input.claimant} записал пополам с вами: ${what}`;
-  return `${input.claimant} записал себе: ${what}`;
+  if (input.statement === "share") return `${input.claimant} записывает пополам с вами: ${what}`;
+  return `${input.claimant} записывает себе: ${what}`;
 }
 
 /** The owner's matter: «Спор о продаже: Катя и Алекс, PPV, $36.00, 11 нояб.». */

@@ -580,7 +580,7 @@ export function ReportBoard({ report, host, transport, light }: {
       parts.push(
         <div className="u" key="incoming">
           <span className="t">
-            <b>{claim.from.forms.nom} {claim.statement === "share" ? "записал эту продажу пополам с вами:" : "записал эту продажу себе:"}</b>
+            <b>{claim.from.forms.nom} {claim.statement === "share" ? "записывает эту продажу пополам с вами:" : "записывает эту продажу себе:"}</b>
             {claim.note ? <> «{claim.note}».</> : null} Если не согласны, скажите: спор решит {decider}.
             {claim.canAnswer && (
               <span className="u-a">
