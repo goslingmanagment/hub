@@ -395,8 +395,7 @@ export async function updateCustomOrderFields(db: Database, orderId: number, pat
   }
   if (patch.sentCleared === true) sets.push(sql`sent_at = null, sent_message_ref = null`);
   if (patch.card !== undefined) sets.push(sql`card = ${JSON.stringify(patch.card)}::jsonb`);
-  // A deadline written by an edit is no longer the system's «примерно» (0436).
-  if (patch.deadlineOn !== undefined) sets.push(sql`deadline_on = ${patch.deadlineOn}::date, deadline_default = false`);
+  if (patch.deadlineOn !== undefined) sets.push(sql`deadline_on = ${patch.deadlineOn}::date`);
   if (patch.pageId !== undefined) sets.push(sql`page_id = ${patch.pageId}`);
   if (patch.fanId !== undefined) sets.push(sql`fan_id = ${patch.fanId}`);
   if (patch.buyer !== undefined) sets.push(sql`buyer = ${patch.buyer}`);
