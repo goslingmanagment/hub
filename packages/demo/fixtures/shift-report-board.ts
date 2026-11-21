@@ -88,7 +88,8 @@ const PAGES = [
 ] as const;
 type PageId = (typeof PAGES)[number]["id"];
 
-type Own = "me" | "pot" | "oleg" | "seva" | "none" | "half:seva" | "half:oleg" | "";
+/** `wait:oleg` — Oleg's PPV that goes to his next shift (he is not on one now). */
+type Own = "me" | "pot" | "oleg" | "seva" | "none" | "half:seva" | "half:oleg" | "wait:oleg" | "";
 interface Base {
   id: number; page: PageId; day: 11 | 12 | 13; t: string; kind: "media" | "sub" | "tip"; name: string; handle: string;
   net: number; gross: number; tx: string; rule: Own; why: string; late?: boolean; lost?: boolean; before?: boolean;
@@ -110,6 +111,7 @@ const BASE: Base[] = [
   mk(62, "m2", 12, "21:55", "tip", "Rowan/Canada", "rowan_k", 15, 0, "981337101552918406", "me", "тип в чате после вашего сообщения", { found: true }),
   mk(13, "m2", 12, "21:12", "media", "Juno/Oslo", "juno_oslo", 30, 0, "981336851204477390", "half:seva", "ппв Севы из 17:20, дожали вы"),
   mk(5, "m2", 12, "20:41", "sub", "Rowan/Canada", "rowan_k", 8, 0, "981336420187553920", "me", "подписался после вашего сообщения"),
+  mk(15, "m2", 12, "20:58", "media", "Kai/Berlin", "kai_b", 26, 0, "981336530221904118", "wait:oleg", "PPV отправил Олег, уйдёт в его следующую смену"),
   mk(6, "m2", 12, "19:40", "tip", "Felix B.", "felix_b", 16, 0, "981335801669112477", "oleg", "шёл его слот до 20:00"),
   mk(7, "m2", 12, "19:31", "tip", "Dario/Milan", "dario_mi", 40, 0, "981335714022638196", "me", "тип в чате после вашего сообщения"),
   mk(8, "m2", 12, "19:05", "media", "Dario/Milan", "dario_mi", 32, 0, "981335468395021753", "me", "ваш ппв, отправлен в 18:51"),
@@ -183,13 +185,37 @@ function ownerOf(own: Own): ShiftReportOwner {
   const h = half(own);
   if (h) return { kind: "share", userId: WHO[h].userId, name: WHO[h].name, words: `пополам с ${personNameForms(WHO[h].name).ins}` };
   if (own === "oleg" || own === "seva") return { kind: "user", userId: WHO[own].userId, name: WHO[own].name, words: personNameForms(WHO[own].name).gen };
+  if (own === "wait:oleg") return { kind: "waiting", userId: OLEG.userId, name: OLEG.name, words: personNameForms(OLEG.name).gen };
   if (own === "pot") return { kind: "pot", userId: null, name: null, words: "общак" };
   return { kind: "nobody", userId: null, name: null, words: "ничья" };
 }
 const ruleWord = (own: Own) => (own === "me" ? "ваша" : ownerOf(own).words);
-const plainUsd = (v: number) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;
-/** Who answers a question about a sale the rule gives `rule`: the colleague, or the owner for the pot. */
-const askedOf = (rule: Own): Who | "owner" | null => (rule === "oleg" || rule === "seva" ? rule : half(rule) ?? (rule === "pot" ? "owner" : null));
+/** Who answers a question about a sale the rule gives `rule`: the colleague (a waiting PPV's sender), or the owner for the pot. */
+const askedOf = (rule: Own): Who | "owner" | null =>
+  (rule === "oleg" || rule === "seva" ? rule : rule === "wait:oleg" ? "oleg" : half(rule) ?? (rule === "pot" ? "owner" : null));
+/** A waiting PPV's last moment for its sender's shift, as Hub's rule gives it (sale-rule.ts `ppvWaitMs`: a week). */
+const waitsUntilOf = (row: Base) => at(row.day + 7, row.t);
+
+/**
+ * The row's «чья» menu as Hub offers it (shift-report-board-view.ts `choicesOf`). Oleg and Seva both hand in by the
+ * board: a word on a colleague is written at once, they are told; the pot's is the owner's.
+ */
+function choicesOf(row: Base, current: ShiftReportOwner): NonNullable<ShiftReportRow["choices"]> {
+  const is = (one: ShiftReportOwner) => one.kind === current.kind && (one.userId ?? 0) === (current.userId ?? 0);
+  type Asks = NonNullable<ShiftReportRow["choices"]>[number]["asks"];
+  const item = (own: Own, asks: Asks, hint?: string) => {
+    const owner = ownerOf(own);
+    return { owner, asks, hint: own === row.rule ? "по правилу" : hint ?? asks?.words ?? "", current: is(owner) };
+  };
+  if (row.rule !== "me" && half(row.rule) === null) {
+    const holder = askedOf(row.rule);
+    const asks: Asks = holder === null ? null : holder === "owner"
+      ? { to: "decider", user: null, words: "решит владелец" }
+      : { to: "colleague", user: person(WHO[holder]), words: `сообщим ${personNameForms(WHO[holder].name).dat}` };
+    return [item(row.rule, null), item("me", asks), ...(holder === "oleg" || holder === "seva" ? [item(`half:${holder}`, asks)] : [])];
+  }
+  return [item("me", null), item("half:oleg", null), item("half:seva", null), item("oleg", null), item("seva", null), item("pot", null, "решит владелец"), item("none", null)];
+}
 
 /** A word on someone else's sale: `taken` — a colleague's, written to Lev at once (Hub since 2026-11-21); `asked` — the decider's. */
 interface Ask { to: Who | "owner"; want: Own; note: string; state: "asked" | "disputed" | "taken" }
@@ -341,11 +367,12 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
   } else if (share <= 0) {
     reasonWords = row.why;
   }
-  // The prototype's `ownerInfo`: on a half that counts, line 2 says the person's half; the reason moves to the title.
-  if (half(word) && share > 0 && !lostOpen(state, row) && !lateOpen(state, row) && !taken) reasonWords = `вам ${plainUsd(share)}`;
   const attention = lostOpen(state, row) || lateOpen(state, row) || incoming?.state === "taken"
     || (state.phase === "confirm" && (proposal?.state === "proposed" || (state.gNote?.id === row.id && note?.by === "agent")));
   const askTo = ask === null ? null : ask.to;
+  // Ticks and «чья» only in the draft; a comment in every phase (the next shift reads it); nothing in a preview.
+  // A sale a colleague wrote to themself: Lev's words on it change nothing while the take stands (Hub's rule).
+  const editable = own && !state.preview && editing && plain && !takenFromMe;
   return {
     key: sighting ? `s${row.id}` : `t${row.id}`,
     transactionId: sighting ? null : row.id,
@@ -359,7 +386,10 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     occurredAt: at(row.day, row.t),
     netMills: m(row.net),
     grossMills: fansly ? null : m(row.gross),
-    rule: { owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : ownerOf(row.lost ? "me" : row.rule), reason: row.before ? "holder" : "demo", words: row.why },
+    rule: {
+      owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : ownerOf(row.lost ? "me" : row.rule), reason: row.before ? "holder" : "demo", words: row.why,
+      ...(row.rule === "wait:oleg" ? { waitsUntil: waitsUntilOf(row) } : {}),
+    },
     owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : owner,
     statement: taken ? (ask!.want === "me" ? "mine" : "share")
       : word === row.rule || row.before || row.lost ? null : word === "none" ? "not_mine" : word === "me" ? "mine" : half(word) ? "share" : word === "pot" ? "pot" : "give",
@@ -395,13 +425,11 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     } : null,
     note: note ? { text: note.text, by: note.by, byName: note.by === "agent" ? "Генгар" : note.by === "other" ? OLEG.name : LEV.name } : null,
     sighting: sighting ? { id: row.id, seenAt: at(12, "21:31"), added: state.lostAdded } : null,
-    // Ticks and «чья» only in the draft; a comment in every phase (the next shift reads it); nothing in a preview.
-    // A sale a colleague wrote to themself: Lev's words on it change nothing while the take stands (Hub's rule).
-    editable: own && !state.preview && editing && plain && !takenFromMe,
+    editable,
     canNote: own && !state.preview && plain,
     attention,
     // A sale Lev wrote to himself has no menu of «чья» (Hub's rule): the tick or «Отменить» takes it back.
-    ...(taken ? { choices: [] } : {}),
+    ...(editable ? { choices: taken ? [] : choicesOf(row, owner) } : {}),
     foundByHub: row.found === true,
   };
 }
