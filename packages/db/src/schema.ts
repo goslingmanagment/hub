@@ -342,6 +342,9 @@ export const pages = pgTable(
     // The persona the page is meant to be worked with (0326): the client
     // bootstrap's `defaultPersonaKey`. A key of ai_personas, not a FK.
     defaultPersonaKey: text("default_persona_key"),
+    // A test page standing in for this live page (0435, its trigger and foreign key there): the client bootstrap's
+    // `platformAccountId` of the stand-in is the live page's; the stand-in's own `external_page_id` stays null.
+    standsInForPageId: bigint("stands_in_for_page_id", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

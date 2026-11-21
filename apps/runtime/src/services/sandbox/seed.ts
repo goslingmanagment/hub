@@ -7,7 +7,6 @@ import {
   findUserByUsername,
   insertPersonLogin,
   insertPersonRow,
-  replacePersonWorkingPages,
   type Database,
   type PersonRowRole,
 } from "@agency_hub_core/db";
@@ -15,9 +14,10 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { createAccountLinkForUserId } from "../account-links.ts";
 import { createUserOrRefuseDuplicate } from "../auth.ts";
-import { issueAgentKey, replaceAgentKey } from "../agent-keys.ts";
+import { issueAgentKey, replaceAgentKey, updateAgentKeyPages } from "../agent-keys.ts";
 import { AGENT_CAPABILITIES, joinLink, publicationContentSchema, type AgentCapability } from "@agency_hub_core/contracts";
 import { recordCustomOrder } from "../custom-orders/index.ts";
+import { ConflictError } from "../errors.ts";
 import { approvePublications, createPublicationDraft } from "../publications.ts";
 import { openMatter } from "@agency_hub_core/db";
 
@@ -46,6 +46,13 @@ import { openMatter } from "@agency_hub_core/db";
  *              tomorrow, one published yesterday, one whose outcome is unknown, a withdrawn one), with files of the test
  *              pages' own vault. Hub never hands a test page's post to a platform (publications.ts realm conditions).
  * Each is re-runnable for «now»: a run in another minute adds a new day's worth, the same minute adds nothing.
+ *
+ * Stand-in pages (`--stand-in <liveLabel…>`, 0435): a test page `test-<liveLabel>` of the test model standing in for a
+ * live Fansly or OnlyFans page. The client bootstrap names the live page's platform account id on it (its Fansly proxy
+ * is the live page's), so a test login's extension on the real site account binds to the stand-in. A stand-in stores
+ * only the pulse and the board's own writes: what the extension reports of the real account (wallet sightings, send and
+ * note attributions, captures) is accepted and dropped, and a test login reads nothing of a real fan. Every test person
+ * who works gets the stand-ins, and `shift` writes its day on them.
  */
 
 export const SANDBOX_MODEL = { slug: "test", name: "Тест" } as const;
@@ -120,13 +127,26 @@ export interface SandboxSeedInput {
   printInvite?: boolean | string;
   /** Mint the checker's key (replacing its live one) and answer its value once (for the coordinator only). */
   printCheckerKey?: boolean;
+  /** Live pages (by label) to make a stand-in for (0435): `test-<label>`, once each. */
+  standIn?: readonly string[];
   env?: NodeJS.ProcessEnv;
   now?: Date;
+}
+
+/** A stand-in page of the test model and the live page it stands in for. */
+export interface SandboxStandIn {
+  label: string;
+  id: number;
+  platform: "fansly" | "onlyfans";
+  created: boolean;
+  standsInFor: { label: string; id: number };
 }
 
 export interface SandboxSeedResult {
   model: { id: number; created: boolean };
   pages: Array<{ label: string; id: number; created: boolean }>;
+  /** Every stand-in page of the test model (this run's and earlier ones). */
+  standIns: SandboxStandIn[];
   people: Array<{ code: string; personId: number; created: boolean; login: string | null; passwordSet: boolean }>;
   scenarios: Record<string, Record<string, number>>;
   invite: string | null;
@@ -172,6 +192,82 @@ async function ensurePages(db: Database, modelId: number) {
   return result;
 }
 
+/** The label of a live page's stand-in (0435). */
+export function standInLabel(liveLabel: string): string {
+  return `test-${liveLabel}`;
+}
+
+interface StandInTarget { id: number; label: string; platform: "fansly" | "onlyfans"; title: string }
+
+/**
+ * The live pages to make stand-ins for, read and checked before anything is written: each an active, not deleted live
+ * page of Fansly or OnlyFans, whose stand-in label is free or already its own test stand-in, with no other stand-in.
+ */
+async function resolveStandInTargets(db: Database, liveLabels: readonly string[]): Promise<StandInTarget[]> {
+  const out: StandInTarget[] = [];
+  for (const liveLabel of new Set(liveLabels)) {
+    const [page] = await rows(db, sql`select p.id, p.platform, p.display_name, p.status, p.deleted_at, m.is_test
+      from pages p join models m on m.id = p.model_id where p.label = ${liveLabel}`);
+    if (!page || page.status !== "active" || page.deleted_at !== null) throw new SandboxSeedRefused(`No live page «${liveLabel}»: nothing written`);
+    if (page.is_test === true) throw new SandboxSeedRefused(`«${liveLabel}» is a test page, a stand-in stands in for a live one: nothing written`);
+    if (page.platform !== "fansly" && page.platform !== "onlyfans") {
+      throw new SandboxSeedRefused(`«${liveLabel}» is a ${String(page.platform)} page, only Fansly and OnlyFans pages get a stand-in: nothing written`);
+    }
+    const label = standInLabel(liveLabel);
+    const [taken] = await rows(db, sql`select p.platform, p.stands_in_for_page_id, m.is_test from pages p join models m on m.id = p.model_id
+      where p.label = ${label}`);
+    if (taken && (taken.is_test !== true || taken.platform !== page.platform
+      || (taken.stands_in_for_page_id !== null && Number(taken.stands_in_for_page_id) !== Number(page.id)))) {
+      throw new SandboxSeedRefused(`A page called «${label}» is not the stand-in of «${liveLabel}»: nothing written`);
+    }
+    const [other] = await rows(db, sql`select label from pages where stands_in_for_page_id = ${page.id} and label <> ${label}`);
+    if (other) throw new SandboxSeedRefused(`«${liveLabel}» already has the stand-in «${String(other.label)}»: nothing written`);
+    const name = typeof page.display_name === "string" && page.display_name.trim() !== "" ? page.display_name.trim() : liveLabel;
+    out.push({ id: Number(page.id), label: liveLabel, platform: page.platform, title: `${name} (тест)` });
+  }
+  return out;
+}
+
+/**
+ * The stand-ins asked for, made where missing (a page of the test model; a page there already keeps its name), then
+ * every stand-in of the test model. Only the live page's account id, platform and name reach the stand-in.
+ */
+async function ensureStandIns(db: Database, modelId: number, targets: readonly StandInTarget[]): Promise<SandboxStandIn[]> {
+  const created = new Set<number>();
+  for (const target of targets) {
+    const label = standInLabel(target.label);
+    const [found] = await rows(db, sql`select id from pages where label = ${label}`);
+    if (found) {
+      await db.execute(sql`update pages set stands_in_for_page_id = ${target.id} where id = ${Number(found.id)} and stands_in_for_page_id is null`);
+      continue;
+    }
+    // No credentials, no egress endpoint, no platform account id of its own: nothing ever syncs it (sandbox/realm.ts).
+    const page = await createPlatformPage(db, { modelId, platform: target.platform, label });
+    await db.execute(sql`update pages set display_name = ${target.title}, username = ${label}, stands_in_for_page_id = ${target.id}
+      where id = ${page.id}`);
+    created.add(page.id);
+  }
+  const list = await rows(db, sql`select p.id, p.label, p.platform, t.id as target_id, t.label as target_label
+    from pages p join pages t on t.id = p.stands_in_for_page_id
+    where p.model_id = ${modelId} and p.status = 'active' and p.deleted_at is null order by p.id`);
+  return list.map((row) => ({
+    label: String(row.label), id: Number(row.id), platform: row.platform === "onlyfans" ? "onlyfans" : "fansly", created: created.has(Number(row.id)),
+    standsInFor: { label: String(row.target_label), id: Number(row.target_id) },
+  }));
+}
+
+/** Adds pages to a person's working pages after those they have, in order; a page they work already stays as it is. */
+async function addWorkingPages(db: Database, personId: number, pageIds: readonly number[]) {
+  if (pageIds.length === 0) return;
+  await db.execute(sql`
+    insert into person_working_pages (person_id, page_id, position)
+    select ${personId}, listed.page_id,
+      ((select coalesce(max(w.position), -1) from person_working_pages w where w.person_id = ${personId})
+        + row_number() over (order by listed.ordinality))::smallint
+    from unnest(${sql.param(pageIds.map(String))}::bigint[]) with ordinality as listed(page_id, ordinality)
+    where not exists (select 1 from person_working_pages w where w.person_id = ${personId} and w.page_id = listed.page_id)`);
+}
+
 /** Refuses before anything is written when a name of the test team is taken by something live. */
 async function assertNamesFree(db: Database) {
   for (const spec of SANDBOX_PEOPLE) {
@@ -191,7 +287,14 @@ async function assertNamesFree(db: Database) {
   }
 }
 
-async function ensurePerson(db: Database, spec: SandboxPersonSpec, pageIds: readonly number[], env: NodeJS.ProcessEnv, now: Date) {
+async function ensurePerson(
+  db: Database,
+  spec: SandboxPersonSpec,
+  pages: { all: readonly number[]; standIns: readonly number[] },
+  env: NodeJS.ProcessEnv,
+  now: Date,
+) {
+  const pageIds = pages.all;
   let person = await findPersonRowByCode(db, spec.code);
   const created = person === null;
   if (person === null) {
@@ -228,8 +331,9 @@ async function ensurePerson(db: Database, spec: SandboxPersonSpec, pageIds: read
     login = spec.login.username;
   }
   if (spec.works) {
+    // A person with no working page gets every test page; one with some keeps them and gets the stand-ins they lack.
     const [has] = await rows(db, sql`select count(*)::int as n from person_working_pages where person_id = ${person.id}`);
-    if (Number(has?.n ?? 0) === 0) await replacePersonWorkingPages(db, person.id, pageIds);
+    await addWorkingPages(db, person.id, Number(has?.n ?? 0) === 0 ? pageIds : pages.standIns);
   }
   if (spec.board) {
     // A shift is on the board only when the right was granted before it began (shift-report-board-view.ts), and the
@@ -370,20 +474,56 @@ async function testLogin(db: Database, username: string): Promise<number> {
   return Number(row.id);
 }
 
-async function seedShift(db: Database, pages: SandboxSeedResult["pages"], now: Date): Promise<Record<string, number>> {
+/**
+ * The pairs of pages `shift` writes its day on: the two fixed test pages; or, once the test model has stand-ins, the
+ * stand-ins, Fansly with OnlyFans by index (the shorter list wraps around; a platform with no stand-in takes its fixed
+ * test page), one day's set per pair.
+ */
+function shiftPairs(pages: SandboxSeedResult["pages"], standIns: readonly SandboxStandIn[]): Array<{ fansly: number; onlyfans: number }> {
+  const fixed = { fansly: pages.find((page) => page.label === "test-1")!.id, onlyfans: pages.find((page) => page.label === "test-of")!.id };
+  const fansly = standIns.filter((page) => page.platform === "fansly").map((page) => page.id);
+  const onlyfans = standIns.filter((page) => page.platform === "onlyfans").map((page) => page.id);
+  if (fansly.length === 0 && onlyfans.length === 0) return [fixed];
+  return Array.from({ length: Math.max(fansly.length, onlyfans.length) }, (_, index) => ({
+    fansly: fansly.length === 0 ? fixed.fansly : fansly[index % fansly.length]!,
+    onlyfans: onlyfans.length === 0 ? fixed.onlyfans : onlyfans[index % onlyfans.length]!,
+  }));
+}
+
+async function seedShift(db: Database, pages: SandboxSeedResult["pages"], standIns: readonly SandboxStandIn[], now: Date): Promise<Record<string, number>> {
   const context: ShiftContext = { db, stamp: stampOf(now), now: now.getTime() };
-  const fansly = pages.find((page) => page.label === "test-1")!.id;
-  const onlyfans = pages.find((page) => page.label === "test-of")!.id;
   const chat1 = await testLogin(db, "t-chat-1");
   const chat2 = await testLogin(db, "t-chat-2");
-  const n = now.getTime();
   // Platform refs are digits (the archive's checks): 9, the run's minute, a number per name. A page's own refs never
-  // meet another page's, and Fansly's own are 18 digits below 9·10^17.
+  // meet another page's, and Fansly's own are 18 digits below 9·10^17. One map for the run: a pair's names carry its
+  // number (the first pair's none, as before stand-ins), so two pairs sharing a page never repeat a ref.
   const names = new Map<string, number>();
-  const ref = (what: string) => {
-    if (!names.has(what)) names.set(what, names.size + 1);
-    return `9${context.stamp}${String(names.get(what)).padStart(5, "0")}`;
-  };
+  let messages = 0;
+  let sales = 0;
+  for (const [index, pair] of shiftPairs(pages, standIns).entries()) {
+    const ref = (what: string) => {
+      const name = index === 0 ? what : `${index}:${what}`;
+      if (!names.has(name)) names.set(name, names.size + 1);
+      return `9${context.stamp}${String(names.get(name)).padStart(5, "0")}`;
+    };
+    const day = await seedShiftDay(context, pair, { chat1, chat2 }, ref);
+    messages += day.messages;
+    sales += day.sales;
+  }
+  return { messages, sales };
+}
+
+/** One day's set of `shift` on a Fansly page and an OnlyFans page. */
+async function seedShiftDay(
+  context: ShiftContext,
+  pages: { fansly: number; onlyfans: number },
+  logins: { chat1: number; chat2: number },
+  ref: (what: string) => string,
+): Promise<{ messages: number; sales: number }> {
+  const { db } = context;
+  const { fansly, onlyfans } = pages;
+  const { chat1, chat2 } = logins;
+  const n = context.now;
   // Twelve fans a page; the ids are the run's, so a later run talks to the same fans.
   const fFans = await Promise.all(Array.from({ length: 12 }, (_, index) => ensureFan(db, "fansly", index + 1, fansly)));
   const oFans = await Promise.all(Array.from({ length: 6 }, (_, index) => ensureFan(db, "onlyfans", index + 1, onlyfans)));
@@ -615,24 +755,29 @@ export async function seedSandbox(app: AppContext, input: SandboxSeedInput): Pro
   const env = input.env ?? process.env;
   const now = input.now ?? new Date();
   await assertNamesFree(app.db);
+  const targets = await resolveStandInTargets(app.db, input.standIn ?? []);
   const result = await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     const model = await ensureModel(db);
     const pages = await ensurePages(db, model.id);
+    const standIns = await ensureStandIns(db, model.id, targets);
+    const pageIds = { all: [...pages, ...standIns].map((page) => page.id), standIns: standIns.map((page) => page.id) };
     const people = [];
-    for (const spec of SANDBOX_PEOPLE) people.push(await ensurePerson(db, spec, pages.map((page) => page.id), env, now));
-    return { model, pages, people };
+    for (const spec of SANDBOX_PEOPLE) people.push(await ensurePerson(db, spec, pageIds, env, now));
+    return { model, pages, standIns, people };
   });
   const scenarios: SandboxSeedResult["scenarios"] = {};
   for (const scenario of input.scenarios) {
-    if (scenario === "shift") scenarios.shift = await seedShift(app.db, result.pages, now);
+    if (scenario === "shift") scenarios.shift = await seedShift(app.db, result.pages, result.standIns, now);
     if (scenario === "customs") scenarios.customs = await seedCustoms(app, result.pages, now);
     if (scenario === "matters") scenarios.matters = await seedMatters(app.db, result.pages, now);
     if (scenario === "publications") scenarios.publications = await seedPublications(app, result.pages, now);
   }
   const checker = await ensureChecker(app);
+  const testPages = [...result.pages, ...result.standIns];
+  await ensureCheckerPages(app, checker, testPages);
   let checkerKey: string | null = null;
-  if (input.printCheckerKey === true) checkerKey = await mintCheckerKey(app, checker);
+  if (input.printCheckerKey === true) checkerKey = await mintCheckerKey(app, checker, testPages.map((page) => page.label));
   let invite: string | null = null;
   if (input.printInvite !== undefined && input.printInvite !== false) {
     invite = await mintTestLink(app, input.printInvite === true ? "t-new" : input.printInvite, env);
@@ -658,14 +803,32 @@ async function ensureChecker(app: AppContext): Promise<{ personId: number; creat
   return { personId: person.id, created: true };
 }
 
-async function liveCheckerKey(db: Database, personId: number): Promise<{ id: number; capabilities: string[] } | null> {
-  const [row] = await rows(db, sql`select a.id, a.capabilities from person_agent_keys k join agent_keys a on a.id = k.agent_key_id
+async function liveCheckerKey(db: Database, personId: number): Promise<{ id: number; capabilities: string[]; pageIds: number[] } | null> {
+  const [row] = await rows(db, sql`select a.id, a.capabilities, a.page_ids from person_agent_keys k join agent_keys a on a.id = k.agent_key_id
     where k.person_id = ${personId} and a.revoked_at is null and a.replaced_at is null and a.expires_at > now()
     order by a.id desc limit 1`);
-  return row ? { id: Number(row.id), capabilities: (row.capabilities as string[] | null) ?? [] } : null;
+  return row
+    ? { id: Number(row.id), capabilities: (row.capabilities as string[] | null) ?? [], pageIds: ((row.page_ids as Array<string | number> | null) ?? []).map(Number) }
+    : null;
 }
 
-async function mintCheckerKey(app: AppContext, checker: { personId: number }): Promise<string> {
+/**
+ * The checker's live key holds every test page, the stand-ins too (its pages change in place, `updateAgentKeyPages`).
+ * While the key is in a replacement the pair stays equal and nothing changes: a later run adds them.
+ */
+async function ensureCheckerPages(app: AppContext, checker: { personId: number }, pages: ReadonlyArray<{ id: number; label: string }>) {
+  const live = await liveCheckerKey(app.db, checker.personId);
+  if (live === null) return;
+  const missing = pages.filter((page) => !live.pageIds.includes(page.id)).map((page) => page.label);
+  if (missing.length === 0) return;
+  try {
+    await updateAgentKeyPages(app, { id: live.id, add: missing, remove: [], note: "sandbox:seed: the test pages" }, { source: "cli" });
+  } catch (error) {
+    if (!(error instanceof ConflictError && error.reason === "agent_key_being_replaced")) throw error;
+  }
+}
+
+async function mintCheckerKey(app: AppContext, checker: { personId: number }, pageLabels: readonly string[]): Promise<string> {
   const existing = await liveCheckerKey(app.db, checker.personId);
   if (existing !== null) {
     const replaced = await replaceAgentKey(app, { id: existing.id, name: `${SANDBOX_CHECKER.keyName}-${Date.now()}`, expiresInDays: 90 }, { source: "cli" });
@@ -673,7 +836,7 @@ async function mintCheckerKey(app: AppContext, checker: { personId: number }): P
   }
   const issued = await issueAgentKey(app, {
     name: SANDBOX_CHECKER.keyName, agentCode: SANDBOX_CHECKER.code, capabilities: sandboxCheckerCapabilities(),
-    pageLabels: SANDBOX_PAGES.map((page) => page.label), expiresInDays: 90,
+    pageLabels: [...pageLabels], expiresInDays: 90,
   }, { source: "cli" });
   return issued.token;
 }

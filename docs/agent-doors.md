@@ -55,12 +55,15 @@ change is recorded as the person's. No agent calls it. Hub has no screens of pub
 more (their old addresses lead into ContentOps); an agent's own publication door is unchanged: `hub publication-*`,
 `/api/v1/agent/publications…`, `/api/v1/agent/pages/:pageLabel/publication…`, by its capabilities.
 
-**The test realm.** The test team on production (the model «Тест», pages `test-1` and `test-of`, people `t-*`) is
-behind a wall (`services/sandbox/realm.ts`): a live key never reads its people, shifts, sales, reports, questions or
-matters, and no feed serves them to it; a test key reads only them. The one test key is `sandbox-checker`
-(`read:team`, `read:money`, `review:shift_reports` on the two test pages): it plays Gengar's check of a handed-in
-report without touching anything live. A `t-…` login or a `test-…` page in a live key's answer is a hole in the
-wall.
+**The test realm.** The test team on production (the model «Тест», pages `test-1` and `test-of` and the stand-ins
+`test-<liveLabel>` of live pages, people `t-*`) is behind a wall (`services/sandbox/realm.ts`): a live key never reads
+its people, shifts, sales, reports, questions or matters, and no feed serves them to it; a test key reads only them.
+The one test key is `sandbox-checker` (`read:team`, `read:money`, `review:shift_reports` on the test pages, the
+stand-ins too): it plays Gengar's check of a handed-in report without touching anything live. A `t-…` login or a
+`test-…` page in a live key's answer is a hole in the wall. A stand-in is how a test login's extension works a live
+page's real site account: it stores only the pulse and the board's own writes (what the extension reports of the real
+account, wallet sightings and send and note attributions, is accepted and dropped), its Fansly proxy is its live
+page's, and a test login reads nothing of a real fan.
 
 ## Shift reports «со слов»
 

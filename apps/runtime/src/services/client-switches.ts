@@ -26,6 +26,7 @@ import {
   CLIENT_FEATURE_CODE_DEFAULTS,
   clientFeatureExistsOn,
   clientFeatureNeedsOn,
+  clientFeaturePageOf,
   clientVersionRefusal,
   evaluateClientFeature,
   type ClientFeatureSettings,
@@ -318,7 +319,8 @@ export function clientFeatureRefusal(
 ): string | null {
   const availability = evaluateClientFeature({
     settings: switches.settings,
-    page: { label: row.label, platform: row.platform, platformAccountId: row.platformAccountId },
+    // As the bootstrap serves the page: a stand-in (0435) is bound by its live page's account.
+    page: clientFeaturePageOf(row),
     flag,
     served: SERVED_CLIENT_CAPABILITIES,
   });

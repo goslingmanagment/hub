@@ -12,7 +12,8 @@ export function registerSandboxCommands(program: Command) {
     .option("--scenario <name...>", `scenarios to add for now: ${SANDBOX_SCENARIOS.join(", ")}`)
     .option("--print-invite [code]", "mint a fresh link of a test login and print it: t-new by default; t-km opens ContentOps (for the coordinator)")
     .option("--print-checker-key", "mint the sandbox-checker agent's key (replacing its live one) and print its value once")
-    .action(async (options: { scenario?: string[]; printInvite?: boolean | string; printCheckerKey?: boolean }) => {
+    .option("--stand-in <liveLabel...>", "make a test page test-<liveLabel> standing in for each live Fansly or OnlyFans page (its account binds to it)")
+    .action(async (options: { scenario?: string[]; printInvite?: boolean | string; printCheckerKey?: boolean; standIn?: string[] }) => {
       const scenarios = [...new Set(options.scenario ?? [])];
       const unknown = scenarios.filter((name) => !(SANDBOX_SCENARIOS as readonly string[]).includes(name));
       if (unknown.length > 0) throw new Error(`Unknown scenario: ${unknown.join(", ")}`);
@@ -20,11 +21,13 @@ export function registerSandboxCommands(program: Command) {
       try {
         const result = await seedSandbox(app, {
           scenarios: scenarios as SandboxScenario[], printInvite: options.printInvite ?? false, printCheckerKey: options.printCheckerKey === true,
+          standIn: options.standIn ?? [],
         });
         // Never a password: only whether one was set from the environment.
         console.log(JSON.stringify({
           model: result.model,
           pages: result.pages,
+          standIns: result.standIns,
           people: result.people,
           scenarios: result.scenarios,
           checker: result.checker,

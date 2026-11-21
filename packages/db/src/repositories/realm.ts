@@ -93,6 +93,15 @@ export async function isTestPage(db: Database, pageId: number): Promise<boolean>
   return (result.rows[0] as { test?: boolean } | undefined)?.test === true;
 }
 
+/**
+ * Whether the page is a stand-in (0435): a test page standing in for a live one. Nothing the extension observes on the
+ * real account (sightings, send and note attributions) is stored under it: only the pulse and the board's own writes.
+ */
+export async function isStandInPage(db: Database, pageId: number): Promise<boolean> {
+  const result = await db.execute(sql`select exists (select 1 from pages where id = ${pageId} and stands_in_for_page_id is not null) as stand_in`);
+  return (result.rows[0] as { stand_in?: boolean } | undefined)?.stand_in === true;
+}
+
 /** Whether the person is a test person. */
 export async function isTestPerson(db: Database, personId: number): Promise<boolean> {
   const result = await db.execute(sql`select exists (select 1 from people where id = ${personId} and is_test) as test`);

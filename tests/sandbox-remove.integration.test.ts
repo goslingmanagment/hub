@@ -17,7 +17,8 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 // `sandbox:remove --execute` (the owner's word, services/sandbox/remove.ts) takes the WHOLE test team — its handed-in
 // reports too, which no one else may ever delete (0400, 0412; 0425 lets the removal take a test person's rows only) —
 // and nothing of the live agency beside it. The test team did everything it can: every seed scenario, a report handed
-// in on the board and counted, a swap answered «Можно», a question; the live agency has the same beside it.
+// in on the board and counted, a swap answered «Можно», a question, all on a stand-in of the live page too (0435); the
+// live agency has the same beside it.
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -124,7 +125,9 @@ beforeAll(async () => {
   const app = createTestAppContext(testDb);
   const db = app.db as Database;
   await seedLive(db);
-  await seedSandbox(app, { scenarios: ["shift", "customs", "matters", "publications"], env: {}, now: new Date(T0 - 12 * HOUR), printCheckerKey: true });
+  await seedSandbox(app, {
+    scenarios: ["shift", "customs", "matters", "publications"], env: {}, now: new Date(T0 - 12 * HOUR), printCheckerKey: true, standIn: ["live-1"],
+  });
   await db.execute(sql`insert into person_rights (person_id, "right", granted_at)
     select id, 'submits_shift', ${new Date(T0 - 30 * DAY).toISOString()}::timestamptz from people where is_test and role = 'chatter'
     on conflict do nothing`);
@@ -207,6 +210,11 @@ describe("sandbox:remove takes the whole test team and nothing live", () => {
     expect(Number(did.publications)).toBeGreaterThan(0);
     expect(ids.matters.length).toBeGreaterThan(0);
     expect(ids.orders.length).toBeGreaterThan(0);
+    // The live page has a stand-in, and the day's sales are on it.
+    const [standIn] = await read(sql`select p.id::text as id, (select count(*)::int from transactions t where t.platform_account_id = p.id) as sales
+      from pages p where p.stands_in_for_page_id = ${live.pageId}`);
+    expect(ids.pages).toContain(standIn!.id);
+    expect(Number(standIn!.sales)).toBeGreaterThan(0);
 
     const before = await liveSnapshot(db);
     const plan = await planSandboxRemoval(db);
@@ -249,6 +257,7 @@ describe("sandbox:remove takes the whole test team and nothing live", () => {
       or (object_type = 'shift_report' and object_id = any(${sql.param(ids.handins)}::text[]))`);
     expect(history).toEqual([]);
     expect(await read(sql`select id from agent_keys where page_ids && ${`{${ids.pages.join(",")}}`}::bigint[]`)).toEqual([]);
+    expect(await read(sql`select id from pages where stands_in_for_page_id is not null`)).toEqual([]);
     // The live question is still the live owner's to answer.
     expect(await read(sql`select id from team_questions where id = ${live.questionId} and state = 'open'`)).toHaveLength(1);
   }, 600_000);

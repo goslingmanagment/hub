@@ -110,6 +110,12 @@ export async function ingestClientObservations(
      * then names only the version.
      */
     clientProfile?: ClientTokenProfile | null;
+    /**
+     * The principal's realm (sandbox/realm.ts `realmOf`). A test login's events are read like anyone's and then dropped:
+     * nothing of them is journaled, and its health reports never merge into the hourly rollups, which have no user or
+     * page to keep them apart from the live team's (and open the live owner's matters).
+     */
+    realm: "live" | "test";
     events: IngestObservationsBody["events"];
   },
 ): Promise<IngestObservationsResponse> {
@@ -132,6 +138,10 @@ export async function ingestClientObservations(
         throw new InvalidIngestEventError(index, `kind "${event.kind}" is not accepted from this client`);
       }
     }
+  }
+
+  if (input.realm === "test") {
+    return { accepted: input.events.length, duplicates: 0 };
   }
 
   const pageScope = input.allowedPageIds === null ? null : new Set(input.allowedPageIds);

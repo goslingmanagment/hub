@@ -1,25 +1,27 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import argon2 from "argon2";
 
-import { SIGNIN_CLIENTS } from "@agency_hub_core/contracts";
-import { createFanslyPage, createModel, insertPersonLogin, insertPersonRow, type Database } from "@agency_hub_core/db";
+import { SIGNIN_CLIENTS, type ClientBootstrapResponse } from "@agency_hub_core/contracts";
+import { createFanslyPage, createModel, createOnlyFansPage, insertPersonLogin, insertPersonRow, type Database } from "@agency_hub_core/db";
 
 import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { issueAgentKey, updateAgentKeyPages } from "../apps/runtime/src/services/agent-keys.ts";
 import { prepareAiGatewayStream } from "../apps/runtime/src/services/ai-gateway.ts";
 import { authenticateSessionToken, createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { seedSandbox, SANDBOX_CHECKER } from "../apps/runtime/src/services/sandbox/seed.ts";
 import { handinActorOf } from "../apps/runtime/src/services/shift-handins.ts";
 import { handInShiftReport } from "../apps/runtime/src/services/shift-report-board.ts";
 import { syncShiftRowsSince } from "../apps/runtime/src/services/shift-rows.ts";
 import { checkServerGrant, mintServerCode, redeemServerCode } from "../apps/runtime/src/services/signin-handoff.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 // The doors of the test realm (apps/runtime/src/services/sandbox/realm.ts) one by one: the static reports' guard, the
 // sign-in hand-off, every decider of whose a sale is, the writes of the test owner's table, the agent keys' grants,
-// the test team's checker and the AI gateway.
+// the test team's checker, the AI gateway, and the extension's door to a real site account: a stand-in page (0435).
 
 const PASSWORDS = {
   SANDBOX_PASSWORD_T_OWNER: "sandbox-owner-1",
@@ -277,5 +279,141 @@ describe("sandbox:seed --print-invite [code]", () => {
     if (!app) return context.skip();
     await expect(seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "live-chatter" })).rejects.toThrow(/not a login of the test team/);
     await expect(seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "nobody" })).rejects.toThrow(/not a login of the test team/);
+  });
+});
+
+describe("stand-in pages (0435)", () => {
+  const LIVE_FANSLY_ACCOUNT = "412345678901234567";
+  const LIVE_ONLYFANS_ACCOUNT = "312345678";
+  /** An invented OnlyMonster account: the owner's ChatSpace binding of the live OnlyFans page. */
+  const HOST_ACCOUNT = "onlymonster:10001";
+  const tokens = { anton: "", owner: "", tChat: "" };
+  const before: { chatter: ClientBootstrapResponse | null; owner: ClientBootstrapResponse | null; proxies: unknown } = { chatter: null, owner: null, proxies: null };
+  let seeded: Awaited<ReturnType<typeof seedSandbox>> | null = null;
+
+  const userOf = async (username: string) => Number((await app!.db.execute<{ id: string }>(sql`select id from users where username = ${username}`)).rows[0]!.id);
+  const tokenOf = async (username: string) => (await issueDeviceTokenForUserId(app!, { userId: await userOf(username), label: "extension" })).token;
+  const get = (url: string, token: string) => server!.inject({ method: "GET", url, headers: { authorization: `Bearer ${token}`, "x-client-version": "chat-extension/3.30.0" } });
+  const bootstrap = async (token: string) => {
+    const answer = await get("/api/v1/client/bootstrap", token);
+    expect(answer.statusCode, answer.body).toBe(200);
+    return { ...(answer.json() as ClientBootstrapResponse), issuedAt: "" };
+  };
+  const proxies = async (token: string) => {
+    const answer = await get("/api/v1/client/fansly-proxies", token);
+    expect(answer.statusCode, answer.body).toBe(200);
+    return { ...(answer.json() as { proxies: Array<Record<string, unknown>> }), serverNow: "" };
+  };
+
+  beforeAll(async () => {
+    if (!server || !app || !testDb) return;
+    const db = app.db as Database;
+    // The live pages' accounts on their sites, an OnlyFans page beside the Fansly one, the Fansly page's proxy, the
+    // owner's ChatSpace binding of the OnlyFans one, and switches on, so an unbound page would read `binding_missing`.
+    const [lana] = (await db.execute<{ id: string }>(sql`select id from models where slug = 'lana'`)).rows;
+    const liveOf = await createOnlyFansPage(db, { modelId: Number(lana!.id), label: "live-of" });
+    await db.execute(sql`update pages set external_page_id = ${LIVE_FANSLY_ACCOUNT} where label = 'live-1'`);
+    await db.execute(sql`update pages set external_page_id = ${LIVE_ONLYFANS_ACCOUNT}, display_name = 'Lana OF' where id = ${liveOf.id}`);
+    const [live1] = (await db.execute<{ id: string }>(sql`select id from pages where label = 'live-1'`)).rows;
+    await saveProxy(app, Number(live1!.id), { url: "socks5://203.0.113.10:12324", username: "live-user", password: "live-pass" });
+    await db.execute(sql`insert into user_page_assignments (user_id, platform_account_id) values (${await userOf("anton")}, ${liveOf.id})`);
+    const patched = await call("PATCH", "/api/v1/admin/config", cookie.owner, { patches: [
+      { key: "chatExtensionEnabled", value: true },
+      { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { fanPanel: true, ofFeed: true }, "live-1": { fanPanel: true }, "test-live-1": { fanPanel: true }, "test-live-of": { fanPanel: true } }) },
+      { key: "chatExtensionHostBindings", value: JSON.stringify({ [HOST_ACCOUNT]: "live-of" }) },
+    ] });
+    expect(patched.statusCode, patched.body).toBe(200);
+    tokens.anton = await tokenOf("anton");
+    tokens.owner = (await issueDeviceTokenForUserId(app, { userId: ids.ownerId, label: "extension" })).token;
+    before.chatter = await bootstrap(tokens.anton);
+    before.owner = await bootstrap(tokens.owner);
+    before.proxies = await proxies(tokens.anton);
+    seeded = await seedSandbox(app, { scenarios: [], env: PASSWORDS, standIn: ["live-1", "live-of"] });
+    tokens.tChat = await tokenOf("t-chat-1");
+  }, 300_000);
+
+  it("a test chatter's extension gets the live page's account on its stand-in; a live login's bootstrap is as it was", async (context) => {
+    if (!server || !app || !testDb || seeded === null) return context.skip();
+    expect(seeded.standIns.map((one) => [one.label, one.standsInFor.label])).toEqual([["test-live-1", "live-1"], ["test-live-of", "live-of"]]);
+    expect(before.chatter!.pages.find((page) => page.pageLabel === "live-of")?.platformAccountId).toBe(LIVE_ONLYFANS_ACCOUNT);
+
+    // A live login's bootstrap is exactly what it was: no stand-in in it, nothing of its pages changed.
+    expect({ chatter: await bootstrap(tokens.anton), owner: await bootstrap(tokens.owner) }).toEqual({ chatter: before.chatter, owner: before.owner });
+    expect(before.owner!.pages.map((page) => page.pageLabel).filter((label) => label.startsWith("test-"))).toEqual([]);
+
+    // The test chatter's: each stand-in carries its live page's account and is bound; the owner's ChatSpace binding of
+    // the live page points at the stand-in; the live pages themselves are not there.
+    const test = await bootstrap(tokens.tChat);
+    const page = (label: string) => test.pages.find((one) => one.pageLabel === label);
+    expect(page("test-live-1")).toMatchObject({ platform: "fansly", platformAccountId: LIVE_FANSLY_ACCOUNT, features: { fanPanel: { available: true } } });
+    expect(page("test-live-of")).toMatchObject({
+      platform: "onlyfans", platformAccountId: LIVE_ONLYFANS_ACCOUNT, title: "Lana OF (тест)", features: { fanPanel: { available: true } },
+    });
+    expect(page("test-of")).toMatchObject({ platformAccountId: null, features: { fanPanel: { available: false, reason: "binding_missing" } } });
+    // A stand-in reads its own row alone: what `"*"` switches on for every OnlyFans page (the feed) stays off on it.
+    expect(page("test-live-of")?.features.ofFeed).toMatchObject({ available: false, reason: "flag_off" });
+    expect(test.bindingsByHost).toEqual({ [HOST_ACCOUNT]: page("test-live-of")!.pageId });
+    expect(test.pages.map((one) => one.pageLabel).filter((label) => !label.startsWith("test-"))).toEqual([]);
+    // The stand-in's own account stays empty: nothing syncs it, and the OnlyFans feed's account check still refuses it.
+    const own = await app.db.execute<{ external_page_id: string | null }>(sql`select external_page_id from pages where label in ('test-live-1', 'test-live-of')`);
+    expect(own.rows.map((row) => row.external_page_id)).toEqual([null, null]);
+  });
+
+  it("a Fansly stand-in's tab leaves through its live page's proxy; the live chatter's proxies are as they were", async (context) => {
+    if (!server || seeded === null) return context.skip();
+    expect(await proxies(tokens.anton)).toEqual(before.proxies);
+    const test = await proxies(tokens.tChat);
+    expect(test.proxies.map((one) => [one.pageLabel, one.platformAccountId, one.host, one.port])).toEqual([
+      ["test-live-1", LIVE_FANSLY_ACCOUNT, "203.0.113.10", 12324],
+    ]);
+  });
+
+  it("a test login reads nothing of a real fan through its stand-in; the live chatter still gets the fan's marks", async (context) => {
+    if (!server || !app || seeded === null) return context.skip();
+    const db = app.db as Database;
+    // A real fan of the live Fansly page: in its «Бомж» list, with money there.
+    const REAL_FAN = "410000000000000077";
+    const [live1] = (await db.execute<{ id: string }>(sql`select id from pages where label = 'live-1'`)).rows;
+    const [fan] = (await db.execute<{ id: string }>(sql`insert into fans (platform, platform_user_id, username, first_seen_at)
+      values ('fansly', ${REAL_FAN}, 'real_fan', now()) returning id`)).rows;
+    await db.execute(sql`insert into page_fans (fan_id, platform_account_id) values (${fan!.id}, ${live1!.id})`);
+    await db.execute(sql`insert into page_fan_lists (page_id, list_ref, label, list_type, item_count, observation_id, captured_at)
+      values (${live1!.id}, '101', 'Бомж', 1, 1, 0, now())`);
+    await db.execute(sql`insert into page_fan_list_members (page_id, list_ref, fan_id, first_seen_at, last_seen_at, last_seen_generation, is_active)
+      values (${live1!.id}, '101', ${fan!.id}, now(), now(), 1, true)`);
+    await db.execute(sql`insert into fan_spend_lifetime (platform_account_id, fan_id, gross_amount_mills, creator_net_amount_mills, last_transaction_at)
+      values (${live1!.id}, ${fan!.id}, 50000, 40000, now())`);
+    const marks = (token: string, label: string) => get(`/api/v1/client/pages/${label}/fans/${REAL_FAN}/marks?username=real_fan`, token);
+    const otherPages = (token: string, label: string) => server!.inject({
+      method: "POST", url: `/api/v1/client/pages/${label}/other-pages`, headers: { authorization: `Bearer ${token}`, "x-client-version": "chat-extension/3.30.0" },
+      payload: { fanRefs: [REAL_FAN] },
+    });
+
+    const live = await marks(tokens.anton, "live-1");
+    expect(live.statusCode, live.body).toBe(200);
+    expect((live.json() as { lists: Array<{ pageLabel: string }> }).lists.map((list) => list.pageLabel)).toEqual(["live-1"]);
+
+    const test = await marks(tokens.tChat, "test-live-1");
+    expect(test.statusCode, test.body).toBe(200);
+    expect(test.json()).toMatchObject({ pageLabel: "test-live-1", lists: [], blocklist: [] });
+    expect(test.json()).not.toHaveProperty("otherPages");
+    const testOther = await otherPages(tokens.tChat, "test-live-1");
+    expect(testOther.statusCode, testOther.body).toBe(200);
+    expect(testOther.json()).toEqual({ pageLabel: "test-live-1", fans: [] });
+  });
+
+  it("the database refuses a stand-in that is live, of a test page, of another platform, of itself, or a second one", async (context) => {
+    if (!testDb || seeded === null) return context.skip();
+    const id = async (label: string) => Number(((await testDb!.pool.query("select id from pages where label = $1", [label])).rows[0] as { id: string }).id);
+    const [live1, liveOf, test1, testOf, standIn] = (await Promise.all(["live-1", "live-of", "test-1", "test-of", "test-live-1"].map(id))) as [number, number, number, number, number];
+    const standsIn = (pageId: number, target: number) => testDb!.pool.query("update pages set stands_in_for_page_id = $2 where id = $1", [pageId, target]);
+    await expect(standsIn(liveOf, live1)).rejects.toThrow(/is live/u);
+    await expect(standsIn(test1, standIn)).rejects.toThrow(/cannot stand in for the test page/u);
+    await expect(standsIn(testOf, live1)).rejects.toThrow(/another platform/u);
+    await expect(standsIn(test1, test1)).rejects.toThrow(/itself/u);
+    await expect(standsIn(test1, live1)).rejects.toThrow(/pages_stands_in_for_uniq/u);
+    // A seed asked for a test page, or a page that is not there, writes nothing.
+    await expect(seedSandbox(app!, { scenarios: [], env: PASSWORDS, standIn: ["test-1"] })).rejects.toThrow(/is a test page/u);
+    await expect(seedSandbox(app!, { scenarios: [], env: PASSWORDS, standIn: ["nowhere"] })).rejects.toThrow(/No live page/u);
   });
 });

@@ -2,7 +2,7 @@ import { listClientBootstrapPages } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
-import { evaluateClientFeature } from "./client-features.ts";
+import { clientFeaturePageOf, evaluateClientFeature } from "./client-features.ts";
 import { loadClientSwitches } from "./client-switches.ts";
 
 /**
@@ -33,7 +33,7 @@ export async function isSplitAllOnForPage(app: AppContext, pageId: number): Prom
     const switches = await loadClientSwitches(app);
     return evaluateClientFeature({
       settings: switches.settings,
-      page: { label: row.label, platform: row.platform, platformAccountId: row.platformAccountId },
+      page: clientFeaturePageOf(row),
       flag: "splitAll",
       served: SERVED_CLIENT_CAPABILITIES,
     }).available;

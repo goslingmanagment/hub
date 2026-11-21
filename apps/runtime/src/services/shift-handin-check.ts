@@ -11,6 +11,7 @@ import {
   hasShiftReportReviewer,
   insertHandinCandidate,
   insertObservation,
+  isStandInPage,
   listHandinCandidates,
   listHandinMarks,
   listHandinNames,
@@ -275,6 +276,8 @@ export async function recordSaleSightings(app: Pick<AppContext, "db" | "logger">
   const catalog = await pageCatalog(app.db);
   const pageId = catalog.idOf.get(body.pageLabel);
   if (pageId === undefined || !principal.assignedPageIds.includes(pageId)) throw new NotFoundError("No such page of yours");
+  // A stand-in (0435) keeps nothing of its real account: the rows are taken and dropped, as if Hub held them all.
+  if (await isStandInPage(app.db, pageId)) return { kept: 0, known: body.rows.length, serverNow: now.toISOString() };
   const platform = catalog.info.get(body.pageLabel)?.platform ?? "fansly";
   const producer = clientCaptureProducer(principal, null);
   const known = await listKnownPlatformRefs(app.db, { pageId, refs: body.rows.map((row) => row.platformRef) });
