@@ -15,7 +15,7 @@ import "./board.css";
  */
 
 const SCENARIOS: ReadonlyArray<{ id: number; name: string; what: string }> = [
-  { id: 9_120_001, name: "Черновик", what: "Колонка на каждую страницу, галочки по правилу" },
+  { id: 9_120_001, name: "Черновик", what: "Карточка на каждую страницу, галочки по правилу, PPV Олега уйдёт в его смену" },
   { id: 9_120_002, name: "Комментарий", what: "Комментарии к продажам и к смене" },
   { id: 9_120_003, name: "Забрать у коллеги", what: "Записано сразу, Олег узнает" },
   { id: 9_120_004, name: "Забрать из общака", what: "Вопрос владельцу ждёт ответа" },
@@ -28,8 +28,8 @@ const SCENARIOS: ReadonlyArray<{ id: number; name: string; what: string }> = [
   { id: 9_120_011, name: "Продажа после сдачи", what: "«Досдать» в учтённый отчёт" },
   { id: 9_120_012, name: "Учтён", what: "«Скопировать пост», «Исправить»" },
   { id: 9_120_013, name: "Правка", what: "Отчёт открыт снова: «Было …, стало …»" },
-  { id: 9_120_014, name: "5 страниц", what: "Колонки уходят вбок" },
-  { id: 9_120_015, name: "Страница без продаж", what: "Узкая колонка «За смену продаж нет»" },
+  { id: 9_120_014, name: "5 страниц", what: "Пять карточек одна под другой, справа «Страницы»" },
+  { id: 9_120_015, name: "Страница без продаж", what: "Карточка «За смену продаж нет»" },
   { id: 9_120_016, name: "Просмотр без права", what: "Сдача смены доской не включена: доска только для чтения" },
   { id: 9_120_017, name: "Две модели", what: "Mia и Nova: комментарий и пост у каждой" },
   { id: 9_120_018, name: "День с перерывом", what: "Утренняя смена не сдана: её продажа и путь к её отчёту" },
@@ -46,34 +46,34 @@ export function ReportDemoIndex() {
   useEffect(() => {
     document.title = "Отчёт смены: демо";
   }, []);
-  const cell = { padding: "8px 12px", borderBottom: "1px solid var(--rule)", textAlign: "left" as const, verticalAlign: "top" as const };
+  const cell = { padding: "8px 12px", borderBottom: "1px solid var(--sep)", textAlign: "left" as const, verticalAlign: "top" as const };
   return (
     <div className="rb" style={{ overflowY: "auto" }}>
       <div style={{ maxWidth: 980, margin: "0 auto", padding: "28px 16px 40px" }}>
-        <h1 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 600, color: "var(--ink-strong)" }}>Отчёт смены: сценарии прототипа</h1>
-        <p style={{ margin: "0 0 18px", color: "var(--ink-muted)" }}>Демо на выдуманных данных. Каждая ссылка открывает свежую копию сценария; дальше доска прокликивается до конца, как прототип.</p>
+        <h1 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 600, color: "var(--l1)" }}>Отчёт смены: сценарии прототипа</h1>
+        <p style={{ margin: "0 0 18px", color: "var(--l2)" }}>Демо на выдуманных данных. Каждая ссылка открывает свежую копию сценария; дальше доска прокликивается до конца, как прототип.</p>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
-            <tr style={{ color: "var(--ink-muted)" }}><th style={cell}>Сценарий</th><th style={cell}>Смена</th><th style={cell}>Открыть</th></tr>
+            <tr style={{ color: "var(--l2)" }}><th style={cell}>Сценарий</th><th style={cell}>Смена</th><th style={cell}>Открыть</th></tr>
           </thead>
           <tbody>
             {SCENARIOS.map((one) => (
               <tr key={one.id}>
-                <td style={cell}><b style={{ color: "var(--ink-strong)" }}>{one.name}</b><br /><span style={{ color: "var(--ink-muted)" }}>{one.what}</span></td>
-                <td style={{ ...cell, fontVariantNumeric: "tabular-nums", color: "var(--ink-muted)" }}>{one.id}</td>
+                <td style={cell}><b style={{ color: "var(--l1)" }}>{one.name}</b><br /><span style={{ color: "var(--l2)" }}>{one.what}</span></td>
+                <td style={{ ...cell, fontVariantNumeric: "tabular-nums", color: "var(--l2)" }}>{one.id}</td>
                 <td style={{ ...cell, whiteSpace: "nowrap" }}>
-                  <a className="lk is-clay" onClick={fresh} href={role("chatter", `/report/${one.id}`)}>Чаттер, вкладка</a>{"  ·  "}
-                  <a className="lk is-clay" onClick={fresh} href={role("chatter", `/__report/frame?shift=${one.id}`)}>Чаттер, в рамке</a>{"  ·  "}
-                  <a className="lk" onClick={fresh} href={role("owner", `/report/${one.id}`)}>Владелец читает</a>
+                  <a className="lk" onClick={fresh} href={role("chatter", `/report/${one.id}`)}>Чаттер, вкладка</a>{"  ·  "}
+                  <a className="lk" onClick={fresh} href={role("chatter", `/__report/frame?shift=${one.id}`)}>Чаттер, в рамке</a>{"  ·  "}
+                  <a className="lk is-quiet" onClick={fresh} href={role("owner", `/report/${one.id}`)}>Владелец читает</a>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <p style={{ marginTop: 18, color: "var(--ink-muted)" }}>
+        <p style={{ marginTop: 18, color: "var(--l2)" }}>
           Рамка расширения: <code>{BASE}/frame/report?shift=&lt;смена&gt;</code> принимает порт от сайта (здесь его роль играет страница «в рамке»).
           Без ключа или порта за 10 секунд говорит «Откройте отчёт из ChatGoose»; расширение старой версии:{" "}
-          <a className="lk is-clay" onClick={fresh} href={role("chatter", "/__report/frame?shift=9120001&v=1")}>«Обновите ChatGoose»</a>.
+          <a className="lk" onClick={fresh} href={role("chatter", "/__report/frame?shift=9120001&v=1")}>«Обновите ChatGoose»</a>.
         </p>
       </div>
     </div>
@@ -81,14 +81,17 @@ export function ReportDemoIndex() {
 }
 
 const MINI_CSS = `
-.rb .mini{position:absolute;left:0;right:0;bottom:0;z-index:8;display:flex;align-items:center;gap:14px;height:44px;padding:0 10px 0 16px;background:var(--raised);box-shadow:0 -1px 0 var(--rule-2),0 -12px 30px -16px rgb(0 0 0 / .9);white-space:nowrap}
-.rb .mini-t{display:flex;align-items:center;gap:7px;font-weight:600;color:var(--ink-strong)}
-.rb .mini-t .ico{color:var(--clay)}
-.rb .mini-c{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--ink-2)}
-.rb .mini-c b{font-weight:600;color:var(--ink-strong)}
-.rb .mini-s{color:var(--ink-muted)}
-.rb .mini-s b{font-weight:600;color:var(--ink-strong);font-variant-numeric:tabular-nums}
-.rb .site{position:absolute;inset:0 0 44px;display:flex;align-items:center;justify-content:center;color:var(--ink-faint)}
+.rb .mini{position:absolute;left:0;right:0;bottom:0;z-index:8;display:flex;align-items:center;gap:14px;height:48px;padding:0 10px 0 16px;background:var(--elev);box-shadow:0 -1px 0 var(--line),0 -12px 30px -16px light-dark(rgba(40,30,20,.25),rgb(0 0 0 / .9));white-space:nowrap}
+.rb .mini-t{display:flex;align-items:center;gap:8px;font-weight:600}
+.rb .mini-t .ico{color:var(--tint)}
+.rb .mini-c{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--l2)}
+.rb .mini-c b{font-weight:600;color:var(--l1)}
+.rb .mini-s{color:var(--l2)}
+.rb .mini-s b{font-weight:600;color:var(--l1);font-variant-numeric:tabular-nums}
+.rb .chip{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:12px;background:var(--fill);font-size:13px;font-weight:600;color:var(--l2)}
+.rb .chip.is-clay{background:var(--tint-soft);color:var(--tint)}
+.rb .chip.is-good{background:var(--green-soft);color:var(--green)}
+.rb .site{position:absolute;inset:0 0 48px;display:flex;align-items:center;justify-content:center;color:var(--l3)}
 `;
 
 /** The site's own words of a sale, as the extension says them in «Сверка». */
@@ -195,7 +198,7 @@ export function ReportDemoFrame() {
             {compare && missing === null && <span className="mini-c">Сверка: <b>{compare.pageLabel}</b>, {siteWords(compare)} {compare.fanName}, {compare.platformRef ? `#…${compare.platformRef.slice(-4)}` : new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" }).format(new Date(compare.occurredAt))}</span>}
             <span className="grow" />
             {state && state.phase !== "none" && <span className="mini-s">Ваши продажи: {state.count}, <b>{usd(state.totalMills)}</b></span>}
-            <button type="button" className="btn btn--line btn--sm" onClick={back}>{compare ? "К отчёту" : "Отчёт"}</button>
+            <button type="button" className="btn btn--sec btn--sm" onClick={back}>{compare ? "К отчёту" : "Отчёт"}</button>
           </section>
         )}
       </div>

@@ -1,4 +1,4 @@
-/** The prototype's own 16-unit icons (columns.html `I`), drawn the same way: 1.6 stroke, round caps. */
+/** The board's own 16-unit icons, drawn the same way: 1.6 stroke, round caps. */
 const PATHS = {
   report: <><path d="M4 2.4h5.4l2.8 2.8v8.4H4z" /><path d="M9.2 2.6v2.8H12" /><path d="M6 9.7l1.4 1.4 2.6-2.9" /></>,
   check: <path d="M3.2 8.4l3 2.9L12.8 4.8" />,
@@ -11,6 +11,8 @@ const PATHS = {
   people: <><circle cx="5.8" cy="6" r="2.2" /><path d="M2 13c.4-2 1.8-3.2 3.8-3.2S9.2 11 9.6 13" /><circle cx="11" cy="5.4" r="1.8" /><path d="M10.4 9.3c1.9-.2 3.3.9 3.7 3.1" /></>,
   copy: <><rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.6" /><path d="M10.5 5.5V4.2A1.2 1.2 0 0 0 9.3 3H4.2A1.2 1.2 0 0 0 3 4.2v5.1a1.2 1.2 0 0 0 1.2 1.2h1.3" /></>,
   pen: <><path d="M10.6 2.9l2.5 2.5-7.6 7.6-3.1.6.6-3.1z" /><path d="M9.2 4.3l2.5 2.5" /></>,
+  spark: <path d="M8 1.8l1.5 4.2 4.3 1.6-4.3 1.6L8 13.4 6.5 9.2 2.2 7.6l4.3-1.6z" />,
+  lock: <><rect x="3.6" y="7.2" width="8.8" height="6.2" rx="1.4" /><path d="M5.6 7.2V5.4a2.4 2.4 0 0 1 4.8 0v1.8" /></>,
   min: <path d="M3.5 12h9" />,
   back: <path d="M9.8 3.6L5.4 8l4.4 4.4" />,
 } as const;
