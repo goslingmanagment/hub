@@ -104,7 +104,8 @@ the owner's machine (outside this repository); a change that moves a home or add
   claim alone moves no home. A colleague's sale written to oneself («Моя», «Пополам с …») is a take: it counts at once
   (owner, 2026-11-21), the colleague is told, not asked, and while it stands it reads as their agreement, so the home
   follows it; «Не согласен» is the decider's dispute, the sale back by the rule until decided. One path:
-  `settleTakeWithin`. Because the home follows it, the sale changes sides in both drafts while the take can still be
+  `settleTakeWithin`. A take on a sale the colleague's report of an already paid day counts is the owner's at once
+  (`escalated_why = 'paid'`): the money is out, nothing moves by a word alone. Because the home follows it, the sale changes sides in both drafts while the take can still be
   undone: a settlement settles a draft's line whatever the line counts now (`draftLines`), and the taker's word lives
   in the claim, written back to their line on a dispute. Hub is their only home: what the chat agent records «со слов» comes through
   `services/sale-decisions-door.ts` (`hub sale decide|ask|…`), a decision on a known sale through the owner's own path

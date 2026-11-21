@@ -873,6 +873,7 @@ export type { MadeVersion, SettleBy };
  * a colleague is settled for the one who said it as an agreement is (`agreed`, `silence_at`: by their word alone, the
  * side told and free to object), and every handed-in report of the two that holds the sale gets what it gives — the
  * claimant all (or a half), the side none (or the other half). Not when (`decider`):
+ *  - the colleague's report of a day the ledger already paid counts the sale (`paid`): the owner's, nothing moves;
  *  - the sale is settled or disputed already by someone else's word (an agreement or a take of another person, a
  *    claim waiting for the decider) or ruled by a decision — one take per sale, no ping-pong: the word is the
  *    decider's, the sale stays as it is; and when the one saying it is the side of an unanswered take of it, it is
@@ -892,8 +893,8 @@ export async function settleTakeWithin(
   const sideIds = (await findHandinPersonOfUser(txDb, claim.sideUserId))?.userIds ?? [claim.sideUserId];
   // The same word against the colleague's other login goes wherever this one goes (`sameTakeOf`).
   const same = [claim, ...await sameTakeOf(txDb, claim, ["asked"])];
-  const toDecider = async () => {
-    for (const one of same) await updateSaleClaim(txDb, one.id, { state: "owner", escalatedAt: now, escalatedWhy: "double" }, now, { ifState: "asked" });
+  const toDecider = async (why: "double" | "paid" = "double") => {
+    for (const one of same) await updateSaleClaim(txDb, one.id, { state: "owner", escalatedAt: now, escalatedWhy: why }, now, { ifState: "asked" });
   };
   // Settled or disputed already, or decided: one take per sale. Only the very same take is none of that — the same
   // word of the person, settled against the colleague's other login or said in another report of theirs. Their own
@@ -920,12 +921,25 @@ export async function settleTakeWithin(
     await othersToDecider(txDb, claim, now);
     return { outcome: "decider", made: [] };
   }
+  // The colleague's report of a day the ledger already paid counts the sale: that money is out, so nothing moves by a
+  // word alone — the owner decides (owner, 2026-11-21). A day the ledger did not answer about is not known to be paid.
+  if (await sidePaidFor(txDb, transactionId, sideIds, input.paid)) {
+    await toDecider("paid");
+    await othersToDecider(txDb, claim, now);
+    return { outcome: "decider", made: [] };
+  }
   for (const one of same) await updateSaleClaim(txDb, one.id, { state: "agreed", closedAt: now, silenceAt: now }, now, { ifState: "asked" });
   await othersToDecider(txDb, claim, now);
   const made = await settleAgreedReports(txDb, {
     claim: { ...claim, transactionId, claimantUserId: claim.claimantUserId }, sideIds, netIfNone: 0, by: input.by, paid: input.paid, at: now, outcome: "taken",
   });
   return { outcome: "settled", made };
+}
+
+/** Whether a handed-in report of the side counts the sale on a day the ledger said is paid (`paid`, by shift). */
+async function sidePaidFor(db: Database, transactionId: number, sideIds: readonly number[], paid: ReadonlyMap<number, boolean | null>): Promise<boolean> {
+  return (await listCurrentReportsOfSales(db, [transactionId])).some((report) => sideIds.includes(report.userId) && paid.get(report.shiftId) === true
+    && report.lines.some((line) => line.transactionId === transactionId && line.alreadyIn == null && line.amountMills > 0));
 }
 
 /**
@@ -1151,8 +1165,10 @@ function requireOwnerSession(principal: HumanAuthPrincipal) {
  * question carried over from the ledger — the owner.
  */
 export function disputeDeciderOf(facts: TeamFacts, claims: readonly SaleClaimRow[], pageId: number | null, potSale = false): Decider {
-  // A sale of the pot is the owner's whoever claims it («по общаку решаю я»).
-  const kind = potSale || claims.some((claim) => claim.sideUserId === null || claim.kind === "imported" || claim.kind === "question") ? "pot" : "dispute";
+  // A sale of the pot is the owner's whoever claims it («по общаку решаю я»); so is a take on a day already paid — the
+  // money is out, and only the owner pays.
+  const kind = potSale || claims.some((claim) => claim.sideUserId === null || claim.kind === "imported" || claim.kind === "question" || claim.escalatedWhy === "paid")
+    ? "pot" : "dispute";
   const sides = personsOfLogins(facts, claims.flatMap((claim) => [claim.claimantUserId, claim.sideUserId]));
   return deciderOf(facts, modelOfPageId(facts, pageId ?? claims.find((claim) => claim.pageId !== null)?.pageId ?? null), kind, sides);
 }

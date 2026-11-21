@@ -110,7 +110,8 @@ export async function listCurrentReportsOfSales(db: Database, transactionIds: re
 export type SaleClaimKind = "claim" | "double" | "imported" | "question";
 export type SaleClaimState = "asked" | "agreed" | "owner" | "decided" | "withdrawn";
 export type SaleClaimAnswer = "agree" | "disagree";
-export type SaleClaimEscalation = "disagree" | "silence" | "no_side" | "double" | "imported" | "question";
+/** `paid` — a take on a sale the colleague's report of an already paid day counts (0434): the owner's at once. */
+export type SaleClaimEscalation = "disagree" | "silence" | "no_side" | "double" | "imported" | "question" | "paid";
 
 export interface SaleClaimRow {
   id: number;

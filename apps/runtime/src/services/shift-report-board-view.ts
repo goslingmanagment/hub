@@ -381,9 +381,11 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       && ((ask.origin === "draft" && ask.escalatedWhy === "disagree") || (ask.state === "owner" && ask.escalatedWhy === "double"));
     // A take: the colleague's sale written to the person by their word alone (owner, 2026-11-21); of the person's own
     // sale, written by a colleague — the reader is told.
+    // A word on a sale the colleague's already paid day counts: the owner's at once, nobody asked (sale-claims.ts).
+    const paidDay = ask !== null && ask.answer === null && ask.state === "owner" && ask.escalatedWhy === "paid";
     const taken = ask !== null && isTake(ask);
     const takenFromMe = incoming !== null && isTake(incoming) && incoming.claimantUserId !== null;
-    const rowDecider = ask !== null && ask.sideUserId === null ? ownerDecider : deciderOfLine(line);
+    const rowDecider = ask !== null && (ask.sideUserId === null || paidDay) ? ownerDecider : deciderOfLine(line);
     // A card of whose the sale is, outranked by a decision or an agreement made since: «решено иначе», it changes nothing.
     const superseded = proposal !== null && (proposal.state === "proposed" || proposal.state === "late") && cardSuperseded(proposal, line);
     let current = lineOwner(line, people, me);
@@ -401,7 +403,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       reason = ruleWords;
     } else if (ask !== null && ask.answer === null && (ask.state === "asked" || ask.state === "owner") && ask.silenceAt === null) {
       current = rule;
-      reason = ask.sideUserId === null || cardDispute ? `ждём: решит ${rowDecider.words}` : `ждём ответа ${personNameForms(people.nameOf(ask.sideUserId)).gen}`;
+      reason = paidDay && ask.sideUserId !== null ? `день ${personNameForms(people.nameOf(ask.sideUserId)).gen} уже выплачен, решит ${rowDecider.words}`
+        : ask.sideUserId === null || cardDispute ? `ждём: решит ${rowDecider.words}` : `ждём ответа ${personNameForms(people.nameOf(ask.sideUserId)).gen}`;
     } else if (ask !== null && ask.answer === "disagree" && ask.state === "owner" && ask.sideUserId !== null) {
       current = rule;
       reason = `${people.nameOf(ask.sideUserId)} не согласен, решит ${rowDecider.words}`;
@@ -431,8 +434,8 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     if (current.kind === "share" && amount > 0 && !isLate && !(taken && ask?.answer === null) && !takenFromMe) reason = `вам ${plainUsd(amount)}`;
     const askWire = ask === null ? null : {
       claimId: ask.id,
-      to: ask.sideUserId === null || cardDispute ? "owner" as const : "colleague" as const,
-      toUser: ask.sideUserId === null || cardDispute ? null : people.person(ask.sideUserId),
+      to: ask.sideUserId === null || cardDispute || paidDay ? "owner" as const : "colleague" as const,
+      toUser: ask.sideUserId === null || cardDispute || paidDay ? null : people.person(ask.sideUserId),
       want: ask.statement === "share" && ask.shareWithUserId !== null ? owner("share", ask.shareWithUserId, people, me) : owner("me", null, people, me),
       note: ask.claimantNote ?? "",
       state: askState(ask),

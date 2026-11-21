@@ -61,9 +61,10 @@ export const saleClaimSchema = z.object({
   answeredAt: isoTimestamp.nullable(),
   /**
    * Why it went to the owner: disagree, silence (before the board), no_side, double (another person counts or already
-   * wrote the sale to themself), imported; null — it did not.
+   * wrote the sale to themself), imported, paid (the colleague's report of a day the ledger already paid counts the
+   * sale: nothing moves by a word alone); null — it did not.
    */
-  escalatedWhy: z.enum(["disagree", "silence", "no_side", "double", "imported", "question"]).nullable(),
+  escalatedWhy: z.enum(["disagree", "silence", "no_side", "double", "imported", "question", "paid"]).nullable(),
   /** The owner's decision of the sale; null — none. */
   decision: z.object({
     outcome: z.enum(["first", "second", "half", "nobody", "imported", "said"]),

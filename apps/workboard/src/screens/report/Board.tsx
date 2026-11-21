@@ -8,6 +8,7 @@ import { phaseConflictReport, useBoardWrite, type Write } from "./data";
 import { Ico } from "./icons";
 import {
   agentNote,
+  allRows,
   beforeWords,
   choiceToast,
   choicesOf,
@@ -122,10 +123,11 @@ export function ReportBoard({ report, host, transport, light }: {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
   }, []);
 
-  const run = useCallback(async (one: Write, done?: string | null): Promise<boolean> => {
+  const run = useCallback(async (one: Write, done?: string | null | ((answer: unknown) => string | null)): Promise<boolean> => {
     try {
-      await write.mutateAsync(one);
-      if (done) toast(done);
+      const answer = await write.mutateAsync(one);
+      const text = typeof done === "function" ? done(answer) : done;
+      if (text) toast(text);
       return true;
     } catch (error) {
       const status = hubErrorStatus(error);
@@ -362,10 +364,18 @@ export function ReportBoard({ report, host, transport, light }: {
       return;
     }
     const to = ask.choice.ask;
-    const ok = await run({ op: "ask", transactionId: row.transactionId, statement: to.statement, shareWithUserId: to.shareWithUserId, note: text },
+    const transactionId = row.transactionId;
+    const ok = await run({ op: "ask", transactionId, statement: to.statement, shareWithUserId: to.shareWithUserId, note: text },
       to.to === "owner" ? `Вопрос ушёл ${(row.decider ?? board.decider).kind === "team_lead" && (row.decider ?? board.decider).user ? (row.decider ?? board.decider).user!.forms.dat : "владельцу"}`
-        // A colleague with the board is told, not asked: the sale is written at once (owner, 2026-11-21).
-        : `${to.statement === "share" ? "Записано пополам" : "Записано вам"}. ${to.forms?.nom ?? ""} узнает`);
+        // A colleague with the board is told, not asked: the sale is written at once (owner, 2026-11-21) — unless Hub
+        // sent the word to the decider (their day is already paid, someone took the sale meanwhile): the row's own
+        // words say which, never «Записано вам».
+        : (answer) => {
+          const fresh = boardOfAnswer(answer);
+          const now = fresh === null ? undefined : allRows(fresh).find((one) => one.transactionId === transactionId);
+          if (now?.ask != null && now.ask.taken !== true && now.reasonWords !== "") return upper(now.reasonWords);
+          return `${to.statement === "share" ? "Записано пополам" : "Записано вам"}. ${to.forms?.nom ?? ""} узнает`;
+        });
     if (ok) setAsk(null);
   };
 
@@ -953,6 +963,12 @@ const personNote = (row: Row) => (row.note?.by === "person" ? row.note.text : nu
 /** A take given back: «Продажа снова Олега». */
 const takenBack = (row: Row) => `Продажа снова ${row.ask?.toUser?.forms.gen ?? row.rule.owner.words}`;
 /** The one line of why after «Вы спросили …»: «: «…»», or nothing when the question carries none (a «пополам» from a handed-in version). */
+/** The board a write's answer carries (the fresh report), if it does. */
+function boardOfAnswer(answer: unknown): Board | null {
+  if (typeof answer !== "object" || answer === null || !("board" in answer)) return null;
+  return (answer as { board: Board | null }).board ?? null;
+}
+
 /** The person's line after a colon, in quotes; the quotes inside it as „…“ (never «…«…»»). */
 const said = (note: string | null | undefined) => (note && note.trim() !== "" ? `: «${note.trim().replace(/«/g, "„").replace(/»/g, "“")}»` : "");
 

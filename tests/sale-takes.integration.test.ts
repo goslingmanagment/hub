@@ -1,12 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { shiftReportConfirmResponseSchema, shiftReportResponseSchema } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel } from "@agency_hub_core/db";
+import { assignUserToPage, createFanslyPage, createModel, lockSaleSettlements, type Database } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
-import { runSaleClaims } from "../apps/runtime/src/services/sale-claims.ts";
+import { runSaleClaims, settleTakeWithin } from "../apps/runtime/src/services/sale-claims.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -417,6 +417,45 @@ describe("a colleague's sale written to oneself counts at once", () => {
     expect((await newest(worked, twice)).line).toMatchObject({ amountMills: 0, settled: "agreed" });
     expect(await boardRow("bella", bellas, twice)).toMatchObject({ amountMills: NET });
     expect(await homeNow(twice)).toEqual({ reason: "agreed", people: [bella] });
+  });
+
+  it("sends a take on a sale the colleague's paid day counts to the owner and moves nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const paidSale = await sale(29 * 60 + 40);
+    await handInAndConfirm(asSession, "anna", worked);
+    const before = await newest(worked, paidSale);
+    expect(before.line).toMatchObject({ amountMills: NET });
+    const hers = await shiftRow(bella, 29.9, 29.5);
+    // The word as the board writes it, then asked again by hand: the test team is never asked of the ledger, so the
+    // turn is taken here with the ledger's word «the day of anna's report is paid».
+    await take("bella", hers, { transactionId: paidSale, statement: "mine" });
+    const undone = await rawSession("bella", "DELETE", `/api/v1/shift-reports/${hers}/asks/${paidSale}`);
+    expect(undone.statusCode, undone.body).toBe(200);
+    const claim = await claimOf(paidSale, bella);
+    await q("update sale_claims set state = 'asked', closed_at = null, silence_at = null where id = $1", [claim.id]);
+    await q(
+      `update shift_handin_marks m set statement = 'mine' from shift_handins h where h.id = m.handin_id and h.shift_id = $1 and m.transaction_id = $2`,
+      [hers, paidSale],
+    );
+    const versionBefore = (await newest(worked, paidSale)).version;
+    const now = new Date();
+    const done = await app.db.transaction(async (tx) => {
+      const txDb = tx as unknown as Database;
+      await lockSaleSettlements(txDb);
+      return settleTakeWithin(txDb, {
+        claimId: claim.id, paid: new Map([[worked, true]]), now,
+        by: { door: "workboard", actorUserId: bella, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
+      });
+    });
+    expect(done).toEqual({ outcome: "decider", made: [] });
+    expect(await claimOf(paidSale, bella)).toMatchObject({ state: "owner", escalated_why: "paid", answer: null });
+    // Nothing moved: anna's paid report keeps the sale, no new version; bella's word waits for the owner.
+    expect(await newest(worked, paidSale)).toMatchObject({ version: versionBefore, line: { amountMills: NET } });
+    await runSaleClaims(app, now);
+    const row = await boardRow("bella", hers, paidSale);
+    expect(row).toMatchObject({ amountMills: 0, ask: { to: "owner" } });
+    expect(row?.reasonWords).toContain("уже выплачен");
+    expect((await q("select state, owner_role from matters where reason_key = $1", [`sale.dispute:${paidSale}`])).rows).toEqual([{ state: "open", owner_role: "owner" }]);
   });
 
   it("writes a take into one report of the taker when two of theirs hold the sale", async (context) => {

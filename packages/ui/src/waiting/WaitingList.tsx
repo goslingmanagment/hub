@@ -185,7 +185,8 @@ function lineOf(matter: Matter, context: Context): Line {
       const net = number(evidence.netMills);
       const why = Array.isArray(evidence.why) ? evidence.why : [];
       const reason = why.includes("disagree") ? "вторая сторона не согласна" : why.includes("silence") ? "вторая сторона не ответила за сутки"
-        : why.includes("double") ? "продажа посчитана в двух отчётах" : why.includes("imported") ? "вопрос из ledger" : "спросить некого";
+        : why.includes("paid") ? "день коллеги уже выплачен"
+          : why.includes("double") ? "продажа посчитана в двух отчётах" : why.includes("imported") ? "вопрос из ledger" : "спросить некого";
       const transactionId = number(evidence.transactionId);
       return {
         ...base,
