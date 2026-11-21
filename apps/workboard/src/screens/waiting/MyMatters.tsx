@@ -5,8 +5,8 @@ import { toast } from "@agency_hub_core/ui";
 import { formatDateTime } from "@agency_hub_core/ui/format";
 import { kernel } from "@/shared/hub";
 import { mattersListQuery } from "@/shared/myMatters";
-import { waitedFor, waitingSince } from "@agency_hub_core/ui/waiting/kinds";
-import { goLink } from "./links";
+import { quoted, waitedFor, waitingSince } from "@agency_hub_core/ui/waiting/kinds";
+import { goLink, titleLink } from "./links";
 
 /**
  * The first lines of what waits for the person themself (their own matters, and a lead's of the teams they lead), on
@@ -25,9 +25,9 @@ const CLAIM_KIND = "sale.claim";
 /**
  * The answer to a colleague's take, in the line itself: the sale may be on none of the person's boards (it waits for
  * their next shift), and one press is all an answer is. «Понятно» closes it; «Не согласен» sends it to whoever decides.
- * `link` — their board at that row, when a shift of theirs holds the sale: «Открыть» shows what is answered about.
+ * The line's title opens their board at that row (`titleLink`), so what is answered about is one press away.
  */
-export function ClaimAnswer({ claimId, link = null }: { claimId: number; link?: string | null }) {
+export function ClaimAnswer({ claimId }: { claimId: number }) {
   const client = useQueryClient();
   const answer = useMutation({
     mutationFn: (word: "agree" | "disagree") => kernel.saleClaimAnswer({ params: { claimId }, body: { answer: word, note: null } }),
@@ -40,7 +40,6 @@ export function ClaimAnswer({ claimId, link = null }: { claimId: number; link?: 
   });
   return (
     <span className="wt-answer">
-      {link !== null && goLink(link, "Открыть")}
       <button type="button" className="wt-go wt-answer__one" disabled={answer.isPending} onClick={() => answer.mutate("agree")}>Понятно</button>
       <button type="button" className="wt-go wt-answer__one" disabled={answer.isPending} onClick={() => answer.mutate("disagree")}>Не согласен</button>
     </span>
@@ -53,15 +52,15 @@ function Row({ matter, now }: { matter: Matter; now: number }) {
   const claimId = claim && typeof matter.evidence.claimId === "number" ? matter.evidence.claimId : null;
   const why = claim && typeof matter.evidence.note === "string" && matter.evidence.note.trim() !== "" ? matter.evidence.note.trim() : null;
   // The page and, of a colleague's take, their line of why.
-  const about = [matter.pageLabels.join(", "), why === null ? "" : `«${why}»`].filter((part) => part !== "");
+  const about = [matter.pageLabels.join(", "), why === null ? "" : quoted(why)].filter((part) => part !== "");
   return (
     <li className="wt-line">
       <div className="wt-line__main">
-        <span className="wt-line__title">{matter.title}</span>
+        <span className="wt-line__title">{claim && matter.link ? titleLink(matter.link, matter.title) : matter.title}</span>
         {about.length > 0 && <span className="wt-line__about">{about.join(" · ")}</span>}
       </div>
       <span className="wt-line__age" title={`С ${formatDateTime(since, { yearUnlessCurrent: true })}`}>{waitedFor(since, now)}</span>
-      <span className="wt-line__go">{claimId !== null ? <ClaimAnswer claimId={claimId} link={matter.link ?? null} /> : matter.link ? goLink(matter.link, "Открыть") : null}</span>
+      <span className="wt-line__go">{claimId !== null ? <ClaimAnswer claimId={claimId} /> : matter.link ? goLink(matter.link, "Открыть") : null}</span>
     </li>
   );
 }

@@ -9,7 +9,7 @@ import { mattersListQuery } from "@/shared/myMatters";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { useMe } from "@/shared/useMe";
 import { useSearchParam } from "@/shared/useSearchParam";
-import { goLink } from "./links";
+import { goLink, titleLink } from "./links";
 import { ClaimAnswer } from "./MyMatters";
 import { AskModal, MyOpenQuestions, QuestionModal, useMyOpenQuestions } from "./Questions";
 
@@ -40,7 +40,8 @@ function OwnWaiting() {
     openSend: () => undefined,
     open: () => undefined,
     link: goLink,
-    answerClaim: (claimId, link) => <ClaimAnswer claimId={claimId} link={link} />,
+    answerClaim: (claimId) => <ClaimAnswer claimId={claimId} />,
+    titleLink,
   }), []);
   const now = list.data ? Date.parse(list.data.serverNow) : Date.now();
   return (

@@ -15,7 +15,7 @@ import { usePages } from "@/shared/usePages";
 import { useSearchParam } from "@/shared/useSearchParam";
 import { ResolveSendModal } from "../decisions/HeldSends";
 import { DisputeModal, NobodyModal, OffPlatformModal, UnlinkedModal } from "./Disputes";
-import { goLink } from "./links";
+import { goLink, titleLink } from "./links";
 import { ClaimAnswer } from "./MyMatters";
 import { AskModal, MyOpenQuestions, QuestionModal, useMyOpenQuestions } from "./Questions";
 import { useFanNames, type FanRefOnPage, type HeldSend } from "../decisions/data";
@@ -64,7 +64,8 @@ export function WaitingScreen() {
     openSend: (id) => setParam("send", id),
     open: (param, value) => setParam(param, value),
     link: goLink,
-    answerClaim: (claimId, link) => <ClaimAnswer claimId={claimId} link={link} />,
+    answerClaim: (claimId) => <ClaimAnswer claimId={claimId} />,
+    titleLink,
   };
   // Package G's windows, by the address (a matter's link lands on its window).
   const disputeParam = Number(search.get("dispute"));

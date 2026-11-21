@@ -13,7 +13,7 @@ import { formatDay, formatDateTime, formatMills, formatWeekdayDay } from "../for
 import { partLabel, purposeLabel } from "../heldSends.js";
 import { ruPlural } from "../plural.js";
 import { postFlagWord } from "../shiftReports.js";
-import { WAITING_GROUPS, contentopsLink, groupOf, uncheckedWords, waitedFor, waitingSince, type WaitingGroupId } from "./kinds.js";
+import { WAITING_GROUPS, contentopsLink, groupOf, quoted, uncheckedWords, waitedFor, waitingSince, type WaitingGroupId } from "./kinds.js";
 
 /**
  * «Ждут вас» (ecosystem plan §6, package K): one list of everything that waits
@@ -69,7 +69,9 @@ export interface WaitingContext {
   /** A matter's link (a path of either product): Workboard's own inside Workboard, anything else by a page load. */
   link: (link: string, children: ReactNode) => ReactNode;
   /** A colleague's take of the viewer's own sale, answered in the line («Понятно», «Не согласен»): Workboard's. */
-  answerClaim?: (claimId: number, link: string | null) => ReactNode;
+  answerClaim?: (claimId: number) => ReactNode;
+  /** A line's title as the link to what it is about (quiet: the title's own ink, a line under it). */
+  titleLink?: (link: string, children: ReactNode) => ReactNode;
 }
 type Context = WaitingContext;
 
@@ -173,8 +175,10 @@ function lineOf(matter: Matter, context: Context): Line {
       if (!matter.mine || claimId === null || context.answerClaim === undefined) return base;
       return {
         ...base,
-        about: [...pages, why === null ? null : `«${why.trim()}»`].filter((part): part is string => part !== null),
-        action: context.answerClaim(claimId, matter.link ?? null),
+        // The title opens the viewer's board at that row: the answers stay two, on one line.
+        title: matter.link && context.titleLink ? context.titleLink(matter.link, matter.title) : matter.title,
+        about: [...pages, why === null ? null : quoted(why)].filter((part): part is string => part !== null),
+        action: context.answerClaim(claimId),
       };
     }
     case "sale.dispute": {

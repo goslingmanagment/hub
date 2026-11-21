@@ -510,14 +510,12 @@ export function ReportBoard({ report, host, transport, light }: {
       parts.push(
         <div className="frm" key="ask">
           <label className="frm-l" htmlFor={`ask-${row.key}`}>Почему продажа ваша?</label>
+          {/* The line of why takes the row's whole width (a reason is a sentence, not a word); the quick reasons under
+              it, then the buttons. */}
           <div className="frm-r">
             <input className="fld" id={`ask-${row.key}`} ref={focusField} value={ask.text} placeholder="Одной строкой" autoComplete="off" maxLength={300}
               onChange={(event) => setAsk({ ...ask, text: event.target.value })}
               onKeyDown={(event) => onField(event, () => void sendAsk(), () => setAsk(null))} />
-            <button type="button" className="btn btn--line btn--sm" disabled={ask.text.trim() === "" || write.isPending} onClick={() => void sendAsk()}>
-              {to === null ? "Забрать" : to.to === "colleague" ? to.statement === "share" ? "Записать пополам" : "Записать себе" : `Спросить ${whom}`}
-            </button>
-            <button type="button" className="btn btn--quiet btn--sm" onClick={() => setAsk(null)}>Отмена</button>
           </div>
           <div className="qw">
             {TAKE_REASONS.map((word) => (
@@ -526,6 +524,12 @@ export function ReportBoard({ report, host, transport, light }: {
                 setAsk({ ...ask, text: was ? `${was}, ${word}` : word });
               }}>{word}</button>
             ))}
+          </div>
+          <div className="frm-r">
+            <button type="button" className="btn btn--line btn--sm" disabled={ask.text.trim() === "" || write.isPending} onClick={() => void sendAsk()}>
+              {to === null ? "Забрать" : to.to === "colleague" ? to.statement === "share" ? "Записать пополам" : "Записать себе" : `Спросить ${whom}`}
+            </button>
+            <button type="button" className="btn btn--quiet btn--sm" onClick={() => setAsk(null)}>Отмена</button>
           </div>
           <div className="frm-h">{hint}</div>
         </div>,
@@ -949,7 +953,8 @@ const personNote = (row: Row) => (row.note?.by === "person" ? row.note.text : nu
 /** A take given back: «Продажа снова Олега». */
 const takenBack = (row: Row) => `Продажа снова ${row.ask?.toUser?.forms.gen ?? row.rule.owner.words}`;
 /** The one line of why after «Вы спросили …»: «: «…»», or nothing when the question carries none (a «пополам» from a handed-in version). */
-const said = (note: string | null | undefined) => (note && note.trim() !== "" ? `: «${note.trim()}»` : "");
+/** The person's line after a colon, in quotes; the quotes inside it as „…“ (never «…«…»»). */
+const said = (note: string | null | undefined) => (note && note.trim() !== "" ? `: «${note.trim().replace(/«/g, "„").replace(/»/g, "“")}»` : "");
 
 function reducedMotion(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
