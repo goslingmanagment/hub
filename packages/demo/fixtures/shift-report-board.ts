@@ -400,6 +400,8 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     editable: own && !state.preview && editing && plain && !takenFromMe,
     canNote: own && !state.preview && plain,
     attention,
+    // A sale Lev wrote to himself has no menu of «чья» (Hub's rule): the tick or «Отменить» takes it back.
+    ...(taken ? { choices: [] } : {}),
     foundByHub: row.found === true,
   };
 }

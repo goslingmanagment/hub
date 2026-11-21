@@ -646,6 +646,20 @@ export async function setShiftReportLine(
   const marks = existing === null ? [] : await listHandinMarks(app.db, existing.id);
   const before = marks.find((mark) => mark.transactionId === input.transactionId);
   const wordChanged = (before?.statement ?? null) !== statement || (before?.shareWithUserId ?? null) !== shareWith || (before?.toUserId ?? null) !== giveTo;
+  // The person's own word on this sale already settled between the two (a take that stands, an agreement): its terms
+  // made the reports' versions and the sale's home, so the line is their own now and «моя» is no word of it (the draft
+  // sets it aside; the board sends none). No word here keeps theirs and writes the comment, in any phase; another word
+  // would say one thing while the settlement counts another — «Отменить» first, else only the decider.
+  if (wordChanged && existing !== null && before?.statement != null
+    && (await listSaleClaims(app.db, { transactionIds: [input.transactionId], states: ["agreed"], kinds: ["claim"] })).some((claim) => claim.claimantHandinId === existing.id)) {
+    if (statement !== null) throw new ConflictError("This sale is already settled: only the decider changes it now", { reason: "claim_settled" });
+    const who = writer(actor);
+    await setHandinMark(app.db, {
+      handinId: existing.id, transactionId: input.transactionId, statement: before.statement, shareWithUserId: before.shareWithUserId, toUserId: before.toUserId ?? null,
+      note, byUserId: who.byUserId, byAgentKeyId: who.byAgentKeyId, at: now,
+    });
+    return { savedAt: now.toISOString() };
+  }
   // On the board, ticks and «чья» change only while it is edited (draft, «Правка»); a sale's comment any time.
   const phase = phaseOf(existing);
   if (boardOn(subject) && wordChanged && phase !== "draft" && phase !== "fixing") throw new PhaseConflictError(subject.shift.id, phase);

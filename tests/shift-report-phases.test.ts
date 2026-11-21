@@ -140,9 +140,9 @@ describe("a take of a colleague's sale", () => {
     expect(takeSettles({ ...claim, kind: "double" })).toBe(false);
   });
 
-  it("keeps the side's notice open three days while unanswered, and closes it on an answer", () => {
-    expect(takeNoticeOpen(taken, later(71.9))).toBe(true);
-    expect(takeNoticeOpen(taken, later(72))).toBe(false);
+  it("keeps the side's notice open a week while unanswered, and closes it on an answer", () => {
+    expect(takeNoticeOpen(taken, later(167.9))).toBe(true);
+    expect(takeNoticeOpen(taken, later(168))).toBe(false);
     expect(takeNoticeOpen({ ...taken, answer: "agree" }, later(1))).toBe(false);
     expect(takeNoticeOpen({ ...taken, state: "owner" }, later(1))).toBe(false);
     expect(takeNoticeOpen({ ...taken, silenceAt: null }, later(1))).toBe(false);

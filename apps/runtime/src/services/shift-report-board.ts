@@ -102,6 +102,7 @@ import {
 } from "./shift-report-draft.ts";
 import {
   cardSuperseded, checkLetsConfirm, holdsSale, isTake, lineWithProposal, lineWithWord, mayAct, PhaseConflictError, proposalDelta, sameAsSigned, SHIFT_REPORT_SIGNATURE_DECLINED_EVENT,
+  TAKE_NOTICE_MS, takeNoticeOpen,
   type BoardAction,
 } from "./shift-report-phases.ts";
 import { requireShiftOfRealm, testUserIds } from "./sandbox/realm.ts";
@@ -1102,7 +1103,13 @@ export async function pulseReport(app: Pick<AppContext, "db">, userId: number, n
   if (current === null) return null;
   const phase = phaseOf(current.handin);
   const person = (await listHandinPeopleOfUsers(app.db, [userId])).get(userId) ?? null;
-  const asked = await listSaleClaims(app.db, { sideUserIds: person?.userIds ?? [userId], states: ["asked"], kinds: ["claim"], limit: 1 });
+  const sideUserIds = person?.userIds ?? [userId];
+  // A question to them, or a colleague's take they were told of and have not answered (its notice open).
+  const asked = [
+    ...await listSaleClaims(app.db, { sideUserIds, states: ["asked"], kinds: ["claim"], limit: 1 }),
+    ...(await listSaleClaims(app.db, { sideUserIds, states: ["agreed"], kinds: ["claim"], silenceSince: new Date(now.getTime() - TAKE_NOTICE_MS) }))
+      .filter((claim) => takeNoticeOpen(claim, now)),
+  ];
   const late = current.handin === null ? false : (await listHandinProposals(app.db, current.handin.id)).some((one) => one.state === "late");
   // «После сдачи» from the cheap mark the minute pass keeps (`late_sales`): no draft is computed here.
   const afterHandIn = (current.handin?.lateSales ?? 0) > 0;

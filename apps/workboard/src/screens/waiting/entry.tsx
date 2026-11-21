@@ -40,7 +40,7 @@ function OwnWaiting() {
     openSend: () => undefined,
     open: () => undefined,
     link: goLink,
-    answerClaim: (claimId) => <ClaimAnswer claimId={claimId} />,
+    answerClaim: (claimId, link) => <ClaimAnswer claimId={claimId} link={link} />,
   }), []);
   const now = list.data ? Date.parse(list.data.serverNow) : Date.now();
   return (

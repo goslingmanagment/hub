@@ -18,15 +18,16 @@ const MINUTE = 60_000;
 
 /**
  * A colleague wrote your sale to themself (or half): it counts as written at once, you are told (owner, 2026-11-21).
- * The notice stays three days unanswered; «Не согласен» has no deadline.
+ * The notice stays a week unanswered; «Не согласен» has no deadline.
  */
 const CLAIM_KIND = "sale.claim";
 
 /**
  * The answer to a colleague's take, in the line itself: the sale may be on none of the person's boards (it waits for
  * their next shift), and one press is all an answer is. «Понятно» closes it; «Не согласен» sends it to whoever decides.
+ * `link` — their board at that row, when a shift of theirs holds the sale: «Открыть» shows what is answered about.
  */
-export function ClaimAnswer({ claimId }: { claimId: number }) {
+export function ClaimAnswer({ claimId, link = null }: { claimId: number; link?: string | null }) {
   const client = useQueryClient();
   const answer = useMutation({
     mutationFn: (word: "agree" | "disagree") => kernel.saleClaimAnswer({ params: { claimId }, body: { answer: word, note: null } }),
@@ -39,6 +40,7 @@ export function ClaimAnswer({ claimId }: { claimId: number }) {
   });
   return (
     <span className="wt-answer">
+      {link !== null && goLink(link, "Открыть")}
       <button type="button" className="wt-go wt-answer__one" disabled={answer.isPending} onClick={() => answer.mutate("agree")}>Понятно</button>
       <button type="button" className="wt-go wt-answer__one" disabled={answer.isPending} onClick={() => answer.mutate("disagree")}>Не согласен</button>
     </span>
@@ -59,7 +61,7 @@ function Row({ matter, now }: { matter: Matter; now: number }) {
         {about.length > 0 && <span className="wt-line__about">{about.join(" · ")}</span>}
       </div>
       <span className="wt-line__age" title={`С ${formatDateTime(since, { yearUnlessCurrent: true })}`}>{waitedFor(since, now)}</span>
-      <span className="wt-line__go">{claimId !== null ? <ClaimAnswer claimId={claimId} /> : matter.link ? goLink(matter.link, "Открыть") : null}</span>
+      <span className="wt-line__go">{claimId !== null ? <ClaimAnswer claimId={claimId} link={matter.link ?? null} /> : matter.link ? goLink(matter.link, "Открыть") : null}</span>
     </li>
   );
 }

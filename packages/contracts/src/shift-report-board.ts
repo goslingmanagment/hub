@@ -62,10 +62,10 @@ export const shiftReportWordEnum = z.enum(SHIFT_REPORT_WORDS);
 export const SHIFT_REPORT_CHECK_MINUTES = 10;
 /**
  * A colleague's sale the person writes to themself («Моя», «Пополам с …») counts at once (owner, 2026-11-21): the
- * colleague is told, not asked. Their notice («Ждут вас», the amber strip on their board) stays this long unanswered;
- * «Не согласен» has no deadline.
+ * colleague is told, not asked. Their notice («Ждут вас», the amber strip on their board) stays this long unanswered
+ * (a week: days off never close it unseen); «Не согласен» has no deadline.
  */
-export const SALE_TAKE_NOTICE_DAYS = 3;
+export const SALE_TAKE_NOTICE_DAYS = 7;
 /** A row of the person's own from this sum without a comment is pointed at («Без комментария: N продаж от $30»). */
 export const SHIFT_REPORT_BARE_NOTE_FROM_MILLS = 30_000;
 /** The quick words of a sale's comment; each one appends to the text. */

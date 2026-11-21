@@ -69,7 +69,7 @@ export interface WaitingContext {
   /** A matter's link (a path of either product): Workboard's own inside Workboard, anything else by a page load. */
   link: (link: string, children: ReactNode) => ReactNode;
   /** A colleague's take of the viewer's own sale, answered in the line («Понятно», «Не согласен»): Workboard's. */
-  answerClaim?: (claimId: number) => ReactNode;
+  answerClaim?: (claimId: number, link: string | null) => ReactNode;
 }
 type Context = WaitingContext;
 
@@ -174,7 +174,7 @@ function lineOf(matter: Matter, context: Context): Line {
       return {
         ...base,
         about: [...pages, why === null ? null : `«${why.trim()}»`].filter((part): part is string => part !== null),
-        action: context.answerClaim(claimId),
+        action: context.answerClaim(claimId, matter.link ?? null),
       };
     }
     case "sale.dispute": {

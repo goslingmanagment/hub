@@ -314,7 +314,7 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
   for (const claim of claims) {
     const day = DAY_MONTH.format(new Date(claim.sale.occurredAt));
     const fan = claim.sale.fan.name ?? (claim.sale.fan.username ? `@${claim.sale.fan.username}` : "фан");
-    // The side's notice of a take, open three days while unanswered (Hub's `SALE_TAKE_NOTICE_DAYS`).
+    // The side's notice of a take, open a week while unanswered (Hub's `SALE_TAKE_NOTICE_DAYS`).
     if (claim.state === "agreed" && claim.takenAt !== null && claim.answer === null && now.getTime() - claim.takenAt < SALE_TAKE_NOTICE_DAYS * DAY_MS) {
       out.push({
         kind: "sale.claim", key: `sale.claim:${claim.id}`,

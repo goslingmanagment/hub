@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { shiftReportResponseSchema } from "@agency_hub_core/contracts";
+import { shiftReportConfirmResponseSchema, shiftReportResponseSchema } from "@agency_hub_core/contracts";
 import { assignUserToPage, createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -15,7 +15,7 @@ import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in
 
 // A take (owner, 2026-11-21): «Моя» / «Пополам с …» on a colleague's sale counts at once — no question, no day of
 // silence. In the same request the sale is written to the one who said it, the colleague's handed-in report follows by
-// a version, and the colleague's notice opens (three days, unanswered). «Не согласен» takes it to the decider and back
+// a version, and the colleague's notice opens (a week, unanswered). «Не согласен» takes it to the decider and back
 // to the rule's holder until the decision, the taker's line waiting; «Отменить» gives it back; a second person's word on
 // a taken sale is the decider's and moves nothing. Money: whose report counts a sale.
 //
@@ -89,6 +89,23 @@ async function claimOf(transactionId: number, claimantUserId: number) {
     `select id::int as id, state, answer, escalated_why, origin, silence_at from sale_claims where transaction_id = $1 and claimant_user_id = $2`,
     [transactionId, claimantUserId],
   )).rows[0] as { id: number; state: string; answer: string | null; escalated_why: string | null; origin: string; silence_at: Date | null };
+}
+
+/** The claim a report made of a sale: a person may have several of one sale, one per report. */
+async function claimIn(transactionId: number, shiftId: number) {
+  return (await q(
+    `select c.id::int as id, c.state, c.answer, c.escalated_why from sale_claims c join shift_handins h on h.id = c.claimant_handin_id
+     where c.transaction_id = $1 and h.shift_id = $2`,
+    [transactionId, shiftId],
+  )).rows[0] as { id: number; state: string; answer: string | null; escalated_why: string | null } | undefined;
+}
+
+/** The person's word on a sale as their report's draft keeps it. */
+async function markOf(shiftId: number, transactionId: number) {
+  return (await q(
+    `select m.statement, m.note from shift_handin_marks m join shift_handins h on h.id = m.handin_id where h.shift_id = $1 and m.transaction_id = $2`,
+    [shiftId, transactionId],
+  )).rows[0] as { statement: string | null; note: string | null } | undefined;
 }
 
 /** Whose the sale is by the rule now: the people of its home and why. */
@@ -192,11 +209,11 @@ describe("a colleague's sale written to oneself counts at once", () => {
     await handInAndConfirm(asSession, "bella", takenBy);
     expect((await newest(takenBy, taken)).line).toMatchObject({ amountMills: NET, disputed: false, settled: "agreed" });
 
-    // No day of silence: a day on nothing moved and the notice is open; three days on it closes, the answer stays open.
+    // No day of silence: a day on nothing moved and the notice is open; a week on it closes, the answer stays open.
     await runSaleClaims(app, new Date(Date.now() + 25 * HOUR_MS));
     expect(await claimOf(taken, bella)).toMatchObject({ state: "agreed", answer: null });
     expect(await matterState(`sale.claim:${claim.id}`)).toBe("open");
-    await runSaleClaims(app, new Date(Date.now() + 73 * HOUR_MS));
+    await runSaleClaims(app, new Date(Date.now() + 169 * HOUR_MS));
     expect(await matterState(`sale.claim:${claim.id}`)).toBe("closed");
     expect((await newest(worked, taken)).line).toMatchObject({ amountMills: 0 });
     expect((await newest(takenBy, taken)).line).toMatchObject({ amountMills: NET });
@@ -290,5 +307,133 @@ describe("a colleague's sale written to oneself counts at once", () => {
     expect(await newest(worked, twice)).toMatchObject({ version: before.version, line: { amountMills: 0, settled: "agreed" } });
     expect(await boardRow("cora", coras, twice)).toMatchObject({ amountMills: 0, ask: { to: "owner" } });
     expect(await matterState(`sale.dispute:${twice}`)).toBe("open");
+  });
+
+  // The review of 2026-11-21 (the rule's home follows a take, so the sale changes sides in both drafts while the take
+  // can still be undone): each case below counted a sale twice, lost it from both reports, or wrote over a dispute.
+
+  it("keeps a disputed take with the decider when its taker says it again from another shift", async (context) => {
+    if (!testDb) return context.skip();
+    // `taken`: bella wrote it to herself, anna said «Не согласен» (the second test): anna counts it until the decision.
+    const other = await shiftRow(bella, 29.3, 28.7);
+    await take("bella", other, { transactionId: taken, statement: "mine" });
+    expect(await claimIn(taken, other)).toMatchObject({ state: "owner", escalated_why: "double" });
+    expect(await claimIn(taken, takenBy)).toMatchObject({ state: "owner", answer: "disagree" });
+    expect((await newest(worked, taken)).line).toMatchObject({ amountMills: NET });
+    expect(await boardRow("bella", other, taken)).toMatchObject({ amountMills: 0 });
+    expect((await homeNow(taken)).people).toEqual([anna]);
+  });
+
+  it("settles the side's report whatever its phase: a take met before «Подтверждаю» never counts for both, and a dispute finds a report handed in after the take", async (context) => {
+    if (!testDb) return context.skip();
+    const bellas = await shiftRow(bella, 28.7, 27.3);
+    const early = await sale(27 * 60 + 30);
+    await handInAndConfirm(asSession, "anna", worked);
+    await take("bella", bellas, { transactionId: early, statement: "mine" });
+    // anna hands in again after the take: the sale is «рядом» for her now, and her line still holds the settlement.
+    await handInAndConfirm(asSession, "anna", worked);
+    expect((await newest(worked, early)).line).toMatchObject({ amountMills: 0, settled: "agreed" });
+
+    // Taken between «Сдать смену» and «Подтверждаю»: the candidate had counted it for anna.
+    const late = await sale(28 * 60 + 30);
+    const reopened = await rawSession("anna", "POST", `/api/v1/shift-reports/${worked}/reopen`);
+    expect(reopened.statusCode, reopened.body).toBe(200);
+    const handed = await rawSession("anna", "POST", `/api/v1/shift-reports/${worked}/submit`);
+    expect(handed.statusCode, handed.body).toBe(200);
+    const candidate = shiftReportResponseSchema.parse(handed.json()).board?.candidate;
+    expect(candidate?.id).toBeDefined();
+    await take("bella", bellas, { transactionId: late, statement: "mine" });
+    const confirmed = await rawSession("anna", "POST", `/api/v1/shift-reports/${worked}/confirm`, { candidateId: candidate!.id });
+    expect(confirmed.statusCode, confirmed.body).toBe(200);
+    expect(shiftReportConfirmResponseSchema.parse(confirmed.json()).confirmed).toBe(true);
+    // Counted once: bella's by her word, anna's report nothing of it.
+    expect((await newest(worked, late)).line).toMatchObject({ amountMills: 0, settled: "agreed" });
+    expect(await boardRow("bella", bellas, late)).toMatchObject({ amountMills: NET });
+
+    // «Не согласен» to the take her report was handed in after: the sale is in her report again, bella's word waits.
+    const claim = await claimOf(early, bella);
+    const answered = await rawSession("anna", "POST", `/api/v1/sale-claims/${claim.id}/answer`, { answer: "disagree" });
+    expect(answered.statusCode, answered.body).toBe(200);
+    const back = await newest(worked, early);
+    expect(back.line).toMatchObject({ amountMills: NET, disputed: false });
+    expect(back.madeFor).toMatchObject({ kind: "claim", outcome: "disputed" });
+    expect(await boardRow("bella", bellas, early)).toMatchObject({ amountMills: 0, ask: { state: "disputed" } });
+    expect((await homeNow(early)).people).toEqual([anna]);
+  });
+
+  it("keeps the taker's word through an edit of the comment, refuses another word over the take, and gives the word back on a dispute", async (context) => {
+    if (!testDb) return context.skip();
+    const kept = await sale(25 * 60 + 30);
+    await handInAndConfirm(asSession, "anna", worked);
+    const hers = await shiftRow(bella, 25.9, 25.1);
+    await take("bella", hers, { transactionId: kept, statement: "mine" });
+    // Her own sale now, by her word: no menu of «чья» over the take («Отменить» takes it back).
+    expect((await boardRow("bella", hers, kept))?.choices).toEqual([]);
+
+    // The board sends no word for a line of her own: the comment is written, the word stays.
+    const noted = await rawSession("bella", "PUT", `/api/v1/shift-reports/${hers}/lines/${kept}`, { statement: null, note: "общался я, вчера вечером" });
+    expect(noted.statusCode, noted.body).toBe(200);
+    expect(await markOf(hers, kept)).toMatchObject({ statement: "mine", note: "общался я, вчера вечером" });
+    // Another word over the take is refused.
+    const other = await rawSession("bella", "PUT", `/api/v1/shift-reports/${hers}/lines/${kept}`, { statement: "pot", note: null });
+    expect(other.statusCode, other.body).toBe(409);
+    expect(await boardRow("bella", hers, kept)).toMatchObject({ amountMills: NET, ask: { taken: true } });
+
+    // The word cleared meanwhile (as «Отмена» of «Правка» clears a word the counted version does not carry) comes back
+    // with the dispute: her line waits for the decider, the claim is not taken for withdrawn.
+    await q(
+      `update shift_handin_marks m set statement = null from shift_handins h where h.id = m.handin_id and h.shift_id = $1 and m.transaction_id = $2`,
+      [hers, kept],
+    );
+    const claim = await claimOf(kept, bella);
+    const answered = await rawSession("anna", "POST", `/api/v1/sale-claims/${claim.id}/answer`, { answer: "disagree" });
+    expect(answered.statusCode, answered.body).toBe(200);
+    expect(await markOf(hers, kept)).toMatchObject({ statement: "mine" });
+    expect(await claimOf(kept, bella)).toMatchObject({ state: "owner", answer: "disagree" });
+    expect(await boardRow("bella", hers, kept)).toMatchObject({ amountMills: 0, ask: { state: "disputed" } });
+    expect((await newest(worked, kept)).line).toMatchObject({ amountMills: NET });
+  });
+
+  it("leaves a take standing when the decider answers a second person's word with «Оставить по правилу»", async (context) => {
+    if (!testDb) return context.skip();
+    const twice = await sale(25 * 60 + 45);
+    await handInAndConfirm(asSession, "anna", worked);
+    const bellas = await shiftRow(bella, 25.95, 25.55);
+    await take("bella", bellas, { transactionId: twice, statement: "mine" });
+    const coras = await shiftRow(cora, 25.9, 25.6);
+    await take("cora", coras, { transactionId: twice, statement: "mine" });
+    expect(await claimOf(twice, cora)).toMatchObject({ state: "owner" });
+
+    // The window says what «по правилу» gives: the sale is bella's by the take.
+    const window = await rawSession("boss", "GET", `/api/v1/sale-disputes/${twice}`);
+    expect(window.statusCode, window.body).toBe(200);
+    const rule = (window.json().outcomes as Array<{ outcome: string; gives: Array<{ userId: number; mills: number }> }>).find((one) => one.outcome === "rule");
+    expect(rule?.gives.find((one) => one.userId === bella)?.mills).toBe(NET);
+    const pressed = await rawSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: twice, outcome: "rule", note: null });
+    expect(pressed.statusCode, pressed.body).toBe(200);
+    // And gives exactly that: cora's question is closed, the take stands, anna's report still counts nothing.
+    expect(await claimOf(twice, cora)).toMatchObject({ state: "decided" });
+    expect(await claimOf(twice, bella)).toMatchObject({ state: "agreed" });
+    expect((await newest(worked, twice)).line).toMatchObject({ amountMills: 0, settled: "agreed" });
+    expect(await boardRow("bella", bellas, twice)).toMatchObject({ amountMills: NET });
+    expect(await homeNow(twice)).toEqual({ reason: "agreed", people: [bella] });
+  });
+
+  it("writes a take into one report of the taker when two of theirs hold the sale", async (context) => {
+    if (!testDb) return context.skip();
+    const once = await sale(26 * 60 + 30);
+    await handInAndConfirm(asSession, "anna", worked);
+    const first = await shiftRow(bella, 26.8, 26.2);
+    const second = await shiftRow(bella, 26.7, 26.3);
+    await handInAndConfirm(asSession, "bella", first);
+    await handInAndConfirm(asSession, "bella", second);
+    const reopened = await rawSession("bella", "POST", `/api/v1/shift-reports/${second}/reopen`);
+    expect(reopened.statusCode, reopened.body).toBe(200);
+    await take("bella", second, { transactionId: once, statement: "mine" });
+    // Counted once: in her report that holds the sale (the first handed in; the other's line only points at it).
+    expect((await newest(first, once)).line).toMatchObject({ amountMills: NET, settled: "agreed" });
+    expect((await newest(second, once)).line).toMatchObject({ amountMills: 0 });
+    expect((await newest(second, once)).line?.alreadyIn).toMatchObject({ shiftId: first });
+    expect((await newest(worked, once)).line).toMatchObject({ amountMills: 0, settled: "agreed" });
   });
 });

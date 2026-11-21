@@ -171,11 +171,14 @@ export function BoardBar({ actions, barRef }: { actions: BoardActions; barRef: R
     ) : <>{totals}<CommentText report={report} /><span className="grow" /></>;
   } else {
     const incoming = allRows(board).find((row) => row.incoming?.state === "asked") ?? null;
+    // A colleague wrote a sale of this report to themself and the person has not answered: the notice, while it is open.
+    const taken = allRows(board).find((row) => row.incoming?.taken === true && row.incoming.canAnswer && row.attention) ?? null;
     const late = allRows(board).find(isLateOpen) ?? null;
     const lateCards = lateProposals(board);
     const counted = <span className="tot"><Ico name="check" size={14} />Учтён в {board.countedAt ? clock(board.countedAt) : ""} · продаж: {count}, <b>{usd(total)}</b></span>;
     let what: ReactNode = <span className="grow" />;
     if (own && incoming) what = <span className="nq"><Ico name="people" size={14} />{incoming.incoming!.from.forms.nom} оспаривает вашу продажу {incoming.fan.name} {usd(incoming.netMills)}{link(incoming, "Показать")}</span>;
+    else if (own && taken) what = <span className="nq"><Ico name="people" size={14} />{taken.incoming!.from.forms.nom} записывает себе вашу продажу {taken.fan.name} {usd(taken.netMills)}{link(taken, "Показать")}</span>;
     else if (own && late) what = <span className="nq"><Ico name="plus" size={14} />После сдачи пришла продажа {late.fan.name} {usd(late.netMills)}{link(late, "Показать")}</span>;
     else if (own && lateCards.length > 0) what = <span className="nq"><Ico name="pen" size={14} />Генгар дочитал: {lateCards.length} {plural(lateCards.length, "правка", "правки", "правок")}{link(lateCards[0]!, "Показать")}</span>;
     else if (candidate?.gengar.state === "silent") what = <span className="nq is-q"><Ico name="clock" size={14} />Подтверждён по проверке Hub. Генгар дочитает позже, его проверка придёт сюда же.</span>;

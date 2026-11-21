@@ -454,7 +454,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       answerBy: null,
       ...(takenFromMe ? { taken: true } : {}),
     };
-    // The side's notice wants them while it is open (three days, unanswered); «Не согласен» stays under the row after.
+    // The side's notice wants them while it is open (a week, unanswered); «Не согласен» stays under the row after.
     const noticeOpen = incomingWire !== null && incomingWire.canAnswer && (incoming!.state === "asked" || takeNoticeOpen(incoming!, now));
     const shownProposal = proposal ?? noteProposal;
     const proposalWire = shownProposal === null ? null : {
@@ -506,7 +506,9 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       editable: editable && !isLate && !takenFromMe,
       canNote: canNote && !isLate,
       attention,
-      choices: editable && !isLate && !takenFromMe ? choicesOf(line, current) : [],
+      // A sale the person's own word settled (a take that stands, an agreement) has no menu either: the home is theirs
+      // by that word, and the owner's menu of their own sale would say another thing over it — «Отменить» takes a take back.
+      choices: editable && !isLate && !takenFromMe && !(ask !== null && ask.state === "agreed") ? choicesOf(line, current) : [],
       foundByHub: foundIds.has(id),
       decider: rowDecider,
     };

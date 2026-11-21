@@ -64,7 +64,7 @@ export function WaitingScreen() {
     openSend: (id) => setParam("send", id),
     open: (param, value) => setParam(param, value),
     link: goLink,
-    answerClaim: (claimId) => <ClaimAnswer claimId={claimId} />,
+    answerClaim: (claimId, link) => <ClaimAnswer claimId={claimId} link={link} />,
   };
   // Package G's windows, by the address (a matter's link lands on its window).
   const disputeParam = Number(search.get("dispute"));
