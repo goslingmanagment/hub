@@ -347,6 +347,8 @@ export function useBoard({ report, host, transport, light }: {
   // ── the phase's presses ──
   /** «Сдать смену» / «Сдать заново» with what the rail shows: equal to the report, it is the person's signature. */
   const submit = async () => {
+    // ⌘Enter as well as the button: never a second hand-in while one is on its way.
+    if (write.isPending) return;
     const seen = { seenTotalMills: board.totals.nowMills, seenCount: board.totals.count };
     await commitNote();
     await run({ op: "submit", ...seen });
@@ -358,7 +360,7 @@ export function useBoard({ report, host, transport, light }: {
    */
   const confirm = async () => {
     const candidate = board.candidate;
-    if (candidate === null || !board.canConfirm) return;
+    if (candidate === null || !board.canConfirm || write.isPending) return;
     const seen = { total: board.totals.nowMills, count: board.totals.count };
     await commitNote();
     try {
