@@ -149,14 +149,14 @@ const everyoneScreens: RouteObject[] = [
     lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FanScreen })),
   },
   { path: "fans/:platform/:platformUserId", lazy: () => import("../screens/fans/index.js").then((m) => ({ Component: m.FanAnyPage })) },
-  { path: "customs", lazy: () => import("../screens/customs/index.js").then((m) => ({ Component: m.CustomsBoardScreen })) },
+  { path: "customs", lazy: () => import("../screens/customs/entry.js").then((m) => ({ Component: m.CustomsEntry })) },
   // «Аккаунт и устройства» (the console's /account until 12.11): everyone's own, from the name menu; a narrow session
   // gets the way to the password there instead of the devices and the password.
   { path: "account", lazy: () => import("../screens/account/index.js").then((m) => ({ Component: m.AccountScreen })) },
   {
     path: "customs/:code",
     handle: { screenKey: (params) => params.code ?? "" } satisfies ScreenHandle,
-    lazy: () => import("../screens/customs/index.js").then((m) => ({ Component: m.CustomOrderScreen })),
+    lazy: () => import("../screens/customs/entry.js").then((m) => ({ Component: m.CustomOrderEntry })),
   },
 ];
 

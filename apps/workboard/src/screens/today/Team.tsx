@@ -8,7 +8,7 @@ import { shiftPauseText } from "@agency_hub_core/ui/shiftLive";
 import { ShiftLink } from "@/shared/links";
 import { mattersListQuery } from "@/shared/myMatters";
 import { useMe } from "@/shared/useMe";
-import { COLUMNS, useCustomBoard } from "../customs/data";
+import { boardNumbers, useCustomBoard } from "../customs/data";
 import { goLink } from "../waiting/links";
 import { MyMatters } from "../waiting/MyMatters";
 import { useNewcomers } from "../team/Newcomers";
@@ -18,7 +18,7 @@ import { useToday } from "./data";
  * «Сегодня» of whoever leads a team (products plan §2.3, §3): the owner every team (the teams without a lead named at
  * the top: their matters are his), a team lead and a chatter who leads by the records their teams. Who is on a shift,
  * whom the schedule names and is not on one, the reports that wait, what to decide, yesterday's shifts without a note,
- * customs by step, the schedule's gaps of the next three days. A lead's first days: the card «Первый день». Hub cuts
+ * customs by the board's three numbers, the schedule's gaps of the next three days. A lead's first days: the card «Первый день». Hub cuts
  * all of it to the viewer's teams (`workboardToday`); no money of people anywhere.
  */
 
@@ -162,11 +162,14 @@ function Reviews({ reviews }: { reviews: Team["reviews"] }) {
 
 function Customs() {
   const board = useCustomBoard(null);
-  const open = COLUMNS.filter((column) => column.id !== "given").map((column) => ({
-    column,
-    count: (board.data?.orders ?? []).filter((order) => (column.states as readonly string[]).includes(order.state)).length,
-  }));
-  const total = open.reduce((sum, one) => sum + one.count, 0);
+  // The board's three numbers (customs facts spec §13): every live order, the burning, the shot and not given yet.
+  const numbers = boardNumbers(board.data?.orders ?? []);
+  const open = [
+    { id: "live", title: "В работе", count: numbers.live.length },
+    { id: "burning", title: "Горят", count: numbers.burning.length },
+    { id: "shot", title: "Сняты, не отданы", count: numbers.shotNotGiven.length },
+  ];
+  const total = numbers.live.length;
   return (
     <section className="today-card" aria-labelledby="today-customs">
       <h2 className="today-card__title" id="today-customs">
@@ -175,10 +178,10 @@ function Customs() {
       </h2>
       {board.isPending ? <Skeleton height={48} radius={8} /> : board.isError ? <p className="ui-muted">Заказы не пришли.</p> : total === 0 ? <p className="ui-muted">Открытых заказов нет.</p> : (
         <dl className="today-steps">
-          {open.map(({ column, count }) => (
-            <div key={column.id} className={count === 0 ? "today-steps__one today-steps__one--none" : "today-steps__one"}>
-              <dt>{column.title}</dt>
-              <dd>{count}</dd>
+          {open.map((one) => (
+            <div key={one.id} className={one.count === 0 ? "today-steps__one today-steps__one--none" : "today-steps__one"}>
+              <dt>{one.title}</dt>
+              <dd>{one.count}</dd>
             </div>
           ))}
         </dl>

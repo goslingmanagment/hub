@@ -11,12 +11,16 @@ import {
   customFindingActionBodySchema,
   customFindingActionResponseSchema,
   customFindingParamsSchema,
+  customFindingsListResponseSchema,
   customOrderActionBodySchema,
+  customOrderChangesResponseSchema,
   customOrderCreateBodySchema,
   customOrderDetailResponseSchema,
   customOrderParamsSchema,
   customOrdersBoardQuerySchema,
   customOrdersBoardResponseSchema,
+  customOrdersDoneQuerySchema,
+  customOrdersDoneResponseSchema,
   customSaleDismissResponseSchema,
   customSaleParamsSchema,
 } from "./custom-orders.ts";
@@ -46,6 +50,29 @@ export const customOrderRouteSchemas = {
       + "of the pages they reach. An order of no known page is the lead's, the owner's and the team leads'.",
     querystring: customOrdersBoardQuerySchema,
     response: { 200: customOrdersBoardResponseSchema, ...sessionErrors },
+  },
+  customOrdersDone: {
+    auth: { kind: "any-session" }, tags: ["admin"],
+    summary: "The board «Кастомы»: the orders given and waiting for the fan's word, and the closed of the last days",
+    description: "Database only. The board's visibility: the lead and the owner every order of their realm, a team lead and a "
+      + "chatter the orders of the pages they reach. Without the card document.",
+    querystring: customOrdersDoneQuerySchema,
+    response: { 200: customOrdersDoneResponseSchema, ...sessionErrors },
+  },
+  customFindingsList: {
+    auth: { kind: "any-session" }, tags: ["admin"],
+    summary: "«Найдено без заказа»: the open findings of a custom with no order the viewer resolves",
+    description: "Database only. The check's leader of the finding's page, the customs lead and the owner, of their realm; anyone "
+      + "else reads an empty list.",
+    response: { 200: customFindingsListResponseSchema, ...sessionErrors },
+  },
+  customOrderChanges: {
+    auth: { kind: "any-session" }, tags: ["admin"],
+    summary: "«За сутки изменилось само»: the last 24 hours' steps of the system and the agents on the viewer's orders, each "
+      + "with its undo when the viewer may take it back",
+    description: "Database only. The orders the board shows the viewer; an undo is the board's step (`unpay`, `ungive`, "
+      + "`retract`, the deadline back) sent with `undoOf`.",
+    response: { 200: customOrderChangesResponseSchema, ...sessionErrors },
   },
   customOrder: {
     auth: { kind: "any-session" }, tags: ["admin"],

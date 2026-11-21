@@ -74,6 +74,11 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "customOrderCreate",
   "customOrderAct",
   "customSaleDismiss",
+  // The facts screen's blocks (customs facts spec §13), read: the given and the closed, the findings the person resolves
+  // (resolving one needs the password, below), what the system and the agents changed by themselves and its undo.
+  "customOrdersDone",
+  "customFindingsList",
+  "customOrderChanges",
   // The page filter of «Кастомы»: the pages the person reaches.
   "pages",
   // «Начало» (package J): a newcomer's way, read. Of where payouts go it carries only whether it is written and when:
@@ -157,6 +162,8 @@ export const NARROW_WEB_SESSION_PASSWORD_ONLY = [
   "teamQuestionAnswer",
   // «Обучение»: the owner's approval of a page for the team.
   "learnPageApprove",
+  // «Кастомы»: a custom with no order recorded, linked or dismissed is the check leader's decision (customs facts spec §8).
+  "customFindingAct",
 ] as const satisfies readonly KernelOperationKey[];
 
 /** Whether a narrow web session may call the route with this key. */

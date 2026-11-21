@@ -186,23 +186,124 @@ const ORDER_SELECT = sql`
 
 export const CUSTOM_ORDER_ENDED_STATES: readonly CustomOrderStateRow[] = ["given", "closed", "cancelled"];
 
+/** Which realm's orders a board reads (0414): a test viewer's are the test pages' alone, a live one's every other order. */
+export type CustomOrderRealmRow = "live" | "test";
+
+function boardScope(input: { pageIds: "all" | readonly number[]; unknownPage: boolean; realm?: CustomOrderRealmRow }): SQL {
+  const pages = input.pageIds === "all" ? sql`o.page_id is not null` : input.pageIds.length === 0 ? sql`false` : sql`o.page_id = any(${ids(input.pageIds)})`;
+  const scope = input.unknownPage ? sql`(${pages} or o.page_id is null)` : pages;
+  // The wall in the query itself: an order of no known page is the live agency's.
+  if (input.realm === undefined) return scope;
+  return sql`${scope} and ${input.realm === "test" ? testPageSql(sql`o.page_id`) : livePageSql(sql`o.page_id`)}`;
+}
+
 /**
- * The orders a board shows: open ones, and the given and closed since `doneSince`, of `pageIds` (all — every
- * page), with or without the orders of no known page; the oldest step first.
+ * The orders a board shows, of `pageIds` (all — every page), with or without the orders of no known page, of `realm`;
+ * the oldest step first. `live` — the open ones alone (the facts screen); else the open ones and the given and closed
+ * since `doneSince`.
  */
 export async function listCustomOrders(
   db: Database,
-  input: { pageIds: "all" | readonly number[]; unknownPage: boolean; doneSince: Date; limit: number },
+  input: { pageIds: "all" | readonly number[]; unknownPage: boolean; realm?: CustomOrderRealmRow; doneSince: Date; live?: boolean; limit: number },
 ): Promise<CustomOrderRow[]> {
-  const pages = input.pageIds === "all" ? sql`o.page_id is not null` : input.pageIds.length === 0 ? sql`false` : sql`o.page_id = any(${ids(input.pageIds)})`;
-  const scope = input.unknownPage ? sql`(${pages} or o.page_id is null)` : pages;
+  const states = input.live === true
+    ? sql`o.state not in ('given', 'closed', 'cancelled')`
+    : sql`(o.state not in ('given', 'closed', 'cancelled')
+        or (o.state in ('given', 'closed') and coalesce(o.given_at, o.state_at) >= ${input.doneSince.toISOString()}::timestamptz))`;
   const result = await db.execute<Row>(sql`${ORDER_SELECT}
-    where ${scope}
-      and (o.state not in ('given', 'closed', 'cancelled')
-        or (o.state in ('given', 'closed') and coalesce(o.given_at, o.state_at) >= ${input.doneSince.toISOString()}::timestamptz))
+    where ${boardScope(input)} and ${states}
     order by o.state_at asc, o.id asc
     limit ${input.limit}`);
   return result.rows.map(orderOf);
+}
+
+/**
+ * «Отдано, ждём слово фана» and «Закрыто за месяц» of a board: the given orders (not closed yet, whatever their age) and
+ * the closed since `closedSince`, the newest step first.
+ */
+export async function listCustomOrdersDone(
+  db: Database,
+  input: { pageIds: "all" | readonly number[]; unknownPage: boolean; realm: CustomOrderRealmRow; closedSince: Date; limit: number },
+): Promise<CustomOrderRow[]> {
+  const result = await db.execute<Row>(sql`${ORDER_SELECT}
+    where ${boardScope(input)}
+      and (o.state = 'given' or (o.state = 'closed' and o.state_at >= ${input.closedSince.toISOString()}::timestamptz))
+    order by o.state_at desc, o.id desc
+    limit ${input.limit}`);
+  return result.rows.map(orderOf);
+}
+
+/** How many of a board's orders are given (not closed) and closed since `closedSince`. */
+export async function countCustomOrdersDone(
+  db: Database,
+  input: { pageIds: "all" | readonly number[]; unknownPage: boolean; realm: CustomOrderRealmRow; closedSince: Date },
+): Promise<{ given: number; closed: number }> {
+  const result = await db.execute<{ given: unknown; closed: unknown }>(sql`
+    select count(*) filter (where o.state = 'given') as given,
+      count(*) filter (where o.state = 'closed' and o.state_at >= ${input.closedSince.toISOString()}::timestamptz) as closed
+    from custom_orders o
+    where ${boardScope(input)} and o.state in ('given', 'closed')`);
+  return { given: Number(result.rows[0]?.given ?? 0), closed: Number(result.rows[0]?.closed ?? 0) };
+}
+
+/** Orders by their ids (the self-changes' orders), in no order. */
+export async function listCustomOrdersByIds(db: Database, orderIds: readonly number[]): Promise<CustomOrderRow[]> {
+  if (orderIds.length === 0) return [];
+  const result = await db.execute<Row>(sql`${ORDER_SELECT} where o.id = any(${ids(orderIds)})`);
+  return result.rows.map(orderOf);
+}
+
+/** A step of an order taken through the system's or an agent's door (customs facts spec §10). */
+export interface CustomOrderSelfChangeRow {
+  id: number;
+  orderId: number;
+  event: string;
+  door: string;
+  actorAgentKeyId: number | null;
+  changes: Record<string, unknown>;
+  at: Date;
+  /**
+   * A sale's link or a delivery: whether its evidence is still on the order (the sale linked, the delivery not taken
+   * back); null — another step.
+   */
+  applied: boolean | null;
+}
+
+/**
+ * The steps of the system's and the agents' doors since `since` on the orders of `realm` (from the orders changed since
+ * then: every step bumps the order), the newest first.
+ */
+export async function listCustomOrderSelfChanges(
+  db: Database,
+  input: { since: Date; realm: CustomOrderRealmRow; limit: number },
+): Promise<CustomOrderSelfChangeRow[]> {
+  const since = input.since.toISOString();
+  const result = await db.execute<Row>(sql`
+    select e.id, o.id as order_id, e.event, e.door, e.actor_agent_key_id, e.changes, e.created_at,
+      case
+        when e.event in ('custom_order.payment', 'custom_order.recorded') and (e.changes ->> 'transactionId') is not null
+          then exists (select 1 from custom_order_payments cp where cp.order_id = o.id and cp.transaction_id::text = e.changes ->> 'transactionId')
+        when e.event = 'custom_order.delivery'
+          then exists (select 1 from custom_order_messages m where m.order_id = o.id and m.kind = 'delivery' and m.retracted_at is null
+            and (case when (e.changes ->> 'eventRef') is not null then m.event_ref = e.changes ->> 'eventRef' else m.telegram_ref = e.changes ->> 'telegramRef' end))
+        else null
+      end as applied
+    from custom_orders o
+    join object_events e on e.object_type = 'custom_order' and e.object_id = o.id::text
+    where o.updated_at >= ${since}::timestamptz and e.created_at >= ${since}::timestamptz and e.door in ('system', 'api')
+      and ${input.realm === "test" ? testPageSql(sql`o.page_id`) : livePageSql(sql`o.page_id`)}
+    order by e.id desc
+    limit ${input.limit}`);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    orderId: Number(row.order_id),
+    event: String(row.event),
+    door: String(row.door),
+    actorAgentKeyId: num(row.actor_agent_key_id),
+    changes: (row.changes as Record<string, unknown> | null) ?? {},
+    at: date(row.created_at)!,
+    applied: row.applied === null || row.applied === undefined ? null : row.applied === true,
+  }));
 }
 
 /** The orders of these fans (a person's accounts): open ones, and the ended within `recentDays`; open first, newest first. */
@@ -1013,6 +1114,15 @@ export async function insertCustomFinding(
   if (inserted.rows[0]) return { id: Number(inserted.rows[0].id), created: true };
   const existing = await db.execute<{ id: unknown }>(sql`select id from custom_findings where source = ${input.source} and ref = ${input.ref}`);
   return { id: Number(existing.rows[0]!.id), created: false };
+}
+
+/** The board's open findings of `realm` (a finding of no known page is the live agency's), with their fans, the newest first. */
+export async function listBoardCustomFindings(db: Database, input: { realm: CustomOrderRealmRow; limit: number }): Promise<CustomFindingRow[]> {
+  const result = await db.execute<Row>(sql`${FINDING_SELECT}
+    where c.status = 'open' and ${input.realm === "test" ? testPageSql(sql`c.page_id`) : livePageSql(sql`c.page_id`)}
+    order by c.happened_at desc, c.id desc
+    limit ${input.limit}`);
+  return result.rows.map(findingOf);
 }
 
 /** An open finding resolved: recorded as an order, linked to one, or dismissed. False — it was not open any more. */

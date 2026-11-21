@@ -14,6 +14,7 @@ import {
   type CustomOrderState,
   type CustomPaidWord,
   type CustomPaidWordKind,
+  type CustomUndo,
 } from "./custom-orders.ts";
 
 /**
@@ -466,6 +467,55 @@ export const CUSTOMS_ROUTINES = {
 export function customsReaderStale(readerAt: Date | string | null, now: Date): boolean {
   if (readerAt === null) return true;
   return now.getTime() - msOf(readerAt) > (2 * CUSTOMS_ROUTINES.reader.periodSeconds + 600) * 1000;
+}
+
+// ── Undo of what the system or an agent did (customs facts spec §10) ────────
+
+/** The doors whose steps are «изменилось само»: Hub itself, and an agent key. */
+export const SELF_CHANGE_DOORS: readonly string[] = ["system", "api"];
+
+/**
+ * How the viewer takes back one step of an order's history that the system or an agent took — the board's «Отменить»
+ * in «За сутки изменилось само» and on the order's facts: a sale linked (`unpay`), «отдан» by a message (`ungive`), a
+ * delivery (`retract`), a deadline moved (back to what it was). Null — not such a step, its evidence is off the order
+ * already (`applied` false: the sale unlinked, the delivery taken back), the order moved on, or the step is not the
+ * viewer's (`may`). The same rule on the server (the changes' list) and on the screen (the order's history).
+ */
+export function customUndoOf(
+  step: { event: string; door: string; changes: Record<string, unknown> },
+  order: { state: CustomOrderState; deadlineOn: string | null; givenMessageRef: string | null },
+  /** The step's evidence is still on the order: its sale linked, its delivery not taken back; null — not asked. */
+  applied: boolean | null,
+  may: (action: CustomOrderAction) => boolean,
+): CustomUndo | null {
+  if (!SELF_CHANGE_DOORS.includes(step.door)) return null;
+  const text = (key: string) => {
+    const value = step.changes[key];
+    return typeof value === "string" || typeof value === "number" ? String(value) : null;
+  };
+  switch (step.event) {
+    case "custom_order.payment":
+    case "custom_order.recorded": {
+      const sale = text("transactionId");
+      return sale !== null && applied === true && may("unpay") ? { action: "unpay", transactionRef: sale } : null;
+    }
+    case "custom_order.given": {
+      const message = text("messageRef");
+      return message !== null && order.state === "given" && order.givenMessageRef === message && may("ungive") ? { action: "ungive" } : null;
+    }
+    case "custom_order.delivery": {
+      const ref = text("eventRef") ?? text("telegramRef");
+      return ref !== null && applied === true && may("retract") ? { action: "retract", retracts: ref } : null;
+    }
+    case "custom_order.deadline": {
+      const from = step.changes.from;
+      const to = step.changes.to;
+      if ((from !== null && typeof from !== "string") || to === undefined || order.deadlineOn !== to || !may("deadline")) return null;
+      return { action: "deadline", deadlineOn: from };
+    }
+    default:
+      return null;
+  }
 }
 
 /** The stored owner's word on the payment, as the wire carries it; null — none, or a shape the contract does not know. */
