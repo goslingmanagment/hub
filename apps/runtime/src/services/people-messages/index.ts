@@ -123,7 +123,7 @@ const MATTER_LOOKBACK_MS = 48 * HOUR_MS;
 const SENDING_STALE_MS = 15 * MINUTE_MS;
 const HELD_SHOWN = 5;
 const SHOT_NOT_GIVEN_KIND = "custom.shot_not_given";
-/** A colleague's claim on a person's sale waiting for their answer (package G, sale-claims.ts). */
+/** A colleague wrote a person's sale to themself (a take, package G, sale-claims.ts): their notice. */
 const SALE_CLAIM_KIND = "sale.claim";
 const REMINDER_KINDS = { [SHIFT_REPORT_MISSING_KIND]: "shift.report.missing", [SHOT_NOT_GIVEN_KIND]: "custom.shot.give", [SALE_CLAIM_KIND]: "claim.confirm" } as const;
 
@@ -227,7 +227,7 @@ async function reminderOf(app: MessagesApp, matter: MatterRow): Promise<Outgoing
     };
   }
   if (matter.kind === SALE_CLAIM_KIND) {
-    // «Подтвердите договорённость»: who claims, the sale's amount and page, the link to the line. No fan in Telegram.
+    // «Коллега записывает продажу себе»: who, the sale's amount and page, the link to the line. No fan, no line of why.
     const claim = await findSaleClaim(app.db, Number(matter.object?.id ?? Number.NaN));
     const sale = claim?.transactionId == null ? undefined : (await listHandinSalesByIds(app.db, [claim.transactionId]))[0];
     if (claim === null || sale === undefined || claim.claimantUserId === null) return null;
@@ -239,9 +239,9 @@ async function reminderOf(app: MessagesApp, matter: MatterRow): Promise<Outgoing
       recipient,
       objectType: "matter",
       objectId: matter.key,
-      about: `заявка: ${who}, ${what}`,
-      text: `${claim.statement === "share" ? `${who} предлагает делить продажу ${what} пополам` : `${who} считает продажу ${what} своей`}. `
-        + `Подтвердите договорённость или ответьте в Workboard: ${teamLink(app, matter.link ?? "/workboard/shifts/mine")}`,
+      about: `запись себе: ${who}, ${what}`,
+      text: `${claim.statement === "share" ? `${who} записывает продажу ${what} пополам с вами` : `${who} записывает себе продажу ${what}`}. `
+        + `Если не согласны, ответьте в Workboard: ${teamLink(app, matter.link ?? "/workboard/shifts/mine")}`,
       eventAt: matter.openedAt,
     };
   }
@@ -542,7 +542,7 @@ const MISSING: Readonly<Record<PeopleMessageKind, string>> = {
   "custom.card.to_model": "Заказов в системе пока нет: пример появится с первым.",
   "shift.report.missing": "Дел «Сдайте смену» пока не было: смену в системе ещё никто не сдаёт.",
   "custom.shot.give": "Дел «Кастом снят, отдайте фану» пока не было.",
-  "claim.confirm": "Заявок «моё / делим» ещё не было: смену в системе ещё никто не сдаёт.",
+  "claim.confirm": "Коллеги ещё не записывали себе чужих продаж: пример появится с первой такой записью.",
   "payout.text": "Пример появится после первого нажатия: текст даёт расчёт выплаты ledger, сейчас он в «Выплате» человека под «Скопировать».",
   "newcomer.invite": "Пример появится после первого нажатия: сейчас текст в окне приглашения под «Скопировать сообщение».",
 };

@@ -234,16 +234,16 @@ describe("«Сдать смену» as the person's signature", () => {
     if (!testDb) return context.skip();
     const taken = await sale(13 * 60);
     const shift = await shiftRow("anna", 14, 12);
-    // anna says the sale is hers and asks cora, whose it is by the rule: it counts nothing meanwhile.
+    // anna writes the sale to herself (cora's by the rule): it counts for her at once, cora is told.
     const asked = await asSession("anna", "POST", `/api/v1/shift-reports/${shift}/asks`, { transactionId: taken, statement: "mine", note: "мой фан" });
     expect(asked.statusCode, asked.body).toBe(200);
     const draft = await board("anna", shift);
     const handed = await handIn("anna", shift, draft.totals);
     expect(handed).toMatchObject({ phase: "checking", candidate: { signed: true } });
-    const claimId = Number((await q("select id from sale_claims where transaction_id = $1 and kind = 'claim' and state = 'asked'", [taken])).rows[0].id);
-    const agreed = await asSession("cora", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" });
-    expect(agreed.statusCode, agreed.body).toBe(200);
-    // Gengar finds nothing; the report is no longer what anna signed: the sale counts for her now.
+    const claimId = Number((await q("select id from sale_claims where transaction_id = $1 and kind = 'claim' and state = 'agreed'", [taken])).rows[0].id);
+    const disagreed = await asSession("cora", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "disagree" });
+    expect(disagreed.statusCode, disagreed.body).toBe(200);
+    // Gengar finds nothing; the report is no longer what anna signed: the sale waits for the decider now.
     const clean = await asReviewer("POST", `/api/v1/agent/shift-reports/checks/${handed.candidate!.id}`, { proposals: [] });
     expect(clean.statusCode, clean.body).toBe(200);
     await runShiftReportBoardPass(app, new Date(Date.now() + 60_000));

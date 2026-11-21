@@ -5,8 +5,8 @@ import { toast } from "@agency_hub_core/ui";
 import { formatDateTime } from "@agency_hub_core/ui/format";
 import { kernel } from "@/shared/hub";
 import { mattersListQuery } from "@/shared/myMatters";
-import { waitedFor, waitingSince } from "@agency_hub_core/ui/waiting/kinds";
-import { goLink } from "./links";
+import { quoted, waitedFor, waitingSince } from "@agency_hub_core/ui/waiting/kinds";
+import { goLink, titleLink } from "./links";
 
 /**
  * The first lines of what waits for the person themself (their own matters, and a lead's of the teams they lead), on
@@ -16,19 +16,23 @@ import { goLink } from "./links";
 
 const MINUTE = 60_000;
 
-/** A colleague's question on your sale waits a day for your answer; after a day of silence the sale stays with the one who asked (`silenceSettles`). */
+/**
+ * A colleague wrote your sale to themself (or half): it counts as written at once, you are told (owner, 2026-11-21).
+ * The notice stays a week unanswered; «Не согласен» has no deadline.
+ */
 const CLAIM_KIND = "sale.claim";
 
 /**
- * The answer to a colleague's question, in the line itself: the sale may be on none of the person's boards (it waits
- * for their next shift), and one press is all an answer is. «Не согласен» sends the question to whoever decides.
+ * The answer to a colleague's take, in the line itself: the sale may be on none of the person's boards (it waits for
+ * their next shift), and one press is all an answer is. «Понятно» closes it; «Не согласен» sends it to whoever decides.
+ * The line's title opens their board at that row (`titleLink`), so what is answered about is one press away.
  */
 export function ClaimAnswer({ claimId }: { claimId: number }) {
   const client = useQueryClient();
   const answer = useMutation({
     mutationFn: (word: "agree" | "disagree") => kernel.saleClaimAnswer({ params: { claimId }, body: { answer: word, note: null } }),
     onSuccess: (_saved, word) => {
-      toast.success(word === "agree" ? "Продажа отдана" : "Записано: вы не согласны");
+      toast.success(word === "agree" ? "Записано" : "Записано: вы не согласны");
       void client.invalidateQueries({ queryKey: ["matters"] });
       void client.invalidateQueries({ queryKey: ["report"] });
     },
@@ -36,7 +40,7 @@ export function ClaimAnswer({ claimId }: { claimId: number }) {
   });
   return (
     <span className="wt-answer">
-      <button type="button" className="wt-go wt-answer__one" disabled={answer.isPending} onClick={() => answer.mutate("agree")}>Согласен</button>
+      <button type="button" className="wt-go wt-answer__one" disabled={answer.isPending} onClick={() => answer.mutate("agree")}>Понятно</button>
       <button type="button" className="wt-go wt-answer__one" disabled={answer.isPending} onClick={() => answer.mutate("disagree")}>Не согласен</button>
     </span>
   );
@@ -45,15 +49,14 @@ export function ClaimAnswer({ claimId }: { claimId: number }) {
 function Row({ matter, now }: { matter: Matter; now: number }) {
   const since = waitingSince(matter);
   const claim = matter.kind === CLAIM_KIND;
-  const answerBy = claim && typeof matter.evidence.answerBy === "string" ? matter.evidence.answerBy : null;
   const claimId = claim && typeof matter.evidence.claimId === "number" ? matter.evidence.claimId : null;
   const why = claim && typeof matter.evidence.note === "string" && matter.evidence.note.trim() !== "" ? matter.evidence.note.trim() : null;
-  const about = [matter.pageLabels.join(", "), answerBy === null ? "" : `ответьте до ${formatDateTime(answerBy)}, иначе продажа останется за тем, кто забрал`].filter((part) => part !== "");
+  // The page and, of a colleague's take, their line of why.
+  const about = [matter.pageLabels.join(", "), why === null ? "" : quoted(why)].filter((part) => part !== "");
   return (
     <li className="wt-line">
       <div className="wt-line__main">
-        <span className="wt-line__title">{matter.title}</span>
-        {why !== null && <span className="wt-line__about">«{why}»</span>}
+        <span className="wt-line__title">{claim && matter.link ? titleLink(matter.link, matter.title) : matter.title}</span>
         {about.length > 0 && <span className="wt-line__about">{about.join(" · ")}</span>}
       </div>
       <span className="wt-line__age" title={`С ${formatDateTime(since, { yearUnlessCurrent: true })}`}>{waitedFor(since, now)}</span>
@@ -71,7 +74,7 @@ export function MyMatters({ title = "Ждут вас", workboardOnly = false }: 
   const matters = (list.data?.matters ?? [])
     .filter((matter) => matter.mine && !isMatterInfoKind(matter.kind) && (!workboardOnly || waitingProductOf(matter.kind) === "workboard"))
     .map((matter) => ({ matter, since: waitingSince(matter) }))
-    // A claim to answer comes first: it has a day before it goes to the owner. Then the longest waiting.
+    // A colleague's take comes first: the person's money moved by it. Then the longest waiting.
     .sort((left, right) => Number(right.matter.kind === CLAIM_KIND) - Number(left.matter.kind === CLAIM_KIND)
       || left.since.localeCompare(right.since) || left.matter.id - right.matter.id);
   const now = list.data ? Date.parse(list.data.serverNow) : Date.now();

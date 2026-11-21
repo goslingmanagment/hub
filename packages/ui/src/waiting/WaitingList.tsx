@@ -13,7 +13,7 @@ import { formatDay, formatDateTime, formatMills, formatWeekdayDay } from "../for
 import { partLabel, purposeLabel } from "../heldSends.js";
 import { ruPlural } from "../plural.js";
 import { postFlagWord } from "../shiftReports.js";
-import { WAITING_GROUPS, contentopsLink, groupOf, uncheckedWords, waitedFor, waitingSince, type WaitingGroupId } from "./kinds.js";
+import { WAITING_GROUPS, contentopsLink, groupOf, quoted, uncheckedWords, waitedFor, waitingSince, type WaitingGroupId } from "./kinds.js";
 
 /**
  * «Ждут вас» (ecosystem plan §6, package K): one list of everything that waits
@@ -68,8 +68,10 @@ export interface WaitingContext {
   open: (param: "dispute" | "claim" | "offPlatform" | "nobody" | "unlinked", value: string) => void;
   /** A matter's link (a path of either product): Workboard's own inside Workboard, anything else by a page load. */
   link: (link: string, children: ReactNode) => ReactNode;
-  /** A colleague's question on the viewer's own sale, answered in the line («Согласен», «Не согласен»): Workboard's. */
+  /** A colleague's take of the viewer's own sale, answered in the line («Понятно», «Не согласен»): Workboard's. */
   answerClaim?: (claimId: number) => ReactNode;
+  /** A line's title as the link to what it is about (quiet: the title's own ink, a line under it). */
+  titleLink?: (link: string, children: ReactNode) => ReactNode;
 }
 type Context = WaitingContext;
 
@@ -167,15 +169,15 @@ function lineOf(matter: Matter, context: Context): Line {
       };
     }
     case "sale.claim": {
-      // A colleague asks for the viewer's sale: a day to answer, then it stays with the one who asked (`silenceSettles`).
+      // A colleague wrote the viewer's sale to themself: counted as written, «Понятно» or «Не согласен» (no deadline).
       const claimId = number(evidence.claimId);
-      const answerBy = text(evidence.answerBy);
       const why = text(evidence.note);
       if (!matter.mine || claimId === null || context.answerClaim === undefined) return base;
       return {
         ...base,
-        about: [why === null ? null : `«${why.trim()}»`, ...pages, answerBy === null ? null : `ответьте до ${formatDateTime(answerBy)}, иначе продажа останется за тем, кто забрал`]
-          .filter((part): part is string => part !== null),
+        // The title opens the viewer's board at that row: the answers stay two, on one line.
+        title: matter.link && context.titleLink ? context.titleLink(matter.link, matter.title) : matter.title,
+        about: [...pages, why === null ? null : quoted(why)].filter((part): part is string => part !== null),
         action: context.answerClaim(claimId),
       };
     }
@@ -183,7 +185,8 @@ function lineOf(matter: Matter, context: Context): Line {
       const net = number(evidence.netMills);
       const why = Array.isArray(evidence.why) ? evidence.why : [];
       const reason = why.includes("disagree") ? "вторая сторона не согласна" : why.includes("silence") ? "вторая сторона не ответила за сутки"
-        : why.includes("double") ? "продажа посчитана в двух отчётах" : why.includes("imported") ? "вопрос из ledger" : "спросить некого";
+        : why.includes("paid") ? "день коллеги уже выплачен"
+          : why.includes("double") ? "продажа посчитана в двух отчётах" : why.includes("imported") ? "вопрос из ledger" : "спросить некого";
       const transactionId = number(evidence.transactionId);
       return {
         ...base,

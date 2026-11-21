@@ -60,12 +60,18 @@ export const shiftReportWordEnum = z.enum(SHIFT_REPORT_WORDS);
 
 /** How long the check may hold the person: after this the server's timer moves `checking` to `confirm`. */
 export const SHIFT_REPORT_CHECK_MINUTES = 10;
-/** A question to a colleague unanswered this long settles for the one who asked (a pot question never does). */
-export const SHIFT_REPORT_ASK_SILENCE_HOURS = 24;
+/**
+ * A colleague's sale the person writes to themself («Моя», «Пополам с …») counts at once (owner, 2026-11-21): the
+ * colleague is told, not asked. Their notice («Ждут вас», the amber strip on their board) stays this long unanswered
+ * (a week: days off never close it unseen); «Не согласен» has no deadline.
+ */
+export const SALE_TAKE_NOTICE_DAYS = 7;
 /** A row of the person's own from this sum without a comment is pointed at («Без комментария: N продаж от $30»). */
 export const SHIFT_REPORT_BARE_NOTE_FROM_MILLS = 30_000;
 /** The quick words of a sale's comment; each one appends to the text. */
 export const SHIFT_REPORT_QUICK_WORDS = ["торг", "кастом", "голосовое", "допродажа"] as const;
+/** The quick reasons of «Почему продажа ваша?»: one tap fills the line of why. */
+export const SHIFT_REPORT_TAKE_REASONS = ["общался я", "мой кастом", "договорились"] as const;
 
 /**
  * A person's name in the cases the board's texts need: «Спросить Олега», «Пополам с Олегом», «Вопрос ушёл Олегу». A
@@ -137,13 +143,14 @@ export const shiftReportAskSchema = z.object({
   /** The one line of why. */
   note: z.string(),
   /**
-   * asked — waits («ждём ответа Олега» / «ждём владельца»); agreed — the colleague agreed («Олег согласился»);
-   * disputed — they did not, the decider decides; silence — a day of silence left it with the one who asked («Олег не
-   * ответил за сутки»); decided — the decider decided (`decision` says how); withdrawn — «Отменить».
+   * asked — waits for the decider («ждём владельца»; a colleague is never asked now: their sale is written at once);
+   * agreed — the colleague agreed («Олег согласился»); disputed — they did not, the decider decides; silence — written
+   * to the person without the colleague's answer (`taken`: at once, by their word; before 2026-11-21 by a day of
+   * silence); decided — the decider decided (`decision` says how); withdrawn — «Отменить».
    */
   state: z.enum(["asked", "agreed", "disputed", "silence", "decided", "withdrawn"]),
   answerNote: z.string().nullable(),
-  /** Until when the colleague may answer before the silence settles it; null — never (a pot question). */
+  /** Null: no deadline any more (the sale is written at once); kept for an older client. */
   answerBy: isoTimestamp.nullable(),
   /** The decider's decision in plain words («владелец отдал вам», «владелец оставил в общаке»); null — none. */
   decision: z.string().nullable(),
@@ -152,21 +159,36 @@ export const shiftReportAskSchema = z.object({
    * runs («Олег сдаёт смену по-старому, решит владелец»). Absent from an older server: false.
    */
   oldWay: z.boolean().optional(),
+  /**
+   * The colleague's sale written to the person at once by their word (a take): it counts for them now, the colleague is
+   * told and may object. «Отменить» and the tick take it back until it is disputed or decided. Absent from an older
+   * server: false.
+   */
+  taken: z.boolean().optional(),
 });
 
-/** Someone claims a sale of the person: the amber strip under the row, answered «Согласен» / «Не согласен». */
+/**
+ * A colleague wrote a sale of the person to themself (or half): the amber strip under the row, «Понятно» / «Не
+ * согласен». Before 2026-11-21 such a word was a question answered «Согласен» / «Не согласен».
+ */
 export const shiftReportIncomingSchema = z.object({
   claimId: intId,
   from: personSchema,
-  /** mine — «считает эту продажу своей»; share — «предлагает делить пополам». */
+  /** mine — «записывает эту продажу себе»; share — «записывает эту продажу пополам с вами». */
   statement: z.enum(["mine", "share"]),
   note: z.string().nullable(),
-  /** asked — waits for the reader; disputed — the reader said «Не согласен», the decider decides; settled — over. */
+  /** asked — waits for the reader; disputed — the reader said «Не согласен», the decider decides; settled — counted as the colleague wrote it (`taken`), or over. */
   state: z.enum(["asked", "disputed", "settled"]),
-  /** The reader may answer it now. */
+  /** The reader may answer it now: «Понятно» or «Не согласен» (no deadline). */
   canAnswer: z.boolean(),
   answer: z.enum(["agree", "disagree"]).nullable(),
+  /** Null: no deadline any more; kept for an older client. */
   answerBy: isoTimestamp.nullable(),
+  /**
+   * Written by the colleague's word alone (a take): it counts for them now; the reader is told and may say «Понятно» or
+   * «Не согласен». Absent from an older server: false.
+   */
+  taken: z.boolean().optional(),
 });
 
 /** Gengar's proposal for a sale of the candidate: a card under the row. */
@@ -218,14 +240,17 @@ export const shiftReportRowNoteSchema = z.object({
  */
 export const shiftReportChoiceSchema = z.object({
   owner: shiftReportOwnerSchema,
-  /** What choosing it does: null — applied at once; else it asks (a colleague with the board answers; anyone else — the decider). */
+  /**
+   * What choosing it does: null — applied at once; else it takes a line of why — a colleague with the board: written at
+   * once, they are told (`colleague`); anyone else, or a sale already settled or disputed by someone else: the decider.
+   */
   asks: z.object({
     to: z.enum(["colleague", "decider"]),
     user: personSchema.nullable(),
-    /** «спросим Олега», «решит владелец», «Олег сдаёт смену по-старому, решит владелец». */
+    /** «сообщим Олегу», «решит владелец», «Олег сдаёт смену по-старому, решит владелец». */
     words: z.string(),
   }).nullable(),
-  /** The menu's grey text: «по правилу», «спросим Олега», «решит владелец»; empty — none. */
+  /** The menu's grey text: «по правилу», «сообщим Олегу», «решит владелец»; empty — none. */
   hint: z.string(),
   /** The current word (absent from a reader that marks it itself). */
   current: z.boolean().optional(),

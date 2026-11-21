@@ -155,7 +155,7 @@ export const SALE_HOME_REASON_TEXT: Readonly<Record<SaleHomeReason, string>> = {
   owner_claim: "ничья, отдана по слову владельца",
   owner_nobody: "владелец решил: никому",
   owner_pot: "владелец решил: в общак",
-  agreed: "по согласию: тот, чья она по правилу, согласился",
+  agreed: "по согласию: тот, чья она по правилу, согласился или не возразил",
 };
 
 /** The days of the week a slot runs on, and a Moscow day's: the registry's schedule (schedule-slots.ts, a leaf). */

@@ -65,7 +65,7 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { ledgerGet } from "./ledger-payouts.ts";
 import { parseLedgerReportDays } from "./ledger-reports.ts";
 import { pagesWithLines, reportSums } from "./sale-claim-rules.ts";
-import { claimsOfReport, runSaleClaims, settleDueSilences } from "./sale-claims.ts";
+import { claimsOfReport, runSaleClaims, settleAskedTakes } from "./sale-claims.ts";
 import { checkReportNow, moveWhenDue, syncCheckMatters } from "./shift-handin-check.ts";
 import { boardOn, phaseOf, readBoard } from "./shift-report-board-view.ts";
 import { holdsSale, PhaseConflictError } from "./shift-report-phases.ts";
@@ -264,12 +264,15 @@ export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: st
   if (madeFor.kind === "decision") return madeFor.outcome === "cancelled" ? "решение о продаже отменено" : "решение о продаже, записанное со слов";
   switch (madeFor.outcome) {
     case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;
+    case "taken": return `записано по слову${actorName ? `: ${actorName}` : " коллеги"}`;
     case "first":
     case "second": return "решение владельца по спору о продаже";
     case "half": return "решение владельца: пополам";
     case "nobody": return "решение владельца: никому";
     case "pot": return "решение владельца: в общак";
     case "rule": return "решение: по правилу";
+    case "withdrawn": return "запись продажи отменена: по правилу";
+    case "disputed": return "спор о продаже: до решения по правилу";
     default: return null;
   }
 }
@@ -367,7 +370,7 @@ async function dueNow(app: HandinApp, input: { handin: HandinRow; subject: Subje
     await checkReportNow(app, { handinId: handin.id, shiftId: subject.shift.id, catalog }, now).catch(logged("Hub's check"));
     await moveWhenDue(app.db, { shiftId: subject.shift.id, catalog }, now).catch(logged("the move to «Подтвердите»"));
   }
-  await settleDueSilences(app, { handinId: handin.id, userIds: subject.userIds }, now).catch(logged("a day of silence"));
+  await settleAskedTakes(app, { handinId: handin.id, userIds: subject.userIds }, now).catch(logged("a take still asked"));
 }
 
 export async function readSubject(app: HandinApp, actor: HandinActor, subject: Subject, now: Date, options: { withPost?: boolean } = {}): Promise<ShiftReportResponse> {
@@ -375,7 +378,7 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
   const catalog = await pageCatalog(db);
   const access = accessOf(actor, subject, catalog);
   // What is due by now happens before the board is drawn (the pass is only the backstop): Hub's check of a report in
-  // «Проверка», its move to «Подтвердите» when Gengar's 10 minutes are up, a day of silence on its questions.
+  // «Проверка», its move to «Подтвердите» when Gengar's 10 minutes are up, a take on its sales still asked.
   const found = await findHandinByShift(db, subject.shift.id);
   if (found !== null) await dueNow(app, { handin: found, subject, catalog }, now);
   const handin = found === null ? null : await findHandinByShift(db, subject.shift.id);
@@ -643,6 +646,20 @@ export async function setShiftReportLine(
   const marks = existing === null ? [] : await listHandinMarks(app.db, existing.id);
   const before = marks.find((mark) => mark.transactionId === input.transactionId);
   const wordChanged = (before?.statement ?? null) !== statement || (before?.shareWithUserId ?? null) !== shareWith || (before?.toUserId ?? null) !== giveTo;
+  // The person's own word on this sale already settled between the two (a take that stands, an agreement): its terms
+  // made the reports' versions and the sale's home, so the line is their own now and «моя» is no word of it (the draft
+  // sets it aside; the board sends none). No word here keeps theirs and writes the comment, in any phase; another word
+  // would say one thing while the settlement counts another — «Отменить» first, else only the decider.
+  if (wordChanged && existing !== null && before?.statement != null
+    && (await listSaleClaims(app.db, { transactionIds: [input.transactionId], states: ["agreed"], kinds: ["claim"] })).some((claim) => claim.claimantHandinId === existing.id)) {
+    if (statement !== null) throw new ConflictError("This sale is already settled: only the decider changes it now", { reason: "claim_settled" });
+    const who = writer(actor);
+    await setHandinMark(app.db, {
+      handinId: existing.id, transactionId: input.transactionId, statement: before.statement, shareWithUserId: before.shareWithUserId, toUserId: before.toUserId ?? null,
+      note, byUserId: who.byUserId, byAgentKeyId: who.byAgentKeyId, at: now,
+    });
+    return { savedAt: now.toISOString() };
+  }
   // On the board, ticks and «чья» change only while it is edited (draft, «Правка»); a sale's comment any time.
   const phase = phaseOf(existing);
   if (boardOn(subject) && wordChanged && phase !== "draft" && phase !== "fixing") throw new PhaseConflictError(subject.shift.id, phase);

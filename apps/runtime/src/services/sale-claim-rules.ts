@@ -165,6 +165,8 @@ export interface ClaimView {
   shareWithUserId: number | null;
   state: "asked" | "agreed" | "owner" | "decided" | "withdrawn";
   answer: "agree" | "disagree" | null;
+  /** Settled by the claimant's word alone (a take): the side is told and has not objected. Absent — not so. */
+  silenceAt?: Date | null;
 }
 
 /**
@@ -187,7 +189,8 @@ export function claimStands(claim: ClaimView, reports: readonly ReportView[]): b
 /**
  * The people's statements as the rule's marks (each confirmed: in a handed-in report or an answer), by sale: the
  * newest version's statements of every report, and over them the claims' — the claimant's word while the claim
- * stands, the other side's agreement («не моё» to a «моё», «делим» back to a «делим»). Pure.
+ * stands, the other side's agreement («не моё» to a «моё», «делим» back to a «делим»): by their answer, or by a take
+ * that stands. Pure.
  */
 export function ruleMarksOf(input: { reports: readonly ReportView[]; claims: readonly ClaimView[] }): Map<number, RuleMark[]> {
   const bySale = new Map<number, Map<number, RuleMark>>();
@@ -238,7 +241,11 @@ export function ruleMarksOf(input: { reports: readonly ReportView[]; claims: rea
       userId: claim.claimantUserId, mark: claim.statement, shareWith: claim.statement === "share" ? claim.shareWithUserId : null, ownAmountMills: null,
       confirmed: claim.state === "agreed",
     });
-    if (claim.answer === "agree" && claim.sideUserId !== null) {
+    // The side's agreement: their answer, or a take that stands (owner, 2026-11-21: a colleague's sale written to
+    // oneself counts at once; told and not objecting, the side agrees until «Не согласен») — else every take would
+    // read as «не в отчёте» for one and «по словам» for the other wherever the rule's home is shown.
+    const takeStands = claim.state === "agreed" && claim.silenceAt != null;
+    if ((claim.answer === "agree" || takeStands) && claim.sideUserId !== null) {
       put(claim.transactionId, claim.statement === "share"
         ? { userId: claim.sideUserId, mark: "share", shareWith: claim.claimantUserId, ownAmountMills: null, confirmed: true }
         : { userId: claim.sideUserId, mark: "not_mine", shareWith: null, ownAmountMills: null, confirmed: true });
@@ -373,13 +380,13 @@ export function saleKindAccusative(kind: string): string {
 }
 
 /**
- * The other side's matter: «Катя считает своей продажу: PPV, фан, $36.00, 11 нояб.» or «Катя делит с вами …».
- * `fan` — the fan's name or login, null — not known.
+ * The other side's notice of a take: «Макс записывает себе: PPV, фан, $52.00, 19 нояб.» or «Макс записывает
+ * пополам с вами: …» (the present tense: Hub knows no gender of a person). `fan` — the fan's name or login, null — not known.
  */
 export function claimTitle(input: { claimant: string; statement: "mine" | "share"; kind: string; fan: string | null; netMills: number; day: string }): string {
   const what = [saleKindAccusative(input.kind), input.fan, money(input.netMills), dayWords(input.day)].filter((part): part is string => part !== null && part !== "").join(", ");
-  if (input.statement === "share") return `${input.claimant} делит с вами пополам: ${what}`;
-  return `${input.claimant} считает своей: ${what}`;
+  if (input.statement === "share") return `${input.claimant} записывает пополам с вами: ${what}`;
+  return `${input.claimant} записывает себе: ${what}`;
 }
 
 /** The owner's matter: «Спор о продаже: Катя и Алекс, PPV, $36.00, 11 нояб.». */

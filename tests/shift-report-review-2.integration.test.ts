@@ -18,9 +18,9 @@ import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in
 
 // Review round 2b of the shift report. (1) A report's date is the shift's date when it is handed in, not the date of
 // its first mark: a night shift that crossed into the next day after the first mark is reported — and fed to the
-// ledger — on the next day. (2) «Моё» on a sale the rule gives to someone else is NOT paid to both while it waits: the
-// claimant's line says what is claimed and counts nothing in the page sums and the total until the claim is settled;
-// the settlement's new version brings the settled share. (3) «Чья продажа» «со слов» has one home, Hub: a decision
+// ledger — on the next day. (2) «Моё» on a sale that waits for the decider (the pot's: a colleague's sale is a take,
+// counted at once) is NOT paid to anyone while it waits: the claimant's line says what is claimed and counts nothing in
+// the page sums and the total until the claim is settled; the settlement's new version brings the settled share. (3) «Чья продажа» «со слов» has one home, Hub: a decision
 // recorded through the agent's door behaves as the owner's decision of a dispute, reaches the ledger's facts, renders as
 // the agent's memory file; an import copies no fan's name; a question nobody answered says so in its title. (4) The
 // ledger's feed says which versions it held back for the key's pages. Money: required.
@@ -55,8 +55,8 @@ async function insertShift(userId: number, startedAt: Date, endedAt: Date, repor
   return Number(result.rows[0].id);
 }
 
-/** A sale of mia-1 `minutesAgo` before now and its home: bella's shift, or nobody's. */
-async function sale(net: number, minutesAgo: number, home: "bella" | "nobody"): Promise<number> {
+/** A sale of mia-1 `minutesAgo` before now and its home: bella's shift, nobody's, or the pot's. */
+async function sale(net: number, minutesAgo: number, home: "bella" | "nobody" | "pot"): Promise<number> {
   refs += 1;
   const inserted = await testDb!.pool.query(
     `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
@@ -66,11 +66,12 @@ async function sale(net: number, minutesAgo: number, home: "bella" | "nobody"): 
     [pageOne, `tx-review2-${refs}`, net + 4_000, net, 4_000, minutesAgo],
   );
   const id = Number(inserted.rows[0].id);
-  const shares = home === "nobody" ? [] : [{ userId: bella, workRef: null, shiftId: shiftB, percent: 100, mills: net }];
+  const shares = home !== "bella" ? [] : [{ userId: bella, workRef: null, shiftId: shiftB, percent: 100, mills: net }];
   await testDb!.pool.query(
-    `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at)
-     values ($1, $2, $3, $4, $5, $6, $7::jsonb, 'test', now())`,
-    [id, pageOne, inserted.rows[0].occurred_at, net, home === "nobody" ? "nobody" : "shift", home === "nobody" ? "no_holder" : "holder", JSON.stringify(shares)],
+    `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at, pot)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, 'test', now(), $8)`,
+    [id, pageOne, inserted.rows[0].occurred_at, net, home === "bella" ? "shift" : home, home === "nobody" ? "no_holder" : home === "pot" ? "post_tip" : "holder",
+      JSON.stringify(shares), home === "pot" ? "obshak" : null],
   );
   return id;
 }
@@ -150,7 +151,7 @@ describe("the shift report, review round 2b", () => {
     if (!testDb) return context.skip();
     const shift = await insertShift(anna, new Date(Date.now() - 30 * 3_600_000), new Date(Date.now() - 25 * 3_600_000), new Date(Date.now() - 27 * 3_600_000).toISOString().slice(0, 10));
     const own = await sale(10_000, 50, "nobody");
-    const disputed = await sale(16_001, 60, "bella");
+    const disputed = await sale(16_001, 60, "pot");
     for (const [id, note] of [[own, "ничья, моя"], [disputed, "мой фан"]] as const) {
       expect((await asSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${id}`, { statement: "mine", note })).statusCode).toBe(200);
     }
@@ -167,9 +168,9 @@ describe("the shift report, review round 2b", () => {
     expect(first.totalMills).toBe(10_000);
     expect(first.pages).toEqual([{ pageLabel: "mia-1", amountMills: 10_000 }]);
     expect(first.lines.find((line) => line.transactionId === disputed)).toMatchObject({ amountMills: 0, claimedMills: 16_001, disputed: true });
-    // The claim stands on it: bella is asked.
+    // The claim stands on it: the owner decides.
     const claim = await testDb.pool.query("select state from sale_claims where transaction_id = $1", [disputed]);
-    expect(claim.rows).toEqual([{ state: "asked" }]);
+    expect(claim.rows).toEqual([{ state: "owner" }]);
 
     // The owner gives it to anna: the settlement's version brings it.
     const decided = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: disputed, outcome: "first" });
@@ -184,7 +185,8 @@ describe("the shift report, review round 2b", () => {
     const disputed = await sale(20_000, 70, "bella");
     expect((await asSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${disputed}`, { statement: "mine", note: "мой фан" })).statusCode).toBe(200);
     await submit(shift);
-    expect((await testDb.pool.query("select state from sale_claims where transaction_id = $1", [disputed])).rows).toEqual([{ state: "asked" }]);
+    // A take of bella's sale: counted for anna at once, bella told.
+    expect((await testDb.pool.query("select state from sale_claims where transaction_id = $1", [disputed])).rows).toEqual([{ state: "agreed" }]);
     // The owner said it in the chat: anna's. Gengar records it through the door.
     const said = await asAgent("POST", "/api/v1/agent/sale-decisions", {
       transactionId: disputed, kind: "owner", shares: [{ person: "anna", percent: 100 }], saidBy: "владелец", saidAt: "2026-11-12", note: "фан её", ...SAID,

@@ -191,7 +191,10 @@ const plainUsd = (v: number) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;
 /** Who answers a question about a sale the rule gives `rule`: the colleague, or the owner for the pot. */
 const askedOf = (rule: Own): Who | "owner" | null => (rule === "oleg" || rule === "seva" ? rule : half(rule) ?? (rule === "pot" ? "owner" : null));
 
-interface Ask { to: Who | "owner"; want: Own; note: string; state: "asked" | "disputed" }
+/** A word on someone else's sale: `taken` — a colleague's, written to Lev at once (Hub since 2026-11-21); `asked` — the decider's. */
+interface Ask { to: Who | "owner"; want: Own; note: string; state: "asked" | "disputed" | "taken" }
+/** A colleague wrote Lev's sale to themself: `taken` — unanswered, `agreed` — «Понятно», `disputed` — «Не согласен». */
+interface Incoming { id: number; from: Who; note: string; state: "taken" | "agreed" | "disputed" }
 interface Proposal { id: number; from: Own; to: Own; why: string; state: "proposed" | "declined" | "accepted" }
 interface OffPlatform { id: number; amountMills: number; fromWhom: string; whatFor: string; state: "pending" | "confirmed" | "rejected"; pageLabel: string | null }
 
@@ -201,7 +204,7 @@ interface State {
   ok: Map<number, string>;
   notes: Map<number, { text: string; by: "person" | "agent" }>;
   asks: Map<number, Ask>;
-  incoming: { id: number; from: Who; note: string; state: "asked" | "disputed" } | null;
+  incoming: Incoming | null;
   proposals: Map<number, Proposal>;
   gNote: { id: number; text: string; state: "proposed" | "accepted" } | null;
   lost: boolean;
@@ -281,7 +284,11 @@ const lateOpen = (state: State, row: Base) => !!row.late && !state.lateAdded;
 const ownNow = (state: State, row: Base): Own => state.own.get(row.id) ?? (row.lost ? "me" : row.rule);
 function shareOf(state: State, row: Base): number {
   if (row.before || lostOpen(state, row) || lateOpen(state, row)) return 0;
-  if (state.asks.has(row.id) || state.incoming?.id === row.id) return 0;
+  // A take counts at once (all, or the half); a question to the decider counts nothing until the decision.
+  const ask = state.asks.get(row.id);
+  if (ask !== undefined) return ask.state === "taken" ? cut(ask.want, row.net) : 0;
+  // Taken by a colleague: nothing of it is Lev's while it stands; disputed, it is the rule's (his) until the decision.
+  if (state.incoming?.id === row.id && state.incoming.state !== "disputed") return 0;
   return cut(ownNow(state, row), row.net);
 }
 function setOwn(state: State, row: Base, own: Own) {
@@ -305,7 +312,9 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
   const note: { text: string; by: "person" | "agent" | "other" } | null = row.before && BEFORE_NOTES[row.id]
     ? { text: BEFORE_NOTES[row.id]!, by: "other" }
     : state.notes.get(row.id) ?? (state.gNote?.id === row.id ? { text: state.gNote.text, by: "agent" as const } : null);
-  let owner = ownerOf(word);
+  const taken = ask?.state === "taken";
+  const takenFromMe = incoming !== null && incoming.state !== "disputed";
+  let owner = ownerOf(taken ? ask!.want : takenFromMe ? incoming!.from : word);
   let reasonWords = "";
   if (lostOpen(state, row)) {
     owner = { kind: "me", userId: LEV.userId, name: LEV.name, words: "нет в Hub" };
@@ -315,8 +324,12 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     reasonWords = row.why;
   } else if (ask?.state === "asked") {
     reasonWords = ask.to === "owner" ? "ждём владельца" : `ждём ответа ${personNameForms(WHO[ask.to].name).gen}`;
+  } else if (taken && ask.to !== "owner") {
+    reasonWords = `по правилу ${personNameForms(WHO[ask.to].name).gen}, записали вы`;
   } else if (ask?.state === "disputed" && ask.to !== "owner") {
     reasonWords = `${WHO[ask.to].name} не согласен, решит владелец`;
+  } else if (takenFromMe) {
+    reasonWords = "по правилу ваша";
   } else if (incoming) {
     reasonWords = `${WHO[incoming.from].name} оспаривает`;
   } else if (proposal && (proposal.state === "proposed" || proposal.state === "accepted")) {
@@ -329,8 +342,8 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     reasonWords = row.why;
   }
   // The prototype's `ownerInfo`: on a half that counts, line 2 says the person's half; the reason moves to the title.
-  if (half(word) && share > 0 && !lostOpen(state, row) && !lateOpen(state, row)) reasonWords = `вам ${plainUsd(share)}`;
-  const attention = lostOpen(state, row) || lateOpen(state, row) || incoming?.state === "asked"
+  if (half(word) && share > 0 && !lostOpen(state, row) && !lateOpen(state, row) && !taken) reasonWords = `вам ${plainUsd(share)}`;
+  const attention = lostOpen(state, row) || lateOpen(state, row) || incoming?.state === "taken"
     || (state.phase === "confirm" && (proposal?.state === "proposed" || (state.gNote?.id === row.id && note?.by === "agent")));
   const askTo = ask === null ? null : ask.to;
   return {
@@ -348,7 +361,8 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     grossMills: fansly ? null : m(row.gross),
     rule: { owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : ownerOf(row.lost ? "me" : row.rule), reason: row.before ? "holder" : "demo", words: row.why },
     owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : owner,
-    statement: word === row.rule || row.before || row.lost ? null : word === "none" ? "not_mine" : word === "me" ? "mine" : half(word) ? "share" : word === "pot" ? "pot" : "give",
+    statement: taken ? (ask!.want === "me" ? "mine" : "share")
+      : word === row.rule || row.before || row.lost ? null : word === "none" ? "not_mine" : word === "me" ? "mine" : half(word) ? "share" : word === "pot" ? "pot" : "give",
     reasonWords: row.split ? "смена 12 нояб., 10:00–13:05, не сдана" : row.before ? "смена Олега" : reasonWords,
     ticked: share > 0,
     amountMills: m(share),
@@ -360,14 +374,18 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
       toUser: askTo === "owner" ? null : person(WHO[askTo]),
       want: ownerOf(ask.want),
       note: ask.note,
-      state: ask.state,
+      // Hub's words of a take: written without the colleague's answer («silence»), `taken`.
+      state: ask.state === "taken" ? "silence" : ask.state,
       answerNote: null,
-      answerBy: askTo === "owner" ? null : at(13, "19:40"),
+      answerBy: null,
       decision: null,
+      ...(ask.state === "taken" ? { taken: true } : {}),
     },
     incoming: incoming ? {
-      claimId: INCOMING_CLAIM_ID, from: person(WHO[incoming.from]), statement: "mine", note: incoming.note, state: incoming.state,
-      canAnswer: own && incoming.state === "asked", answer: incoming.state === "disputed" ? "disagree" : null, answerBy: at(14, "02:10"),
+      claimId: INCOMING_CLAIM_ID, from: person(WHO[incoming.from]), statement: "mine", note: incoming.note,
+      state: incoming.state === "disputed" ? "disputed" : "settled",
+      canAnswer: own && incoming.state === "taken", answer: incoming.state === "disputed" ? "disagree" : incoming.state === "agreed" ? "agree" : null, answerBy: null,
+      ...(incoming.state === "disputed" ? {} : { taken: true }),
     } : null,
     proposal: proposal ? {
       id: proposal.id, kind: "owner_change", from: ownerOf(proposal.from), to: ownerOf(proposal.to),
@@ -378,9 +396,12 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     note: note ? { text: note.text, by: note.by, byName: note.by === "agent" ? "Генгар" : note.by === "other" ? OLEG.name : LEV.name } : null,
     sighting: sighting ? { id: row.id, seenAt: at(12, "21:31"), added: state.lostAdded } : null,
     // Ticks and «чья» only in the draft; a comment in every phase (the next shift reads it); nothing in a preview.
-    editable: own && !state.preview && editing && plain,
+    // A sale a colleague wrote to themself: Lev's words on it change nothing while the take stands (Hub's rule).
+    editable: own && !state.preview && editing && plain && !takenFromMe,
     canNote: own && !state.preview && plain,
     attention,
+    // A sale Lev wrote to himself has no menu of «чья» (Hub's rule): the tick or «Отменить» takes it back.
+    ...(taken ? { choices: [] } : {}),
     foundByHub: row.found === true,
   };
 }
@@ -447,7 +468,7 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
     colleagues: [person(OLEG), person(SEVA)],
     decider: { kind: "owner", user: null, words: "владелец" },
     canConfirm: own && state.phase === "confirm",
-    needsMe: own && (state.phase === "confirm" || waiting.some((one) => one.why === "incoming" || one.why === "late") || state.split),
+    needsMe: own && (state.phase === "confirm" || waiting.some((one) => one.why === "incoming" || one.why === "late") || flat.some((row) => row.incoming?.canAnswer === true) || state.split),
     handedInAt: handed ? HANDED_IN[again ? 1 : 0] : null,
     countedAt: state.counted ? state.countedAt : null,
     preview: state.preview ? true : undefined,
@@ -594,9 +615,10 @@ const SCENARIOS: Record<Scenario, (nowMs: number) => State> = {
     state.comment = "Dario ждёт кастом к пятнице, Viggo торгуется";
     return state;
   },
+  // «Моя» on Oleg's sale: written to Lev at once, Oleg told; «Отменить» under the row gives it back.
   askColleague: () => {
     const state = fresh();
-    state.asks.set(6, { to: "oleg", want: "me", note: "Felix ответил на мою рассылку в 19:36", state: "asked" });
+    state.asks.set(6, { to: "oleg", want: "me", note: "общался я, Felix ответил на мою рассылку в 19:36", state: "taken" });
     return state;
   },
   askOwner: () => {
@@ -617,7 +639,12 @@ const SCENARIOS: Record<Scenario, (nowMs: number) => State> = {
   // The first «Подтверждаю» meets Hub's late re-read: one more sale, the board changed, the person presses again.
   gengarClean: () => ({ ...confirmState("clean"), hubFinds: true }),
   gengarSilent: () => confirmState("silent"),
-  dispute: () => ({ ...countedState(), post: { copiedAt: at(13, "02:11"), seen: true, changedSinceCopy: false, late: false }, incoming: { id: 23, from: "seva", note: "этот ппв Ash я отправлял 10-го, Лев только напомнил", state: "asked" } }),
+  // Seva wrote Lev's Ash/UK to himself: it counts for Seva at once (Lev's report got its version), Lev is told.
+  dispute: () => {
+    const state: State = { ...countedState(), post: { copiedAt: at(13, "02:11"), seen: true, changedSinceCopy: false, late: false }, incoming: { id: 23, from: "seva", note: "этот ппв Ash я отправлял 10-го, Лев только напомнил", state: "taken" } };
+    state.countedMills = totalOf(state);
+    return state;
+  },
   late: () => ({ ...countedState(), late: true, post: { copiedAt: null, seen: false, changedSinceCopy: false, late: true } }),
   counted: () => ({ ...countedState(), post: { copiedAt: at(13, "02:11"), seen: false, changedSinceCopy: false, late: false } }),
   fixing: () => {
@@ -819,7 +846,10 @@ export function demoBoardWrite(request: DemoRequest, operation: "lineSet" | "com
   return answer;
 }
 
-/** «Согласен» / «Не согласен» on the board's incoming claim (sale-claims.ts asks here first). */
+/**
+ * «Понятно» / «Не согласен» on the board's incoming take (sale-claims.ts asks here first): «Понятно» moves nothing;
+ * «Не согласен» sends it to the owner, and until he decides the sale is Lev's by the rule again (his report's version).
+ */
 export function demoBoardClaimAnswer(request: DemoRequest): unknown {
   const claimId = Number(request.params.claimId);
   if (claimId !== INCOMING_CLAIM_ID) return null;
@@ -827,17 +857,11 @@ export function demoBoardClaimAnswer(request: DemoRequest): unknown {
   const scenario: Scenario = "dispute";
   const state = stateOf(request, scenario);
   const incoming = state.incoming;
-  if (incoming === null || incoming.state !== "asked") return refused("Nothing to answer");
+  if (incoming === null || incoming.state !== "taken") return refused("Nothing to answer");
   const body = request.body as { answer: "agree" | "disagree" };
   const row = rowById(state, incoming.id)!;
-  if (body.answer === "agree") {
-    setOwn(state, row, incoming.from);
-    state.ok.set(row.id, `вы согласились с ${personNameForms(WHO[incoming.from].name).ins}`);
-    state.incoming = null;
-    if (state.post.copiedAt !== null) state.post.changedSinceCopy = true;
-  } else {
-    incoming.state = "disputed";
-  }
+  incoming.state = body.answer === "agree" ? "agreed" : "disputed";
+  if (body.answer === "disagree" && state.counted) state.countedMills = totalOf(state);
   const now = request.now.toISOString();
   return {
     claim: {
@@ -912,7 +936,8 @@ export const shiftReportBoardHandlers: DemoHandlers = {
     if (to === null) return refused("Nobody to ask: the sale is nobody's");
     const share = whoOf(body.shareWithUserId);
     const want: Own = body.statement === "mine" ? "me" : share ? `half:${share}` : "me";
-    state.asks.set(row.id, { to, want, note: body.note.trim(), state: "asked" });
+    // A colleague's sale is written to Lev at once, the colleague told (Hub since 2026-11-21); the pot's waits for the owner.
+    state.asks.set(row.id, { to, want, note: body.note.trim(), state: to === "owner" ? "asked" : "taken" });
     return null;
   }) ?? noBoard(),
   shiftReportAskWithdraw: (request) => write(request, shiftOf(request), (state) => {

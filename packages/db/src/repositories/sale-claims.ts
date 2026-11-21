@@ -110,7 +110,8 @@ export async function listCurrentReportsOfSales(db: Database, transactionIds: re
 export type SaleClaimKind = "claim" | "double" | "imported" | "question";
 export type SaleClaimState = "asked" | "agreed" | "owner" | "decided" | "withdrawn";
 export type SaleClaimAnswer = "agree" | "disagree";
-export type SaleClaimEscalation = "disagree" | "silence" | "no_side" | "double" | "imported" | "question";
+/** `paid` — a take on a sale the colleague's report of an already paid day counts (0434): the owner's at once. */
+export type SaleClaimEscalation = "disagree" | "silence" | "no_side" | "double" | "imported" | "question" | "paid";
 
 export interface SaleClaimRow {
   id: number;
@@ -154,7 +155,11 @@ export interface SaleClaimRow {
   closeNote: string | null;
   /** version — born from a handed-in version; draft — asked from the draft at «Спросить» (the board, 0412). */
   origin: "version" | "draft";
-  /** A day of silence settled it for the one who asked (0412); null — not. */
+  /**
+   * Settled for the one who said it by their word alone, without the side's answer; the side may still object
+   * («Не согласен», no deadline). Since 2026-11-21 a colleague's sale written to oneself («Моя», «Пополам с …») is
+   * settled so at once (a take; the side is told, not asked); before, by a day of silence (0412). Null — not so.
+   */
   silenceAt: Date | null;
 }
 
@@ -219,11 +224,14 @@ export async function listSaleClaims(
     kinds?: readonly SaleClaimKind[];
     /** Closed by one of these decisions. */
     decisionIds?: readonly number[];
+    /** Settled without the side's answer at or after this moment (`silence_at`). */
+    silenceSince?: Date;
     limit?: number;
   },
 ): Promise<SaleClaimRow[]> {
   const where = [sql`true`];
   if (input.ids !== undefined) where.push(sql`c.id = any(${ids(input.ids)})`);
+  if (input.silenceSince !== undefined) where.push(sql`c.silence_at >= ${input.silenceSince.toISOString()}::timestamptz`);
   if (input.decisionIds !== undefined) where.push(sql`c.decision_id = any(${ids(input.decisionIds)})`);
   if (input.transactionIds !== undefined) where.push(sql`c.transaction_id = any(${ids(input.transactionIds)})`);
   if (input.sideUserIds !== undefined) where.push(sql`c.side_user_id = any(${ids(input.sideUserIds)})`);
@@ -351,24 +359,27 @@ export async function updateSaleClaim(
 /**
  * A withdrawn claim its report makes again: the same row is the claim again (there is one row per report, sale and
  * side), written as a new one would be — the kind and the word, the note, the version and the moment of now, asked of
- * the side or the owner's at once — and with nothing of its first life: no answer, no decision, not closed, and asked
- * now (`created_at`: the day the side has to answer counts from it). False — it is not withdrawn: nothing changed.
+ * the side or the owner's at once — and with nothing of its first life: no answer, no decision, not settled, not
+ * closed, and asked now (`created_at`). `keepAnswer` — the side's answer of its first life stays (their «Не согласен»
+ * to a word then taken back and now said again: the decider reads it). False — it is not withdrawn: nothing changed.
  */
 export async function reopenSaleClaim(
   db: Database,
   id: number,
   input: Pick<SaleClaimInsert, "pageId" | "kind" | "claimantVersion" | "statement" | "shareWithUserId" | "claimantNote" | "claimedAt" | "sideShiftId" | "state">
-    & { escalatedAt: Date | null; escalatedWhy: SaleClaimEscalation | null },
+    & { escalatedAt: Date | null; escalatedWhy: SaleClaimEscalation | null; keepAnswer?: boolean },
   at: Date,
 ): Promise<boolean> {
   const now = at.toISOString();
+  const answer = input.keepAnswer === true ? sql`` : sql`
+      answer = null, answer_note = null, answered_at = null, answered_by_user_id = null, answered_by_agent_key_id = null,
+      answer_door = null, answer_ref = null,`;
   const result = await db.execute(sql`
     update sale_claims set page_id = ${input.pageId}, kind = ${input.kind}, claimant_version = ${input.claimantVersion},
       statement = ${input.statement}, share_with_user_id = ${input.shareWithUserId}, claimant_note = ${input.claimantNote},
       claimed_at = ${input.claimedAt.toISOString()}::timestamptz, side_shift_id = ${input.sideShiftId}, state = ${input.state},
-      escalated_at = ${input.escalatedAt?.toISOString() ?? null}::timestamptz, escalated_why = ${input.escalatedWhy},
-      answer = null, answer_note = null, answered_at = null, answered_by_user_id = null, answered_by_agent_key_id = null,
-      answer_door = null, answer_ref = null, decision_id = null, closed_at = null,
+      escalated_at = ${input.escalatedAt?.toISOString() ?? null}::timestamptz, escalated_why = ${input.escalatedWhy},${answer}
+      decision_id = null, closed_at = null, silence_at = null,
       created_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
     where id = ${id} and state = 'withdrawn' and kind in ('claim', 'double')`);
   return (result.rowCount ?? 0) > 0;

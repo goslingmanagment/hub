@@ -23,7 +23,8 @@ import { handInAndConfirm, handInAndConfirmDirect, editingSession } from "./help
 // whose wait for the ledger a decision, an agreement or a cancel fell into writes what rules after it, never the sums
 // it read before; a decision «со слов» in flight does not replace the owner's newer one unnamed. (3) A cancelled
 // decision takes its shares back out of the reports it settled: each gets a new version with what rules now, a day
-// already paid raises the owner's matter, the claims it decided wait again. (8) Every line's page is one of its
+// already paid raises the owner's matter, the claims it decided wait again — a colleague's sale said «моё» is a take
+// again, counted for the one who said it at once (owner, 2026-11-21). (8) Every line's page is one of its
 // version's pages. (9) The owner's own decision is the owner's to change. (11) A handed-in report has one day for every
 // reader. (12) A decision stays open for the person it gives the sale to; a share is its person's by any login.
 // Money: required.
@@ -120,6 +121,16 @@ async function newest(shiftId: number, transactionId: number) {
      from shift_handins h join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version where h.shift_id = $1`,
     [shiftId],
   )).rows[0] as { id: string; version: number; total_mills: string; made_for: Record<string, unknown> | null; day_paid: boolean | null; lines: Array<Record<string, unknown>> };
+  return { ...row, line: row.lines.find((one) => one.transactionId === transactionId) };
+}
+
+/** A given version of a shift's report, and its line of a sale. */
+async function versionOf(shiftId: number, version: number, transactionId: number) {
+  const row = (await q(
+    `select v.id, v.version, v.total_mills, v.made_for, v.lines
+     from shift_handins h join shift_handin_versions v on v.handin_id = h.id and v.version = $2 where h.shift_id = $1`,
+    [shiftId, version],
+  )).rows[0] as { id: string; version: number; total_mills: string; made_for: Record<string, unknown> | null; lines: Array<Record<string, unknown>> };
   return { ...row, line: row.lines.find((one) => one.transactionId === transactionId) };
 }
 
@@ -310,12 +321,13 @@ describe("«чья продажа» and the shift report, the final review's sec
 
   it("hands in what was decided while the hand-in waited for the ledger, not what it read before (2)", async (context) => {
     if (!testDb) return context.skip();
-    // A report handed in with a disputed «моё»; anna hands in again, and while that waits the owner decides «пополам».
+    // A report handed in with «моё» on bella's sale (a take: counted for anna at once); anna hands in again, and while
+    // that waits the owner decides «пополам».
     const shift = await shiftRow(anna, 30);
     const disputed = await sale(pageOne, 16_001, 60);
     await say(shift, disputed, "мой фан");
     await submit(shift);
-    expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 0, claimedMills: 16_001, disputed: true });
+    expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 16_001, disputed: false, settled: "agreed" });
     await handInAndConfirmDirect(app, annaAtWorkboard(), { shiftId: shift }, {
       dayPaid: async () => {
         const decided = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: disputed, outcome: "half" });
@@ -325,11 +337,12 @@ describe("«чья продажа» and the shift report, the final review's sec
     });
     const half = Math.min(anna, bella) === anna ? 8_001 : 8_000;
     const after = await newest(shift, disputed);
-    expect(after.version).toBe(3);
+    // v1 handed in, v2 the take, v3 the decision, v4 the hand-in that waited.
+    expect(after.version).toBe(4);
     expect(after.line).toMatchObject({ amountMills: half, disputed: false, settled: "owner" });
     expect(after.line).not.toHaveProperty("claimedMills");
     const fed = (await readShiftReportsFeed(app, { pageIds: [pageOne], limit: 500 })).reports.filter((one) => one.shiftId === shift).at(-1)!;
-    expect(fed).toMatchObject({ version: 3, totalMills: 8_000 });
+    expect(fed).toMatchObject({ version: 4, totalMills: 8_000 });
     expect((await claimOf(disputed)).map((claim) => claim.state)).toEqual(["decided"]);
 
     // A first hand-in: the draft read a disputed «моё», and while it waited the sale was decided «со слов».
@@ -348,7 +361,8 @@ describe("«чья продажа» and the shift report, the final review's sec
     // A decided sale is not contested again by a hand-in.
     expect(await claimOf(said)).toEqual([]);
 
-    // A decision cancelled while the hand-in waited: what it gave is not handed in.
+    // A decision cancelled while the hand-in waited: what it gave is not handed in — anna's word rules again, a take
+    // (counted for her at once by her word, not by the decision).
     const third = await shiftRow(anna, 78);
     const given = await sale(pageOne, 14_000, 70);
     await say(third, given, "мой");
@@ -363,9 +377,8 @@ describe("«чья продажа» and the shift report, the final review's sec
       },
     });
     const back = await newest(third, given);
-    expect(back.line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 14_000 });
-    expect(back.line).not.toHaveProperty("settled");
-    expect(Number(back.total_mills)).toBe(0);
+    expect(back.line).toMatchObject({ amountMills: 14_000, disputed: false, settled: "agreed" });
+    expect((await claimOf(given)).map((claim) => claim.state)).toEqual(["agreed"]);
   });
 
   it("refuses a decision «со слов» on a sale decided while it waited for the ledger: it replaces nothing it did not name (1, 2)", async (context) => {
@@ -425,7 +438,8 @@ describe("«чья продажа» and the shift report, the final review's sec
     const untouched = async () => {
       expect((await q("select id::int as id, state, source from sale_owner_decisions where transaction_id = $1 order by id", [first.disputed])).rows)
         .toEqual([{ id: first.id, state: "active", source: "dispute" }]);
-      expect(await newest(first.shift, first.disputed)).toMatchObject({ version: 2, line: expect.objectContaining({ amountMills: 13_000, settled: "owner" }) });
+      // v1 handed in, v2 the take, v3 the owner's decision.
+      expect(await newest(first.shift, first.disputed)).toMatchObject({ version: 3, line: expect.objectContaining({ amountMills: 13_000, settled: "owner" }) });
     };
 
     // The registry names its owner with no Telegram id: nobody's message is the owner's — never an open door.
@@ -452,19 +466,19 @@ describe("«чья продажа» and the shift report, the final review's sec
       transactionId: first.disputed, kind: "owner", shares: [{ person: "bella", percent: 100 }], supersedes: first.id, saidBy: "владелец", saidAt: "2026-11-12", ...from(OWNER_SENDER),
     });
     expect(replaced.statusCode, replaced.body).toBe(200);
-    expect(replaced.json().versions).toEqual([{ shiftId: first.shift, version: 3 }]);
+    expect(replaced.json().versions).toEqual([{ shiftId: first.shift, version: 4 }]);
     expect((await q("select state from sale_owner_decisions where id = $1", [first.id])).rows[0].state).toBe("superseded");
     expect((await newest(first.shift, first.disputed)).line).toMatchObject({ amountMills: 0, disputed: false, settled: "owner" });
 
-    // And cancels one: the report goes back to what rules without it.
+    // And cancels one: the report goes back to what rules without it — anna's word, a take again.
     const second = await ownersDecision(318, 128, 12_500);
     const strangers = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: second.id, note: "ошибка", ...from(CHATTER_SENDER) });
     expect([strangers.statusCode, strangers.json().reason]).toEqual([409, "owner_decision"]);
     const cancelled = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: second.id, note: "передумал", ...from(OWNER_SENDER) });
     expect(cancelled.statusCode, cancelled.body).toBe(200);
-    expect(cancelled.json().versions).toEqual([{ shiftId: second.shift, version: 3 }]);
+    expect(cancelled.json().versions).toEqual([{ shiftId: second.shift, version: 4 }]);
     expect((await q("select state from sale_owner_decisions where id = $1", [second.id])).rows[0].state).toBe("cancelled");
-    expect((await newest(second.shift, second.disputed)).line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 12_500 });
+    expect((await newest(second.shift, second.disputed)).line).toMatchObject({ amountMills: 12_500, disputed: false, settled: "agreed" });
   });
 
   it("keeps a decision open for the person it gives the sale to while only someone else's report holds the line (12)", async (context) => {
@@ -490,51 +504,56 @@ describe("«чья продажа» and the shift report, the final review's sec
     expect(own.json().decision).toMatchObject({ status: "held" });
   });
 
-  it("brings the reports a cancelled decision settled back to what rules now, and its claim back to the side (3)", async (context) => {
+  it("brings the reports a cancelled decision settled back to what rules now, and its claim back as it stood: a take (3)", async (context) => {
     if (!testDb) return context.skip();
     const shift = await shiftRow(anna, 126);
     const disputed = await sale(pageOne, 16_000, 80);
     await say(shift, disputed, "мой фан");
     await submit(shift);
     const [claim] = await claimOf(disputed);
-    expect(claim).toMatchObject({ state: "asked" });
+    // A take of bella's sale: counted for anna at once (her report's v2), bella told.
+    expect(claim).toMatchObject({ state: "agreed" });
     const matter = async () => (await q("select state from matters where reason_key = $1", [`sale.claim:${claim!.id}`])).rows[0]?.state as string | undefined;
     expect(await matter()).toBe("open");
 
-    // Decided «со слов»: anna's whole. Her report follows, the claim is decided, the home is the decision's.
+    // Decided «со слов»: anna's whole. Her report follows (the decider's line now), the claim is decided, the home is the decision's.
     const decision = await decide("one", { transactionId: disputed, kind: "owner", shares: [{ person: "anna", percent: 100 }] });
-    expect(decision.versions).toEqual([{ shiftId: shift, version: 2 }]);
+    expect(decision.versions).toEqual([{ shiftId: shift, version: 3 }]);
     expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 16_000, disputed: false, settled: "owner" });
     expect(await claimOf(disputed)).toEqual([expect.objectContaining({ state: "decided", decision_id: decision.id })]);
     expect(await matter()).toBe("closed");
     expect(await homeOf(disputed)).toMatchObject({ reason: "owner_split", users: [anna] });
 
-    // Cancelled: the report gets a version with what rules now — bella's sale by the rule, anna's «моё» claiming it.
+    // Cancelled: the report gets a version with what rules without it — bella's sale by the rule, anna's «моё» claiming it.
     const cancelled = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: decision.id, note: "ошибка", telegramUserId: WORDS.telegramUserId, sourceRef: WORDS.sourceRef });
     expect(cancelled.statusCode, cancelled.body).toBe(200);
     expect(cancelled.json().decision).toMatchObject({ id: decision.id, status: "cancelled" });
-    expect(cancelled.json().versions).toEqual([{ shiftId: shift, version: 3 }]);
+    expect(cancelled.json().versions).toEqual([{ shiftId: shift, version: 4 }]);
+    const undone = await versionOf(shift, 4, disputed);
+    expect(undone).toMatchObject({ made_for: { kind: "decision", decisionId: decision.id, transactionId: disputed, outcome: "cancelled" } });
+    expect(undone.line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 16_000 });
+    expect(undone.line).not.toHaveProperty("settled");
+    expect(Number(undone.total_mills)).toBe(0);
+    // The decision gone, the claim stands again as it stood: a take — anna's at once, bella told again, and the home
+    // follows the take as it follows an agreement.
+    expect(await homeOf(disputed)).toEqual({ home: "shift", reason: "agreed", users: [anna] });
+    expect(await claimOf(disputed)).toEqual([expect.objectContaining({ id: claim!.id, state: "agreed", decision_id: null })]);
+    expect(await matter()).toBe("open");
     const back = await newest(shift, disputed);
-    expect(back).toMatchObject({ version: 3, made_for: { kind: "decision", decisionId: decision.id, transactionId: disputed, outcome: "cancelled" } });
-    expect(back.line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 16_000 });
-    expect(back.line).not.toHaveProperty("settled");
-    expect(Number(back.total_mills)).toBe(0);
+    expect(back).toMatchObject({ version: 5, made_for: { kind: "claim", claimId: claim!.id, transactionId: disputed, outcome: "taken" } });
+    expect(back.line).toMatchObject({ amountMills: 16_000, disputed: false, settled: "agreed" });
     // It is what a hand-in now would write: her draft says the same of the sale.
     const draft = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shift}`)).json());
-    expect(draft.view!.lines.find((line) => line.transactionId === disputed)).toMatchObject({ amountMills: 0, claimedMills: 16_000, disputed: true });
-    expect(draft.latest).toMatchObject({ version: 3, madeFor: "решение о продаже отменено" });
+    expect(draft.view!.lines.find((line) => line.transactionId === disputed)).toMatchObject({ amountMills: 16_000, disputed: false });
+    expect(draft.latest).toMatchObject({ version: 5 });
     // The ledger's feed serves it as the report's newest version.
     const fed = (await readShiftReportsFeed(app, { pageIds: [pageOne], limit: 500 })).reports.filter((one) => one.shiftId === shift).at(-1)!;
-    expect(fed).toMatchObject({ version: 3, totalMills: 0, madeFor: { kind: "decision", decisionId: decision.id, outcome: "cancelled" } });
-    // The home is the rule's again, and the claim waits for bella again, her matter open.
-    expect(await homeOf(disputed)).toEqual({ home: "shift", reason: "holder", users: [bella] });
-    expect(await claimOf(disputed)).toEqual([expect.objectContaining({ id: claim!.id, state: "asked", decision_id: null, closed_at: null })]);
-    expect(await matter()).toBe("open");
+    expect(fed).toMatchObject({ version: 5, totalMills: 16_000, madeFor: { kind: "claim", outcome: "taken" } });
 
     // The owner decides the dispute anew: bella's.
     const again = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: disputed, outcome: "second" });
     expect(again.statusCode, again.body).toBe(200);
-    expect(again.json().versions).toEqual([{ shiftId: shift, version: 4 }]);
+    expect(again.json().versions).toEqual([{ shiftId: shift, version: 6 }]);
     expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 0, disputed: false, settled: "owner" });
 
     // A question the cancelled decision answered is open again.
@@ -554,16 +573,18 @@ describe("«чья продажа» and the shift report, the final review's sec
     await submit(shift);
     const first = await decide("one", { transactionId: disputed, kind: "owner", shares: [{ person: "anna", percent: 100 }] });
     expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 20_000, settled: "owner" });
+    // v1 handed in, v2 the take, v3 the first decision.
     const second = await decide("one", { transactionId: disputed, kind: "split", shares: [{ person: "anna", percent: 50 }, { person: "bella", percent: 50 }], supersedes: first.id });
-    expect(second.versions).toEqual([{ shiftId: shift, version: 3 }]);
+    expect(second.versions).toEqual([{ shiftId: shift, version: 4 }]);
     expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 10_000, settled: "owner" });
     // The replacement cancelled: nothing rules but the rule — the first decision does not come back.
     const cancelled = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: second.id, note: "ошибка", telegramUserId: WORDS.telegramUserId, sourceRef: WORDS.sourceRef });
-    expect(cancelled.json().versions).toEqual([{ shiftId: shift, version: 4 }]);
+    expect(cancelled.json().versions).toEqual([{ shiftId: shift, version: 5 }]);
     expect(await decisionState(first.id)).toBe("superseded");
-    expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 20_000 });
-    // The claim the first decision closed waits again as well: nothing decides the sale now.
-    expect((await claimOf(disputed)).map((claim) => [claim.state, claim.decision_id])).toEqual([["asked", null]]);
+    expect((await versionOf(shift, 5, disputed)).line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 20_000 });
+    // The claim the first decision closed stands again as well: nothing decides the sale now, anna's word is a take again.
+    expect((await claimOf(disputed)).map((claim) => [claim.state, claim.decision_id])).toEqual([["agreed", null]]);
+    expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 20_000, disputed: false, settled: "agreed" });
   });
 
   it("follows a decision tied to its sale as one made on it: the claim decided, the report given what it gives (3)", async (context) => {
@@ -572,7 +593,8 @@ describe("«чья продажа» and the shift report, the final review's sec
     const disputed = await sale(pageOne, 17_000, 125);
     await say(shift, disputed, "мой");
     await submit(shift);
-    expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 17_000 });
+    // A take of bella's sale: counted for anna at once.
+    expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 17_000, disputed: false, settled: "agreed" });
     // Carried over from the ledger with words that found no sale: anna's whole. The owner ties it to the sale.
     const carried = Number((await q(
       `insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, decided_at, said_by, source, ledger_decision_id, ledger_ref, needs_link)
@@ -583,7 +605,7 @@ describe("«чья продажа» and the shift report, the final review's sec
     expect(tied.statusCode, tied.body).toBe(200);
     expect(tied.json().linked).toBe(true);
     const after = await newest(shift, disputed);
-    expect(after).toMatchObject({ version: 2, made_for: { kind: "decision", decisionId: carried, transactionId: disputed, outcome: "said" } });
+    expect(after).toMatchObject({ version: 3, made_for: { kind: "decision", decisionId: carried, transactionId: disputed, outcome: "said" } });
     expect(after.line).toMatchObject({ amountMills: 17_000, disputed: false, settled: "owner" });
     expect(await claimOf(disputed)).toEqual([expect.objectContaining({ state: "decided", decision_id: carried })]);
   });
@@ -609,12 +631,15 @@ describe("«чья продажа» and the shift report, the final review's sec
     try {
       const cancelled = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: decision.id, note: "ошибка", telegramUserId: WORDS.telegramUserId, sourceRef: WORDS.sourceRef });
       expect(cancelled.statusCode, cancelled.body).toBe(200);
-      expect(cancelled.json().versions).toEqual([{ shiftId: shift, version: 3 }]);
+      // v1 handed in, v2 the take, v3 the decision, v4 the cancel; then anna's word is a take again (v5), of the same day.
+      expect(cancelled.json().versions).toEqual([{ shiftId: shift, version: 4 }]);
     } finally {
       await ledger.close();
     }
+    expect(await versionOf(shift, 4, disputed)).toMatchObject({ version: 4 });
+    expect((await q("select day_paid from shift_handin_versions v join shift_handins h on h.id = v.handin_id where h.shift_id = $1 and v.version = 4", [shift])).rows[0].day_paid).toBe(true);
     const back = await newest(shift, disputed);
-    expect(back).toMatchObject({ version: 3, day_paid: true });
+    expect(back).toMatchObject({ version: 5, day_paid: true });
     expect((await q("select state, owner_role, money from matters where reason_key = $1", [`shift.report.after_paid:${back.id}`])).rows).toEqual([
       { state: "open", owner_role: "owner", money: true },
     ]);
@@ -640,6 +665,10 @@ describe("«чья продажа» and the shift report, the final review's sec
     const shift = await shiftRow(anna, 270);
     await say(shift, sold, "мой");
     await submit(shift);
+    // One take against one person: her word against each of bella's logins settles together, none is the decider's.
+    const taken = (await q("select state, silence_at is not null as by_word from sale_claims where transaction_id = $1", [sold])).rows;
+    expect(taken.length).toBeGreaterThan(0);
+    expect(taken.every((row: { state: string; by_word: boolean }) => row.state === "agreed" && row.by_word)).toBe(true);
     const claim = Number((await q("select id from sale_claims where transaction_id = $1 and side_user_id = $2", [sold, bella])).rows[0].id);
     const disagreed = await asSession("bella", "POST", `/api/v1/sale-claims/${claim}/answer`, { answer: "disagree", note: "фан мой" });
     expect(disagreed.statusCode, disagreed.body).toBe(200);

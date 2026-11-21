@@ -12,13 +12,14 @@ import {
   mayAct,
   sameAsSigned,
   signedLines,
-  silenceSettles,
+  takeNoticeOpen,
+  takeSettles,
   withSettlementsNow,
   type BoardAction,
 } from "../apps/runtime/src/services/shift-report-phases.ts";
 
 // The «Отчёт» board (package R): who may do what in each phase, when the check lets the person confirm, what a
-// version made at «Подтверждаю» counts with Gengar's proposals, and a day of silence.
+// version made at «Подтверждаю» counts with Gengar's proposals, and a take of a colleague's sale.
 
 const ACTIONS: BoardAction[] = ["edit", "note", "ask", "handIn", "confirm", "reopen", "cancel", "resend", "answerProposal"];
 const person = { access: "own" as const, kind: "person" as const, enabled: true };
@@ -122,20 +123,29 @@ describe("a version made at «Подтверждаю»", () => {
   });
 });
 
-describe("a day of silence", () => {
-  const createdAt = new Date("2026-11-12T20:00:00Z");
-  const claim = { kind: "claim", state: "asked", sideUserId: 77, createdAt };
-  const later = (hours: number) => new Date(createdAt.getTime() + hours * 3_600_000);
+describe("a take of a colleague's sale", () => {
+  const takenAt = new Date("2026-11-12T20:00:00Z");
+  const claim = { kind: "claim", state: "asked", sideUserId: 77 };
+  const taken = { kind: "claim", state: "agreed", sideUserId: 77, silenceAt: takenAt, answer: null };
+  const later = (hours: number) => new Date(takenAt.getTime() + hours * 3_600_000);
 
-  it("settles a colleague's unanswered question for the one who asked after 24 hours, not before", () => {
-    expect(silenceSettles(claim, later(23.9))).toBe(false);
-    expect(silenceSettles(claim, later(24))).toBe(true);
+  it("settles a colleague's sale for the one who said it at once, with no day of silence", () => {
+    expect(takeSettles(claim)).toBe(true);
   });
 
-  it("never settles the pot's question or one already answered", () => {
-    expect(silenceSettles({ ...claim, sideUserId: null }, later(48))).toBe(false);
-    expect(silenceSettles({ ...claim, state: "owner" }, later(48))).toBe(false);
-    expect(silenceSettles({ ...claim, state: "agreed" }, later(48))).toBe(false);
+  it("never settles the pot's question, one with nobody to ask, or one already answered or settled", () => {
+    expect(takeSettles({ ...claim, sideUserId: null })).toBe(false);
+    expect(takeSettles({ ...claim, state: "owner" })).toBe(false);
+    expect(takeSettles({ ...claim, state: "agreed" })).toBe(false);
+    expect(takeSettles({ ...claim, kind: "double" })).toBe(false);
+  });
+
+  it("keeps the side's notice open a week while unanswered, and closes it on an answer", () => {
+    expect(takeNoticeOpen(taken, later(167.9))).toBe(true);
+    expect(takeNoticeOpen(taken, later(168))).toBe(false);
+    expect(takeNoticeOpen({ ...taken, answer: "agree" }, later(1))).toBe(false);
+    expect(takeNoticeOpen({ ...taken, state: "owner" }, later(1))).toBe(false);
+    expect(takeNoticeOpen({ ...taken, silenceAt: null }, later(1))).toBe(false);
   });
 });
 

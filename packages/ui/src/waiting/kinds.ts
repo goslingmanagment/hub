@@ -52,6 +52,11 @@ export function uncheckedWords(kinds: readonly string[]): string[] {
 /** Since when a matter waits — since its reason began: the one function (contracts waiting-groups.ts). */
 export { waitingSinceOf as waitingSince } from "@agency_hub_core/contracts";
 
+/** A person's own line in quotes: «…», the quotes inside it as „…“ (never «…«…»»). */
+export function quoted(text: string): string {
+  return `«${text.trim().replace(/«/g, "„").replace(/»/g, "“")}»`;
+}
+
 /** «12 мин», «5 ч», «3 дня»: how long it waits, short. */
 export function waitedFor(sinceIso: string, now: number): string {
   const minutes = Math.max(0, Math.floor((now - Date.parse(sinceIso)) / 60_000));

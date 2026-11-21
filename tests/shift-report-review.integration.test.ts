@@ -139,12 +139,12 @@ describe("the shift report after a settled claim, and a reader of one page", () 
     const pick = (line: Record<string, unknown> | undefined) => ({ amountMills: line?.amountMills, disputed: line?.disputed, settled: line?.settled ?? null });
     const seen: Array<{ outcome: string; decided: unknown; again: unknown; fed: unknown; total: boolean; reopened: number }> = [];
     for (const outcome of ["first", "second", "half", "nobody"] as const) {
-      // anna says «моё» on bella's sale and hands in: a claim against bella.
+      // anna says «моё» on bella's sale and hands in: a take, counted for anna at once (bella told).
       const id = await sale(pageOne, net, 60, "bella");
       const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftClaims}/lines/${id}`, { statement: "mine", note: `моё: ${outcome}` });
       expect(said.statusCode, said.body).toBe(200);
       await submit(shiftClaims);
-      expect((await newest(shiftClaims, id)).line).toMatchObject({ amountMills: 0, claimedMills: net, disputed: true });
+      expect((await newest(shiftClaims, id)).line).toMatchObject({ amountMills: net, disputed: false, settled: "agreed" });
       // The owner decides; the system's version gives anna what the decision gives her.
       const decided = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: id, outcome });
       expect(decided.statusCode, decided.body).toBe(200);
