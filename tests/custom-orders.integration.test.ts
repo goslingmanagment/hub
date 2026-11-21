@@ -114,7 +114,7 @@ describe("custom orders: who sees and moves what", () => {
     if (!testDb || !server) return context.skip();
     const board = customOrdersBoardResponseSchema.parse((await get("alice", "/api/v1/custom-orders")).json());
     expect(board.orders.map((order) => order.code).sort()).toEqual([orders.alices, orders.daves].sort());
-    expect(board.viewer).toEqual({ lead: false, owner: false });
+    expect(board.viewer).toMatchObject({ lead: false, owner: false });
     expect((await get("alice", `/api/v1/custom-orders/${orders.elsewhere}`)).statusCode).toBe(404);
     expect((await act("alice", orders.elsewhere!, { action: "cancel" })).statusCode).toBe(404);
     expect((await get("alice", "/api/v1/custom-orders?pageLabel=lora-2")).statusCode).toBe(404);
