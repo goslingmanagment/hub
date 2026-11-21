@@ -211,7 +211,10 @@ export const agentSaleClaimsQuerySchema = z.object({
   telegramUserId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   /** …or a sale. */
   transactionId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
-  /** Only what is not over: open claims and standing decisions (the default); `all` — the history too. */
+  /**
+   * Only what is not over: claims waiting for the decider, takes the side has not answered, standing decisions (the
+   * default); `all` — the history too.
+   */
   scope: z.enum(["open", "all"]).default("open"),
 }).refine((query) => query.person !== undefined || query.telegramUserId !== undefined || query.transactionId !== undefined, "name a person or a sale");
 

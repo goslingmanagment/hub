@@ -359,23 +359,26 @@ export async function updateSaleClaim(
  * A withdrawn claim its report makes again: the same row is the claim again (there is one row per report, sale and
  * side), written as a new one would be — the kind and the word, the note, the version and the moment of now, asked of
  * the side or the owner's at once — and with nothing of its first life: no answer, no decision, not settled, not
- * closed, and asked now (`created_at`). False — it is not withdrawn: nothing changed.
+ * closed, and asked now (`created_at`). `keepAnswer` — the side's answer of its first life stays (their «Не согласен»
+ * to a word then taken back and now said again: the decider reads it). False — it is not withdrawn: nothing changed.
  */
 export async function reopenSaleClaim(
   db: Database,
   id: number,
   input: Pick<SaleClaimInsert, "pageId" | "kind" | "claimantVersion" | "statement" | "shareWithUserId" | "claimantNote" | "claimedAt" | "sideShiftId" | "state">
-    & { escalatedAt: Date | null; escalatedWhy: SaleClaimEscalation | null },
+    & { escalatedAt: Date | null; escalatedWhy: SaleClaimEscalation | null; keepAnswer?: boolean },
   at: Date,
 ): Promise<boolean> {
   const now = at.toISOString();
+  const answer = input.keepAnswer === true ? sql`` : sql`
+      answer = null, answer_note = null, answered_at = null, answered_by_user_id = null, answered_by_agent_key_id = null,
+      answer_door = null, answer_ref = null,`;
   const result = await db.execute(sql`
     update sale_claims set page_id = ${input.pageId}, kind = ${input.kind}, claimant_version = ${input.claimantVersion},
       statement = ${input.statement}, share_with_user_id = ${input.shareWithUserId}, claimant_note = ${input.claimantNote},
       claimed_at = ${input.claimedAt.toISOString()}::timestamptz, side_shift_id = ${input.sideShiftId}, state = ${input.state},
-      escalated_at = ${input.escalatedAt?.toISOString() ?? null}::timestamptz, escalated_why = ${input.escalatedWhy},
-      answer = null, answer_note = null, answered_at = null, answered_by_user_id = null, answered_by_agent_key_id = null,
-      answer_door = null, answer_ref = null, decision_id = null, closed_at = null, silence_at = null,
+      escalated_at = ${input.escalatedAt?.toISOString() ?? null}::timestamptz, escalated_why = ${input.escalatedWhy},${answer}
+      decision_id = null, closed_at = null, silence_at = null,
       created_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
     where id = ${id} and state = 'withdrawn' and kind in ('claim', 'double')`);
   return (result.rowCount ?? 0) > 0;

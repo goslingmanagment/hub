@@ -534,8 +534,9 @@ describe("«чья продажа» and the shift report, the final review's sec
     expect(undone.line).toMatchObject({ amountMills: 0, disputed: true, claimedMills: 16_000 });
     expect(undone.line).not.toHaveProperty("settled");
     expect(Number(undone.total_mills)).toBe(0);
-    // The home is the rule's again, and the claim stands again as it stood: a take — anna's at once, bella told again.
-    expect(await homeOf(disputed)).toEqual({ home: "shift", reason: "holder", users: [bella] });
+    // The decision gone, the claim stands again as it stood: a take — anna's at once, bella told again, and the home
+    // follows the take as it follows an agreement.
+    expect(await homeOf(disputed)).toEqual({ home: "shift", reason: "agreed", users: [anna] });
     expect(await claimOf(disputed)).toEqual([expect.objectContaining({ id: claim!.id, state: "agreed", decision_id: null })]);
     expect(await matter()).toBe("open");
     const back = await newest(shift, disputed);
@@ -664,6 +665,10 @@ describe("«чья продажа» and the shift report, the final review's sec
     const shift = await shiftRow(anna, 270);
     await say(shift, sold, "мой");
     await submit(shift);
+    // One take against one person: her word against each of bella's logins settles together, none is the decider's.
+    const taken = (await q("select state, silence_at is not null as by_word from sale_claims where transaction_id = $1", [sold])).rows;
+    expect(taken.length).toBeGreaterThan(0);
+    expect(taken.every((row: { state: string; by_word: boolean }) => row.state === "agreed" && row.by_word)).toBe(true);
     const claim = Number((await q("select id from sale_claims where transaction_id = $1 and side_user_id = $2", [sold, bella])).rows[0].id);
     const disagreed = await asSession("bella", "POST", `/api/v1/sale-claims/${claim}/answer`, { answer: "disagree", note: "фан мой" });
     expect(disagreed.statusCode, disagreed.body).toBe(200);

@@ -165,6 +165,25 @@ describe("the people's words and the owner's decisions as the rule's inputs", ()
     expect(marks.get(9)).toEqual([said(102, "not_mine")]);
   });
 
+  it("reads a take that stands as the side's agreement, and no longer once the side says «Не согласен»", () => {
+    const take: ClaimView = {
+      kind: "claim", transactionId: 7, claimantUserId: 101, claimantHandinId: 1, sideUserId: 102, statement: "mine", shareWithUserId: null,
+      state: "agreed", answer: null, silenceAt: new Date("2026-11-21T10:00:00Z"),
+    };
+    // Told and not objecting, the holder agrees: the home follows the take as it follows «Согласен».
+    expect(ruleMarksOf({ reports: [], claims: [take] }).get(7)).toEqual([said(101, "mine"), said(102, "not_mine")]);
+    expect(ruleMarksOf({ reports: [], claims: [{ ...take, statement: "share", shareWithUserId: 102 }] }).get(7)).toEqual([said(101, "share", 102), said(102, "share", 101)]);
+    const holder = work(102, "2026-11-05 12:00", "2026-11-05 20:00");
+    const other = work(101, "2026-11-05 08:00", "2026-11-05 14:00");
+    const base = sale("2026-11-05 16:00", 36_000, [holder]);
+    expect(homeOfSale({ ...base, marks: ruleMarksOf({ reports: [], claims: [take] }).get(7)! }, [holder, other], [], later))
+      .toMatchObject({ reason: "agreed", shares: [{ userId: 101, mills: 36_000 }] });
+    // Disputed: the taker's word waits and nobody agreed — the home is the rule's own.
+    const disputed = ruleMarksOf({ reports: [], claims: [{ ...take, state: "owner", answer: "disagree" }] }).get(7)!;
+    expect(disputed).toEqual([{ ...said(101, "mine"), confirmed: false }]);
+    expect(homeOfSale({ ...base, marks: disputed }, [holder, other], [], later)).toMatchObject({ reason: "holder", shares: [{ userId: 102, mills: 36_000 }] });
+  });
+
   it("keeps an open question's word unconfirmed: a «стык смен» goes to nobody while it waits, to the asker once decided (third reader, 3)", () => {
     const left = work(101, "2026-11-05 12:00", "2026-11-05 20:00");
     const right = work(102, "2026-11-05 12:00", "2026-11-05 20:00");

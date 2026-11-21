@@ -225,8 +225,13 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
     };
     if (existing !== undefined) {
       // Withdrawn — its report had stopped counting the sale — and made again: there is one row per report, sale and
-      // side, so the same row is the claim again, asked as a new one is (`reopenSaleClaim`).
-      if (await reopenSaleClaim(db, existing.id, { ...said, pageId: said.pageId ?? existing.pageId, ...asked }, now)) tally.opened += 1;
+      // side, so the same row is the claim again, asked as a new one is (`reopenSaleClaim`). Not a word the side already
+      // said «Не согласен» to: taken back and said again it is no new take but the same dispute, the decider's at once
+      // with their answer kept — never «wrote it, disputed, wrote it again».
+      const again = why === null && existing.answer === "disagree"
+        ? { state: "owner" as const, escalatedAt: now, escalatedWhy: "disagree" as const, keepAnswer: true }
+        : asked;
+      if (await reopenSaleClaim(db, existing.id, { ...said, pageId: said.pageId ?? existing.pageId, ...again }, now)) tally.opened += 1;
       continue;
     }
     const inserted = await insertSaleClaim(db, {
@@ -792,6 +797,24 @@ async function othersToDecider(db: Database, settled: Pick<SaleClaimRow, "id" | 
 }
 
 /**
+ * The same word of the same person against another login of the same colleague: a report makes one claim per login
+ * (`deriveClaims`: the login the rule names, the login whose report counts the sale), and they are ONE take — settled,
+ * answered and disputed together, each login told by its own notice; never «another person took it too».
+ */
+async function sameTakeOf(
+  db: Database,
+  claim: Pick<SaleClaimRow, "id" | "transactionId" | "claimantUserId" | "sideUserId">,
+  states: readonly SaleClaimRow["state"][],
+): Promise<SaleClaimRow[]> {
+  if (claim.transactionId === null || claim.claimantUserId === null || claim.sideUserId === null) return [];
+  const claimantIds = (await findHandinPersonOfUser(db, claim.claimantUserId))?.userIds ?? [claim.claimantUserId];
+  const sideIds = (await findHandinPersonOfUser(db, claim.sideUserId))?.userIds ?? [claim.sideUserId];
+  return (await listSaleClaims(db, { transactionIds: [claim.transactionId], states, kinds: ["claim"] }))
+    .filter((one) => one.id !== claim.id && one.claimantUserId !== null && claimantIds.includes(one.claimantUserId)
+      && one.sideUserId !== null && sideIds.includes(one.sideUserId));
+}
+
+/**
  * An agreement (an answer «Согласен», a take) written into the reports, in the caller's transaction (the settlements'
  * turn taken): every handed-in report of the claimant or of the side that holds the sale gets what the agreement gives
  * its person — the claimant all (or a half), the side none (or the other half). `netIfNone` — the net when no report
@@ -860,7 +883,11 @@ export async function settleTakeWithin(
   const transactionId = claim.transactionId;
   const claimantIds = (await findHandinPersonOfUser(txDb, claim.claimantUserId))?.userIds ?? [claim.claimantUserId];
   const sideIds = (await findHandinPersonOfUser(txDb, claim.sideUserId))?.userIds ?? [claim.sideUserId];
-  const toDecider = () => updateSaleClaim(txDb, claim.id, { state: "owner", escalatedAt: now, escalatedWhy: "double" }, now, { ifState: "asked" });
+  // The same word against the colleague's other login goes wherever this one goes (`sameTakeOf`).
+  const same = [claim, ...await sameTakeOf(txDb, claim, ["asked"])];
+  const toDecider = async () => {
+    for (const one of same) await updateSaleClaim(txDb, one.id, { state: "owner", escalatedAt: now, escalatedWhy: "double" }, now, { ifState: "asked" });
+  };
   // Settled or disputed already by someone else's word, or decided: one take per sale.
   const before = (await listSaleClaims(txDb, { transactionIds: [transactionId], states: ["agreed", "owner"] }))
     .filter((one) => one.id !== claim.id && !(one.claimantUserId !== null && claimantIds.includes(one.claimantUserId)));
@@ -881,7 +908,7 @@ export async function settleTakeWithin(
     await othersToDecider(txDb, claim, now);
     return { outcome: "decider", made: [] };
   }
-  await updateSaleClaim(txDb, claim.id, { state: "agreed", closedAt: now, silenceAt: now }, now, { ifState: "asked" });
+  for (const one of same) await updateSaleClaim(txDb, one.id, { state: "agreed", closedAt: now, silenceAt: now }, now, { ifState: "asked" });
   await othersToDecider(txDb, claim, now);
   const made = await settleAgreedReports(txDb, {
     claim: { ...claim, transactionId, claimantUserId: claim.claimantUserId }, sideIds, netIfNone: 0, by: input.by, paid: input.paid, at: now, outcome: "taken",
@@ -903,10 +930,13 @@ async function disputeTakeWithin(
   input: { note: string | null; answeredByUserId: number | null; door: HandinDoor; by: SettleBy; paid: ReadonlyMap<number, boolean | null>; now: Date },
 ): Promise<MadeVersion[]> {
   const { now } = input;
-  const written = await updateSaleClaim(txDb, take.id, {
-    answer: "disagree", answerNote: input.note, answeredAt: now, answerDoor: input.door, answerRef: null, answeredByUserId: input.answeredByUserId,
-    answeredByAgentKeyId: null, state: "owner", escalatedAt: now, escalatedWhy: "disagree",
-  }, now, { ifState: "agreed" });
+  const disputed = {
+    answer: "disagree" as const, answerNote: input.note, answeredAt: now, answerDoor: input.door, answerRef: null, answeredByUserId: input.answeredByUserId,
+    answeredByAgentKeyId: null, state: "owner" as const, escalatedAt: now, escalatedWhy: "disagree" as const,
+  };
+  const written = await updateSaleClaim(txDb, take.id, disputed, now, { ifState: "agreed" });
+  // The same take against their other login is disputed with it (`sameTakeOf`).
+  if (written) for (const one of await sameTakeOf(txDb, take, ["agreed"])) if (isTake(one) && one.answer === null) await updateSaleClaim(txDb, one.id, disputed, now, { ifState: "agreed" });
   return written ? takeToRuleWithin(txDb, take, { outcome: "disputed", holds: (line) => line.settled === "agreed", by: input.by, paid: input.paid, now }) : [];
 }
 
@@ -1041,12 +1071,18 @@ export async function answerSaleClaim(
     if (claim === null || !answerable(claim)) throw new ConflictError("This claim is already answered or decided", { reason: "claim_closed" });
     // Someone else counts the sale too (a holder of the other half): the two sides alone cannot settle it — the decider.
     const thirdHolds = input.answer === "agree" && (await othersCount(txDb, claim, sideIds));
-    await updateSaleClaim(txDb, claim.id, {
+    const answered = {
       answer: input.answer, answerNote: note, answeredAt: now, answerDoor: door, answerRef: actor.kind === "agent" ? actor.sourceRef : null,
       answeredByUserId: actor.kind === "person" ? actor.userId : null, answeredByAgentKeyId: actor.kind === "agent" ? actor.agentKeyId : null,
       ...(input.answer === "agree" && !thirdHolds ? { state: "agreed" as const, closedAt: now }
         : { state: "owner" as const, escalatedAt: now, escalatedWhy: thirdHolds ? "double" as const : "disagree" as const }),
-    }, now);
+    };
+    await updateSaleClaim(txDb, claim.id, answered, now);
+    // The answer to a take is the answer to the same take against the person's other login (`sameTakeOf`): its notice
+    // closes with this one, and a dispute leaves no half of the take standing.
+    if (claim.state === "agreed") {
+      for (const one of await sameTakeOf(txDb, claim, ["agreed"])) if (isTake(one) && one.answer === null) await updateSaleClaim(txDb, one.id, answered, now, { ifState: "agreed" });
+    }
     if (thirdHolds) await othersToDecider(txDb, claim, now);
     // «Не согласен» to a take already counted (or settled by a day of silence), or a third holder met at «Понятно»: the
     // sale is back with the one the rule gives it to until the decision, the taker's line waits — every report the
@@ -1997,9 +2033,12 @@ export async function readAgentSaleClaims(
   const claims = (await listSaleClaims(db, {
     ...(input.transactionId !== undefined ? { transactionIds: [input.transactionId] } : {}),
     ...(userIds !== null ? { involvingUserIds: userIds } : {}),
-    ...(input.scope === "open" ? { states: ["asked", "owner"] as const } : {}),
+    ...(input.scope === "open" ? { states: ["asked", "owner", "agreed"] as const } : {}),
     limit: 500,
-  })).filter((claim) => claim.pageId !== null && granted.has(claim.pageId));
+  }))
+    // Not over: waiting for the decider, or a take the side was told of and has not answered (they may still object).
+    .filter((claim) => input.scope !== "open" || claim.state !== "agreed" || (isTake(claim) && claim.answer === null))
+    .filter((claim) => claim.pageId !== null && granted.has(claim.pageId));
   const decisions = (await listSaleDecisions(db, {
     ...(input.transactionId !== undefined ? { transactionIds: [input.transactionId] } : {}),
     ...(userIds !== null ? { userIds } : {}),

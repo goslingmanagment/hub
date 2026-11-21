@@ -598,6 +598,20 @@ export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, in
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
     const handin = await handinFor(db, subject);
+    // The person's own word on this sale that already settled between the two — a take that stands, or agreed: its terms
+    // made the reports' versions and the sale's home (it is no longer «рядом» for them). The same word again changes
+    // only the line of why; another word is refused: «Отменить» first, then written again, else only the decider.
+    const own = (await listSaleClaims(db, { transactionIds: [input.body.transactionId], states: ["agreed"] })).find((claim) => claim.claimantHandinId === handin.id);
+    if (own !== undefined) {
+      const same = own.statement === input.body.statement && (input.body.statement !== "share" || own.shareWithUserId === (input.body.shareWithUserId ?? null));
+      if (!same) throw new ConflictError("This sale is already settled: only the decider changes it now", { reason: "claim_settled" });
+      await setHandinMark(db, {
+        handinId: handin.id, transactionId: input.body.transactionId, statement: input.body.statement,
+        shareWithUserId: input.body.statement === "share" ? own.shareWithUserId : null, note, byUserId: actor.userId, byAgentKeyId: null, at: now,
+      });
+      await updateSaleClaim(db, own.id, { claimantNote: note }, now);
+      return;
+    }
     const marks = await listHandinMarks(db, handin.id);
     const facts = await draftFacts(db, subject, handin, catalog, now, marks);
     const one = facts.classified.find((sale) => sale.sale.transactionId === input.body.transactionId);
@@ -633,7 +647,12 @@ export async function askShiftReport(app: BoardApp, actor: HandinPersonActor, in
     }
     let claimId: number | null = existing?.id ?? null;
     if (existing !== undefined) {
-      if (existing.state === "withdrawn") await reopenSaleClaim(db, existing.id, fields, now);
+      // A word the colleague already said «Не согласен» to, taken back and said again, is the same dispute: the
+      // decider's at once, their answer kept (sale-claims.ts, the pass does the same).
+      const again = askable && existing.answer === "disagree"
+        ? { ...fields, state: "owner" as const, escalatedAt: now, escalatedWhy: "disagree" as const, keepAnswer: true }
+        : fields;
+      if (existing.state === "withdrawn") await reopenSaleClaim(db, existing.id, again, now);
       else await updateSaleClaim(db, existing.id, { claimantNote: note, statement: fields.statement, shareWithUserId: fields.shareWithUserId }, now);
     } else {
       claimId = (await insertSaleClaim(db, {

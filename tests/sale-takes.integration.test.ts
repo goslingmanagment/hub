@@ -91,6 +91,12 @@ async function claimOf(transactionId: number, claimantUserId: number) {
   )).rows[0] as { id: number; state: string; answer: string | null; escalated_why: string | null; origin: string; silence_at: Date | null };
 }
 
+/** Whose the sale is by the rule now: the people of its home and why. */
+async function homeNow(transactionId: number) {
+  const row = (await q("select reason, shares from sale_homes where transaction_id = $1", [transactionId])).rows[0] as { reason: string; shares: Array<{ userId: number }> };
+  return { reason: row.reason, people: row.shares.map((share) => Number(share.userId)) };
+}
+
 const matterState = async (key: string) => (await q("select state from matters where reason_key = $1", [key])).rows[0]?.state as string | undefined;
 
 async function boardRow(who: string, shiftId: number, transactionId: number) {
@@ -172,6 +178,9 @@ describe("a colleague's sale written to oneself counts at once", () => {
     const annas = await newest(worked, taken);
     expect(annas.line).toMatchObject({ amountMills: 0, disputed: false, settled: "agreed" });
     expect(annas.madeFor).toMatchObject({ kind: "claim", claimId: claim.id, outcome: "taken" });
+    // The rule's home follows the take as it follows an agreement: told and not objecting, anna agrees («Смены» name no
+    // difference between the rule and the two reports).
+    expect(await homeNow(taken)).toEqual({ reason: "agreed", people: [bella] });
     expect(await boardRow("bella", takenBy, taken)).toMatchObject({ amountMills: NET, ticked: true, ask: { taken: true, state: "silence", answerBy: null } });
     // anna is told: her notice, and the row of her board waits for her «Понятно» or «Не согласен».
     expect(await matterState(`sale.claim:${claim.id}`)).toBe("open");
@@ -209,6 +218,11 @@ describe("a colleague's sale written to oneself counts at once", () => {
     expect(await boardRow("bella", takenBy, taken)).toMatchObject({ amountMills: 0, ask: { state: "disputed" } });
     expect(await matterState(`sale.claim:${claim.id}`)).toBe("closed");
     expect((await q("select state, owner_role from matters where reason_key = $1", [`sale.dispute:${taken}`])).rows).toEqual([{ state: "open", owner_role: "owner" }]);
+    // The home is the rule's own again, and the decider may leave it so («по правилу»).
+    expect((await homeNow(taken)).people).toEqual([anna]);
+    const window = await rawSession("boss", "GET", `/api/v1/sale-disputes/${taken}`);
+    expect(window.statusCode, window.body).toBe(200);
+    expect((window.json().outcomes as Array<{ outcome: string }>).map((one) => one.outcome)).toContain("rule");
   });
 
   it("counts a take of half at once: half in each report", async (context) => {
@@ -244,6 +258,15 @@ describe("a colleague's sale written to oneself counts at once", () => {
     expect(annas.madeFor).toMatchObject({ kind: "claim", outcome: "withdrawn" });
     expect(await boardRow("bella", hers, back)).toMatchObject({ amountMills: 0, ticked: false, ask: null });
     expect(await matterState(`sale.claim:${claim.id}`)).toBe("closed");
+    expect((await homeNow(back)).people).toEqual([anna]);
+
+    // Said again, it is a new take in the same row: counted at once, anna told again.
+    await take("bella", hers, { transactionId: back, statement: "mine" });
+    const again = await claimOf(back, bella);
+    expect(again).toMatchObject({ id: claim.id, state: "agreed", answer: null });
+    expect(again.silence_at).not.toBeNull();
+    expect((await newest(worked, back)).line).toMatchObject({ amountMills: 0, settled: "agreed" });
+    expect(await matterState(`sale.claim:${claim.id}`)).toBe("open");
   });
 
   it("sends a second person's word on a taken sale to the decider and moves nothing", async (context) => {

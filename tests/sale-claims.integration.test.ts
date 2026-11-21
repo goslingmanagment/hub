@@ -71,12 +71,26 @@ async function bellasSale(ref: string, net: number): Promise<number> {
     [pageOne, ref, net + 4_000, net, 4_000],
   );
   const id = Number(inserted.rows[0].id);
+  await bellasHome(id);
+  return id;
+}
+
+/**
+ * The sale's home by the rule, written by hand: bella's shift holds it. This file's world has no activity of the
+ * shifts, so the rule itself, asked again (a take, an agreement, a dispute recompute the sale's day), finds no holder:
+ * a test that reads the home after such a step writes it again. tests/sale-takes.integration.test.ts runs the same
+ * steps on homes the rule computes.
+ */
+async function bellasHome(id: number): Promise<void> {
+  await testDb!.pool.query("delete from sale_homes where transaction_id = $1", [id]);
   await testDb!.pool.query(
     `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at)
-     values ($1, $2, $3, $4, 'shift', 'holder', $5::jsonb, 'test', now())`,
-    [id, pageOne, inserted.rows[0].occurred_at, net, JSON.stringify([{ userId: bella, workRef: null, shiftId: shiftB, percent: 100, mills: net }])],
+     select t.id, t.platform_account_id, t.occurred_at, t.creator_net_amount_mills, 'shift', 'holder',
+            jsonb_build_array(jsonb_build_object('userId', $2::bigint, 'workRef', null, 'shiftId', $3::bigint, 'percent', 100, 'mills', t.creator_net_amount_mills)),
+            'test', now()
+     from transactions t where t.id = $1`,
+    [id, bella, shiftB],
   );
-  return id;
 }
 
 /** anna says «моё» of a sale by hand and hands her shift in: a take of bella's sale, counted for anna at once. */
@@ -243,6 +257,7 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
       expect((await asSession(who, "GET", `/api/v1/sale-disputes/${sale}`)).statusCode).toBe(403);
       expect((await asSession(who, "POST", "/api/v1/sale-disputes/decide", { transactionId: Number(sale), outcome: "first" })).statusCode).toBe(403);
     }
+    await bellasHome(Number(sale));
     const dispute = saleDisputeResponseSchema.parse((await asSession("boss", "GET", `/api/v1/sale-disputes/${sale}`)).json());
     // anna's take, disputed: her report's next version counts it nothing while it waits, claiming the net (review R2b-2).
     expect((await newestLine(shiftA, Number(sale)))).toMatchObject({ version: 3, made_for: { kind: "claim", outcome: "disputed" } });
@@ -324,12 +339,12 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     }
   });
 
-  it("takes the sale again when a take that was withdrawn is said again", async (context) => {
+  it("sends a word the side said «Не согласен» to, taken back and said again, to the decider: no second take", async (context) => {
     if (!testDb) return context.skip();
     const sale = await bellasSale("tx-claim-again", 9_000);
     const claimId = await annaClaims(sale, "мой фан");
     const rows = async () => (await testDb!.pool.query(
-      `select id::int as id, state, claimant_note, claimant_version, answer, answer_note, answered_at, escalated_at, escalated_why, closed_at
+      `select id::int as id, state, claimant_note, claimant_version, answer, answer_note, answered_at, escalated_at, escalated_why, closed_at, silence_at
        from sale_claims where transaction_id = $1 order by id`,
       [sale],
     )).rows as Array<Record<string, unknown>>;
@@ -350,24 +365,22 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     expect(await rows()).toEqual([expect.objectContaining({ id: claimId, state: "withdrawn" })]);
     expect(await matter(`sale.dispute:${sale}`)).toBe("closed");
     const before = (await rows())[0]!;
-    // Days pass; she says «моё» again and hands in. The same row is the take again, counted at once as a new one is:
-    // the answer and the escalation of its first life are gone, and bella's notice opens again from now.
+    // Days pass; she says «моё» again and hands in. The same row is the claim again, but no take: bella already said
+    // «Не согласен» to this word, so it is the same dispute — the decider's at once, her answer kept, nothing counted.
     await testDb.pool.query("update sale_claims set created_at = created_at - interval '3 days' where id = $1", [claimId]);
+    await bellasHome(sale);
     await say({ statement: "mine", note: "всё-таки мой" });
     expect(await rows()).toEqual([expect.objectContaining({
-      id: claimId, state: "agreed", claimant_note: "всё-таки мой", answer: null, answer_note: null, answered_at: null,
-      escalated_at: null, escalated_why: null,
+      id: claimId, state: "owner", claimant_note: "всё-таки мой", answer: "disagree", answer_note: "писала ему последней",
+      escalated_why: "disagree", closed_at: null, silence_at: null,
     })]);
     expect(Number((await rows())[0]!.claimant_version)).toBeGreaterThan(Number(before.claimant_version));
-    expect(await matter(`sale.claim:${claimId}`)).toBe("open");
-    expect(await matter(`sale.dispute:${sale}`)).toBe("closed");
+    expect(await matter(`sale.claim:${claimId}`)).toBe("closed");
+    expect(await matter(`sale.dispute:${sale}`)).toBe("open");
+    // anna's word waits for the decider, counting nothing; bella has answered and is not asked again.
+    expect((await newestLine(shiftA, sale))!.line).toMatchObject({ amountMills: 0, disputed: true });
     const report = shiftReportResponseSchema.parse((await asSession("bella", "GET", `/api/v1/shift-reports/${shiftB}`)).json());
-    expect(report.claims.find((claim) => claim.id === claimId)).toMatchObject({ direction: "incoming", canAnswer: true, state: "agreed", note: "всё-таки мой" });
-    // Counted for anna at once; bella can answer it as any take.
-    expect((await newestLine(shiftA, sale))!.line).toMatchObject({ amountMills: 9_000, disputed: false, settled: "agreed" });
-    const agreed = await asSession("bella", "POST", `/api/v1/sale-claims/${claimId}/answer`, { answer: "agree" });
-    expect(agreed.statusCode, agreed.body).toBe(200);
-    expect((await newestLine(shiftA, sale))!.line).toMatchObject({ amountMills: 9_000, disputed: false, settled: "agreed" });
+    expect(report.claims.find((claim) => claim.id === claimId)).toMatchObject({ direction: "incoming", canAnswer: false, state: "owner", answer: "disagree" });
   });
 
   it("writes a claim only as the pass read it: a decision or an answer committed meanwhile stays", async (context) => {
