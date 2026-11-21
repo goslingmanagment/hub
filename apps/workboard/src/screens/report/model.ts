@@ -129,14 +129,14 @@ export const isLateOpen = (row: Row) => row.late && !row.ticked;
 /** The person's question waits for the decider, or the colleague said «Не согласен» to it. */
 export const askOpen = (row: Row) => row.ask !== null && (row.ask.state === "asked" || row.ask.state === "disputed");
 /** A colleague's word on the person's sale waits for them, or is disputed. */
-export const incomingOpen = (row: Row) => row.incoming !== null && row.incoming.state !== "settled";
+const incomingOpen = (row: Row) => row.incoming !== null && row.incoming.state !== "settled";
 /** A colleague's sale the person wrote to themself, standing: «Отменить» gives it back. */
 export const takeStands = (row: Row) => row.ask !== null && row.ask.taken === true && row.ask.state === "silence";
 /** A colleague wrote the person's sale to themself and the person has not answered: «Понятно» / «Не согласен». */
 export const takenFromMeOpen = (row: Row) =>
   row.incoming !== null && row.incoming.taken === true && row.incoming.state === "settled" && row.incoming.answer === null;
 /** A strip under the row says what stands on it: line 2 then leaves the reason to it. */
-export const hasStrip = (row: Row) => askOpen(row) || incomingOpen(row) || takeStands(row) || takenFromMeOpen(row);
+const hasStrip = (row: Row) => askOpen(row) || incomingOpen(row) || takeStands(row) || takenFromMeOpen(row);
 
 /** Ticks and «чья» change only while the report is a draft (or a correction), never in a preview. */
 export const canTick = (board: Board, row: Row, preview: boolean) =>
@@ -286,7 +286,7 @@ function lineOfKey(key: ChoiceKey, ruleKey: ChoiceKey | null): Choice["line"] {
  * someone else's only the rule's word, «Моя» and «Пополам с <держатель>» — and only there a word is a question (on one's
  * own sale Hub sends «пополам» or «отдать» with a colleague without the board to the decider by the mark itself).
  */
-export function choicesOf(row: Row): Choice[] {
+function choicesOf(row: Row): Choice[] {
   const ruleKey = keyOfOwner(row.rule.owner);
   const listed = (row.choices ?? []).flatMap((one) => {
     const key = keyOfOwner(one.owner);
@@ -331,7 +331,7 @@ function staysOf(board: Board, row: Row): string {
 }
 
 /** Why the sale is whose the rule says, in full: the menu's footer over the rule's word. */
-export function ruleFoot(board: Board, row: Row): string {
+function ruleFoot(board: Board, row: Row): string {
   const rule = row.rule.owner;
   const words = row.rule.words;
   const why = words === "" ? "" : `: ${words}`;

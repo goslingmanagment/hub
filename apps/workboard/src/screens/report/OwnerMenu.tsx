@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type SyntheticEvent } from "react";
 import { Ico } from "./icons";
-import { ownerMenu, type MenuItem, type Row } from "./model";
+import { askOpen, ownerMenu, type MenuItem, type Row } from "./model";
 import { placeBy } from "./place";
 import type { BoardApi } from "./useBoard";
 
@@ -13,7 +13,7 @@ export function OwnerMenu({ api, row }: { api: BoardApi; row: Row }) {
   const ref = useRef<HTMLDivElement>(null);
   const menu = useMemo(() => ownerMenu(api.board, row), [api.board, row]);
   const [foot, setFoot] = useState<string | null>(null);
-  const waits = row.ask !== null && (row.ask.state === "asked" || row.ask.state === "disputed");
+  const waits = askOpen(row);
   const anchorOf = useCallback(() => document.querySelector(`[data-menu="${CSS.escape(row.key)}"]`), [row.key]);
 
   const place = useCallback(() => {
