@@ -385,8 +385,11 @@ export interface HandinVersionLine {
   kind: string;
   occurredAt: string | null;
   netMills: number;
-  /** The rule's home, why, the person's share by it, whose it is when not the person's, the bought PPV's sender. */
-  rule: { home: string; reason: string; shareMills: number; toUserId: number | null; senderUserId: number | null };
+  /**
+   * The rule's home, why, the person's share by it, whose it is when not the person's, the bought PPV's sender; a waiting
+   * PPV's last moment for its sender's shift (`waitsUntil`, ISO; absent — not waiting, or a line from before it was kept).
+   */
+  rule: { home: string; reason: string; shareMills: number; toUserId: number | null; senderUserId: number | null; waitsUntil?: string };
   /** Another report of the person held it when this was submitted: it counted 0 here. */
   alreadyIn: { shiftId: number; reportDate: string } | null;
   statement: HandinStatement | null;

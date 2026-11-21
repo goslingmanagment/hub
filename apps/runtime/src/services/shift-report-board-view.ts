@@ -45,7 +45,7 @@ import {
   isTestUser,
   sumSaleHomesOfShifts,
 } from "@agency_hub_core/db";
-import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
+import { moscowDayOfMs } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
 import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-report-draft.ts";
@@ -154,7 +154,8 @@ function owner(kind: ShiftReportOwner["kind"], userId: number | null, people: Pe
     case "share": return { kind, userId, name, words: forms ? `пополам с ${forms.ins}` : "пополам" };
     case "user": return { kind, userId, name, words: forms?.gen ?? "коллеги" };
     case "pot": return { kind, userId: null, name: null, words: "общак" };
-    case "waiting": return { kind, userId, name, words: forms ? `ждёт смены ${forms.gen}` : "ждёт смены" };
+    // A waiting PPV is its sender's (it goes to their next shift): the board says «чужая», the menu names the sender.
+    case "waiting": return { kind, userId, name, words: forms?.gen ?? "коллеги" };
     case "decide": return { kind, userId: null, name: null, words: "решит владелец" };
     default: return { kind: "nobody", userId: null, name: null, words: "ничья" };
   }
@@ -187,7 +188,6 @@ function lineOwner(line: HandinVersionLine, people: People, me: number): ShiftRe
 }
 
 const sameOwner = (a: ShiftReportOwner, b: ShiftReportOwner) => a.kind === b.kind && (a.userId ?? 0) === (b.userId ?? 0);
-const plainUsd = (mills: number) => formatUsdFromMills(mills).replace(/\.00$/, "");
 
 export interface BoardRead {
   db: Database;
@@ -430,8 +430,6 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     } else if (amount <= 0) {
       reason = ruleWords;
     }
-    // A take's own words stand on a half too (never «вам $26» over «записали вы»).
-    if (current.kind === "share" && amount > 0 && !isLate && !(taken && ask?.answer === null) && !takenFromMe) reason = `вам ${plainUsd(amount)}`;
     const askWire = ask === null ? null : {
       claimId: ask.id,
       to: ask.sideUserId === null || cardDispute || paidDay ? "owner" as const : "colleague" as const,
@@ -491,7 +489,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       occurredAt: line.occurredAt ?? new Date(0).toISOString(),
       netMills: line.netMills,
       grossMills: fansly || ref === null ? null : ref.grossMills,
-      rule: { owner: rule, reason: line.rule.reason, words: ruleWords },
+      rule: { owner: rule, reason: line.rule.reason, words: ruleWords, ...(line.rule.waitsUntil !== undefined ? { waitsUntil: line.rule.waitsUntil } : {}) },
       owner: current,
       statement: line.statement,
       reasonWords: reason,
@@ -536,12 +534,13 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       return { to: "colleague", user: people.person(userId), words: `сообщим ${personNameForms(people.nameOf(userId)).dat}` };
     };
     if (line.group !== "mine") {
-      // Someone else's sale: «Моя» and «Пополам с <держатель>» only, each a question (a nobody's sale is mine at once,
-      // with the one line of why the server asks for). A sale that waits for its PPV's sender is that colleague's.
+      // Someone else's sale: the rule's own word (back to it), «Моя» and «Пополам с <держатель>», each of the two a
+      // question (a nobody's sale is mine at once, with the one line of why the server asks for). A sale that waits for
+      // its PPV's sender is that colleague's.
       const holder = line.rule.toUserId ?? (line.rule.home === "waiting" ? line.rule.senderUserId : null);
       const pot = line.rule.home === "pot" || line.rule.home === "decide";
       const mine = owner("me", null, people, me);
-      const out = [{ owner: mine, asks: askOf(holder, pot && holder === null), hint: "", current: is(mine) }];
+      const out = [{ owner: rule, asks: null, hint: "", current: is(rule) }, { owner: mine, asks: askOf(holder, pot && holder === null), hint: "", current: is(mine) }];
       if (holder !== null) {
         const half = owner("share", holder, people, me);
         out.push({ owner: half, asks: askOf(holder, false), hint: "", current: is(half) });

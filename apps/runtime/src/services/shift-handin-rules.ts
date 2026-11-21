@@ -64,7 +64,8 @@ export interface DraftSale {
   kind: string;
   occurredAt: number;
   netMills: number;
-  home: { kind: SaleHomeKind; reason: SaleHomeReason; pot: string | null; shares: readonly DraftShare[] };
+  /** `waitsUntil` (ms): a waiting PPV's last moment for its sender's shift, the rule's own (sale-rule.ts); absent — not waiting. */
+  home: { kind: SaleHomeKind; reason: SaleHomeReason; pot: string | null; shares: readonly DraftShare[]; waitsUntil?: number | null };
   /** The bought PPV's sender; null — none. */
   ppvSenderUserId: number | null;
   /** `window` — inside the report's window, its home computed now; `before` — of the days before it, its home as `sale_homes` keeps it. */
@@ -299,7 +300,7 @@ export function reasonWords(input: {
     case "pot":
       return input.reason === "campaign" ? "общак: Campaign OnlyFans" : "общак: чаевые под постом";
     case "waiting":
-      return `PPV отправил ${input.senderName ?? "коллега"}: ждёт его смены`;
+      return `PPV отправил ${input.senderName ?? "коллега"}, уйдёт в его следующую смену`;
     case "decide":
       return input.reason === "marks_disagree" ? "метки чаттеров не сходятся: решит владелец" : "стык смен, фану никто из них не писал: решит владелец";
     case "nobody":
