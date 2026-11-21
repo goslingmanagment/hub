@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 85 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (557)
+## Routes (559)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -213,6 +213,7 @@ A full device token is not affected.
 | POST | `/api/v1/admin/users/by-id/:userId/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — | no |
 | GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/custom-findings` | `agentCustomFindings` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/custom-orders` | `agentCustomOrders` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/custom-orders` | `agentCustomOrderCreate` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/custom-orders/:code` | `agentCustomOrderUpdate` | `agentKey` | — | — | no |
@@ -393,6 +394,7 @@ A full device token is not affected.
 | POST | `/api/v1/custom-orders` | `customOrderCreate` | `any` | — | — | yes |
 | GET | `/api/v1/custom-orders/:code` | `customOrder` | `any-session` | — | — | no |
 | POST | `/api/v1/custom-orders/:code` | `customOrderAct` | `any` | — | — | yes |
+| POST | `/api/v1/custom-orders/findings/:findingId` | `customFindingAct` | `any-session` | — | — | no |
 | POST | `/api/v1/custom-orders/sales/:transactionRef/dismiss` | `customSaleDismiss` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `any-session` | — | — | no |

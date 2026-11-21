@@ -22,7 +22,8 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 
 // The wall by object (services/sandbox/objects.ts), proven on the contract itself and GENERATED from it: both realms
 // hold an object of every kind a request can name (a page, a model, a login, a person, a shift, a sale, a claim, a
-// report's candidate and proposal, a «мимо площадки» line, a sighting, a question, an order, a publication). Then every
+// report's candidate and proposal, a «мимо площадки» line, a sighting, a question, an order, a custom with no order, a
+// publication). Then every
 // operation is called with every field the wall classifies — optional parameters and body fields included — set to an
 // object of the OTHER realm:
 //   - as the test owner, every operation of its table (SANDBOX_OWNER_OPERATIONS);
@@ -48,7 +49,7 @@ const MISSING: Record<RealmObjectKind, string> = {
   claim: String(Number.MAX_SAFE_INTEGER), offPlatformLine: String(Number.MAX_SAFE_INTEGER), candidate: String(Number.MAX_SAFE_INTEGER),
   proposal: String(Number.MAX_SAFE_INTEGER), personProposal: String(Number.MAX_SAFE_INTEGER), sighting: String(Number.MAX_SAFE_INTEGER),
   question: String(Number.MAX_SAFE_INTEGER),
-  order: `K-${Number.MAX_SAFE_INTEGER}`, publication: String(Number.MAX_SAFE_INTEGER),
+  order: `K-${Number.MAX_SAFE_INTEGER}`, finding: String(Number.MAX_SAFE_INTEGER), publication: String(Number.MAX_SAFE_INTEGER),
 };
 const ISO_TIME = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/gu;
 const CLOCK_KEYS = new Set(["serverNow", "generatedAt", "now", "asOf", "computedAt", "checkedAt", "fetchedAt", "readAt", "requestId", "savedAt"]);
@@ -313,7 +314,9 @@ beforeAll(async () => {
       values (${handin}, ${user}, 10000, 'фан', 'кастом') returning id`);
     const sighting = await one(db, sql`insert into sale_sightings (page_id, platform_ref, kind, occurred_at, net_mills)
       values (${pageId}, ${`sighting-${realm}`}, 'tip', now() - interval '1 day', 5000) returning id`);
-    return { handin, candidate, sale, claim, proposal, line, sighting, user };
+    const finding = await one(db, sql`insert into custom_findings (source, ref, page_id, quote, happened_at)
+      values ('fan_chat', ${`finding-${realm}`}, ${pageId}, 'хочу кастом', now() - interval '1 day') returning id`);
+    return { handin, candidate, sale, claim, proposal, line, sighting, finding, user };
   };
   const liveRows = await realmRows("live", liveShift);
   const testRows = await realmRows("test", testShift);
@@ -343,6 +346,7 @@ beforeAll(async () => {
     personProposal: { live: livePersonProposal, test: testPersonProposal },
     sighting: { live: liveRows.sighting, test: testRows.sighting },
     question: { live: String(liveQuestion), test: String(testQuestion) },
+    finding: { live: liveRows.finding, test: testRows.finding },
     order: await pick((test) => sql`select 'K-' || o.id from custom_orders o join pages p on p.id = o.page_id join models m on m.id = p.model_id
       where m.is_test = ${test} order by o.id limit 1`),
     publication: await pick((test) => sql`select pu.id from publications pu join pages p on p.id = pu.page_id join models m on m.id = p.model_id

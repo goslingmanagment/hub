@@ -2132,8 +2132,9 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   const customOrderPred = byBuyer.length === 0 ? sql`fan_id = ${fanId}` : sql`(fan_id = ${fanId} or id in ${byBuyer})`;
   // Its messages and its history keep the facts — which message did what and when, the states, the times — and
   // lose the words: an excerpt quotes the chat, an author is a Telegram name, a revision's request, a refusal's
-  // reason and a note are free text about the fan, and the history keeps copies of them. Before the order loses
-  // the fan: the predicates follow him.
+  // reason and a note are free text about the fan, and the history keeps copies of them — with the marks' words of
+  // 0436: a hold's and a deadline's reason, the owner's note on the payment, an issue's sentence (`text`). Before
+  // the order loses the fan: the predicates follow him.
   const customMessagePred = sql`order_id in (select id from custom_orders where ${customOrderPred})
     and (excerpt is not null or author is not null)`;
   targets.push({
@@ -2145,14 +2146,14 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   });
   const customEventPred = sql`object_type = 'custom_order'
     and object_id in (select id::text from custom_orders where ${customOrderPred})
-    and (changes ? 'note' or changes ? 'reason' or changes ? 'excerpt')`;
+    and (changes ? 'note' or changes ? 'reason' or changes ? 'excerpt' or changes ? 'text')`;
   targets.push({
     plane: "hot",
     target: "object_events",
     action: "anonymize",
     rows: await countOf(app, sql`select count(*)::text as n from object_events where ${customEventPred}`),
     run: (tx) => execCount(tx, sql`
-      update object_events set changes = changes - 'note' - 'reason' - 'excerpt' where ${customEventPred}`),
+      update object_events set changes = changes - 'note' - 'reason' - 'excerpt' - 'text' where ${customEventPred}`),
   });
   targets.push({
     plane: "hot",

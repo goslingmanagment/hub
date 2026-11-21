@@ -1,11 +1,16 @@
 import {
   agentCustomCardsBodySchema,
   agentCustomCardsResponseSchema,
+  agentCustomFindingsBodySchema,
+  agentCustomFindingsResponseSchema,
   agentCustomOrderCreateBodySchema,
   agentCustomOrderResponseSchema,
   agentCustomOrdersQuerySchema,
   agentCustomOrdersResponseSchema,
   agentCustomOrderUpdateBodySchema,
+  customFindingActionBodySchema,
+  customFindingActionResponseSchema,
+  customFindingParamsSchema,
   customOrderActionBodySchema,
   customOrderCreateBodySchema,
   customOrderDetailResponseSchema,
@@ -51,13 +56,24 @@ export const customOrderRouteSchemas = {
   customOrderAct: {
     auth: { kind: "any" }, tags: ["admin"],
     summary: "A step of a custom order: edit the card, deadline, fan, Telegram card, payment, at the model, partly, shot, revision, "
-      + "refused, given, close, cancel",
-    description: "Database only. The lead and the owner take every step; a chatter only theirs (a payment, «отдали», editing and "
-      + "cancelling their own order); a step not from the order's state is 409 `not_allowed`. Answers the order after it. "
+      + "refused, given and its undo, a delivery taken back, close, cancel, a hold, the issue settled, the owner's word on the payment",
+    description: "Database only. The lead and the owner take every step; a chatter only theirs (a payment, «отдали» and its undo, "
+      + "editing and cancelling their own order); the owner alone his word on the payment and settling an issue; a hold the owner "
+      + "and the check's leader; a step not from the order's state is 409 `not_allowed`. Taking off a sale or a message the system "
+      + "or an agent applied is remembered: they never apply it to the order again. Answers the order after it. "
       + "A session or the extension's device token (the fan panel's «Отдан», package R5: it reads as a chatter).",
     params: customOrderParamsSchema,
     body: customOrderActionBodySchema,
     response: { 200: customOrderDetailResponseSchema, ...sessionErrors },
+  },
+  customFindingAct: {
+    auth: { kind: "any-session" }, tags: ["admin"],
+    summary: "Resolve a custom with no order: record it as an order, link it to one, or dismiss it with a reason",
+    description: "Database only. The check's leader of the finding's page, the customs lead and the owner; any other reads it as not "
+      + "found. A sale's finding brings its sale to the order as its payment. A resolved finding is 409 `resolved`.",
+    params: customFindingParamsSchema,
+    body: customFindingActionBodySchema,
+    response: { 200: customFindingActionResponseSchema, ...sessionErrors },
   },
   customOrderCreate: {
     auth: { kind: "any" }, tags: ["admin"],
@@ -74,25 +90,40 @@ export const customOrderRouteSchemas = {
   },
   agentCustomOrders: {
     auth: { kind: "agentKey" }, tags: ["agent"],
-    summary: "Custom orders of the key's pages and of no known page, with the card text (needs write:customs); no money",
+    summary: "Custom orders of the key's pages and of no known page, with the card text (needs write:customs); no money, the facts"
+      + " with read:money",
+    description: "`state=live`: the open orders and the given ones not closed yet.",
     querystring: agentCustomOrdersQuerySchema,
     response: { 200: agentCustomOrdersResponseSchema, ...agentErrors },
   },
   agentCustomOrderCreate: {
     auth: { kind: "agentKey" }, tags: ["agent"],
-    summary: "Create a recorded custom order from the card's fields and the fan's link (needs write:customs)",
+    summary: "Create a recorded custom order from the card's fields, its price and the fan's link (needs write:customs; its sales"
+      + " with read:money)",
     description: "Database only. A fan that does not match a fan of the page stays the buyer's string; a page outside the key's grant "
-      + "is 404. The same Telegram card again answers its order (`unchanged`).",
+      + "is 404. The same Telegram card again answers its order (`unchanged`); an order found by its card or its code takes the "
+      + "price and the sales. Each named sale is answered in `sales`: linked or why not; none fails the create.",
     body: agentCustomOrderCreateBodySchema,
     response: { 200: agentCustomOrderResponseSchema, ...agentErrors },
   },
   agentCustomOrderUpdate: {
     auth: { kind: "agentKey" }, tags: ["agent"],
-    summary: "Update a custom order: the card's fields, at the model, partly shot, shot, a revision, the model's refusal, a Telegram card"
-      + " (needs write:customs)",
+    summary: "Update a custom order: the card's fields, at the model, partly shot, shot, a revision, the model's refusal, a Telegram card,"
+      + " the deadline, an issue (needs write:customs); a payment (also read:money); «отдан» by a message, the fan, the fan's «where is"
+      + " it» (also read:messages)",
+    description: "Database only. What a step names — a sale, a message, a fan — is one Hub holds on the key's pages, checked by Hub "
+      + "(a page outside them is 404); a refusal is 409 with its reason.",
     params: customOrderParamsSchema,
     body: agentCustomOrderUpdateBodySchema,
     response: { 200: agentCustomOrderResponseSchema, ...agentErrors },
+  },
+  agentCustomFindings: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "Report the traces of a custom with no order, or a candidate that is no custom (needs write:customs, read:money and"
+      + " read:messages)",
+    description: "Database only. Each once by `(source, ref)`, on the key's pages; the check's leader of the page resolves an open one.",
+    body: agentCustomFindingsBodySchema,
+    response: { 200: agentCustomFindingsResponseSchema, ...agentErrors },
   },
   agentCustomCards: {
     auth: { kind: "agentKey" }, tags: ["agent"],

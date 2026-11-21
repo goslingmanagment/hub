@@ -111548,12 +111548,418 @@
         }
       }
     },
-    "/api/v1/agent/custom-orders": {
-      "get": {
-        "summary": "Custom orders of the key's pages and of no known page, with the card text (needs write:customs); no money",
+    "/api/v1/agent/custom-findings": {
+      "post": {
+        "summary": "Report the traces of a custom with no order, or a candidate that is no custom (needs write:customs, read:money and read:messages)",
         "tags": [
           "agent"
         ],
+        "description": "Database only. Each once by `(source, ref)`, on the key's pages; the check's leader of the page resolves an open one.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "findings": {
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "sale",
+                            "fan_chat",
+                            "work_chat",
+                            "model_group",
+                            "shift_report"
+                          ]
+                        },
+                        "ref": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 200
+                        },
+                        "pageLabel": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        },
+                        "fanRef": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64,
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        },
+                        "amountMills": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "quote": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 300
+                        },
+                        "happenedAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        },
+                        "notCustom": {
+                          "type": "boolean",
+                          "enum": [
+                            true
+                          ]
+                        }
+                      },
+                      "required": [
+                        "source",
+                        "ref",
+                        "happenedAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "findings"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "sale",
+                              "fan_chat",
+                              "work_chat",
+                              "model_group",
+                              "shift_report"
+                            ]
+                          },
+                          "ref": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "string",
+                            "enum": [
+                              "created",
+                              "dismissed",
+                              "already",
+                              "not_found"
+                            ]
+                          },
+                          "id": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "ref",
+                          "outcome",
+                          "id"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "findings"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/custom-orders": {
+      "get": {
+        "summary": "Custom orders of the key's pages and of no known page, with the card text (needs write:customs); no money, the facts with read:money",
+        "tags": [
+          "agent"
+        ],
+        "description": "`state=live`: the open orders and the given ones not closed yet.",
         "parameters": [
           {
             "schema": {
@@ -111561,6 +111967,7 @@
               "type": "string",
               "enum": [
                 "open",
+                "live",
                 "all"
               ]
             },
@@ -111957,6 +112364,226 @@
                           "updatedAt": {
                             "type": "string"
                           },
+                          "dueLeftDays": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deadlineDefault": {
+                            "type": "boolean"
+                          },
+                          "facts": {
+                            "type": "object",
+                            "properties": {
+                              "paid": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "atModel": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "shot": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "given": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "paid",
+                              "atModel",
+                              "shot",
+                              "given"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "paidWord": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "gift",
+                                      "off_platform"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "by": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "note",
+                                  "by",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "holdReason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "issue": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "text": {
+                                    "type": "string"
+                                  },
+                                  "by": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "text",
+                                  "by",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "fanAskedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sentAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "cardText": {
                             "type": "string"
                           },
@@ -112061,6 +112688,39 @@
                                 "excerpt",
                                 "doneAt",
                                 "retractedAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "unlinkedSales": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "saleRef": {
+                                  "type": "string"
+                                },
+                                "pageLabel": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "grossMills": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "saleRef",
+                                "pageLabel",
+                                "kind",
+                                "grossMills",
+                                "at"
                               ],
                               "additionalProperties": false
                             }
@@ -112367,11 +113027,11 @@
         }
       },
       "post": {
-        "summary": "Create a recorded custom order from the card's fields and the fan's link (needs write:customs)",
+        "summary": "Create a recorded custom order from the card's fields, its price and the fan's link (needs write:customs; its sales with read:money)",
         "tags": [
           "agent"
         ],
-        "description": "Database only. A fan that does not match a fan of the page stays the buyer's string; a page outside the key's grant is 404. The same Telegram card again answers its order (`unchanged`).",
+        "description": "Database only. A fan that does not match a fan of the page stays the buyer's string; a page outside the key's grant is 404. The same Telegram card again answers its order (`unchanged`); an order found by its card or its code takes the price and the sales. Each named sale is answered in `sales`: linked or why not; none fails the create.",
         "requestBody": {
           "required": true,
           "content": {
@@ -112483,6 +113143,58 @@
                   "deadlineOn": {
                     "type": "string",
                     "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                  },
+                  "priceMills": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1000000000
+                  },
+                  "holdReason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "sales": {
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "saleRef": {
+                              "type": "string",
+                              "pattern": "^\\d{1,19}$"
+                            }
+                          },
+                          "required": [
+                            "saleRef"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageLabel": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "transactionRef": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            }
+                          },
+                          "required": [
+                            "pageLabel",
+                            "transactionRef"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
                   },
                   "telegramRef": {
                     "type": "string",
@@ -112876,6 +113588,226 @@
                         "updatedAt": {
                           "type": "string"
                         },
+                        "dueLeftDays": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "deadlineDefault": {
+                          "type": "boolean"
+                        },
+                        "facts": {
+                          "type": "object",
+                          "properties": {
+                            "paid": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "atModel": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "shot": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "given": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "paid",
+                            "atModel",
+                            "shot",
+                            "given"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "priceMills": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "paidWord": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "gift",
+                                    "off_platform"
+                                  ]
+                                },
+                                "note": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "note",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "holdReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "issue": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "text": {
+                                  "type": "string"
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "text",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fanAskedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "sentAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "cardText": {
                           "type": "string"
                         },
@@ -112983,6 +113915,39 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "unlinkedSales": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "saleRef": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "grossMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "at": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "saleRef",
+                              "pageLabel",
+                              "kind",
+                              "grossMills",
+                              "at"
+                            ],
+                            "additionalProperties": false
+                          }
                         }
                       },
                       "required": [
@@ -113058,6 +114023,95 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "sales": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sale": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "saleRef": {
+                                    "type": "string",
+                                    "pattern": "^\\d{1,19}$"
+                                  }
+                                },
+                                "required": [
+                                  "saleRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "transactionRef": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "transactionRef"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "saleRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "result": {
+                            "type": "string",
+                            "enum": [
+                              "linked",
+                              "already",
+                              "refused"
+                            ]
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "capability_missing",
+                                  "not_found",
+                                  "order_no_page",
+                                  "order_no_fan",
+                                  "other_model",
+                                  "other_fan",
+                                  "wrong_kind",
+                                  "taken",
+                                  "reversed",
+                                  "rejected",
+                                  "not_allowed"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "sale",
+                          "saleRef",
+                          "result",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": [
@@ -113673,10 +114727,11 @@
     },
     "/api/v1/agent/custom-orders/{code}": {
       "post": {
-        "summary": "Update a custom order: the card's fields, at the model, partly shot, shot, a revision, the model's refusal, a Telegram card (needs write:customs)",
+        "summary": "Update a custom order: the card's fields, at the model, partly shot, shot, a revision, the model's refusal, a Telegram card, the deadline, an issue (needs write:customs); a payment (also read:money); «отдан» by a message, the fan, the fan's «where is it» (also read:messages)",
         "tags": [
           "agent"
         ],
+        "description": "Database only. What a step names — a sale, a message, a fan — is one Hub holds on the key's pages, checked by Hub (a page outside them is 404); a refusal is 409 with its reason.",
         "requestBody": {
           "required": true,
           "content": {
@@ -113904,11 +114959,264 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 64
+                      },
+                      "priceMills": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "holdReason": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 500
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     },
                     "required": [
                       "action",
                       "card"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "payment"
+                        ]
+                      },
+                      "sale": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "saleRef": {
+                                "type": "string",
+                                "pattern": "^\\d{1,19}$"
+                              }
+                            },
+                            "required": [
+                              "saleRef"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "transactionRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "transactionRef"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "sale"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "given"
+                        ]
+                      },
+                      "messageRef": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[1-9]\\d{0,29}$"
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "messageRef"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "fan"
+                        ]
+                      },
+                      "pageLabel": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      },
+                      "fanRef": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[1-9]\\d{0,29}$"
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "pageLabel",
+                      "fanRef"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "fan_asked"
+                        ]
+                      },
+                      "messageRef": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[1-9]\\d{0,29}$"
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "messageRef"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "deadline"
+                        ]
+                      },
+                      "deadlineOn": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "deadlineOn",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "issue"
+                        ]
+                      },
+                      "text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "text"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "issue_clear"
+                        ]
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "action"
                     ],
                     "additionalProperties": false
                   },
@@ -114750,6 +116058,226 @@
                         "updatedAt": {
                           "type": "string"
                         },
+                        "dueLeftDays": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "deadlineDefault": {
+                          "type": "boolean"
+                        },
+                        "facts": {
+                          "type": "object",
+                          "properties": {
+                            "paid": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "atModel": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "shot": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "given": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "paid",
+                            "atModel",
+                            "shot",
+                            "given"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "priceMills": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "paidWord": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "gift",
+                                    "off_platform"
+                                  ]
+                                },
+                                "note": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "note",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "holdReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "issue": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "text": {
+                                  "type": "string"
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "text",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fanAskedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "sentAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "cardText": {
                           "type": "string"
                         },
@@ -114857,6 +116385,39 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "unlinkedSales": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "saleRef": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "grossMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "at": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "saleRef",
+                              "pageLabel",
+                              "kind",
+                              "grossMills",
+                              "at"
+                            ],
+                            "additionalProperties": false
+                          }
                         }
                       },
                       "required": [
@@ -114932,6 +116493,95 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "sales": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sale": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "saleRef": {
+                                    "type": "string",
+                                    "pattern": "^\\d{1,19}$"
+                                  }
+                                },
+                                "required": [
+                                  "saleRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "transactionRef": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "transactionRef"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "saleRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "result": {
+                            "type": "string",
+                            "enum": [
+                              "linked",
+                              "already",
+                              "refused"
+                            ]
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "capability_missing",
+                                  "not_found",
+                                  "order_no_page",
+                                  "order_no_fan",
+                                  "other_model",
+                                  "other_fan",
+                                  "wrong_kind",
+                                  "taken",
+                                  "reversed",
+                                  "rejected",
+                                  "not_allowed"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "sale",
+                          "saleRef",
+                          "result",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": [
@@ -243097,6 +244747,11 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "at": {
                             "type": "string"
                           },
@@ -243127,6 +244782,7 @@
                           }
                         },
                         "required": [
+                          "id",
                           "at",
                           "event",
                           "actor",
@@ -243155,8 +244811,14 @@
                           "revision",
                           "refused",
                           "given",
+                          "ungive",
+                          "retract",
                           "close",
-                          "cancel"
+                          "cancel",
+                          "hold",
+                          "unhold",
+                          "issue_clear",
+                          "paid_word"
                         ]
                       }
                     },
@@ -243175,6 +244837,543 @@
                     "history",
                     "actions",
                     "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/custom-orders/findings/{findingId}": {
+      "post": {
+        "summary": "Resolve a custom with no order: record it as an order, link it to one, or dismiss it with a reason",
+        "tags": [
+          "admin"
+        ],
+        "description": "Database only. The check's leader of the finding's page, the customs lead and the owner; any other reads it as not found. A sale's finding brings its sale to the order as its payment. A resolved finding is 409 `resolved`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "record"
+                        ]
+                      },
+                      "card": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 40
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          },
+                          "price": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 300
+                          },
+                          "duration": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "task": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 3000
+                          },
+                          "photos": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "clothes": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1000
+                          },
+                          "face": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "notes": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1500
+                          },
+                          "urgency": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100
+                          },
+                          "deadlineNote": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
+                          },
+                          "attachments": {
+                            "maxItems": 20,
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "maxLength": 500,
+                              "format": "uri"
+                            }
+                          },
+                          "nameInVideo": {
+                            "type": "string",
+                            "enum": [
+                              "yes",
+                              "no",
+                              "unknown"
+                            ]
+                          },
+                          "wantsVideo": {
+                            "type": "boolean"
+                          },
+                          "wantsPhotos": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 500
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "pageLabel": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120
+                      },
+                      "fan": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300
+                      },
+                      "telegramRef": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 300
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "card"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "link"
+                        ]
+                      },
+                      "code": {
+                        "type": "string",
+                        "minLength": 2,
+                        "maxLength": 24
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "code"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "dismiss"
+                        ]
+                      },
+                      "reason": {
+                        "type": "string",
+                        "enum": [
+                          "not_custom",
+                          "sexting",
+                          "unused",
+                          "duplicate",
+                          "test"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,18}$"
+            },
+            "in": "path",
+            "name": "findingId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "finding": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "sale",
+                            "fan_chat",
+                            "work_chat",
+                            "model_group",
+                            "shift_report"
+                          ]
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "pageLabel": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "fan": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "platform": {
+                                  "type": "string"
+                                },
+                                "fanRef": {
+                                  "type": "string"
+                                },
+                                "username": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "displayName": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "platform",
+                                "fanRef",
+                                "username",
+                                "displayName"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "amountMills": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "quote": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "happenedAt": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "recorded",
+                            "linked",
+                            "dismissed"
+                          ]
+                        },
+                        "orderCode": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "dismissReason": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "not_custom",
+                                "sexting",
+                                "unused",
+                                "duplicate",
+                                "test"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "resolvedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "source",
+                        "ref",
+                        "pageLabel",
+                        "fan",
+                        "amountMills",
+                        "quote",
+                        "happenedAt",
+                        "status",
+                        "orderCode",
+                        "dismissReason",
+                        "resolvedAt",
+                        "createdAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "finding"
                   ],
                   "additionalProperties": false
                 }
@@ -244467,6 +246666,11 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "at": {
                             "type": "string"
                           },
@@ -244497,6 +246701,7 @@
                           }
                         },
                         "required": [
+                          "id",
                           "at",
                           "event",
                           "actor",
@@ -244525,8 +246730,14 @@
                           "revision",
                           "refused",
                           "given",
+                          "ungive",
+                          "retract",
                           "close",
-                          "cancel"
+                          "cancel",
+                          "hold",
+                          "unhold",
+                          "issue_clear",
+                          "paid_word"
                         ]
                       }
                     },
@@ -244729,11 +246940,11 @@
         }
       },
       "post": {
-        "summary": "A step of a custom order: edit the card, deadline, fan, Telegram card, payment, at the model, partly, shot, revision, refused, given, close, cancel",
+        "summary": "A step of a custom order: edit the card, deadline, fan, Telegram card, payment, at the model, partly, shot, revision, refused, given and its undo, a delivery taken back, close, cancel, a hold, the issue settled, the owner's word on the payment",
         "tags": [
           "admin"
         ],
-        "description": "Database only. The lead and the owner take every step; a chatter only theirs (a payment, «отдали», editing and cancelling their own order); a step not from the order's state is 409 `not_allowed`. Answers the order after it. A session or the extension's device token (the fan panel's «Отдан», package R5: it reads as a chatter).",
+        "description": "Database only. The lead and the owner take every step; a chatter only theirs (a payment, «отдали» and its undo, editing and cancelling their own order); the owner alone his word on the payment and settling an issue; a hold the owner and the check's leader; a step not from the order's state is 409 `not_allowed`. Taking off a sale or a message the system or an agent applied is remembered: they never apply it to the order again. Answers the order after it. A session or the extension's device token (the fan panel's «Отдан», package R5: it reads as a chatter).",
         "requestBody": {
           "required": true,
           "content": {
@@ -244861,6 +247072,11 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "undoOf": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
                       }
                     },
                     "required": [
@@ -244953,6 +247169,11 @@
                         "minLength": 1,
                         "maxLength": 64,
                         "pattern": "^[1-9]\\d{0,29}$"
+                      },
+                      "undoOf": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
                       }
                     },
                     "required": [
@@ -245110,6 +247331,58 @@
                       "action": {
                         "type": "string",
                         "enum": [
+                          "ungive"
+                        ]
+                      },
+                      "undoOf": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "retract"
+                        ]
+                      },
+                      "retracts": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 300
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "undoOf": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "retracts",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
                           "close"
                         ]
                       }
@@ -245136,6 +247409,101 @@
                     },
                     "required": [
                       "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "hold"
+                        ]
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "reason"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "unhold"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "issue_clear"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "paid_word"
+                        ]
+                      },
+                      "word": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "gift",
+                                  "off_platform"
+                                ]
+                              },
+                              "note": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              }
+                            },
+                            "required": [
+                              "kind"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "word"
                     ],
                     "additionalProperties": false
                   }
@@ -246027,6 +248395,11 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
                           "at": {
                             "type": "string"
                           },
@@ -246057,6 +248430,7 @@
                           }
                         },
                         "required": [
+                          "id",
                           "at",
                           "event",
                           "actor",
@@ -246085,8 +248459,14 @@
                           "revision",
                           "refused",
                           "given",
+                          "ungive",
+                          "retract",
                           "close",
-                          "cancel"
+                          "cancel",
+                          "hold",
+                          "unhold",
+                          "issue_clear",
+                          "paid_word"
                         ]
                       }
                     },
@@ -282176,6 +284556,226 @@
                           "updatedAt": {
                             "type": "string"
                           },
+                          "dueLeftDays": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deadlineDefault": {
+                            "type": "boolean"
+                          },
+                          "facts": {
+                            "type": "object",
+                            "properties": {
+                              "paid": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "atModel": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "shot": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "given": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "paid",
+                              "atModel",
+                              "shot",
+                              "given"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "paidWord": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "gift",
+                                      "off_platform"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "by": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "note",
+                                  "by",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "holdReason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "issue": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "text": {
+                                    "type": "string"
+                                  },
+                                  "by": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "text",
+                                  "by",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "fanAskedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sentAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "cardText": {
                             "type": "string"
                           },
@@ -282280,6 +284880,39 @@
                                 "excerpt",
                                 "doneAt",
                                 "retractedAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "unlinkedSales": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "saleRef": {
+                                  "type": "string"
+                                },
+                                "pageLabel": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "grossMills": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "saleRef",
+                                "pageLabel",
+                                "kind",
+                                "grossMills",
+                                "at"
                               ],
                               "additionalProperties": false
                             }
@@ -282972,6 +285605,226 @@
                         "updatedAt": {
                           "type": "string"
                         },
+                        "dueLeftDays": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "deadlineDefault": {
+                          "type": "boolean"
+                        },
+                        "facts": {
+                          "type": "object",
+                          "properties": {
+                            "paid": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "atModel": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "shot": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "given": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "paid",
+                            "atModel",
+                            "shot",
+                            "given"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "priceMills": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "paidWord": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "gift",
+                                    "off_platform"
+                                  ]
+                                },
+                                "note": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "note",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "holdReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "issue": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "text": {
+                                  "type": "string"
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "text",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fanAskedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "sentAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "cardText": {
                           "type": "string"
                         },
@@ -283079,6 +285932,39 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "unlinkedSales": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "saleRef": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "grossMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "at": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "saleRef",
+                              "pageLabel",
+                              "kind",
+                              "grossMills",
+                              "at"
+                            ],
+                            "additionalProperties": false
+                          }
                         }
                       },
                       "required": [
@@ -283154,6 +286040,95 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "sales": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "sale": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "saleRef": {
+                                    "type": "string",
+                                    "pattern": "^\\d{1,19}$"
+                                  }
+                                },
+                                "required": [
+                                  "saleRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "pageLabel": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "transactionRef": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  }
+                                },
+                                "required": [
+                                  "pageLabel",
+                                  "transactionRef"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          },
+                          "saleRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "result": {
+                            "type": "string",
+                            "enum": [
+                              "linked",
+                              "already",
+                              "refused"
+                            ]
+                          },
+                          "reason": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "capability_missing",
+                                  "not_found",
+                                  "order_no_page",
+                                  "order_no_fan",
+                                  "other_model",
+                                  "other_fan",
+                                  "wrong_kind",
+                                  "taken",
+                                  "reversed",
+                                  "rejected",
+                                  "not_allowed"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "sale",
+                          "saleRef",
+                          "result",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": [

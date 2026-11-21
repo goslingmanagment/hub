@@ -35,7 +35,8 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | System state | `PUT /api/v1/agent/system/routines`, `PUT …/system/copies` | `write:system_state` | A reporter's whole list of routines and copies, for Система → «Состояние» |
 | Content | `hub publication-*`, `post-*`, `media-look`, `vault-album-draft` | `write:publication_drafts`, `approve:*`, `withdraw:publications`, `delete:posts`, `look:media`, `read:content` | `agent-read-skill.md`, «Drafting wall posts» and after |
 | Fan queues | `hub queue-*` | `write:fan_queues` | Queues for chatters, on the word of the person who asked |
-| Custom orders | `GET/POST /api/v1/agent/custom-orders`, `POST …/custom-orders/:code`, `POST …/custom-orders/cards` (`hub custom list\|create\|step\|cards`) | `write:customs` | Record an order from the card (Gengar's `/tz`), write what the models' group says (at the model, deliveries in parts, revisions, refusals, cancels, messages), report cards with no order. Never a payment or «отдали»: those are people's |
+| Custom orders | `GET/POST /api/v1/agent/custom-orders`, `POST …/custom-orders/:code`, `POST …/custom-orders/cards` (`hub custom list\|create\|step\|cards`) | `write:customs`; a payment `+ read:money`; «отдан», the fan, «where is it» `+ read:messages` | Record an order from the card (Gengar's `/tz`) with its price and the sales that paid it, write what the models' group says (at the model, deliveries in parts, revisions, refusals, cancels, messages, the deadline, an issue), report cards with no order. The agent names sales and messages Hub already holds; Hub verifies each; a person can undo it, and the undo is remembered: below |
+| Custom orders (findings) | `POST /api/v1/agent/custom-findings` (`hub custom findings post\|dismiss`) | `write:customs` + `read:money` + `read:messages` | A trace of a custom with no order the reader found, or a candidate it read as no custom: below |
 | Shift reports «со слов» | `GET /api/v1/agent/shift-reports/draft`, `GET …/claimable`, `POST …/line`, `…/comment`, `…/off-platform`, `…/submit` (`hub shift-report show\|claimable\|line\|comment\|off-platform\|submit`) | `write:shift_reports` | Gengar's `/smena` fills and hands in the report of a person whose switch «сдаёт смену в системе» is on, from the person's own words: below |
 | Shift reports (Gengar's check) | `GET /api/v1/agent/shift-reports/checks`, `POST …/checks/:candidateId` | `review:shift_reports` | The candidates handed in and waiting for the check (`checks`), on the key's pages and of its realm; the answer «замечаний нет» or proposals, never a confirmation. `awaitingConfirm`: the reports standing in «Подтвердите» — shift, candidate, person's code and name, pages, `startedAt`, `confirmSince` (when it entered «Подтвердите» for its current candidate): what the reminder «Отчёт не подтверждён сутки» reads |
 | Shift reports (the ledger's feed) | `GET /api/v1/agent/shift-reports` | `read:team` + `read:money` | Every version handed in, after a cursor (`next`, a place `seq`): what the ledger accrues and pays from. `held` lists the versions held back for the key's pages on every read until the key may read them; then each gets a new place at the end of the feed and comes in `reports` through the cursor. How to read it: below |
@@ -64,6 +65,36 @@ stand-ins too): it plays Gengar's check of a handed-in report without touching a
 page's real site account: it stores only the pulse and the board's own writes (what the extension reports of the real
 account, wallet sightings and send and note attributions, is accepted and dropped), its Fansly proxy is its live
 page's, and a test login reads nothing of a real fan.
+
+## Custom orders: what the agent names
+
+An order's facts (paid, at the model, shot, given) are kept true from what Hub holds, not from a person's click. The
+agent never states a fact: it names a sale or a message Hub already has, Hub checks it and takes the step, and a
+person can undo it. An undo of what an agent or the system applied is remembered (`custom_order_rejections`): neither
+applies that sale or that message to the order again; a person who applies it by hand takes the memory away. Every
+page a call names is one of the key's pages (another answers 404, the same as one that does not exist), and a key
+holding `write:customs` alone gains none of the calls below that need more. The CLI: `hub custom create --price
+<dollars> --sale <saleRef or pageLabel:transactionRef> …`, `hub custom step K-… --step payment|given|fan|fan_asked|deadline|issue|issue_clear`,
+`hub custom list --state live`, `hub custom findings post --file …` and `hub custom findings dismiss --source … --ref … --at …`
+(`hub custom <command> --help` for the flags).
+
+| Call | Also needs | What Hub checks |
+|---|---|---|
+| `create` / step `edit` with `priceMills`, `deadlineOn`, `holdReason` | — | as before: a field a person edited is never overwritten (409 `edited_by_person`) |
+| `create` with `sales`, step `payment` (`sale`: `{saleRef}` or `{pageLabel, transactionRef}`) | `read:money` | the sale is on a page of the order's model among the key's pages; an account's of the order's fan (any account of the person); a tip, a subscription or a message purchase; held by no other order; not reversed; not taken off this order by a person. `create` never fails because of a sale: the order is recorded and `sales` answers each — `linked`, `already`, or `refused` with its reason. A `create` that finds the order by its card or its code takes the price and the sales too |
+| step `given` with `messageRef` | `read:messages` | the page's message on a page of the order's model among the key's pages, to an account of the order's fan (the chat's fan), sent after the order was recorded, with media; a priced one bought. Refused (409 `code_named_file`) while a vault file carries the order's code: Hub's own rule finds that delivery. Never by a word |
+| step `fan` with `pageLabel` and `fanRef` (the fan's platform id) | `read:messages` | the fan has an account on that page; the order has no fan and its fan was not erased; the page becomes the order's when it has none (another page than the order's: 409 `other_page`) |
+| step `fan_asked` with `messageRef` | `read:messages` | the fan's message in a chat of the order's fan on the order's page |
+| step `deadline` with `reason` | — | as `edit`: never over a deadline a person set |
+| steps `issue` (≤ 200 characters), `issue_clear` | — | the shape |
+| `GET …/custom-orders?state=live` | — | the open orders and the given ones not closed yet. The facts (`facts`, `priceMills`, `holdReason`, `issue`, …) are on the wire only for a key with `read:money`; to it an order whose money is not complete also carries `unlinkedSales`: the fan's sales since the order was recorded, on the key's pages of the order's model, that pay no order and no person took off it (at most 10). Read the chat around one before naming it back |
+| `POST …/custom-findings` | `read:money` + `read:messages` | each finding once by `(source, ref)`; a sale's is Hub's sale on the key's pages (its page, fan, sum and time are Hub's). `notCustom` keeps a new one dismissed as «не кастом»; a finding Hub has stays as it is — its check's leader resolves it |
+
+The refusals are 409 with `error.reason`: `capability_missing` (in `sales`), `not_found`, `order_no_page`,
+`order_no_fan`, `other_model`, `other_fan`, `wrong_kind`, `taken`, `reversed`, `rejected`, `not_allowed` for a sale;
+`not_page_message`, `not_fan_message`, `before_order`, `no_media`, `not_bought`, `code_named_file`, `rejected` for a
+message; `fan_known`, `other_page`, `fan_unknown` for the fan. A step that needs a capability the key lacks is 403
+`agent_capability_missing`.
 
 ## Shift reports «со слов»
 

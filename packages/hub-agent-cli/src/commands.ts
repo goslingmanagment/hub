@@ -27,8 +27,10 @@ import {
   agentMatterCommentBodySchema,
   agentMatterOpenBodySchema,
   agentCustomCardsBodySchema,
+  agentCustomFindingsBodySchema,
   agentCustomOrderCreateBodySchema,
   agentCustomOrderUpdateBodySchema,
+  CUSTOM_FINDING_SOURCES,
   CUSTOM_ORDER_STATES,
   adminPersonUpdateBodySchema,
   agentPeopleQuerySchema,
@@ -1901,7 +1903,9 @@ const MATTER_COMMANDS: HubCommand[] = [
 // --- custom orders (write:customs) -----------------------------------------
 
 const CUSTOM_CAPABILITY_HINT =
-  "This key lacks write:customs: the owner grants it to the key (dashboard, Система, Агенты и ключи)";
+  "This key lacks a capability the call needs: write:customs for every custom call; a payment (step payment, --sale on create)"
+  + " also read:money; step given, fan, fan_asked also read:messages; findings both. The owner grants them to the key"
+  + " (dashboard, Система, Агенты и ключи)";
 
 /** The machine reason of a refusal (`version_changed`, `edited_by_person`…), from the hub's error body. */
 function refusalReason(error: unknown): string | null {
@@ -1925,7 +1929,28 @@ function customHint(error: { status: number | null; code: string | null }): stri
     return "not_allowed: the order's state takes no such step (read its `state`): a delivery to an order already given, a refusal"
       + " of an order not at the model…";
   }
-  if (error.status === 409 && reason === "taken") return "taken: this Telegram card belongs to another order (hub custom list --card <ref>)";
+  if (error.status === 409 && reason === "taken") {
+    return "taken: another order holds it — the Telegram card (hub custom list --card <ref>), or the sale (it pays that order)";
+  }
+  if (error.status === 409 && reason === "rejected") {
+    return "rejected: a person took this sale or message off the order. It is not applied again; say the difference in your summary";
+  }
+  if (error.status === 409 && (reason === "other_fan" || reason === "other_model" || reason === "wrong_kind" || reason === "reversed")) {
+    return `${reason}: the sale does not pay this order (another fan's, another model's page, not a tip, a subscription or a message`
+      + " purchase, or taken back by the platform): name another sale or none";
+  }
+  if (error.status === 409 && (reason === "order_no_page" || reason === "order_no_fan")) {
+    return `${reason}: the order names no page or no fan to check it against: set its fan first (hub custom step K-… --step fan --page … --fan …)`;
+  }
+  if (error.status === 409 && reason === "code_named_file") {
+    return "code_named_file: a vault file carries the order's code: Hub finds its delivery by itself, leave «отдан» to it";
+  }
+  if (error.status === 409 && (reason === "not_bought" || reason === "no_media" || reason === "before_order" || reason === "not_page_message")) {
+    return `${reason}: the message did not give the order (a priced one not bought yet, no media, sent before the order, the fan's own)`;
+  }
+  if (error.status === 409 && (reason === "fan_known" || reason === "other_page" || reason === "fan_unknown")) {
+    return `${reason}: the order has its fan already (or he was erased), the page is not the order's, or no such fan on the page`;
+  }
   if (error.status === 409 && reason === "code_unknown") {
     return "code_unknown: the card's text names a code K-… of no order on this key's pages. Resolve it (hub custom list --code K-…);"
       + " never record a second order for a card that carries a code";
@@ -1944,11 +1969,34 @@ function customHint(error: { status: number | null; code: string | null }): stri
 
 const CUSTOM_STEPS = [
   "at_model", "delivery", "partly", "shot", "revision", "revision_done", "refused", "cancel", "message", "edit", "card",
+  "payment", "given", "fan", "fan_asked", "deadline", "issue", "issue_clear",
 ] as const;
 type CustomStepName = (typeof CUSTOM_STEPS)[number];
 const CUSTOM_MESSAGE_KINDS = ["repost", "confirmation", "note"] as const;
-/** `--state`: the door's own two (open, all), or one state of an order (read from all, filtered here). */
-const CUSTOM_LIST_STATES = ["open", "all", ...CUSTOM_ORDER_STATES] as const;
+/** `--state`: the door's own three (open, live, all), or one state of an order (read from all, filtered here). */
+const CUSTOM_LIST_STATES = ["open", "live", "all", ...CUSTOM_ORDER_STATES] as const;
+
+/** A sale as `--sale` names it: Hub's id (`7744520`), or a page and the platform's transaction id (`page-1:tx123`). */
+function customSale(text: string): { saleRef: string } | { pageLabel: string; transactionRef: string } {
+  const value = text.trim();
+  if (/^\d{1,19}$/u.test(value)) return { saleRef: value };
+  const colon = value.indexOf(":");
+  if (colon <= 0 || colon === value.length - 1) {
+    throw new HubUsageError(`--sale is Hub's id of the sale (digits) or <pageLabel>:<transactionRef>, got "${text}"`);
+  }
+  return { pageLabel: value.slice(0, colon), transactionRef: value.slice(colon + 1) };
+}
+
+/** `--price` in dollars, or `none` (an edit: not named any more). */
+function customPrice(values: HubOptionValues): number | null | undefined {
+  return readString(values, "price") === "none" ? null : hubDollarsToMills(values, "price", "positive");
+}
+
+/** `--hold` the reason the order waits on purpose, or `none` (an edit: it waits no more). */
+function customHold(values: HubOptionValues): string | null | undefined {
+  const hold = readString(values, "hold");
+  return hold === "none" ? null : hold;
+}
 
 /** A JSON object from `--<name>` (a file, or - for stdin). */
 function readJsonObject(values: HubOptionValues, deps: HubRunDeps, name: string): Record<string, unknown> | undefined {
@@ -1989,6 +2037,27 @@ export function customStepBody(values: HubOptionValues, deps: HubRunDeps) {
     case "card":
       body = { telegramRef: requireString(values, "card") };
       break;
+    case "payment":
+      body = { sale: customSale(requireString(values, "sale")) };
+      break;
+    case "given":
+    case "fan_asked":
+      body = { messageRef: requireString(values, "message") };
+      break;
+    case "fan":
+      body = { pageLabel: requireString(values, "page"), fanRef: requireString(values, "fan") };
+      break;
+    case "deadline": {
+      const on = requireString(values, "on");
+      body = { deadlineOn: on === "none" ? null : on, reason: requireString(values, "reason") };
+      break;
+    }
+    case "issue":
+      body = { text: requireString(values, "text") };
+      break;
+    case "issue_clear":
+      body = {};
+      break;
     case "delivery":
       body = { message: customMessage(values), part: readEnum(values, "part", ["video", "photos"] as const), complete: readFlag(values, "complete") };
       break;
@@ -2017,14 +2086,20 @@ export function customStepBody(values: HubOptionValues, deps: HubRunDeps) {
       const card = readJsonObject(values, deps, "card-file");
       const deadline = readString(values, "deadline");
       const sourceFile = readString(values, "source-file");
-      if (card === undefined && deadline === undefined && sourceFile === undefined) {
-        throw new HubUsageError("an edit says what changed: --card-file (only the changed fields; null empties one), --deadline or --source-file");
+      const price = customPrice(values);
+      const hold = customHold(values);
+      if (card === undefined && deadline === undefined && sourceFile === undefined && price === undefined && hold === undefined) {
+        throw new HubUsageError(
+          "an edit says what changed: --card-file (only the changed fields; null empties one), --deadline, --source-file, --price or --hold",
+        );
       }
       body = {
         card: card ?? {},
         deadlineOn: deadline === undefined ? undefined : deadline === "none" ? null : deadline,
         sourceText: sourceFile === undefined ? undefined : readTextFile(deps, sourceFile),
         ifVersion: readNumber(values, "if-version"),
+        priceMills: price,
+        holdReason: hold,
       };
       break;
     }
@@ -2045,7 +2120,24 @@ export function customCreateBody(values: HubOptionValues, deps: HubRunDeps) {
       deadlineOn: readString(values, "deadline"),
       onBehalfOf: readString(values, "on-behalf-of"),
       another: readFlag(values, "another") ? true : undefined,
+      priceMills: hubDollarsToMills(values, "price", "positive"),
+      holdReason: readString(values, "hold"),
+      sales: readList(values, "sale")?.map(customSale),
     }),
+  });
+}
+
+/** `custom findings dismiss`: one candidate the reader read and found no custom, kept as «не кастом». */
+export function customFindingDismissBody(values: HubOptionValues) {
+  return checkedDraft(agentCustomFindingsBodySchema, {
+    findings: [defined({
+      source: requireEnum(values, "source", CUSTOM_FINDING_SOURCES),
+      ref: requireString(values, "ref"),
+      pageLabel: readString(values, "page"),
+      fanRef: readString(values, "fan"),
+      happenedAt: requireString(values, "at"),
+      notCustom: true as const,
+    })],
   });
 }
 
@@ -2059,10 +2151,15 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       "Custom orders of this key's pages and of no known page, the newest first: the state as the server keeps it, overdueDays"
       + " (past the deadline and not delivered whole), the deadline, the parts ready in the current round, the open revision requests,"
       + " the messages already recorded, the version and the card text with its code. --card or --code finds one order in"
-      + " any state. No money. Exit 0 — answered; 4 — refused or no answer. Needs write:customs.",
+      + " any state; --state live: the open ones and the given ones not closed yet (watch them until they close). No money; with"
+      + " read:money also the four facts (`facts`: paid, at the model, shot, given), the price, the hold, the issue, and on --state live"
+      + " for an order whose money is not complete `unlinkedSales`: the fan's sales since the order was recorded that pay no order"
+      + " (saleRef, pageLabel, kind, grossMills, at; at most 10). Read the chat around one before you name it back (hub custom step"
+      + " K-… --step payment --sale <saleRef>); never by its amount alone. Exit 0 — answered; 4 — refused or no answer. Needs"
+      + " write:customs.",
     example: "hub custom list --card https://t.me/c/2600000001/3/10017",
     options: {
-      state: { kind: "string", describe: `open (default: not given and not ended) | all | one state: ${CUSTOM_ORDER_STATES.join(" | ")}` },
+      state: { kind: "string", describe: `open (default: not given and not ended) | live (open, and given not closed) | all | one state: ${CUSTOM_ORDER_STATES.join(" | ")}` },
       page: { kind: "string", describe: "Only this page's orders (an order of no known page shows on every page)" },
       card: { kind: "string", describe: "The order of this Telegram card: https://t.me/c/<chat>/<topic>/<msg> or tg:<chat>/<topic>/<msg>" },
       code: { kind: "string", describe: "The order of this code, K-<number>" },
@@ -2074,14 +2171,14 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       const page = readString(values, "page");
       const answer = await client.agentCustomOrders({
         query: defined({
-          state: state === undefined || state === "open" ? "open" as const : "all" as const,
+          state: state === undefined || state === "open" ? "open" as const : state === "live" ? "live" as const : "all" as const,
           code: readString(values, "code"),
           telegramRef: readString(values, "card"),
           limit: readNumber(values, "limit"),
         }),
       });
       const orders = answer.orders.filter((order) => (page === undefined || order.pageLabel === page || order.pageLabel === null)
-        && (state === undefined || state === "open" || state === "all" || order.state === state));
+        && (state === undefined || state === "open" || state === "live" || state === "all" || order.state === state));
       return { ...answer, orders };
     },
   },
@@ -2090,7 +2187,12 @@ const CUSTOM_COMMANDS: HubCommand[] = [
     operation: "agentCustomOrderCreate",
     summary:
       "Record a custom order from the card's fields (--file, a JSON object: card, pageLabel, fan, acceptedBy, deadlineOn, telegramRef,"
-      + " postedAt, author, sourceText) and the fan's link; flags override the file. Resolve the code first: a card whose title"
+      + " postedAt, author, sourceText, priceMills, holdReason, sales) and the fan's link; flags override the file. --price: the agreed"
+      + " total in dollars; --sale (repeatable): a sale the fan paid it with, as you read it in the fan's chat (needs read:money):"
+      + " Hub links each that holds (the order's fan or another account of the same person, a page of the order's model, a tip, a"
+      + " subscription or a message purchase no other order holds, not taken back) and answers each in `sales` — linked, or refused"
+      + " with its reason; a sale never fails the create. An order found by its card or its code takes the price and the sales."
+      + " Resolve the code first: a card whose title"
       + " carries «K-…» is that order's (hub custom list --code K-…); given its sourceText, create attaches the card to that order and"
       + " answers it (`outcome`: changed or unchanged; 409 code_unknown — a code of no order this key sees), never a second order and"
       + " never a match by the fan's name. A fan with an open order on the page is refused (409 open_orders, the orders named):"
@@ -2108,6 +2210,9 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       deadline: { kind: "string", describe: "The deadline, YYYY-MM-DD (Moscow)" },
       "on-behalf-of": { kind: "string", describe: "The Hub login on whose word the agent writes" },
       another: { kind: "boolean", describe: "One more order for a fan who has an open one on the page (else 409 open_orders)" },
+      price: { kind: "string", describe: "The agreed total, gross, in dollars: 150 or 149.99 (the card's «Оплата» stays the team's words)" },
+      hold: { kind: "string", describe: "Why the order waits on purpose (the fan is unreachable, a prop is awaited): it does not burn" },
+      sale: { kind: "list", describe: "A sale that pays it (repeatable; needs read:money): Hub's id (7744520) or <pageLabel>:<transactionRef>" },
     },
     hint: customHint,
     run: async (client, values, deps) => {
@@ -2130,32 +2235,48 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       + " is whole), partly | shot (--message), revision (a request: --message, --text, --part when it is about one part, --ordinal"
       + " for several in one message), revision_done (--message, --ordinal), refused (the model's refusal: --message, --reason),"
       + " cancel (--reason: a return, a duplicate card), message (--kind repost | confirmation | note, --message), edit (only the"
-      + " changed fields: --card-file, --deadline, --source-file, --if-version), card (attach --card). Readiness is by the round,"
+      + " changed fields: --card-file, --deadline, --source-file, --price, --hold, --if-version), card (attach --card)."
+      + " What Hub already holds, named and checked by Hub: payment (--sale; needs read:money), given (--message: the page's platform"
+      + " message that carried the order to the fan; needs read:messages; never by a word, and refused while a vault file carries the"
+      + " order's code), fan (--page, --fan: the fan's platform id; only while the order has none; needs read:messages), fan_asked"
+      + " (--message: the fan's own message «where is it»; needs read:messages); deadline (--on YYYY-MM-DD or none, --reason: the move"
+      + " the chatter agreed with the fan), issue (--text: one sentence ≤ 200 when the sources disagree), issue_clear. A person can"
+      + " undo any of them; what a person took off is never applied again (409 rejected). Readiness is by the round,"
       + " per part: a whole delivery makes its part ready only when it is newer than the last request about that part (by --at,"
       + " the message's own time: give it, or an old message reported now counts as new), and fixes only the requests whose"
       + " every part is ready; `partsDone` is what is ready, the other wanted parts are waited for. The same message again"
       + " changes nothing (`outcome`: unchanged). Exit 0 — changed or unchanged; 4 — refused (409 version_changed,"
-      + " edited_by_person, not_allowed: read `error.reason`) or no answer. Never a payment or «отдали»: those are people's."
-      + " Needs write:customs.",
+      + " edited_by_person, not_allowed, rejected…: read `error.reason`) or no answer. Needs write:customs (and the capability a step"
+      + " names).",
     example: 'hub custom step K-123 --step delivery --message https://t.me/c/2600000001/3/10030 --excerpt "6-08 название.mov" --part video --complete',
     arguments: CUSTOM_CODE_ARGUMENT,
     options: {
       step: { kind: "string", describe: `The step (required): ${CUSTOM_STEPS.join(" | ")}` },
-      message: { kind: "string", describe: "The model's (or the team's) message: https://t.me/c/<chat>/<topic>/<msg> or tg:…" },
+      message: {
+        kind: "string",
+        describe: "The model's (or the team's) message: https://t.me/c/<chat>/<topic>/<msg> or tg:…; given and fan_asked: the platform's"
+          + " message id in the fan's chat",
+      },
       at: { kind: "string", describe: "When the message was sent, ISO 8601: what came after a revision request is told by it (default: now)" },
       author: { kind: "string", describe: "Who sent it, as Telegram names them" },
       excerpt: { kind: "string", describe: "A short verbatim excerpt (a delivery: the model's line with the file's name)" },
       part: { kind: "string", describe: "video | photos. A delivery's part (default: the first the card orders); a revision: the part it is about (default: the whole order)" },
       complete: { kind: "boolean", describe: "A delivery: that part is whole now (without it the part waits for more)" },
       ordinal: { kind: "number", describe: "Several revision requests in one message: 1, 2… (default 0)" },
-      text: { kind: "string", describe: "A revision's request, or what a partial delivery is about" },
-      reason: { kind: "string", describe: "Why the model refused, or why the order is cancelled" },
+      text: { kind: "string", describe: "A revision's request, what a partial delivery is about, or an issue's sentence (≤ 200)" },
+      reason: { kind: "string", describe: "Why the model refused, why the order is cancelled, or why the deadline moved" },
       kind: { kind: "string", describe: `A message's kind: ${CUSTOM_MESSAGE_KINDS.join(" | ")} (a repost also becomes a card of the order)` },
       card: { kind: "string", describe: "A Telegram card: its copy in the model's group (at_model), or one to attach (card)" },
       "card-file": { kind: "string", describe: "An edit: the changed card fields as a JSON object (null empties a field); - for stdin" },
       deadline: { kind: "string", describe: "An edit: the deadline YYYY-MM-DD (Moscow), or none" },
       "source-file": { kind: "string", describe: "An edit: the card's whole text as posted, from a file" },
       "if-version": { kind: "number", describe: "An edit: refuse it (409 version_changed) if the order changed since this version" },
+      price: { kind: "string", describe: "An edit: the agreed total in dollars, or none" },
+      hold: { kind: "string", describe: "An edit: why the order waits on purpose, or none (it waits no more)" },
+      sale: { kind: "string", describe: "A payment: Hub's id of the sale (7744520) or <pageLabel>:<transactionRef>" },
+      page: { kind: "string", describe: "A fan: the page the fan's account is on, of this key's grant" },
+      fan: { kind: "string", describe: "A fan: the fan's platform id on that page" },
+      on: { kind: "string", describe: "A deadline: the new day, YYYY-MM-DD (Moscow), or none" },
       "on-behalf-of": { kind: "string", describe: "The Hub login on whose word the agent writes" },
     },
     hint: customHint,
@@ -2207,6 +2328,37 @@ const CUSTOM_COMMANDS: HubCommand[] = [
         }
       }
       return new HubCompositeResult({ attached, unmatched: reported }, failed, { calls: attached.length + (reported === null ? 0 : 1), failed });
+    },
+  },
+  {
+    name: "custom findings",
+    operation: "agentCustomFindings",
+    summary:
+      "A custom with no order, as the reader found it: `post` sends --file {\"findings\": [{source, ref, pageLabel, fanRef, amountMills,"
+      + " quote, happenedAt}]} — source sale (ref: Hub's id of the sale; its page, fan, sum and time are Hub's) | fan_chat | work_chat |"
+      + " model_group | shift_report, the quote verbatim (≤ 300). `dismiss` keeps one candidate you read and found no custom as «не"
+      + " кастом» (--source, --ref, --at, --page, --fan), so it is not offered again. Each once by (source, ref): `outcome` created,"
+      + " dismissed, already (Hub had it: a finding there stays as it is, its check's leader resolves it) or not_found (its page, fan"
+      + " or sale is not on this key's pages). Exit 0 — answered; 4 — refused or no answer. Needs write:customs, read:money and"
+      + " read:messages.",
+    example: "hub custom findings post --file findings.json",
+    arguments: { name: "action", describe: "post | dismiss", min: 1, max: 1 },
+    options: {
+      file: { kind: "string", describe: "post: the findings as a JSON object {\"findings\": [...]}; - for stdin" },
+      source: { kind: "string", describe: `dismiss: where the candidate is, ${CUSTOM_FINDING_SOURCES.join(" | ")}` },
+      ref: { kind: "string", describe: "dismiss: its reference there (a sale: Hub's id)" },
+      at: { kind: "string", describe: "dismiss: when it happened, ISO 8601 with an offset" },
+      page: { kind: "string", describe: "dismiss: its page, of this key's grant" },
+      fan: { kind: "string", describe: "dismiss: the fan's platform id on that page" },
+    },
+    hint: customHint,
+    run: (client, values, deps, args) => {
+      const action = args[0];
+      if (action === "dismiss") return client.agentCustomFindings({ body: customFindingDismissBody(values) });
+      if (action !== "post") throw new HubUsageError(`custom findings takes post or dismiss, got "${action ?? ""}"`);
+      const file = readJsonObject(values, deps, "file");
+      if (file === undefined) throw new HubUsageError("--file is required: {\"findings\": [...]}");
+      return client.agentCustomFindings({ body: checkedDraft(agentCustomFindingsBodySchema, file) });
     },
   },
 ];

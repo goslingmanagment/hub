@@ -31,10 +31,10 @@ const ALL: readonly CustomOrderState[] = [...NOT_ENDED, "closed", "cancelled"];
 
 /**
  * The board's steps, and the readers' own: a delivery message, a revision fixed, another message, a delivery taken
- * back; and the server's own `settle` — the order put where its kept messages say (an import stores messages
- * without a step).
+ * back, the fan's «where is it», a disagreement of the sources; and the server's own `settle` — the order put where
+ * its kept messages say (an import stores messages without a step).
  */
-export type CustomStepName = CustomOrderAction | "delivery" | "revision_done" | "message" | "retract" | "settle";
+export type CustomStepName = CustomOrderAction | "delivery" | "revision_done" | "message" | "retract" | "settle" | "fan_asked" | "issue";
 
 const BOARD_ACTIONS: ReadonlySet<string> = new Set(CUSTOM_ORDER_ACTIONS);
 export function isBoardAction(step: CustomStepName): step is CustomOrderAction {
@@ -62,6 +62,8 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
   revision: ["partly", "shot", "revision", "given"],
   refused: ["at_model", "partly", "revision"],
   given: ["recorded", "paid", "checked", "at_model", "partly", "shot", "revision"],
+  // «Отдан» taken back while the order is not closed yet: it is «снят» again.
+  ungive: ["given"],
   close: ["given"],
   cancel: OPEN,
   // A delivery is kept in every state (its sender must know it is in the hub); it moves the order only from the
@@ -71,6 +73,16 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
   message: ALL,
   retract: ALL,
   settle: DELIVERY_MOVES_FROM,
+  // A wait on purpose belongs to an order in work; it can always be taken off.
+  hold: OPEN,
+  unhold: ALL,
+  // The fan asks about an order that is not his yet.
+  fan_asked: OPEN,
+  // The sources disagree about an order until it closes; a standing issue can always be cleared.
+  issue: NOT_ENDED,
+  issue_clear: ALL,
+  // The owner's word on the payment, as a payment: at any step, after «отдан» too; never on a cancelled order.
+  paid_word: [...NOT_ENDED, "closed"],
 };
 
 export const STEP_TO: Partial<Readonly<Record<CustomOrderAction, CustomOrderState>>> = {
@@ -172,8 +184,8 @@ export function customPhaseProduct(phase: CustomPhase): "workboard" | "contentop
   return phase === "shoot" ? "contentops" : "workboard";
 }
 
-/** The content side's steps: whoever leads the shooting takes them. */
-const SHOOT_STEPS: ReadonlySet<CustomOrderAction> = new Set(["at_model", "partly", "shot", "revision", "refused"]);
+/** The content side's steps: whoever leads the shooting takes them (a delivery taken back too). */
+const SHOOT_STEPS: ReadonlySet<CustomOrderAction> = new Set(["at_model", "partly", "shot", "revision", "refused", "retract"]);
 
 /** Whether the viewer leads a phase of the order (the owner always; an order of no page: the person right, a team lead). */
 export function leadsPhase(viewer: CustomViewer, order: { pageId: number | null }, phase: "check" | "shoot"): boolean {
@@ -193,14 +205,32 @@ export function worksOnPage(viewer: CustomViewer, pageId: number | null): boolea
   return viewer.leads !== undefined && (viewer.leads.check.includes(pageId) || viewer.leads.shoot.includes(pageId));
 }
 
-/** A chatter's steps: a payment, «отдали»; on their own order also its card, its fan and «отменить». */
-const CHATTER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["payment", "given"]);
+/** A chatter's steps: a payment, «отдали» and taking it back; on their own order also its card, its fan and «отменить». */
+const CHATTER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["payment", "given", "ungive"]);
 const OWN_ORDER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["edit", "fan", "unpay", "cancel"]);
+/** The owner's alone: his word on the payment, and settling the agent's sentence of a disagreement. */
+const OWNER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["paid_word", "issue_clear"]);
+/** A wait on purpose: the owner's and the check's leader's. */
+const HOLD_STEPS: ReadonlySet<CustomOrderAction> = new Set(["hold", "unhold"]);
+
+/** An order as the rights read it; a hold and an issue, when given, say whether there is one to take off. */
+export interface CustomRightsOrder {
+  pageId: number | null;
+  state: CustomOrderState;
+  acceptedByUserId: number | null;
+  holdReason?: string | null;
+  issue?: unknown;
+}
 
 /** Whether the viewer may take `step` on the order now (its state included). */
-export function mayTakeStep(viewer: CustomViewer, order: { pageId: number | null; state: CustomOrderState; acceptedByUserId: number | null }, step: CustomOrderAction): boolean {
+export function mayTakeStep(viewer: CustomViewer, order: CustomRightsOrder, step: CustomOrderAction): boolean {
   if (!seesOrder(viewer, order)) return false;
   if (!STEP_FROM[step].includes(order.state)) return false;
+  if ((step === "unhold" && order.holdReason === null) || (step === "issue_clear" && order.issue === null)) return false;
+  if (OWNER_STEPS.has(step)) return viewer.role === "owner";
+  if (HOLD_STEPS.has(step)) {
+    return viewer.role === "owner" || (viewer.leads !== undefined ? leadsPhase(viewer, order, "check") : leadsSteps(viewer));
+  }
   if (viewer.leads !== undefined) {
     const check = leadsPhase(viewer, order, "check");
     const shoot = leadsPhase(viewer, order, "shoot");
@@ -218,7 +248,7 @@ export function mayTakeStep(viewer: CustomViewer, order: { pageId: number | null
 }
 
 /** The steps the viewer may take on the order now, in the board's order. */
-export function stepsFor(viewer: CustomViewer, order: { pageId: number | null; state: CustomOrderState; acceptedByUserId: number | null }): CustomOrderAction[] {
+export function stepsFor(viewer: CustomViewer, order: CustomRightsOrder): CustomOrderAction[] {
   return CUSTOM_ORDER_ACTIONS.filter((step) => mayTakeStep(viewer, order, step));
 }
 
