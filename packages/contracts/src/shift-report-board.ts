@@ -254,6 +254,11 @@ export const shiftReportChoiceSchema = z.object({
   }).nullable(),
   /** The menu's grey text: «по правилу», «сообщим Олегу», «решит владелец»; empty — none. */
   hint: z.string(),
+  /**
+   * What choosing it writes: `line` — the line's word (`shiftReportLineSet`; «Моя» on a nobody's sale and a word the
+   * decider decides go with one line of why); `ask` — a question about someone else's sale (`shiftReportAsk`).
+   */
+  via: z.enum(["line", "ask"]),
   /** The current word (absent from a reader that marks it itself). */
   current: z.boolean().optional(),
 });

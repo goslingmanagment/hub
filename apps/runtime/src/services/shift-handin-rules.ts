@@ -1,3 +1,4 @@
+import { personNameForms } from "@agency_hub_core/contracts";
 import { formatUsdFromMills, millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
 
 import type { RuleSlot, SaleHomeKind, SaleHomeReason } from "./sale-rule.ts";
@@ -299,8 +300,11 @@ export function reasonWords(input: {
   switch (input.homeKind) {
     case "pot":
       return input.reason === "campaign" ? "общак: Campaign OnlyFans" : "общак: чаевые под постом";
-    case "waiting":
-      return `PPV отправил ${input.senderName ?? "коллега"}, уйдёт в его следующую смену`;
+    case "waiting": {
+      // Names carry no gender: «PPV от Олега, уйдёт в следующую смену Олега».
+      const sender = input.senderName === null ? null : personNameForms(input.senderName).gen;
+      return sender === null ? "PPV коллеги, уйдёт в следующую смену отправителя" : `PPV от ${sender}, уйдёт в следующую смену ${sender}`;
+    }
     case "decide":
       return input.reason === "marks_disagree" ? "метки чаттеров не сходятся: решит владелец" : "стык смен, фану никто из них не писал: решит владелец";
     case "nobody":
