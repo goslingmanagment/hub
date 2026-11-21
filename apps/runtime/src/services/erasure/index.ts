@@ -2206,6 +2206,10 @@ export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[]
     table: "traffic_channels",
     reason: "A traffic source measured by a page's subscriber counter (0428 counter_page_id): agency configuration, not captured creator or fan data; the pages catalog row it names stays.",
   },
+  {
+    table: "pages",
+    reason: "A test page standing in for this live page (0435 stands_in_for_page_id): the test team's catalog configuration, not captured creator or fan data; the pages catalog row it names stays, and the stand-in holds nothing of the live page.",
+  },
 ];
 
 async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget[]> {
