@@ -29,6 +29,7 @@ import {
   listOpenSaleSightings,
   listReportedSales,
   listSaleClaims,
+  listSaleLastWriters,
   listActiveSaleDecisions,
   listUserRoles,
   listTransactionPlatformRefs,
@@ -48,6 +49,7 @@ import {
 } from "@agency_hub_core/db";
 import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
 
+import { SALE_LAST_WRITER_HOURS } from "./chatter-shifts.ts";
 import { reportSums } from "./sale-claim-rules.ts";
 import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-report-draft.ts";
 import { SALE_RULE, type SaleHomeReason } from "./sale-rule.ts";
@@ -305,17 +307,27 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     .filter((word) => word.statement === "not_mine" && [...base, ...late].some((line) => line.transactionId === word.transactionId && line.toUserId === word.userId))
     .map((word) => word.transactionId));
   const beforeNotes = await listNotesOfSales(db, before.map((sale) => sale.transactionId));
-  // A nobody's sale before the shift (a fan bought an old PPV while nobody held the page, 20.11): «Это моё» on its own
-  // row, the claim of «Ещё → Найти продажу» (`claimableSales`, shift-handins.ts): of the last CLAIMABLE_DAYS days, in no
-  // report of the person's but this one. Hub takes it as the person's line while the report is edited; a report handed
-  // in opens for «Правка» first (`mayAct` «reopen»).
+  // A nobody's sale before the shift (20.11: a fan the person had been writing to bought an old PPV while nobody held
+  // the page): «Это моё» on its own row, the claim of «Ещё → Найти продажу» (`claimableSales`, shift-handins.ts) — of
+  // the last CLAIMABLE_DAYS days, in no report of the person's but this one. Offered only to the person who last wrote
+  // to the fan before the purchase (the rule's own 48 hours): a sale nobody worked for (a renewal at night) stays
+  // nobody's on the board, and of two chatters only one is offered it. Hub takes it as the person's line while the
+  // report is edited; a report handed in opens for «Правка» first (`mayAct` «reopen»).
   const claimFrom = now.getTime() - CLAIMABLE_DAYS * DAY_MS;
   const nobodys = own && !preview && (mayAct(actor, "edit", phase) || mayAct(actor, "reopen", phase))
-    ? before.filter((sale) => sale.home?.home === "nobody" && sale.occurredAt.getTime() >= claimFrom)
+    ? before.filter((sale) => sale.home?.home === "nobody" && sale.fan.fanRef !== null && sale.occurredAt.getTime() >= claimFrom)
     : [];
-  const reportedBefore = nobodys.length === 0 ? new Map<number, { handinId: number }>()
+  const lastWriters = await listSaleLastWriters(db, {
+    hours: SALE_LAST_WRITER_HOURS,
+    sales: nobodys.map((sale) => ({ transactionId: sale.transactionId, pageId: sale.pageId, fanRef: sale.fan.fanRef!, at: sale.occurredAt })),
+  });
+  const wrote = nobodys.filter((sale) => {
+    const writer = lastWriters.get(sale.transactionId);
+    return writer !== undefined && subject.userIds.includes(writer);
+  });
+  const reportedBefore = wrote.length === 0 ? new Map<number, { handinId: number }>()
     : await listReportedSales(db, { userIds: subject.userIds, since: new Date(claimFrom - 3 * DAY_MS).toISOString().slice(0, 10) });
-  const claimable = new Set(nobodys
+  const claimable = new Set(wrote
     .filter((sale) => {
       const held = reportedBefore.get(sale.transactionId);
       return held === undefined || held.handinId === handin?.id;
