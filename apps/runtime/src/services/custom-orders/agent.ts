@@ -24,7 +24,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../auth.ts";
 import { AppError, ConflictError } from "../errors.ts";
 import {
-  applyCustomStep, cardTextOf, customLeaderContext, messageWire, orderMessagesOf, orderWire, recordCustomOrder,
+  agentOrderBase, applyCustomStep, cardTextOf, customLeaderContext, messageWire, orderMessagesOf, recordCustomOrder,
   type CustomActor, type CustomEventResult, type CustomLeaderContext, type CustomMessageInput, type CustomStep,
 } from "./index.ts";
 import { reportUnmatchedCards } from "./checks.ts";
@@ -65,8 +65,7 @@ async function agentOrderOf(app: AgentApp, order: CustomOrderRow, now: Date): Pr
 }
 
 function agentWire(order: CustomOrderRow, messages: AgentCustomOrder["messages"], now: Date, leaders: CustomLeaderContext | null): AgentCustomOrder {
-  const { paidGrossMills: _gross, paidNetMills: _net, ...wire } = orderWire(order, now, leaders);
-  return { ...wire, cardText: cardTextOf(order), sourceText: order.sourceText, messages };
+  return { ...agentOrderBase(order, now, leaders), cardText: cardTextOf(order), sourceText: order.sourceText, messages };
 }
 
 export async function agentListCustomOrders(app: AgentApp, scope: AgentCustomScope, query: AgentCustomOrdersQuery, now: Date = new Date()) {

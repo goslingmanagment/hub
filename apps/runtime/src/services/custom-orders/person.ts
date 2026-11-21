@@ -12,7 +12,7 @@ import type { HumanAuthPrincipal } from "../auth.ts";
 import { ForbiddenError, NotFoundError } from "../errors.ts";
 import { pagesOfModels, personOfLogin, teamFactsFor, teamsOfPerson } from "../teams.ts";
 import {
-  applyCustomStep, cardTextOf, customLeaderContext, messageWire, notAllowed, orderMessagesOf, orderWire,
+  agentOrderBase, applyCustomStep, cardTextOf, customLeaderContext, messageWire, notAllowed, orderMessagesOf,
   type CustomActor, type CustomLeaderContext, type CustomStep,
 } from "./index.ts";
 import { leadsPhaseOf, ledPhasesOf } from "./leaders.ts";
@@ -67,8 +67,7 @@ function inScope(scope: ShootingScope, order: { pageId: number | null }): boolea
 }
 
 function wireOf(order: CustomOrderRow, messages: AgentCustomOrder["messages"], now: Date, leaders: CustomLeaderContext): AgentCustomOrder {
-  const { paidGrossMills: _gross, paidNetMills: _net, ...wire } = orderWire(order, now, leaders);
-  return { ...wire, cardText: cardTextOf(order), sourceText: order.sourceText, messages };
+  return { ...agentOrderBase(order, now, leaders), cardText: cardTextOf(order), sourceText: order.sourceText, messages };
 }
 
 /**

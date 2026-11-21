@@ -998,7 +998,7 @@ async function execCount(tx: Db["db"], query: SQL): Promise<number> {
 
 /** Non-cascade FKs to fans need a curated stance; an unmapped one means a
  * new table joined the fan graph without an erasure decision — fail loudly. */
-const FAN_FK_CURATED = new Set(["transactions", "page_dm_threads", "page_fan_identities", "fan_earnings_stats", "fan_links", "custom_orders"]);
+const FAN_FK_CURATED = new Set(["transactions", "page_dm_threads", "page_fan_identities", "fan_earnings_stats", "fan_links", "custom_orders", "custom_findings"]);
 
 /** How the fan-scope plan reaches a fan-ref column's row. */
 export type FanRefErasureReach =
@@ -1173,10 +1173,11 @@ export interface FanTextErasureColumn {
 }
 
 /**
- * The work objects about a sale (0382 matters and history, 0400 shift reports, 0404 claims and decisions), whose every
- * column of text or JSON is accounted for in `FAN_TEXT_ERASURE_COLUMNS`. Words have no column shape a pattern could
- * find (the fan-ref ratchet above hunts ids), so the census is by table: a new text column on one of these tables fails
- * `tests/erasure-fan-ref-columns.integration.test.ts` until it is listed here with its stance.
+ * The work objects about a sale (0382 matters and history, 0400 shift reports, 0404 claims and decisions, 0399 and 0436
+ * custom orders), whose every column of text or JSON is accounted for in `FAN_TEXT_ERASURE_COLUMNS`. Words have no
+ * column shape a pattern could find (the fan-ref ratchet above hunts ids), so the census is by table: a new text column
+ * on one of these tables fails `tests/erasure-fan-ref-columns.integration.test.ts` until it is listed here with its
+ * stance.
  */
 export const FAN_TEXT_ERASURE_TABLES = [
   "matters",
@@ -1190,6 +1191,11 @@ export const FAN_TEXT_ERASURE_TABLES = [
   // The «Отчёт» board (0412): what «Сдать смену» records, and Gengar's cards on it.
   "shift_handin_candidates",
   "shift_handin_proposals",
+  // Custom orders (0399, 0436): the order, a trace of a custom with no order (a sale of the fan among them), and the
+  // sales and messages a person took off an order.
+  "custom_orders",
+  "custom_findings",
+  "custom_order_rejections",
 ] as const;
 
 const ENUM = "an enum the table's CHECK holds to its list";
@@ -1288,6 +1294,34 @@ export const FAN_TEXT_ERASURE_COLUMNS: readonly FanTextErasureColumn[] = [
   { column: "shift_handin_proposals.note", stance: "cleared", target: "shift_handin_proposals", why: "the comment Gengar proposed on the fan's sale" },
   { column: "shift_handin_proposals.why", stance: "cleared", target: "shift_handin_proposals", why: "Gengar's words of why, read from the fan's chat" },
   { column: "shift_handin_proposals.message_refs", stance: "cleared", target: "shift_handin_proposals", why: "the references of the fan's messages Gengar read" },
+  // Custom orders (0399, 0436): the order stays and loses what names the fan and his words; the marks stay.
+  { column: "custom_orders.buyer", stance: "cleared", target: "custom_orders", why: "the buyer as the card names him (a link or a name)" },
+  { column: "custom_orders.conversation_ref", stance: "cleared", target: "custom_orders", why: "the fan's chat on the page" },
+  { column: "custom_orders.card", stance: "cleared", target: "custom_orders", why: "the card's fields in his words go (`CUSTOM_CARD_FAN_TEXTS`); the price, the length, the face and the parts stay" },
+  { column: "custom_orders.state", stance: "no_words", why: ENUM },
+  { column: "custom_orders.state_note", stance: "cleared", target: "custom_orders", why: "a refusal's reason, what a revision or a partial delivery is about: free text about the fan's order" },
+  { column: "custom_orders.state_ref", stance: "no_words", why: "the link of the model's group's Telegram message the state comes from" },
+  { column: "custom_orders.given_message_ref", stance: "no_words", why: "the page's platform message that carried the files: an id" },
+  { column: "custom_orders.origin", stance: "no_words", why: ENUM },
+  { column: "custom_orders.contentops_ref", stance: "no_words", why: "ContentOps' order reference (`<model>/<id>`)" },
+  { column: "custom_orders.source_text", stance: "cleared", target: "custom_orders", why: "the card's whole text as posted in Telegram" },
+  { column: "custom_orders.parts_done", stance: "no_words", why: "the parts ready: video, photos" },
+  { column: "custom_orders.person_fields", stance: "no_words", why: "the names of the card's fields a person edited" },
+  { column: "custom_orders.paid_word", stance: "cleared", target: "custom_orders", why: "the owner's note goes; the word's kind, who and when stay (the order stays paid by it)" },
+  { column: "custom_orders.hold_reason", stance: "cleared", target: "custom_orders", why: "its words become «фан стёрт»: the order stays on hold, the reason goes" },
+  { column: "custom_orders.fan_asked_ref", stance: "no_words", why: "the platform id of the fan's message «where is it» (as given_message_ref, an id)" },
+  { column: "custom_orders.issue", stance: "cleared", target: "custom_orders", why: "the agent's sentence becomes «фан стёрт»: the issue stands, its words go" },
+  { column: "custom_orders.sent_message_ref", stance: "no_words", why: "the page's platform message that carried the files, not bought yet: an id" },
+  // A trace of a custom with no order (0436): its source, status, sums and times stay; the fan, the quote and the
+  // reference of his chat go.
+  { column: "custom_findings.source", stance: "no_words", why: ENUM },
+  { column: "custom_findings.ref", stance: "cleared", target: "custom_findings", why: "a reference into the fan's chat (`fan_chat`) becomes `erased:<id>`; a sale's id, a Telegram link of the team's chats and a report line stay" },
+  { column: "custom_findings.quote", stance: "cleared", target: "custom_findings", why: "the words the finding quotes" },
+  { column: "custom_findings.status", stance: "no_words", why: ENUM },
+  { column: "custom_findings.dismiss_reason", stance: "no_words", why: ENUM },
+  // Undo remembered (0436): which sale or message a person took off an order.
+  { column: "custom_order_rejections.kind", stance: "no_words", why: ENUM },
+  { column: "custom_order_rejections.ref", stance: "no_words", why: "the sale's id or the platform message's id" },
 ];
 
 /** The words Hub's writers put in a matter's evidence and in an object event's changes: a person's note (a claim's
@@ -2059,8 +2093,10 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
 
   // Custom orders (0399, package I): the order is the agency's work and stays; what names the fan goes — the
   // link to him, the buyer's string, his chat, the card's posted text and its fields in his words (what he asked
-  // for, the name said in the video, notes, references: CUSTOM_CARD_FAN_TEXTS). The price, the length, the face and
-  // the parts stay. The order shows «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK
+  // for, the name said in the video, notes, references: CUSTOM_CARD_FAN_TEXTS), and the words of its marks (0436): the
+  // hold's reason and the issue's sentence become «фан стёрт», the owner's note on the payment goes — the order stays
+  // on hold, its issue stands, its word holds. The price, the length, the face and the parts stay. The order shows
+  // «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK
   // would only null the link). An order no fan was matched for is his when its buyer's string names him
   // (`buyerNamesFan`) on one of the platform's pages or on no known page: by the platform's number — his alone by
   // itself — or by his login, and then only while no other fan of the order's page (of the platform's pages, for
@@ -2127,8 +2163,28 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       update custom_orders
       set fan_id = null, buyer = null, conversation_ref = null, source_text = null, state_note = null,
           card = card - ${sql.param([...CUSTOM_CARD_FAN_TEXTS])}::text[],
+          hold_reason = case when hold_reason is not null then ${MATTER_FAN_ERASED} end,
+          issue = case when issue is not null then jsonb_set(issue, '{text}', to_jsonb(${MATTER_FAN_ERASED}::text)) end,
+          paid_word = case when paid_word is not null then paid_word - 'note' end,
           fan_erased_at = coalesce(fan_erased_at, now()), updated_at = now(), version = version + 1
       where ${customOrderPred}`),
+  });
+
+  // Traces of a custom with no order (0436) about the fan: his own (`fan_id`), and a finding of one of his sales. The
+  // finding stays — its source, status, sums, times and order —, the fan, the quote and the reference into his chat go
+  // (`erased:<id>` keeps `(source, ref)` unique). Before the fans row goes (its FK would only null the link) and before
+  // the transactions lose him.
+  const customFindingPred = sql`(fan_id = ${fanId} or (source = 'sale' and ref in (select id::text from transactions where ${txnPred})))
+    and (fan_id is not null or quote is not null or (source = 'fan_chat' and ref not like 'erased:%'))`;
+  targets.push({
+    plane: "hot",
+    target: "custom_findings",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from custom_findings where ${customFindingPred}`),
+    run: (tx) => execCount(tx, sql`
+      update custom_findings
+      set fan_id = null, quote = null, ref = case when source = 'fan_chat' then 'erased:' || id::text else ref end
+      where ${customFindingPred}`),
   });
 
   // Transactions: the money moved — anonymize, never delete (fan scope; `txnPred` above).
@@ -2318,7 +2374,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["client_outreaches", "page_id"],
     // Chat Memory week 4: the page's customs (0310).
     ["fan_customs", "page_id"],
-    // Custom orders (0399): the page's orders; their payments, cards and messages go with them by FK.
+    // A trace of a custom with no order on the page (0436), before the orders it may name.
+    ["custom_findings", "page_id"],
+    // Custom orders (0399): the page's orders; their payments, cards, messages and rejections go with them by FK.
     ["custom_orders", "page_id"],
     // Questions to whoever decides (0418): the page's.
     ["team_questions", "page_id"],

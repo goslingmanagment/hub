@@ -18,7 +18,9 @@ function order(id: number, fields: Partial<CustomOrderRow>): CustomOrderRow {
     fanDisplayName: null, buyer: null, fanErasedAt: null, conversationRef: null, card: { task: "Заказ" }, deadlineOn: null, state: "recorded",
     stateAt: NOW, stateNote: null, stateRef: null, givenMessageRef: null, givenAt: null, acceptedByUserId: 11, acceptedBy: "alice",
     acceptedByName: "Alice", origin: "agent", contentopsRef: null, sourceText: null, partsDone: [], shotByHandAt: null, personFields: [], version: 1, openRevisions: 0,
-    createdAt: NOW, updatedAt: NOW, paidGrossMills: 0, paidNetMills: 0, payments: 0, firstPaidAt: null, telegramRefs: [], ...fields,
+    createdAt: NOW, updatedAt: NOW, paidGrossMills: 0, paidNetMills: 0, payments: 0, firstPaidAt: null, paymentReversed: false, telegramRefs: [],
+    priceMills: null, deadlineDefault: false, paidWord: null, holdReason: null, fanAskedAt: null, fanAskedRef: null, issue: null, sentAt: null,
+    sentMessageRef: null, ...fields,
   };
 }
 

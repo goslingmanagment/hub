@@ -241523,6 +241523,226 @@
                               }
                             ]
                           },
+                          "dueLeftDays": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deadlineDefault": {
+                            "type": "boolean"
+                          },
+                          "facts": {
+                            "type": "object",
+                            "properties": {
+                              "paid": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "atModel": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "shot": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "given": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "part",
+                                      "no",
+                                      "wait",
+                                      "conflict",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "value"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "paid",
+                              "atModel",
+                              "shot",
+                              "given"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "paidWord": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "gift",
+                                      "off_platform"
+                                    ]
+                                  },
+                                  "note": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "by": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "note",
+                                  "by",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "holdReason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "issue": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "text": {
+                                    "type": "string"
+                                  },
+                                  "by": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "text",
+                                  "by",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "fanAskedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sentAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "partsDone": {
                             "type": "array",
                             "items": {
@@ -241580,6 +241800,15 @@
                           "contentopsRef",
                           "origin",
                           "overdueDays",
+                          "dueLeftDays",
+                          "deadlineDefault",
+                          "facts",
+                          "priceMills",
+                          "paidWord",
+                          "holdReason",
+                          "issue",
+                          "fanAskedAt",
+                          "sentAt",
                           "partsDone",
                           "openRevisions",
                           "version",
@@ -242339,6 +242568,226 @@
                             }
                           ]
                         },
+                        "dueLeftDays": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "deadlineDefault": {
+                          "type": "boolean"
+                        },
+                        "facts": {
+                          "type": "object",
+                          "properties": {
+                            "paid": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "atModel": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "shot": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "given": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "paid",
+                            "atModel",
+                            "shot",
+                            "given"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "priceMills": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "paidWord": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "gift",
+                                    "off_platform"
+                                  ]
+                                },
+                                "note": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "note",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "holdReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "issue": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "text": {
+                                  "type": "string"
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "text",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fanAskedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "sentAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "partsDone": {
                           "type": "array",
                           "items": {
@@ -242396,6 +242845,15 @@
                         "contentopsRef",
                         "origin",
                         "overdueDays",
+                        "dueLeftDays",
+                        "deadlineDefault",
+                        "facts",
+                        "priceMills",
+                        "paidWord",
+                        "holdReason",
+                        "issue",
+                        "fanAskedAt",
+                        "sentAt",
                         "partsDone",
                         "openRevisions",
                         "version",
@@ -243480,6 +243938,226 @@
                             }
                           ]
                         },
+                        "dueLeftDays": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "deadlineDefault": {
+                          "type": "boolean"
+                        },
+                        "facts": {
+                          "type": "object",
+                          "properties": {
+                            "paid": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "atModel": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "shot": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "given": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "paid",
+                            "atModel",
+                            "shot",
+                            "given"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "priceMills": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "paidWord": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "gift",
+                                    "off_platform"
+                                  ]
+                                },
+                                "note": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "note",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "holdReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "issue": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "text": {
+                                  "type": "string"
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "text",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fanAskedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "sentAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "partsDone": {
                           "type": "array",
                           "items": {
@@ -243537,6 +244215,15 @@
                         "contentopsRef",
                         "origin",
                         "overdueDays",
+                        "dueLeftDays",
+                        "deadlineDefault",
+                        "facts",
+                        "priceMills",
+                        "paidWord",
+                        "holdReason",
+                        "issue",
+                        "fanAskedAt",
+                        "sentAt",
                         "partsDone",
                         "openRevisions",
                         "version",
@@ -244811,6 +245498,226 @@
                             }
                           ]
                         },
+                        "dueLeftDays": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "deadlineDefault": {
+                          "type": "boolean"
+                        },
+                        "facts": {
+                          "type": "object",
+                          "properties": {
+                            "paid": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "atModel": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "shot": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "given": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string",
+                                  "enum": [
+                                    "yes",
+                                    "part",
+                                    "no",
+                                    "wait",
+                                    "conflict",
+                                    "unknown"
+                                  ]
+                                },
+                                "note": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "value"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "paid",
+                            "atModel",
+                            "shot",
+                            "given"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "priceMills": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "paidWord": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "gift",
+                                    "off_platform"
+                                  ]
+                                },
+                                "note": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "note",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "holdReason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "issue": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "text": {
+                                  "type": "string"
+                                },
+                                "by": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "at": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "text",
+                                "by",
+                                "at"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "fanAskedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "sentAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "partsDone": {
                           "type": "array",
                           "items": {
@@ -244868,6 +245775,15 @@
                         "contentopsRef",
                         "origin",
                         "overdueDays",
+                        "dueLeftDays",
+                        "deadlineDefault",
+                        "facts",
+                        "priceMills",
+                        "paidWord",
+                        "holdReason",
+                        "issue",
+                        "fanAskedAt",
+                        "sentAt",
                         "partsDone",
                         "openRevisions",
                         "version",

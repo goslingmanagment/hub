@@ -57,7 +57,29 @@ export interface CustomOrderRow {
   paidNetMills: number;
   payments: number;
   firstPaidAt: Date | null;
+  /**
+   * A sale that pays the order was taken back: OnlyFans wrote its `<id>:reversal` or `<id>:chargeback` row on the
+   * page (money-negation-guards.ts), whether or not that row counts in the money. A sale missing from a sync window is
+   * not taken back; Fansly writes no such row.
+   */
+  paymentReversed: boolean;
   telegramRefs: string[];
+  /** The agreed total, gross (0436); null — not named. */
+  priceMills: number | null;
+  /** The deadline was set by the system, «примерно» (0436). */
+  deadlineDefault: boolean;
+  /** The owner's word on the payment as stored, `{kind, note, by, at}` (0436). */
+  paidWord: Record<string, unknown> | null;
+  /** Why the order waits on purpose (0436). */
+  holdReason: string | null;
+  /** The fan asked where the order is: when, and his message (0436). */
+  fanAskedAt: Date | null;
+  fanAskedRef: string | null;
+  /** The sources disagree: the agent's sentence as stored, `{text, by, at}` (0436). */
+  issue: Record<string, unknown> | null;
+  /** Every file sent and a priced one not bought yet: when, and the last message that carried one (0436). */
+  sentAt: Date | null;
+  sentMessageRef: string | null;
 }
 
 type Row = Record<string, unknown>;
@@ -106,7 +128,17 @@ function orderOf(row: Row): CustomOrderRow {
     paidNetMills: Number(row.paid_net ?? 0),
     payments: Number(row.payments ?? 0),
     firstPaidAt: date(row.first_paid_at),
+    paymentReversed: row.payment_reversed === true,
     telegramRefs: ((row.telegram_refs as string[] | null) ?? []).filter((ref) => typeof ref === "string"),
+    priceMills: num(row.price_mills),
+    deadlineDefault: row.deadline_default === true,
+    paidWord: (row.paid_word as Record<string, unknown> | null) ?? null,
+    holdReason: (row.hold_reason as string | null) ?? null,
+    fanAskedAt: date(row.fan_asked_at),
+    fanAskedRef: (row.fan_asked_ref as string | null) ?? null,
+    issue: (row.issue as Record<string, unknown> | null) ?? null,
+    sentAt: date(row.sent_at),
+    sentMessageRef: (row.sent_message_ref as string | null) ?? null,
   };
 }
 
@@ -124,7 +156,9 @@ const ORDER_SELECT = sql`
     (select count(*) from custom_order_messages mm where mm.order_id = o.id and mm.kind = 'revision' and mm.done_at is null) as open_revisions,
     o.created_at, o.updated_at,
     coalesce(pay.gross, 0) as paid_gross, coalesce(pay.net, 0) as paid_net, coalesce(pay.n, 0) as payments, pay.first_at as first_paid_at,
-    coalesce(cards.refs, '{}'::text[]) as telegram_refs
+    coalesce(pay.reversed, false) as payment_reversed,
+    coalesce(cards.refs, '{}'::text[]) as telegram_refs,
+    o.price_mills, o.deadline_default, o.paid_word, o.hold_reason, o.fan_asked_at, o.fan_asked_ref, o.issue, o.sent_at, o.sent_message_ref
   from custom_orders o
   left join pages p on p.id = o.page_id
   left join models m on m.id = p.model_id
@@ -134,7 +168,15 @@ const ORDER_SELECT = sql`
   left join people ap on ap.id = apl.person_id
   left join lateral (
     select sum(t.gross_amount_mills) as gross, sum(t.creator_net_amount_mills) as net, count(cp.transaction_id) as n,
-      min(t.occurred_at) as first_at
+      min(t.occurred_at) as first_at,
+      -- OnlyFans writes a sale's reversal or chargeback as a row of its own, '<id>:reversal' / '<id>:chargeback', on the
+      -- same page (money-negation-guards.ts); a guard may write it inactive, it is still the sale taken back. A row
+      -- retired as missing from a sync window is not.
+      bool_or(exists (
+        select 1 from transactions r
+        where r.platform_account_id = t.platform_account_id
+          and r.transaction_id in (t.transaction_id || ':reversal', t.transaction_id || ':chargeback')
+          and r.inactive_reason is distinct from 'missing_from_sync_window')) as reversed
     from custom_order_payments cp left join transactions t on t.id = cp.transaction_id
     where cp.order_id = o.id) pay on true
   left join lateral (
