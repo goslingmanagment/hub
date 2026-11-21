@@ -81,7 +81,7 @@ describe("ownerMenu", () => {
     expect(menu.items[1]!.choice.question).toEqual({ statement: "mine", shareWithUserId: null });
     expect(menu.items[2]!.choice.question).toEqual({ statement: "share", shareWithUserId: 2 });
     expect(menu.foot).toBe("Олег отправил этот PPV, поэтому продажа его. Сейчас он не на смене: продажа уйдёт в его следующую смену. "
-      + "Если смены не будет до 19 нояб., продажа станет ничьей.");
+      + "Если смены не будет до 19\u00a0нояб., продажа станет ничьей.");
   });
 
   it("marks the word asked for while the question waits, and says how to take it back", () => {

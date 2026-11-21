@@ -41,8 +41,8 @@ const clockFormat = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: 
 const dayFormat = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "Europe/Moscow" });
 /** `22:30`, Moscow. */
 export const clock = (iso: string) => clockFormat.format(new Date(iso));
-/** `12 нояб.`, Moscow. */
-export const day = (iso: string) => dayFormat.format(new Date(iso));
+/** `12 нояб.`, Moscow (the day never apart from its month). */
+export const day = (iso: string) => dayFormat.format(new Date(iso)).replace(" ", "\u00a0");
 
 export const plural = (count: number, one: string, few: string, many: string) => ruPlural(count, one, few, many);
 /** `3 продажи` (the number never apart from its word). */
