@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import type { Platform } from "@agency_hub_core/shared";
 
@@ -18,7 +19,16 @@ export interface ClientBootstrapPageRow {
   ofapiBindingGeneration: number;
   /** `pages.default_persona_key` (0326): the persona the page is meant for. */
   defaultPersonaKey: string | null;
+  /**
+   * A test page standing in for a live one (0435): that live page's platform account id and label, which the
+   * extension binds the stand-in by. Null for every other page. Never served as such: the bootstrap names only the
+   * account id, on the stand-in (client-features.ts `clientFeaturePageOf`).
+   */
+  standsInFor: { platformAccountId: string | null; label: string } | null;
 }
+
+/** The live page a stand-in stands in for (0435). */
+const standInTarget = alias(pages, "stand_in_target");
 
 /**
  * The pages the chat-extension bootstrap lists: active and not tombstoned.
@@ -38,7 +48,7 @@ export async function listClientBootstrapPages(
   if (pageIds !== null) {
     clauses.push(inArray(pages.id, [...pageIds]));
   }
-  return db.select({
+  const rows = await db.select({
     id: pages.id,
     label: pages.label,
     platform: pages.platform,
@@ -47,10 +57,17 @@ export async function listClientBootstrapPages(
     platformAccountId: pages.platformAccountId,
     ofapiBindingGeneration: pages.ofapiBindingGeneration,
     defaultPersonaKey: pages.defaultPersonaKey,
+    standsInForLabel: standInTarget.label,
+    standsInForAccountId: standInTarget.platformAccountId,
   }).from(pages)
     .innerJoin(models, eq(models.id, pages.modelId))
+    .leftJoin(standInTarget, eq(standInTarget.id, pages.standsInForPageId))
     .where(and(...clauses))
     .orderBy(models.sortOrder, models.slug, pages.label);
+  return rows.map(({ standsInForLabel, standsInForAccountId, ...row }) => ({
+    ...row,
+    standsInFor: standsInForLabel === null ? null : { platformAccountId: standsInForAccountId, label: standsInForLabel },
+  }));
 }
 
 /**

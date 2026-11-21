@@ -12,6 +12,7 @@ import { aiTranscriptDeepMaxRowsOf } from "./ai-transcript-depth.ts";
 import { clientBootstrapCapabilities, SERVED_CLIENT_CAPABILITIES } from "./client-capabilities.ts";
 import {
   clientBootstrapFlags,
+  clientFeaturePageOf,
   evaluateClientPageFeatures,
   hostBindingFitsPlatform,
   type ClientFeatureLane,
@@ -71,16 +72,18 @@ function toBootstrapPage(
   lanes: ReadonlySet<ClientFeatureLane>,
 ): ClientBootstrapPage {
   const displayName = row.displayName?.trim();
+  // A stand-in (0435) carries its live page's account id; every other page is served as it is.
+  const page = clientFeaturePageOf(row);
   return {
     pageId: row.id,
     pageLabel: row.label,
     title: displayName ? displayName : row.modelName,
     platform: row.platform,
-    platformAccountId: row.platformAccountId,
+    platformAccountId: page.platformAccountId,
     bindingRevision: BINDING_REVISION[row.platform](row),
     features: evaluateClientPageFeatures({
       settings,
-      page: { label: row.label, platform: row.platform, platformAccountId: row.platformAccountId },
+      page,
       served,
       lanes,
     }),
@@ -93,14 +96,17 @@ function toBootstrapPage(
  *  active pages: a binding to a page that is missing, inactive or not granted
  *  is dropped, so the bootstrap never reveals that someone else's page exists.
  *  A binding whose host does not hold accounts of the page's platform (an
- *  OnlyMonster account bound to a Fansly page) is dropped too. */
+ *  OnlyMonster account bound to a Fansly page) is dropped too. A stand-in of
+ *  the caller's (0435) takes the binding of the live page it stands in for:
+ *  only a test login lists stand-ins, and it never lists the live page. */
 function bindingsForCaller(
   hostBindings: Readonly<Record<string, string>>,
   rows: readonly ClientBootstrapPageRow[],
 ): Record<string, number> {
   const pageByLabel = new Map(rows.map((row) => [row.label, row]));
+  const standInByLiveLabel = new Map(rows.flatMap((row) => (row.standsInFor === null ? [] : [[row.standsInFor.label, row] as const])));
   return Object.fromEntries(Object.entries(hostBindings).flatMap(([host, label]) => {
-    const page = pageByLabel.get(label);
+    const page = pageByLabel.get(label) ?? standInByLiveLabel.get(label);
     return page === undefined || !hostBindingFitsPlatform(host, page.platform) ? [] : [[host, page.id] as const];
   }));
 }

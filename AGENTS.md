@@ -168,6 +168,11 @@ the owner's machine (outside this repository); a change that moves a home or add
   `tests/sandbox-realm-background.integration.test.ts`. Seed: `cli.js sandbox:seed [--scenario shift customs matters]`
   (passwords from `SANDBOX_PASSWORD_T_*`); removal `sandbox:remove` is the owner's word only. Nothing real is ever written
   under the test realm, and nothing of it ever reaches a platform, Telegram, the ledger or AI money.
+  A stand-in page (0435, `pages.stands_in_for_page_id`) is a test page standing in for one live Fansly or OnlyFans page:
+  the client bootstrap names the live page's platform account id (and the owner's ChatSpace binding) on it, the only way
+  a real site account binds to the test realm in the released extension; its own `external_page_id` stays null. Seed:
+  `sandbox:seed --stand-in <liveLabel…>` (`test-<liveLabel>`; `shift` then writes its day there). What the extension
+  observes on the real account (pulse, sightings, attributions) lands under the stand-in, behind the wall.
 - Lists in CHECK constraints (agent-key capabilities, person rights) are rewritten whole by every migration that
   widens them: at rebase take the union with main's. A migration's number must be above main's highest: the runner
   refuses a lower one once a higher one is applied.

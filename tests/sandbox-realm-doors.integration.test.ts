@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import argon2 from "argon2";
 
-import { SIGNIN_CLIENTS } from "@agency_hub_core/contracts";
-import { createFanslyPage, createModel, insertPersonLogin, insertPersonRow, type Database } from "@agency_hub_core/db";
+import { SIGNIN_CLIENTS, type ClientBootstrapResponse } from "@agency_hub_core/contracts";
+import { createFanslyPage, createModel, createOnlyFansPage, insertPersonLogin, insertPersonRow, type Database } from "@agency_hub_core/db";
 
 import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -15,11 +15,12 @@ import { handInShiftReport } from "../apps/runtime/src/services/shift-report-boa
 import { syncShiftRowsSince } from "../apps/runtime/src/services/shift-rows.ts";
 import { checkServerGrant, mintServerCode, redeemServerCode } from "../apps/runtime/src/services/signin-handoff.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 // The doors of the test realm (apps/runtime/src/services/sandbox/realm.ts) one by one: the static reports' guard, the
 // sign-in hand-off, every decider of whose a sale is, the writes of the test owner's table, the agent keys' grants,
-// the test team's checker and the AI gateway.
+// the test team's checker, the AI gateway, and the extension's door to a real site account: a stand-in page (0435).
 
 const PASSWORDS = {
   SANDBOX_PASSWORD_T_OWNER: "sandbox-owner-1",
@@ -277,5 +278,79 @@ describe("sandbox:seed --print-invite [code]", () => {
     if (!app) return context.skip();
     await expect(seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "live-chatter" })).rejects.toThrow(/not a login of the test team/);
     await expect(seedSandbox(app, { scenarios: [], env: PASSWORDS, printInvite: "nobody" })).rejects.toThrow(/not a login of the test team/);
+  });
+});
+
+describe("stand-in pages (0435)", () => {
+  const LIVE_FANSLY_ACCOUNT = "412345678901234567";
+  const LIVE_ONLYFANS_ACCOUNT = "312345678";
+
+  it("a test chatter's extension gets the live page's account on its stand-in; a live login's bootstrap is as it was", async (context) => {
+    if (!server || !app || !testDb) return context.skip();
+    const db = app.db as Database;
+    // The live pages' accounts on their sites, an OnlyFans page beside the Fansly one, the owner's ChatSpace binding of
+    // it, and a switch on for every page, so an unbound page would read `binding_missing`.
+    const [lana] = (await db.execute<{ id: string }>(sql`select id from models where slug = 'lana'`)).rows;
+    const liveOf = await createOnlyFansPage(db, { modelId: Number(lana!.id), label: "live-of" });
+    await db.execute(sql`update pages set external_page_id = ${LIVE_FANSLY_ACCOUNT} where label = 'live-1'`);
+    await db.execute(sql`update pages set external_page_id = ${LIVE_ONLYFANS_ACCOUNT}, display_name = 'Lana OF' where id = ${liveOf.id}`);
+    const userOf = async (username: string) => Number((await db.execute<{ id: string }>(sql`select id from users where username = ${username}`)).rows[0]!.id);
+    const anton = await userOf("anton");
+    await db.execute(sql`insert into user_page_assignments (user_id, platform_account_id) values (${anton}, ${liveOf.id})`);
+    const patched = await call("PATCH", "/api/v1/admin/config", cookie.owner, { patches: [
+      { key: "chatExtensionEnabled", value: true },
+      { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { fanPanel: true }, "live-1": { fanPanel: true }, "test-live-1": { fanPanel: true } }) },
+      { key: "chatExtensionHostBindings", value: JSON.stringify({ "onlymonster:36408": "live-of" }) },
+    ] });
+    expect(patched.statusCode, patched.body).toBe(200);
+    const bootstrapOf = async (userId: number) => {
+      const { token } = await issueDeviceTokenForUserId(app!, { userId, label: "extension" });
+      return async () => {
+        const answer = await server!.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers: { authorization: `Bearer ${token}` } });
+        expect(answer.statusCode, answer.body).toBe(200);
+        return { ...(answer.json() as ClientBootstrapResponse), issuedAt: "" };
+      };
+    };
+    const liveChatter = await bootstrapOf(anton);
+    const liveOwner = await bootstrapOf(ids.ownerId);
+    const before = { chatter: await liveChatter(), owner: await liveOwner() };
+    expect(before.chatter.pages.find((page) => page.pageLabel === "live-of")?.platformAccountId).toBe(LIVE_ONLYFANS_ACCOUNT);
+
+    const seeded = await seedSandbox(app, { scenarios: [], env: PASSWORDS, standIn: ["live-1", "live-of"] });
+    expect(seeded.standIns.map((one) => [one.label, one.standsInFor.label])).toEqual([["test-live-1", "live-1"], ["test-live-of", "live-of"]]);
+
+    // A live login's bootstrap is exactly what it was: no stand-in in it, nothing of its pages changed.
+    expect({ chatter: await liveChatter(), owner: await liveOwner() }).toEqual(before);
+    expect(before.owner.pages.map((page) => page.pageLabel).filter((label) => label.startsWith("test-"))).toEqual([]);
+
+    // The test chatter's: each stand-in carries its live page's account and is bound; the owner's ChatSpace binding of
+    // the live page points at the stand-in; the live pages themselves are not there.
+    const test = await (await bootstrapOf(await userOf("t-chat-1")))();
+    const page = (label: string) => test.pages.find((one) => one.pageLabel === label);
+    expect(page("test-live-1")).toMatchObject({ platform: "fansly", platformAccountId: LIVE_FANSLY_ACCOUNT, features: { fanPanel: { available: true } } });
+    expect(page("test-live-of")).toMatchObject({
+      platform: "onlyfans", platformAccountId: LIVE_ONLYFANS_ACCOUNT, title: "Lana OF (тест)", features: { fanPanel: { available: true } },
+    });
+    expect(page("test-of")).toMatchObject({ platformAccountId: null, features: { fanPanel: { available: false, reason: "binding_missing" } } });
+    expect(test.bindingsByHost).toEqual({ "onlymonster:36408": page("test-live-of")!.pageId });
+    expect(test.pages.map((one) => one.pageLabel).filter((label) => !label.startsWith("test-"))).toEqual([]);
+    // The stand-in's own account stays empty: nothing syncs it, and the OnlyFans feed's account check still refuses it.
+    const own = await db.execute<{ external_page_id: string | null }>(sql`select external_page_id from pages where label in ('test-live-1', 'test-live-of')`);
+    expect(own.rows.map((row) => row.external_page_id)).toEqual([null, null]);
+  });
+
+  it("the database refuses a stand-in that is live, of a test page, of another platform, of itself, or a second one", async (context) => {
+    if (!testDb) return context.skip();
+    const id = async (label: string) => Number(((await testDb!.pool.query("select id from pages where label = $1", [label])).rows[0] as { id: string }).id);
+    const [live1, liveOf, test1, testOf, standIn] = (await Promise.all(["live-1", "live-of", "test-1", "test-of", "test-live-1"].map(id))) as [number, number, number, number, number];
+    const standsIn = (pageId: number, target: number) => testDb!.pool.query("update pages set stands_in_for_page_id = $2 where id = $1", [pageId, target]);
+    await expect(standsIn(liveOf, live1)).rejects.toThrow(/is live/u);
+    await expect(standsIn(test1, standIn)).rejects.toThrow(/cannot stand in for the test page/u);
+    await expect(standsIn(testOf, live1)).rejects.toThrow(/another platform/u);
+    await expect(standsIn(test1, test1)).rejects.toThrow(/itself/u);
+    await expect(standsIn(test1, live1)).rejects.toThrow(/pages_stands_in_for_uniq/u);
+    // A seed asked for a test page, or a page that is not there, writes nothing.
+    await expect(seedSandbox(app!, { scenarios: [], env: PASSWORDS, standIn: ["test-1"] })).rejects.toThrow(/is a test page/u);
+    await expect(seedSandbox(app!, { scenarios: [], env: PASSWORDS, standIn: ["nowhere"] })).rejects.toThrow(/No live page/u);
   });
 });

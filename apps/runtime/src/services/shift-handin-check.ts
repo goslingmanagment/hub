@@ -5,6 +5,7 @@ import {
   bumpPagePolls,
   closeMatter,
   findHandinById,
+  findTestOwnerLogin,
   countLateSales,
   findHandinByShift,
   findHandinPersonOfUser,
@@ -44,6 +45,7 @@ import {
   type Database,
   type HandinVersionLine,
   type MatterActor,
+  type MatterOwner,
 } from "@agency_hub_core/db";
 import { SHIFT_REPORT_CHECK_MINUTES } from "@agency_hub_core/contracts";
 import { formatUsdFromMills } from "@agency_hub_core/shared";
@@ -54,6 +56,7 @@ import { ForbiddenError, NotFoundError } from "./errors.ts";
 import { clientCaptureProducer } from "./ingest-observations.ts";
 import { reportSums } from "./sale-claim-rules.ts";
 import { SALE_RULE } from "./sale-rule.ts";
+import { testPageIds } from "./sandbox/realm.ts";
 import { disputeDecider, hubPending, phaseOf, postPagesDiffer } from "./shift-report-board-view.ts";
 import { draftFacts, draftLines, pageCatalog, postPagesOf, subjectOf, type PageCatalog, type Subject } from "./shift-report-draft.ts";
 import { checkLetsConfirm } from "./shift-report-phases.ts";
@@ -331,22 +334,32 @@ export async function syncCheckMatters(app: CheckApp, now: Date): Promise<number
     if (opened.transition !== "unchanged") touched += 1;
   };
   const decider = disputeDecider({ modelSlug: null });
+  // A test page's matter is the test team's owner's, by name (0414: never a role); with no test owner it waits for no
+  // one. The test team's pages (a stand-in's sightings of its real account too, 0435) never stop the live ones' pass.
+  const testPages = await testPageIds({ db });
+  const testOwner = testPages.size > 0 ? await findTestOwnerLogin(db) : null;
+  const ownerOn = (pageId: number, live: MatterOwner): MatterOwner | null =>
+    (!testPages.has(pageId) ? live : testOwner === null ? null : { userId: testOwner.userId });
   for (const one of await listSightingsUnmatchedSince(db, new Date(now.getTime() - SIGHTING_UNMATCHED_MS))) {
+    const owner = ownerOn(one.pageId, decider.kind === "owner" ? { role: "owner" } : { userId: decider.user?.userId ?? 0 });
+    if (owner === null) continue;
     await open({
       key: `${SIGHTING_UNMATCHED_KIND}:${one.id}`, kind: SIGHTING_UNMATCHED_KIND, source: "server",
       title: `Есть на сайте, нет в Hub: ${one.pageLabel}, ${formatUsdFromMills(one.netMills)}, ${one.occurredAt.toISOString().slice(0, 10)}`,
       object: { type: "sale_sighting", id: String(one.id) }, pageIds: [one.pageId],
-      owner: decider.kind === "owner" ? { role: "owner" } : { userId: decider.user?.userId ?? 0 }, money: true,
+      owner, money: true,
       evidence: { sightingId: one.id, netMills: one.netMills, occurredAt: one.occurredAt.toISOString() }, link: null,
     });
   }
   const offers = await listOpenPotOffers(db);
   const names = await listHandinNames(db, offers.map((one) => one.userId));
   for (const one of offers) {
+    const owner = ownerOn(one.pageId, { role: "owner" });
+    if (owner === null) continue;
     await open({
       key: `${POT_OFFER_KIND}:${one.transactionId}`, kind: POT_OFFER_KIND, source: "server",
       title: `${names.get(one.userId) ?? "Чаттер"} отдаёт продажу в общак: ${formatUsdFromMills(one.netMills)}, ${one.occurredAt.toISOString().slice(0, 10)}`,
-      object: { type: "transaction", id: String(one.transactionId) }, pageIds: [one.pageId], owner: { role: "owner" }, money: true,
+      object: { type: "transaction", id: String(one.transactionId) }, pageIds: [one.pageId], owner, money: true,
       evidence: { transactionId: one.transactionId, shiftId: one.shiftId, netMills: one.netMills }, link: `/workboard/waiting?dispute=${one.transactionId}#questions`,
     });
   }

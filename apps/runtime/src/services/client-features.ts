@@ -246,8 +246,29 @@ export const CLIENT_FEATURE_CODE_DEFAULTS: ClientFeatureSettings = Object.freeze
 export interface ClientFeaturePage {
   label: string;
   platform: Platform;
-  /** `pages.external_page_id`: what the extension binds a host account by. */
+  /** `pages.external_page_id`: what the extension binds a host account by. A stand-in's is its live page's (0435). */
   platformAccountId: string | null;
+  /** A stand-in's live page (0435): the owner's host binding of that page binds the stand-in for its test login. */
+  standsInForLabel?: string | null;
+}
+
+/**
+ * A page as the bootstrap serves it and every feature check reads it. A test page standing in for a live one (0435)
+ * carries the live page's platform account id, so a test login's extension binds the live page's real account to the
+ * stand-in; nothing else of the live page is named. Every other page is read as it is.
+ */
+export function clientFeaturePageOf(row: {
+  label: string;
+  platform: Platform;
+  platformAccountId: string | null;
+  standsInFor: { platformAccountId: string | null; label: string } | null;
+}): ClientFeaturePage {
+  return {
+    label: row.label,
+    platform: row.platform,
+    platformAccountId: row.platformAccountId ?? row.standsInFor?.platformAccountId ?? null,
+    standsInForLabel: row.standsInFor?.label ?? null,
+  };
 }
 
 function unavailable(reason: ClientFeatureUnavailableReason): ClientFeatureAvailability {
@@ -260,10 +281,12 @@ function flagValue(settings: ClientFeatureSettings, scope: string, flag: ClientF
 }
 
 /** The extension can bind a host account to the page: by the page's platform
- *  account id, or by an explicit owner binding from a host of the page's platform. */
+ *  account id, or by an explicit owner binding from a host of the page's platform
+ *  (of a stand-in: the binding of its live page too, 0435). */
 function bindable(settings: ClientFeatureSettings, page: ClientFeaturePage): boolean {
   return page.platformAccountId !== null || Object.entries(settings.hostBindings).some(
-    ([hostAccount, label]) => label === page.label && hostBindingFitsPlatform(hostAccount, page.platform),
+    ([hostAccount, label]) => (label === page.label || label === page.standsInForLabel)
+      && hostBindingFitsPlatform(hostAccount, page.platform),
   );
 }
 

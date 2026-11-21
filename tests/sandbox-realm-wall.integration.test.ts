@@ -13,9 +13,10 @@ import { issueAgentKey } from "../apps/runtime/src/services/agent-keys.ts";
 import { SANDBOX_OWNER_OPERATIONS } from "../apps/runtime/src/services/sandbox/owner-operations.ts";
 import { SANDBOX_MODEL, seedSandbox } from "../apps/runtime/src/services/sandbox/seed.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
+import { SIGHTING_UNMATCHED_KIND, syncCheckMatters } from "../apps/runtime/src/services/shift-handin-check.ts";
 import { syncShiftRowsSince } from "../apps/runtime/src/services/shift-rows.ts";
 import { runCustomOrderChecks } from "../apps/runtime/src/services/custom-orders/checks.ts";
-import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
+import { issueChatterDeviceToken, issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
@@ -23,9 +24,10 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 //
 // 1. every READ of the contract (every GET, and the agent plane's POST reads), called as the live owner, a live
 //    chatter and keys shaped like the ledger's, Gengar's and the /OS people mirror's, answers the SAME before the test
-//    team is seeded, after it is seeded, after its `shift`, `customs` and `matters` scenarios and the ordinary jobs
-//    ran, and after its people worked (signed in, beat, read). Only clock fields are set aside (`VOLATILE_KEYS`, and
-//    timestamps of the run's own minutes), by name;
+//    team is seeded, after it is seeded with stand-ins of both live pages (0435), after its `shift`, `customs` and
+//    `matters` scenarios and the ordinary jobs ran, and after its people worked (signed in, beat on the stand-ins,
+//    reported the site's sales there, read). Only clock fields are set aside (`VOLATILE_KEYS`, and timestamps of the
+//    run's own minutes), by name;
 // 2. `t-owner` (the owner of the test team) is refused every operation not on SANDBOX_OWNER_OPERATIONS with 403, and
 //    what it may read names nothing live.
 //
@@ -370,25 +372,49 @@ describe("the wall of the test realm", () => {
 
     const before = await snapshot(reads);
 
-    await seedSandbox(app, { scenarios: [], env: SANDBOX_PASSWORDS });
+    const standIn = [live.pageLabel, "live-of"];
+    await seedSandbox(app, { scenarios: [], env: SANDBOX_PASSWORDS, standIn });
     const seeded = await snapshot(reads);
     expect(differences(before, seeded, "seeded")).toEqual([]);
 
     const now = new Date();
-    await seedSandbox(app, { scenarios: ["shift", "customs", "matters", "publications"], env: SANDBOX_PASSWORDS, now });
+    const scenarioSeed = await seedSandbox(app, { scenarios: ["shift", "customs", "matters", "publications"], env: SANDBOX_PASSWORDS, now, standIn });
+    // The day of `shift` is on the stand-ins, none of it on the fixed OnlyFans test page.
+    const shiftSales = (await testDb.pool.query(`select p.label, count(*)::int as n from transactions t join pages p on p.id = t.platform_account_id
+      where t.source = 'sandbox' and p.label in ('test-${live.pageLabel}', 'test-live-of', 'test-of') group by p.label order by p.label`)).rows as Array<{ label: string; n: number }>;
+    expect(shiftSales).toEqual([{ label: "test-live-1", n: 7 }, { label: "test-live-of", n: 2 }]);
+    expect(scenarioSeed.scenarios.shift).toMatchObject({ sales: 9 });
     await syncShiftRowsSince(app.db, { from: new Date(now.getTime() - 3 * DAY_MS), now });
     await refreshSaleHomes(app.db, { from: new Date(now.getTime() - 3 * DAY_MS), to: now, now });
     await runCustomOrderChecks(app, now);
     const scenarios = await snapshot(reads);
     expect(differences(before, scenarios, "scenarios")).toEqual([]);
 
-    // The test team works: its owner and a chatter sign in and read; the chatter's extension beats.
+    // The test team works: its owner and a chatter sign in and read; the chatter's extension, on the live pages' real
+    // accounts, beats on the stand-ins and reports the site's sales there.
     tOwnerCookie = await login("t-owner", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_OWNER);
     const chat = await login("t-chat-1", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_CHAT_1);
     for (const read of reads.filter((one) => SANDBOX_OWNER_OPERATIONS.has(one.key))) {
       await answer(read, { name: "t-owner", headers: { cookie: tOwnerCookie } });
       await answer(read, { name: "t-chat-1", headers: { cookie: chat } });
     }
+    const [tChat] = (await testDb.pool.query("select id from users where username = 't-chat-1'")).rows as Array<{ id: string }>;
+    const extension = { authorization: `Bearer ${(await issueDeviceTokenForUserId(app, { userId: Number(tChat!.id), label: "extension" })).token}` };
+    const beat = await server.inject({ method: "POST", url: "/api/v1/client/activity", headers: extension, payload: {
+      instanceId: "sandbox-wall-test", pages: [{ pageLabel: `test-${live.pageLabel}`, idleMs: 0 }, { pageLabel: "test-live-of", idleMs: 0 }],
+    } });
+    expect(beat.statusCode, beat.body).toBe(200);
+    expect(beat.json()).toMatchObject({ recorded: 2 });
+    const sighted = await server.inject({ method: "POST", url: "/api/v1/client/sale-sightings", headers: extension, payload: {
+      pageLabel: `test-${live.pageLabel}`,
+      rows: [{ platformRef: "777000000000000001", kind: "tip", occurredAt: new Date(now.getTime() - 60_000).toISOString(), grossMills: 10_000, netMills: 8_000, fanRef: "100000000000000777", fanName: "Фан с сайта" }],
+    } });
+    expect(sighted.statusCode, sighted.body).toBe(200);
+    // Two days on, the sale still not in Hub: the check's matter is the test team's owner's, and the live pass goes on.
+    await syncCheckMatters(app, new Date(now.getTime() + 2 * DAY_MS + 3_600_000));
+    const [unmatched] = (await testDb.pool.query(`select u.username from matters m join users u on u.id = m.owner_user_id
+      where m.kind = $1 and m.state = 'open'`, [SIGHTING_UNMATCHED_KIND])).rows as Array<{ username: string }>;
+    expect(unmatched?.username).toBe("t-owner");
     const worked = await snapshot(reads);
     expect(differences(before, worked, "worked")).toEqual([]);
 
