@@ -111548,6 +111548,390 @@
         }
       }
     },
+    "/api/v1/agent/custom-candidates": {
+      "get": {
+        "summary": "Sales that may be a custom with no order, for the reader to read the chat around (needs write:customs, read:money, read:messages)",
+        "tags": [
+          "agent"
+        ],
+        "description": "Database only, the key's pages only: tips of $40 and more of the last 14 days that pay no order and have no finding, and fans holding a tier that includes a custom whose current period has no resolved finding. Hub records nothing from them.",
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tips": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "saleRef": {
+                            "type": "string"
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "fan": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "platform": {
+                                    "type": "string"
+                                  },
+                                  "fanRef": {
+                                    "type": "string"
+                                  },
+                                  "username": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "displayName": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "platform",
+                                  "fanRef",
+                                  "username",
+                                  "displayName"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "grossMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "note": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "saleRef",
+                          "pageLabel",
+                          "fan",
+                          "grossMills",
+                          "at",
+                          "note"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "tiers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "fan": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "platform": {
+                                    "type": "string"
+                                  },
+                                  "fanRef": {
+                                    "type": "string"
+                                  },
+                                  "username": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "displayName": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "platform",
+                                  "fanRef",
+                                  "username",
+                                  "displayName"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "tierRef": {
+                            "type": "string"
+                          },
+                          "tierName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "endsAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "saleRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "grossMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "at": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "pageLabel",
+                          "fan",
+                          "tierRef",
+                          "tierName",
+                          "endsAt",
+                          "saleRef",
+                          "grossMills",
+                          "at"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tips",
+                    "tiers",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/custom-findings": {
       "post": {
         "summary": "Report the traces of a custom with no order, or a candidate that is no custom (needs write:customs, read:money and read:messages)",
@@ -243393,6 +243777,87 @@
                               "null"
                             ]
                           },
+                          "move": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "who": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "whoKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person",
+                                      "shift",
+                                      "model",
+                                      "fan",
+                                      "owner",
+                                      "none"
+                                    ]
+                                  },
+                                  "what": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "who",
+                                  "whoKind",
+                                  "what"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "burning": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "timer": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "forwarding"
+                                    ]
+                                  },
+                                  "level": {
+                                    "type": "string",
+                                    "enum": [
+                                      "amber",
+                                      "red"
+                                    ]
+                                  },
+                                  "since": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "level",
+                                  "since"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "partsDone": {
                             "type": "array",
                             "items": {
@@ -243459,6 +243924,10 @@
                           "issue",
                           "fanAskedAt",
                           "sentAt",
+                          "move",
+                          "burning",
+                          "reason",
+                          "timer",
                           "partsDone",
                           "openRevisions",
                           "version",
@@ -243553,6 +244022,32 @@
                         "additionalProperties": false
                       }
                     },
+                    "verified": {
+                      "type": "object",
+                      "properties": {
+                        "readerAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "nightlyAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "readerStale": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "readerAt",
+                        "nightlyAt",
+                        "readerStale"
+                      ],
+                      "additionalProperties": false
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -243563,6 +244058,7 @@
                     "orders",
                     "capped",
                     "lookalikes",
+                    "verified",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -244438,6 +244934,87 @@
                             "null"
                           ]
                         },
+                        "move": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "who": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "whoKind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "person",
+                                    "shift",
+                                    "model",
+                                    "fan",
+                                    "owner",
+                                    "none"
+                                  ]
+                                },
+                                "what": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "who",
+                                "whoKind",
+                                "what"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "burning": {
+                          "type": "boolean"
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "timer": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "forwarding"
+                                  ]
+                                },
+                                "level": {
+                                  "type": "string",
+                                  "enum": [
+                                    "amber",
+                                    "red"
+                                  ]
+                                },
+                                "since": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "level",
+                                "since"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "partsDone": {
                           "type": "array",
                           "items": {
@@ -244504,6 +245081,10 @@
                         "issue",
                         "fanAskedAt",
                         "sentAt",
+                        "move",
+                        "burning",
+                        "reason",
+                        "timer",
                         "partsDone",
                         "openRevisions",
                         "version",
@@ -246357,6 +246938,87 @@
                             "null"
                           ]
                         },
+                        "move": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "who": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "whoKind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "person",
+                                    "shift",
+                                    "model",
+                                    "fan",
+                                    "owner",
+                                    "none"
+                                  ]
+                                },
+                                "what": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "who",
+                                "whoKind",
+                                "what"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "burning": {
+                          "type": "boolean"
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "timer": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "forwarding"
+                                  ]
+                                },
+                                "level": {
+                                  "type": "string",
+                                  "enum": [
+                                    "amber",
+                                    "red"
+                                  ]
+                                },
+                                "since": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "level",
+                                "since"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "partsDone": {
                           "type": "array",
                           "items": {
@@ -246423,6 +247085,10 @@
                         "issue",
                         "fanAskedAt",
                         "sentAt",
+                        "move",
+                        "burning",
+                        "reason",
+                        "timer",
                         "partsDone",
                         "openRevisions",
                         "version",
@@ -248086,6 +248752,87 @@
                             "null"
                           ]
                         },
+                        "move": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "who": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "whoKind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "person",
+                                    "shift",
+                                    "model",
+                                    "fan",
+                                    "owner",
+                                    "none"
+                                  ]
+                                },
+                                "what": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "who",
+                                "whoKind",
+                                "what"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "burning": {
+                          "type": "boolean"
+                        },
+                        "reason": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "timer": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "forwarding"
+                                  ]
+                                },
+                                "level": {
+                                  "type": "string",
+                                  "enum": [
+                                    "amber",
+                                    "red"
+                                  ]
+                                },
+                                "since": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "level",
+                                "since"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "partsDone": {
                           "type": "array",
                           "items": {
@@ -248152,6 +248899,10 @@
                         "issue",
                         "fanAskedAt",
                         "sentAt",
+                        "move",
+                        "burning",
+                        "reason",
+                        "timer",
                         "partsDone",
                         "openRevisions",
                         "version",
