@@ -3,9 +3,11 @@
  * dark. Every colour is a token in the block below, the one place a palette lives, each `light-dark(light, dark)` as
  * Workboard's own tokens (packages/ui tokens.css); `color-scheme` picks the side: in a tab Workboard's choice
  * (`data-theme` on <html>, else the system's), in the extension's frame (`.is-frame`) the scheme the frame is given
- * (its `prefers-color-scheme`). Surfaces; the label hierarchy (secondary is the floor for what a chatter must read,
- * tertiary only for what one may skip); one tint (Workboard's clay); green only for «сошлись» and «Учтён»; yellow only
- * for what waits. Type 13 / 15 / 17 / 24 and the total 36; a 4 pt grid.
+ * (its `prefers-color-scheme`). Surfaces; the label hierarchy (secondary is the floor for what a chatter must read, at
+ * least 7:1 on every surface it stands on in both schemes; tertiary at least 4.5:1, only for what one may skip; the
+ * fourth only for lines, rings and what is switched off); one tint (Workboard's clay: its text and the press's label at
+ * least 4.5:1); green only for «сошлись» and «Учтён»; yellow only for what waits (its text at least 4.5:1). Type 13 /
+ * 15 / 17 / 24 and the total 36; a 4 pt grid.
  */
 .rb{
   --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,"Helvetica Neue",Arial,sans-serif;
@@ -21,20 +23,21 @@
   --sep:light-dark(rgba(40,30,20,.09),rgba(255,250,240,.075));
   --line:light-dark(rgba(40,30,20,.16),rgba(255,250,240,.11));
   --l1:light-dark(rgba(28,24,20,.9),rgba(250,248,242,.92));
-  --l2:light-dark(rgba(60,54,46,.64),rgba(240,236,228,.64));
-  --l3:light-dark(rgba(60,54,46,.42),rgba(240,236,228,.42));
+  --l2:light-dark(rgba(60,54,46,.9),rgba(240,236,228,.86));
+  --l3:light-dark(rgba(60,54,46,.74),rgba(240,236,228,.62));
   --l4:light-dark(rgba(60,54,46,.26),rgba(240,236,228,.26));
-  --tint-fill:light-dark(#c9633f,#cf6c4a);
-  --tint-fill-h:light-dark(#bd5933,#d97757);
-  --on-tint:#fff;
-  --tint:light-dark(#b4532f,#ea8a6a);
+  --tint-fill:light-dark(#ad5230,#cf6c4a);
+  --tint-fill-h:light-dark(#964526,#d97757);
+  --on-tint:light-dark(#fff,#1d1c1b);
+  --tint:light-dark(#a84a26,#f09676);
   --tint-soft:light-dark(rgba(201,99,63,.1),rgba(234,138,106,.12));
   --tint-line:light-dark(rgba(201,99,63,.3),rgba(234,138,106,.34));
   --green:light-dark(#248a3d,#45c05e);
   --green-soft:light-dark(rgba(36,138,61,.1),rgba(69,192,94,.12));
-  --yellow:light-dark(#9a6b00,#e6b94a);
+  --yellow:light-dark(#855c00,#e6b94a);
   --yellow-soft:light-dark(rgba(230,185,74,.16),rgba(230,185,74,.075));
   --yellow-line:light-dark(rgba(230,185,74,.4),rgba(230,185,74,.26));
+  --paper:light-dark(#f4f0e8,rgba(255,250,240,.045));
   --shadow-card:0 0 0 1px var(--sep),0 1px 3px light-dark(rgba(40,30,20,.05),rgb(0 0 0 / .2));
   --shadow-pop:0 0 0 .5px light-dark(rgba(40,30,20,.14),rgba(255,250,240,.14)),0 14px 40px light-dark(rgba(40,30,20,.16),rgb(0 0 0 / .5));
   color-scheme:light dark;
@@ -82,7 +85,8 @@
 .rb .top-t{display:flex;align-items:baseline;gap:12px;min-width:0;white-space:nowrap}
 .rb .top-t h1{font:600 17px/24px var(--display);letter-spacing:-.01em}
 .rb .top-d{font-size:15px;color:var(--l2)}
-.rb .ro{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:12px;align-self:center;background:var(--fill);color:var(--l2);font-size:13px;line-height:20px;font-weight:500}
+.rb .ro,.rb .phase{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:12px;align-self:center;background:var(--fill);color:var(--l2);font-size:13px;line-height:20px;font-weight:500}
+.rb .phase{display:none;color:var(--l1)}
 .rb .steps{grid-column:2;display:flex;align-items:center;gap:8px;margin:0;padding:0;list-style:none;font-size:13px;line-height:20px;color:var(--l3);white-space:nowrap}
 .rb .st{display:flex;align-items:center;gap:8px}
 .rb .st+.st::before{content:"";width:20px;height:1px;background:var(--line)}
@@ -110,7 +114,7 @@
 
 /* ── a page: its title row over its card ── */
 .rb .pg-h{position:sticky;top:0;z-index:3;display:flex;align-items:baseline;gap:8px;padding:16px 4px 8px;background:var(--bg)}
-.rb .pg+.pg .pg-h,.rb .mh+.pg .pg-h{padding-top:20px}
+.rb .pg+.pg .pg-h{padding-top:20px}
 .rb .mh+.pg .pg-h{padding-top:8px}
 .rb .pg-n{font:600 17px/24px var(--display);letter-spacing:-.01em}
 .rb .pg-p{font-size:13px;line-height:20px;color:var(--l3)}
@@ -129,7 +133,7 @@
 .rb .row:hover{background:var(--hover)}
 .rb .row.is-sel{background:var(--hover)}
 .rb .row:focus-visible{background:var(--fill)}
-.rb .row.is-hl{animation:rb-hl 2.6s ease-out forwards}
+.rb .row.is-hl{animation:rb-hl 2.6s ease-out}
 @keyframes rb-hl{0%,55%{background:var(--tint-soft)}100%{background:transparent}}
 .rb .ck{grid-column:1;display:grid;place-items:center;width:20px;height:20px;margin-top:2px;border-radius:6px;box-shadow:inset 0 0 0 1.5px var(--l3);color:var(--on-tint)}
 .rb button.ck:hover{box-shadow:inset 0 0 0 1.5px var(--tint)}
@@ -143,9 +147,9 @@
 .rb .tm.is-find,.rb .ref{text-decoration:underline dotted;text-underline-offset:3px;text-decoration-color:var(--l3)}
 .rb .tm.is-find:hover,.rb button.ref:hover{color:var(--tint);text-decoration-color:var(--tint)}
 .rb .ds{grid-column:3;min-width:0}
-.rb .l1{color:var(--l2);overflow-wrap:break-word}
+.rb .l1{color:var(--l2);overflow-wrap:anywhere}
 .rb .l1 b{color:var(--l1);font-weight:500}
-.rb .l2{font-size:13px;line-height:20px;color:var(--l2);overflow-wrap:break-word}
+.rb .l2{font-size:13px;line-height:20px;color:var(--l2);overflow-wrap:anywhere}
 .rb .ref{color:var(--l2);font-variant-numeric:tabular-nums}
 .rb .ref.is-plain{text-decoration:none}
 .rb .why.is-wait{color:var(--yellow)}
@@ -196,8 +200,8 @@
 .rb .fld:focus{box-shadow:inset 0 0 0 1px var(--tint-line),0 0 0 3px var(--tint-soft)}
 .rb textarea.fld{display:block;width:100%;height:auto;padding:8px 12px;resize:none}
 .rb .qw{display:flex;flex-wrap:wrap;gap:8px}
-.rb .qw button{height:28px;padding:0 12px;border-radius:14px;background:var(--fill);color:var(--l2);font-size:13px;line-height:20px;font-weight:500}
-.rb .qw button:hover{background:var(--tint-soft);color:var(--tint)}
+.rb .qw button{height:28px;padding:0 12px;border-radius:14px;background:var(--fill);color:var(--l1);font-size:13px;line-height:20px;font-weight:500}
+.rb .qw button:hover{background:var(--tint-soft);box-shadow:inset 0 0 0 1px var(--tint-line)}
 .rb .gc{display:flex;flex-direction:column;gap:8px;padding:12px 16px;border-radius:12px;background:var(--inner);box-shadow:inset 3px 0 0 var(--tint-fill)}
 .rb .gc-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;font-size:15px;line-height:22px}
 .rb .gc-who{display:inline-flex;align-items:center;gap:6px;align-self:center;font-weight:600;color:var(--tint)}
@@ -269,8 +273,9 @@
 .rb .bk-m{padding:8px 12px 2px;font-size:13px;line-height:20px;font-weight:600}
 .rb .offs{margin-top:8px;font-size:13px;line-height:20px;color:var(--l2)}
 /* «Отчёт учтён»: the receipt */
-.rb .rc{position:relative;margin-bottom:12px;padding:24px 20px 20px;border-radius:12px 12px 0 0;background:var(--inner)}
-.rb .rc::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:7px;background:radial-gradient(circle at 7px 0,var(--inner) 6.5px,transparent 7px) -1px 0/14px 7px repeat-x}
+.rb .rc{position:relative;margin-bottom:12px;padding:24px 20px 20px;border-radius:12px 12px 0 0;background:var(--paper)}
+/* the torn edge: whole scallops end to end, whatever the rail's width */
+.rb .rc::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:7px;background:radial-gradient(circle at 50% 0,var(--paper) 6.5px,transparent 7px) 0 0/14px 7px round no-repeat}
 .rb .rc-ic{display:grid;place-items:center;width:44px;height:44px;margin:0 auto 12px;border-radius:50%;background:var(--green-soft);color:var(--green)}
 .rb .rc-t{text-align:center;font:600 24px/32px var(--display);letter-spacing:-.015em}
 .rb .rc-s{margin-top:4px;text-align:center;font-size:13px;line-height:20px;color:var(--l2);font-variant-numeric:tabular-nums}
@@ -281,10 +286,12 @@
 .rb .rl b{font-weight:500;font-variant-numeric:tabular-nums}
 .rb .rl.is-model span,.rb .rl.is-tot span{color:var(--l1);font-weight:600}
 .rb .rl.is-tot b{font:600 24px/32px var(--display);letter-spacing:-.015em}
+.rb .rc-off{margin-top:12px;font-size:13px;line-height:20px;color:var(--l2)}
 .rb .rc-l{display:inline-block;margin-top:12px}
 
 /* ── floating: «чья», «Ещё», the keys, the windows, the toast ── */
 .rb .menu,.rb .pop{position:fixed;z-index:40;max-width:calc(100vw - 16px);overflow:auto;padding:6px;border-radius:14px;background:var(--elev);box-shadow:var(--shadow-pop)}
+.rb .menu:focus,.rb .pop:focus,.rb .dlg:focus{outline:0}
 .rb .menu{width:360px}
 .rb .pop{width:320px}
 .rb .mn-h{padding:8px 10px 6px;font-size:13px;line-height:20px;color:var(--l2)}
@@ -294,6 +301,7 @@
 .rb .mi-c{color:var(--tint)}
 .rb .mi.is-on .mi-t{font-weight:600}
 .rb .mi-h{font-size:13px;line-height:20px;color:var(--l2);text-align:right}
+.rb .mi:hover .mi-h,.rb .mi:focus-visible .mi-h,.rb .pi:hover span,.rb .pi:focus-visible span{color:var(--l1)}
 .rb .mn-sep{height:1px;margin:6px;background:var(--sep)}
 .rb .mg-h,.rb .mg-r{display:grid;grid-template-columns:minmax(0,1fr) 64px 64px;align-items:center}
 .rb .mg-h{padding:4px 10px 2px;font-size:13px;line-height:20px;font-weight:500;color:var(--l2)}
@@ -332,6 +340,10 @@
 .rb .toast{position:fixed;left:50%;bottom:24px;z-index:60;max-width:min(560px,calc(100vw - 32px));padding:10px 16px;border-radius:12px;background:var(--elev);box-shadow:var(--shadow-pop);font-size:15px;line-height:22px;opacity:0;pointer-events:none;transform:translate(-50%,12px);transition:opacity .18s,transform .18s}
 .rb .toast.is-on{opacity:1;transform:translate(-50%,0)}
 
+/* A word with no place to break (a long login, a pasted link) breaks anywhere rather than pushes the board wider. */
+.rb .ds,.rb .banner .t,.rb .strip .t,.rb .gc-h,.rb .gc-t,.rb .gc-a,.rb .nt .t,.rb .chk li>span,.rb .dr>span,.rb .mn-h,.rb .mn-f,.rb .mi-t,
+.rb .pi,.rb .hint,.rb .fl span,.rb .offs,.rb .rc-off,.rb .toast,.rb .dlg-e{overflow-wrap:anywhere}
+
 /* A laptop: the title and the date over each other, so the steps keep their room. */
 @media (max-width:1279px){
   .rb .top-t{flex-direction:column;align-items:flex-start;gap:0}
@@ -345,6 +357,7 @@
   .rb .rail-b{overflow:visible}
   .rb .top-in{padding:0 16px}
   .rb .steps{display:none}
+  .rb .phase{display:inline-flex}
 }
 @media (prefers-reduced-motion:reduce){
   .rb *,.rb *::before,.rb *::after{animation:none!important;transition:none!important}
