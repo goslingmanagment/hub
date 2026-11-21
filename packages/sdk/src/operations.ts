@@ -132,6 +132,7 @@ export const kernelOperations = {
   agentCapabilities: { method: "GET", path: "/api/v1/agent/capabilities" },
   agentCoverage: { method: "GET", path: "/api/v1/agent/coverage" },
   agentCrossSpenders: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/cross-spenders" },
+  agentCustomCandidates: { method: "GET", path: "/api/v1/agent/custom-candidates" },
   agentCustomCards: { method: "POST", path: "/api/v1/agent/custom-orders/cards" },
   agentCustomFindings: { method: "POST", path: "/api/v1/agent/custom-findings" },
   agentCustomOrderCreate: { method: "POST", path: "/api/v1/agent/custom-orders" },

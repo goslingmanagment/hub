@@ -1,0 +1,175 @@
+import { sql } from "drizzle-orm";
+
+import type { Database } from "../client.ts";
+import { ppvBoughtSql, seenMessageSql } from "./shift-sql.ts";
+
+// Заказ кастома, what the checks pass reads and writes by itself (customs facts spec §6, §7, behind the switch
+// `customsFacts`): the order's finished files and the messages that carried them to the fan, the sent-and-not-opened
+// mark, the system's default deadline. Raw SQL over the tables of 0399/0436 and the media plane (0130, 0136, 0148).
+// Every change of an order is the service's with its history event (services/custom-orders/deliveries.ts).
+
+type Row = Record<string, unknown>;
+const date = (value: unknown) => (value === null || value === undefined ? null : value instanceof Date ? value : new Date(String(value)));
+const ids = (values: readonly number[]) => sql`${sql.param(values.map(String))}::bigint[]`;
+const texts = (values: readonly string[]) => sql`${sql.param([...values])}::text[]`;
+
+/** A finished file of an order: a vault file of a page of its model. */
+export interface CustomOrderFileRow {
+  orderId: number;
+  pageId: number;
+  mediaRef: string;
+  /** When it first appeared (the platform's time of the upload or of the album, else when the hub saw it). */
+  appearedAt: Date;
+}
+
+/**
+ * The finished files of these orders: the vault files on pages of each order's model whose name carries the order's
+ * code (`…_K-<id>_…`: the album member's `custom_filename`, the raw file's `filename`) and that first appeared after the
+ * order's last revision request — a file of before it is the version sent back. Reads only the pages of the orders'
+ * models (the vault rows by their page index); an order of no known page has none.
+ */
+export async function listCustomOrderNamedFiles(db: Database, orderIds: readonly number[]): Promise<CustomOrderFileRow[]> {
+  if (orderIds.length === 0) return [];
+  const result = await db.execute<Row>(sql`
+    with o as (
+      select co.id as order_id, p.model_id,
+        (select max(coalesce(mm.posted_at, mm.added_at)) from custom_order_messages mm where mm.order_id = co.id and mm.kind = 'revision') as revised_at
+      from custom_orders co join pages p on p.id = co.page_id
+      where co.id = any(${ids(orderIds)}) and p.model_id is not null
+    ),
+    model_pages as (select distinct o.model_id, mp.id as page_id from o join pages mp on mp.model_id = o.model_id),
+    named as (
+      select mp.model_id, vm.page_id, vm.media_ref, (regexp_match(vm.custom_filename, '_K-([0-9]{1,15})_'))[1] as code,
+        coalesce(vm.created_at_platform, vm.first_observed_at) as at
+      from model_pages mp join creator_vault_album_members vm on vm.page_id = mp.page_id
+      where vm.vault_kind = 'creator' and vm.custom_filename ~ '_K-[0-9]{1,15}_'
+      union all
+      select mp.model_id, r.page_id, r.media_ref, (regexp_match(r.filename, '_K-([0-9]{1,15})_'))[1],
+        coalesce(r.created_at_platform, r.first_observed_at)
+      from model_pages mp join creator_raw_media r on r.page_id = mp.page_id
+      where r.filename ~ '_K-[0-9]{1,15}_'
+    )
+    select o.order_id, n.page_id, n.media_ref, min(n.at) as appeared_at
+    from named n join o on o.model_id = n.model_id and n.code::bigint = o.order_id
+    group by o.order_id, o.revised_at, n.page_id, n.media_ref
+    having o.revised_at is null or min(n.at) > o.revised_at
+    order by o.order_id, n.page_id, n.media_ref`);
+  return result.rows.map((row) => ({
+    orderId: Number(row.order_id), pageId: Number(row.page_id), mediaRef: String(row.media_ref), appearedAt: date(row.appeared_at)!,
+  }));
+}
+
+/** A page's message that carried a file of an order to one of the order's fan's accounts. */
+export interface CustomFileSendRow {
+  pageId: number;
+  mediaRef: string;
+  messageRef: string;
+  at: Date;
+  /** The message has a price (its own, or an offer's). */
+  priced: boolean;
+  /** A priced message bought, by the one rule (`ppvBoughtSql`); a free one — false. */
+  bought: boolean;
+  /** The purchase sales of it by that fan (Hub's ids; Fansly: by the message's offers), the earliest first. */
+  purchaseIds: number[];
+}
+
+/**
+ * The messages that carried these files to the fan (any of `fanIds`, the accounts of one person), sent after `since`.
+ * The path (verified on production): the vault file's `media_ref` → its offers in `creator_media` (`media_offer_ref`,
+ * `bundle_refs`: a send makes a new offer, never the vault's id) → `message_media_offers` → the page's message. The
+ * recipient is the message's conversation (`page_dm_threads`), never `message_media_offers.fan_platform_user_id` (on
+ * Fansly it holds the page's own id). A message deleted before anyone could see it carried nothing. Every lookup is by
+ * an index from the few files; `message_archive` is read only by its unique key.
+ */
+export async function listCustomFileSends(
+  db: Database,
+  input: { files: ReadonlyArray<{ pageId: number; mediaRef: string }>; fanIds: readonly number[]; since: Date; unseenSeconds: number },
+): Promise<CustomFileSendRow[]> {
+  if (input.files.length === 0 || input.fanIds.length === 0) return [];
+  const result = await db.execute<Row>(sql`
+    with files as (
+      select * from unnest(${ids(input.files.map((file) => file.pageId))}, ${texts(input.files.map((file) => file.mediaRef))}) as f(page_id, media_ref)
+    ),
+    offers as (
+      select f.page_id, f.media_ref, cm.media_offer_ref, cm.bundle_refs
+      from files f join creator_media cm on cm.page_id = f.page_id and cm.media_ref = f.media_ref
+    ),
+    carried as (
+      select o.page_id, o.media_ref, mo.message_ref
+      from offers o join message_media_offers mo on mo.page_id = o.page_id and mo.media_offer_ref = o.media_offer_ref
+      union
+      select o.page_id, o.media_ref, mo.message_ref
+      from offers o cross join lateral unnest(o.bundle_refs) as b(bundle_ref)
+      join message_media_offers mo on mo.page_id = o.page_id and mo.bundle_ref = b.bundle_ref
+    )
+    select c.page_id, c.media_ref, c.message_ref, ma.occurred_at,
+      (coalesce(ma.price_mills, 0) > 0 or exists (
+        select 1 from message_media_offers po where po.page_id = ma.account_id and po.message_ref = ma.message_ref and coalesce(po.price_mills, 0) > 0)) as priced,
+      ${ppvBoughtSql({ pageId: "ma.account_id", platform: "ma.platform", ref: "ma.message_ref", conv: "ma.conversation_ref", at: "ma.occurred_at" })} as bought,
+      array(
+        select t.id from transactions t
+        where t.platform_account_id = ma.account_id and t.fan_id = th.fan_id and t.canonical_type = 'message_purchase' and t.is_active
+          and t.occurred_at >= ma.occurred_at
+          and t.correlation_id in (
+            select x.ref from message_media_offers lo cross join lateral (values (lo.media_offer_ref), (lo.bundle_ref)) as x(ref)
+            where lo.page_id = ma.account_id and lo.message_ref = ma.message_ref and x.ref is not null)
+        order by t.occurred_at, t.id) as purchase_ids
+    from carried c
+    join pages p on p.id = c.page_id
+    join message_archive ma on ma.account_id = c.page_id and ma.platform = p.platform and ma.message_ref = c.message_ref
+    join page_dm_threads th on th.platform_account_id = ma.account_id and th.platform_conversation_id = ma.conversation_ref
+    where ma.is_sent_by_me and ma.occurred_at > ${input.since.toISOString()}::timestamptz
+      and th.fan_id = any(${ids(input.fanIds)})
+      and ${seenMessageSql("ma", input.unseenSeconds)}
+    order by ma.occurred_at, c.message_ref`);
+  return result.rows.map((row) => ({
+    pageId: Number(row.page_id),
+    mediaRef: String(row.media_ref),
+    messageRef: String(row.message_ref),
+    at: date(row.occurred_at)!,
+    priced: row.priced === true,
+    bought: row.priced === true && row.bought === true,
+    purchaseIds: ((row.purchase_ids as unknown[] | null) ?? []).map(Number),
+  }));
+}
+
+/** What a person took off an order (0436, `custom_order_rejections`): the sales and the delivering messages, by kind. */
+export async function listCustomOrderRejectedRefs(db: Database, orderId: number): Promise<{ payment: Set<string>; given: Set<string> }> {
+  const result = await db.execute<Row>(sql`select kind, ref from custom_order_rejections where order_id = ${orderId}`);
+  const out = { payment: new Set<string>(), given: new Set<string>() };
+  for (const row of result.rows) (row.kind === "payment" ? out.payment : out.given).add(String(row.ref));
+  return out;
+}
+
+/**
+ * The order's «отправлен, фан не открыл» (0436): every file was sent and a priced one is not bought yet — the last
+ * message that carried one and its time; null clears it. Answers whether it changed.
+ */
+export async function setCustomOrderSent(db: Database, orderId: number, sent: { messageRef: string; at: Date } | null, now: Date): Promise<boolean> {
+  const at = sent === null ? null : sent.at.toISOString();
+  const ref = sent === null ? null : sent.messageRef;
+  const result = await db.execute(sql`
+    update custom_orders set sent_at = ${at}::timestamptz, sent_message_ref = ${ref}, updated_at = ${now.toISOString()}::timestamptz
+    where id = ${orderId} and (sent_at is distinct from ${at}::timestamptz or sent_message_ref is distinct from ${ref})`);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/** Given: what only an order still waiting for its fan holds goes — the sent mark and the fan's «where is it» (0436). */
+export async function clearCustomOrderWaitMarks(db: Database, orderId: number, now: Date): Promise<void> {
+  await db.execute(sql`
+    update custom_orders set sent_at = null, sent_message_ref = null, fan_asked_at = null, fan_asked_ref = null,
+      updated_at = ${now.toISOString()}::timestamptz
+    where id = ${orderId} and (sent_at is not null or fan_asked_at is not null)`);
+}
+
+/**
+ * The system's deadline of an order that has none (customs facts spec C2): the day given, marked «примерно»
+ * (`deadline_default`), and never one of the person's fields. Only while the order still has no deadline; answers
+ * whether it was set.
+ */
+export async function setCustomOrderDefaultDeadline(db: Database, orderId: number, deadlineOn: string, now: Date): Promise<boolean> {
+  const result = await db.execute(sql`
+    update custom_orders set deadline_on = ${deadlineOn}::date, deadline_default = true, updated_at = ${now.toISOString()}::timestamptz
+    where id = ${orderId} and deadline_on is null`);
+  return (result.rowCount ?? 0) > 0;
+}

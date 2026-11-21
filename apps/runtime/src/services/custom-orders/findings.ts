@@ -8,22 +8,37 @@ import {
   type CustomFindingActionBody,
 } from "@agency_hub_core/contracts";
 import {
+  closeMatter,
+  copyCustomSaleDismissals,
   findCustomFinding,
   findCustomOrder,
   findCustomSale,
   findPageFanByInput,
   findPageSummaryByLabel,
+  insertCustomCardFindings,
   insertCustomFinding,
+  insertCustomFindingsOfSales,
+  insertCustomSaleFindings,
+  insertShiftReportCustomFindings,
+  linkCustomFindingsToOrders,
+  listCustomFindingKeys,
+  listOpenCustomFindings,
+  listOpenMattersOfKinds,
   resolveCustomFinding,
   type CustomFindingRow,
   type Database,
+  type MatterActor,
+  type MatterOwner,
+  type OpenCustomFindingRow,
 } from "@agency_hub_core/db";
+import type { CustomTierOverride } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
 import { ConflictError, NotFoundError } from "../errors.ts";
 import type { AgentCustomScope } from "./agent.ts";
 import { applyCustomStep, customViewerOf, recordCustomOrder, resolveFanOnPage } from "./index.ts";
+import { CUSTOM_UNRECORDED_KIND, unrecordedSaleOf } from "./readers.ts";
 import { seesOrder, type CustomViewer } from "./rules.ts";
 
 /**
@@ -200,4 +215,169 @@ export async function actOnCustomFinding(
     }
   });
   return { finding: findingWire((await findCustomFinding(app.db, id))!) };
+}
+
+// ── What the checks pass writes (customs facts spec §8, C1; behind the switch `customsFacts`) ───────────────────────
+
+/**
+ * The checks pass's side of the findings: one home for every trace of a custom with no order, `custom_findings`,
+ * instead of the two kinds of matter before it.
+ *
+ *   Hub writes   a tip whose note speaks of a custom (Fansly's tip context; OnlyFans' tip message by its amount and
+ *                time), a purchase or renewal of a tier that includes one (the sale's own reference to its subscription,
+ *                the ±2 h window only as a fallback; «includes» is the wording match corrected by `customTierOverrides`),
+ *                a shift report's line marked «кастом» whose sale pays no order, a card the reader found with no order.
+ *                A sale is skipped only when it pays an order or has a finding already (a dismissed one never comes
+ *                back); an open finding an order took since is linked to it.
+ *   switch-on    every open `custom.unrecorded` and `custom.card_without_order` matter becomes an open finding (from the
+ *                moment it was opened); the two sets are compared, and only then the matters close (withdrawn) — those
+ *                kinds are no longer written. «Не кастом» marks (`custom_sale_dismissals`) become dismissed findings.
+ *                Idempotent: every pass with the switch on runs it, and finds nothing more to do.
+ *   matters      `custom.finding` — a finding open a day, for the check's leader of its page; `custom.findings_owner`
+ *                — one line for the owner with how many stand open three days. The test realm's findings go to its
+ *                own leaders, never into the owner's count.
+ */
+
+type FindingsPassApp = Pick<AppContext, "db" | "logger">;
+
+const HOUR_MS = 3_600_000;
+/** Sales and shift reports are looked through this far back for new findings. */
+export const FINDINGS_LOOK_BACK_DAYS = 14;
+/** An open finding becomes the check's leader's matter after this long … */
+export const FINDING_MATTER_HOURS = 24;
+/** … and the owner's line after this long. */
+export const FINDINGS_OWNER_HOURS = 72;
+export const CARD_KIND = "custom.card_without_order";
+const SYSTEM: MatterActor = { door: "system" };
+
+/** The card's finding: the reader of the models' groups reports the cards of those groups (agentCustomCards). */
+const CARD_SOURCE = "model_group" as const;
+
+/**
+ * The switch-on step: every open matter of the retired kinds as an open finding, then — when every one of them has its
+ * finding — the matters closed as withdrawn; and «не кастом» marks as dismissed findings. Answers how many matters it
+ * turned into findings and closed.
+ */
+export async function retireCustomFindingMatters(app: FindingsPassApp, now: Date): Promise<{ migrated: number; closed: number }> {
+  await copyCustomSaleDismissals(app.db);
+  const matters = await listOpenMattersOfKinds(app.db, [CUSTOM_UNRECORDED_KIND, CARD_KIND]);
+  if (matters.length === 0) return { migrated: 0, closed: 0 };
+  const sales: Array<{ transactionId: number; pageId: number | null; at: Date | null; createdAt: Date }> = [];
+  const cards: Array<{ source: typeof CARD_SOURCE; telegramRef: string; postedAt: Date | null; createdAt: Date }> = [];
+  const keyOf = new Map<string, string>();
+  for (const matter of matters) {
+    if (matter.kind === CUSTOM_UNRECORDED_KIND) {
+      const transactionId = unrecordedSaleOf(matter.key);
+      if (transactionId === null) continue;
+      const at = typeof matter.evidence.at === "string" ? new Date(matter.evidence.at) : null;
+      sales.push({ transactionId, pageId: matter.pageIds[0] ?? null, at: at !== null && !Number.isNaN(at.getTime()) ? at : null, createdAt: matter.openedAt });
+      keyOf.set(matter.key, `sale:${transactionId}`);
+    } else {
+      const telegramRef = matter.key.slice(CARD_KIND.length + 1);
+      const posted = typeof matter.evidence.postedAt === "string" ? new Date(matter.evidence.postedAt) : null;
+      cards.push({ source: CARD_SOURCE, telegramRef, postedAt: posted !== null && !Number.isNaN(posted.getTime()) ? posted : null, createdAt: matter.openedAt });
+      keyOf.set(matter.key, `${CARD_SOURCE}:${telegramRef}`);
+    }
+  }
+  const migrated = (await insertCustomFindingsOfSales(app.db, sales)) + (await insertCustomCardFindings(app.db, cards));
+  // The two sets compared: every open matter has its finding, or none of them closes yet (the next pass tries again).
+  const present = await listCustomFindingKeys(app.db, [
+    ...sales.map((sale) => ({ source: "sale", ref: String(sale.transactionId) })),
+    ...cards.map((card) => ({ source: card.source, ref: card.telegramRef })),
+  ]);
+  const missing = matters.filter((matter) => !present.has(keyOf.get(matter.key) ?? ""));
+  if (missing.length > 0) {
+    app.logger.error({ missing: missing.map((matter) => matter.key).slice(0, 50), count: missing.length }, "custom checks: matters without their finding; none closed");
+    return { migrated, closed: 0 };
+  }
+  let closed = 0;
+  for (const matter of matters) {
+    try {
+      if ((await closeMatter(app.db, { key: matter.key, how: "withdrawn", writer: "server", note: "Перенесено в «Найдено без заказа»" }, SYSTEM, now)).transition === "closed") closed += 1;
+    } catch (error) {
+      app.logger.error({ err: error, key: matter.key }, "custom checks: a retired matter could not be closed");
+    }
+  }
+  return { migrated, closed };
+}
+
+/** Hub's own findings of a pass: sales, tiers and shift reports of the last two weeks, and the ones an order took since. */
+export async function writeCustomFindings(app: FindingsPassApp, input: { overrides: readonly CustomTierOverride[]; now: Date }): Promise<{ written: number; linked: number }> {
+  const { now } = input;
+  const from = new Date(now.getTime() - FINDINGS_LOOK_BACK_DAYS * 24 * HOUR_MS);
+  const sales = await insertCustomSaleFindings(app.db, { from, to: now, overrides: input.overrides, now });
+  const reports = await insertShiftReportCustomFindings(app.db, { since: from, now });
+  const linked = await linkCustomFindingsToOrders(app.db, now);
+  return { written: sales + reports, linked };
+}
+
+/** The reader's cards no order has, as findings of the models' groups (the switch on: they are no longer matters). */
+export async function reportCardFindings(app: FindingsPassApp, cards: ReadonlyArray<{ telegramRef: string; postedAt?: string | undefined }>, now: Date): Promise<number> {
+  return insertCustomCardFindings(app.db, cards.map((card) => {
+    const posted = card.postedAt === undefined ? null : new Date(card.postedAt);
+    return { source: CARD_SOURCE, telegramRef: card.telegramRef, postedAt: posted !== null && !Number.isNaN(posted.getTime()) ? posted : null, createdAt: now };
+  }));
+}
+
+/** A finding's source in people's words. */
+const SOURCE_WORDS: Readonly<Record<string, string>> = {
+  sale: "продажа похожа на кастом",
+  fan_chat: "в чате с фаном",
+  work_chat: "в рабочем чате",
+  model_group: "в группе модели",
+  shift_report: "в отчёте смены",
+};
+
+export interface FindingMatter {
+  key: string;
+  title: string;
+  object: { type: string; id: string } | null;
+  pageIds: number[];
+  owner: MatterOwner;
+  evidence: Record<string, unknown>;
+  link: string;
+}
+
+/**
+ * The matters of the open findings, pure (C1): each a day open → the check's leader of its page (`leadOf`); the ones
+ * three days open, of the live agency, → one line for the owner with the count.
+ */
+export function findingMatters(input: {
+  findings: readonly OpenCustomFindingRow[];
+  now: Date;
+  leadOf: (pageId: number | null) => MatterOwner;
+}): { "custom.finding": FindingMatter[]; "custom.findings_owner": FindingMatter[] } {
+  const out = { "custom.finding": [] as FindingMatter[], "custom.findings_owner": [] as FindingMatter[] };
+  const age = (finding: OpenCustomFindingRow) => input.now.getTime() - finding.createdAt.getTime();
+  const long: OpenCustomFindingRow[] = [];
+  for (const finding of input.findings) {
+    if (age(finding) < FINDING_MATTER_HOURS * HOUR_MS) continue;
+    if (!finding.test && age(finding) >= FINDINGS_OWNER_HOURS * HOUR_MS) long.push(finding);
+    out["custom.finding"].push({
+      key: `custom.finding:${finding.id}`,
+      title: `Кастом без заказа: ${SOURCE_WORDS[finding.source] ?? finding.source}, ${finding.pageLabel ?? "страница не известна"}`,
+      object: { type: "custom_finding", id: String(finding.id) },
+      pageIds: finding.pageId === null ? [] : [finding.pageId],
+      owner: input.leadOf(finding.pageId),
+      evidence: { findingId: finding.id, source: finding.source, since: finding.createdAt.toISOString(), happenedAt: finding.happenedAt.toISOString() },
+      link: `/workboard/customs?finding=${finding.id}`,
+    });
+  }
+  if (long.length > 0) {
+    out["custom.findings_owner"].push({
+      key: "custom.findings_owner:all",
+      title: `Кастомы без заказа больше трёх дней: ${long.length}`,
+      object: null,
+      pageIds: [],
+      owner: { role: "owner" },
+      evidence: { count: long.length, findingIds: long.map((finding) => finding.id).slice(0, 50) },
+      link: "/workboard/customs",
+    });
+  }
+  return out;
+}
+
+/** The open findings a matter may be about: the ones written a day ago or earlier. */
+export function openFindingsForMatters(app: Pick<AppContext, "db">, now: Date): Promise<OpenCustomFindingRow[]> {
+  return listOpenCustomFindings(app.db, { before: new Date(now.getTime() - FINDING_MATTER_HOURS * HOUR_MS) });
 }

@@ -30,6 +30,10 @@ export const CUSTOM_ORDER_ORIGINS = ["extension", "agent", "workboard", "import"
 export const CUSTOM_ORDER_CHECK_KINDS = [
   "custom.not_at_model", "custom.checked_not_at_model", "custom.overdue", "custom.overdue_owner", "custom.shot_not_given", "custom.give_on_shift",
   "custom.unrecorded", "custom.card_without_order",
+  // Behind the switch `customsFacts` (customs facts spec C1, C3): the owner's line of the paid cards two days not at the
+  // model; a custom with no order (`custom_findings`) a day open, for the check's leader; the owner's line of those three
+  // days open. `custom.unrecorded` and `custom.card_without_order` are retired into findings when the switch goes on.
+  "custom.not_at_model_owner", "custom.finding", "custom.findings_owner",
 ] as const;
 export type CustomOrderCheckKind = (typeof CUSTOM_ORDER_CHECK_KINDS)[number];
 const CHECK_KIND_SET: ReadonlySet<string> = new Set(CUSTOM_ORDER_CHECK_KINDS);
@@ -192,6 +196,35 @@ export const customOrderIssueSchema = z.object({
 });
 export type CustomOrderIssue = z.infer<typeof customOrderIssueSchema>;
 
+/**
+ * Whose move an order waits for (customs facts spec §4; the one rule, services/custom-orders/leaders.ts, so the board
+ * and the matters never disagree): `person` — a person by name (the content manager, the acceptor, the check's
+ * leader); `shift` — whoever is on shift on the fan's page now; `model` — the model shoots; `fan` — the fan has to open
+ * what was sent; `owner` — the owner decides (a hold, a refusal, a reversed payment); `none` — nobody is named.
+ */
+export const CUSTOM_MOVE_WHO_KINDS = ["person", "shift", "model", "fan", "owner", "none"] as const;
+export type CustomMoveWhoKind = (typeof CUSTOM_MOVE_WHO_KINDS)[number];
+export const customOrderMoveSchema = z.object({
+  /** The person's, the model's or the fan's name; null — the owner, or nobody named. */
+  who: z.string().nullable(),
+  whoKind: z.enum(CUSTOM_MOVE_WHO_KINDS),
+  /** What to do, in people's words: «передать модели», «отдать фану». */
+  what: z.string(),
+});
+export type CustomOrderMove = z.infer<typeof customOrderMoveSchema>;
+
+/** The forwarding timer (customs facts spec C3): money linked or the owner's word, the card not at the model. */
+export const CUSTOM_TIMER_LEVELS = ["amber", "red"] as const;
+export type CustomTimerLevel = (typeof CUSTOM_TIMER_LEVELS)[number];
+export const customOrderTimerSchema = z.object({
+  kind: z.literal("forwarding"),
+  /** amber after 24 h, red after 48 h; under 24 h there is no timer. */
+  level: z.enum(CUSTOM_TIMER_LEVELS),
+  /** Since when the paid card waits for the model: the later of the record and the first sale (or the owner's word). */
+  since: isoTimestamp,
+});
+export type CustomOrderTimer = z.infer<typeof customOrderTimerSchema>;
+
 /** One order as every session door reads it. */
 export const customOrderSchema = z.object({
   id: intId,
@@ -264,6 +297,17 @@ export const customOrderSchema = z.object({
   fanAskedAt: isoTimestamp.nullable(),
   /** Every file was sent to the fan and a priced one is not bought yet («отправлен, фан не открыл»): since when. */
   sentAt: isoTimestamp.nullable(),
+  /** Whose move it is now (`customMoveOf`, leaders.ts); null — nobody's: given and waiting, closed, cancelled. */
+  move: customOrderMoveSchema.nullable(),
+  /**
+   * It burns (customs facts spec §7): more than one full day past the deadline, shot and nothing sent for 12 h, the
+   * fan asked where it is, a fact in conflict, an issue. Never on hold. Derived at read time (`customOrderUrgencyOf`).
+   */
+  burning: z.boolean(),
+  /** Why it burns or what it waits for, one Russian line; null — nothing to say (an ended order). */
+  reason: z.string().nullable(),
+  /** The forwarding timer (C3); null — none runs, or under 24 h. */
+  timer: customOrderTimerSchema.nullable(),
   /**
    * The parts ready in the current round: delivered whole after the last revision request about them (a delivery
    * that was sent back for revision does not count), or said whole by a person («снят»). The wanted parts not
@@ -364,6 +408,16 @@ export const customOrdersBoardResponseSchema = z.object({
   capped: z.boolean(),
   /** Sales that look like a custom with no order (the viewer's chats; the lead and the owner every page's). */
   lookalikes: z.array(customLookalikeSaleSchema),
+  /**
+   * How fresh the board is (customs facts spec §9), from «Система → Состояние»: the last good pass of the reader
+   * (`customs-reader`, every 30 minutes) and of the nightly reconciliation (`customs-nightly`); null — never. `readerStale`
+   * — the reader is past twice its period and ten minutes (the system state's own rule for «молчит»), or never ran.
+   */
+  verified: z.object({
+    readerAt: isoTimestamp.nullable(),
+    nightlyAt: isoTimestamp.nullable(),
+    readerStale: z.boolean(),
+  }),
   serverNow: isoTimestamp,
 });
 
@@ -543,9 +597,11 @@ export const customFindingActionResponseSchema = z.object({ finding: customFindi
 const BOARD_ONLY_FIELDS = {
   dueLeftDays: true, deadlineDefault: true, facts: true, priceMills: true, paidWord: true, holdReason: true, issue: true, fanAskedAt: true, sentAt: true,
 } as const;
+/** The board's own reading of an order (whose move, what burns and why, the forwarding timer): never on the agent's wire. */
+const BOARD_READING_FIELDS = { move: true, burning: true, reason: true, timer: true } as const;
 
 /** An order as an agent key reads it: no money but the card's own price line; the facts with `read:money`. */
-export const agentCustomOrderSchema = customOrderSchema.omit({ paidGrossMills: true, paidNetMills: true, ...BOARD_ONLY_FIELDS })
+export const agentCustomOrderSchema = customOrderSchema.omit({ paidGrossMills: true, paidNetMills: true, ...BOARD_ONLY_FIELDS, ...BOARD_READING_FIELDS })
   .extend(customOrderSchema.pick(BOARD_ONLY_FIELDS).partial().shape)
   .extend({
     /** The card's text with the code, as «Скопировать карточку» gives it. */

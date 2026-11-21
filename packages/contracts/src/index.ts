@@ -64,6 +64,8 @@ export * from "./routes-ai-spend.ts";
 export * from "./routes-chatter-stats.ts";
 // The chat extension's routes (client bootstrap…), spread by routes.ts.
 export * from "./routes-client.ts";
+// Заказ кастома: the candidates of a custom with no order (customs facts spec §8), spread by routes.ts.
+export * from "./routes-custom-candidates.ts";
 // Заказ кастома (package I), spread by routes.ts.
 export * from "./routes-custom-orders.ts";
 // Стирание фана: the ledger's feed of the erasures Hub completed.

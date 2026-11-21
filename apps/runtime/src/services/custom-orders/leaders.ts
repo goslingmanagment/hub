@@ -1,7 +1,7 @@
-import { customPhaseOf, customPhaseProduct, type CustomOrderState, type CustomPhase } from "@agency_hub_core/contracts";
+import { customPhaseOf, customPhaseProduct, type CustomFactValue, type CustomOrderState, type CustomPhase } from "@agency_hub_core/contracts";
 import type { MatterOwner, TeamFacts } from "@agency_hub_core/db";
 
-import { loginOfPerson, modelOfPageId, pagesOfModels } from "../teams.ts";
+import { loginOfPerson, modelOfPageId, pagesOfModels, personOfLogin } from "../teams.ts";
 
 /**
  * Who leads each step of a custom order (products plan 2026-11-13 §4.5, package C3) — THE rule, over T's team records
@@ -101,6 +101,14 @@ export interface CustomLeaderOrder {
   acceptedBy?: string | null;
 }
 
+/** The chatter who took the order, as a leader; null — nobody (imported). */
+function acceptorOf(facts: TeamFacts, order: CustomLeaderOrder): CustomLeader | null {
+  if (order.acceptedByUserId === null) return null;
+  const personId = facts.logins.find((login) => login.userId === order.acceptedByUserId)?.personId ?? null;
+  const name = personId !== null ? nameOf(facts, personId) : order.acceptedByName ?? order.acceptedBy ?? "";
+  return { kind: "person", personId, userId: order.acceptedByUserId, name: name || (order.acceptedBy ?? "") };
+}
+
 /** Who leads the order's current step and where it is done; null — an ended order. */
 export function customStepLeader(
   facts: TeamFacts,
@@ -110,15 +118,70 @@ export function customStepLeader(
   const phase = customPhaseOf(order.state);
   if (phase === null) return null;
   const product = customPhaseProduct(phase);
-  if (phase === "give") {
-    if (order.acceptedByUserId !== null) {
-      const personId = facts.logins.find((login) => login.userId === order.acceptedByUserId)?.personId ?? null;
-      const name = personId !== null ? nameOf(facts, personId) : order.acceptedByName ?? order.acceptedBy ?? "";
-      return { phase, product, leader: { kind: "person", personId, userId: order.acceptedByUserId, name: name || (order.acceptedBy ?? "") } };
-    }
-    return { phase, product, leader: phaseLeader(facts, order.pageId, "check", fallback) };
-  }
+  if (phase === "give") return { phase, product, leader: acceptorOf(facts, order) ?? phaseLeader(facts, order.pageId, "check", fallback) };
   return { phase, product, leader: phaseLeader(facts, order.pageId, phase, fallback) };
+}
+
+/** What whose move is read from, besides its facts' values and who is on shift on its page now. */
+export interface CustomMoveOrder extends CustomLeaderOrder {
+  holdReason: string | null;
+  payments: number;
+  paidWord: object | null;
+}
+
+/** Whose move it is: a leader of the rule (a person, the owner), whoever is on shift, the model, the fan. */
+export type CustomMover =
+  | CustomLeader
+  | { kind: "shift"; userId: number; personId: number | null; name: string }
+  | { kind: "model" }
+  | { kind: "fan" };
+
+/**
+ * Whose move an order waits for (customs facts spec §4), the first rule that holds — the board and the matters read it
+ * from here:
+ *
+ *   on hold, a refusal, a payment in conflict         the owner
+ *   a revision                                        the shooting's leader (the page's content manager)
+ *   sent and not opened (`given: part`)               the fan
+ *   shot and nothing sent                             whoever is on shift on the fan's page, else the acceptor, else the
+ *                                                     check's leader
+ *   at the model (delivered or partly)                the model
+ *   money linked (or the owner's word), not at her    the check's leader: «передать модели»
+ *   recorded                                          the acceptor, else the check's leader
+ *
+ * Null — nobody's move: given and waiting for the fan's word, closed, cancelled.
+ */
+export function customMoveOf(
+  facts: TeamFacts,
+  order: CustomMoveOrder,
+  values: { paid: CustomFactValue; given: CustomFactValue },
+  onShiftUserIds: readonly number[],
+  fallback: CustomLeader | null,
+): { who: CustomMover; what: string } | null {
+  const check = () => phaseLeader(facts, order.pageId, "check", fallback);
+  switch (order.state) {
+    case "given": case "closed": case "cancelled":
+      return null;
+    default:
+      break;
+  }
+  if (order.holdReason !== null) return { who: OWNER, what: "решить, когда продолжить" };
+  if (order.state === "refused") return { who: OWNER, what: "решить после отказа модели" };
+  if (values.paid === "conflict") return { who: OWNER, what: "разобраться с возвратом оплаты" };
+  if (order.state === "revision") return { who: phaseLeader(facts, order.pageId, "shoot", fallback), what: "довести правку" };
+  if (values.given === "part") return { who: { kind: "fan" }, what: "открыть присланное" };
+  if (order.state === "shot") {
+    const userId = onShiftUserIds[0];
+    if (userId !== undefined) {
+      const personId = personOfLogin(facts, userId);
+      return { who: { kind: "shift", userId, personId, name: personId === null ? "" : nameOf(facts, personId) }, what: "отдать фану" };
+    }
+    return { who: acceptorOf(facts, order) ?? check(), what: "отдать фану" };
+  }
+  if (order.state === "at_model") return { who: { kind: "model" }, what: "снять" };
+  if (order.state === "partly") return { who: { kind: "model" }, what: "доснять" };
+  if (order.payments > 0 || order.paidWord !== null) return { who: check(), what: "передать модели" };
+  return { who: acceptorOf(facts, order) ?? check(), what: order.state === "recorded" ? "получить оплату" : "привязать оплату" };
 }
 
 /** The matter's owner of a leader. */

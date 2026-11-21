@@ -455,7 +455,8 @@ export async function startWorkerServices(
   // Заказ кастома: the checks' matters (paid and not at the model, overdue, shot and not given, a sale with no order).
   await boss.work(CUSTOM_CHECKS_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     const tally = await runCustomOrderChecks(app);
-    if (tally.opened + tally.closed + tally.autoClosed > 0) app.logger.info(tally, "Custom order checks pass complete");
+    const settled = tally.given + tally.sent + tally.payments + tally.deadlines + tally.findings;
+    if (tally.opened + tally.closed + tally.autoClosed + settled > 0) app.logger.info(tally, "Custom order checks pass complete");
   });
   // A closed shift's numbers, stored by the same function the team reads count with (package N); the check compares
   // them with the live count. The returned `detail` is each routine's line in «Система → Состояние».
