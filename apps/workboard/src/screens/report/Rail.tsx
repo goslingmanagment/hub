@@ -331,7 +331,7 @@ function Foot({ api }: { api: BoardApi }) {
         <button type="button" className="btn btn--sec btn--wide" disabled={pending} onClick={() => void api.reopen()}>Исправить</button>
       </>
     );
-    line = report.posts.some((one) => !copiedOf(one.modelSlug)) ? "Вставьте пост в «Отчётность». Только текст, скрины не нужны." : "Пост скопирован. Скрины не нужны.";
+    line = report.posts.some((one) => !copiedOf(one.modelSlug)) ? "Вставьте пост в «Отчётность». Только текст, скрины не нужны." : "Только текст, скрины не нужны.";
   }
   return (
     <div className="rail-f">
