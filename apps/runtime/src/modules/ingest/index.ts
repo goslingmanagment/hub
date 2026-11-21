@@ -13,6 +13,7 @@ import { refreshOfapiBinding } from "../../services/ofapi-binding-refresh.ts";
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
+import { realmOf } from "../../services/sandbox/realm.ts";
 import {
   ingestClientObservations,
   InvalidIngestEventError,
@@ -61,6 +62,7 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
         allowedPageIds: pageScopeFor(principal) ?? null,
         clientVersion: normalizedClientVersion,
         clientProfile: principal.clientProfile ?? null,
+        realm: realmOf(principal),
         events: request.body.events,
       });
     } catch (error) {

@@ -4,6 +4,7 @@ import { normalizeProxyConfigWithMetadata } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
+import { clientFeaturePageOf } from "./client-features.ts";
 import { resolveStoredProxyConfig } from "./page-context.ts";
 
 /**
@@ -19,6 +20,10 @@ import { resolveStoredProxyConfig } from "./page-context.ts";
  *
  * WHAT. One row per such page with a proxy; a page without one is absent, and so is a row the hub cannot read (logged):
  * one bad row must not take the others' proxies away. Database only: no platform request, no queued work.
+ *
+ * A STAND-IN (0435), a test page standing in for a live Fansly page, answers that live page's proxy under its own label
+ * with the live account id: the test login's tab works the live page's real account, so its tab-less requests (the
+ * service worker, the extension's background) must leave through the same proxy as the live team's, never direct.
  */
 export async function readClientFanslyProxies(
   app: AppContext,
@@ -32,13 +37,13 @@ export async function readClientFanslyProxies(
   for (const row of rows) {
     if (row.platform !== "fansly") continue;
     try {
-      const stored = await findPageById(app.db, row.id);
+      const stored = await findPageById(app.db, row.standsInFor?.id ?? row.id);
       const proxy = stored === null ? null : resolveStoredProxyConfig(app, stored.proxy);
       if (proxy === null) continue;
       const normalized = normalizeProxyConfigWithMetadata(proxy);
       proxies.push({
         pageLabel: row.label,
-        platformAccountId: row.platformAccountId,
+        platformAccountId: clientFeaturePageOf(row).platformAccountId,
         scheme: normalized.protocol.replace(/:$/, ""),
         host: normalized.hostname,
         port: normalized.port,

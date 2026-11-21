@@ -2,17 +2,20 @@
 -- 0435_sandbox_stand_in_pages.sql
 --
 -- A stand-in page (the test realm, 0414): a test page that stands in for one live page, so a test login can work that
--- live page's real site account in the released chat extension while everything the extension writes lands under the
--- test page, behind the wall. The client bootstrap (apps/runtime/src/services/client-bootstrap.ts) names the live page's
--- platform account id on the stand-in; the stand-in's own `external_page_id` stays NULL (UNIQUE(platform,
+-- live page's real site account in the released chat extension. The client bootstrap (apps/runtime/src/services/
+-- client-bootstrap.ts) names the live page's platform account id on the stand-in while the live page is active, and its
+-- Fansly proxy is the live page's; the stand-in's own `external_page_id` stays NULL (UNIQUE(platform,
 -- external_page_id), and every sync keys on it), so nothing syncs it and the OnlyFans feed's account check
--- (`requireBoundAccount`) still refuses it.
+-- (`requireBoundAccount`) still refuses it. A stand-in stores only the pulse and the board's own writes: what the
+-- extension reports of the real account (wallet sightings, send and note attributions, captures) is accepted and
+-- dropped, and a test login reads nothing of a real fan.
 --
 -- pages.stands_in_for_page_id   the live page this test page stands in for; one stand-in per live page.
 --
 -- What the database holds to: only a test page stands in; what it stands in for is a live page of the same platform,
--- never itself. A live page that goes away leaves its stand-in an ordinary test page (on delete set null): the test realm
--- never holds a live row in place. `sandbox:remove` takes the stand-ins with the test model's pages.
+-- never itself. A live page that goes away leaves its stand-in an ordinary unbound test page (deleted in the catalog: the
+-- bootstrap stops naming its account; deleted as a row: on delete set null): the test realm never holds a live row in
+-- place. `sandbox:remove` takes the stand-ins with the test model's pages.
 
 set local lock_timeout = '5s';
 

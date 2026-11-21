@@ -48,9 +48,11 @@ import { openMatter } from "@agency_hub_core/db";
  * Each is re-runnable for «now»: a run in another minute adds a new day's worth, the same minute adds nothing.
  *
  * Stand-in pages (`--stand-in <liveLabel…>`, 0435): a test page `test-<liveLabel>` of the test model standing in for a
- * live Fansly or OnlyFans page. The client bootstrap names the live page's platform account id on it, so a test login's
- * extension on the real site account binds to the stand-in: its pulse, sightings and attributions land under the test
- * page, behind the wall. Every test person who works gets the stand-ins, and `shift` writes its day on them.
+ * live Fansly or OnlyFans page. The client bootstrap names the live page's platform account id on it (its Fansly proxy
+ * is the live page's), so a test login's extension on the real site account binds to the stand-in. A stand-in stores
+ * only the pulse and the board's own writes: what the extension reports of the real account (wallet sightings, send and
+ * note attributions, captures) is accepted and dropped, and a test login reads nothing of a real fan. Every test person
+ * who works gets the stand-ins, and `shift` writes its day on them.
  */
 
 export const SANDBOX_MODEL = { slug: "test", name: "Тест" } as const;

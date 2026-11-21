@@ -14,6 +14,7 @@ import {
   CLIENT_SEND_ATTRIBUTION_STORED_COMPOSED_WITH,
   findPageSummaryByLabel,
   insertObservation,
+  isStandInPage,
   listClientMessageAuthors,
   recordClientSendAttributions,
   type ClientSendAttributionFactInput,
@@ -144,6 +145,16 @@ export async function applyClientSendAttributions(
   const clientVersion = clientVersionOf(request.headers["x-client-version"]);
   const producer = clientCaptureProducer(principal, clientVersion);
   const now = new Date();
+
+  // A stand-in (0435) keeps nothing of its real account: nothing is journaled or stored, and every fact is answered
+  // `duplicate` — final for the extension's journal (never sent again) and no claim that it was recorded.
+  if (await isStandInPage(app.db, page.id)) {
+    return {
+      pageLabel: page.label,
+      results: input.body.facts.map((fact) => ({ platformMessageId: fact.platformMessageId, outcome: "duplicate" as const })),
+      serverNow: now.toISOString(),
+    };
+  }
 
   const taken: ClientSendAttributionFactInput[] = [];
   const recorded = await app.db.transaction(async (transaction) => {

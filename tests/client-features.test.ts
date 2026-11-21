@@ -16,6 +16,7 @@ import {
   CLIENT_FEATURE_CODE_DEFAULTS,
   clientBootstrapFlags,
   clientFeatureNeedsOn,
+  clientFeaturePageOf,
   clientStarRowReaches,
   clientVersionRefusal,
   evaluateClientFeature,
@@ -31,12 +32,12 @@ import {
   storedClientSwitchProblems,
 } from "../apps/runtime/src/services/client-switches.ts";
 
-const OF_PAGE: ClientFeaturePage = { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001" };
-const FANSLY_PAGE: ClientFeaturePage = { label: "lora-fansly", platform: "fansly", platformAccountId: null };
+const OF_PAGE: ClientFeaturePage = { label: "lora-of", platform: "onlyfans", platformAccountId: "100000001", standsInForLabel: null };
+const FANSLY_PAGE: ClientFeaturePage = { label: "lora-fansly", platform: "fansly", platformAccountId: null, standsInForLabel: null };
 /** An OnlyFans page whose platform account id is not known. */
-const UNBOUND_OF_PAGE: ClientFeaturePage = { label: "nova-of", platform: "onlyfans", platformAccountId: null };
+const UNBOUND_OF_PAGE: ClientFeaturePage = { label: "nova-of", platform: "onlyfans", platformAccountId: null, standsInForLabel: null };
 /** A Fansly page whose platform account id is known (every Fansly page on prod has one). */
-const BOUND_FANSLY_PAGE: ClientFeaturePage = { label: "lora-1", platform: "fansly", platformAccountId: "123456789012345678" };
+const BOUND_FANSLY_PAGE: ClientFeaturePage = { label: "lora-1", platform: "fansly", platformAccountId: "123456789012345678", standsInForLabel: null };
 /** Fansly's own flags (R20 HF-12, HF-2): its AI generations' and the extension's own panels there. `voice`, `notes` and `notesFill` are on both. */
 const FANSLY_ONLY_FLAGS: readonly string[] = ["drafts", "vault", "registration"];
 /**
@@ -122,7 +123,7 @@ describe("chat-extension feature evaluation", () => {
     });
     const coach = (page: ClientFeaturePage) => evaluateClientFeature({ settings: input, page, flag: "coach", served: [] });
     const review = (page: ClientFeaturePage) => evaluateClientFeature({ settings: input, page, flag: "review", served: [] });
-    const otherPage: ClientFeaturePage = { label: "lora-vip-of", platform: "onlyfans", platformAccountId: "100000002" };
+    const otherPage: ClientFeaturePage = { label: "lora-vip-of", platform: "onlyfans", platformAccountId: "100000002", standsInForLabel: null };
 
     expect(coach(OF_PAGE)).toEqual({ available: false, reason: "flag_off" });
     expect(coach(otherPage)).toEqual({ available: true });
@@ -261,6 +262,42 @@ describe("[R20 HF-2] Fansly in the feature admission by platform", () => {
         expect(unbound[flag], flag).toEqual({ available: false, reason: "binding_missing" });
       }
     }
+  });
+});
+
+describe("a stand-in page (0435): a test page standing in for a live one", () => {
+  const live = { label: "lora-of", platform: "onlyfans" as const, platformAccountId: "100000001" };
+  const standIn = clientFeaturePageOf({
+    label: "test-lora-of", platform: "onlyfans", platformAccountId: null, standsInFor: { platformAccountId: "100000001", label: "lora-of" },
+  });
+
+  it("takes its live page's account id; a page with an id of its own keeps it", () => {
+    expect(standIn).toEqual({ label: "test-lora-of", platform: "onlyfans", platformAccountId: "100000001", standsInForLabel: "lora-of" });
+    expect(clientFeaturePageOf({ ...live, standsInFor: null })).toEqual({ ...live, standsInForLabel: null });
+    expect(clientFeaturePageOf({ ...live, standsInFor: { platformAccountId: "100000009", label: "lora-vip-of" } }).platformAccountId)
+      .toBe("100000001");
+  });
+
+  it("is never reached by the \"*\" row: its own row alone switches it on", () => {
+    const coach = (input: ClientFeatureSettings, page: ClientFeaturePage) => evaluateClientFeature({ settings: input, page, flag: "coach", served: [] });
+    const star = settings({ features: { "*": { coach: true, ofFeed: true } } });
+    expect(coach(star, standIn)).toEqual({ available: false, reason: "flag_off" });
+    expect(evaluateClientFeature({ settings: star, page: standIn, flag: "ofFeed", served: EVERY_CAPABILITY }))
+      .toEqual({ available: false, reason: "flag_off" });
+    expect(coach(star, OF_PAGE)).toEqual({ available: true });
+    expect(coach(settings({ features: { "*": { coach: false }, "test-lora-of": { coach: true } } }), standIn)).toEqual({ available: true });
+  });
+
+  it("is bindable through its live page's host binding, and only through that one", () => {
+    const unbound = clientFeaturePageOf({
+      label: "test-nova-of", platform: "onlyfans", platformAccountId: null, standsInFor: { platformAccountId: null, label: "nova-of" },
+    });
+    const coach = (hostBindings: Record<string, string>) => evaluateClientFeature({
+      settings: settings({ features: { "test-nova-of": { coach: true } }, hostBindings }), page: unbound, flag: "coach", served: [],
+    });
+    expect(coach({})).toEqual({ available: false, reason: "binding_missing" });
+    expect(coach({ "onlymonster:10001": "nova-of" })).toEqual({ available: true });
+    expect(coach({ "onlymonster:10001": "lora-of" })).toEqual({ available: false, reason: "binding_missing" });
   });
 });
 

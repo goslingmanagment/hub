@@ -139,7 +139,8 @@ export async function resolveLiveTextEnabled(app: AppContext, page: LiveTextPage
     const switches = await loadClientSwitches(app);
     return evaluateClientFeature({
       settings: switches.settings,
-      page: { label: page.label, platform: page.platform, platformAccountId: page.platformAccountId },
+      // Never a stand-in (0435): AI never runs for a test page, the gateway refuses it first.
+      page: { label: page.label, platform: page.platform, platformAccountId: page.platformAccountId, standsInForLabel: null },
       flag: "freshText",
       served: SERVED_CLIENT_CAPABILITIES,
     }).available;

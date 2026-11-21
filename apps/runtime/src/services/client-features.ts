@@ -248,8 +248,11 @@ export interface ClientFeaturePage {
   platform: Platform;
   /** `pages.external_page_id`: what the extension binds a host account by. A stand-in's is its live page's (0435). */
   platformAccountId: string | null;
-  /** A stand-in's live page (0435): the owner's host binding of that page binds the stand-in for its test login. */
-  standsInForLabel?: string | null;
+  /**
+   * A stand-in's live page (0435): the owner's host binding of that page binds the stand-in for its test login, and the
+   * `"*"` row never reaches it. Null for every other page.
+   */
+  standsInForLabel: string | null;
 }
 
 /**
@@ -342,7 +345,7 @@ export function evaluateClientFeature(input: {
   }
   // A stand-in (0435) reads its own row alone: the `"*"` row switches on what reads the real account into Hub (the
   // OnlyFans feed, its poll, the online probe), and a stand-in's tab must not do that for the test team.
-  const star = clientStarRowReaches(input.page.platform) && (input.page.standsInForLabel ?? null) === null;
+  const star = clientStarRowReaches(input.page.platform) && input.page.standsInForLabel === null;
   const on = flagValue(input.settings, input.page.label, input.flag)
     ?? (star ? flagValue(input.settings, "*", input.flag) : undefined)
     ?? false;

@@ -25,6 +25,7 @@ import { fanListLabel, isMarkList } from "../sync/fansly/lib/fan-lists-rules.ts"
 import { canAccessPage, requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
 import { blocklistHandleKey } from "./fansly-blocklist/handles.ts";
+import { realmOf } from "./sandbox/realm.ts";
 
 /**
  * Fan marks (`clientFanMarks`, 2026-10-27): what the chat header says about the
@@ -113,7 +114,9 @@ export async function readClientFanMarks(
   const empty: ClientFanMarksResponse = {
     pageLabel: page.label, fanRef: input.fanRef, lists: [], blocklist: [], listsReadAt: null, blocklistReadAt: null, accountState,
   };
-  if (page.platform !== "fansly") return empty;
+  // A test login reads nothing of a real fan (sandbox/realm.ts): on a stand-in (0435) the fan is one of the live pages',
+  // and their lists, posts and money are the live realm's.
+  if (page.platform !== "fansly" || realmOf(principal) === "test") return empty;
 
   const memberships = fan === null ? [] : await listFanListMemberships(app.db, fan.id);
   const keys = [input.query.username, fan?.username ?? undefined].flatMap((name) => {
@@ -142,6 +145,8 @@ export async function readClientOtherPages(
 ): Promise<ClientOtherPagesResponse> {
   requireApiKeyUser(principal);
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_MARKS_FEATURE);
+  // A test login reads nothing of a real fan: the other pages are the live realm's.
+  if (realmOf(principal) === "test") return { pageLabel: page.label, fans: [] };
   const fans = await readOtherPagesByRefs(app.db, { pageId: page.id, platform: page.platform, fanRefs: input.body.fanRefs });
   return { pageLabel: page.label, fans };
 }

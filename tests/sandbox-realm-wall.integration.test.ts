@@ -13,7 +13,6 @@ import { issueAgentKey } from "../apps/runtime/src/services/agent-keys.ts";
 import { SANDBOX_OWNER_OPERATIONS } from "../apps/runtime/src/services/sandbox/owner-operations.ts";
 import { SANDBOX_MODEL, seedSandbox } from "../apps/runtime/src/services/sandbox/seed.ts";
 import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
-import { SIGHTING_UNMATCHED_KIND, syncCheckMatters } from "../apps/runtime/src/services/shift-handin-check.ts";
 import { syncShiftRowsSince } from "../apps/runtime/src/services/shift-rows.ts";
 import { runCustomOrderChecks } from "../apps/runtime/src/services/custom-orders/checks.ts";
 import { issueChatterDeviceToken, issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
@@ -26,7 +25,7 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 //    chatter and keys shaped like the ledger's, Gengar's and the /OS people mirror's, answers the SAME before the test
 //    team is seeded, after it is seeded with stand-ins of both live pages (0435), after its `shift`, `customs` and
 //    `matters` scenarios and the ordinary jobs ran, and after its people worked (signed in, beat on the stand-ins,
-//    reported the site's sales there, read). Only clock fields are set aside (`VOLATILE_KEYS`, and timestamps of the
+//    reported the site's sales there, which a stand-in drops, read). Only clock fields are set aside (`VOLATILE_KEYS`, and timestamps of the
 //    run's own minutes), by name;
 // 2. `t-owner` (the owner of the test team) is refused every operation not on SANDBOX_OWNER_OPERATIONS with 403, and
 //    what it may read names nothing live.
@@ -391,7 +390,7 @@ describe("the wall of the test realm", () => {
     expect(differences(before, scenarios, "scenarios")).toEqual([]);
 
     // The test team works: its owner and a chatter sign in and read; the chatter's extension, on the live pages' real
-    // accounts, beats on the stand-ins and reports the site's sales there.
+    // accounts, beats on the stand-ins and reports the site's sales there (taken and dropped).
     tOwnerCookie = await login("t-owner", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_OWNER);
     const chat = await login("t-chat-1", SANDBOX_PASSWORDS.SANDBOX_PASSWORD_T_CHAT_1);
     for (const read of reads.filter((one) => SANDBOX_OWNER_OPERATIONS.has(one.key))) {
@@ -410,11 +409,11 @@ describe("the wall of the test realm", () => {
       rows: [{ platformRef: "777000000000000001", kind: "tip", occurredAt: new Date(now.getTime() - 60_000).toISOString(), grossMills: 10_000, netMills: 8_000, fanRef: "100000000000000777", fanName: "Фан с сайта" }],
     } });
     expect(sighted.statusCode, sighted.body).toBe(200);
-    // Two days on, the sale still not in Hub: the check's matter is the test team's owner's, and the live pass goes on.
-    await syncCheckMatters(app, new Date(now.getTime() + 2 * DAY_MS + 3_600_000));
-    const [unmatched] = (await testDb.pool.query(`select u.username from matters m join users u on u.id = m.owner_user_id
-      where m.kind = $1 and m.state = 'open'`, [SIGHTING_UNMATCHED_KIND])).rows as Array<{ username: string }>;
-    expect(unmatched?.username).toBe("t-owner");
+    // A stand-in keeps nothing of its real account: the site's row is taken and dropped, journaled nowhere.
+    expect(sighted.json()).toMatchObject({ kept: 0, known: 1 });
+    const kept = (await testDb.pool.query(`select (select count(*)::int from sale_sightings s join pages p on p.id = s.page_id where p.label = $1) as sightings,
+      (select count(*)::int from observations o join pages p on p.id = o.account_id where p.label = $1) as observations`, [`test-${live.pageLabel}`])).rows[0];
+    expect(kept).toEqual({ sightings: 0, observations: 0 });
     const worked = await snapshot(reads);
     expect(differences(before, worked, "worked")).toEqual([]);
 

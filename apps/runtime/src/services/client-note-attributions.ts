@@ -17,6 +17,7 @@ import {
   CLIENT_NOTE_ATTRIBUTION_STORED_ORIGINS,
   findPageSummaryByLabel,
   insertObservation,
+  isStandInPage,
   listClientFanNoteAttributions,
   recordClientNoteAttributions,
   type ClientFanNoteAttributionRow,
@@ -139,6 +140,16 @@ export async function applyClientNoteAttributions(
   const clientVersion = clientVersionOf(request.headers["x-client-version"]);
   const producer = clientCaptureProducer(principal, clientVersion);
   const now = new Date();
+
+  // A stand-in (0435) keeps nothing of its real account: nothing is journaled or stored, and every fact is answered
+  // `duplicate` — final for the extension's journal (never sent again) and no claim that it was recorded.
+  if (await isStandInPage(app.db, page.id)) {
+    return {
+      pageLabel: page.label,
+      results: input.body.facts.map((fact) => ({ eventId: fact.eventId, outcome: "duplicate" as const })),
+      serverNow: now.toISOString(),
+    };
+  }
 
   const recorded = await app.db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;

@@ -20,14 +20,16 @@ export interface ClientBootstrapPageRow {
   /** `pages.default_persona_key` (0326): the persona the page is meant for. */
   defaultPersonaKey: string | null;
   /**
-   * A test page standing in for a live one (0435): that live page's platform account id and label, which the
-   * extension binds the stand-in by. Null for every other page. Never served as such: the bootstrap names only the
-   * account id, on the stand-in (client-features.ts `clientFeaturePageOf`).
+   * A test page standing in for a live one (0435): that live page's id, platform account id and label, which the
+   * extension binds the stand-in by (and its Fansly proxy, client-fansly-proxies.ts). Null for every other page, and for
+   * a stand-in whose live page is not active (deleted or switched off): that one is served as an unbound test page.
+   * Never served as such: the bootstrap names only the account id, on the stand-in (client-features.ts
+   * `clientFeaturePageOf`).
    */
-  standsInFor: { platformAccountId: string | null; label: string } | null;
+  standsInFor: { id: number; platformAccountId: string | null; label: string } | null;
 }
 
-/** The live page a stand-in stands in for (0435). */
+/** The live page a stand-in stands in for (0435), while it is active and not deleted. */
 const standInTarget = alias(pages, "stand_in_target");
 
 /**
@@ -57,16 +59,24 @@ export async function listClientBootstrapPages(
     platformAccountId: pages.platformAccountId,
     ofapiBindingGeneration: pages.ofapiBindingGeneration,
     defaultPersonaKey: pages.defaultPersonaKey,
+    standsInForId: standInTarget.id,
     standsInForLabel: standInTarget.label,
     standsInForAccountId: standInTarget.platformAccountId,
   }).from(pages)
     .innerJoin(models, eq(models.id, pages.modelId))
-    .leftJoin(standInTarget, eq(standInTarget.id, pages.standsInForPageId))
+    // A deleted page is a tombstone, not a deleted row: the foreign key's `on delete set null` never sees it.
+    .leftJoin(standInTarget, and(
+      eq(standInTarget.id, pages.standsInForPageId),
+      eq(standInTarget.status, "active"),
+      isNull(standInTarget.deletedAt),
+    ))
     .where(and(...clauses))
     .orderBy(models.sortOrder, models.slug, pages.label);
-  return rows.map(({ standsInForLabel, standsInForAccountId, ...row }) => ({
+  return rows.map(({ standsInForId, standsInForLabel, standsInForAccountId, ...row }) => ({
     ...row,
-    standsInFor: standsInForLabel === null ? null : { platformAccountId: standsInForAccountId, label: standsInForLabel },
+    standsInFor: standsInForId === null || standsInForLabel === null
+      ? null
+      : { id: standsInForId, platformAccountId: standsInForAccountId, label: standsInForLabel },
   }));
 }
 
