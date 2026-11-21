@@ -102,7 +102,7 @@ interface Scenario {
   due: number | null;
   /** Hours since the step. */
   stepHours: number;
-  /** How much of the price came: 1 — all, a part, 0 — nothing; the price null — not named. */
+  /** How much of the price came, in percent: 100 — all, a part, 0 — nothing; the price null — not named. */
   paid: number;
   price: number | null;
   approximate?: boolean;
@@ -119,31 +119,31 @@ interface Scenario {
 }
 
 const SCENARIOS: readonly Scenario[] = [
-  { state: "at_model", page: "mia-1", due: -3, stepHours: 120, paid: 1, price: 380_000 },
-  { state: "revision", page: "mia-2", due: -2, stepHours: 30, paid: 1, price: 220_000, note: "Фото тёмные: переснять у окна" },
-  { state: "shot", page: "mia-1", due: 2, stepHours: 15, paid: 1, price: 260_000 },
-  { state: "at_model", page: "ivy-1", due: 8, stepHours: 50, paid: 1, price: 190_000, issue: "У модели в карточке другой срок, чем в заказе" },
-  { state: "paid", page: "nova-1", due: null, stepHours: 60, paid: 1, price: 170_000, fanAskedHours: 20 },
-  { state: "refused", page: "ivy-2", due: 4, stepHours: 10, paid: 1, price: 180_000, note: "Модель не снимает такие сцены" },
-  { state: "at_model", page: "mia-of", due: 5, stepHours: 40, paid: 1, price: 140_000, reversed: true },
-  { state: "shot", page: "mia-3", due: 0, stepHours: 5, paid: 0.5, price: 360_000, sentHours: 3 },
-  { state: "at_model", page: "mia-2", due: -1, stepHours: 70, paid: 1, price: 125_000 },
-  { state: "shot", page: "mia-1", due: 2, stepHours: 2, paid: 1, price: 45_000, recent: true },
-  { state: "partly", page: "mia-2", due: 3, stepHours: 20, paid: 1, price: 240_000, note: "Видео есть, фото ещё ждём" },
-  { state: "paid", page: "ivy-1", due: 5, stepHours: 28, paid: 1, price: 155_000 },
-  { state: "checked", page: "nova-1", due: 6, stepHours: 52, paid: 0.4, price: 230_000, approximate: true, recent: true },
-  { state: "at_model", page: "mia-3", due: 4, stepHours: 26, paid: 1, price: null, recent: true },
+  { state: "at_model", page: "mia-1", due: -3, stepHours: 120, paid: 100, price: 380_000 },
+  { state: "revision", page: "mia-2", due: -2, stepHours: 30, paid: 100, price: 220_000, note: "Фото тёмные: переснять у окна" },
+  { state: "shot", page: "mia-1", due: 2, stepHours: 15, paid: 100, price: 260_000 },
+  { state: "at_model", page: "ivy-1", due: 8, stepHours: 50, paid: 100, price: 190_000, issue: "У модели в карточке другой срок, чем в заказе" },
+  { state: "paid", page: "nova-1", due: null, stepHours: 60, paid: 100, price: 170_000, fanAskedHours: 20 },
+  { state: "refused", page: "ivy-2", due: 4, stepHours: 10, paid: 100, price: 180_000, note: "Модель не снимает такие сцены" },
+  { state: "at_model", page: "mia-of", due: 5, stepHours: 40, paid: 100, price: 140_000, reversed: true },
+  { state: "shot", page: "mia-3", due: 0, stepHours: 5, paid: 50, price: 360_000, sentHours: 3 },
+  { state: "at_model", page: "mia-2", due: -1, stepHours: 70, paid: 100, price: 125_000 },
+  { state: "shot", page: "mia-1", due: 2, stepHours: 2, paid: 100, price: 45_000, recent: true },
+  { state: "partly", page: "mia-2", due: 3, stepHours: 20, paid: 100, price: 240_000, note: "Видео есть, фото ещё ждём" },
+  { state: "paid", page: "ivy-1", due: 5, stepHours: 28, paid: 100, price: 155_000 },
+  { state: "checked", page: "nova-1", due: 6, stepHours: 52, paid: 40, price: 230_000, approximate: true, recent: true },
+  { state: "at_model", page: "mia-3", due: 4, stepHours: 26, paid: 100, price: null, recent: true },
   { state: "at_model", page: "mia-vip-of", due: 7, stepHours: 12, paid: 0, price: 280_000, word: "off_platform" },
   { state: "recorded", page: "mia-1", due: null, stepHours: 6, paid: 0, price: 480_000 },
-  { state: "at_model", page: "ivy-2", due: null, stepHours: 90, paid: 1, price: 135_000, hold: "Ждём от фана фото образа" },
+  { state: "at_model", page: "ivy-2", due: null, stepHours: 90, paid: 100, price: 135_000, hold: "Ждём от фана фото образа" },
   { state: "recorded", page: null, due: null, stepHours: 30, paid: 0, price: null, imported: true },
-  { state: "at_model", page: "nova-1", due: 12, stepHours: 18, paid: 1, price: 210_000 },
+  { state: "at_model", page: "nova-1", due: 12, stepHours: 18, paid: 100, price: 210_000 },
   { state: "recorded", page: "mia-2", due: 9, stepHours: 3, paid: 0, price: 65_000 },
-  { state: "given", page: "mia-1", due: 1, stepHours: 20, paid: 1, price: 310_000 },
-  { state: "given", page: "ivy-1", due: -1, stepHours: 50, paid: 1, price: 145_000 },
-  { state: "closed", page: "mia-2", due: -6, stepHours: 24 * 5, paid: 1, price: 205_000 },
-  { state: "closed", page: "nova-1", due: -10, stepHours: 24 * 9, paid: 1, price: 115_000 },
-  { state: "closed", page: "mia-3", due: -14, stepHours: 24 * 16, paid: 1, price: 85_000 },
+  { state: "given", page: "mia-1", due: 1, stepHours: 20, paid: 100, price: 310_000 },
+  { state: "given", page: "ivy-1", due: -1, stepHours: 50, paid: 100, price: 145_000 },
+  { state: "closed", page: "mia-2", due: -6, stepHours: 24 * 5, paid: 100, price: 205_000 },
+  { state: "closed", page: "nova-1", due: -10, stepHours: 24 * 9, paid: 100, price: 115_000 },
+  { state: "closed", page: "mia-3", due: -14, stepHours: 24 * 16, paid: 100, price: 85_000 },
 ];
 
 const DEMO_CHAT = "1000000001";
@@ -166,8 +166,8 @@ function seedOrder(index: number, now: number, random: () => number): DemoOrder 
   const due = scenario ? scenario.due : index % 5 === 3 ? null : [3, -2, 1, 5, 0, -4, 6][index % 7]!;
   const deadlineOn = due === null ? null : mskDay(now + due * DAY);
   const priceMills = scenario ? scenario.price : [150_000, 150_000, null, 200_000, 60_000, 200_000, 80_000, null][index % 8]!;
-  const paidShare = scenario ? scenario.paid : state === "recorded" ? 0 : 1;
-  const gross = Math.round((priceMills ?? 150_000) * paidShare / 1000) * 1000;
+  const paidPercent = scenario ? scenario.paid : state === "recorded" ? 0 : 100;
+  const gross = ((priceMills ?? 150_000) * paidPercent) / 100;
   const paid = gross > 0 && !imported;
   const history: DemoOrder["history"] = [{ at: isoAt(createdAt), event: "custom_order.recorded", actor: imported ? null : nameOf(acceptor), onBehalfOf: null, door: imported ? "system" : index % 2 === 0 ? "extension" : "api", changes: {} }];
   const recent = scenario?.recent === true;
