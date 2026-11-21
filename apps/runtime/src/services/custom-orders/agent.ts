@@ -121,11 +121,12 @@ function saleRefusalOf(error: unknown): AgentCustomSaleOutcome["reason"] | null 
 
 /**
  * The sales a create names, each checked (evidence.ts) and the ones that hold linked by the payment step, one by one:
- * a sale that does not hold never fails the create — the answer says, per sale, linked or why not.
+ * a sale that does not hold never fails the create — the answer says, per sale, linked or why not. The one-off backfill
+ * links its sales by the same path (backfill.ts).
  */
-async function linkNamedSales(
+export async function linkNamedSales(
   app: AgentApp,
-  scope: AgentCustomScope,
+  scope: Pick<AgentCustomScope, "pages" | "money">,
   orderId: number,
   sales: readonly AgentSaleRequest[],
   actor: CustomActor,
