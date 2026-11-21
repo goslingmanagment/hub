@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import { CUSTOM_STATE_WORDS, parseCustomOrderCode } from "@agency_hub_core/contracts";
 
 import { createAppContext } from "../../bootstrap.ts";
+import { customOrdersBackfillFileSchema, runCustomOrdersBackfill } from "./backfill.ts";
 import {
   applyCustomOrdersImport,
   customOrdersImportArgsSchema,
@@ -28,7 +29,44 @@ import { settleCustomOrders } from "./index.ts";
 // An order a person moved by their own hand after its newest message is listed and left as it is. A second run of
 // --apply finds nothing to settle.
 
+// The one-off backfill of the orders open before the facts (customs facts spec §14), on the owner's word only:
+//   pnpm cli custom-orders:backfill --file <backfill.json> [--json]      what it would do per order; writes nothing
+//   pnpm cli custom-orders:backfill --file <backfill.json> --apply       the fan and page, the price, the sales, «отдан»
+// The file (version 1, `{orders: {"K-123": {…}}}`) is prepared from the audit outside the repository. Each thing is
+// checked as the doors check it and answered: would, done, already, or refused with the reason. A second --apply
+// changes nothing; no order is closed by it.
+
 export function registerCustomOrderCommands(program: Command) {
+  program
+    .command("custom-orders:backfill")
+    .description("Bring the audit's facts (fan and page, price, sales, «отдан») to the orders open before the facts; --apply writes them")
+    .requiredOption("--file <path>", "the backfill file (JSON, version 1), prepared outside the repository")
+    .option("--apply", "apply what holds (a second run changes nothing)")
+    .option("--json", "print the rows as JSON")
+    .action(async (options: { file: string; apply?: boolean; json?: boolean }) => {
+      const file = customOrdersBackfillFileSchema.parse(JSON.parse(await readFile(options.file, "utf8")));
+      const app = await createAppContext();
+      try {
+        const rows = await runCustomOrdersBackfill(app, file, { apply: options.apply === true });
+        if (options.json) {
+          console.log(JSON.stringify(rows, null, 2));
+        } else {
+          for (const row of rows) {
+            console.log(`${row.code}\t${row.state === null ? "—" : `«${CUSTOM_STATE_WORDS[row.state]}»`}`);
+            for (const one of row.lines) console.log(`\t${one.subject}\t${one.outcome}${one.reason === null ? "" : `: ${one.reason}`}`);
+          }
+        }
+        const lines = rows.flatMap((row) => row.lines);
+        const count = (outcome: string) => lines.filter((one) => one.outcome === outcome).length;
+        console.error(JSON.stringify({
+          orders: rows.length, would: count("would"), done: count("done"), already: count("already"), refused: count("refused"),
+          written: options.apply === true,
+        }));
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("custom-orders:settle")
     .description("List the custom orders whose kept messages disagree with their state; --apply puts each where its messages say")

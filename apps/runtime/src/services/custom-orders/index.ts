@@ -516,8 +516,11 @@ export type CustomStep =
   | { action: "revision"; note?: string | undefined; ref?: string | undefined; message?: CustomMessageInput; ordinal?: number; part?: CustomPart | undefined }
   | { action: "shot"; ref?: string | undefined }
   | { action: "refused"; reason: string; ref?: string | undefined }
-  /** `messageRef` null — given by a person's word, no message named. */
-  | { action: "given"; messageRef: string | null; at: Date }
+  /**
+   * `messageRef` null — given by a person's word, no message named; `note` — whose word and where, as the one-off
+   * backfill carries it (kept in the history only).
+   */
+  | { action: "given"; messageRef: string | null; at: Date; note?: string | undefined }
   /** «Отдан» taken back: «снят» again; a delivering message the system or an agent named stays off the order. */
   | { action: "ungive"; undoOf?: number | undefined }
   | { action: "close" }
@@ -982,7 +985,7 @@ export async function applyCustomStep(
             orderId: order.id, from: [order.state], to: "given", given: { messageRef: step.messageRef, at: step.at }, clear: { sent: true, fanAsked: true }, at: now,
           });
           await event("given", step.messageRef === null
-            ? { from: order.state, byWord: true }
+            ? { from: order.state, byWord: true, ...(step.note === undefined ? {} : { note: step.note, at: step.at.toISOString() }) }
             : { from: order.state, messageRef: step.messageRef, sentAt: step.at.toISOString() });
           return true;
         }
