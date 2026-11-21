@@ -299,7 +299,7 @@ describe("stand-in pages (0435)", () => {
     await db.execute(sql`insert into user_page_assignments (user_id, platform_account_id) values (${anton}, ${liveOf.id})`);
     const patched = await call("PATCH", "/api/v1/admin/config", cookie.owner, { patches: [
       { key: "chatExtensionEnabled", value: true },
-      { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { fanPanel: true }, "live-1": { fanPanel: true }, "test-live-1": { fanPanel: true } }) },
+      { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { fanPanel: true, ofFeed: true }, "live-1": { fanPanel: true }, "test-live-1": { fanPanel: true }, "test-live-of": { fanPanel: true } }) },
       { key: "chatExtensionHostBindings", value: JSON.stringify({ "onlymonster:36408": "live-of" }) },
     ] });
     expect(patched.statusCode, patched.body).toBe(200);
@@ -332,6 +332,8 @@ describe("stand-in pages (0435)", () => {
       platform: "onlyfans", platformAccountId: LIVE_ONLYFANS_ACCOUNT, title: "Lana OF (тест)", features: { fanPanel: { available: true } },
     });
     expect(page("test-of")).toMatchObject({ platformAccountId: null, features: { fanPanel: { available: false, reason: "binding_missing" } } });
+    // A stand-in reads its own row alone: what `"*"` switches on for every OnlyFans page (the feed) stays off on it.
+    expect(page("test-live-of")?.features.ofFeed).toMatchObject({ available: false, reason: "flag_off" });
     expect(test.bindingsByHost).toEqual({ "onlymonster:36408": page("test-live-of")!.pageId });
     expect(test.pages.map((one) => one.pageLabel).filter((label) => !label.startsWith("test-"))).toEqual([]);
     // The stand-in's own account stays empty: nothing syncs it, and the OnlyFans feed's account check still refuses it.

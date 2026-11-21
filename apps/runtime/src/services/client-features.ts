@@ -340,8 +340,11 @@ export function evaluateClientFeature(input: {
   if (requirement === undefined) {
     return unavailable("platform_unsupported");
   }
+  // A stand-in (0435) reads its own row alone: the `"*"` row switches on what reads the real account into Hub (the
+  // OnlyFans feed, its poll, the online probe), and a stand-in's tab must not do that for the test team.
+  const star = clientStarRowReaches(input.page.platform) && (input.page.standsInForLabel ?? null) === null;
   const on = flagValue(input.settings, input.page.label, input.flag)
-    ?? (clientStarRowReaches(input.page.platform) ? flagValue(input.settings, "*", input.flag) : undefined)
+    ?? (star ? flagValue(input.settings, "*", input.flag) : undefined)
     ?? false;
   if (!on) {
     return unavailable("flag_off");
