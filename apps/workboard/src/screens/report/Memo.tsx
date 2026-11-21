@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { BoardApi } from "./useBoard";
 
 type Report = BoardApi["report"];
 type ModelComment = NonNullable<Report["view"]>["comments"][number];
 
 /**
- * «Комментарий для следующей смены» in the rail: one field per post (a model's), each saving its own model; a report
- * with no page yet, the one general field. Two models or more: each field named by its model.
+ * «Комментарий для следующей смены» in the rail while the report is edited (the hand-in takes it): one field per post
+ * (a model's), each saving its own model; a report with no page yet, the one general field. Two models or more: each
+ * field named by its model.
  */
 export function Memos({ api }: { api: BoardApi }) {
   const comments = api.report.view?.comments ?? [];
@@ -26,38 +27,56 @@ export function Memos({ api }: { api: BoardApi }) {
   );
 }
 
-/** One comment for the next shift (a model's, or the general one): saved on Enter, on leaving the field, and after a pause in typing. */
+/**
+ * One comment for the next shift (a model's, or the general one): saved on Enter, on leaving the field, after a pause in
+ * typing, before the phase's presses (`flushMemos`) and when the board goes away. Its own write: a save never holds
+ * «Сдать смену» down.
+ */
 function Memo({ api, model, id }: { api: BoardApi; model: ModelComment | null; id: string }) {
   const saved = model?.comment ?? api.report.view?.comment ?? "";
   const [text, setText] = useState(saved);
   const last = useRef(saved);
+  const typed = useRef(saved);
   const timer = useRef<number | null>(null);
+  const inFlight = useRef<Promise<unknown>>(Promise.resolve());
+  const slug = model?.modelSlug ?? null;
+  const { saveComment, memoFlushes } = api;
   useEffect(() => {
     // Hub's comment comes back with every read; the field keeps what is being typed.
     if (timer.current === null && text === last.current && saved !== last.current) {
       setText(saved);
+      typed.current = saved;
       last.current = saved;
     }
   }, [saved, text]);
-  useEffect(() => () => {
-    if (timer.current !== null) window.clearTimeout(timer.current);
-  }, []);
-  const flush = (value: string) => {
+  const flush = useCallback(() => {
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = null;
-    if (value === last.current) return;
-    last.current = value;
-    void api.run(model === null ? { op: "comment", comment: value } : { op: "comment", comment: value, modelSlug: model.modelSlug });
-  };
+    if (typed.current !== last.current) {
+      last.current = typed.current;
+      inFlight.current = saveComment(typed.current, slug);
+    }
+    return inFlight.current;
+  }, [saveComment, slug]);
+  useEffect(() => {
+    memoFlushes.current.add(flush);
+    const flushes = memoFlushes.current;
+    return () => {
+      flushes.delete(flush);
+      // Leaving the board (a link, another shift): what was typed is sent, not dropped.
+      void flush();
+    };
+  }, [flush, memoFlushes]);
   return (
     <textarea className="fld memo" id={id} rows={3} value={text} placeholder="Что важно знать следующей смене" maxLength={2000}
       onChange={(event) => {
         const value = event.target.value;
         setText(value);
+        typed.current = value;
         if (timer.current !== null) window.clearTimeout(timer.current);
-        timer.current = window.setTimeout(() => flush(value), 1_000);
+        timer.current = window.setTimeout(() => void flush(), 1_000);
       }}
-      onBlur={() => flush(text)}
+      onBlur={() => void flush()}
       onKeyDown={(event) => {
         // One line of text, as the post takes it: Enter saves.
         if (event.key === "Enter" && !event.nativeEvent.isComposing) {

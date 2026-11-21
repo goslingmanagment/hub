@@ -14,13 +14,18 @@ export function Header({ api }: { api: BoardApi }) {
       <div className="top-in">
         <div className="top-l">
           {host === "tab" && (
-            <Link to="/" className="btn btn--quiet btn--sm top-back" title="Вернуться в Workboard"><Ico name="back" size={15} />На главную</Link>
+            // The comment for the next shift typed and not sent yet goes with the way out.
+            <Link to="/" className="btn btn--quiet btn--sm top-back" title="Вернуться в Workboard" onClick={() => void api.flushMemos()}>
+              <Ico name="back" size={15} />На главную
+            </Link>
           )}
           <div className="top-t">
             <h1>{titleOf(report.shift.personName, own)}</h1>
             <span className="top-d">{whenOf(report.shift)}</span>
           </div>
           {(!own || preview) && <span className="ro"><Ico name="lock" size={13} />{preview ? "Просмотр" : "Только чтение"}</span>}
+          {/* Where the steps have no room (a narrow window), the phase in one word. */}
+          {!preview && <span className="phase">{api.board.chip}</span>}
         </div>
         {!preview && (
           <ol className="steps" aria-label="Этапы отчёта">

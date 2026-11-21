@@ -4,12 +4,14 @@ import {
   amountOf,
   canTick,
   clock,
+  fanOf,
   hasMenu,
   isLateOpen,
   isLost,
   noteOf,
   pillOf,
   reasonOf,
+  rowTitleOf,
   tickLook,
   wantsNote,
   type Row,
@@ -27,7 +29,7 @@ export function SaleRow({ api, row }: { api: BoardApi; row: Row }) {
   const time = clock(row.occurredAt);
   const findable = host === "frame";
   const findTitle = fansly ? `Показать на Fansly, номер ${row.platformRef ?? ""}` : "Показать в выписке ChatSpace";
-  const reason = reasonOf(row);
+  const reason = reasonOf(board, row);
   const amount = amountOf(row);
   const noteShown = noteOf(row) !== null;
   const cls = ["row"];
@@ -43,7 +45,7 @@ export function SaleRow({ api, row }: { api: BoardApi; row: Row }) {
         ? <span className="tm">{time}</span>
         : <button type="button" className="tm is-find" title={findTitle} onClick={() => api.find(row)}>{time}</button>}
       <div className="ds">
-        <div className="l1"><span className="sw">{row.siteWords}</span> <b>{row.fan.name ?? row.fan.username ?? ""}</b></div>
+        <div className="l1" title={rowTitleOf(row)}>{row.siteWords} <b>{fanOf(row)}</b></div>
         {(row.refLabel !== null || reason !== null) && (
           <div className="l2">
             {row.refLabel !== null && (findable
@@ -70,7 +72,7 @@ export function SaleRow({ api, row }: { api: BoardApi; row: Row }) {
         {amount.sub !== null && <div className="am2">{amount.sub}</div>}
       </div>
       <div className="cmc">
-        {row.canNote && !preview && !noteShown && api.edit?.key !== row.key && (
+        {row.canNote && !preview && !noteShown && api.edit !== row.key && (
           <button type="button" className={`cm${wantsNote(row) ? " is-ask" : ""}`} aria-label="Комментарий к продаже"
             title={wantsNote(row) ? "Продажа от $30: напишите пару слов" : "Комментарий"}
             onClick={() => api.openNote(row.key)}><Ico name="note" size={17} /></button>
@@ -88,7 +90,7 @@ function Tick({ api, row }: { api: BoardApi; row: Row }) {
   const cls = look === "mix" ? " is-mix" : look === "on" ? " is-on" : "";
   const inner = look === "mix" ? <Ico name="dash" size={13} /> : look === "on" ? <Ico name="tick" size={14} /> : null;
   const checked = look === "mix" ? "mixed" as const : look === "on";
-  const label = `${row.siteWords} ${row.fan.name ?? ""}, ${clock(row.occurredAt)}`;
+  const label = `${row.siteWords} ${fanOf(row)}, ${clock(row.occurredAt)}`;
   if (!canTick(api.board, row, api.preview)) {
     return <span className={`ck${cls}`} role="checkbox" aria-checked={checked} aria-disabled="true" aria-label={label}>{inner}</span>;
   }

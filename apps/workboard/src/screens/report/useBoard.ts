@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ShiftReportResponse } from "@agency_hub_core/contracts";
 import { KernelApiError, hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { phaseConflictReport, useBoardWrite, type Write } from "./data";
@@ -9,9 +9,11 @@ import {
   choiceToast,
   deciderForms,
   deciderOf,
-  frameState,
-  keyOfOwner,
+  fanOf,
+  hasMenu,
   keyOfTransaction,
+  oldWayOwn,
+  pickOf,
   rowByKey,
   tickChoice,
   upper,
@@ -21,27 +23,30 @@ import {
   type Row,
 } from "./model";
 import type { PortTransport } from "./transport";
+import { useBoardExtension } from "./useBoardExtension";
+import { stripToastOf, type StripAct } from "./words";
 
 /**
  * The «Отчёт» board's state and writes, in one place: what is open (the «чья» menu, a row's form, a panel), what is lit
  * and selected, and every press as Hub's write. Everything the board shows is Hub's `board`; a press is a write, and the
- * board is Hub's answer. The parts (Header, PageCard, SaleRow, OwnerMenu, Rail) only draw it and call these.
+ * board is Hub's answer. The parts (Header, PageCard, SaleRow, OwnerMenu, Rail) only draw it and call these; the text
+ * being typed stays in its field (the board is not drawn again for a letter), only its save comes here.
  *
  * In a tab there is no site under the board: no «Свернуть», and a sale's number is plain text. In the frame «Свернуть»
- * hides the frame, the number asks the extension to find the row on the site, and every change of phase or totals goes
- * to the extension's bar.
+ * hides the frame, the number asks the extension to find the row on the site (useBoardExtension.ts).
  */
 
 export type Host = "tab" | "frame";
 
-/** «Почему продажа ваша?» under a row: the word chosen and the line of why. */
-export interface AskDraft { key: string; choice: Choice; text: string }
-/** A sale's comment being written. */
-export interface NoteDraft { key: string; draft: string }
-/** «Не согласен» with Gengar's card: the one line of why, sent to whoever decides the sale. */
-export interface RefuseDraft { key: string; proposalId: number; text: string }
-/** What floats over the board besides the «чья» menu: «Ещё», its two panels, the keys. */
+/** The form of why under a row: the word chosen; the line itself is the form's own. */
+export interface AskOpen { key: string; choice: Choice; initial: string }
+/** «Не согласен» with Gengar's card. */
+export interface RefuseOpen { key: string; proposalId: number }
+/** What floats over the board besides the «чья» menu: «Ещё», its two windows, the keys. */
 export type Panel = "more" | "off" | "find" | "keys" | null;
+
+/** How long a lit row stays lit (its fade). */
+const LIT_MS = 2_600;
 
 export function useBoard({ report, host, transport, light }: {
   report: ShiftReportResponse & { board: Board };
@@ -57,25 +62,24 @@ export function useBoard({ report, host, transport, light }: {
   const preview = own && (board.preview ?? (report.boardShift === false || report.enabled === false));
   const editing = own && !preview && (board.phase === "draft" || board.phase === "fixing");
   const write = useBoardWrite(shiftId);
+  // The comment for the next shift writes apart: its save on leaving the field never holds the phase's press.
+  const commentWrite = useBoardWrite(shiftId);
   const mainRef = useRef<HTMLElement>(null);
 
   // ── what is open ──
   const [menu, setMenu] = useState<string | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
-  const [ask, setAsk] = useState<AskDraft | null>(null);
-  const [edit, setEdit] = useState<NoteDraft | null>(null);
-  const [refuse, setRefuse] = useState<RefuseDraft | null>(null);
+  const [ask, setAsk] = useState<AskOpen | null>(null);
+  /** The sale whose comment is being written; its text is the field's (`noteDraft`). */
+  const [edit, setEdit] = useState<string | null>(null);
+  const noteDraft = useRef("");
+  const [refuse, setRefuse] = useState<RefuseOpen | null>(null);
   const [beforeOpen, setBeforeOpen] = useState<Record<string, boolean>>({});
-  /** Lit rows (a link, Hub's found ones, a fresh write), and the row the keys stand on. */
+  /** Lit rows (a link, Hub's found ones, a fresh write) for a moment, and the row the keys stand on. */
   const [lit, setLit] = useState<string[]>(light ? [keyOfTransaction(light)] : []);
   const [selected, setSelected] = useState<string | null>(null);
-  /** The site could not find the row: a quiet line under it until the person's next action. */
-  const [miss, setMiss] = useState<{ key: string | null; words: string } | null>(null);
-  /** «Подтверждаю» was refused because the board changed: what the person saw, for «Было …». */
+  /** «Подтверждаю» was refused because the board changed: what the person saw, for «было …». */
   const [seenMills, setSeenMills] = useState<number | null>(null);
-  /** The frame is hidden by the extension (after «Свернуть» or a sale's number) until it says `show`. */
-  const hidden = useRef(false);
-  const missToast = useRef<string | null>(null);
   const editRef = useRef(edit);
   editRef.current = edit;
 
@@ -91,9 +95,10 @@ export function useBoard({ report, host, transport, light }: {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
   }, []);
 
-  const run = useCallback(async (one: Write, done?: string | null | ((answer: unknown) => string | null)): Promise<boolean> => {
+  /** A write and its toast; a failure says itself. */
+  const runWith = useCallback(async (mutation: typeof write, one: Write, done?: string | null | ((answer: unknown) => string | null)): Promise<boolean> => {
     try {
-      const answer = await write.mutateAsync(one);
+      const answer = await mutation.mutateAsync(one);
       const text = typeof done === "function" ? done(answer) : done;
       if (text) toast(text);
       return true;
@@ -107,7 +112,14 @@ export function useBoard({ report, host, transport, light }: {
         : status === null || status >= 500 ? "Hub не ответил: неизвестно, сохранилось ли" : "Не получилось. Hub вернул ошибку");
       return false;
     }
-  }, [write, toast, host]);
+  }, [toast, host]);
+  const run = useCallback((one: Write, done?: string | null | ((answer: unknown) => string | null)) => runWith(write, one, done), [runWith, write]);
+
+  // ── the comment for the next shift: each field registers its save, the phase's presses wait for it ──
+  const memoFlushes = useRef(new Set<() => Promise<unknown>>());
+  const saveComment = useCallback((comment: string, modelSlug: string | null) =>
+    runWith(commentWrite, modelSlug === null ? { op: "comment", comment } : { op: "comment", comment, modelSlug }), [runWith, commentWrite]);
+  const flushMemos = useCallback(() => Promise.all([...memoFlushes.current].map((flush) => flush())), []);
 
   // ── scrolling to a row ──
   const reveal = useCallback((key: string, how: "center" | "near") => {
@@ -132,6 +144,12 @@ export function useBoard({ report, host, transport, light }: {
     pendingReveal.current = null;
     reveal(key, "center");
   });
+  // A lit row fades and is ordinary again: its hover and the keys' fill come back.
+  useEffect(() => {
+    if (lit.length === 0) return;
+    const timer = window.setTimeout(() => setLit([]), LIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [lit]);
 
   /** Light a row and bring it into view, its folded group opened. */
   const show = useCallback((key: string) => {
@@ -157,56 +175,8 @@ export function useBoard({ report, host, transport, light }: {
     // Once, on the board the link opened.
   }, []);
 
-  // ── the extension ──
-  useEffect(() => {
-    if (!transport) return;
-    return transport.on((message) => {
-      if (message.t === "show") {
-        hidden.current = false;
-        if (typeof message.transactionId === "number") show(keyOfTransaction(message.transactionId));
-        // What the site did not find is said once the board is seen again.
-        if (missToast.current !== null) {
-          toast(missToast.current);
-          missToast.current = null;
-        }
-      } else if (message.t === "found" && !message.ok && message.words) {
-        // The extension could not find the row on the site: a toast when the board is visible, and a quiet line under
-        // the row until the person's next action. `ok: true` needs nothing.
-        const words = message.words;
-        setMiss({ key: message.transactionId === null ? null : keyOfTransaction(message.transactionId), words });
-        if (hidden.current) missToast.current = words;
-        else toast(words);
-      }
-    });
-  }, [transport, show, toast]);
-  // The quiet line «Строка на сайте не найдена…» leaves with the next action on the visible board.
-  useEffect(() => {
-    if (miss === null) return;
-    const clear = () => {
-      if (!hidden.current) setMiss(null);
-    };
-    document.addEventListener("pointerdown", clear, true);
-    document.addEventListener("keydown", clear, true);
-    return () => {
-      document.removeEventListener("pointerdown", clear, true);
-      document.removeEventListener("keydown", clear, true);
-    };
-  }, [miss]);
-  // What the extension's bar shows: sent on every change of phase or totals.
-  const state = useMemo(() => JSON.stringify(frameState(shiftId, board)), [shiftId, board]);
-  useEffect(() => {
-    transport?.post(JSON.parse(state) as ReturnType<typeof frameState>);
-  }, [transport, state]);
-  // An OnlyFans page that waits for ChatSpace's statement: ask the extension to read it again, once per candidate.
-  const statementAsked = useRef<number | null>(null);
-  useEffect(() => {
-    const candidate = board.candidate;
-    if (!transport || !candidate || statementAsked.current === candidate.id) return;
-    const pages = candidate.hub.pages.filter((page) => page.state === "statement").map((page) => page.pageLabel);
-    if (pages.length === 0) return;
-    statementAsked.current = candidate.id;
-    transport.post({ t: "statement", pages });
-  }, [transport, board.candidate]);
+  const { hidden, miss, setMiss } = useBoardExtension({ transport, shiftId, board, show, toast });
+
   // Gengar's late reading after «по проверке Hub»: «замечаний нет» clears the waiting line.
   const gengarWas = useRef(board.candidate?.gengar.state ?? null);
   useEffect(() => {
@@ -214,29 +184,39 @@ export function useBoard({ report, host, transport, light }: {
     if (board.phase === "counted" && gengarWas.current === "silent" && now === "clean") toast("Генгар дочитал: замечаний нет");
     gengarWas.current = now;
   }, [board.phase, board.candidate?.gengar.state, toast]);
-  // «Было …» lives while the board waits for the second press.
+  // A new phase closes what belonged to the old one: the windows, the menu, the forms of a draft.
   useEffect(() => {
+    setPanel(null);
+    setMenu(null);
+    setAsk(null);
+    if (board.phase !== "confirm") setRefuse(null);
+    // «Было …» lives while the board waits for the second press.
     if (board.phase !== "confirm") setSeenMills(null);
   }, [board.phase]);
+  // The menu of a row that cannot change any more (Hub's answer, a colleague's word) closes.
+  const menuRow = menu === null ? null : rowByKey(board, menu);
+  useEffect(() => {
+    if (menu !== null && (menuRow === null || !hasMenu(board, menuRow, preview))) setMenu(null);
+  }, [board, menu, menuRow, preview]);
 
   // ── comments ──
-  /** Save the open comment: an empty one deletes it. */
+  /** Save the open comment: an empty one deletes it. The word of the sale is not sent: Hub keeps it as it stands. */
   const commitNote = useCallback(async () => {
     const open = editRef.current;
     if (open === null) return;
     setEdit(null);
-    const row = rowByKey(board, open.key);
+    const row = rowByKey(board, open);
     if (!row || row.transactionId === null) return;
-    const text = open.draft.trim();
+    const text = noteDraft.current.trim();
     const was = row.note?.by === "person" ? row.note.text : "";
     const agent = agentNote(row);
     if (text === was || (was === "" && agent !== null && text === agent)) return;
-    await run({ op: "line", transactionId: row.transactionId, body: { ...lineOf(row), note: text === "" ? null : text } });
+    await run({ op: "line", transactionId: row.transactionId, body: { note: text === "" ? null : text } });
   }, [board, run]);
   const openNote = useCallback((key: string, draft?: string) => {
     const row = rowByKey(board, key);
     if (!row) return;
-    if (editRef.current?.key === key) {
+    if (editRef.current === key) {
       void commitNote();
       return;
     }
@@ -244,37 +224,45 @@ export function useBoard({ report, host, transport, light }: {
     setAsk(null);
     setMenu(null);
     setSelected(key);
-    setEdit({ key, draft: draft ?? (row.note?.text ?? agentNote(row) ?? "") });
+    noteDraft.current = draft ?? row.note?.text ?? agentNote(row) ?? "";
+    setEdit(key);
   }, [board, commitNote]);
+  const cancelNote = useCallback(() => {
+    const open = editRef.current;
+    setEdit(null);
+    if (open !== null) focusRow(open);
+  }, []);
 
   // ── the menu, the tick, the questions ──
   const unask = useCallback((row: Row) => {
     if (row.transactionId === null) return Promise.resolve(false);
-    return run({ op: "unask", transactionId: row.transactionId }, row.ask?.taken === true ? takenBack(row) : "Вопрос отменён");
-  }, [run]);
+    return run({ op: "unask", transactionId: row.transactionId }, stripToastOf(board, row, "unask"));
+  }, [run, board]);
 
   const apply = async (row: Row, choice: Choice) => {
     setMenu(null);
     if (row.transactionId === null) return;
-    const asking = row.ask !== null && row.ask.state === "asked";
-    if ((asking || row.ask?.taken === true) && choice.key === keyOfOwner(row.owner)) {
+    const pick = pickOf(row, choice);
+    if (pick === "none") return;
+    if (pick === "unask") {
       await unask(row);
       return;
     }
-    // A word that makes the person's share larger on someone else's sale takes one line of why (the server refuses it
-    // without): the same field, and with no one to ask the sale is taken at once.
-    if (choice.question !== null || (choice.line.statement === "mine" && personNote(row) === null)) {
+    // A question, «Моя» without a line of why yet, a word the decider decides: the line of why first.
+    const note = personNote(row);
+    if (choice.needsWhy && !(choice.question === null && choice.line.statement === "mine" && note !== null)) {
       await commitNote();
-      setAsk((one) => ({ key: row.key, choice, text: one?.key === row.key ? one.text : "" }));
+      setAsk({ key: row.key, choice, initial: choice.asks?.to === "decider" && choice.question === null ? note ?? "" : "" });
       return;
     }
     setAsk((one) => (one?.key === row.key ? null : one));
-    await run({ op: "line", transactionId: row.transactionId, body: { ...choice.line, note: personNote(row) } }, choiceToast(board, row, choice));
+    // The word alone: Hub keeps the sale's comment as it stands.
+    await run({ op: "line", transactionId: row.transactionId, body: { ...choice.line } }, choiceToast(board, row, choice));
   };
 
   const tick = async (row: Row) => {
     if (!canTick(board, row, preview) || row.transactionId === null) return;
-    if (row.ask !== null && (row.ask.state === "asked" || row.ask.taken === true)) {
+    if (row.ask !== null && (row.ask.state === "asked" || row.ask.taken === true) && !oldWayOwn(row)) {
       await unask(row);
       return;
     }
@@ -286,20 +274,19 @@ export function useBoard({ report, host, transport, light }: {
     if (choice) await apply(row, choice);
   };
 
-  const sendAsk = async () => {
+  const sendAsk = async (text: string) => {
     if (ask === null) return;
     const row = rowByKey(board, ask.key);
-    const text = ask.text.trim();
-    if (!row || row.transactionId === null || text === "") return;
+    const why = text.trim();
+    if (!row || row.transactionId === null || why === "") return;
     const question = ask.choice.question;
     if (question === null) {
-      const taken = await run({ op: "line", transactionId: row.transactionId, body: { ...ask.choice.line, note: text } }, choiceToast(board, row, ask.choice));
-      if (taken) setAsk(null);
+      if (await run({ op: "line", transactionId: row.transactionId, body: { ...ask.choice.line, note: why } }, choiceToast(board, row, ask.choice))) setAsk(null);
       return;
     }
     const asks = ask.choice.asks;
     const transactionId = row.transactionId;
-    const ok = await run({ op: "ask", transactionId, statement: question.statement, shareWithUserId: question.shareWithUserId, note: text },
+    const ok = await run({ op: "ask", transactionId, statement: question.statement, shareWithUserId: question.shareWithUserId, note: why },
       asks?.to !== "colleague" ? `Вопрос ушёл ${deciderForms(board, row)?.dat ?? "владельцу"}`
         // A colleague with the board is told, not asked: the sale is written at once (owner, 2026-11-21), unless Hub
         // sent the word to the decider (their day is already paid, someone took the sale meanwhile): the row's own
@@ -308,17 +295,29 @@ export function useBoard({ report, host, transport, light }: {
           const fresh = boardOfAnswer(answer);
           const now = fresh === null ? undefined : allRows(fresh).find((one) => one.transactionId === transactionId);
           if (now?.ask != null && now.ask.taken !== true && now.reasonWords !== "") return upper(now.reasonWords);
-          return `${question.statement === "share" ? "Записано пополам" : "Записано вам"}. ${asks.forms?.nom ?? ""} узнает`;
+          return `${question.statement === "share" ? "Записано пополам" : "Записано вам"}. ${asks.forms?.nom ?? "Коллега"} узнает`;
         });
     if (ok) setAsk(null);
   };
 
-  const sendRefuse = async () => {
+  /** A strip's press: take the question back, or answer a colleague's word. */
+  const answer = (row: Row, act: StripAct) => {
+    if (act === "unask") {
+      void unask(row);
+      return;
+    }
+    const claimId = row.incoming?.claimId;
+    if (claimId === undefined) return;
+    void run({ op: "claim", claimId, answer: act === "disagree" ? "disagree" : "agree" }, stripToastOf(board, row, act));
+  };
+
+  /** «Не согласен» with Gengar's card: the one line of why, for whoever decides the sale. */
+  const sendRefuse = async (text: string) => {
     if (refuse === null) return;
     const row = rowByKey(board, refuse.key);
-    const text = refuse.text.trim();
-    if (!row || text === "") return;
-    if (await run({ op: "proposal", proposalId: refuse.proposalId, answer: "decline", note: text }, `Спор решит ${deciderOf(board, row).words}`)) setRefuse(null);
+    const why = text.trim();
+    if (!row || why === "") return;
+    if (await run({ op: "proposal", proposalId: refuse.proposalId, answer: "decline", note: why }, `Спор решит ${deciderOf(board, row).words}`)) setRefuse(null);
   };
 
   // ── the site ──
@@ -338,11 +337,12 @@ export function useBoard({ report, host, transport, light }: {
 
   const collapse = useCallback(() => {
     void commitNote();
+    void flushMemos();
     setMenu(null);
     setPanel(null);
     hidden.current = true;
     transport?.post({ t: "collapse" });
-  }, [commitNote, transport]);
+  }, [commitNote, flushMemos, transport, hidden]);
 
   // ── the phase's presses ──
   /** «Сдать смену» / «Сдать заново» with what the rail shows: equal to the report, it is the person's signature. */
@@ -350,7 +350,7 @@ export function useBoard({ report, host, transport, light }: {
     // ⌘Enter as well as the button: never a second hand-in while one is on its way.
     if (write.isPending) return;
     const seen = { seenTotalMills: board.totals.nowMills, seenCount: board.totals.count };
-    await commitNote();
+    await Promise.all([commitNote(), flushMemos()]);
     await run({ op: "submit", ...seen });
   };
 
@@ -360,7 +360,7 @@ export function useBoard({ report, host, transport, light }: {
    */
   const confirm = async () => {
     const candidate = board.candidate;
-    if (candidate === null || !board.canConfirm || write.isPending) return;
+    if (candidate === null || !board.canConfirm || !own || preview || write.isPending) return;
     const seen = { total: board.totals.nowMills, count: board.totals.count };
     await commitNote();
     try {
@@ -375,7 +375,7 @@ export function useBoard({ report, host, transport, light }: {
   };
 
   const reopen = async () => {
-    await commitNote();
+    await Promise.all([commitNote(), flushMemos()]);
     await run({ op: "reopen" });
   };
 
@@ -408,33 +408,28 @@ export function useBoard({ report, host, transport, light }: {
   const resend = (row: Row) => {
     if (row.transactionId === null) return;
     setLit([row.key]);
-    void run({ op: "resend", transactionIds: [row.transactionId] }, `Досдано: ${row.fan.name ?? ""} ${usd(row.netMills)} в отчёте`);
+    void run({ op: "resend", transactionIds: [row.transactionId] }, `Досдано: ${fanOf(row)} ${usd(row.netMills)} в отчёте`);
   };
 
   return {
     board, report, host, own, preview, editing, pending: write.isPending, seenMills, mainRef,
-    menu, setMenu, panel, setPanel, ask, setAsk, edit, setEdit, refuse, setRefuse, beforeOpen, setBeforeOpen,
+    menu, menuRow, setMenu, panel, setPanel, ask, setAsk, edit, noteDraft, cancelNote, refuse, setRefuse, beforeOpen, setBeforeOpen,
     lit, selected, setSelected, miss,
     toastText, toast, run, show, showMany, reveal,
-    commitNote, openNote, unask, apply, tick, sendAsk, sendRefuse, find, collapse, submit, confirm, reopen, copyPost, addSighting, resend,
+    commitNote, openNote, unask, apply, tick, sendAsk, answer, sendRefuse, find, collapse, submit, confirm, reopen, copyPost, addSighting, resend,
+    memoFlushes, saveComment, flushMemos,
   };
 }
 
 export type BoardApi = ReturnType<typeof useBoard>;
 
-/** The row's current word as a line's body: kept when only its comment changes. */
-function lineOf(row: Row) {
-  return {
-    statement: row.statement,
-    shareWithUserId: row.statement === "share" ? row.owner.userId : null,
-    toUserId: row.statement === "give" ? row.owner.userId : null,
-  };
+/** The focus back on a row (a field of it closed by Esc): the keys go on from it. */
+export function focusRow(key: string) {
+  requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-row="${CSS.escape(key)}"]`)?.focus({ preventScroll: true }));
 }
 
-/** The person's own comment of a row, sent along with a new word so the word does not drop it. */
+/** The person's own comment of a row: a line of why already said. */
 const personNote = (row: Row) => (row.note?.by === "person" ? row.note.text : null);
-/** A take given back: «Продажа снова Олега». */
-const takenBack = (row: Row) => `Продажа снова ${row.ask?.toUser?.forms.gen ?? row.rule.owner.words}`;
 
 /** The board a write's answer carries (the fresh report), if it does. */
 function boardOfAnswer(answer: unknown): Board | null {

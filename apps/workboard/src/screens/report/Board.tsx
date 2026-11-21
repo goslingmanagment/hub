@@ -3,14 +3,13 @@ import { Link } from "react-router";
 import { Header } from "./Header";
 import { Ico } from "./icons";
 import { useBoardKeys } from "./keys";
-import { otherShiftWords, plural, rowByKey, said, type Board } from "./model";
+import { byModel, otherShiftWords, plural, said, type Board } from "./model";
 import { OwnerMenu } from "./OwnerMenu";
 import { PageCard } from "./PageCard";
 import { Panels } from "./Panels";
 import { Rail } from "./Rail";
 import { useBoard, type BoardApi, type Host } from "./useBoard";
 import type { PortTransport } from "./transport";
-import "./board.css";
 
 /**
  * The «Отчёт» board (package R; the design of 2026-11-21, report-board-redesign/synthesis/mockup.html): one component,
@@ -28,7 +27,6 @@ export function ReportBoard({ report, host, transport, light }: {
 }) {
   const api = useBoard({ report, host, transport: transport ?? null, light: light ?? null });
   useBoardKeys(api);
-  const menuRow = api.menu === null ? null : rowByKey(api.board, api.menu);
   return (
     // In the frame the board takes the scheme the frame is given, never a choice saved in Workboard (board.css).
     <div className={host === "frame" ? "rb is-frame" : "rb"}>
@@ -42,7 +40,7 @@ export function ReportBoard({ report, host, transport, light }: {
           <Rail api={api} />
         </div>
       </main>
-      {menuRow && <OwnerMenu api={api} row={menuRow} key={menuRow.key} />}
+      {api.menuRow !== null && <OwnerMenu api={api} row={api.menuRow} key={api.menuRow.key} />}
       <Panels api={api} />
       <div className={`toast${api.toastText.on ? " is-on" : ""}`} role="status" aria-live="polite">{api.toastText.text}</div>
     </div>
@@ -51,18 +49,14 @@ export function ReportBoard({ report, host, transport, light }: {
 
 /** The pages as cards; a shift on two models' pages names each model over its pages. */
 function PageList({ api }: { api: BoardApi }) {
-  const columns = api.board.columns;
-  const models = [...new Set(columns.map((column) => column.modelName ?? ""))];
-  if (models.length < 2) return <>{columns.map((column) => <PageCard api={api} column={column} key={column.pageLabel} />)}</>;
   return (
     <>
-      {models.map((model) => {
-        const pages = columns.filter((column) => (column.modelName ?? "") === model);
-        return [
-          <div className="mh" key={`m-${model}`}><b>{model}</b><span>{pages.length} {plural(pages.length, "страница", "страницы", "страниц")}</span></div>,
-          ...pages.map((column) => <PageCard api={api} column={column} key={column.pageLabel} />),
-        ];
-      })}
+      {byModel(api.board.columns).map((group) => [
+        group.model === null ? null : (
+          <div className="mh" key={`m-${group.model}`}><b>{group.model}</b><span>{group.columns.length} {plural(group.columns.length, "страница", "страницы", "страниц")}</span></div>
+        ),
+        ...group.columns.map((column) => <PageCard api={api} column={column} key={column.pageLabel} />),
+      ])}
     </>
   );
 }
@@ -80,7 +74,7 @@ function Banners({ api }: { api: BoardApi }) {
           <Ico name="report" size={18} />
           <span className="t">{otherShiftWords(one)}</span>
           <Link to={host === "tab" ? `/report/${one.shiftId}` : { search: `?shift=${one.shiftId}` }} className="btn btn--sec btn--sm"
-            onClick={() => void api.commitNote()}>{one.ongoing ? "Вернуться" : "Открыть"}</Link>
+            onClick={() => void Promise.all([api.commitNote(), api.flushMemos()])}>{one.ongoing ? "Вернуться" : "Открыть"}</Link>
         </div>
       ))}
       {previous !== null && previous.comment.trim() !== "" && (

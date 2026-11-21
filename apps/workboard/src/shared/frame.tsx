@@ -51,10 +51,13 @@ export function FrameGate({ link, title, children }: { link: FrameLink; title: s
   return <>{children(link.transport)}</>;
 }
 
-/** One sentence in the middle of the window, in the board's look: the frames' states and a board that cannot be drawn. */
+/**
+ * One sentence in the middle of the window, in the board's look: the frames' states and a board that cannot be drawn. In
+ * a frame (the extension's) it takes the scheme the frame is given, as the board there does (board.css `.is-frame`).
+ */
 export function Gate({ children, waiting = false }: { children: ReactNode; waiting?: boolean }) {
   return (
-    <div className="rb">
+    <div className={window.parent !== window ? "rb is-frame" : "rb"}>
       <div className="view">
         <div className="gate" role={waiting ? "status" : undefined}>
           {waiting && <i className="spin" />}

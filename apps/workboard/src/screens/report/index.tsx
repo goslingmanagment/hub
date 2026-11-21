@@ -10,7 +10,6 @@ import { frameState } from "./model";
 import type { PortTransport } from "./transport";
 import type { Host } from "./useBoard";
 import type { ShiftReportResponse } from "@agency_hub_core/contracts";
-import "./board.css";
 
 /**
  * The «Отчёт» board's addresses (package R, R-board.md §1): `/report/:shiftId` and `/report` in a Workboard tab on the

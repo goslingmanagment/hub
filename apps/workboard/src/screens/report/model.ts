@@ -9,43 +9,41 @@ import {
   type ShiftReportPhase,
   type ShiftReportRow,
 } from "@agency_hub_core/contracts";
+import { millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
+import { formatDay, formatMills, formatSignedMills, formatTimeOfDay, unbreakable } from "@agency_hub_core/ui/format";
 import { ruPlural } from "@agency_hub_core/ui/plural";
 
 /**
- * The «Отчёт» board's words, read from Hub's `board` (shift-report-board.ts): how a row, its tick and its «чья» look,
- * what each item of the «Чья продажа» menu does and says, the phase's steps, the formats. Nothing here counts money:
- * every sum and share is Hub's (`amountMills`, `sumMills`, `totals`), and every rule is Hub's (`row.rule`, `choices`):
- * here they are only shortened into the board's words. No React here.
+ * The «Отчёт» board's rules of look, read from Hub's `board` (shift-report-board.ts): how a row, its tick, its «чья» and
+ * its amount look, what each item of the «Чья продажа» menu does and says, the phase's steps, the formats. Nothing here
+ * counts money: every sum and share is Hub's (`amountMills`, `sumMills`, `totals`), shown through Hub's own formats and
+ * rounding; every rule is Hub's (`row.rule`, `choices`), only shortened into the board's words. The words of what stands
+ * under a row and in the rail are words.ts. No React here.
  */
 
 export type Board = ShiftReportBoard;
 export type Row = ShiftReportRow;
+type Column = Board["columns"][number];
 
 // ── formats ───────────────────────────────────────────────────────────────────
 
-const dollars = (mills: number) => mills / 1000;
+/** Hub's own rounding to the cent (half up, as a page's sum): a half of $10.01 shows $5.01, as the page says. */
+const toCents = (mills: number) => millsToNumber(millsRoundedTo(mills, "cent"));
 /** `$477.40`, `$1,204.00`. */
-export function usd(mills: number): string {
-  return `$${dollars(mills).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
-}
+export const usd = (mills: number) => formatMills(toCents(mills));
 /** Fansly's way: `+$48`, `+$17.60`. */
-export function plus(mills: number): string {
-  return `+$${mills % 1000 === 0 ? dollars(mills) : dollars(mills).toFixed(2)}`;
-}
+export const plus = (mills: number) => `+${usd(mills).replace(/\.00$/, "")}`;
 /** A card's change of the person's sum: `+$8.00`, `−$24.00`. */
-export function signed(mills: number): string {
-  return `${mills > 0 ? "+" : "−"}${usd(Math.abs(mills))}`;
-}
-
-const clockFormat = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
-const dayFormat = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: "Europe/Moscow" });
+export const signed = (mills: number) => formatSignedMills(toCents(mills));
 /** `22:30`, Moscow. */
-export const clock = (iso: string) => clockFormat.format(new Date(iso));
-/** `12 нояб.`, Moscow (the day never apart from its month). */
-export const day = (iso: string) => dayFormat.format(new Date(iso)).replace(" ", "\u00a0");
+export const clock = (iso: string) => formatTimeOfDay(iso);
+/** `12 нояб.`, Moscow, the day never apart from its month. */
+export const day = (iso: string) => unbreakable(formatDay(iso));
+/** `28 нояб., 20:17`. */
+export const moment = (iso: string) => `${day(iso)}, ${clock(iso)}`;
 
 export const plural = (count: number, one: string, few: string, many: string) => ruPlural(count, one, few, many);
-/** `3 продажи` (the number never apart from its word). */
+/** `3 продажи`, the number never apart from its word. */
 export const salesCount = (count: number) => `${count}\u00a0${plural(count, "продажа", "продажи", "продаж")}`;
 
 /** The first letter up: «моя» → «Моя». */
@@ -53,6 +51,9 @@ export const upper = (words: string) => (words === "" ? words : words[0]!.toUppe
 
 /** The person's line after a colon, in quotes; the quotes inside it as „…“ (never «…«…»»); nothing for no line. */
 export const said = (note: string | null | undefined) => (note && note.trim() !== "" ? `: «${note.trim().replace(/«/g, "„").replace(/»/g, "“")}»` : "");
+
+/** A sale's fan as the site names them: the name, else the login, never an empty word. */
+export const fanOf = (row: { fan: { name: string | null; username: string | null } }) => row.fan.name ?? row.fan.username ?? "фан без имени";
 
 // ── the shift ─────────────────────────────────────────────────────────────────
 
@@ -72,8 +73,15 @@ export function offShiftOf(board: Board): string {
 /** «Fansly», «OnlyFans». */
 export const platformName = (platform: string) => (platform === "fansly" ? "Fansly" : "OnlyFans");
 
+/** The pages by their model, in the board's order; `model` null — one model, no names over its pages. */
+export function byModel(columns: readonly Column[]): Array<{ model: string | null; columns: Column[] }> {
+  const names = [...new Set(columns.map((column) => column.modelName ?? ""))];
+  if (names.length < 2) return [{ model: null, columns: [...columns] }];
+  return names.map((name) => ({ model: name === "" ? null : name, columns: columns.filter((column) => (column.modelName ?? "") === name) }));
+}
+
 /** «До 18:00: 3 продажи Олега»; with the person's own among them: «До 18:00: 4 продажи: 3 Олега, 1 ваша». */
-export function beforeWords(before: Board["columns"][number]["before"]): string {
+export function beforeWords(before: Column["before"]): string {
   const whose = before.people.map((one) => one.forms.gen).join(" и ");
   const mine = before.rows.filter((row) => row.owner.kind === "me").length;
   const head = `До ${clock(before.until)}: ${salesCount(before.count)}`;
@@ -129,13 +137,13 @@ export const isLateOpen = (row: Row) => row.late && !row.ticked;
 /** The person's question waits for the decider, or the colleague said «Не согласен» to it. */
 export const askOpen = (row: Row) => row.ask !== null && (row.ask.state === "asked" || row.ask.state === "disputed");
 /** A colleague's word on the person's sale waits for them, or is disputed. */
-const incomingOpen = (row: Row) => row.incoming !== null && row.incoming.state !== "settled";
+export const incomingOpen = (row: Row) => row.incoming !== null && row.incoming.state !== "settled";
 /** A colleague's sale the person wrote to themself, standing: «Отменить» gives it back. */
 export const takeStands = (row: Row) => row.ask !== null && row.ask.taken === true && row.ask.state === "silence";
 /** A colleague wrote the person's sale to themself and the person has not answered: «Понятно» / «Не согласен». */
 export const takenFromMeOpen = (row: Row) =>
   row.incoming !== null && row.incoming.taken === true && row.incoming.state === "settled" && row.incoming.answer === null;
-/** A strip under the row says what stands on it: line 2 then leaves the reason to it. */
+/** A strip under the row says what stands on it, its reason included: line 2 then leaves the reason to it. */
 const hasStrip = (row: Row) => askOpen(row) || incomingOpen(row) || takeStands(row) || takenFromMeOpen(row);
 
 /** Ticks and «чья» change only while the report is a draft (or a correction), never in a preview. */
@@ -159,12 +167,14 @@ export function deciderForms(board: Board, row: Row): PersonNameForms | null {
   const decider = deciderOf(board, row);
   return decider.kind === "team_lead" && decider.user !== null ? decider.user.forms : null;
 }
+/** One's own sale whose «пополам» or «отдать» the decider decides (the colleague hands in the old way). */
+export const oldWayOwn = (row: Row) => row.ask?.oldWay === true && (row.rule.owner.kind === "me" || row.rule.owner.kind === "share");
 
 const sameOwner = (a: ShiftReportOwner, b: ShiftReportOwner) => a.kind === b.kind && (a.userId ?? 0) === (b.userId ?? 0);
 
 /** Someone's name forms: the board's colleague, else a plain rule on the name Hub gave. */
-function formsOf(board: Board, userId: number | null, name: string | null): PersonNameForms {
-  return board.colleagues.find((one) => one.userId === userId)?.forms ?? personNameForms(name ?? "");
+export function formsOf(board: Board, userId: number | null, name: string | null): PersonNameForms {
+  return board.colleagues.find((one) => one.userId === userId)?.forms ?? personNameForms(name ?? "коллега");
 }
 
 /**
@@ -182,11 +192,14 @@ export function pillOf(board: Board, row: Row): Pill | null {
   if (isLost(row)) return pill("нет в Hub", "wait");
   if (isLateOpen(row)) return pill("после сдачи", "wait");
   if (row.ask !== null && askOpen(row)) {
-    return pill(row.ask.state === "disputed" ? "спор" : row.ask.to === "owner" ? `ждём ${deciderForms(board, row)?.gen ?? "владельца"}` : "ждём ответа", "wait");
+    if (row.ask.state === "disputed") return pill("спор", "wait");
+    // To the decider: the pot's, a team lead's sale, a colleague who hands in the old way.
+    return pill(row.ask.to === "owner" || row.ask.oldWay === true ? `ждём ${deciderForms(board, row)?.gen ?? "владельца"}` : "ждём ответа", "wait");
   }
   if (row.incoming !== null && incomingOpen(row)) return pill(row.incoming.state === "disputed" ? "спор" : "ждёт ответа", "wait");
   const owner = row.owner;
-  const text = owner.kind === "user" && row.statement === "give" ? `отдал ${formsOf(board, owner.userId, owner.name).dat}`
+  // Names carry no gender: one's own sale given away is «отдана Олегу».
+  const text = owner.kind === "user" && row.statement === "give" ? `отдана ${formsOf(board, owner.userId, owner.name).dat}`
     : owner.kind === "user" || owner.kind === "waiting" ? "чужая"
       : owner.words;
   const card = board.phase === "confirm" && row.proposal?.kind === "owner_change" && row.proposal.state === "proposed" && row.proposal.superseded !== true;
@@ -195,22 +208,23 @@ export function pillOf(board: Board, row: Row): Pill | null {
   return pill(text, mine ? "tint" : "plain", owner.kind === "me" && row.ticked && sameOwner(owner, row.rule.owner));
 }
 
-/** Line 2's reason: Hub's words, when they say something a strip under the row does not say already. */
-export function reasonOf(row: Row): { text: string; tone: "plain" | "wait" | "tint" } | null {
+/** Line 2's reason: Hub's words, unless a strip under the row says them (a strip names its reason itself). */
+export function reasonOf(board: Board, row: Row): { text: string; tone: "plain" | "wait" | "tint" } | null {
   if (row.reasonWords === "" || (row.before === null && hasStrip(row))) return null;
   if (isLost(row) || isLateOpen(row)) return { text: row.reasonWords, tone: "wait" };
-  const card = row.proposal?.kind === "owner_change" && row.proposal.state === "proposed" && row.proposal.superseded !== true;
+  const card = board.phase === "confirm" && row.proposal?.kind === "owner_change" && row.proposal.state === "proposed" && row.proposal.superseded !== true;
   return { text: row.reasonWords, tone: card ? "tint" : "plain" };
 }
 
-/** The amount column: the person's half of a shared sale «из» the sale; on OnlyFans what the fan paid under the net. */
+/**
+ * The amount column: what the row counts for the person when it is a part of the sale (a half, the owner's split) «из»
+ * the sale, else the sale; what the fan paid on OnlyFans in the title. Hub's numbers only.
+ */
 export function amountOf(row: Row): { main: string; sub: string | null; title: string | null } {
-  const half = row.owner.kind === "share" && row.amountMills > 0 && row.amountMills < row.netMills;
-  if (half) return { main: plus(row.amountMills), sub: `из ${plus(row.netMills)}`, title: null };
-  if (row.grossMills !== null) {
-    return { main: plus(row.netMills), sub: `из ${usd(row.grossMills)}`, title: `Фан заплатил ${usd(row.grossMills)}, после комиссии ${usd(row.netMills)}` };
-  }
-  return { main: plus(row.netMills), sub: null, title: null };
+  const part = row.amountMills > 0 && row.amountMills < row.netMills;
+  const title = row.grossMills === null ? null : `Фан заплатил ${usd(row.grossMills)}, после комиссии ${usd(row.netMills)}`;
+  if (part) return { main: plus(row.amountMills), sub: `из ${plus(row.netMills)}`, title };
+  return { main: plus(row.netMills), sub: row.grossMills === null ? null : `из ${usd(row.grossMills)}`, title };
 }
 
 /** The comment asks for itself: one's own sale from $30 without a comment. */
@@ -225,12 +239,19 @@ export function agentNote(row: Row): string | null {
   return null;
 }
 
+/** Gengar's proposals and comments of the check, in the board's order (the rail's line links them). */
+export const gengarFoundRows = (board: Board) =>
+  allRows(board).filter((row) => (row.proposal?.kind === "owner_change" && row.proposal.state !== "late") || agentNote(row) !== null);
+
 /** The comment a row shows: the person's or someone else's (named), else Gengar's («написал Генгар»); null — none. */
 export function noteOf(row: Row): { text: string; by: string | null } | null {
   if (row.note !== null && row.note.by !== "agent") return { text: row.note.text, by: row.note.by === "other" ? row.note.byName : null };
   const agent = agentNote(row);
   return agent === null ? null : { text: agent, by: "написал Генгар" };
 }
+
+/** «@login», the row's title beside the fan's name. */
+export const rowTitleOf = (row: Row) => `${row.siteWords} ${fanOf(row)}${row.fan.username !== null && row.fan.username !== row.fan.name ? ` @${row.fan.username}` : ""}`;
 
 // ── «Чья продажа»: the menu ───────────────────────────────────────────────────
 
@@ -261,11 +282,10 @@ export interface Choice {
   hint: string;
   /** Who is told of it or decides it (Hub's `asks`); null — it applies as it is. */
   asks: { to: "colleague" | "decider"; forms: PersonNameForms | null; words: string } | null;
-  /**
-   * The word on someone else's sale that makes the person's share larger: it takes a line of why and goes as a question
-   * (`ask`: written at once and the colleague told, or the decider's). Null — a mark (`line`).
-   */
+  /** Hub's `via: "ask"`: a question about someone else's sale; null — the line's word (`line`). */
   question: { statement: "mine" | "share"; shareWithUserId: number | null } | null;
+  /** It goes with one line of why: a question, «Моя» (Hub asks why), a word the decider decides. */
+  needsWhy: boolean;
   /** The mark it is when it is not a question. */
   line: Pick<ShiftReportLineBody, "statement" | "shareWithUserId" | "toUserId">;
 }
@@ -281,37 +301,31 @@ function lineOfKey(key: ChoiceKey, ruleKey: ChoiceKey | null): Choice["line"] {
           : kind === "pot" ? { statement: "pot" } : { statement: "not_mine" };
 }
 
-/**
- * Hub's menu of a row (`row.choices`), in its order. One's own sale offers «Общак» and «Ничья» besides the rule's word;
- * someone else's only the rule's word, «Моя» and «Пополам с <держатель>» — and only there a word is a question (on one's
- * own sale Hub sends «пополам» or «отдать» with a colleague without the board to the decider by the mark itself).
- */
+/** Hub's menu of a row (`row.choices`), in its order; each says how it is written (`via`). */
 function choicesOf(row: Row): Choice[] {
   const ruleKey = keyOfOwner(row.rule.owner);
-  const listed = (row.choices ?? []).flatMap((one) => {
+  return (row.choices ?? []).flatMap((one) => {
     const key = keyOfOwner(one.owner);
-    return key === null ? [] : [{ one, key }];
-  });
-  const ownSale = listed.some(({ key }) => (key === "pot" || key === "nobody") && key !== ruleKey);
-  return listed.map(({ one, key }) => {
-    const grows = !ownSale && one.asks !== null && (key === "me" || key.startsWith("share:"));
-    return {
-      key,
-      owner: one.owner,
-      words: one.owner.words,
-      hint: one.hint,
-      asks: one.asks === null ? null : { to: one.asks.to, forms: one.asks.user?.forms ?? null, words: one.asks.words },
-      question: grows ? { statement: key === "me" ? "mine" as const : "share" as const, shareWithUserId: key === "me" ? null : one.owner.userId } : null,
-      line: lineOfKey(key, ruleKey),
-    };
+    if (key === null) return [];
+    const line = lineOfKey(key, ruleKey);
+    const asks = one.asks === null ? null : { to: one.asks.to, forms: one.asks.user?.forms ?? null, words: one.asks.words };
+    const question = one.via === "ask" ? { statement: key === "me" ? "mine" as const : "share" as const, shareWithUserId: key === "me" ? null : one.owner.userId } : null;
+    return [{
+      key, owner: one.owner, words: one.owner.words, hint: one.hint, asks, question, line,
+      needsWhy: question !== null || line.statement === "mine" || (asks?.to === "decider" && key !== ruleKey),
+    }];
   });
 }
 
-/** The key the menu marks: the word asked for while the question waits, else Hub's current word. */
+/** The key Hub marks as the row's word now. */
 function currentKeyOf(row: Row): ChoiceKey | null {
-  if (row.ask !== null && askOpen(row)) return keyOfOwner(row.ask.want);
   const marked = row.choices?.find((one) => one.current === true);
   return keyOfOwner(marked?.owner ?? row.owner);
+}
+
+/** The word asked for while the question waits on someone else's sale (the row stays the rule's meanwhile). */
+function askedKeyOf(row: Row): ChoiceKey | null {
+  return row.ask !== null && askOpen(row) && currentKeyOf(row) === keyOfOwner(row.rule.owner) ? keyOfOwner(row.ask.want) : null;
 }
 
 /** The menu's label of a word: «Моя», «Пополам с Севой», a colleague by name («Олег»), «Общак», «Ничья». */
@@ -322,7 +336,7 @@ function labelOf(choice: Choice): string {
 }
 
 /** Where the sale stays until the decider answers. */
-function staysOf(board: Board, row: Row): string {
+export function staysOf(board: Board, row: Row): string {
   const rule = row.rule.owner;
   if (rule.kind === "me" || rule.kind === "share") return "ждёт отдельно";
   if (rule.kind === "pot") return "остаётся в общаке";
@@ -330,32 +344,45 @@ function staysOf(board: Board, row: Row): string {
   return "ждёт решения";
 }
 
-/** Why the sale is whose the rule says, in full: the menu's footer over the rule's word. */
+/** Hub's reason of the rule without the word it starts with («ничья: …» → «…») or the decider it ends with. */
+function whyOfRule(row: Row): string {
+  const words = row.rule.words.trim();
+  const owner = row.rule.owner.words;
+  const lead = words.toLowerCase().startsWith(`${owner.toLowerCase()}:`) ? words.slice(owner.length + 1).trim() : words;
+  return lead.replace(/:\s*решит [^:]+$/u, "").trim();
+}
+
+/** Why the sale is whose the rule says, in full, whose first: the menu's footer over the rule's word. */
 function ruleFoot(board: Board, row: Row): string {
   const rule = row.rule.owner;
-  const words = row.rule.words;
-  const why = words === "" ? "" : `: ${words}`;
+  const why = whyOfRule(row);
+  const tail = why === "" ? "" : `: ${why}`;
   const forms = formsOf(board, rule.userId, rule.name);
   switch (rule.kind) {
-    case "me": return `По правилу продажа ваша${why}.`;
-    case "share": return `По правилу продажа пополам с ${forms.ins}${why}.`;
-    case "user": return `По правилу продажа ${forms.gen}${why}.`;
+    case "me": return `По правилу продажа ваша${tail}.`;
+    case "share": return `По правилу продажа пополам с ${forms.ins}${tail}.`;
+    case "user": return `По правилу продажа ${forms.gen}${tail}.`;
     case "waiting": {
+      // Names carry no gender: «PPV от Олега, поэтому продажа Олега».
       const until = row.rule.waitsUntil;
-      return `${forms.nom} отправил этот PPV, поэтому продажа его. Сейчас он не на смене: продажа уйдёт в его следующую смену.`
-        + (until === undefined ? "" : ` Если смены не будет до ${day(until)}, продажа станет ничьей.`);
+      return `PPV от ${forms.gen}, поэтому продажа ${forms.gen}. Смены у ${forms.gen} сейчас нет: продажа уйдёт в следующую.`
+        + (until === undefined ? "" : ` Если смены не будет до ${moment(until)}, продажа станет ничьей.`);
     }
-    default: return `По правилу ${words || rule.words}.`;
+    default: return `По правилу ${rule.words}${tail}.`;
   }
 }
 
-/** What choosing a word does, in full: the menu's footer and the hint of the form «Почему продажа ваша?». */
+/** What choosing a word does, in full: the menu's footer and the hint of the form of why. */
 export function footOf(board: Board, row: Row, choice: Choice): string {
   if (choice.key === keyOfOwner(row.rule.owner)) return ruleFoot(board, row);
   const kind = kindOfKey(choice.key);
   const decides = `решит ${deciderOf(board, row).words}`;
   if (choice.asks?.to === "colleague") {
     return `Продажа сразу станет ${kind === "me" ? "вашей" : "пополам"}. ${choice.asks.forms?.nom ?? "Коллега"} узнает и может не согласиться.`;
+  }
+  if (choice.asks !== null && choice.question === null) {
+    // One's own sale with a colleague who hands in the old way: the word counts now, the decider decides the colleague's part.
+    return `${upper(choice.asks.words || decides)}: ${kind === "share" ? "ваша половина в отчёте сразу" : "продажа сразу уйдёт из отчёта"}.`;
   }
   if (choice.asks !== null) return `${upper(choice.asks.words || decides)}. До ответа продажа ${staysOf(board, row)}.`;
   const forms = formsOf(board, choice.owner.userId, choice.owner.name);
@@ -403,25 +430,27 @@ export interface OwnerMenu {
   subject: string;
   items: MenuItem[];
   colleagues: MenuColleague[];
+  /** Hub's word of the row now (checked). */
   currentKey: ChoiceKey | null;
+  /** The word asked for while its question waits («ждём ответа»). */
+  askedKey: ChoiceKey | null;
   /** The footer when nothing is hovered: the current word's, or how to take a question back. */
   foot: string;
 }
 
 /**
- * The menu «Чья продажа» of a row, built from Hub's `choices`: the plain words («Моя», «Общак», «Ничья», the rule's
- * colleague) each with its short consequence, and the colleagues one may give the sale to as a matrix — each named once,
- * «пополам» and «отдать» in two columns. Pure.
+ * The menu «Чья продажа» of a row, built from Hub's `choices`: the plain words with a short consequence, and the
+ * colleagues one may give the sale to as a matrix — each named once, «пополам» and «отдать» in two columns. Pure.
  */
 export function ownerMenu(board: Board, row: Row): OwnerMenu {
   const choices = choicesOf(row);
   const ruleKey = keyOfOwner(row.rule.owner);
   const currentKey = currentKeyOf(row);
-  const waits = row.ask !== null && askOpen(row);
+  const askedKey = askedKeyOf(row);
   const item = (choice: Choice, label = labelOf(choice)): MenuItem => ({
     choice,
     label,
-    short: waits && choice.key === currentKey ? "ждём ответа" : shortOf(board, row, choice),
+    short: choice.key === askedKey ? "ждём ответа" : shortOf(board, row, choice),
     foot: footOf(board, row, choice),
   });
   // A colleague one may give the sale to (an own sale) has both words in the matrix; else every word is a plain item.
@@ -451,13 +480,27 @@ export function ownerMenu(board: Board, row: Row): OwnerMenu {
   }
   const current = choices.find((one) => one.key === currentKey) ?? null;
   return {
-    subject: `${row.fan.name ?? row.fan.username ?? ""}, ${plus(row.netMills)}`,
+    subject: `${fanOf(row)}, ${plus(row.netMills)}`,
     items,
     colleagues: [...colleagues.values()],
     currentKey,
-    foot: waits ? "Вопрос задан. Выберите прежний вариант, чтобы отменить его."
+    askedKey,
+    foot: askedKey !== null ? "Вопрос задан. Выберите прежний вариант, чтобы отменить его."
       : current !== null ? footOf(board, row, current) : ruleFoot(board, row),
   };
+}
+
+/**
+ * What a word chosen in the menu does now: nothing (the row's word already), take the question or the take back (the
+ * rule's word while one stands), or the word itself.
+ */
+export function pickOf(row: Row, choice: Choice): "none" | "unask" | "word" {
+  const ruleKey = keyOfOwner(row.rule.owner);
+  const asking = row.ask !== null && (row.ask.state === "asked" || row.ask.taken === true);
+  // Someone else's sale goes back by taking the question back; one's own by the rule's word (it withdraws the question).
+  if (asking && choice.key === ruleKey) return oldWayOwn(row) ? "word" : "unask";
+  if (choice.key === currentKeyOf(row) || choice.key === askedKeyOf(row)) return "none";
+  return "word";
 }
 
 /** The word a tick press means: off — back to the rule, the half to its partner, or nobody; on — the rule's own word, or «моя». */
@@ -477,7 +520,10 @@ export function tickChoice(row: Row): Choice | null {
 export function choiceToast(board: Board, row: Row, choice: Choice): string | null {
   const ruleKey = keyOfOwner(row.rule.owner);
   const kind = kindOfKey(choice.key);
-  if (choice.asks?.to === "decider" && choice.key !== ruleKey) return `${upper(choice.asks.words)}: до ответа продажа ждёт отдельно`;
+  const decides = `решит ${deciderOf(board, row).words}`;
+  if (choice.asks?.to === "decider" && choice.question === null && choice.key !== ruleKey) {
+    return kind === "share" ? `Ваша половина в отчёте, вторую ${decides}` : `Убрано из отчёта, дальше ${decides}`;
+  }
   const forms = choice.owner.userId === null ? null : formsOf(board, choice.owner.userId, choice.owner.name);
   if (kind === "share" && choice.key !== ruleKey && forms) return `${forms.nom} увидит: продажа пополам`;
   if (row.ticked && rankOf(choice.key) === 0) return `Убрано из отчёта, продажа ${choice.words}`;
@@ -485,29 +531,19 @@ export function choiceToast(board: Board, row: Row, choice: Choice): string | nu
   return null;
 }
 
-// ── the rail ──────────────────────────────────────────────────────────────────
-
-/** «Генгар предложил 2 правки и 1 комментарий» and the rows it links to, in the board's order. */
-export function gengarFound(board: Board): { words: string; rows: Row[] } | null {
-  const rows = allRows(board).filter((row) => (row.proposal?.kind === "owner_change" && row.proposal.state !== "late") || agentNote(row) !== null);
-  if (rows.length === 0) return null;
-  const edits = rows.filter((row) => row.proposal?.kind === "owner_change").length;
-  const notes = rows.length - edits;
-  const what = [
-    edits ? `${edits}\u00a0${plural(edits, "правку", "правки", "правок")}` : "",
-    notes ? `${notes}\u00a0${plural(notes, "комментарий", "комментария", "комментариев")}` : "",
-  ].filter(Boolean).join(" и ");
-  return { words: `Генгар предложил ${what}`, rows };
+/** The form of why under a row: its question, its button, whether the quick reasons fit, its hint. */
+export function whyFormOf(board: Board, row: Row, choice: Choice): { label: string; send: string; reasons: boolean; hint: string } {
+  const hint = footOf(board, row, choice);
+  if (choice.question === null && choice.asks?.to === "decider") {
+    // One's own sale with a colleague who hands in the old way: why, for the decider.
+    const forms = formsOf(board, choice.owner.userId, choice.owner.name);
+    return { label: kindOfKey(choice.key) === "share" ? `Почему пополам с ${forms.ins}?` : `Почему продажа ${forms.gen}?`, send: "Записать", reasons: false, hint };
+  }
+  const send = choice.question === null ? "Забрать"
+    : choice.asks?.to === "colleague" ? choice.question.statement === "share" ? "Записать пополам" : "Записать себе"
+      : `Спросить ${deciderForms(board, row)?.acc ?? "владельца"}`;
+  return { label: "Почему продажа ваша?", send, reasons: true, hint };
 }
-
-/** Gengar's cards that came after the report was counted: «Принять» / «Не согласен». */
-export const lateProposals = (board: Board) => allRows(board).filter((row) => row.proposal?.state === "late");
-
-/** «Ждут ответа, в сумму не входят: …»: the rows of the questions and claims still open. */
-export const waitingRows = (board: Board) => {
-  const keys = new Set(board.waiting.filter((one) => one.why === "ask" || one.why === "incoming").map((one) => one.key));
-  return allRows(board).filter((row) => keys.has(row.key));
-};
 
 /** The frame's `state` message: what the collapsed bar shows. */
 export function frameState(shiftId: number | null, board: Board | null) {
@@ -515,3 +551,4 @@ export function frameState(shiftId: number | null, board: Board | null) {
     ? { t: "state" as const, shiftId, phase: "none" as const, chip: "", count: 0, totalMills: 0, needsMe: false }
     : { t: "state" as const, shiftId, phase: board.phase, chip: board.chip, count: board.totals.count, totalMills: board.totals.nowMills, needsMe: board.needsMe };
 }
+
