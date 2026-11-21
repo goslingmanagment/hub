@@ -194728,6 +194728,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -195556,6 +195559,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -195563,7 +195573,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -195890,6 +195901,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -196719,6 +196733,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -196726,7 +196747,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -197855,7 +197877,6 @@
                   }
                 },
                 "required": [
-                  "statement",
                   "shiftId",
                   "transactionId",
                   "telegramUserId"
@@ -199897,6 +199918,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -200725,6 +200749,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -200732,7 +200763,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -201059,6 +201091,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -201888,6 +201923,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -201895,7 +201937,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -312690,6 +312733,9 @@
                                                     },
                                                     "words": {
                                                       "type": "string"
+                                                    },
+                                                    "waitsUntil": {
+                                                      "type": "string"
                                                     }
                                                   },
                                                   "required": [
@@ -313518,6 +313564,13 @@
                                                       "hint": {
                                                         "type": "string"
                                                       },
+                                                      "via": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "line",
+                                                          "ask"
+                                                        ]
+                                                      },
                                                       "current": {
                                                         "type": "boolean"
                                                       }
@@ -313525,7 +313578,8 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint"
+                                                      "hint",
+                                                      "via"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -313852,6 +313906,9 @@
                                                           "type": "string"
                                                         },
                                                         "words": {
+                                                          "type": "string"
+                                                        },
+                                                        "waitsUntil": {
                                                           "type": "string"
                                                         }
                                                       },
@@ -314681,6 +314738,13 @@
                                                           "hint": {
                                                             "type": "string"
                                                           },
+                                                          "via": {
+                                                            "type": "string",
+                                                            "enum": [
+                                                              "line",
+                                                              "ask"
+                                                            ]
+                                                          },
                                                           "current": {
                                                             "type": "boolean"
                                                           }
@@ -314688,7 +314752,8 @@
                                                         "required": [
                                                           "owner",
                                                           "asks",
-                                                          "hint"
+                                                          "hint",
+                                                          "via"
                                                         ],
                                                         "additionalProperties": false
                                                       }
@@ -317166,6 +317231,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -317994,6 +318062,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -318001,7 +318076,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -318328,6 +318404,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -319157,6 +319236,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -319164,7 +319250,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -321655,6 +321742,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -322483,6 +322573,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -322490,7 +322587,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -322817,6 +322915,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -323646,6 +323747,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -323653,7 +323761,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -326052,6 +326161,9 @@
                                                 },
                                                 "words": {
                                                   "type": "string"
+                                                },
+                                                "waitsUntil": {
+                                                  "type": "string"
                                                 }
                                               },
                                               "required": [
@@ -326880,6 +326992,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -326887,7 +327006,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -327214,6 +327334,9 @@
                                                       "type": "string"
                                                     },
                                                     "words": {
+                                                      "type": "string"
+                                                    },
+                                                    "waitsUntil": {
                                                       "type": "string"
                                                     }
                                                   },
@@ -328043,6 +328166,13 @@
                                                       "hint": {
                                                         "type": "string"
                                                       },
+                                                      "via": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "line",
+                                                          "ask"
+                                                        ]
+                                                      },
                                                       "current": {
                                                         "type": "boolean"
                                                       }
@@ -328050,7 +328180,8 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint"
+                                                      "hint",
+                                                      "via"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -330338,6 +330469,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -331166,6 +331300,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -331173,7 +331314,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -331500,6 +331642,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -332329,6 +332474,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -332336,7 +332488,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -334735,6 +334888,9 @@
                                                 },
                                                 "words": {
                                                   "type": "string"
+                                                },
+                                                "waitsUntil": {
+                                                  "type": "string"
                                                 }
                                               },
                                               "required": [
@@ -335563,6 +335719,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -335570,7 +335733,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -335897,6 +336061,9 @@
                                                       "type": "string"
                                                     },
                                                     "words": {
+                                                      "type": "string"
+                                                    },
+                                                    "waitsUntil": {
                                                       "type": "string"
                                                     }
                                                   },
@@ -336726,6 +336893,13 @@
                                                       "hint": {
                                                         "type": "string"
                                                       },
+                                                      "via": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "line",
+                                                          "ask"
+                                                        ]
+                                                      },
                                                       "current": {
                                                         "type": "boolean"
                                                       }
@@ -336733,7 +336907,8 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint"
+                                                      "hint",
+                                                      "via"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -339614,6 +339789,9 @@
                                                 },
                                                 "words": {
                                                   "type": "string"
+                                                },
+                                                "waitsUntil": {
+                                                  "type": "string"
                                                 }
                                               },
                                               "required": [
@@ -340442,6 +340620,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -340449,7 +340634,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -340776,6 +340962,9 @@
                                                       "type": "string"
                                                     },
                                                     "words": {
+                                                      "type": "string"
+                                                    },
+                                                    "waitsUntil": {
                                                       "type": "string"
                                                     }
                                                   },
@@ -341605,6 +341794,13 @@
                                                       "hint": {
                                                         "type": "string"
                                                       },
+                                                      "via": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "line",
+                                                          "ask"
+                                                        ]
+                                                      },
                                                       "current": {
                                                         "type": "boolean"
                                                       }
@@ -341612,7 +341808,8 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint"
+                                                      "hint",
+                                                      "via"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -342692,10 +342889,7 @@
                       }
                     ]
                   }
-                },
-                "required": [
-                  "statement"
-                ]
+                }
               }
             }
           }
@@ -344321,6 +344515,9 @@
                                                 },
                                                 "words": {
                                                   "type": "string"
+                                                },
+                                                "waitsUntil": {
+                                                  "type": "string"
                                                 }
                                               },
                                               "required": [
@@ -345149,6 +345346,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -345156,7 +345360,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -345483,6 +345688,9 @@
                                                       "type": "string"
                                                     },
                                                     "words": {
+                                                      "type": "string"
+                                                    },
+                                                    "waitsUntil": {
                                                       "type": "string"
                                                     }
                                                   },
@@ -346312,6 +346520,13 @@
                                                       "hint": {
                                                         "type": "string"
                                                       },
+                                                      "via": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "line",
+                                                          "ask"
+                                                        ]
+                                                      },
                                                       "current": {
                                                         "type": "boolean"
                                                       }
@@ -346319,7 +346534,8 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint"
+                                                      "hint",
+                                                      "via"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -349145,6 +349361,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -349973,6 +350192,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -349980,7 +350206,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -350307,6 +350534,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -351136,6 +351366,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -351143,7 +351380,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -353632,6 +353870,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -354460,6 +354701,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -354467,7 +354715,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -354794,6 +355043,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -355623,6 +355875,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -355630,7 +355889,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -358075,6 +358335,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -358903,6 +359166,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -358910,7 +359180,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -359237,6 +359508,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -360066,6 +360340,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -360073,7 +360354,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -362518,6 +362800,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -363346,6 +363631,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -363353,7 +363645,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -363680,6 +363973,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -364509,6 +364805,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -364516,7 +364819,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -366986,6 +367290,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -367814,6 +368121,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -367821,7 +368135,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -368148,6 +368463,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -368977,6 +369295,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -368984,7 +369309,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -371439,6 +371765,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -372267,6 +372596,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -372274,7 +372610,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -372601,6 +372938,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -373430,6 +373770,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -373437,7 +373784,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -375836,6 +376184,9 @@
                                                 },
                                                 "words": {
                                                   "type": "string"
+                                                },
+                                                "waitsUntil": {
+                                                  "type": "string"
                                                 }
                                               },
                                               "required": [
@@ -376664,6 +377015,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -376671,7 +377029,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
@@ -376998,6 +377357,9 @@
                                                       "type": "string"
                                                     },
                                                     "words": {
+                                                      "type": "string"
+                                                    },
+                                                    "waitsUntil": {
                                                       "type": "string"
                                                     }
                                                   },
@@ -377827,6 +378189,13 @@
                                                       "hint": {
                                                         "type": "string"
                                                       },
+                                                      "via": {
+                                                        "type": "string",
+                                                        "enum": [
+                                                          "line",
+                                                          "ask"
+                                                        ]
+                                                      },
                                                       "current": {
                                                         "type": "boolean"
                                                       }
@@ -377834,7 +378203,8 @@
                                                     "required": [
                                                       "owner",
                                                       "asks",
-                                                      "hint"
+                                                      "hint",
+                                                      "via"
                                                     ],
                                                     "additionalProperties": false
                                                   }
@@ -380142,6 +380512,9 @@
                                             },
                                             "words": {
                                               "type": "string"
+                                            },
+                                            "waitsUntil": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
@@ -380970,6 +381343,13 @@
                                               "hint": {
                                                 "type": "string"
                                               },
+                                              "via": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "line",
+                                                  "ask"
+                                                ]
+                                              },
                                               "current": {
                                                 "type": "boolean"
                                               }
@@ -380977,7 +381357,8 @@
                                             "required": [
                                               "owner",
                                               "asks",
-                                              "hint"
+                                              "hint",
+                                              "via"
                                             ],
                                             "additionalProperties": false
                                           }
@@ -381304,6 +381685,9 @@
                                                   "type": "string"
                                                 },
                                                 "words": {
+                                                  "type": "string"
+                                                },
+                                                "waitsUntil": {
                                                   "type": "string"
                                                 }
                                               },
@@ -382133,6 +382517,13 @@
                                                   "hint": {
                                                     "type": "string"
                                                   },
+                                                  "via": {
+                                                    "type": "string",
+                                                    "enum": [
+                                                      "line",
+                                                      "ask"
+                                                    ]
+                                                  },
                                                   "current": {
                                                     "type": "boolean"
                                                   }
@@ -382140,7 +382531,8 @@
                                                 "required": [
                                                   "owner",
                                                   "asks",
-                                                  "hint"
+                                                  "hint",
+                                                  "via"
                                                 ],
                                                 "additionalProperties": false
                                               }
