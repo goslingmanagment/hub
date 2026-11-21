@@ -119,6 +119,10 @@ const envSchema = z.object({
   PEOPLE_TELEGRAM_BOT_TOKEN: optionalTrimmedStringSchema,
   PEOPLE_MESSAGE_KINDS: z.string().default("{}"),
   PEOPLE_MESSAGE_CHATS: z.string().default("{}"),
+  // Custom orders that keep themselves true (customs facts spec): the owner's live switch (off) and the tiers'
+  // correction (custom-tier-overrides.ts, [] — none).
+  CUSTOMS_FACTS: booleanSchema.default(false),
+  CUSTOM_TIER_OVERRIDES: z.string().default("[]"),
   SERVICE_EGRESS_PROXY_URL: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_USERNAME: optionalTrimmedStringSchema,
   SERVICE_EGRESS_PROXY_PASSWORD: optionalTrimmedStringSchema,
@@ -492,6 +496,10 @@ export interface AppConfig {
   peopleMessageKinds?: string;
   /** PEOPLE_MESSAGE_CHATS (live): the work chats per model, JSON (people-messages.ts). */
   peopleMessageChats?: string;
+  /** CUSTOMS_FACTS (live): the custom orders' automatic behaviour and the facts screen; off — as before. */
+  customsFacts?: boolean;
+  /** CUSTOM_TIER_OVERRIDES (live): which tiers include a custom where the wording match is wrong, JSON (custom-tier-overrides.ts). */
+  customTierOverrides?: string;
   serviceEgressProxyUrl: string | null;
   serviceEgressProxyUsername: string | null;
   serviceEgressProxyPassword: string | null;
@@ -916,6 +924,8 @@ export function loadConfig(
     peopleTelegramBotToken: parsed.PEOPLE_TELEGRAM_BOT_TOKEN ?? null,
     peopleMessageKinds: parsed.PEOPLE_MESSAGE_KINDS,
     peopleMessageChats: parsed.PEOPLE_MESSAGE_CHATS,
+    customsFacts: parsed.CUSTOMS_FACTS,
+    customTierOverrides: parsed.CUSTOM_TIER_OVERRIDES,
     serviceEgressProxyUrl: serviceEgressProxy.url,
     serviceEgressProxyUsername: serviceEgressProxy.username,
     serviceEgressProxyPassword: serviceEgressProxy.password,

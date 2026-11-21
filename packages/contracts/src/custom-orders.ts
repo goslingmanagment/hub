@@ -144,6 +144,53 @@ export const customOrderFanSchema = z.object({
   displayName: z.string().nullable(),
 });
 
+/**
+ * A fact of an order (customs facts spec §4): `yes` — proven; `part` — partly (some money, some parts, sent and not
+ * opened); `no` — not yet; `wait` — not yet, and it is the next move; `conflict` — the sources contradict it (a
+ * reversed sale, a refusal); `unknown` — Hub cannot tell.
+ */
+export const CUSTOM_FACT_VALUES = ["yes", "part", "no", "wait", "conflict", "unknown"] as const;
+export type CustomFactValue = (typeof CUSTOM_FACT_VALUES)[number];
+export const customFactSchema = z.object({
+  value: z.enum(CUSTOM_FACT_VALUES),
+  /** What the value rests on, in people's words («получено $50 из $150»); absent — the value says it all. */
+  note: z.string().optional(),
+});
+export type CustomFact = z.infer<typeof customFactSchema>;
+
+/**
+ * The four facts of an order, derived at read time from its row and its payments by one pure function
+ * (custom-order-rules.ts, `customOrderFactsOf`), never stored: the fan's money arrived (`paid`), the model has the
+ * card (`atModel`), the model delivered everything (`shot`), the fan received every file (`given`).
+ */
+export const customOrderFactsSchema = z.object({
+  paid: customFactSchema,
+  atModel: customFactSchema,
+  shot: customFactSchema,
+  given: customFactSchema,
+});
+export type CustomOrderFacts = z.infer<typeof customOrderFactsSchema>;
+
+/** The owner's word on an order's payment: shot without payment (`gift`), or paid outside the platform (`off_platform`). */
+export const CUSTOM_PAID_WORD_KINDS = ["gift", "off_platform"] as const;
+export type CustomPaidWordKind = (typeof CUSTOM_PAID_WORD_KINDS)[number];
+export const customPaidWordSchema = z.object({
+  kind: z.enum(CUSTOM_PAID_WORD_KINDS),
+  note: z.string().nullable(),
+  /** Who said it, as the people registry named them then; null — not known. */
+  by: z.string().nullable(),
+  at: isoTimestamp,
+});
+export type CustomPaidWord = z.infer<typeof customPaidWordSchema>;
+
+/** The sources disagree about the order: one sentence (≤ 200), who wrote it and when. The order burns while it stands. */
+export const customOrderIssueSchema = z.object({
+  text: z.string(),
+  by: z.string().nullable(),
+  at: isoTimestamp,
+});
+export type CustomOrderIssue = z.infer<typeof customOrderIssueSchema>;
+
 /** One order as every session door reads it. */
 export const customOrderSchema = z.object({
   id: intId,
@@ -195,6 +242,27 @@ export const customOrderSchema = z.object({
   origin: z.enum(CUSTOM_ORDER_ORIGINS),
   /** Days past the deadline while the model has not delivered it whole; null — not overdue. */
   overdueDays: z.number().int().positive().nullable(),
+  /**
+   * Moscow days from today to the deadline, in every state before «отдан» (0 — today, negative — past it); null — no
+   * deadline, or the order is given or ended. Unlike `overdueDays`, a shot order still counts until the fan has it.
+   */
+  dueLeftDays: z.number().int().nullable(),
+  /** The deadline was set by the system, «примерно» (recorded or first paid + 7 days); a later edit clears it. */
+  deadlineDefault: z.boolean(),
+  /** The four facts (`customOrderFactsOf`): paid, at the model, shot, given. */
+  facts: customOrderFactsSchema,
+  /** The agreed total, gross; null — not named (`facts.paid` is then never «yes» by the money). */
+  priceMills: mills.nullable(),
+  /** The owner's word on the payment: a gift, or paid outside the platform. */
+  paidWord: customPaidWordSchema.nullable(),
+  /** Why the order waits on purpose (the fan is unreachable, a prop is awaited): it does not burn. */
+  holdReason: z.string().nullable(),
+  /** The sources disagree about the order: the agent's one sentence. */
+  issue: customOrderIssueSchema.nullable(),
+  /** When the fan asked where the order is; null — he did not, or the page wrote to him since. */
+  fanAskedAt: isoTimestamp.nullable(),
+  /** Every file was sent to the fan and a priced one is not bought yet («отправлен, фан не открыл»): since when. */
+  sentAt: isoTimestamp.nullable(),
   /**
    * The parts ready in the current round: delivered whole after the last revision request about them (a delivery
    * that was sent back for revision does not count), or said whole by a person («снят»). The wanted parts not
@@ -385,8 +453,17 @@ export const customSaleDismissResponseSchema = z.object({ dismissed: z.boolean()
 
 // ── The agent's door (write:customs) ────────────────────────────────────────
 
+/**
+ * The fields of the board and the order's page that the agent's door (and ContentOps «Съёмка», which reads its shape)
+ * does not carry yet: the facts and what they are read from (customs facts spec, slice 1). The agent's wire gains them
+ * with the agent's steps, `facts.paid` only for a key with `read:money`.
+ */
+const BOARD_ONLY_FIELDS = {
+  dueLeftDays: true, deadlineDefault: true, facts: true, priceMills: true, paidWord: true, holdReason: true, issue: true, fanAskedAt: true, sentAt: true,
+} as const;
+
 /** An order as an agent key reads it: no money but the card's own price line. */
-export const agentCustomOrderSchema = customOrderSchema.omit({ paidGrossMills: true, paidNetMills: true }).extend({
+export const agentCustomOrderSchema = customOrderSchema.omit({ paidGrossMills: true, paidNetMills: true, ...BOARD_ONLY_FIELDS }).extend({
   /** The card's text with the code, as «Скопировать карточку» gives it. */
   cardText: z.string(),
   sourceText: z.string().nullable(),

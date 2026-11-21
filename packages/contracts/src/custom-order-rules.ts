@@ -4,9 +4,16 @@ import {
   CUSTOM_ORDER_ACTIONS,
   customOrderCardSchema,
   customOrderCode,
+  customOrderIssueSchema,
+  customPaidWordSchema,
+  type CustomFact,
   type CustomOrderAction,
   type CustomOrderCard,
+  type CustomOrderFacts,
+  type CustomOrderIssue,
   type CustomOrderState,
+  type CustomPaidWord,
+  type CustomPaidWordKind,
 } from "./custom-orders.ts";
 
 /**
@@ -235,6 +242,99 @@ export function overdueDaysOf(order: { state: CustomOrderState; deadlineOn: stri
   const today = moscowDay(now);
   if (today <= order.deadlineOn) return null;
   return Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${order.deadlineOn}T00:00:00Z`)) / 86_400_000);
+}
+
+/**
+ * Moscow days from today to the deadline in every state before «отдан» (0 — today, negative — past it): a shot order
+ * still counts until the fan has it, where `overdueDaysOf` stops at «снят». Null — no deadline, or given or ended.
+ */
+export function dueLeftDaysOf(order: { state: CustomOrderState; deadlineOn: string | null }, now: Date): number | null {
+  if (!OPEN.includes(order.state) || order.deadlineOn === null) return null;
+  return Math.round((Date.parse(`${order.deadlineOn}T00:00:00Z`) - Date.parse(`${moscowDay(now)}T00:00:00Z`)) / 86_400_000);
+}
+
+// ── The four facts (customs facts spec §4) ──────────────────────────────────
+
+/** What an order's four facts are read from: its row and the aggregate of the sales that pay it. */
+export interface CustomFactsInput {
+  state: CustomOrderState;
+  /** The agreed total, gross; null — not named. */
+  priceMills: number | null;
+  /** How many sales pay the order, and their gross sum (a Fansly sale still pending counts). */
+  payments: number;
+  paidGrossMills: number;
+  /**
+   * One of those sales was taken back: OnlyFans wrote its reversal or chargeback as a row of its own. A sale merely
+   * missing from a sync window is not taken back; Fansly reports no refund per sale, so on Fansly this is never true.
+   */
+  paymentReversed: boolean;
+  /** The owner's word on the payment (a gift, paid outside the platform); null — none. */
+  paidWord: { kind: CustomPaidWordKind } | null;
+  /** Every file was sent to the fan and a priced one is not bought yet (the pass's mark, `sent_at`); null — not so. */
+  sentAt: Date | string | null;
+}
+
+/** The states before the card reaches the model: a payment is the next move while nothing pays the order. */
+const BEFORE_MODEL: readonly CustomOrderState[] = ["recorded", "paid", "checked"];
+/** The states from «у модели» on: the model has the card (a refusal too, a given or closed order). */
+const AT_MODEL_ON: readonly CustomOrderState[] = ["at_model", "partly", "shot", "revision", "refused", "given", "closed"];
+const PAID_WORD_NOTES: Readonly<Record<CustomPaidWordKind, string>> = { gift: "без оплаты, слово владельца", off_platform: "оплачен не через площадку" };
+
+function paidFact(input: CustomFactsInput): CustomFact {
+  if (input.paidWord !== null) return { value: "yes", note: PAID_WORD_NOTES[input.paidWord.kind] };
+  if (input.payments === 0) return BEFORE_MODEL.includes(input.state) ? { value: "wait" } : { value: "no" };
+  if (input.paymentReversed) return { value: "conflict", note: "возврат оплаты" };
+  // Never «оплачен» while the price is unknown: the screen says what came, «получено $X».
+  if (input.priceMills === null || input.priceMills <= 0) return { value: "part", note: "цена не названа" };
+  return input.paidGrossMills >= input.priceMills ? { value: "yes" } : { value: "part", note: "не вся сумма" };
+}
+
+function atModelFact(input: CustomFactsInput): CustomFact {
+  if (AT_MODEL_ON.includes(input.state)) return { value: "yes" };
+  // Money is linked (or the owner's word stands) and the card is not there: «передать модели» is the next move.
+  if (BEFORE_MODEL.includes(input.state) && (input.payments > 0 || input.paidWord !== null)) return { value: "wait" };
+  return { value: "no" };
+}
+
+function shotFact(state: CustomOrderState): CustomFact {
+  switch (state) {
+    case "shot": case "given": case "closed": return { value: "yes" };
+    case "partly": return { value: "part" };
+    case "revision": return { value: "wait", note: "правка" };
+    case "refused": return { value: "conflict", note: "отказ модели" };
+    case "at_model": return { value: "wait" };
+    default: return { value: "no" };
+  }
+}
+
+function givenFact(input: CustomFactsInput): CustomFact {
+  if (input.state === "given" || input.state === "closed") return { value: "yes" };
+  if (!OPEN.includes(input.state)) return { value: "no" };
+  if (input.sentAt !== null) return { value: "part", note: "отправлен, фан не открыл" };
+  return input.state === "shot" ? { value: "wait" } : { value: "no" };
+}
+
+/**
+ * The four facts of an order (paid, at the model, shot, given), derived from its row and its payments at read time
+ * and never stored: the server's board and the order's page read them, and so does the screen. «Given» is «yes» only
+ * in the states «отдан» and «закрыт»; «paid» is «yes» only by the price reached or the owner's word.
+ */
+export function customOrderFactsOf(input: CustomFactsInput): CustomOrderFacts {
+  return { paid: paidFact(input), atModel: atModelFact(input), shot: shotFact(input.state), given: givenFact(input) };
+}
+
+/** The stored owner's word on the payment, as the wire carries it; null — none, or a shape the contract does not know. */
+export function paidWordOf(stored: unknown): CustomPaidWord | null {
+  if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return null;
+  const parsed = customPaidWordSchema.safeParse({ note: null, by: null, ...stored });
+  return parsed.success ? parsed.data : null;
+}
+
+/** The stored issue of an order, as the wire carries it; null — none, or a shape the contract does not know. */
+export function issueOf(stored: unknown): CustomOrderIssue | null {
+  if (stored === null || typeof stored !== "object" || Array.isArray(stored)) return null;
+  const parsed = customOrderIssueSchema.safeParse({ by: null, ...stored });
+  return parsed.success ? parsed.data : null;
 }
 
 // ── The card ────────────────────────────────────────────────────────────────

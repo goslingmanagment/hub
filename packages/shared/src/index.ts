@@ -12,6 +12,7 @@ export * from "./config-registry.ts";
 export * from "./config-settings.ts";
 export * from "./cross-spenders-lists.ts";
 export * from "./crypto.ts";
+export * from "./custom-tier-overrides.ts";
 export * from "./dm-text.ts";
 export * from "./error-sanitizer.ts";
 export * from "./fans.ts";

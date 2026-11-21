@@ -67,11 +67,15 @@ import { requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from 
 import { ConflictError, NotFoundError } from "../errors.ts";
 import {
   cardOf,
+  customOrderFactsOf,
+  dueLeftDaysOf,
   fanInputOf,
   isBoardAction,
+  issueOf,
   leadsSteps,
   mayTakeStep,
   overdueDaysOf,
+  paidWordOf,
   partsAbout,
   renderCardText,
   roundOf,
@@ -180,6 +184,7 @@ export function leaderWire(context: CustomLeaderContext | null, row: CustomOrder
 
 export function orderWire(row: CustomOrderRow, now: Date = new Date(), leaders: CustomLeaderContext | null = null): CustomOrder {
   const card = cardOf(row.card);
+  const paidWord = paidWordOf(row.paidWord);
   return {
     id: row.id,
     code: customOrderCode(row.id),
@@ -212,12 +217,36 @@ export function orderWire(row: CustomOrderRow, now: Date = new Date(), leaders: 
     contentopsRef: row.contentopsRef,
     origin: row.origin,
     overdueDays: overdueDaysOf(row, now),
+    dueLeftDays: dueLeftDaysOf(row, now),
+    deadlineDefault: row.deadlineDefault,
+    facts: customOrderFactsOf({
+      state: row.state, priceMills: row.priceMills, payments: row.payments, paidGrossMills: row.paidGrossMills,
+      paymentReversed: row.paymentReversed, paidWord, sentAt: row.sentAt,
+    }),
+    priceMills: row.priceMills,
+    paidWord,
+    holdReason: row.holdReason,
+    issue: issueOf(row.issue),
+    fanAskedAt: row.fanAskedAt?.toISOString() ?? null,
+    sentAt: row.sentAt?.toISOString() ?? null,
     partsDone: row.partsDone,
     openRevisions: row.openRevisions,
     version: row.version,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+/**
+ * The order on the agent's wire and ContentOps' («Съёмка» reads the agent's shape): the session wire without money and
+ * without the facts' fields, which those doors do not carry yet (customs facts spec, slice 1).
+ */
+export function agentOrderBase(row: CustomOrderRow, now: Date, leaders: CustomLeaderContext | null) {
+  const {
+    paidGrossMills: _gross, paidNetMills: _net, dueLeftDays: _due, deadlineDefault: _default, facts: _facts, priceMills: _price,
+    paidWord: _word, holdReason: _hold, issue: _issue, fanAskedAt: _asked, sentAt: _sent, ...wire
+  } = orderWire(row, now, leaders);
+  return wire;
 }
 
 export function messageWire(message: CustomOrderMessageRow): CustomOrderMessage {

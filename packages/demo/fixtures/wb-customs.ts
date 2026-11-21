@@ -7,9 +7,11 @@
  */
 import {
   CUSTOM_STATE_WORDS,
+  customOrderFactsOf,
   customPhaseOf,
   customPhaseProduct,
   customOrderCode,
+  dueLeftDaysOf,
   parseCustomOrderCode,
   renderCardText,
   STEP_FROM,
@@ -22,7 +24,9 @@ import {
   type CustomOrderActionBody,
   type CustomOrderCard,
   type CustomOrderDetailResponse,
+  type CustomOrderIssue,
   type CustomOrderState,
+  type CustomPaidWord,
   type CustomViewer,
   type KernelOperationResponse,
 } from "@agency_hub_core/contracts";
@@ -51,6 +55,15 @@ interface DemoOrder {
   partsDone: CustomOrder["partsDone"];
   messages: CustomOrderDetailResponse["messages"];
   history: CustomOrderDetailResponse["history"];
+  /** The agreed total (null — not named), a deadline the system set, the owner's word, a hold, an issue, the fan's
+   *  «where is it», every file sent and not opened yet. */
+  priceMills: number | null;
+  deadlineDefault: boolean;
+  paidWord: CustomPaidWord | null;
+  holdReason: string | null;
+  issue: CustomOrderIssue | null;
+  fanAskedAt: number | null;
+  sentAt: number | null;
 }
 
 const TASKS: readonly string[] = [
@@ -66,6 +79,8 @@ const TASKS: readonly string[] = [
   "1. Сцена «соседка зашла за солью» по его сценарию, ~8 мин\n2. Реплики короткие, выписаны в заметках",
 ];
 const PRICES: readonly string[] = ["100$ тир Master + 50$", "150$ чаевые", "250$ уже оплачено", "100$ чаевые + 100$ после готовности", "60$", "150$ подписка + 50$ чаевые", "80$ чаевые", "220$"];
+/** Each price above as the agreed total; null — the agent did not name it (the card's words only). */
+const PRICE_MILLS: readonly (number | null)[] = [150_000, 150_000, null, 200_000, 60_000, 200_000, 80_000, null];
 const CLOTHES: readonly string[] = ["Красное бельё, каблуки", "Спортивный комплект", "Его футболка, под ней ничего", "Чёрное платье, чулки", "Фартук на голое тело"];
 /** The order of steps the seeds walk through; the board shows every column. */
 const STATE_CYCLE: readonly CustomOrderState[] = ["at_model", "paid", "shot", "recorded", "checked", "partly", "given", "revision", "shot", "at_model", "at_model", "closed", "refused", "given"];
@@ -159,6 +174,13 @@ function seedOrders(count: number, now: number): DemoOrder[] {
       partsDone: ["shot", "given", "closed", "revision"].includes(state) ? ["video"] : [],
       messages,
       history,
+      priceMills: PRICE_MILLS[index % PRICE_MILLS.length]!,
+      deadlineDefault: deadlineOn !== null && index % 6 === 1,
+      paidWord: index % 14 === 5 ? { kind: "off_platform", note: "Оплатил переводом", by: "Владелец", at: isoAt(createdAt + 2 * HOUR) } : null,
+      holdReason: index % 14 === 9 ? "Ждём от фана фото образа" : null,
+      issue: index % 14 === 10 ? { text: "У модели в карточке другой срок, чем в заказе", by: "Читатель групп", at: isoAt(stepAt) } : null,
+      fanAskedAt: index % 14 === 8 ? Math.max(stepAt, now - 3 * HOUR) : null,
+      sentAt: index % 14 === 2 ? stepAt + 2 * HOUR : null,
     });
   }
   return orders;
@@ -235,6 +257,19 @@ function wire(order: DemoOrder, now: number): CustomOrder {
     contentopsRef: null,
     origin: order.origin,
     overdueDays: overdueDaysOf(order, new Date(now)),
+    dueLeftDays: dueLeftDaysOf(order, new Date(now)),
+    deadlineDefault: order.deadlineDefault,
+    facts: customOrderFactsOf({
+      state: order.state, priceMills: order.priceMills, payments: order.payments.length,
+      paidGrossMills: order.payments.reduce((sum, payment) => sum + payment.gross, 0), paymentReversed: false, paidWord: order.paidWord,
+      sentAt: order.sentAt === null ? null : isoAt(order.sentAt),
+    }),
+    priceMills: order.priceMills,
+    paidWord: order.paidWord,
+    holdReason: order.holdReason,
+    issue: order.issue,
+    fanAskedAt: order.fanAskedAt === null ? null : isoAt(order.fanAskedAt),
+    sentAt: order.sentAt === null ? null : isoAt(order.sentAt),
     partsDone: order.partsDone,
     openRevisions: order.messages.filter((message) => message.kind === "revision" && message.doneAt === null).length,
     version: order.history.length,
@@ -320,7 +355,7 @@ function act(request: DemoRequest, order: DemoOrder, body: CustomOrderActionBody
   };
   switch (body.action) {
     case "edit": order.card = body.card; break;
-    case "deadline": order.deadlineOn = body.deadlineOn; break;
+    case "deadline": order.deadlineOn = body.deadlineOn; order.deadlineDefault = false; break;
     case "fan": order.page = body.pageLabel; order.fanRef = demoFans(body.pageLabel)[2]?.platformUserId ?? null; order.buyer = null; break;
     case "card": order.refs.push(body.telegramRef); break;
     case "payment":
@@ -328,7 +363,7 @@ function act(request: DemoRequest, order: DemoOrder, body: CustomOrderActionBody
       if (from === "recorded") move("paid");
       break;
     case "unpay": order.payments = order.payments.filter((payment) => payment.ref !== body.transactionRef); break;
-    case "given": order.givenAt = now; move("given"); break;
+    case "given": order.givenAt = now; order.sentAt = null; order.fanAskedAt = null; move("given"); break;
     case "refused": move("refused", body.reason); break;
     case "partly": move("partly", body.note ?? null); break;
     case "revision": {
@@ -340,6 +375,7 @@ function act(request: DemoRequest, order: DemoOrder, body: CustomOrderActionBody
         telegramRef: null, eventRef: `workboard:revision:${order.history.length + 1}`, ordinal: 0, kind: "revision", part: body.part ?? null, complete: null,
         at: isoAt(now), author: null, excerpt: body.note ?? null, doneAt: null, retractedAt: null,
       });
+      order.sentAt = null;
       move("revision", body.note ?? null);
       break;
     }
@@ -397,6 +433,7 @@ export const wbCustomsHandlers: DemoHandlers = {
       payments: [{ ref: sale.transactionRef, kind: sale.kind === "tier" ? "subscription" : "tip", gross: sale.grossMills, at: Date.parse(sale.at), note: sale.kind === "tip_note" ? sale.detail : null }],
       givenAt: null, refs: [], partsDone: [], messages: [],
       history: [{ at: isoAt(now), event: "custom_order.recorded", actor: user.name, onBehalfOf: null, door: "workboard", changes: {} }],
+      priceMills: null, deadlineDefault: false, paidWord: null, holdReason: null, issue: null, fanAskedAt: null, sentAt: null,
     };
     store.push(order);
     return detail(request, order);
