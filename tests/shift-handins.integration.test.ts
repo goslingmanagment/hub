@@ -495,7 +495,7 @@ describe("the shift report: who reads, who writes", () => {
     const organic = await sale("tx-before-organic", "8800000002", "2026-11-12T09:00:00Z");
     await testDb.pool.query(
       `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
-       values ('fansly', $1, 'msg-before-worked', '8800000001', $2, 'fansly-extension', false, false, '2026-11-11T21:36:00Z', 'hand')`,
+       values ('fansly', $1, '9900000001', '8800000001', $2, 'fansly-extension', false, false, '2026-11-11T21:36:00Z', 'hand')`,
       [pageId, cora],
     );
     // The board judges «за 7 дней» by the clock: the morning after the shift.
