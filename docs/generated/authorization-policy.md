@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 85 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (560)
+## Routes (563)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -395,6 +395,9 @@ A full device token is not affected.
 | POST | `/api/v1/custom-orders` | `customOrderCreate` | `any` | — | — | yes |
 | GET | `/api/v1/custom-orders/:code` | `customOrder` | `any-session` | — | — | no |
 | POST | `/api/v1/custom-orders/:code` | `customOrderAct` | `any` | — | — | yes |
+| GET | `/api/v1/custom-orders/changes` | `customOrderChanges` | `any-session` | — | — | no |
+| GET | `/api/v1/custom-orders/done` | `customOrdersDone` | `any-session` | — | — | no |
+| GET | `/api/v1/custom-orders/findings` | `customFindingsList` | `any-session` | — | — | no |
 | POST | `/api/v1/custom-orders/findings/:findingId` | `customFindingAct` | `any-session` | — | — | no |
 | POST | `/api/v1/custom-orders/sales/:transactionRef/dismiss` | `customSaleDismiss` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `any-session` | — | — | no |

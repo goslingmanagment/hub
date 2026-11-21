@@ -5,8 +5,13 @@ import {
   createCustomOrderOnBoard,
   dismissCustomLookalike,
   readCustomOrder,
-  readCustomOrdersBoard,
 } from "../../services/custom-orders/index.ts";
+import {
+  readCustomFindings,
+  readCustomOrderChanges,
+  readCustomOrdersBoard,
+  readCustomOrdersDone,
+} from "../../services/custom-orders/board.ts";
 import {
   agentCreateCustomOrder,
   agentListCustomOrders,
@@ -49,6 +54,22 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
   server.get("/api/v1/custom-orders", { schema: routeSchemas.customOrdersBoard }, async (request) => {
     const principal = await requirePrincipal(request);
     return readCustomOrdersBoard(appContext, principal, request.query);
+  });
+
+  // The facts screen's blocks, each read when it is opened (customs facts spec §13). Static paths: never an order's code.
+  server.get("/api/v1/custom-orders/done", { schema: routeSchemas.customOrdersDone }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return readCustomOrdersDone(appContext, principal, request.query);
+  });
+
+  server.get("/api/v1/custom-orders/findings", { schema: routeSchemas.customFindingsList }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return readCustomFindings(appContext, principal);
+  });
+
+  server.get("/api/v1/custom-orders/changes", { schema: routeSchemas.customOrderChanges }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return readCustomOrderChanges(appContext, principal);
   });
 
   server.post("/api/v1/custom-orders", { schema: routeSchemas.customOrderCreate }, async (request) => {

@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { CustomOrder, CustomOrderActionBody, CustomOrderCreateBody, CustomOrderDetailResponse, CustomOrderState } from "@agency_hub_core/contracts";
+import type {
+  CustomBoardOrder, CustomFindingActionBody, CustomOrder, CustomOrderActionBody, CustomOrderCreateBody, CustomOrderDetailResponse, CustomOrderState,
+} from "@agency_hub_core/contracts";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { customDeadlineWords, customLeaderWords } from "@agency_hub_core/look";
 import { kernel } from "@/shared/hub";
@@ -21,9 +23,58 @@ export function useCustomBoard(page: string | null) {
   });
 }
 
-export function useCustomOrder(code: string) {
-  return useQuery({ queryKey: orderKey(code), queryFn: () => kernel.customOrder({ params: { code } }) });
+export function useCustomOrder(code: string, options: { enabled?: boolean } = {}) {
+  return useQuery({ queryKey: orderKey(code), queryFn: () => kernel.customOrder({ params: { code } }), enabled: options.enabled ?? true });
 }
+
+/** The facts screen's blocks, each read when it is opened: under the board's key, so a step refreshes them too. */
+export function useCustomDone(enabled: boolean) {
+  return useQuery({ queryKey: [...BOARD_KEY, "~done"], queryFn: () => kernel.customOrdersDone({ query: { days: 30 } }), enabled, refetchInterval: 60_000 });
+}
+
+export function useCustomFindings(enabled: boolean) {
+  return useQuery({ queryKey: [...BOARD_KEY, "~findings"], queryFn: () => kernel.customFindingsList(), enabled, refetchInterval: 60_000 });
+}
+
+export function useCustomChanges(enabled: boolean) {
+  return useQuery({ queryKey: [...BOARD_KEY, "~changes"], queryFn: () => kernel.customOrderChanges(), enabled, refetchInterval: 60_000 });
+}
+
+/** A finding answered: recorded as an order, linked to one, dismissed. */
+export function useFindingAct() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (input: { findingId: number; body: CustomFindingActionBody }) =>
+      kernel.customFindingAct({ params: { findingId: String(input.findingId) }, body: input.body }),
+    onSettled: () => qc.invalidateQueries({ queryKey: BOARD_KEY }),
+  });
+}
+
+/** A step of an order named by its code at the call (an undo in «изменилось само»): the order and the board refresh. */
+export function useAnyCustomStep() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (input: { code: string; body: CustomOrderActionBody }) => kernel.customOrderAct({ params: { code: input.code }, body: input.body }),
+    onSuccess: (detail: CustomOrderDetailResponse) => qc.setQueryData(orderKey(detail.order.code), detail),
+    onSettled: () => qc.invalidateQueries({ queryKey: BOARD_KEY }),
+  });
+}
+
+/**
+ * The board's three numbers (customs facts spec §13), each with its orders: in work (every live order), burning (Hub's
+ * `burning`), shot and not given to the fan yet. «Сегодня → команда» shows the same.
+ */
+export function boardNumbers(orders: readonly CustomBoardOrder[]) {
+  const live = orders.filter((order) => LIVE_STATES.includes(order.state));
+  return {
+    live,
+    burning: live.filter((order) => order.burning),
+    shotNotGiven: live.filter((order) => order.facts.shot.value === "yes" && order.facts.given.value !== "yes"),
+  };
+}
+const LIVE_STATES: readonly CustomOrderState[] = ["recorded", "paid", "checked", "at_model", "partly", "shot", "revision", "refused"];
 
 export function useCustomStep(code: string) {
   const qc = useQueryClient();
@@ -61,6 +112,9 @@ export function stepFailure(error: unknown): string {
   if (status === 409 && reason === "not_suggested") return "Этого уже нет среди подсказок: обновите страницу.";
   if (status === 409 && reason === "taken") return "Эта карточка уже привязана к другому заказу.";
   if (status === 409 && reason === "fan_unknown") return "Такого фана на этой странице Hub не знает.";
+  if (status === 409 && reason === "resolved") return "Эту находку уже разобрали: обновите страницу.";
+  if (status === 409 && reason === "unknown_event") return "Этого шага уже нет в истории заказа: обновите страницу.";
+  if (status === 409 && reason === "other_page") return "Находка с другой страницы.";
   if (status === 409) return "Этот шаг сейчас недоступен: заказ уже изменился. Обновите страницу.";
   if (status === 404) return "Заказ не найден.";
   if (status === null || status >= 500) return "Hub не ответил: неизвестно, сохранилось ли.";
@@ -102,7 +156,7 @@ export const STATE_TONE: Partial<Record<CustomOrderState, "success" | "warning" 
 };
 
 /** «осталось 2 дня», «сегодня последний день», «просрочен на 3 дня», or nothing without a deadline (Hub's look: one copy). */
-export function deadlineWords(order: Pick<CustomOrder, "deadlineOn" | "overdueDays" | "state">, serverNow: string): { text: string; late: boolean } | null {
+export function deadlineWords(order: Pick<CustomBoardOrder, "deadlineOn" | "overdueDays" | "state">, serverNow: string): { text: string; late: boolean } | null {
   return customDeadlineWords(order, serverNow);
 }
 
@@ -112,7 +166,7 @@ export function leaderWords(order: Pick<CustomOrder, "leader">): string | null {
 }
 
 /** The fan as the board names him: his name, or what the card says while he is not confirmed. */
-export function fanWords(order: Pick<CustomOrder, "fan" | "buyer" | "fanErased">): { name: string; confirmed: boolean } {
+export function fanWords(order: Pick<CustomBoardOrder, "fan" | "buyer" | "fanErased">): { name: string; confirmed: boolean } {
   if (order.fanErased) return { name: "фан стёрт", confirmed: true };
   if (order.fan) return { name: order.fan.displayName ?? order.fan.username ?? `фан ·${order.fan.fanRef.slice(-4)}`, confirmed: true };
   return { name: order.buyer ?? "покупатель не назван", confirmed: false };
@@ -140,7 +194,22 @@ export const EVENT_WORDS: Record<string, string> = {
   "custom_order.message": "Сообщение в группе модели",
   "custom_order.retracted": "Сдача отозвана",
   "custom_order.settled": "Шаг пересчитан по сообщениям",
+  "custom_order.ungiven": "«Отдан» отменён",
+  "custom_order.hold": "На паузе",
+  "custom_order.unhold": "Снят с паузы",
+  "custom_order.issue": "Источники расходятся",
+  "custom_order.issue_cleared": "Расхождение снято",
+  "custom_order.paid_word": "Слово владельца об оплате",
+  "custom_order.fan_asked": "Фан спросил, где заказ",
+  "custom_order.sent": "Отправлен фану, не открыт",
 };
+
+/** A step of an order's history in words: the event's word, or what its changes make of it (an import, a mark taken off). */
+export function eventWords(item: { event: string; changes: Record<string, unknown> }): string {
+  if (item.event === "custom_order.recorded" && item.changes.origin === "import") return "Перенесён из старых карточек";
+  if (item.event === "custom_order.sent" && item.changes.cleared === true) return "Отметка «отправлен» снята";
+  return EVENT_WORDS[item.event] ?? item.event;
+}
 
 export const DOOR_WORDS: Record<string, string> = {
   extension: "в расширении",

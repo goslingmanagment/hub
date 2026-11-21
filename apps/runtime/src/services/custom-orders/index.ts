@@ -44,7 +44,6 @@ import {
   listCustomLookalikeSales,
   listCustomOrderActorNames,
   listCustomOrderPayments,
-  listCustomOrders,
   listCustomOrdersInStates,
   listCustomPaymentCandidates,
   listObjectEvents,
@@ -85,7 +84,6 @@ import {
   fanInputOf,
   isBoardAction,
   issueOf,
-  leadsSteps,
   mayTakeStep,
   overdueDaysOf,
   paidWordOf,
@@ -104,7 +102,7 @@ import {
   type CustomViewer,
 } from "./rules.ts";
 import { waitingCustomSaleIds } from "./readers.ts";
-import { boardLeads, customMoveOf, customStepLeader, ledPhasesOf, type CustomLeader } from "./leaders.ts";
+import { customMoveOf, customStepLeader, ledPhasesOf, type CustomLeader } from "./leaders.ts";
 import { personOfLogin, teamFactsFor, teamPagesFor } from "../teams.ts";
 
 /**
@@ -122,9 +120,6 @@ type CustomApp = Pick<AppContext, "db">;
 
 /** How long a sale is offered as a payment, and how many. */
 export const CUSTOM_PAYMENT_DAYS = 30;
-/** The board shows the given and closed orders of the last week. */
-const DONE_DAYS = 7;
-const BOARD_LIMIT = 500;
 const DAY_MS = 86_400_000;
 
 /** Who did a step and through which door (object_events). */
@@ -352,53 +347,6 @@ export function lookalikesFor(viewer: CustomViewer, given: readonly CustomLookal
   if (viewer.lead || viewer.role === "owner") return [...rows];
   if (viewer.role === "team_lead") return rows.filter((row) => viewer.pageIds.includes(row.pageId));
   return rows.filter((row) => row.ledByUserIds.includes(viewer.userId) && viewer.pageIds.includes(row.pageId));
-}
-
-export async function readCustomOrdersBoard(
-  app: CustomApp,
-  principal: AuthPrincipal,
-  query: { pageLabel?: string | undefined },
-  now: Date = new Date(),
-): Promise<CustomOrdersBoardResponse> {
-  requireSessionUser(principal);
-  const viewer = await customViewerOf(app, principal);
-  let pageId: number | null = null;
-  if (query.pageLabel !== undefined) {
-    const page = await findPageSummaryByLabel(app.db, query.pageLabel);
-    if (!page || !seesOrder(viewer, { pageId: page.id })) throw new NotFoundError(`Page "${query.pageLabel}" was not found`);
-    pageId = page.id;
-  }
-  const everything = viewer.lead || viewer.role === "owner";
-  const pageIds = pageId !== null ? [pageId] : everything ? "all" as const : viewer.pageIds;
-  const [rows, lookalikes, leaders, onShift, verified] = await Promise.all([
-    listCustomOrders(app.db, { pageIds, unknownPage: everything || viewer.role === "team_lead", doneSince: new Date(now.getTime() - DONE_DAYS * DAY_MS), limit: BOARD_LIMIT + 1 }),
-    // The last week's, and the older ones a matter still waits about: «Записать» or «Не кастом» closes it here.
-    listCustomLookalikeSales(app.db, { from: new Date(now.getTime() - DONE_DAYS * DAY_MS), to: now, limit: 200, alsoIds: await waitingCustomSaleIds(app.db) }),
-    customLeaderContext(app, principal),
-    listOnShiftUsersByPage(app.db, now),
-    customsVerifiedOf(app, now),
-  ]);
-  const visible = rows.filter((row) => seesOrder(viewer, row));
-  return {
-    viewer: { lead: leadsSteps(viewer), owner: viewer.role === "owner" },
-    // The header by the one rule, for the models of the pages the viewer sees, of their realm (never a global right).
-    leads: boardLeads(leaders.facts, pageIds, viewer.realm?.test === true),
-    orders: visible.slice(0, BOARD_LIMIT).map((row) => orderWire(row, now, leaders, onShift)),
-    capped: visible.length > BOARD_LIMIT,
-    lookalikes: lookalikesFor(viewer, lookalikes)
-      .filter((row) => pageId === null || row.pageId === pageId)
-      .map((row) => ({
-        transactionRef: String(row.transactionId),
-        pageLabel: row.pageLabel,
-        fan: row.fanRef === null ? null : { platform: row.platform, fanRef: row.fanRef, username: row.fanUsername, displayName: row.fanDisplayName },
-        kind: row.kind,
-        detail: row.detail,
-        grossMills: row.grossMills,
-        at: row.at.toISOString(),
-      })),
-    verified,
-    serverNow: now.toISOString(),
-  };
 }
 
 /**

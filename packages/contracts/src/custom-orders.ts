@@ -391,11 +391,66 @@ export const customOrdersBoardQuerySchema = z.object({
   pageLabel: z.string().trim().min(1).max(120).optional(),
 }).strict();
 
+/**
+ * An order on the board's lists: the order without its card document while the facts screen is on (`factsOn`: the
+ * order's page has it), with the card's volume line alone; with the switch off, the card as before.
+ */
+export const customBoardOrderSchema = customOrderSchema.omit({ card: true }).extend({
+  card: customOrderCardSchema.optional(),
+  /** The card's «Длительность» («6 минут», «10 фото»); null — the card names none. */
+  volume: z.string().nullable(),
+});
+export type CustomBoardOrder = z.infer<typeof customBoardOrderSchema>;
+
+/**
+ * How a person takes back a step the system or an agent took (customs facts spec §10): the sale off the order, «отдан»
+ * off it, the delivery taken back (with a reason the person gives), the deadline back to what it was. Sent as the
+ * board's step with `undoOf` — the history event it takes back.
+ */
+export const customUndoSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("unpay"), transactionRef: z.string() }),
+  z.object({ action: z.literal("ungive") }),
+  z.object({ action: z.literal("retract"), retracts: z.string() }),
+  z.object({ action: z.literal("deadline"), deadlineOn: day.nullable() }),
+]);
+export type CustomUndo = z.infer<typeof customUndoSchema>;
+
+/** A step of an order that came through the system's or an agent's door: «изменилось само». */
+export const customSelfChangeSchema = z.object({
+  /** The history event's id (`undoOf` of its undo). */
+  id: intId,
+  at: isoTimestamp,
+  code: z.string(),
+  /** The order's fan as the board names him (or the card's buyer); null — not known, or erased. */
+  fan: z.string().nullable(),
+  event: z.string(),
+  /** system | api. */
+  door: z.string(),
+  /** An agent key's name; null — Hub itself. */
+  actor: z.string().nullable(),
+  changes: z.record(z.string(), z.unknown()),
+  /** The viewer may take it back, so; null — not theirs to undo, or nothing to undo any more. */
+  undo: customUndoSchema.nullable(),
+});
+export type CustomSelfChange = z.infer<typeof customSelfChangeSchema>;
+
+/**
+ * When the reader and the nightly pass last checked the sources (spec §9, «Система → Состояние»): `readerStale` — the
+ * 30-minute reader is late.
+ */
+export const customVerifiedSchema = z.object({
+  readerAt: isoTimestamp.nullable(),
+  nightlyAt: isoTimestamp.nullable(),
+  readerStale: z.boolean(),
+});
+
 export const customOrdersBoardResponseSchema = z.object({
   viewer: z.object({
     /** «Ведёт кастомы»: the lead's steps on every order. The owner has them too. */
     lead: z.boolean(),
     owner: z.boolean(),
+    /** The viewer as the people registry names them (the login without a person): «Только мой ход» compares `move.who`. */
+    name: z.string().nullable(),
   }),
   /**
    * Who leads customs, for the board's header: per model of the pages the viewer sees (of the viewer's realm only), by
@@ -403,21 +458,52 @@ export const customOrdersBoardResponseSchema = z.object({
    * — nobody leads it: the owner.
    */
   leads: z.array(z.object({ model: z.string(), check: z.string().nullable(), shoot: z.string().nullable() })),
-  /** Open orders, and the given and closed of the last 7 days, the oldest step first. */
-  orders: z.array(customOrderSchema),
+  /**
+   * The facts screen is on (the live switch `customsFacts`): `orders` are the live orders alone, without their card;
+   * the given and closed are read by `customOrdersDone`. Off: the open orders and the given and closed of the last 7
+   * days, with their card, as before.
+   */
+  factsOn: z.boolean(),
+  /** The oldest step first. */
+  orders: z.array(customBoardOrderSchema),
   capped: z.boolean(),
-  /** Sales that look like a custom with no order (the viewer's chats; the lead and the owner every page's). */
+  /** Sales that look like a custom with no order (the viewer's chats; the lead and the owner every page's). Empty while `factsOn`: the findings are. */
   lookalikes: z.array(customLookalikeSaleSchema),
   /**
    * How fresh the board is (customs facts spec §9), from «Система → Состояние»: the last good pass of the reader
    * (`customs-reader`, every 30 minutes) and of the nightly reconciliation (`customs-nightly`); null — never. `readerStale`
    * — the reader is past twice its period and ten minutes (the system state's own rule for «молчит»), or never ran.
    */
-  verified: z.object({
-    readerAt: isoTimestamp.nullable(),
-    nightlyAt: isoTimestamp.nullable(),
-    readerStale: z.boolean(),
-  }),
+  verified: customVerifiedSchema,
+  /**
+   * The open findings the viewer resolves (`customFindingsList`): how many, their money, the first fans' names. Zero
+   * while the switch is off.
+   */
+  findings: z.object({ open: z.number().int().nonnegative(), amountMills: mills, fans: z.array(z.string()) }),
+  /** The last 24 hours' steps by the system's or an agent's door on the viewer's orders (`customOrderChanges`): how many, the newest. */
+  changes: z.object({ count: z.number().int().nonnegative(), newest: customSelfChangeSchema.nullable() }),
+  /** How many are given and wait for the fan's word, and closed in the last 30 days (`customOrdersDone`); zero while off. */
+  done: z.object({ given: z.number().int().nonnegative(), closed: z.number().int().nonnegative() }),
+  serverNow: isoTimestamp,
+});
+
+/** «Отдано, ждём слово фана» and «Закрыто за месяц»: the orders given and not closed, and closed in the last `days`. */
+export const customOrdersDoneQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(90).default(30),
+}).strict();
+
+export const customOrdersDoneResponseSchema = z.object({
+  /** Given, waiting for the fan's word (it closes by itself 72 h after the mark), the newest first. */
+  given: z.array(customBoardOrderSchema),
+  /** Closed in the last `days`, the newest first. */
+  closed: z.array(customBoardOrderSchema),
+  capped: z.boolean(),
+  serverNow: isoTimestamp,
+});
+
+/** «За сутки изменилось само»: the last 24 hours' steps of the system's and the agents' doors on the viewer's orders, the newest first. */
+export const customOrderChangesResponseSchema = z.object({
+  changes: z.array(customSelfChangeSchema),
   serverNow: isoTimestamp,
 });
 
@@ -567,6 +653,12 @@ export const customFindingSchema = z.object({
 export type CustomFinding = z.infer<typeof customFindingSchema>;
 
 export const customFindingParamsSchema = z.object({ findingId: z.string().trim().regex(/^[1-9]\d{0,18}$/) });
+
+/** «Найдено без заказа»: the open findings the viewer resolves, the newest first. */
+export const customFindingsListResponseSchema = z.object({
+  findings: z.array(customFindingSchema),
+  serverNow: isoTimestamp,
+});
 
 /**
  * A finding resolved by the check's leader of its page (the customs lead, the owner): recorded as an order (the board's
@@ -910,6 +1002,9 @@ export const agentCustomFindingsResponseSchema = z.object({
 });
 
 export type CustomOrdersBoardResponse = z.infer<typeof customOrdersBoardResponseSchema>;
+export type CustomOrdersDoneResponse = z.infer<typeof customOrdersDoneResponseSchema>;
+export type CustomFindingsListResponse = z.infer<typeof customFindingsListResponseSchema>;
+export type CustomOrderChangesResponse = z.infer<typeof customOrderChangesResponseSchema>;
 export type CustomOrderDetailResponse = z.infer<typeof customOrderDetailResponseSchema>;
 export type CustomOrderCreateBody = z.infer<typeof customOrderCreateBodySchema>;
 export type CustomLookalikeSale = z.infer<typeof customLookalikeSaleSchema>;

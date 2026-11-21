@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
   CUSTOM_STATE_WORDS, waitedParts, wantedParts,
-  type CustomLookalikeSale, type CustomOrder, type CustomOrderAction, type CustomOrderActionBody, type CustomOrderCard, type CustomOrderDetailResponse, type CustomOrdersBoardResponse,
+  type CustomBoardOrder, type CustomLookalikeSale, type CustomOrder, type CustomOrderAction, type CustomOrderActionBody, type CustomOrderCard, type CustomOrderDetailResponse, type CustomOrdersBoardResponse,
 } from "@agency_hub_core/contracts";
 import {
   Badge,
@@ -37,12 +37,12 @@ import { contentopsHref } from "@agency_hub_core/ui/sites";
 import {
   COLUMNS,
   DOOR_WORDS,
-  EVENT_WORDS,
   PART_WORDS,
   PAYMENT_KIND_WORDS,
   STATE_TONE,
   columnOf,
   deadlineWords,
+  eventWords,
   leaderWords,
   fanWords,
   partsWords,
@@ -72,7 +72,7 @@ const BOARD_BACK = { to: "/customs", label: "Кастомы" };
  * Who took the order, by the registry's name, or Gengar who wrote it alone. An imported order nobody took says
  * nothing on its face: that it came over is in its history.
  */
-function acceptorOf(order: Pick<CustomOrder, "acceptedByName" | "origin">): string | null {
+export function acceptorOf(order: Pick<CustomOrder, "acceptedByName" | "origin">): string | null {
   return order.acceptedByName ?? (order.origin === "import" ? null : "Генгар");
 }
 
@@ -81,7 +81,7 @@ function StateBadge({ order }: { order: Pick<CustomOrder, "state"> }) {
   return <Badge tone={tone ?? "neutral"}>{CUSTOM_STATE_WORDS[order.state]}</Badge>;
 }
 
-function Deadline({ order, serverNow }: { order: CustomOrder; serverNow: string }) {
+function Deadline({ order, serverNow }: { order: CustomBoardOrder; serverNow: string }) {
   if (order.state === "given" || order.state === "closed") return <span>отдан <TimeMsk at={order.givenAt ?? order.stateAt} show="date" /></span>;
   if (order.state === "shot") return <span>снят <TimeMsk at={order.stateAt} show="ago" /></span>;
   const words = deadlineWords(order, serverNow);
@@ -90,16 +90,16 @@ function Deadline({ order, serverNow }: { order: CustomOrder; serverNow: string 
 }
 
 /** Price and paid in one line: «100$ тир Master + 50$ · оплачено $150.00». */
-function PaidLine({ order }: { order: CustomOrder }) {
+function PaidLine({ order }: { order: CustomBoardOrder }) {
   return (
     <span className="cus-paid">
-      {order.card.price ?? <span className="cus-muted">цена не записана</span>}
+      {order.card?.price ?? <span className="cus-muted">цена не записана</span>}
       {order.payments > 0 && <> · оплачено <Money mills={order.paidGrossMills} /></>}
     </span>
   );
 }
 
-function OrderCard({ order, serverNow }: { order: CustomOrder; serverNow: string }) {
+function OrderCard({ order, serverNow }: { order: CustomBoardOrder; serverNow: string }) {
   const back = useBackState("Кастомы");
   const fan = fanWords(order);
   return (
@@ -285,7 +285,7 @@ export function CustomsBoardScreen() {
   } else if (board.isError || !data) {
     body = <ErrorState onRetry={() => void board.refetch()} retrying={board.isFetching}>Заказы не загрузились: Hub не ответил.</ErrorState>;
   } else {
-    const byColumn = new Map(COLUMNS.map((column) => [column.id, [] as CustomOrder[]]));
+    const byColumn = new Map(COLUMNS.map((column) => [column.id, [] as CustomBoardOrder[]]));
     for (const order of data.orders) {
       const column = columnOf(order);
       if (column !== null) byColumn.get(column)!.push(order);
@@ -357,7 +357,7 @@ export function CustomsBoardScreen() {
 
 // ── The order ───────────────────────────────────────────────────────────────
 
-const CARD_FIELDS: ReadonlyArray<{ key: keyof CustomOrderCard & string; label: string; long?: boolean }> = [
+export const CARD_FIELDS: ReadonlyArray<{ key: keyof CustomOrderCard & string; label: string; long?: boolean }> = [
   { key: "price", label: "Оплата" },
   { key: "duration", label: "Длительность" },
   { key: "task", label: "Описание задания", long: true },
@@ -370,9 +370,9 @@ const CARD_FIELDS: ReadonlyArray<{ key: keyof CustomOrderCard & string; label: s
   { key: "deadlineNote", label: "Сроки словами" },
 ];
 
-type Ask = { action: CustomOrderAction; title: string; field?: "note" | "reason" | "telegram" | "date"; required?: boolean; confirm: string; hint?: string };
+export type Ask = { action: CustomOrderAction; title: string; field?: "note" | "reason" | "telegram" | "date"; required?: boolean; confirm: string; hint?: string };
 
-const ASKS: Partial<Record<CustomOrderAction, Ask>> = {
+export const ASKS: Partial<Record<CustomOrderAction, Ask>> = {
   checked: { action: "checked", title: "Проверен", confirm: "Проверен", hint: "Карточка проверена, спорное решено: заказ уходит в съёмку." },
   given: { action: "given", title: "Отдан фану", confirm: "Отдан" },
   at_model: { action: "at_model", title: "Карточка у модели", field: "telegram", confirm: "У модели", hint: "Ссылка на карточку в группе модели, если есть: так сдачу найдут сами." },
@@ -384,6 +384,7 @@ const ASKS: Partial<Record<CustomOrderAction, Ask>> = {
   close: { action: "close", title: "Закрыть заказ", confirm: "Закрыть" },
   cancel: { action: "cancel", title: "Отменить заказ", field: "reason", confirm: "Отменить заказ", hint: "Оплаты вернутся в подсказки: их сможет взять другой заказ." },
   card: { action: "card", title: "Карточка в Telegram", field: "telegram", required: true, confirm: "Привязать" },
+  hold: { action: "hold", title: "На паузу", field: "reason", required: true, confirm: "На паузу", hint: "Почему заказ ждёт: фан недоступен, ждём реквизит. На паузе заказ не горит." },
 };
 
 /**
@@ -434,12 +435,13 @@ function bodyOf(ask: Ask, value: string, part: CustomPart | null): CustomOrderAc
     // «Отдан» by the person's word: the message is named on the order when Hub suggests it (below).
     case "given": return { action: "given" };
     case "close": return { action: "close" };
+    case "hold": return { action: "hold", reason: text };
     default: return null;
   }
 }
 
 /** `parts` — what the card orders: «Правка» of an order with two parts says which one it is about. */
-function StepModal({ ask, code, initial, parts, onClose }: { ask: Ask; code: string; initial: string; parts: readonly CustomPart[]; onClose: () => void }) {
+export function StepModal({ ask, code, initial, parts, onClose }: { ask: Ask; code: string; initial: string; parts: readonly CustomPart[]; onClose: () => void }) {
   const step = useCustomStep(code);
   const [value, setValue] = useState(initial);
   const [part, setPart] = useState<CustomPart | null>(null);
@@ -487,7 +489,7 @@ function StepModal({ ask, code, initial, parts, onClose }: { ask: Ask; code: str
   );
 }
 
-function EditCardModal({ detail, onClose }: { detail: CustomOrderDetailResponse; onClose: () => void }) {
+export function EditCardModal({ detail, onClose }: { detail: CustomOrderDetailResponse; onClose: () => void }) {
   const step = useCustomStep(detail.order.code);
   const [draft, setDraft] = useState<Record<string, string>>(() => Object.fromEntries(CARD_FIELDS.map((field) => [field.key, String(detail.order.card[field.key] ?? "")])));
   const [failure, setFailure] = useState<string | null>(null);
@@ -533,7 +535,7 @@ function EditCardModal({ detail, onClose }: { detail: CustomOrderDetailResponse;
   );
 }
 
-function FanForm({ detail }: { detail: CustomOrderDetailResponse }) {
+export function FanForm({ detail }: { detail: CustomOrderDetailResponse }) {
   const pages = usePages();
   const step = useCustomStep(detail.order.code);
   const [pageLabel, setPageLabel] = useState(detail.order.pageLabel ?? "");
@@ -558,7 +560,7 @@ function FanForm({ detail }: { detail: CustomOrderDetailResponse }) {
   );
 }
 
-function Deliveries({ detail, onGiven, pending }: { detail: CustomOrderDetailResponse; onGiven: (messageRef: string) => void; pending: boolean }) {
+export function Deliveries({ detail, onGiven, pending }: { detail: CustomOrderDetailResponse; onGiven: (messageRef: string) => void; pending: boolean }) {
   if (detail.deliverySuggestions.length === 0) return null;
   return (
     <ul className="cus-list">
@@ -577,7 +579,7 @@ function Deliveries({ detail, onGiven, pending }: { detail: CustomOrderDetailRes
  * «Правка»: what the order still waits for. A part is ready again only by a whole delivery newer than the last
  * request about it (Hub's round), so the parts not ready are named, with the requests not fixed.
  */
-function RevisionWaits({ detail }: { detail: CustomOrderDetailResponse }) {
+export function RevisionWaits({ detail }: { detail: CustomOrderDetailResponse }) {
   const { order } = detail;
   const waited = waitedParts(order);
   if (order.state !== "revision" || waited.length === 0) return null;
@@ -752,7 +754,7 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
               {detail.history.map((item, index) => (
                 <li key={index}>
                   <TimeMsk at={item.at} />
-                  <span>{item.event === "custom_order.recorded" && item.changes.origin === "import" ? "Перенесён из старых карточек" : EVENT_WORDS[item.event] ?? item.event}</span>
+                  <span>{eventWords(item)}</span>
                   <span className="cus-muted">{[item.actor ?? (item.door === "system" ? null : "кто-то"), item.onBehalfOf ? `за ${item.onBehalfOf}` : null, DOOR_WORDS[item.door] ?? item.door].filter(Boolean).join(", ")}</span>
                 </li>
               ))}
