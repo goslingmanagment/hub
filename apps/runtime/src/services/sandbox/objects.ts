@@ -7,7 +7,8 @@ import { isTestAgent, isTestPrincipal } from "./realm.ts";
 
 /**
  * THE WALL BY OBJECT (sandbox/realm.ts): what a request NAMES — a page, a login, a person, a model, a shift, a sale, a
- * claim, a report's candidate or proposal, a «мимо площадки» line, a question, an order, a publication — is of the
+ * claim, a report's candidate or proposal, a «мимо площадки» line, a question, an order, a custom with no order, a
+ * publication — is of the
  * caller's realm, or the request is answered exactly as for an object that does not exist. One check, in the API's
  * preHandler (api/server.ts) and the person's door, for every route and every principal: a handler never has to
  * remember which of its parameters to look at.
@@ -22,14 +23,14 @@ import { isTestAgent, isTestPrincipal } from "./realm.ts";
 
 export type RealmObjectKind =
   | "page" | "pageLabel" | "model" | "modelSlug" | "login" | "personCode" | "shift" | "sale" | "claim" | "offPlatformLine"
-  | "candidate" | "proposal" | "personProposal" | "sighting" | "question" | "order" | "publication";
+  | "candidate" | "proposal" | "personProposal" | "sighting" | "question" | "order" | "finding" | "publication";
 
 /** The table each kind reads (tests/sandbox-realm-objects.test.ts holds it against what each route's handler reads). */
 export const KIND_TABLES: Readonly<Record<RealmObjectKind, string>> = {
   page: "pages", pageLabel: "pages", model: "models", modelSlug: "models", login: "users", personCode: "people",
   shift: "shifts", sale: "transactions", claim: "sale_claims", offPlatformLine: "off_platform_sales",
   candidate: "shift_handin_candidates", proposal: "shift_handin_proposals", personProposal: "person_proposals",
-  sighting: "sale_sightings", question: "team_questions", order: "custom_orders", publication: "publications",
+  sighting: "sale_sightings", question: "team_questions", order: "custom_orders", finding: "custom_findings", publication: "publications",
 };
 
 /**
@@ -69,6 +70,8 @@ export const FIELD_OBJECTS: Readonly<Record<string, FieldObject>> = {
   proposalId: "proposal",
   sightingId: "sighting",
   questionId: "question",
+  // A trace of a custom with no order (0436): of its page's realm, one of no known page the live agency's.
+  findingId: "finding",
   publicationId: "publication",
   // A fan, a conversation, a message, a media offer, a send attempt: named inside the route's own page (its pageLabel
   // is checked) or read through the caller's page scope; never an object of a realm by itself.
@@ -111,6 +114,8 @@ export const ROUTE_OBJECTS: Readonly<Record<string, Readonly<Record<string, Fiel
   adminPersonProposalDecide: { proposalId: "personProposal" },
   customOrder: { code: "order" },
   customOrderAct: { code: "order" },
+  // A finding linked to an order: the order's code.
+  customFindingAct: { code: "order" },
   adminPerson: { code: "personCode" },
   adminPersonUpdate: { code: "personCode" },
   // A new person's code: nobody's yet (a code of an existing person is refused by the service).
@@ -167,6 +172,7 @@ function realmQuery(kind: RealmObjectKind, values: readonly string[]): SQL {
     case "sighting": return pageOf("sale_sightings");
     case "question": return pageOf("team_questions");
     case "order": return byId("custom_orders", testPageSql(sql`o.page_id`), sql`'K-' || o.id::text`);
+    case "finding": return pageOf("custom_findings");
     case "publication": return pageOf("publications");
   }
 }

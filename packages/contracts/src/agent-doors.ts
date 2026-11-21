@@ -136,12 +136,15 @@ export const agentFanWatchResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
-const saleRequestSchema = z.union([
+/** A sale as an agent names it: by Hub's id, or by a page and the platform's id (the custom orders' payments too). */
+export const agentSaleRequestSchema = z.union([
   /** Hub's own id of the sale (`saleRef` of the review, `transactionRef` of `agentTeamSales`). */
   z.object({ saleRef: z.string().regex(/^\d{1,19}$/) }).strict(),
   /** The platform's transaction id on a page (`transactionRef` of the `transactions` dataset). */
   z.object({ pageLabel: z.string().min(1).max(200), transactionRef: z.string().min(1).max(200) }).strict(),
 ]);
+const saleRequestSchema = agentSaleRequestSchema;
+export type AgentSaleRequest = z.infer<typeof agentSaleRequestSchema>;
 
 export const agentSaleContextBodySchema = z.object({
   sales: z.array(saleRequestSchema).min(1).max(500),

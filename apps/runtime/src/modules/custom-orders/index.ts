@@ -14,6 +14,7 @@ import {
   agentUpdateCustomOrder,
   type AgentCustomScope,
 } from "../../services/custom-orders/agent.ts";
+import { actOnCustomFinding, agentPostCustomFindings } from "../../services/custom-orders/findings.ts";
 import { personCustomOrders, personCustomOrderStep } from "../../services/custom-orders/person.ts";
 import { doorPerson, type PersonDoorOperation } from "../../services/person-door.ts";
 import { beginAgentRequest, settleAgentRequest as settled, writeAgentAudit } from "../agent-read/index.ts";
@@ -67,13 +68,25 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
     return dismissCustomLookalike(appContext, principal, request.params.transactionRef);
   });
 
+  // A custom with no order (customs facts spec §8): resolved by the check's leader of its page, the customs lead, the owner.
+  server.post("/api/v1/custom-orders/findings/:findingId", { schema: routeSchemas.customFindingAct }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return actOnCustomFinding(appContext, principal, { findingId: request.params.findingId, body: request.body });
+  });
+
   // --- Agent keys (write:customs) -------------------------------------------
 
-  async function agentScope(request: Parameters<typeof requireAgentKeyPrincipal>[0], operation: string) {
+  async function agentScope(
+    request: Parameters<typeof requireAgentKeyPrincipal>[0],
+    operation: string,
+    also: ReadonlyArray<"read:money" | "read:messages"> = [],
+  ) {
     const principal = await requireAgentKeyPrincipal(request);
-    const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: ["write:customs"] });
+    const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: ["write:customs", ...also] });
+    // What a step names besides the shooting needs its own capability (customs facts spec §11): the service checks it.
     const customScope: AgentCustomScope = {
-      principal, pages: scope.pages.map((page) => ({ id: page.id, pageLabel: page.pageLabel, platform: page.platform })),
+      principal, pages: scope.pages.map((page) => ({ id: page.id, pageLabel: page.pageLabel, platform: page.platform, modelSlug: page.modelSlug })),
+      money: scope.has("read:money"), texts: scope.has("read:messages"),
     };
     return { principal, scope, customScope };
   }
@@ -123,6 +136,24 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId, operation: "agentCustomCards", pageIds: [], verbatimText: false,
         requestSummary: { returned: request.body.cards.length, outcome: `opened:${answer.opened}.closed:${answer.closed}` },
+      });
+      return answer;
+    });
+  });
+
+  server.post("/api/v1/agent/custom-findings", { schema: routeSchemas.agentCustomFindings }, async (request) => {
+    const { principal, scope, customScope } = await agentScope(request, "agentCustomFindings", ["read:money", "read:messages"]);
+    return settled(scope, async () => {
+      const answer = await agentPostCustomFindings(appContext, customScope, request.body);
+      const count = (outcome: string) => answer.findings.filter((one) => one.outcome === outcome).length;
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId, operation: "agentCustomFindings",
+        pageIds: customScope.pages.filter((page) => request.body.findings.some((one) => one.pageLabel === page.pageLabel)).map((page) => page.id),
+        verbatimText: false,
+        requestSummary: {
+          returned: answer.findings.length,
+          outcome: `created:${count("created")}.dismissed:${count("dismissed")}.already:${count("already")}.not_found:${count("not_found")}`,
+        },
       });
       return answer;
     });

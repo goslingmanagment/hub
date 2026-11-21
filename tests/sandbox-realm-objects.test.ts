@@ -127,6 +127,7 @@ const HANDLER_TABLES: Readonly<Record<string, string>> = {
   "shiftReportSightingAdd sightingId": "sale_sightings",
   "customOrder code": "custom_orders",
   "customOrderAct code": "custom_orders",
+  "customFindingAct code": "custom_orders",
   "adminPerson code": "people",
   "adminPersonUpdate code": "people",
 };

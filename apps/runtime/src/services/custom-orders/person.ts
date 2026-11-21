@@ -121,7 +121,7 @@ export async function takeShootingStep(
   if (!leads) throw notAllowed("This step of the order is not the person's: the shooting's leader takes it");
   let changed = false;
   if (body.step === "at_model" && body.deadlineOn !== undefined && body.deadlineOn !== order.deadlineOn) {
-    changed = await applyCustomStep(app, { orderId: order.id, step: { action: "deadline", deadlineOn: body.deadlineOn }, actor, viewer: null, now, byPerson: true });
+    changed = await applyCustomStep(app, { orderId: order.id, step: { action: "deadline", deadlineOn: body.deadlineOn, by: "person" }, actor, viewer: null, now, byPerson: true });
   }
   if (body.step === "refused" && (body.note === undefined || body.note.trim() === "")) throw notAllowed("A refusal names its reason");
   const step: CustomStep = body.step === "at_model" ? { action: "at_model" }

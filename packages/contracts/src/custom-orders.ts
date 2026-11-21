@@ -9,6 +9,7 @@
  */
 import { z } from "zod";
 
+import { agentSaleRequestSchema } from "./agent-doors.ts";
 import { intId, isoDateTime, isoTimestamp, mills } from "./primitives.ts";
 
 /**
@@ -330,8 +331,14 @@ export const customLookalikeSaleSchema = z.object({
   at: isoTimestamp,
 });
 
+/**
+ * The board's steps. Besides the path: `ungive` takes «отдан» back (the order is «снят» again), `retract` takes a
+ * delivery back (the shooting's leader), `hold` / `unhold` the order's wait on purpose, `issue_clear` the agent's
+ * sentence of a disagreement, `paid_word` the owner's word on the payment (customs facts spec §6, §9, §10).
+ */
 export const CUSTOM_ORDER_ACTIONS = [
-  "edit", "deadline", "fan", "card", "payment", "unpay", "checked", "at_model", "partly", "shot", "revision", "refused", "given", "close", "cancel",
+  "edit", "deadline", "fan", "card", "payment", "unpay", "checked", "at_model", "partly", "shot", "revision", "refused", "given", "ungive",
+  "retract", "close", "cancel", "hold", "unhold", "issue_clear", "paid_word",
 ] as const;
 export type CustomOrderAction = (typeof CUSTOM_ORDER_ACTIONS)[number];
 
@@ -374,6 +381,8 @@ export const customOrderPaymentSchema = z.object({
 });
 
 export const customOrderHistoryItemSchema = z.object({
+  /** The event's own id: a person's undo names the step it takes back by it (`undoOf`). */
+  id: intId,
   at: isoTimestamp,
   event: z.string(),
   /** A person's registry name (else the login) or an agent key's name; null — the system. */
@@ -411,14 +420,20 @@ const note = z.string().trim().min(1).max(500);
 const ref = z.string().trim().min(1).max(64).regex(/^[1-9]\d{0,29}$/);
 /** A fan as a person gives it: a profile link, a username, or the platform's number. */
 const fanInput = z.string().trim().min(1).max(300);
+/** A person's undo names the history event it takes back (`history[].id`): the event records it as `undoOf`. */
+const undoOf = intId.optional();
+/** A delivery to take back: its eventRef, or the Telegram link of its message (every delivery of that message). */
+const retractsInput = z.string().trim().min(3).max(300).refine((value) => parseTelegramRef(value) !== null || CUSTOM_ORDER_EVENT_REF_PATTERN.test(value), {
+  message: "the delivery's eventRef, or the Telegram link of its message",
+});
 
 export const customOrderActionBodySchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("edit"), card: customOrderCardSchema }).strict(),
-  z.object({ action: z.literal("deadline"), deadlineOn: day.nullable() }).strict(),
+  z.object({ action: z.literal("deadline"), deadlineOn: day.nullable(), undoOf }).strict(),
   z.object({ action: z.literal("fan"), pageLabel: z.string().trim().min(1).max(120), fan: fanInput }).strict(),
   z.object({ action: z.literal("card"), telegramRef: telegramRefInputSchema }).strict(),
   z.object({ action: z.literal("payment"), transactionRef: ref }).strict(),
-  z.object({ action: z.literal("unpay"), transactionRef: ref }).strict(),
+  z.object({ action: z.literal("unpay"), transactionRef: ref, undoOf }).strict(),
   /** «Проверен»: the card is checked, the order goes to shooting. */
   z.object({ action: z.literal("checked") }).strict(),
   z.object({ action: z.literal("at_model"), telegramRef: telegramRefInputSchema.optional(), deadlineOn: day.optional() }).strict(),
@@ -432,8 +447,22 @@ export const customOrderActionBodySchema = z.discriminatedUnion("action", [
    * saw the chat, a Fansly chat the hub does not read).
    */
   z.object({ action: z.literal("given"), messageRef: ref.optional() }).strict(),
+  /** «Не отдан»: «отдан» taken back — the order is «снят» again; the message stays off it from then on. */
+  z.object({ action: z.literal("ungive"), undoOf }).strict(),
+  /** A delivery taken back by the shooting's leader (or the owner): its part stops counting. */
+  z.object({ action: z.literal("retract"), retracts: retractsInput, reason: note, undoOf }).strict(),
   z.object({ action: z.literal("close") }).strict(),
   z.object({ action: z.literal("cancel"), reason: note.optional() }).strict(),
+  /** The order waits on purpose (the fan is unreachable, a prop is awaited): it does not burn. */
+  z.object({ action: z.literal("hold"), reason: note }).strict(),
+  z.object({ action: z.literal("unhold") }).strict(),
+  /** The agent's sentence of a disagreement is settled. */
+  z.object({ action: z.literal("issue_clear") }).strict(),
+  /** The owner's word on the payment: a gift, or paid outside the platform; null — the word is taken back. */
+  z.object({
+    action: z.literal("paid_word"),
+    word: z.object({ kind: z.enum(CUSTOM_PAID_WORD_KINDS), note: note.optional() }).strict().nullable(),
+  }).strict(),
 ]);
 export type CustomOrderActionBody = z.infer<typeof customOrderActionBodySchema>;
 
@@ -451,28 +480,100 @@ export const customOrderCreateBodySchema = z.object({
 export const customSaleParamsSchema = z.object({ transactionRef: ref });
 export const customSaleDismissResponseSchema = z.object({ dismissed: z.boolean() });
 
+// ── Findings: a custom with no order (customs facts spec §8) ────────────────
+
+/**
+ * Where a trace of a custom with no order was found: a sale (Hub's id), the fan's chat (a message), the chatters' work
+ * chat or the model's group (a Telegram message), a line of a shift report.
+ */
+export const CUSTOM_FINDING_SOURCES = ["sale", "fan_chat", "work_chat", "model_group", "shift_report"] as const;
+export type CustomFindingSource = (typeof CUSTOM_FINDING_SOURCES)[number];
+export const CUSTOM_FINDING_STATUSES = ["open", "recorded", "linked", "dismissed"] as const;
+/** Why a finding is no order: не кастом, выбрал секстинг, не воспользовался, дубль, тест. */
+export const CUSTOM_FINDING_DISMISS_REASONS = ["not_custom", "sexting", "unused", "duplicate", "test"] as const;
+
+export const customFindingSchema = z.object({
+  id: intId,
+  source: z.enum(CUSTOM_FINDING_SOURCES),
+  /** The trace's reference in its source: a sale's Hub id, a message's id or link, a report line. */
+  ref: z.string(),
+  pageLabel: z.string().nullable(),
+  fan: customOrderFanSchema.nullable(),
+  amountMills: mills.nullable(),
+  /** The words that make it look like a custom (≤ 300). */
+  quote: z.string().nullable(),
+  happenedAt: isoTimestamp,
+  status: z.enum(CUSTOM_FINDING_STATUSES),
+  /** The order it was recorded as or linked to. */
+  orderCode: z.string().nullable(),
+  dismissReason: z.enum(CUSTOM_FINDING_DISMISS_REASONS).nullable(),
+  resolvedAt: isoTimestamp.nullable(),
+  createdAt: isoTimestamp,
+});
+export type CustomFinding = z.infer<typeof customFindingSchema>;
+
+export const customFindingParamsSchema = z.object({ findingId: z.string().trim().regex(/^[1-9]\d{0,18}$/) });
+
+/**
+ * A finding resolved by the check's leader of its page (the customs lead, the owner): recorded as an order (the board's
+ * «Записать кастом», filled from the finding; a sale's finding brings its sale as the payment), linked to an order
+ * there is (a sale's finding pays it), or dismissed with a reason from the list.
+ */
+export const customFindingActionBodySchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("record"), card: customOrderCardSchema,
+    /** The page and the fan when the finding names none. */
+    pageLabel: z.string().trim().min(1).max(120).optional(), fan: fanInput.optional(),
+    telegramRef: telegramRefInputSchema.optional(),
+  }).strict(),
+  z.object({ action: z.literal("link"), code: customOrderCodeSchema }).strict(),
+  z.object({ action: z.literal("dismiss"), reason: z.enum(CUSTOM_FINDING_DISMISS_REASONS) }).strict(),
+]);
+export type CustomFindingActionBody = z.infer<typeof customFindingActionBodySchema>;
+
+export const customFindingActionResponseSchema = z.object({ finding: customFindingSchema });
+
 // ── The agent's door (write:customs) ────────────────────────────────────────
 
 /**
- * The fields of the board and the order's page that the agent's door (and ContentOps «Съёмка», which reads its shape)
- * does not carry yet: the facts and what they are read from (customs facts spec, slice 1). The agent's wire gains them
- * with the agent's steps, `facts.paid` only for a key with `read:money`.
+ * The fields of the board and the order's page that ContentOps «Съёмка» (which reads the agent's shape) does not
+ * carry: the facts and what they are read from (customs facts spec). The agent's wire carries them to a key with
+ * `read:money` only (`facts.paid` is about the fan's money); to any other key it stays as it was.
  */
 const BOARD_ONLY_FIELDS = {
   dueLeftDays: true, deadlineDefault: true, facts: true, priceMills: true, paidWord: true, holdReason: true, issue: true, fanAskedAt: true, sentAt: true,
 } as const;
 
-/** An order as an agent key reads it: no money but the card's own price line. */
-export const agentCustomOrderSchema = customOrderSchema.omit({ paidGrossMills: true, paidNetMills: true, ...BOARD_ONLY_FIELDS }).extend({
-  /** The card's text with the code, as «Скопировать карточку» gives it. */
-  cardText: z.string(),
-  sourceText: z.string().nullable(),
-  messages: z.array(customOrderMessageSchema),
-});
+/** An order as an agent key reads it: no money but the card's own price line; the facts with `read:money`. */
+export const agentCustomOrderSchema = customOrderSchema.omit({ paidGrossMills: true, paidNetMills: true, ...BOARD_ONLY_FIELDS })
+  .extend(customOrderSchema.pick(BOARD_ONLY_FIELDS).partial().shape)
+  .extend({
+    /** The card's text with the code, as «Скопировать карточку» gives it. */
+    cardText: z.string(),
+    sourceText: z.string().nullable(),
+    messages: z.array(customOrderMessageSchema),
+    /**
+     * `state=live`, to a key with `read:money`, on an order whose money is not complete (`facts.paid` not yes): the fan's
+     * sales (any account of the person) since the order was recorded, on the key's pages of the order's model, that pay
+     * no order and that no person took off this one — the newest first, at most 10. The reader reads the chat around
+     * each and names one back (`step payment --sale <saleRef>`) or leaves it; Hub never links one by its amount.
+     */
+    unlinkedSales: z.array(z.object({
+      saleRef: z.string(),
+      pageLabel: z.string(),
+      /** tip | subscription | message_purchase. */
+      kind: z.string(),
+      grossMills: mills,
+      at: isoTimestamp,
+    })).optional(),
+  });
 
 export const agentCustomOrdersQuerySchema = z.object({
-  /** open (default): not given and not ended; all: the last 200 of every state. */
-  state: z.enum(["open", "all"]).default("open"),
+  /**
+   * open (default): not given and not ended; live: open and the given ones not closed yet (the reader watches them
+   * until they close); all: the last 200 of every state.
+   */
+  state: z.enum(["open", "live", "all"]).default("open"),
   code: customOrderCodeSchema.optional(),
   telegramRef: telegramRefInputSchema.optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
@@ -484,6 +585,10 @@ export const agentCustomOrdersResponseSchema = z.object({
 });
 
 const login = z.string().trim().min(1).max(64);
+/** The agreed total, gross, in mills. */
+const priceMills = mills.positive().max(1_000_000_000);
+/** Why the order waits on purpose (the fan is unreachable, a prop is awaited). */
+const holdReason = note;
 
 export const agentCustomOrderCreateBodySchema = z.object({
   /** The fan's page, of the key's grant; absent — not known yet. */
@@ -494,6 +599,14 @@ export const agentCustomOrderCreateBodySchema = z.object({
   acceptedBy: login.optional(),
   card: customOrderCardSchema,
   deadlineOn: day.optional(),
+  /** The agreed total, gross (the card's `price` stays the team's words). */
+  priceMills: priceMills.optional(),
+  holdReason: holdReason.optional(),
+  /**
+   * The sales that pay the order, as the agent read them in the fan's chat (needs `read:money`). Hub links each that
+   * holds by its rules and answers per sale (`sales`); a sale that does not hold never fails the create.
+   */
+  sales: z.array(agentSaleRequestSchema).min(1).max(20).optional(),
   /** The card's message in Telegram, when it is already posted. */
   telegramRef: telegramRefInputSchema.optional(),
   /** When the card was posted and by whom (its Telegram name): the order counts from then. */
@@ -536,7 +649,31 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("edit"), card: cardPatchSchema, deadlineOn: day.nullable().optional(),
     sourceText: z.string().trim().min(1).max(8000).optional(), ifVersion: z.number().int().positive().optional(), onBehalfOf: login.optional(),
+    /** The agreed total, gross; null — not named any more. A hold's reason; null — the order waits no more. */
+    priceMills: priceMills.nullable().optional(), holdReason: holdReason.nullable().optional(),
   }).strict(),
+  /**
+   * A sale pays the order (needs `read:money`): of the order's fan (any account of the person), on a page of the
+   * order's model among the key's pages; a tip, a subscription or a message purchase; held by no other order, not
+   * taken back, not taken off this order by a person. 409 with the reason otherwise.
+   */
+  z.object({ action: z.literal("payment"), sale: agentSaleRequestSchema, onBehalfOf: login.optional() }).strict(),
+  /**
+   * «Отдан» by the page's message that carried the order (needs `read:messages`): sent by a page of the order's model
+   * among the key's pages to any account of the order's fan, after the order was recorded, with media; a priced one
+   * bought. Refused while the order has a file named by its code (Hub's own rule finds that delivery), and for a
+   * message a person took off the order. Never by a word.
+   */
+  z.object({ action: z.literal("given"), messageRef: ref, onBehalfOf: login.optional() }).strict(),
+  /** The order's fan (needs `read:messages`): by the platform's id on a page of the key; only while the order has none. */
+  z.object({ action: z.literal("fan"), pageLabel: z.string().trim().min(1).max(120), fanRef: ref, onBehalfOf: login.optional() }).strict(),
+  /** The fan asked where the order is (needs `read:messages`): his message in the order's chat. */
+  z.object({ action: z.literal("fan_asked"), messageRef: ref, onBehalfOf: login.optional() }).strict(),
+  /** The deadline moved, as the chatter agreed with the fan: why, in a few words. Never over a person's deadline. */
+  z.object({ action: z.literal("deadline"), deadlineOn: day.nullable(), reason: note, onBehalfOf: login.optional() }).strict(),
+  /** The sources disagree about the order (the card at the model differs from what the fan bought…): one sentence. */
+  z.object({ action: z.literal("issue"), text: z.string().trim().min(1).max(200), onBehalfOf: login.optional() }).strict(),
+  z.object({ action: z.literal("issue_clear"), onBehalfOf: login.optional() }).strict(),
   /** The card reached the model's group (its copy there, if any). */
   z.object({ action: z.literal("at_model"), telegramRef: telegramRefInputSchema.optional(), onBehalfOf: login.optional() }).strict(),
   /**
@@ -618,6 +755,30 @@ export const agentCustomOrderEventSchema = z.object({
   result: z.enum(["stored", "already"]),
 });
 
+/**
+ * Why a named sale does not pay the order (customs facts spec §5): `capability_missing` — the key lacks read:money;
+ * `not_found` — no such sale on the key's pages; `order_no_page`, `order_no_fan` — the order names no page or no fan to
+ * check it against; `other_model` — a page of another model; `other_fan` — another fan's; `wrong_kind` — not a tip, a
+ * subscription or a message purchase, or no live sale; `taken` — another order holds it; `reversed` — the platform took
+ * it back; `rejected` — a person took it off this order; `not_allowed` — the order's state takes no payment.
+ */
+export const AGENT_CUSTOM_SALE_REFUSALS = [
+  "capability_missing", "not_found", "order_no_page", "order_no_fan", "other_model", "other_fan", "wrong_kind", "taken", "reversed",
+  "rejected", "not_allowed",
+] as const;
+export type AgentCustomSaleRefusal = (typeof AGENT_CUSTOM_SALE_REFUSALS)[number];
+
+/** One named sale and what became of it. */
+export const agentCustomSaleOutcomeSchema = z.object({
+  /** The sale as it was named. */
+  sale: agentSaleRequestSchema,
+  /** Hub's id of the sale; null — not found. */
+  saleRef: z.string().nullable(),
+  /** linked — it pays the order now; already — it did before; refused — it does not (`reason`). */
+  result: z.enum(["linked", "already", "refused"]),
+  reason: z.enum(AGENT_CUSTOM_SALE_REFUSALS).nullable(),
+});
+
 export const agentCustomOrderResponseSchema = z.object({
   order: agentCustomOrderSchema,
   /** What the call did: created, changed, or nothing (the same again). */
@@ -628,6 +789,8 @@ export const agentCustomOrderResponseSchema = z.object({
    * step. A sender that must know its event is in the hub checks this, not the status.
    */
   event: agentCustomOrderEventSchema.nullable(),
+  /** A create that named sales: each, and what became of it. Absent — none named. */
+  sales: z.array(agentCustomSaleOutcomeSchema).optional(),
 });
 
 /** The reader of the models' groups: the cards it found that no order has, for the lead. */
@@ -650,6 +813,46 @@ export const agentCustomCardsResponseSchema = z.object({
   closed: z.number().int().nonnegative(),
 });
 
+/**
+ * What the reader found of a custom with no order (needs `read:money` + `read:messages`), each once by `(source, ref)`:
+ * a sale (`ref` — Hub's id of the sale: its page, fan, sum and time are Hub's), a message of the fan's chat, of the
+ * work chat or of the model's group, a report line. `notCustom` — a candidate the reader read and found no custom:
+ * kept dismissed («не кастом»), so it is not offered again; a finding already there stays as it is (its resolution is
+ * a person's).
+ */
+export const agentCustomFindingsBodySchema = z.object({
+  findings: z.array(z.object({
+    source: z.enum(CUSTOM_FINDING_SOURCES),
+    ref: z.string().trim().min(1).max(200),
+    /** The page, of the key's pages; absent — not known (a card in the work chat). */
+    pageLabel: z.string().trim().min(1).max(120).optional(),
+    /** The fan's platform id on that page. */
+    fanRef: ref.optional(),
+    amountMills: mills.positive().optional(),
+    /** The words that make it look like a custom, verbatim (≤ 300). */
+    quote: z.string().trim().min(1).max(300).optional(),
+    happenedAt: isoDateTime({ offset: true }),
+    notCustom: z.literal(true).optional(),
+  }).strict().superRefine((item, context) => {
+    if (item.notCustom !== true && item.quote === undefined) context.addIssue({ code: "custom", path: ["quote"], message: "a finding quotes its words" });
+    if (item.fanRef !== undefined && item.pageLabel === undefined) context.addIssue({ code: "custom", path: ["pageLabel"], message: "a fan is named on a page" });
+  })).min(1).max(200),
+}).strict();
+
+export const agentCustomFindingsResponseSchema = z.object({
+  findings: z.array(z.object({
+    source: z.enum(CUSTOM_FINDING_SOURCES),
+    ref: z.string(),
+    /**
+     * created — a new open finding; dismissed — kept as «не кастом»; already — Hub had this one (in whatever status);
+     * not_found — its page, fan or sale is not on the key's pages.
+     */
+    outcome: z.enum(["created", "dismissed", "already", "not_found"]),
+    /** The finding's id; null — not found. */
+    id: intId.nullable(),
+  })),
+});
+
 export type CustomOrdersBoardResponse = z.infer<typeof customOrdersBoardResponseSchema>;
 export type CustomOrderDetailResponse = z.infer<typeof customOrderDetailResponseSchema>;
 export type CustomOrderCreateBody = z.infer<typeof customOrderCreateBodySchema>;
@@ -661,3 +864,6 @@ export type AgentCustomOrdersQuery = z.infer<typeof agentCustomOrdersQuerySchema
 export type AgentCustomOrderCreateBody = z.infer<typeof agentCustomOrderCreateBodySchema>;
 export type AgentCustomOrderUpdateBody = z.infer<typeof agentCustomOrderUpdateBodySchema>;
 export type AgentCustomCardsBody = z.infer<typeof agentCustomCardsBodySchema>;
+export type AgentCustomSaleOutcome = z.infer<typeof agentCustomSaleOutcomeSchema>;
+export type AgentCustomFindingsBody = z.infer<typeof agentCustomFindingsBodySchema>;
+export type AgentCustomFindingsResponse = z.infer<typeof agentCustomFindingsResponseSchema>;

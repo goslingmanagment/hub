@@ -54,7 +54,8 @@ interface DemoOrder {
   /** The parts ready in the current round, and the order's messages (deliveries, revision requests). */
   partsDone: CustomOrder["partsDone"];
   messages: CustomOrderDetailResponse["messages"];
-  history: CustomOrderDetailResponse["history"];
+  /** The order's history; each event's id is given when the detail is read (its place in the history). */
+  history: Array<Omit<CustomOrderDetailResponse["history"][number], "id">>;
   /** The agreed total (null — not named), a deadline the system set, the owner's word, a hold, an issue, the fan's
    *  «where is it», every file sent and not opened yet. */
   priceMills: number | null;
@@ -306,7 +307,7 @@ function detail(request: DemoRequest, order: DemoOrder): CustomOrderDetailRespon
     deliverySuggestions: fanRef !== null && open && order.state !== "recorded"
       ? [{ messageRef: String(990_000_000_000 + order.id), at: isoAt(Math.min(now, order.stateAt + 2 * HOUR)), mediaCount: 1, priceMills: null }]
       : [],
-    history: order.history,
+    history: order.history.map((item, index) => ({ id: order.id * 1000 + index + 1, ...item })),
     actions: stepsFor(viewer, { pageId: pageIdOf(order.page), state: order.state, acceptedByUserId: DEMO_USERS.find((user) => user.username === order.acceptedBy)?.id ?? null }),
     serverNow: request.now.toISOString(),
   };

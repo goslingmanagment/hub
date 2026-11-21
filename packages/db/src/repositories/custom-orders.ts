@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { livePageSql } from "./realm.ts";
+import { ppvBoughtSql } from "./shift-sql.ts";
 import type { Database } from "../client.ts";
 
 // Заказ кастома (0399; ecosystem plan 2026-11-12, package I): the order, its
@@ -249,13 +250,17 @@ export async function listCustomOrdersInStates(db: Database, states: readonly Cu
   return result.rows.map(orderOf);
 }
 
-/** Orders by agent filters: open or every state, of `pageIds` and of no known page. */
+/**
+ * Orders by agent filters: open, live (open and the given ones not closed yet) or every state, of `pageIds` and of no
+ * known page.
+ */
 export async function listAgentCustomOrders(
   db: Database,
-  input: { pageIds: readonly number[]; open: boolean; orderId?: number | null; telegramRef?: string | null; limit: number },
+  input: { pageIds: readonly number[]; open: boolean; live?: boolean; orderId?: number | null; telegramRef?: string | null; limit: number },
 ): Promise<CustomOrderRow[]> {
   const parts: SQL[] = [sql`(o.page_id is null or o.page_id = any(${ids(input.pageIds)}))`];
   if (input.open) parts.push(sql`o.state not in ('given', 'closed', 'cancelled')`);
+  else if (input.live === true) parts.push(sql`o.state not in ('closed', 'cancelled')`);
   if (input.orderId) parts.push(sql`o.id = ${input.orderId}`);
   if (input.telegramRef) parts.push(sql`exists (select 1 from custom_order_cards c where c.order_id = o.id and c.telegram_ref = ${input.telegramRef})`);
   const result = await db.execute<Row>(sql`${ORDER_SELECT} where ${sql.join(parts, sql` and `)} order by o.id desc limit ${input.limit}`);
@@ -336,6 +341,9 @@ export interface NewCustomOrderRow {
   origin: CustomOrderOriginRow;
   contentopsRef: string | null;
   sourceText: string | null;
+  /** 0436: the agreed total, gross; a wait on purpose. */
+  priceMills?: number | null;
+  holdReason?: string | null;
   at: Date;
 }
 
@@ -343,10 +351,10 @@ export async function insertCustomOrder(db: Database, input: NewCustomOrderRow):
   const at = input.at.toISOString();
   const result = await db.execute<{ id: unknown }>(sql`
     insert into custom_orders (page_id, fan_id, buyer, conversation_ref, card, deadline_on, state, state_at, accepted_by_user_id,
-      origin, contentops_ref, source_text, created_at, updated_at)
+      origin, contentops_ref, source_text, price_mills, hold_reason, created_at, updated_at)
     values (${input.pageId}, ${input.fanId}, ${input.buyer}, ${input.conversationRef}, ${JSON.stringify(input.card)}::jsonb,
       ${input.deadlineOn}::date, ${input.state}, ${at}::timestamptz, ${input.acceptedByUserId}, ${input.origin},
-      ${input.contentopsRef}, ${input.sourceText}, ${at}::timestamptz, ${at}::timestamptz)
+      ${input.contentopsRef}, ${input.sourceText}, ${input.priceMills ?? null}, ${input.holdReason ?? null}, ${at}::timestamptz, ${at}::timestamptz)
     returning id`);
   return Number(result.rows[0]!.id);
 }
@@ -362,11 +370,30 @@ export interface CustomOrderFieldsPatch {
   partsDone?: readonly string[];
   shotByHandAt?: Date;
   personFields?: readonly string[];
+  /** 0436: the agreed price, the deadline's «примерно», the owner's word, a hold, an issue, the fan's «where is it». */
+  priceMills?: number | null;
+  deadlineDefault?: boolean;
+  paidWord?: Record<string, unknown> | null;
+  holdReason?: string | null;
+  issue?: Record<string, unknown> | null;
+  fanAsked?: { at: Date; ref: string } | null;
+  /** «Отправлен, фан не открыл» taken off (a revision of an order that stays in it). */
+  sentCleared?: true;
 }
 
 /** The order's fields (not its state). */
 export async function updateCustomOrderFields(db: Database, orderId: number, patch: CustomOrderFieldsPatch, at: Date): Promise<void> {
   const sets: SQL[] = [sql`updated_at = ${at.toISOString()}::timestamptz`];
+  const json = (value: Record<string, unknown> | null) => (value === null ? sql`null` : sql`${JSON.stringify(value)}::jsonb`);
+  if (patch.priceMills !== undefined) sets.push(sql`price_mills = ${patch.priceMills}`);
+  if (patch.deadlineDefault !== undefined) sets.push(sql`deadline_default = ${patch.deadlineDefault}`);
+  if (patch.paidWord !== undefined) sets.push(sql`paid_word = ${json(patch.paidWord)}`);
+  if (patch.holdReason !== undefined) sets.push(sql`hold_reason = ${patch.holdReason}`);
+  if (patch.issue !== undefined) sets.push(sql`issue = ${json(patch.issue)}`);
+  if (patch.fanAsked !== undefined) {
+    sets.push(sql`fan_asked_at = ${patch.fanAsked?.at.toISOString() ?? null}::timestamptz, fan_asked_ref = ${patch.fanAsked?.ref ?? null}`);
+  }
+  if (patch.sentCleared === true) sets.push(sql`sent_at = null, sent_message_ref = null`);
   if (patch.card !== undefined) sets.push(sql`card = ${JSON.stringify(patch.card)}::jsonb`);
   if (patch.deadlineOn !== undefined) sets.push(sql`deadline_on = ${patch.deadlineOn}::date`);
   if (patch.pageId !== undefined) sets.push(sql`page_id = ${patch.pageId}`);
@@ -394,14 +421,24 @@ export async function moveCustomOrder(
     ref?: string | null;
     /** `messageRef` null — given by a person's word, no message named. */
     given?: { messageRef: string | null; at: Date };
+    /**
+     * What the move takes off the order (0436): «отдан» (taken back, or a revision of a given order), «отправлен, фан не
+     * открыл» (given, or a revision), the fan's «where is it» (given).
+     */
+    clear?: { given?: boolean; sent?: boolean; fanAsked?: boolean };
     at: Date;
   },
 ): Promise<boolean> {
   const at = input.at.toISOString();
   const given = input.given === undefined ? sql`` : sql`, given_message_ref = ${input.given.messageRef}, given_at = ${input.given.at.toISOString()}::timestamptz`;
+  const clears: SQL[] = [
+    ...(input.clear?.given === true && input.given === undefined ? [sql`, given_message_ref = null, given_at = null`] : []),
+    ...(input.clear?.sent === true ? [sql`, sent_at = null, sent_message_ref = null`] : []),
+    ...(input.clear?.fanAsked === true ? [sql`, fan_asked_at = null, fan_asked_ref = null`] : []),
+  ];
   const result = await db.execute(sql`
     update custom_orders set state = ${input.to}, state_at = ${at}::timestamptz, state_note = ${input.note ?? null},
-      state_ref = ${input.ref ?? null}, updated_at = ${at}::timestamptz ${given}
+      state_ref = ${input.ref ?? null}, updated_at = ${at}::timestamptz ${given} ${clears.length === 0 ? sql`` : sql.join(clears, sql` `)}
     where id = ${input.orderId} and state = any(${texts(input.from)})`);
   return (result.rowCount ?? 0) > 0;
 }
@@ -635,6 +672,8 @@ export async function listCustomOrderMessages(db: Database, orderId: number): Pr
 
 export interface CustomOrderSaleRow {
   transactionId: number;
+  /** The sale's page; null — not read (an order's own payments). */
+  pageId: number | null;
   kind: string;
   grossMills: number;
   netMills: number;
@@ -652,6 +691,7 @@ const NOTE_OF = sql`case when t.canonical_type = 'tip' then coalesce(
 
 const saleOf = (row: Row): CustomOrderSaleRow => ({
   transactionId: Number(row.id),
+  pageId: num(row.page_id),
   kind: String(row.canonical_type),
   grossMills: Number(row.gross_amount_mills ?? 0),
   netMills: Number(row.creator_net_amount_mills ?? 0),
@@ -672,31 +712,320 @@ export async function listCustomOrderPayments(db: Database, orderId: number): Pr
   return result.rows.map(saleOf);
 }
 
-/** The fan's sales on the page in the last `days` that no order holds, of `kinds`, the newest first: «Это оплата?». */
+/**
+ * The fan's sales on the page (or on `pageIds`) in the last `days` (or since `since`) that no order holds, of `kinds`,
+ * the newest first: «Это оплата?». `notRejectedFor` — and none a person took off that order (0436).
+ */
 export async function listCustomPaymentCandidates(
   db: Database,
-  input: { pageId: number; fanIds: readonly number[]; kinds: readonly string[]; now: Date; days: number; limit: number },
+  input: {
+    pageId?: number; pageIds?: readonly number[]; fanIds: readonly number[]; kinds: readonly string[]; now: Date; days: number;
+    since?: Date; notRejectedFor?: number; limit: number;
+  },
 ): Promise<CustomOrderSaleRow[]> {
-  if (input.fanIds.length === 0) return [];
+  const pageIds = input.pageIds ?? (input.pageId === undefined ? [] : [input.pageId]);
+  if (input.fanIds.length === 0 || pageIds.length === 0) return [];
+  const since = input.since === undefined ? sql`` : sql`and t.occurred_at >= ${input.since.toISOString()}::timestamptz`;
+  const rejected = input.notRejectedFor === undefined ? sql`` : sql`and not exists (
+        select 1 from custom_order_rejections x where x.order_id = ${input.notRejectedFor} and x.kind = 'payment' and x.ref = t.id::text)`;
   const result = await db.execute<Row>(sql`
-    select t.id, t.canonical_type::text as canonical_type, t.gross_amount_mills, t.creator_net_amount_mills, t.occurred_at, ${NOTE_OF} as note
+    select t.id, t.platform_account_id as page_id, t.canonical_type::text as canonical_type, t.gross_amount_mills, t.creator_net_amount_mills,
+      t.occurred_at, ${NOTE_OF} as note
     from transactions t
     join fans f on f.id = t.fan_id
-    where t.platform_account_id = ${input.pageId} and t.fan_id = any(${ids(input.fanIds)})
+    where t.platform_account_id = any(${ids(pageIds)}) and t.fan_id = any(${ids(input.fanIds)})
       and t.canonical_type::text = any(${texts(input.kinds)}) and t.is_active and t.gross_amount_mills > 0
       and t.occurred_at > ${input.now.toISOString()}::timestamptz - make_interval(days => ${input.days})
+      ${since}
       and not exists (select 1 from custom_order_payments cp where cp.transaction_id = t.id)
+      ${rejected}
     order by t.occurred_at desc
     limit ${input.limit}`);
   return result.rows.map(saleOf);
 }
 
 /** One sale with its page and fan, for a record from it. */
-export async function findCustomSale(db: Database, transactionId: number): Promise<{ transactionId: number; pageId: number; fanId: number | null; at: Date } | null> {
+export async function findCustomSale(
+  db: Database,
+  transactionId: number,
+): Promise<{ transactionId: number; pageId: number; fanId: number | null; at: Date; grossMills: number } | null> {
   const result = await db.execute<Row>(sql`
-    select id, platform_account_id, fan_id, occurred_at from transactions where id = ${transactionId}`);
+    select id, platform_account_id, fan_id, occurred_at, gross_amount_mills from transactions where id = ${transactionId}`);
   const row = result.rows[0];
-  return row ? { transactionId: Number(row.id), pageId: Number(row.platform_account_id), fanId: num(row.fan_id), at: date(row.occurred_at)! } : null;
+  return row
+    ? { transactionId: Number(row.id), pageId: Number(row.platform_account_id), fanId: num(row.fan_id), at: date(row.occurred_at)!, grossMills: Number(row.gross_amount_mills ?? 0) }
+    : null;
+}
+
+// ── What an agent names, and undo remembered (0436; customs facts spec §5, §6, §10) ──
+
+/** What a named sale is checked by before it pays an order. */
+export interface CustomSaleFactsRow {
+  transactionId: number;
+  pageId: number;
+  fanId: number | null;
+  /** The transaction's kind: tip | subscription | message_purchase | … */
+  kind: string;
+  /** Active and of money: a sale that counts. */
+  live: boolean;
+  /** The order that holds it; null — none. */
+  heldBy: number | null;
+  /** OnlyFans wrote its reversal or chargeback (a row retired as missing from a sync window is not one). */
+  reversed: boolean;
+  /** A person took it off this order (`custom_order_rejections`). */
+  rejected: boolean;
+}
+
+export async function listCustomSaleFacts(
+  db: Database,
+  input: { orderId: number; transactionIds: readonly number[] },
+): Promise<Map<number, CustomSaleFactsRow>> {
+  if (input.transactionIds.length === 0) return new Map();
+  const result = await db.execute<Row>(sql`
+    select t.id, t.platform_account_id, t.fan_id, t.canonical_type::text as kind, t.is_active and t.gross_amount_mills > 0 as live,
+      (select cp.order_id from custom_order_payments cp where cp.transaction_id = t.id) as held_by,
+      exists (
+        select 1 from transactions r
+        where r.platform_account_id = t.platform_account_id
+          and r.transaction_id in (t.transaction_id || ':reversal', t.transaction_id || ':chargeback')
+          and r.inactive_reason is distinct from 'missing_from_sync_window') as reversed,
+      exists (
+        select 1 from custom_order_rejections x
+        where x.order_id = ${input.orderId} and x.kind = 'payment' and x.ref = t.id::text) as rejected
+    from transactions t
+    where t.id = any(${ids(input.transactionIds)})`);
+  return new Map(result.rows.map((row) => [Number(row.id), {
+    transactionId: Number(row.id),
+    pageId: Number(row.platform_account_id),
+    fanId: num(row.fan_id),
+    kind: String(row.kind),
+    live: row.live === true,
+    heldBy: num(row.held_by),
+    reversed: row.reversed === true,
+    rejected: row.rejected === true,
+  }]));
+}
+
+/** A page's message as the agent's «отдан» and «where is it» are checked by. */
+export interface CustomPageMessageRow {
+  pageId: number;
+  messageRef: string;
+  at: Date | null;
+  sentByPage: boolean;
+  /** How many media it carries. */
+  media: number;
+  /** Its price; 0 — free. */
+  priceMills: number;
+  /**
+   * The fan of the message's chat, from the chat itself (`page_dm_threads`; an OnlyFans chat is named by the fan's own
+   * id), never from a media offer's recipient. Null — the chat names no fan Hub knows.
+   */
+  chatFanId: number | null;
+  /** A priced message bought (`ppvBoughtSql`, the one rule). */
+  bought: boolean;
+}
+
+/** One message by its platform id on one of `pageIds`, not deleted; null — none. */
+export async function findCustomPageMessage(
+  db: Database,
+  input: { pageIds: readonly number[]; messageRef: string },
+): Promise<CustomPageMessageRow | null> {
+  if (input.pageIds.length === 0) return null;
+  const result = await db.execute<Row>(sql`
+    select m.account_id, m.message_ref, m.occurred_at, m.is_sent_by_me, jsonb_array_length(m.media_metadata) as media,
+      coalesce(m.price_mills, 0) as price_mills,
+      coalesce(
+        (select th.fan_id from page_dm_threads th
+          where th.platform_account_id = m.account_id and th.platform_conversation_id = m.conversation_ref and th.fan_id is not null
+          order by th.id limit 1),
+        (select f.id from fans f
+          where m.platform = 'onlyfans' and f.platform = 'onlyfans' and f.platform_user_id = m.conversation_ref limit 1)) as chat_fan_id,
+      ${ppvBoughtSql({ pageId: "m.account_id", platform: "m.platform", ref: "m.message_ref", conv: "m.conversation_ref", at: "m.occurred_at" })} as bought
+    from message_archive m
+    where m.account_id = any(${ids(input.pageIds)}) and m.message_ref = ${input.messageRef} and m.deleted_at is null
+    order by m.occurred_at desc nulls last
+    limit 1`);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    pageId: Number(row.account_id),
+    messageRef: String(row.message_ref),
+    at: date(row.occurred_at),
+    sentByPage: row.is_sent_by_me === true,
+    media: Number(row.media ?? 0),
+    priceMills: Number(row.price_mills ?? 0),
+    chatFanId: num(row.chat_fan_id),
+    bought: row.bought === true,
+  };
+}
+
+/**
+ * Whether a vault file on a page of the order's model carries the order's code in its name (`…_K-123_custom.mp4`,
+ * `creator_vault_album_members.custom_filename` or `creator_raw_media.filename`): then the order's files are known and
+ * Hub's own rule finds their delivery.
+ */
+export async function hasCustomOrderNamedFile(db: Database, input: { orderId: number; pageId: number }): Promise<boolean> {
+  const needle = `_K-${input.orderId}_`;
+  const modelPages = sql`(select p2.id from pages p2 where p2.model_id = (select p.model_id from pages p where p.id = ${input.pageId}))`;
+  const result = await db.execute<{ named: boolean }>(sql`
+    select exists (select 1 from creator_vault_album_members v where v.page_id in ${modelPages} and strpos(v.custom_filename, ${needle}) > 0)
+      or exists (select 1 from creator_raw_media r where r.page_id in ${modelPages} and strpos(r.filename, ${needle}) > 0) as named`);
+  return result.rows[0]?.named === true;
+}
+
+export type CustomRejectionKind = "payment" | "given";
+
+/** A sale (`payment`) or a delivering message (`given`) the system or an agent applied and a person took off the order. */
+export async function addCustomOrderRejection(
+  db: Database,
+  input: { orderId: number; kind: CustomRejectionKind; ref: string; userId: number | null; at: Date },
+): Promise<void> {
+  await db.execute(sql`
+    insert into custom_order_rejections (order_id, kind, ref, rejected_by_user_id, rejected_at)
+    values (${input.orderId}, ${input.kind}, ${input.ref}, ${input.userId}, ${input.at.toISOString()}::timestamptz)
+    on conflict (order_id, kind, ref) do nothing`);
+}
+
+/** A person applied it to the order by hand again: the undo is not remembered any more. Whether there was one. */
+export async function removeCustomOrderRejection(db: Database, input: { orderId: number; kind: CustomRejectionKind; ref: string }): Promise<boolean> {
+  const result = await db.execute(sql`
+    delete from custom_order_rejections where order_id = ${input.orderId} and kind = ${input.kind} and ref = ${input.ref}`);
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function hasCustomOrderRejection(db: Database, input: { orderId: number; kind: CustomRejectionKind; ref: string }): Promise<boolean> {
+  const result = await db.execute(sql`
+    select 1 from custom_order_rejections where order_id = ${input.orderId} and kind = ${input.kind} and ref = ${input.ref}`);
+  return result.rows.length > 0;
+}
+
+/**
+ * The door of the newest step of the order's history that applied this evidence: a payment by the sale (or the record
+ * that brought it), «отдан» by the message. Null — none.
+ */
+export async function findCustomOrderLinkDoor(db: Database, input: { orderId: number; kind: CustomRejectionKind; ref: string }): Promise<string | null> {
+  const match = input.kind === "payment"
+    ? sql`event in ('custom_order.payment', 'custom_order.recorded') and changes ->> 'transactionId' = ${input.ref}`
+    : sql`event = 'custom_order.given' and changes ->> 'messageRef' = ${input.ref}`;
+  const result = await db.execute<{ door: string }>(sql`
+    select door from object_events
+    where object_type = 'custom_order' and object_id = ${String(input.orderId)} and ${match}
+    order by id desc limit 1`);
+  return result.rows[0]?.door ?? null;
+}
+
+/** Whether `eventId` is a step of the order's history (a person's undo names the step it takes back). */
+export async function isCustomOrderEvent(db: Database, input: { orderId: number; eventId: number }): Promise<boolean> {
+  const result = await db.execute(sql`
+    select 1 from object_events where id = ${input.eventId} and object_type = 'custom_order' and object_id = ${String(input.orderId)}`);
+  return result.rows.length > 0;
+}
+
+// ── Findings: a custom with no order (0436; customs facts spec §8) ──────────
+
+export type CustomFindingSourceRow = "sale" | "fan_chat" | "work_chat" | "model_group" | "shift_report";
+export type CustomFindingStatusRow = "open" | "recorded" | "linked" | "dismissed";
+export type CustomFindingDismissRow = "not_custom" | "sexting" | "unused" | "duplicate" | "test";
+
+export interface CustomFindingRow {
+  id: number;
+  source: CustomFindingSourceRow;
+  ref: string;
+  pageId: number | null;
+  pageLabel: string | null;
+  platform: string | null;
+  fanId: number | null;
+  fanRef: string | null;
+  fanUsername: string | null;
+  fanDisplayName: string | null;
+  amountMills: number | null;
+  quote: string | null;
+  happenedAt: Date;
+  status: CustomFindingStatusRow;
+  orderId: number | null;
+  dismissReason: CustomFindingDismissRow | null;
+  resolvedAt: Date | null;
+  createdAt: Date;
+}
+
+const FINDING_SELECT = sql`
+  select c.id, c.source, c.ref, c.page_id, p.label as page_label, p.platform, c.fan_id, f.platform_user_id as fan_ref,
+    f.username as fan_username, f.display_name as fan_display_name, c.amount_mills, c.quote, c.happened_at, c.status, c.order_id,
+    c.dismiss_reason, c.resolved_at, c.created_at
+  from custom_findings c
+  left join pages p on p.id = c.page_id
+  left join fans f on f.id = c.fan_id`;
+
+function findingOf(row: Row): CustomFindingRow {
+  return {
+    id: Number(row.id),
+    source: row.source as CustomFindingSourceRow,
+    ref: String(row.ref),
+    pageId: num(row.page_id),
+    pageLabel: (row.page_label as string | null) ?? null,
+    platform: (row.platform as string | null) ?? null,
+    fanId: num(row.fan_id),
+    fanRef: (row.fan_ref as string | null) ?? null,
+    fanUsername: (row.fan_username as string | null) ?? null,
+    fanDisplayName: (row.fan_display_name as string | null) ?? null,
+    amountMills: num(row.amount_mills),
+    quote: (row.quote as string | null) ?? null,
+    happenedAt: date(row.happened_at)!,
+    status: row.status as CustomFindingStatusRow,
+    orderId: num(row.order_id),
+    dismissReason: (row.dismiss_reason as CustomFindingDismissRow | null) ?? null,
+    resolvedAt: date(row.resolved_at),
+    createdAt: date(row.created_at)!,
+  };
+}
+
+/** One finding; `lock` — its row lock for the rest of the transaction. */
+export async function findCustomFinding(db: Database, id: number, options: { lock?: boolean } = {}): Promise<CustomFindingRow | null> {
+  if (options.lock === true) {
+    const locked = await db.execute(sql`select id from custom_findings where id = ${id} for update`);
+    if (locked.rows.length === 0) return null;
+  }
+  const result = await db.execute<Row>(sql`${FINDING_SELECT} where c.id = ${id}`);
+  return result.rows[0] ? findingOf(result.rows[0]) : null;
+}
+
+/**
+ * A finding, once by `(source, ref)`: a new one is open, or — `dismissed` — kept as «не кастом» at once. Answers its id
+ * and whether it is new; one there already stays as it is, whatever its status.
+ */
+export async function insertCustomFinding(
+  db: Database,
+  input: {
+    source: CustomFindingSourceRow; ref: string; pageId: number | null; fanId: number | null; amountMills: number | null; quote: string | null;
+    happenedAt: Date; dismissed?: { reason: CustomFindingDismissRow; agentKeyId: number | null; userId: number | null }; at: Date;
+  },
+): Promise<{ id: number; created: boolean }> {
+  const at = input.at.toISOString();
+  const dismissed = input.dismissed;
+  const inserted = await db.execute<{ id: unknown }>(sql`
+    insert into custom_findings (source, ref, page_id, fan_id, amount_mills, quote, happened_at, status, dismiss_reason,
+      resolved_by_user_id, resolved_by_agent_key_id, resolved_at, created_at)
+    values (${input.source}, ${input.ref}, ${input.pageId}, ${input.fanId}, ${input.amountMills}, ${input.quote},
+      ${input.happenedAt.toISOString()}::timestamptz, ${dismissed === undefined ? "open" : "dismissed"}, ${dismissed?.reason ?? null},
+      ${dismissed?.userId ?? null}, ${dismissed?.agentKeyId ?? null}, ${dismissed === undefined ? null : at}::timestamptz, ${at}::timestamptz)
+    on conflict (source, ref) do nothing
+    returning id`);
+  if (inserted.rows[0]) return { id: Number(inserted.rows[0].id), created: true };
+  const existing = await db.execute<{ id: unknown }>(sql`select id from custom_findings where source = ${input.source} and ref = ${input.ref}`);
+  return { id: Number(existing.rows[0]!.id), created: false };
+}
+
+/** An open finding resolved: recorded as an order, linked to one, or dismissed. False — it was not open any more. */
+export async function resolveCustomFinding(
+  db: Database,
+  input: { id: number; status: "recorded" | "linked" | "dismissed"; orderId: number | null; dismissReason: CustomFindingDismissRow | null; userId: number; at: Date },
+): Promise<boolean> {
+  const result = await db.execute(sql`
+    update custom_findings
+    set status = ${input.status}, order_id = ${input.orderId}, dismiss_reason = ${input.dismissReason},
+      resolved_by_user_id = ${input.userId}, resolved_at = ${input.at.toISOString()}::timestamptz
+    where id = ${input.id} and status = 'open'`);
+  return (result.rowCount ?? 0) > 0;
 }
 
 export interface CustomLookalikeRow {
