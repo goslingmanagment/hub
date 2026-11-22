@@ -310,7 +310,7 @@
   }
 
   .cf-thead {
-    padding: 0 12px 10px;
+    padding: 0 15px 10px;
     border-bottom: 1px solid var(--ui-line);
     color: var(--ui-text-3);
     font-size: var(--ui-fs-13);
@@ -377,10 +377,14 @@
     color: var(--ui-text-2);
   }
 
+  /* Each order is a card of its own (owner, 2026-11-22: «рамочки-блоки, чтобы прям отделялись друг от друга»). */
   .cf-rows,
   .cf-aday__list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     margin: 0;
-    padding: 0;
+    padding: 10px 0 4px;
     list-style: none;
   }
 
@@ -389,10 +393,10 @@
       "due main chain move price"
       "due reason reason reason price";
     width: 100%;
-    padding: 12px;
-    border: 0;
-    border-bottom: 1px solid var(--ui-line);
-    background: transparent;
+    padding: 12px 14px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
     color: var(--ui-text);
     font: inherit;
     text-align: left;
@@ -400,6 +404,7 @@
   }
 
   .cf-row:hover {
+    border-color: var(--ui-line-strong);
     background: var(--ui-hover-soft);
   }
 
@@ -1072,13 +1077,7 @@
       "main chain move price"
       "reason reason reason price";
     column-gap: 16px;
-    padding: 10px 8px;
-    border-bottom: 0;
-    border-radius: var(--ui-radius);
-  }
-
-  .cf-aday__list .cf-item + .cf-item {
-    border-top: 1px solid var(--ui-line);
+    padding: 10px 12px;
   }
 
   /* ------------------------------------------------------------ The order's panel */
