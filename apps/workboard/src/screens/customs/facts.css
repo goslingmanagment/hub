@@ -301,7 +301,7 @@
     flex-direction: column;
   }
 
-  .cf-thead,
+  .cf-ghead--steps,
   .cf-row {
     display: grid;
     grid-template-columns: 112px minmax(0, 1fr) var(--cf-chain-w) minmax(0, 240px) 104px;
@@ -309,17 +309,6 @@
     column-gap: 20px;
   }
 
-  .cf-thead {
-    padding: 0 15px 10px;
-    border-bottom: 1px solid var(--ui-line);
-    color: var(--ui-text-3);
-    font-size: var(--ui-fs-13);
-    line-height: var(--ui-lh-13);
-  }
-
-  .cf-thead__price {
-    text-align: right;
-  }
 
   .cf-chain {
     display: grid;
@@ -340,6 +329,45 @@
     border-bottom: 1px solid var(--ui-line);
     list-style: none;
     cursor: pointer;
+  }
+
+  /* The head of a group whose cards are open: the same columns as a card, inside the card's border and padding. */
+  .cf-ghead--steps {
+    display: grid;
+    align-items: baseline;
+    column-gap: 20px;
+    grid-template-areas: "lead lead chain move price";
+    padding-right: 15px;
+    padding-left: 15px;
+  }
+
+  .cf-ghead__lead {
+    display: flex;
+    grid-area: lead;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .cf-ghead--steps .cf-ghead__hint {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cf-ghead--steps .cf-chain--head {
+    grid-area: chain;
+    color: var(--ui-text-3);
+    font-size: var(--ui-fs-13);
+    font-weight: 400;
+    line-height: var(--ui-lh-13);
+  }
+
+  .cf-ghead--steps .cf-ghead__sum {
+    grid-area: price;
+    justify-content: flex-end;
+    margin-left: 0;
   }
 
   .cf-ghead::-webkit-details-marker {
@@ -1322,7 +1350,7 @@
 
   /* 1280: the schedule keeps whose move beside each row; the small month, the day and the price give way. */
   @media (max-width: 1399px) {
-    .cf-thead,
+    .cf-ghead--steps,
     .cf-row {
       grid-template-columns: 112px minmax(0, 1fr) var(--cf-chain-w) minmax(0, 184px) 96px;
       column-gap: 16px;
@@ -1375,9 +1403,17 @@
   }
 
   @media (max-width: 900px) {
-    .cf-thead,
+    .cf-ghead--steps .cf-chain--head,
     .cf-ghead__hint {
       display: none;
+    }
+
+    .cf-ghead--steps {
+      display: flex;
+    }
+
+    .cf-ghead--steps .cf-ghead__sum {
+      margin-left: auto;
     }
 
     .cf-row,
