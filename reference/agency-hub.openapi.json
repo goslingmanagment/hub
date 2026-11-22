@@ -245498,12 +245498,18 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "userId": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
                         "lead",
                         "owner",
-                        "name"
+                        "name",
+                        "userId"
                       ],
                       "additionalProperties": false
                     },
