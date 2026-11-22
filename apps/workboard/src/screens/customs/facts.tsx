@@ -72,15 +72,24 @@ function Numbers({ orders }: { orders: readonly CustomBoardOrder[] }) {
   );
 }
 
-function GroupHead({ title, count, hint, dot, sum, folded }: { title: string; count: number | null; hint?: string | undefined; dot?: "danger" | "warn" | undefined; sum: ReactNode; folded?: boolean }) {
+/**
+ * A group's head over its cards: the name on the left, the four steps' labels right over the cards' dots (the owner,
+ * 2026-11-22: a separate column header read as not belonging to the cards), the sum over the prices.
+ */
+function GroupHead({ title, count, hint, dot, sum, folded, steps }: {
+  title: string; count: number | null; hint?: string | undefined; dot?: "danger" | "warn" | undefined; sum: ReactNode; folded?: boolean; steps?: boolean;
+}) {
   return (
-    <summary className="cf-ghead">
-      <span className="cf-ghead__name">
-        {dot !== undefined && <StatusDot tone={dot === "danger" ? "danger" : "warning"} />}
-        {title}
-        {count !== null && <span className="cf-ghead__n">{count}</span>}
+    <summary className={steps ? "cf-ghead cf-ghead--steps" : "cf-ghead"}>
+      <span className="cf-ghead__lead">
+        <span className="cf-ghead__name">
+          {dot !== undefined && <StatusDot tone={dot === "danger" ? "danger" : "warning"} />}
+          {title}
+          {count !== null && <span className="cf-ghead__n">{count}</span>}
+        </span>
+        {hint !== undefined && <span className="cf-ghead__hint">{hint}</span>}
       </span>
-      {hint !== undefined && <span className="cf-ghead__hint">{hint}</span>}
+      {steps && <FactChainHead />}
       <span className="cf-ghead__sum">
         {folded && <span className="cf-ghead__show">Показать</span>}
         {sum}
@@ -121,6 +130,7 @@ function DoneGroups({ counts, keep, onOpen }: { counts: CustomOrdersBoardRespons
               hint={"hint" in group ? group.hint : undefined}
               sum={orders !== null ? <Money mills={sumOf(orders)} muted /> : null}
               folded={!open}
+              steps={open}
             />
             {open && (done.isPending ? <Skeleton height={96} /> : done.isError || orders === null ? <p className="cf-muted cf-empty">Не загрузилось: Hub не ответил.</p> : (
               <ul className="cf-rows">{orders.map((order) => <OrderRow key={order.id} order={order} onOpen={onOpen} />)}</ul>
@@ -140,19 +150,12 @@ function DueView({ orders, board, keep, onOpen, mine }: {
     .filter((group) => group.orders.length > 0);
   return (
     <div className="cf-table">
-      <div className="cf-thead" aria-hidden>
-        <span>Срок фану</span>
-        <span>Фан и заказ</span>
-        <FactChainHead />
-        <span>Чей ход</span>
-        <span className="cf-thead__price">Сумма</span>
-      </div>
       {groups.length === 0 && (
         <p className="cf-muted cf-empty">{mine ? "Заказов с вашим ходом нет. Снимите «Только мой ход», чтобы увидеть все." : "Заказов в работе нет."}</p>
       )}
       {groups.map((group) => (
         <details key={group.id} className="cf-group" open>
-          <GroupHead title={group.title} count={group.orders.length} hint={group.hint} dot={group.dot} sum={<Money mills={sumOf(group.orders)} muted />} />
+          <GroupHead title={group.title} count={group.orders.length} hint={group.hint} dot={group.dot} sum={<Money mills={sumOf(group.orders)} muted />} steps />
           <ul className="cf-rows">{group.orders.map((order) => <OrderRow key={order.id} order={order} onOpen={onOpen} />)}</ul>
         </details>
       ))}
