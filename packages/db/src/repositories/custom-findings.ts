@@ -4,10 +4,11 @@ import type { Database } from "../client.ts";
 import { testPageSql } from "./realm.ts";
 
 // Заказ кастома, a custom with no order (customs facts spec §8; table custom_findings, 0436): one trace of a custom no
-// order has — a sale (a tip whose note says custom, a purchase or renewal of a tier that includes one), a line of a
-// shift report marked «кастом», a card the reader found in a Telegram place. `(source, ref)` names it once: a dismissed
-// one never comes back, a tier's next renewal is a new sale and a new finding. Hub's checks pass writes these (behind
-// the switch `customsFacts`); people and the agent resolve them. A sale's finding is known by Hub's id of the sale.
+// order has — a sale (a tip whose note says custom), a line of a shift report marked «кастом», a card the reader found
+// in a Telegram place, what the reader read in a fan's chat. `(source, ref)` names it once: a dismissed one never comes
+// back. A tier that includes a custom is no finding by itself (the owner, 2026-11-22: only a fan who asked for one): its
+// holders are the reader's candidates. Hub's checks pass writes these (behind the switch `customsFacts`); people and the
+// agent resolve them. A sale's finding is known by Hub's id of the sale.
 
 type Row = Record<string, unknown>;
 const num = (value: unknown) => (value === null || value === undefined ? null : Number(value));
@@ -73,14 +74,16 @@ const TIP_NOTE = sql`coalesce(
 /**
  * The tier a subscription sale `t` paid for: by the sale's own reference to its subscription (Fansly: the sale's
  * correlation id is the subscription's history id — a renewal too), the ±2 h window around the subscription's start only
- * when no subscription names it.
+ * for a subscription that names no history (OnlyFans). A subscription that names another history is another sale's: Fansly
+ * rewrites an upgraded subscription in place (the new tier and history, the old start), so the window would give the
+ * cheap first payment the upgrade's tier — two findings for one tier.
  */
 const SALE_TIER = sql`coalesce(
   (select ps.subscription_tier_id from page_subscriptions ps
     where ps.platform_account_id = t.platform_account_id and ps.fan_id = t.fan_id and ps.platform_history_id = t.correlation_id
     order by ps.id desc limit 1),
   (select ps.subscription_tier_id from page_subscriptions ps
-    where ps.platform_account_id = t.platform_account_id and ps.fan_id = t.fan_id
+    where ps.platform_account_id = t.platform_account_id and ps.fan_id = t.fan_id and ps.platform_history_id is null
       and ps.source_created_at between t.occurred_at - interval '2 hours' and t.occurred_at + interval '2 hours'
     order by ps.source_created_at desc limit 1))`;
 
@@ -89,49 +92,50 @@ const amountOf = sql`case when t.gross_amount_mills > 0 then t.gross_amount_mill
 
 /**
  * The sales of [from, to) that look like a custom, written as open findings (`sale`): a tip whose note speaks of a
- * custom, a purchase or renewal of a tier that includes one. Skipped only a sale that pays an order, or one that has
- * a finding already (its dismissal stays: `(source, ref)` is written once) — no more the week around an existing order
- * of the fan (the old rule hid a second custom). Answers how many were written.
+ * custom. Never a purchase or renewal of a tier that includes one (the owner, 2026-11-22: a finding is a fan who asked
+ * for a custom, not one who bought a tier — a tier holder is the reader's candidate, who writes the fan's chat when he
+ * asks). Skipped only a sale that pays an order, or one that has a finding already (its dismissal stays: `(source, ref)`
+ * is written once) — no more the week around an existing order of the fan (the old rule hid a second custom). Answers
+ * how many were written.
  */
-export async function insertCustomSaleFindings(
-  db: Database,
-  input: { from: Date; to: Date; overrides: readonly CustomTierOverrideInput[]; now: Date },
-): Promise<number> {
+export async function insertCustomSaleFindings(db: Database, input: { from: Date; to: Date; now: Date }): Promise<number> {
   const window = sql`t.is_active and t.gross_amount_mills > 0
     and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz
     and not exists (select 1 from custom_order_payments cp where cp.transaction_id = t.id)
     and not exists (select 1 from custom_findings cf where cf.source in ('sale', 'shift_report') and cf.ref = t.id::text)`;
   const result = await db.execute(sql`
-    with ${customTiersCtes(input.overrides)},
-    tips as (
+    with tips as (
       select t.id, ${TIP_NOTE} as quote
       from transactions t join pages p on p.id = t.platform_account_id left join fans f on f.id = t.fan_id
       where t.canonical_type = 'tip' and ${window}
-    ),
-    tier_sales as (
-      select t.id, coalesce(ct.name, (select ps.subscription_tier_name from page_subscriptions ps
-          where ps.platform_account_id = t.platform_account_id and ps.subscription_tier_id = ct.tier_ref limit 1)) as quote
-      from transactions t
-      cross join lateral (select ${SALE_TIER} as tier_ref) st
-      join custom_tiers ct on ct.page_id = t.platform_account_id and ct.tier_ref = st.tier_ref
-      where t.canonical_type = 'subscription' and ${window}
-    ),
-    found as (
-      select id, quote from tips where quote ~* ${CUSTOM_WORD}
-      union all
-      select id, quote from tier_sales
     )
     insert into custom_findings (source, ref, page_id, fan_id, amount_mills, quote, happened_at, created_at)
     select 'sale', t.id::text, t.platform_account_id, t.fan_id, ${amountOf}, ${quoteOf(sql`x.quote`)}, t.occurred_at, ${input.now.toISOString()}::timestamptz
-    from (select distinct on (id) id, quote from found order by id) x join transactions t on t.id = x.id
+    from (select distinct on (id) id, quote from tips where quote ~* ${CUSTOM_WORD} order by id) x join transactions t on t.id = x.id
     on conflict (source, ref) do nothing`);
   return result.rowCount ?? 0;
 }
 
 /**
+ * The open findings of a tier's purchase or renewal (a sale's finding whose sale is a subscription) dismissed as «кастом
+ * не просил» (`not_asked`) by the system — the owner's decision of 2026-11-22: buying a tier that includes a custom is no
+ * request for one. Idempotent (an open one only), every pass with the switch on; no row is deleted. Answers the ids.
+ */
+export async function dismissTierCustomFindings(db: Database, now: Date): Promise<number[]> {
+  const result = await db.execute<Row>(sql`
+    update custom_findings f
+    set status = 'dismissed', dismiss_reason = 'not_asked', resolved_by_user_id = null, resolved_by_agent_key_id = null,
+      resolved_at = ${now.toISOString()}::timestamptz
+    from transactions t
+    where f.status = 'open' and f.source = 'sale' and f.ref ~ '^[1-9][0-9]{0,18}$' and t.id = f.ref::bigint and t.canonical_type = 'subscription'
+    returning f.id`);
+  return result.rows.map((row) => Number(row.id));
+}
+
+/**
  * The lines of the shift reports handed in since `since` (their newest versions) whose note carries the quick word
- * «кастом» and whose sale pays no order and is no finding yet, written as open findings (`shift_report`, the sale's id;
- * the line's note is the quote). Answers how many were written.
+ * «кастом» and whose sale is live money (active, positive), pays no order and is no finding yet, written as open findings
+ * (`shift_report`, the sale's id; the line's note is the quote). Answers how many were written.
  */
 export async function insertShiftReportCustomFindings(db: Database, input: { since: Date; now: Date }): Promise<number> {
   const result = await db.execute(sql`
@@ -147,7 +151,8 @@ export async function insertShiftReportCustomFindings(db: Database, input: { sin
     insert into custom_findings (source, ref, page_id, fan_id, amount_mills, quote, happened_at, created_at)
     select 'shift_report', t.id::text, t.platform_account_id, t.fan_id, ${amountOf}, ${quoteOf(sql`l.note`)}, t.occurred_at, ${input.now.toISOString()}::timestamptz
     from lines l join transactions t on t.id = l.sale::bigint
-    where not exists (select 1 from custom_order_payments cp where cp.transaction_id = t.id)
+    where t.is_active and t.gross_amount_mills > 0
+      and not exists (select 1 from custom_order_payments cp where cp.transaction_id = t.id)
       and not exists (select 1 from custom_findings cf where cf.source in ('sale', 'shift_report') and cf.ref = t.id::text)
     on conflict (source, ref) do nothing`);
   return result.rowCount ?? 0;
@@ -319,9 +324,12 @@ export interface CustomCandidateTierRow {
 }
 
 /**
- * The fans of these pages holding now a tier that includes a custom whose current period has no resolved finding: the
- * period's sale (the newest subscription sale of the fan there in 40 days, the one that names the subscription first)
- * pays no order and its finding, if any, is still open.
+ * The fans of these pages holding now a tier that includes a custom whose current period is no finding yet: the period's
+ * sale (the newest subscription sale of the fan there in 40 days, the one that names the subscription first) pays no
+ * order and has no finding of any status — an open one waits for a person already, a resolved one stays resolved — but
+ * «кастом не просил» (`not_asked`): a tier bought is no request (the owner, 2026-11-22), so the reader keeps reading the
+ * holder's chat and writes the chat's finding when he asks. A holder with no such sale is no candidate: the reader could
+ * name nothing to resolve it by.
  */
 export async function listCustomCandidateTiers(
   db: Database,
@@ -350,8 +358,10 @@ export async function listCustomCandidateTiers(
         and t.gross_amount_mills > 0 and t.occurred_at > ${now} - interval '40 days'
       order by (t.correlation_id is not distinct from h.platform_history_id) desc, t.occurred_at desc, t.id desc
       limit 1) sale on true
-    where not exists (select 1 from custom_order_payments cp where cp.transaction_id = sale.id)
-      and not exists (select 1 from custom_findings cf where cf.source = 'sale' and cf.ref = sale.id::text and cf.status <> 'open')
+    where sale.id is not null
+      and not exists (select 1 from custom_order_payments cp where cp.transaction_id = sale.id)
+      and not exists (select 1 from custom_findings cf where cf.source in ('sale', 'shift_report') and cf.ref = sale.id::text
+        and cf.dismiss_reason is distinct from 'not_asked')
     order by sale.occurred_at desc nulls last, p.label, f.id
     limit ${input.limit}`);
   return result.rows.map((row) => ({

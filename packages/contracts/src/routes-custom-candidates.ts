@@ -43,7 +43,10 @@ export const agentCustomCandidateTierSchema = z.object({
 export const agentCustomCandidatesResponseSchema = z.object({
   /** Tips of $40 and more of the last 14 days that pay no order and have no finding, the newest first. */
   tips: z.array(agentCustomCandidateTipSchema),
-  /** Fans holding a tier that includes a custom whose current period has no resolved finding. */
+  /**
+   * Fans holding a tier that includes a custom whose current period's sale is no finding yet (or one dismissed as «кастом не
+   * просил»): a tier bought is no custom asked for — the reader writes a finding of the fan's chat when he asks for one.
+   */
   tiers: z.array(agentCustomCandidateTierSchema),
   serverNow: isoTimestamp,
 });
@@ -55,7 +58,8 @@ export const customCandidateRouteSchemas = {
     auth: { kind: "agentKey" }, tags: ["agent"],
     summary: "Sales that may be a custom with no order, for the reader to read the chat around (needs write:customs, read:money, read:messages)",
     description: "Database only, the key's pages only: tips of $40 and more of the last 14 days that pay no order and have no finding, "
-      + "and fans holding a tier that includes a custom whose current period has no resolved finding. Hub records nothing from them.",
+      + "and fans holding a tier that includes a custom whose current period's sale is no finding yet (a tier bought is no custom asked "
+      + "for: the reader writes the fan's chat as a finding when he asks). Hub records nothing from them.",
     response: {
       200: agentCustomCandidatesResponseSchema,
       400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 429: errorResponseSchema, 503: errorResponseSchema,

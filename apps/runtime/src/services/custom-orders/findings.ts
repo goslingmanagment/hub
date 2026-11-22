@@ -10,6 +10,7 @@ import {
 import {
   closeMatter,
   copyCustomSaleDismissals,
+  dismissTierCustomFindings,
   findCustomFinding,
   findCustomOrder,
   findCustomSale,
@@ -24,6 +25,7 @@ import {
   listCustomFindingKeys,
   listOpenCustomFindings,
   listOpenMattersOfKinds,
+  reopenCustomFinding,
   resolveCustomFinding,
   type CustomFindingRow,
   type Database,
@@ -31,12 +33,13 @@ import {
   type MatterOwner,
   type OpenCustomFindingRow,
 } from "@agency_hub_core/db";
-import type { CustomTierOverride } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
 import { ConflictError, NotFoundError } from "../errors.ts";
+import { isTestAgent } from "../sandbox/realm.ts";
 import type { AgentCustomScope } from "./agent.ts";
+import { checkPersonSale } from "./evidence.ts";
 import { applyCustomStep, customViewerOf, recordCustomOrder, resolveFanOnPage } from "./index.ts";
 import { CUSTOM_UNRECORDED_KIND, unrecordedSaleOf } from "./readers.ts";
 import { seesOrder, type CustomViewer } from "./rules.ts";
@@ -68,6 +71,7 @@ export function findingWire(row: CustomFindingRow): CustomFinding {
     orderCode: row.orderId === null ? null : customOrderCode(row.orderId),
     dismissReason: row.dismissReason,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    resolvedByAgent: row.resolvedByAgentKeyId === null ? null : row.resolvedByAgent ?? "агент",
     createdAt: row.createdAt.toISOString(),
   };
 }
@@ -98,6 +102,11 @@ export async function agentPostCustomFindings(
       continue;
     }
     let pageId = page?.id ?? null;
+    // A trace of no known page is the live agency's (0414): the test realm's key writes none.
+    if (pageId === null && item.source !== "sale" && isTestAgent(scope.principal)) {
+      answer("not_found", null);
+      continue;
+    }
     let fanId: number | null = null;
     let amountMills = item.amountMills ?? null;
     let happenedAt = new Date(item.happenedAt);
@@ -144,10 +153,26 @@ export function mayResolveFinding(viewer: CustomViewer, finding: { pageId: numbe
 }
 
 const resolvedAlready = () => new ConflictError("The finding is resolved already", { reason: "resolved" });
+/** Only what an agent dismissed is brought back by a person; their own and another person's answers stand. */
+const notReopenable = () => new ConflictError("Only a finding an agent dismissed is brought back", { reason: "not_reopenable" });
+const byAgentDismissed = (finding: CustomFindingRow) => finding.status === "dismissed" && finding.resolvedByAgentKeyId !== null;
+
+/** The sale a finding names (Hub's id: a sale's, a shift report line's); null — none. */
+function saleOf(finding: CustomFindingRow): number | null {
+  return (finding.source === "sale" || finding.source === "shift_report") && SALE_REF.test(finding.ref) ? Number(finding.ref) : null;
+}
+
+/** The Telegram card a finding is (the work chat, the model's group); null — none. */
+function cardOf(finding: CustomFindingRow): string | null {
+  return finding.source === "work_chat" || finding.source === "model_group" ? parseTelegramRef(finding.ref) : null;
+}
 
 /**
- * `customFindingAct`: one answer to an open finding by whoever resolves it. A finding the viewer does not resolve reads
- * like one that does not exist. Each answer and the finding's resolution are one transaction.
+ * `customFindingAct`: one answer to a finding by whoever resolves it. A finding the viewer does not resolve reads like
+ * one that does not exist. Each answer and the finding's resolution are one transaction. A sale it names becomes the
+ * order's payment only when it holds as the agent's sale must (evidence.ts `checkPersonSale`: the order's fan, its model,
+ * live, no other order's, not taken back) — else nothing is written; a card it is becomes the order's card. `reopen` —
+ * a finding an agent dismissed is open again.
  */
 export async function actOnCustomFinding(
   app: FindingsApp,
@@ -161,14 +186,27 @@ export async function actOnCustomFinding(
   const id = Number(input.findingId);
   const seen = await findCustomFinding(app.db, id);
   if (seen === null || isNarrow(human) || !mayResolveFinding(viewer, seen)) throw new NotFoundError("The finding was not found");
-  if (seen.status !== "open") throw resolvedAlready();
-  const userId = human.user.id;
   const body = input.body;
+  if (body.action === "reopen" ? !byAgentDismissed(seen) : seen.status !== "open") throw body.action === "reopen" ? notReopenable() : resolvedAlready();
+  const userId = human.user.id;
+  const actor = { door: "workboard" as const, userId };
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     const finding = (await findCustomFinding(db, id, { lock: true }))!;
+    if (body.action === "reopen") {
+      if (!byAgentDismissed(finding) || !(await reopenCustomFinding(db, { id }))) throw notReopenable();
+      return;
+    }
     if (finding.status !== "open") throw resolvedAlready();
-    const sale = finding.source === "sale" && /^[1-9]\d{0,18}$/.test(finding.ref) ? Number(finding.ref) : null;
+    const sale = saleOf(finding);
+    const card = cardOf(finding);
+    /** The finding's sale paid to the order, checked first; a person's own step (it takes a sale off no other order). */
+    const pay = async (orderId: number) => {
+      if (sale === null) return;
+      const order = (await findCustomOrder(db, orderId))!;
+      if ((await checkPersonSale(db, order, sale)).already) return;
+      await applyCustomStep({ db }, { orderId, step: { action: "payment", transactionId: sale }, actor, viewer: null, now });
+    };
     switch (body.action) {
       case "dismiss":
         await resolveCustomFinding(db, { id, status: "dismissed", orderId: null, dismissReason: body.reason, userId, at: now });
@@ -196,10 +234,15 @@ export async function actOnCustomFinding(
           if (found === null) buyer = body.fan.slice(0, 300);
         }
         const telegramRef = body.telegramRef === undefined ? null : parseTelegramRef(body.telegramRef);
+        // The card the finding is, and the one the person gives: the order's cards (the reader finds them by them).
+        const telegramRefs = [...new Set([card, telegramRef].filter((ref): ref is string => ref !== null))];
         const orderId = await recordCustomOrder({ db }, {
           pageId, fanId, buyer, conversationRef, card: body.card, deadlineOn: null, acceptedByUserId: userId, origin: "workboard",
-          paymentTransactionId: sale, telegramRefs: telegramRef === null ? [] : [telegramRef], actor: { door: "workboard", userId }, now,
+          telegramRefs, actor, now,
+          ...(body.priceMills === undefined ? {} : { priceMills: body.priceMills, personFields: ["priceMills"] }),
         });
+        // A sale that does not hold for the new order refuses the record whole: nothing of it is kept.
+        await pay(orderId);
         await resolveCustomFinding(db, { id, status: "recorded", orderId, dismissReason: null, userId, at: now });
         return;
       }
@@ -207,8 +250,9 @@ export async function actOnCustomFinding(
         const orderId = parseCustomOrderCode(body.code);
         const order = orderId === null ? null : await findCustomOrder(db, orderId);
         if (order === null || !seesOrder(viewer, order)) throw new NotFoundError("The custom order was not found");
-        // A sale's finding pays the order it is linked to: the person's own step (it takes a sale off no other order).
-        if (sale !== null) await applyCustomStep({ db }, { orderId: order.id, step: { action: "payment", transactionId: sale }, actor: { door: "workboard", userId }, viewer: null, now });
+        // A sale's finding pays the order it is linked to — only one of its fan and its model; a card's is its card.
+        await pay(order.id);
+        if (card !== null) await applyCustomStep({ db }, { orderId: order.id, step: { action: "card", telegramRef: card }, actor, viewer: null, now });
         await resolveCustomFinding(db, { id, status: "linked", orderId: order.id, dismissReason: null, userId, at: now });
         return;
       }
@@ -224,11 +268,11 @@ export async function actOnCustomFinding(
  * instead of the two kinds of matter before it.
  *
  *   Hub writes   a tip whose note speaks of a custom (Fansly's tip context; OnlyFans' tip message by its amount and
- *                time), a purchase or renewal of a tier that includes one (the sale's own reference to its subscription,
- *                the ±2 h window only as a fallback; «includes» is the wording match corrected by `customTierOverrides`),
- *                a shift report's line marked «кастом» whose sale pays no order, a card the reader found with no order.
- *                A sale is skipped only when it pays an order or has a finding already (a dismissed one never comes
- *                back); an open finding an order took since is linked to it.
+ *                time), a shift report's line marked «кастом» whose live sale pays no order, a card the reader found
+ *                with no order. A sale is skipped only when it pays an order or has a finding already (a dismissed one
+ *                never comes back); an open finding an order took since is linked to it. Never a purchase or renewal of
+ *                a tier that includes a custom (the owner, 2026-11-22: only a fan who asked for one): its holders are the
+ *                reader's candidates, and every open finding of one is dismissed as «кастом не просил» (`not_asked`).
  *   switch-on    every open `custom.unrecorded` and `custom.card_without_order` matter becomes an open finding (from the
  *                moment it was opened); the two sets are compared, and only then the matters close (withdrawn) — those
  *                kinds are no longer written. «Не кастом» marks (`custom_sale_dismissals`) become dismissed findings.
@@ -301,14 +345,36 @@ export async function retireCustomFindingMatters(app: FindingsPassApp, now: Date
   return { migrated, closed };
 }
 
-/** Hub's own findings of a pass: sales, tiers and shift reports of the last two weeks, and the ones an order took since. */
-export async function writeCustomFindings(app: FindingsPassApp, input: { overrides: readonly CustomTierOverride[]; now: Date }): Promise<{ written: number; linked: number }> {
+/**
+ * Hub's own findings of a pass: tips whose note says custom and shift reports' lines marked «кастом» of the last two
+ * weeks, and the ones an order took since. Never a tier's purchase or renewal (the owner, 2026-11-22: only a fan who
+ * asked for a custom): the open ones written before are dismissed as «кастом не просил» (`dismissTierFindings`).
+ */
+export async function writeCustomFindings(app: FindingsPassApp, input: { now: Date }): Promise<{ written: number; linked: number }> {
   const { now } = input;
   const from = new Date(now.getTime() - FINDINGS_LOOK_BACK_DAYS * 24 * HOUR_MS);
-  const sales = await insertCustomSaleFindings(app.db, { from, to: now, overrides: input.overrides, now });
+  const sales = await insertCustomSaleFindings(app.db, { from, to: now, now });
   const reports = await insertShiftReportCustomFindings(app.db, { since: from, now });
   const linked = await linkCustomFindingsToOrders(app.db, now);
   return { written: sales + reports, linked };
+}
+
+/**
+ * The owner's decision of 2026-11-22 («только тех, кто запросил кастом, а не просто купил»): every open finding of a
+ * tier's purchase or renewal is dismissed as «кастом не просил» by the system, and its matter «Кастом без заказа» closes
+ * as withdrawn (the owner's line recounts by itself). Idempotent: every pass with the switch on runs it and, after the
+ * first, finds nothing — or what a migrated matter of the old kind brought in since. No row is deleted. Answers how many.
+ */
+export async function dismissTierFindings(app: FindingsPassApp, now: Date): Promise<number> {
+  const dismissed = await dismissTierCustomFindings(app.db, now);
+  for (const id of dismissed) {
+    try {
+      await closeMatter(app.db, { key: `custom.finding:${id}`, how: "withdrawn", writer: "server", note: "Кастом не просил: тир куплен, кастома не просили" }, SYSTEM, now);
+    } catch (error) {
+      app.logger.error({ err: error, findingId: id }, "custom checks: a tier finding's matter could not be closed");
+    }
+  }
+  return dismissed.length;
 }
 
 /** The reader's cards no order has, as findings of the models' groups (the switch on: they are no longer matters). */

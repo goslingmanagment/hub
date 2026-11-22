@@ -159,7 +159,8 @@ function DueView({ orders, board, keep, onOpen, mine }: {
           <ul className="cf-rows">{group.orders.map((order) => <OrderRow key={order.id} order={order} onOpen={onOpen} />)}</ul>
         </details>
       ))}
-      <DoneGroups counts={board.done} keep={keep} onOpen={onOpen} />
+      {/* A given order waiting for the fan's word and a closed one are nobody's move: no part of «Только мой ход». */}
+      {!mine && <DoneGroups counts={board.done} keep={keep} onOpen={onOpen} />}
     </div>
   );
 }
@@ -203,6 +204,8 @@ export function CustomsFactsScreen() {
     body = <ErrorState onRetry={() => void board.refetch()} retrying={board.isFetching}>Заказы не загрузились: Hub не ответил.</ErrorState>;
   } else {
     const card = param("card");
+    // A matter «Кастом без заказа» links to its finding (`?finding=<id>`): the block opens on it.
+    const finding = /^[1-9]\d{0,18}$/u.test(param("finding") ?? "") ? Number(param("finding")) : null;
     body = (
       <>
         <Numbers orders={data.orders.filter((order) => model === null || order.model === model)} />
@@ -227,7 +230,7 @@ export function CustomsFactsScreen() {
           </Notice>
         )}
         <div className="cf-banners">
-          <FindingsBanner summary={data.findings} narrow={me.narrow} orders={data.orders} defaultOpen={param("sale") !== null} onOpenOrder={openOrder} />
+          <FindingsBanner summary={data.findings} narrow={me.narrow} orders={data.orders} defaultOpen={param("sale") !== null} focus={finding} onOpenOrder={openOrder} />
           <ChangesBanner summary={data.changes} onOpenOrder={openOrder} />
         </div>
         {data.orders.length === 0 && data.done.given === 0 && data.done.closed === 0 ? (

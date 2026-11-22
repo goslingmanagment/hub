@@ -1,4 +1,5 @@
 import type { CustomBoardOrder, CustomFact, CustomOrderFacts, CustomSelfChange } from "@agency_hub_core/contracts";
+import { millsFromDollars } from "@agency_hub_core/shared";
 import { formatMills } from "@agency_hub_core/ui/format";
 import { moscowDayOf, weekdayIndex } from "@agency_hub_core/ui/moscow";
 import { ruPlural } from "@agency_hub_core/ui/plural";
@@ -48,7 +49,8 @@ export function dueWords(order: FactsOrder): { big: string; small: string; tone:
   if (left === null || order.deadlineOn === null) return { big: "срок не назван", small: `заказ от ${dotted(moscowDayOf(order.createdAt))}`, tone: "calm" };
   const about = order.deadlineDefault ? "примерно " : "";
   const day = dotted(order.deadlineOn);
-  if (left < 0) return { big: `−${daysWord(left)}`, small: `${about}срок был ${day}`, tone: "danger" };
+  // Red only more than a full day past it (C2: the burn's own threshold); the day after is amber.
+  if (left < 0) return { big: `−${daysWord(left)}`, small: `${about}срок был ${day}`, tone: left <= -2 ? "danger" : "warn" };
   if (left === 0) return { big: "сегодня", small: `${about}до конца ${day}`, tone: "warn" };
   if (left === 1) return { big: "завтра", small: `${about}до ${day}, ${weekdayOf(order.deadlineOn)}`, tone: "warn" };
   return { big: daysWord(left), small: `${about}до ${day}, ${weekdayOf(order.deadlineOn)}`, tone: "calm" };
@@ -106,13 +108,29 @@ export function moveWords(order: FactsOrder): { who: string | null; what: string
   return { who, what: move.what || null };
 }
 
-/** «Только мой ход»: the move is the viewer's by name, or the owner's to the owner. */
+/**
+ * «Только мой ход»: the move is the viewer's — a person's or the shift's by the viewer's name (never a fan's or a model's
+ * that happens to be the same), or the owner's to the owner.
+ */
 export function isMine(order: FactsOrder, viewer: { name: string | null; owner: boolean }): boolean {
   const move = order.move;
   if (move === null) return false;
   if (move.whoKind === "owner") return viewer.owner;
+  if (move.whoKind !== "person" && move.whoKind !== "shift") return false;
   return viewer.name !== null && move.who === viewer.name;
 }
+
+/** A sum in dollars as a person types it («120», «49.50», «1 200», «$75») in mills; null — empty; undefined — no sum. */
+export function millsOfDollars(text: string): number | null | undefined {
+  const value = text.replace(/[\s$]/gu, "").replace(",", ".");
+  if (value === "") return null;
+  if (!/^\d{1,7}(?:\.\d{1,3})?$/u.test(value)) return undefined;
+  const mills = Number(millsFromDollars(value));
+  return mills > 0 ? mills : undefined;
+}
+
+/** Mills as dollars to type into a field, exact: 49 500 → «49.5», 120 000 → «120». */
+export const dollarsOf = (mills: number) => String(mills / 1000);
 
 /** The search: a fan's nick or name, or the order's code («K-12», «к12», «12»). */
 export function matchesSearch(order: FactsOrder, text: string): boolean {
@@ -174,6 +192,7 @@ export function changeWords(change: Pick<CustomSelfChange, "event" | "changes">)
     case "custom_order.deadline":
       return changes.approximate === true ? `срок примерно до ${dayWords(changes.to)}` : `срок ${dayWords(changes.from)} → ${dayWords(changes.to)}`;
     case "custom_order.fan_asked": return "фан спросил, где заказ";
+    case "custom_order.fan_asked_cleared": return "фану ответили";
     case "custom_order.issue": return text(changes, "text") ? `расхождение: ${text(changes, "text")}` : "источники расходятся";
     case "custom_order.issue_cleared": return "расхождение снято";
     case "custom_order.fan_confirmed": return "найден фан";

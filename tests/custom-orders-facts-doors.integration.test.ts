@@ -251,4 +251,68 @@ describe("custom orders: what an agent names, checked; undo remembered", () => {
     const revision = customOrderDetailResponseSchema.parse((await act(order, { action: "revision", note: "другой ракурс" })).json());
     expect(revision.order).toMatchObject({ state: "revision", givenAt: null, givenMessageRef: null, facts: { given: { value: "no" } } });
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses the agent's «отдан» by a message priced in its media offer that the fan has not bought", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
+    const id = await recordCustomOrder(app, {
+      pageId: pages["vela-1"]!, fanId: fans.a!, buyer: null, conversationRef: null, card: { task: "Ролик за PPV" }, deadlineOn: null,
+      acceptedByUserId: bossId, origin: "agent", actor: { door: "system" }, createdAt: new Date(Date.now() - 180 * 60_000),
+    });
+    // A Fansly PPV: the message itself carries no price, its media offer does.
+    await q(`insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
+               media_metadata, message_type, is_tip, tip_amount_mills, price_mills)
+             values ($1, 'fansly', 'conv-a', '9600000005', 'model', true, $2, '', '[{"id": "1"}]'::jsonb, 1, false, 0, null)`,
+    [pages["vela-1"], minutesAgo(50)]);
+    await q(`insert into message_media_offers (page_id, platform, message_ref, offer_ordinal, media_offer_ref, conversation_ref, fan_platform_user_id,
+               message_created_at, price_mills, purchase_state, first_observed_at, last_observed_at, content_hash, source_event_id,
+               source_observation_id, source_account_seq)
+             values ($1, 'fansly', '9600000005', 0, '9700000005', 'conv-a', '7400000999', $2, 30000, 'unknown', now(), now(), $3, 1, 1, 1)`,
+    [pages["vela-1"], minutesAgo(50), "1".repeat(64)]);
+    const given = await agent(`/api/v1/agent/custom-orders/K-${id}`, { action: "given", messageRef: "9600000005" });
+    expect(given.statusCode, given.body).toBe(409);
+    expect(given.json()).toMatchObject({ reason: "not_bought" });
+    expect((await testDb.pool.query("select state from custom_orders where id = $1", [id])).rows[0].state).toBe("recorded");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("links a finding's sale to an order only when it is the order's fan's, and leaves the finding open otherwise", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
+    const id = await recordCustomOrder(app, {
+      pageId: pages["vela-1"]!, fanId: fans.a!, buyer: null, conversationRef: null, card: { task: "Ролик по находке" }, deadlineOn: null,
+      acceptedByUserId: bossId, origin: "agent", actor: { door: "system" }, createdAt: new Date(Date.now() - 180 * 60_000),
+    });
+    const tip = async (key: string, fanKey: string) => Number((await q(
+      `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+         gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, currency)
+       values ($1, $2, $3, 'tip', 'tip', 'posted', 'ok', 40000, 40000, 32000, $4, 'fansly:rest', 'USD') returning id`,
+      [pages["vela-1"], fans[fanKey], `tx-${key}`, minutesAgo(90)],
+    )).rows[0].id);
+    const finding = async (sale: number, fanKey: string) => Number((await q(
+      `insert into custom_findings (source, ref, page_id, fan_id, amount_mills, quote, happened_at)
+       values ('sale', $1, $2, $3, 40000, 'for the custom', $4) returning id`,
+      [String(sale), pages["vela-1"], fans[fanKey], minutesAgo(90)],
+    )).rows[0].id);
+    const link = (findingId: number) => server!.inject({
+      method: "POST", url: `/api/v1/custom-orders/findings/${findingId}`, headers: { cookie }, payload: { action: "link", code: `K-${id}` },
+    });
+    const payments = async () => (await q("select transaction_id from custom_order_payments where order_id = $1", [id])).rows.map((row) => Number(row.transaction_id));
+
+    // Another fan's money never pays this fan's order: refused, nothing linked, the finding still waits.
+    const foreignSale = await tip("findingForeign", "b");
+    const foreign = await finding(foreignSale, "b");
+    const refused = await link(foreign);
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json()).toMatchObject({ reason: "other_fan" });
+    expect(await payments()).toEqual([]);
+    expect((await q("select status from custom_findings where id = $1", [foreign])).rows[0].status).toBe("open");
+
+    // The order's own fan's sale: it pays the order, and the finding is linked.
+    const ownSale = await tip("findingOwn", "a");
+    const own = await finding(ownSale, "a");
+    const linked = await link(own);
+    expect(linked.statusCode, linked.body).toBe(200);
+    expect(linked.json()).toMatchObject({ finding: { status: "linked", orderCode: `K-${id}` } });
+    expect(await payments()).toEqual([ownSale]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

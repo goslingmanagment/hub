@@ -80,14 +80,16 @@ holding `write:customs` alone gains none of the calls below that need more. The 
 
 | Call | Also needs | What Hub checks |
 |---|---|---|
-| `create` / step `edit` with `priceMills`, `deadlineOn`, `holdReason` | — | as before: a field a person edited is never overwritten (409 `edited_by_person`) |
+| `create` / step `edit` with `deadlineOn` | — | as before: a field a person edited is never overwritten (409 `edited_by_person`) |
+| `create` / step `edit` with `priceMills` | `read:money` | as `edit` |
+| `create` / step `edit` with `holdReason` | `read:messages` | as `edit` |
 | `create` with `sales`, step `payment` (`sale`: `{saleRef}` or `{pageLabel, transactionRef}`) | `read:money` | the sale is on a page of the order's model among the key's pages; an account's of the order's fan (any account of the person); a tip, a subscription or a message purchase; held by no other order; not reversed; not taken off this order by a person. `create` never fails because of a sale: the order is recorded and `sales` answers each — `linked`, `already`, or `refused` with its reason. A `create` that finds the order by its card or its code takes the price and the sales too |
-| step `given` with `messageRef` | `read:messages` | the page's message on a page of the order's model among the key's pages, to an account of the order's fan (the chat's fan), sent after the order was recorded, with media; a priced one bought. Refused (409 `code_named_file`) while a vault file carries the order's code: Hub's own rule finds that delivery. Never by a word |
+| step `given` with `messageRef` | `read:messages` | the page's message on a page of the order's model among the key's pages, to an account of the order's fan (the chat's fan), sent after the order was recorded, with media; a priced one (its own price or a media offer's) bought. Refused (409 `code_named_file`) while the order has its code-named files (the vault files named with its code since its last revision): Hub's own rule finds that delivery. Never by a word |
 | step `fan` with `pageLabel` and `fanRef` (the fan's platform id) | `read:messages` | the fan has an account on that page; the order has no fan and its fan was not erased; the page becomes the order's when it has none (another page than the order's: 409 `other_page`) |
-| step `fan_asked` with `messageRef` | `read:messages` | the fan's message in a chat of the order's fan on the order's page |
+| step `fan_asked` with `messageRef` | `read:messages` | the fan's message in a chat of the order's fan on the order's page, sent after the order was recorded (409 `before_order`). An ask the page has answered since, and any ask while one stands, change nothing (`unchanged`); Hub takes the ask off by itself once the page writes to the fan |
 | step `deadline` with `reason` | — | as `edit`: never over a deadline a person set |
-| steps `issue` (≤ 200 characters), `issue_clear` | — | the shape |
-| `GET …/custom-orders?state=live` | — | the open orders and the given ones not closed yet. The facts (`facts`, `priceMills`, `holdReason`, `issue`, …) are on the wire only for a key with `read:money`; to it an order whose money is not complete also carries `unlinkedSales`: the fan's sales since the order was recorded, on the key's pages of the order's model, that pay no order and no person took off it (at most 10). Read the chat around one before naming it back |
+| steps `issue` (≤ 200 characters), `issue_clear` | `read:messages` | the shape; `issue_clear` only of an issue this agent set (409 `not_yours`: a person settles another's) |
+| `GET …/custom-orders?state=live` | — | the open orders and the given ones not closed yet. The facts (`facts`, `priceMills`, `holdReason`, `issue`, …) are on the wire only for a key with `read:money`; to it an order whose money is not complete also carries `unlinkedSales`: the fan's sales of the last 30 days (a fan often pays before the card), on the key's pages of the order's model, that pay no order and no person took off it (at most 10). Read the chat around one before naming it back. To a key with `read:messages` each order also carries `move` (whose move, the board's one rule) and `burning` |
 | `POST …/custom-findings` | `read:money` + `read:messages` | each finding once by `(source, ref)`; a sale's is Hub's sale on the key's pages (its page, fan, sum and time are Hub's). `notCustom` keeps a new one dismissed as «не кастом»; a finding Hub has stays as it is — its check's leader resolves it |
 
 The refusals are 409 with `error.reason`: `capability_missing` (in `sales`), `not_found`, `order_no_page`,
@@ -292,7 +294,7 @@ false`). The answer:
     "change": "made",               // made | superseded | cancelled | linked | applied | changed
     "at": "2026-11-12T18:20:00.000Z",
     "decision": {                   // the decision as it is now: apply in order, keep by id
-      "id": 12, "transactionId": 7744520, "pageLabel": "mia-1",
+      "id": 12, "transactionId": 1234567, "pageLabel": "mia-1",
       "kind": "owner",              // owner | split | pot | off_platform | exclude
       "shares": [{ "person": "anna", "userId": 6, "percent": 100 }],
       "pot": null,                  // kind pot: the pot's name = the ledger's pot slug

@@ -13,21 +13,26 @@ import {
 import {
   findCustomOrder,
   findCustomOrderIdByCard,
+  findCustomPageReplyAfter,
   findMatterPerson,
   findPageFanByInput,
+  isCustomOrderIssueOfAgent,
   listAgentCustomOrders,
+  listOnShiftUsersByPage,
   listOpenCustomOrdersOfFan,
   listCustomOrderCardOwners,
   listCustomOrderMessagesOf,
+  listCustomOrdersByIds,
   type CustomOrderRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
 import type { AgentAuthPrincipal } from "../auth.ts";
 import { AppError, ConflictError } from "../errors.ts";
+import { isTestAgent } from "../sandbox/realm.ts";
 import {
   agentOrderBase, applyCustomStep, cardTextOf, customLeaderContext, messageWire, orderMessagesOf, recordCustomOrder, unlinkedSalesOf,
-  type CustomActor, type CustomEventResult, type CustomLeaderContext, type CustomMessageInput, type CustomStep,
+  type CustomActor, type CustomEventResult, type CustomLeaderContext, type CustomMessageInput, type CustomOnShift, type CustomStep,
 } from "./index.ts";
 import { reportUnmatchedCards } from "./checks.ts";
 import { checkFanAskedMessage, checkGivenMessage, checkNamedSales, modelPagesOf } from "./evidence.ts";
@@ -70,16 +75,29 @@ async function personOf(app: AgentApp, username: string): Promise<number> {
   return person.userId;
 }
 
+/**
+ * An order of the key's pages; one of no known page is the live agency's (0414): a live key's to read and write, never a
+ * test key's — the test realm's key neither reads nor writes a live order.
+ */
 function inGrant(scope: AgentCustomScope, order: CustomOrderRow): boolean {
-  return order.pageId === null || scope.pages.some((page) => page.id === order.pageId);
+  if (order.pageId === null) return !isTestAgent(scope.principal);
+  return scope.pages.some((page) => page.id === order.pageId);
 }
 
 async function agentOrderOf(app: AgentApp, scope: AgentCustomScope, order: CustomOrderRow, now: Date): Promise<AgentCustomOrder> {
   return agentWire(scope, order, await orderMessagesOf(app.db, order.id), now, await customLeaderContext(app));
 }
 
-function agentWire(scope: AgentCustomScope, order: CustomOrderRow, messages: AgentCustomOrder["messages"], now: Date, leaders: CustomLeaderContext | null): AgentCustomOrder {
-  return { ...agentOrderBase(order, now, leaders, { money: scope.money }), cardText: cardTextOf(order), sourceText: order.sourceText, messages };
+function agentWire(
+  scope: AgentCustomScope,
+  order: CustomOrderRow,
+  messages: AgentCustomOrder["messages"],
+  now: Date,
+  leaders: CustomLeaderContext | null,
+  reading?: { onShift: CustomOnShift },
+): AgentCustomOrder {
+  const base = agentOrderBase(order, now, leaders, { money: scope.money, ...(reading === undefined ? {} : { reading: true, onShift: reading.onShift }) });
+  return { ...base, cardText: cardTextOf(order), sourceText: order.sourceText, messages };
 }
 
 export async function agentListCustomOrders(app: AgentApp, scope: AgentCustomScope, query: AgentCustomOrdersQuery, now: Date = new Date()) {
@@ -87,11 +105,18 @@ export async function agentListCustomOrders(app: AgentApp, scope: AgentCustomSco
   const telegramRef = query.telegramRef === undefined ? null : parseTelegramRef(query.telegramRef);
   const filtered = orderId === null && telegramRef === null;
   const orders = await listAgentCustomOrders(app.db, {
-    pageIds: scope.pages.map((page) => page.id), open: query.state === "open" && filtered, live: query.state === "live" && filtered, orderId, telegramRef,
-    limit: query.limit,
+    pageIds: scope.pages.map((page) => page.id), noPage: !isTestAgent(scope.principal),
+    open: query.state === "open" && filtered, live: query.state === "live" && filtered, orderId, telegramRef, limit: query.limit,
   });
-  const [messages, leaders] = await Promise.all([listCustomOrderMessagesOf(app.db, orders.map((order) => order.id)), customLeaderContext(app)]);
-  const wires = orders.map((order) => agentWire(scope, order, (messages.get(order.id) ?? []).map(messageWire), now, leaders));
+  // The live list to a key with read:messages: whose move each order is and whether it burns, by the board's one rule —
+  // the reader's reminders (who gives a shot order, who forwards a waiting card) read it from here.
+  const reading = query.state === "live" && filtered && scope.texts;
+  const [messages, leaders, onShift] = await Promise.all([
+    listCustomOrderMessagesOf(app.db, orders.map((order) => order.id)),
+    customLeaderContext(app),
+    reading ? listOnShiftUsersByPage(app.db, now) : Promise.resolve(new Map<string, number[]>()),
+  ]);
+  const wires = orders.map((order) => agentWire(scope, order, (messages.get(order.id) ?? []).map(messageWire), now, leaders, reading ? { onShift } : undefined));
   // The live list to a key with read:money: what the reader may name for an order whose money is not complete.
   if (query.state === "live" && filtered && scope.money) {
     const labelOf = new Map(scope.pages.map((page) => [page.id, page.pageLabel]));
@@ -195,6 +220,10 @@ async function applyToFound(
  * are each answered in `sales`: linked, or why not; none of them fails the create.
  */
 export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomScope, body: AgentCustomOrderCreateBody, now: Date = new Date()) {
+  // The price is about the fan's money, a hold's reason is read in the chats: a key that only writes the shooting names
+  // neither (customs facts spec §11).
+  if (body.priceMills !== undefined && !scope.money) throw capabilityMissing("read:money");
+  if (body.holdReason !== undefined && !scope.texts) throw capabilityMissing("read:messages");
   const telegramRef = body.telegramRef === undefined ? null : parseTelegramRef(body.telegramRef);
   const actorNow = async () => actorOf(scope, body.onBehalfOf === undefined ? null : await personOf(app, body.onBehalfOf));
   const withSales = <T extends object>(answer: T, sales: AgentCustomSaleOutcome[] | undefined) => (sales === undefined ? answer : { ...answer, sales });
@@ -235,6 +264,10 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
   let pageId: number | null = null;
   let fanId: number | null = null;
   let conversationRef: string | null = null;
+  // An order of no known page is the live agency's: the test realm's key records only on its own pages.
+  if (body.pageLabel === undefined && isTestAgent(scope.principal)) {
+    throw new ConflictError("A test key records an order on one of its pages: pageLabel", { reason: "page_required" });
+  }
   if (body.pageLabel !== undefined) {
     const page = scope.pages.find((candidate) => candidate.pageLabel === body.pageLabel);
     if (!page) throw notFound();
@@ -289,9 +322,11 @@ function saleRefused(verdict: Exclude<AgentCustomSaleOutcome["reason"], null>): 
 
 export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomScope, code: string, body: AgentCustomOrderUpdateBody, now: Date = new Date()) {
   // A step that names money or a message needs that capability besides write:customs: a key that only writes the
-  // shooting gains nothing new (customs facts spec §11). Checked before the order is looked at.
-  if (body.action === "payment" && !scope.money) throw capabilityMissing("read:money");
-  if ((body.action === "given" || body.action === "fan" || body.action === "fan_asked") && !scope.texts) throw capabilityMissing("read:messages");
+  // shooting gains nothing new (customs facts spec §11) — the price is money; a hold, an issue and its end are read in
+  // the chats. Checked before the order is looked at.
+  if ((body.action === "payment" || (body.action === "edit" && body.priceMills !== undefined)) && !scope.money) throw capabilityMissing("read:money");
+  if ((body.action === "given" || body.action === "fan" || body.action === "fan_asked" || body.action === "issue" || body.action === "issue_clear"
+    || (body.action === "edit" && body.holdReason !== undefined)) && !scope.texts) throw capabilityMissing("read:messages");
   const id = parseCustomOrderCode(code);
   const order = id === null ? null : await findCustomOrder(app.db, id);
   if (order === null || !inGrant(scope, order)) throw notFound();
@@ -349,6 +384,8 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
     case "fan_asked": {
       if (order.fanAskedRef === body.messageRef) return unchanged();
       const checked = await checkFanAskedMessage(app.db, order, body.messageRef);
+      // An ask the page has answered since (the reader repeats what it read) asks nothing any more.
+      if ((await findCustomPageReplyAfter(app.db, { pageId: order.pageId!, fanIds: checked.fanIds, after: checked.at })) !== null) return unchanged();
       step = { action: "fan_asked", messageRef: body.messageRef, at: checked.at };
       break;
     }
@@ -356,6 +393,10 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
       step = { action: "issue", text: body.text };
       break;
     case "issue_clear":
+      // The agent takes back only its own sentence; another's — another key's — a person settles (the owner's step).
+      if (order.issue !== null && !(await isCustomOrderIssueOfAgent(app.db, { orderId: order.id, agentKeyId: scope.principal.agentKeyId }))) {
+        throw new ConflictError("Another agent set this issue: a person settles it", { reason: "not_yours" });
+      }
       step = { action: "issue_clear" };
       break;
     case "at_model": {
@@ -432,10 +473,19 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
   };
 }
 
-/** The cards no order has: the ones that do belong to an order are answered, the rest become the lead's matters. */
+/**
+ * The cards no order has: the ones that do belong to an order are answered, the rest become the lead's findings (or
+ * matters, with the switch off). A card names no page — it is the live agency's: the test realm's key hears only its
+ * own orders' cards and writes nothing for the rest.
+ */
 export async function agentReportCustomCards(app: Pick<AppContext, "db" | "logger" | "config">, scope: AgentCustomScope, body: AgentCustomCardsBody, now: Date = new Date()) {
   const cards = body.cards.map((card) => ({ ...card, telegramRef: parseTelegramRef(card.telegramRef)! }));
   const owners = await listCustomOrderCardOwners(app.db, cards.map((card) => card.telegramRef));
+  if (isTestAgent(scope.principal)) {
+    const own = new Set((await listCustomOrdersByIds(app.db, [...new Set(owners.values())])).filter((order) => order.pageId !== null && inGrant(scope, order)).map((order) => order.id));
+    const matched = [...owners].filter(([, orderId]) => own.has(orderId)).map(([telegramRef, orderId]) => ({ telegramRef, code: `K-${orderId}` }));
+    return { matched, opened: 0, closed: 0 };
+  }
   const matched = [...owners].map(([telegramRef, orderId]) => ({ telegramRef, code: `K-${orderId}` }));
   const unmatched = cards.filter((card) => !owners.has(card.telegramRef));
   const { opened, closed } = await reportUnmatchedCards(app, { cards: unmatched, complete: body.complete, agentKeyId: scope.principal.agentKeyId }, now);

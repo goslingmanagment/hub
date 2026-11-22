@@ -5,7 +5,7 @@ import { createFanslyPage, createModel, findCustomOrder, findMatterByKey, upsert
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { reportUnmatchedCards, runCustomOrderChecks } from "../apps/runtime/src/services/custom-orders/checks.ts";
-import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
+import { applyCustomStep, factsOfRow, recordCustomOrder, urgencyOfRow } from "../apps/runtime/src/services/custom-orders/index.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
@@ -103,6 +103,23 @@ async function purchase(fanId: number, correlationId: string, at: Date): Promise
   });
   return Number((await q("select id from transactions where transaction_id = $1", [name])).rows[0].id);
 }
+
+/** A sale of the fan on the page: its Hub id and its platform id. */
+async function sale(fanId: number, kind: "tip" | "subscription", at: Date): Promise<{ id: number; name: string }> {
+  const name = `${kind}-${nextRef++}`;
+  await upsertTransaction(app.db, {
+    platformAccountId: pageId, source: "fansly:rest", fanId, transactionId: name, correlationId: `corr-${name}`, rawType: "7001",
+    canonicalType: kind, transactionState: "posted", rawStatus: "ok", grossAmountMills: 30_000n,
+    sourceDestinationAmountMills: 30_000n, creatorNetAmountMills: 24_000n, occurredAt: at,
+  });
+  return { id: Number((await q("select id from transactions where transaction_id = $1", [name])).rows[0].id), name };
+}
+
+/** A person's step on the board (the owner's), at a moment. */
+const byPerson = (orderId: number, step: Parameters<typeof applyCustomStep>[1]["step"], now: Date) =>
+  applyCustomStep(app, { orderId, step, actor: { door: "workboard", userId: ownerId }, viewer: null, now });
+const later = (ms: number) => new Date(T.getTime() + ms);
+const rejectionsOf = async (id: number) => (await q("select kind, ref from custom_order_rejections where order_id = $1 order by kind, ref", [id])).rows;
 
 const orderOf = async (id: number) => {
   const order = (await findCustomOrder(app.db, id))!;
@@ -248,5 +265,100 @@ describe("custom orders keep themselves true: the checks pass", () => {
     await reportUnmatchedCards(on, { cards: [{ telegramRef: card }], complete: true, agentKeyId: 1 }, T);
     await runCustomOrderChecks(on, T);
     for (const key of keys) expect((await findMatterByKey(app.db, key))?.state, key).toBe("closed");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("does not close a given order whose sale the platform took back: it burns, the owner's to settle", async (context) => {
+    if (!testDb) return context.skip();
+    const order = await shotOrder();
+    const paid = await sale(fans.a, "tip", ago(4 * DAY));
+    await applyCustomStep(app, { orderId: order, step: { action: "payment", transactionId: paid.id }, actor: { door: "system" }, viewer: null, now: ago(4 * DAY) });
+    await applyCustomStep(app, { orderId: order, step: { action: "given", messageRef: String(nextRef++), at: ago(2 * DAY) }, actor: { door: "system" }, viewer: null, now: T });
+    // OnlyFans writes the chargeback as a row of its own after the order was given.
+    await q(`insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+               gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, currency)
+             values ($1, $2, $3, 'chargeback', 'chargeback', 'posted', 'ok', 30000, 30000, 24000, $4, 'fansly:rest', 'USD')`,
+    [pageId, fans.a, `${paid.name}:chargeback`, ago(DAY).toISOString()]);
+    const past = later(73 * HOUR);
+    await runCustomOrderChecks(on, past);
+    expect((await orderOf(order)).state).toBe("given");
+    const row = (await findCustomOrder(app.db, order))!;
+    expect(urgencyOfRow(row, factsOfRow(row), past)).toMatchObject({ burning: true });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("never sets the default deadline again once a person took it off", async (context) => {
+    if (!testDb) return context.skip();
+    const order = await recordCustomOrder(app, {
+      pageId, fanId: fans.a, buyer: null, conversationRef: null, card: { task: "Ролик без срока" }, deadlineOn: null, state: "recorded",
+      acceptedByUserId: null, origin: "agent", actor: { door: "system" }, createdAt: ago(5 * DAY), now: ago(5 * DAY),
+    });
+    await runCustomOrderChecks(on, T);
+    const set = (await findCustomOrder(app.db, order))!;
+    expect(set).toMatchObject({ deadlineDefault: true });
+    expect(set.deadlineOn).not.toBeNull();
+    const events = await q("select changes from object_events where object_type = 'custom_order' and object_id = $1 and event = 'custom_order.deadline'", [String(order)]);
+    expect(events.rows.map((row) => row.changes)).toEqual([{ from: null, to: set.deadlineOn, approximate: true }]);
+    // The board's «Вернуть срок»: the person's empty deadline is theirs.
+    await byPerson(order, { action: "deadline", deadlineOn: null, by: "person" }, later(HOUR));
+    await runCustomOrderChecks(on, later(2 * HOUR));
+    expect(await findCustomOrder(app.db, order)).toMatchObject({ deadlineOn: null, deadlineDefault: false });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("after a person's «не отдан», a message of before it with the same file does not give the order again; a newer one does", async (context) => {
+    if (!testDb) return context.skip();
+    const order = await shotOrder();
+    const offerRef = await offer(await file(order));
+    const first = await send(conv.a, ago(2 * DAY), [{ offerRef }]);
+    await send(conv.a, ago(36 * HOUR), [{ offerRef }]);
+    await runCustomOrderChecks(on, T);
+    expect(await orderOf(order)).toMatchObject({ state: "given", givenMessageRef: first });
+    await byPerson(order, { action: "ungive" }, later(HOUR));
+    await runCustomOrderChecks(on, later(2 * HOUR));
+    expect(await orderOf(order)).toMatchObject({ state: "shot", givenMessageRef: null });
+    const afterIt = await send(conv.a, later(90 * 60_000), [{ offerRef }]);
+    await runCustomOrderChecks(on, later(3 * HOUR));
+    expect(await orderOf(order)).toMatchObject({ state: "given", givenMessageRef: afterIt });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("after a revision of a given order, its old message is no evidence, and a message of before the revision gives nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const order = await shotOrder();
+    const first = await send(conv.a, ago(2 * DAY), [{ offerRef: await offer(await file(order)) }]);
+    await runCustomOrderChecks(on, T);
+    expect(await orderOf(order)).toMatchObject({ state: "given", givenMessageRef: first });
+    await byPerson(order, { action: "revision", note: "Другой свет" }, later(HOUR));
+    expect((await orderOf(order)).state).toBe("revision");
+    expect(await rejectionsOf(order)).toEqual([{ kind: "given", ref: first }]);
+    // The vault shows a file named with the code only now (Hub saw it late), and the page had sent it before the revision.
+    const lateMedia = String(nextRef++);
+    await q(`insert into creator_raw_media (page_id, platform, media_ref, filename, created_at_platform, source_kind, first_origin,
+               first_observed_at, last_observed_at, content_hash, source_event_id, source_observation_id, source_account_seq)
+             values ($1, 'fansly', $2, $3, null, 'vault_media', 'vault', $4, $4, $5, 1, 1, 1)`,
+    [pageId, lateMedia, `demo_retake_K-${order}_custom.mp4`, later(2 * HOUR).toISOString(), HASH]);
+    await send(conv.a, ago(DAY), [{ offerRef: await offer(lateMedia) }]);
+    await runCustomOrderChecks(on, later(3 * HOUR));
+    expect(await orderOf(order)).toMatchObject({ state: "revision", givenMessageRef: null });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("dismisses an open finding of a tier bought as «кастом не просил», and leaves a tip's finding open", async (context) => {
+    if (!testDb) return context.skip();
+    const finding = async (saleId: number) => Number((await q(
+      `insert into custom_findings (source, ref, page_id, fan_id, amount_mills, quote, happened_at, created_at)
+       values ('sale', $1, $2, $3, 30000, 'for my custom', $4, $4) returning id`,
+      [String(saleId), pageId, fans.tipper, ago(2 * DAY).toISOString()],
+    )).rows[0].id);
+    const tier = await finding((await sale(fans.tipper, "subscription", ago(2 * DAY))).id);
+    const tip = await finding((await sale(fans.tipper, "tip", ago(2 * DAY))).id);
+    await runCustomOrderChecks(on, T);
+    const rows = await q("select id, status, dismiss_reason, resolved_by_user_id, resolved_by_agent_key_id from custom_findings where id = any($1::bigint[]) order by id", [[tier, tip]]);
+    expect(rows.rows.map((row) => [Number(row.id), row.status, row.dismiss_reason, row.resolved_by_user_id, row.resolved_by_agent_key_id])).toEqual([
+      [tier, "dismissed", "not_asked", null, null],
+      [tip, "open", null, null, null],
+    ]);
+    // The tip's finding waits for the check's leader; the tier's is no matter.
+    expect((await findMatterByKey(app.db, `custom.finding:${tip}`))?.state).toBe("open");
+    expect((await findMatterByKey(app.db, `custom.finding:${tier}`))?.state ?? "absent").not.toBe("open");
+    // Idempotent: the next pass finds nothing more to do.
+    await runCustomOrderChecks(on, later(HOUR));
+    expect((await q("select status from custom_findings where id = $1", [tip])).rows[0].status).toBe("open");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

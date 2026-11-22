@@ -22,15 +22,15 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { reconcileKindMatters } from "../matters.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
-import { applyCustomStep, factsOfRow, urgencyOfRow } from "./index.ts";
+import { applyCustomStep, burnsOfRow, factsOfRow, urgencyOfRow } from "./index.ts";
 import { CUSTOM_UNRECORDED_KIND, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
-import { deadlinePassed, dottedDay } from "./rules.ts";
+import { deadlinePassed, dottedDay, issueOf } from "./rules.ts";
 import { customLeaderContext } from "./index.ts";
-import { leaderOwner, phaseLeader } from "./leaders.ts";
+import { CUSTOM_GIVE_MOVE, customMoveOf, leaderOwner, phaseLeader } from "./leaders.ts";
 import { testPageIds } from "../sandbox/realm.ts";
-import { setDefaultDeadlines, settleCustomDeliveries } from "./deliveries.ts";
-import { findingMatters, openFindingsForMatters, reportCardFindings, retireCustomFindingMatters, writeCustomFindings } from "./findings.ts";
-import { customsFactsOn, customTierOverridesNow } from "./switch.ts";
+import { clearAnsweredAsks, setDefaultDeadlines, settleCustomDeliveries } from "./deliveries.ts";
+import { dismissTierFindings, findingMatters, openFindingsForMatters, reportCardFindings, retireCustomFindingMatters, writeCustomFindings } from "./findings.ts";
+import { customsFactsOn } from "./switch.ts";
 
 /**
  * Заказ кастома, the checks (ecosystem plan §6; one writer per kind — this
@@ -69,6 +69,9 @@ import { customsFactsOn, customTierOverridesNow } from "./switch.ts";
  *                            → the check's leader («Проверен» leaves the path, C8: the shooting's matter keeps only the
  *                            model's refusal)
  *   custom.not_at_model_owner  the same 48 h: one line for the owner with the count
+ *   custom.overdue, custom.shot_not_given, custom.give_on_shift  the board's «Горит» (`customOrderBurnsOf`, one rule):
+ *                            more than a full day past the deadline; shot and nothing sent for 12 h while giving it is the
+ *                            move (`customMoveOf`). Never on hold, never «отправлен, фан не открыл»
  *   custom.finding           a custom with no order (findings.ts) open a day → the check's leader of its page
  *   custom.findings_owner    open three days: one line for the owner with the count
  *
@@ -116,6 +119,11 @@ export type LeadOf = MatterOwner | ((pageId: number | null) => MatterOwner);
 const leadFn = (lead: LeadOf) => (typeof lead === "function" ? lead : () => lead);
 /** Who leads a phase of a page's order (leaders.ts, the one rule); absent — `lead` for every phase. */
 export type PhaseLeadOf = (pageId: number | null, phase: "check" | "shoot") => MatterOwner;
+/** Whose move an order is, in what to do (leaders.ts `customMoveOf`, the board's one rule); null — nobody's. */
+export type MoveOf = (order: CustomOrderRow, facts: ReturnType<typeof factsOfRow>) => { what: string } | null;
+
+/** The states «просрочен» is the shooting's matter in: not shot yet. */
+const OVERDUE_STATES: readonly CustomOrderRow["state"][] = ["recorded", "paid", "checked", "at_model", "partly", "revision"];
 
 /** The findings of every order kind from the orders, pure: the rules above. */
 export function orderFindings(input: {
@@ -131,8 +139,15 @@ export function orderFindings(input: {
   testPageIds?: ReadonlySet<number>;
   /** Who leads each phase (leaders.ts); absent — `lead` for every phase. */
   phaseLead?: PhaseLeadOf;
-  /** The switch `customsFacts`: the forwarding timer decides «не у модели» (C3), «Проверен» is off the path (C8). */
+  /**
+   * The switch `customsFacts`: the forwarding timer decides «не у модели» (C3), «Проверен» is off the path (C8), and
+   * «просрочен» and «снят, отдайте фану» are the board's own «Горит» (`customOrderBurnsOf`: past the deadline by more than
+   * a full day; shot, nothing sent for 12 h — never on hold, never sent and not opened) — the latter while giving it is
+   * the move (`moveOf`; a reversed payment is the owner's first).
+   */
   factsOn?: boolean;
+  /** Whose move each order is (with the facts): absent — every burning shot order is the giver's. */
+  moveOf?: MoveOf;
 }): Record<"custom.not_at_model" | "custom.not_at_model_owner" | "custom.checked_not_at_model" | "custom.overdue" | "custom.overdue_owner" | "custom.shot_not_given" | "custom.give_on_shift", Finding[]> {
   const { now } = input;
   const leadOf = leadFn(input.lead);
@@ -153,8 +168,15 @@ export function orderFindings(input: {
     const pageIds = order.pageId === null ? [] : [order.pageId];
     const since = now.getTime() - order.stateAt.getTime();
     const test = order.pageId !== null && input.testPageIds?.has(order.pageId) === true;
-    // With the facts: the board's own timer (one reading, `customForwardTimerOf`), amber from a day after the money.
-    const timer = input.factsOn === true ? urgencyOfRow(order, factsOfRow(order), now).timer : null;
+    // With the facts: the board's own timer (one reading, `customForwardTimerOf`), amber from a day after the money; and
+    // what it burns by (`customOrderBurnsOf`), which «просрочен» and «отдайте фану» follow.
+    const facts = input.factsOn === true ? factsOfRow(order) : null;
+    const timer = facts !== null ? urgencyOfRow(order, facts, now).timer : null;
+    const burns = facts !== null ? new Set(burnsOfRow(order, facts, now).map((burn) => burn.kind)) : null;
+    const overdueNow = OVERDUE_STATES.includes(order.state) && (burns !== null ? burns.has("overdue") : deadlinePassed(order.deadlineOn, now));
+    const giveNow = burns !== null
+      ? burns.has("shot_unsent") && (input.moveOf === undefined || input.moveOf(order, facts!)?.what === CUSTOM_GIVE_MOVE)
+      : order.state === "shot" && since >= NOT_GIVEN_HOURS * HOUR_MS;
     const waitsAtStart = input.factsOn === true
       ? timer !== null
       : (order.state === "paid" || order.state === "recorded") && since >= NOT_AT_MODEL_HOURS * HOUR_MS;
@@ -179,14 +201,14 @@ export function orderFindings(input: {
         object: orderObject(order), pageIds, owner: phaseOf(order.pageId, "shoot"), evidence: { code, state: order.state, since: order.stateAt.toISOString() }, link: orderLink(order),
       });
     }
-    if (["recorded", "paid", "checked", "at_model", "partly", "revision"].includes(order.state) && deadlinePassed(order.deadlineOn, now)) {
+    if (overdueNow) {
       if (order.pageId === null || input.testPageIds?.has(order.pageId) !== true) overdue.push(order);
       out["custom.overdue"].push({
         key: `custom.overdue:${code}`, title: `Кастом ${code} просрочен: срок был ${dottedDay(order.deadlineOn!)}, ${pageOf(order)}`,
         object: orderObject(order), pageIds, owner: phaseOf(order.pageId, "shoot"), evidence: { code, deadlineOn: order.deadlineOn, state: order.state }, link: orderLink(order),
       });
     }
-    if (order.state === "shot" && since >= NOT_GIVEN_HOURS * HOUR_MS) {
+    if (giveNow) {
       const acceptor = order.acceptedByUserId !== null && input.recorders.has(order.acceptedByUserId) ? order.acceptedByUserId : null;
       const evidence = { code, shotAt: order.stateAt.toISOString() };
       const title = `Кастом ${code} снят, отдайте фану: ${pageOf(order)}`;
@@ -299,11 +321,15 @@ export interface CustomChecksTally {
   opened: number;
   closed: number;
   autoClosed: number;
-  /** With the facts: orders given by their files, sent marks changed, purchases linked, default deadlines set, findings written. */
+  /**
+   * With the facts: orders given by their files, sent marks changed, purchases linked, default deadlines set, the fan's
+   * asks answered, findings written.
+   */
   given: number;
   sent: number;
   payments: number;
   deadlines: number;
+  answered: number;
   findings: number;
 }
 
@@ -311,7 +337,7 @@ const OPEN_STATES: readonly CustomOrderRow["state"][] = ["recorded", "paid", "ch
 
 /** One pass of the checks; a kind whose read fails is logged and left as it was. */
 export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger" | "config">, now: Date = new Date()): Promise<CustomChecksTally> {
-  const tally: CustomChecksTally = { opened: 0, closed: 0, autoClosed: 0, given: 0, sent: 0, payments: 0, deadlines: 0, findings: 0 };
+  const tally: CustomChecksTally = { opened: 0, closed: 0, autoClosed: 0, given: 0, sent: 0, payments: 0, deadlines: 0, answered: 0, findings: 0 };
   const add = (done: { opened: number; closed: number }) => {
     tally.opened += done.opened;
     tally.closed += done.closed;
@@ -328,8 +354,11 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
   const recorders = new Set(recorderRows.map((row) => row.userId));
 
   // Marked given and quiet for three days: closed by itself (a revision moves it out of «given» first). From the mark
-  // (`state_at`), not the message's own time: a delivery found late or backfilled keeps a full window.
+  // (`state_at`), not the message's own time: a delivery found late or backfilled keeps a full window. Never while
+  // something stands against it — the agent's sentence of a disagreement, a sale the platform took back: it burns, the
+  // owner's move, until settled.
   for (const order of await listCustomOrdersInStates(app.db, ["given"])) {
+    if (issueOf(order.issue) !== null || factsOfRow(order).paid.value === "conflict") continue;
     if (now.getTime() - order.stateAt.getTime() >= AUTO_CLOSE_HOURS * HOUR_MS) {
       try {
         if (await applyCustomStep(app, { orderId: order.id, step: { action: "close" }, actor: { door: "system" }, viewer: null, now })) tally.autoClosed += 1;
@@ -340,18 +369,25 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
   }
 
   if (factsOn) {
-    // The exact «given» and the sent mark from the orders' files, then the default deadline of the orders with none.
+    // The exact «given» and the sent mark from the orders' files, then the default deadline of the orders with none and
+    // the fan's asks the page answered.
     const live = await listCustomOrdersInStates(app.db, OPEN_STATES);
     const delivered = await settleCustomDeliveries(app, live, now);
     tally.given = delivered.given;
     tally.sent = delivered.sent;
     tally.payments = delivered.payments;
-    tally.deadlines = await setDefaultDeadlines(app, (await listCustomOrdersInStates(app.db, OPEN_STATES)), now);
+    const settled = await listCustomOrdersInStates(app.db, OPEN_STATES);
+    tally.deadlines = await setDefaultDeadlines(app, settled, now);
+    tally.answered = await clearAnsweredAsks(app, settled, now);
   }
 
   const orders = await listCustomOrdersInStates(app.db, OPEN_STATES);
   const tests = await testPageIds(app);
-  const findings = orderFindings({ orders, now, lead, phaseLead, recorders, onShift, testPageIds: tests, factsOn });
+  // Whose move, by the board's one rule: «отдайте фану» only while giving it is the move.
+  const moveOf: MoveOf = (order, facts) => customMoveOf(
+    leaders.facts, order, { paid: facts.paid.value, given: facts.given.value }, order.pageLabel === null ? [] : onShift.get(order.pageLabel) ?? [], leaders.fallback,
+  );
+  const findings = orderFindings({ orders, now, lead, phaseLead, recorders, onShift, testPageIds: tests, factsOn, moveOf });
   for (const kind of Object.keys(findings) as Array<keyof typeof findings>) add(await reconcile(app, kind, findings[kind], now));
 
   // A custom with no order: findings (one home) with the switch on; the two kinds of matter before them with it off.
@@ -360,8 +396,10 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
       const retired = await retireCustomFindingMatters(app, now);
       tally.closed += retired.closed;
       tally.findings += retired.migrated;
-      const written = await writeCustomFindings(app, { overrides: await customTierOverridesNow(app), now });
+      const written = await writeCustomFindings(app, { now });
       tally.findings += written.written;
+      // A tier bought is no custom asked for (the owner, 2026-11-22): its open findings are dismissed, their matters closed.
+      tally.findings += await dismissTierFindings(app, now);
     } catch (error) {
       app.logger.error({ err: error }, "custom checks: the findings could not be written");
     }

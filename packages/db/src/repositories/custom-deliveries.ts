@@ -18,15 +18,21 @@ export interface CustomOrderFileRow {
   orderId: number;
   pageId: number;
   mediaRef: string;
+  /**
+   * Its name, lower-cased: the same file copied to another page of the model (to resell it) keeps it, so the copies of
+   * one file share it (`deliveryVerdictOf`: one of them reaching the fan delivers the file).
+   */
+  name: string;
   /** When it first appeared (the platform's time of the upload or of the album, else when the hub saw it). */
   appearedAt: Date;
 }
 
 /**
  * The finished files of these orders: the vault files on pages of each order's model whose name carries the order's
- * code (`…_K-<id>_…`: the album member's `custom_filename`, the raw file's `filename`) and that first appeared after the
- * order's last revision request — a file of before it is the version sent back. Reads only the pages of the orders'
- * models (the vault rows by their page index); an order of no known page has none.
+ * code (`…_K-<id>_…`: the album member's `custom_filename` in the creator's vault, the raw file's `filename`) and that
+ * first appeared after the order's last revision request — a file of before it is the version sent back. Reads only the
+ * pages of the orders' models (the vault rows by their page index); an order of no known page has none. The one rule of
+ * «the order has its files»: the exact «given» and the agent's door (evidence.ts) read it alike.
  */
 export async function listCustomOrderNamedFiles(db: Database, orderIds: readonly number[]): Promise<CustomOrderFileRow[]> {
   if (orderIds.length === 0) return [];
@@ -40,23 +46,45 @@ export async function listCustomOrderNamedFiles(db: Database, orderIds: readonly
     model_pages as (select distinct o.model_id, mp.id as page_id from o join pages mp on mp.model_id = o.model_id),
     named as (
       select mp.model_id, vm.page_id, vm.media_ref, (regexp_match(vm.custom_filename, '_K-([0-9]{1,15})_'))[1] as code,
-        coalesce(vm.created_at_platform, vm.first_observed_at) as at
+        lower(vm.custom_filename) as name, coalesce(vm.created_at_platform, vm.first_observed_at) as at
       from model_pages mp join creator_vault_album_members vm on vm.page_id = mp.page_id
       where vm.vault_kind = 'creator' and vm.custom_filename ~ '_K-[0-9]{1,15}_'
       union all
       select mp.model_id, r.page_id, r.media_ref, (regexp_match(r.filename, '_K-([0-9]{1,15})_'))[1],
-        coalesce(r.created_at_platform, r.first_observed_at)
+        lower(r.filename), coalesce(r.created_at_platform, r.first_observed_at)
       from model_pages mp join creator_raw_media r on r.page_id = mp.page_id
       where r.filename ~ '_K-[0-9]{1,15}_'
     )
-    select o.order_id, n.page_id, n.media_ref, min(n.at) as appeared_at
+    select o.order_id, n.page_id, n.media_ref, min(n.name) as name, min(n.at) as appeared_at
     from named n join o on o.model_id = n.model_id and n.code::bigint = o.order_id
     group by o.order_id, o.revised_at, n.page_id, n.media_ref
     having o.revised_at is null or min(n.at) > o.revised_at
     order by o.order_id, n.page_id, n.media_ref`);
   return result.rows.map((row) => ({
-    orderId: Number(row.order_id), pageId: Number(row.page_id), mediaRef: String(row.media_ref), appearedAt: date(row.appeared_at)!,
+    orderId: Number(row.order_id), pageId: Number(row.page_id), mediaRef: String(row.media_ref), name: String(row.name), appearedAt: date(row.appeared_at)!,
   }));
+}
+
+/**
+ * From when a page's message counts as delivering each of these orders (customs facts spec §6, §10): the later of its last
+ * revision request (the files the fan had are sent back) and a person's last «не отдан» (they took the delivery off, so a
+ * message of before it — the same file sent twice — never gives it again). Absent — neither: since the order was recorded.
+ */
+export async function listCustomOrderEvidenceFloors(db: Database, orderIds: readonly number[]): Promise<Map<number, Date>> {
+  if (orderIds.length === 0) return new Map();
+  const result = await db.execute<Row>(sql`
+    select x.id, greatest(
+        (select max(coalesce(mm.posted_at, mm.added_at)) from custom_order_messages mm where mm.order_id = x.id and mm.kind = 'revision'),
+        (select max(e.created_at) from object_events e
+          where e.object_type = 'custom_order' and e.object_id = x.id::text and e.event = 'custom_order.ungiven' and e.door not in ('system', 'api'))
+      ) as floor
+    from unnest(${ids(orderIds)}) as x(id)`);
+  const out = new Map<number, Date>();
+  for (const row of result.rows) {
+    const floor = date(row.floor);
+    if (floor !== null) out.set(Number(row.id), floor);
+  }
+  return out;
 }
 
 /** A page's message that carried a file of an order to one of the order's fan's accounts. */
@@ -69,7 +97,10 @@ export interface CustomFileSendRow {
   priced: boolean;
   /** A priced message bought, by the one rule (`ppvBoughtSql`); a free one — false. */
   bought: boolean;
-  /** The purchase sales of it by that fan (Hub's ids; Fansly: by the message's offers), the earliest first. */
+  /**
+   * The purchase sales of it by that fan (Hub's ids; Fansly: by the message's offers — every one of a message with several
+   * priced offers), the earliest first.
+   */
   purchaseIds: number[];
 }
 
@@ -109,7 +140,7 @@ export async function listCustomFileSends(
       array(
         select t.id from transactions t
         where t.platform_account_id = ma.account_id and t.fan_id = th.fan_id and t.canonical_type = 'message_purchase' and t.is_active
-          and t.occurred_at >= ma.occurred_at
+          and t.gross_amount_mills > 0 and t.occurred_at >= ma.occurred_at
           and t.correlation_id in (
             select x.ref from message_media_offers lo cross join lateral (values (lo.media_offer_ref), (lo.bundle_ref)) as x(ref)
             where lo.page_id = ma.account_id and lo.message_ref = ma.message_ref and x.ref is not null)
@@ -164,12 +195,39 @@ export async function clearCustomOrderWaitMarks(db: Database, orderId: number, n
 
 /**
  * The system's deadline of an order that has none (customs facts spec C2): the day given, marked «примерно»
- * (`deadline_default`), and never one of the person's fields. Only while the order still has no deadline; answers
- * whether it was set.
+ * (`deadline_default`), and never one of the person's fields. Only while the order still has no deadline and no person
+ * set it (a person who took the deadline off meant it: `person_fields` holds `deadlineOn`); answers whether it was set.
  */
 export async function setCustomOrderDefaultDeadline(db: Database, orderId: number, deadlineOn: string, now: Date): Promise<boolean> {
   const result = await db.execute(sql`
     update custom_orders set deadline_on = ${deadlineOn}::date, deadline_default = true, updated_at = ${now.toISOString()}::timestamptz
-    where id = ${orderId} and deadline_on is null`);
+    where id = ${orderId} and deadline_on is null and not ('deadlineOn' = any(coalesce(person_fields, '{}'::text[])))`);
   return (result.rowCount ?? 0) > 0;
+}
+
+/**
+ * The page's first message to the fan (any of `fanIds`, the accounts of one person) in his chat on the page after
+ * `after`: the page answered his «where is it» (customs facts spec §7). Null — it did not. By the chat's index.
+ */
+export async function findCustomPageReplyAfter(
+  db: Database,
+  input: { pageId: number; fanIds: readonly number[]; after: Date },
+): Promise<{ messageRef: string; at: Date } | null> {
+  if (input.fanIds.length === 0) return null;
+  const result = await db.execute<Row>(sql`
+    with chats as (
+      select th.platform_conversation_id as conv from page_dm_threads th
+      where th.platform_account_id = ${input.pageId} and th.fan_id = any(${ids(input.fanIds)})
+      union
+      -- An OnlyFans chat is named by the fan's own id.
+      select f.platform_user_id from fans f join pages p on p.id = ${input.pageId}
+      where p.platform = 'onlyfans' and f.platform = 'onlyfans' and f.id = any(${ids(input.fanIds)})
+    )
+    select m.message_ref, m.occurred_at
+    from chats c join message_archive m on m.account_id = ${input.pageId} and m.conversation_ref = c.conv
+    where m.is_sent_by_me and m.deleted_at is null and m.occurred_at > ${input.after.toISOString()}::timestamptz
+    order by m.occurred_at, m.message_ref
+    limit 1`);
+  const row = result.rows[0];
+  return row ? { messageRef: String(row.message_ref), at: date(row.occurred_at)! } : null;
 }

@@ -1976,7 +1976,7 @@ const CUSTOM_MESSAGE_KINDS = ["repost", "confirmation", "note"] as const;
 /** `--state`: the door's own three (open, live, all), or one state of an order (read from all, filtered here). */
 const CUSTOM_LIST_STATES = ["open", "live", "all", ...CUSTOM_ORDER_STATES] as const;
 
-/** A sale as `--sale` names it: Hub's id (`7744520`), or a page and the platform's transaction id (`page-1:tx123`). */
+/** A sale as `--sale` names it: Hub's id (`1234567`), or a page and the platform's transaction id (`page-1:tx123`). */
 function customSale(text: string): { saleRef: string } | { pageLabel: string; transactionRef: string } {
   const value = text.trim();
   if (/^\d{1,19}$/u.test(value)) return { saleRef: value };
@@ -2212,7 +2212,7 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       another: { kind: "boolean", describe: "One more order for a fan who has an open one on the page (else 409 open_orders)" },
       price: { kind: "string", describe: "The agreed total, gross, in dollars: 150 or 149.99 (the card's «Оплата» stays the team's words)" },
       hold: { kind: "string", describe: "Why the order waits on purpose (the fan is unreachable, a prop is awaited): it does not burn" },
-      sale: { kind: "list", describe: "A sale that pays it (repeatable; needs read:money): Hub's id (7744520) or <pageLabel>:<transactionRef>" },
+      sale: { kind: "list", describe: "A sale that pays it (repeatable; needs read:money): Hub's id (1234567) or <pageLabel>:<transactionRef>" },
     },
     hint: customHint,
     run: async (client, values, deps) => {
@@ -2273,7 +2273,7 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       "if-version": { kind: "number", describe: "An edit: refuse it (409 version_changed) if the order changed since this version" },
       price: { kind: "string", describe: "An edit: the agreed total in dollars, or none" },
       hold: { kind: "string", describe: "An edit: why the order waits on purpose, or none (it waits no more)" },
-      sale: { kind: "string", describe: "A payment: Hub's id of the sale (7744520) or <pageLabel>:<transactionRef>" },
+      sale: { kind: "string", describe: "A payment: Hub's id of the sale (1234567) or <pageLabel>:<transactionRef>" },
       page: { kind: "string", describe: "A fan: the page the fan's account is on, of this key's grant" },
       fan: { kind: "string", describe: "A fan: the fan's platform id on that page" },
       on: { kind: "string", describe: "A deadline: the new day, YYYY-MM-DD (Moscow), or none" },
@@ -2522,7 +2522,7 @@ const SALE_SAID_COMMANDS: HubCommand[] = [
       + " knows behaves as the owner's decision of a dispute: the reports holding it get a new version, its open claims and"
       + " questions are decided, its home is computed again. A sale with an active decision needs --supersedes <its №>."
       + " --answers <question №> closes the question it answers. Needs write:shift_reports.",
-    example: "hub sale decide --sale 7744520 --kind owner --share maxim --said-by владелец --said-at 2026-11-12 --sender 700000111 --message https://t.me/c/1/2",
+    example: "hub sale decide --sale 1234567 --kind owner --share maxim --said-by владелец --said-at 2026-11-12 --sender 700000111 --message https://t.me/c/1/2",
     options: {
       ...SALE_SAID_SALE,
       kind: { kind: "string", describe: "owner | split | pot | exclude | off_platform (required)" },
@@ -4426,7 +4426,7 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
       + " shift, the report of that day (Hub's handed-in version, else the ledger's post), the ledger's accrual and payout"
       + " as states. A sale by Hub's id (a bare word) or by --page and --ref (the platform's transaction id). Never a pay"
       + " sum: the ledger is the door for pay. Needs read:team and read:money.",
-    example: "hub sale-chain 7744520",
+    example: "hub sale-chain 1234567",
     options: {
       page: { kind: "string", describe: "With --ref: the sale's page label" },
       ref: { kind: "string", describe: "With --page: the platform's transaction id" },

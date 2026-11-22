@@ -64,13 +64,14 @@ export function useAnyCustomStep() {
 
 /**
  * The board's three numbers (customs facts spec §13), each with its orders: in work (every live order), burning (Hub's
- * `burning`), shot and not given to the fan yet. «Сегодня → команда» shows the same.
+ * `burning` — a given order something still stands against too), shot and not given to the fan yet. «Сегодня →
+ * команда» shows the same.
  */
 export function boardNumbers(orders: readonly CustomBoardOrder[]) {
   const live = orders.filter((order) => LIVE_STATES.includes(order.state));
   return {
     live,
-    burning: live.filter((order) => order.burning),
+    burning: orders.filter((order) => order.burning),
     shotNotGiven: live.filter((order) => order.facts.shot.value === "yes" && order.facts.given.value !== "yes"),
   };
 }
@@ -110,11 +111,18 @@ export function stepFailure(error: unknown): string {
   const status = hubErrorStatus(error);
   const reason = (error as { body?: { reason?: unknown } } | null)?.body?.reason;
   if (status === 409 && reason === "not_suggested") return "Этого уже нет среди подсказок: обновите страницу.";
-  if (status === 409 && reason === "taken") return "Эта карточка уже привязана к другому заказу.";
+  if (status === 409 && reason === "taken") return "Карточка или продажа уже привязана к другому заказу.";
   if (status === 409 && reason === "fan_unknown") return "Такого фана на этой странице Hub не знает.";
   if (status === 409 && reason === "resolved") return "Эту находку уже разобрали: обновите страницу.";
   if (status === 409 && reason === "unknown_event") return "Этого шага уже нет в истории заказа: обновите страницу.";
   if (status === 409 && reason === "other_page") return "Находка с другой страницы.";
+  if (status === 409 && reason === "other_fan") return "Это продажа другого фана: оплатой этого заказа она быть не может.";
+  if (status === 409 && reason === "other_model") return "Это продажа другой модели: оплатой этого заказа она быть не может.";
+  if (status === 409 && reason === "order_no_fan") return "У заказа не подтверждён фан: продажу не с чем сверить. Сначала подтвердите фана.";
+  if (status === 409 && reason === "order_no_page") return "У заказа не определена страница: продажу не с чем сверить.";
+  if (status === 409 && reason === "reversed") return "Площадка вернула эту продажу: оплатой она не считается.";
+  if (status === 409 && reason === "wrong_kind") return "Эта продажа не может оплатить кастом.";
+  if (status === 409 && reason === "not_reopenable") return "Эту находку уже разобрал человек: вернуть можно только отклонённую агентом.";
   if (status === 409) return "Этот шаг сейчас недоступен: заказ уже изменился. Обновите страницу.";
   if (status === 404) return "Заказ не найден.";
   if (status === null || status >= 500) return "Hub не ответил: неизвестно, сохранилось ли.";
@@ -201,6 +209,7 @@ export const EVENT_WORDS: Record<string, string> = {
   "custom_order.issue_cleared": "Расхождение снято",
   "custom_order.paid_word": "Слово владельца об оплате",
   "custom_order.fan_asked": "Фан спросил, где заказ",
+  "custom_order.fan_asked_cleared": "Фану ответили",
   "custom_order.sent": "Отправлен фану, не открыт",
 };
 

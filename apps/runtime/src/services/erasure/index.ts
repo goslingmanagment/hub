@@ -1923,12 +1923,52 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     and (btrim(ledger_ref ->> 'fanRef') in (${ref}, ${`u${ref}`})
       or lower(btrim(ledger_ref ->> 'fanRef')) in (select lower(username) from fans where id = ${fanId} and username is not null)))`;
   const ofFanSalePred = sql`(transaction_id in (${fanSales}) or ${ledgerFanPred})`;
-  // What a matter or an event is about: the fan's sale, a claim or a decision on it, his custom order, or he himself.
+  // The fan's custom orders (0399, package I): his own, and an order no fan was matched for whose buyer's string names
+  // him (`buyerNamesFan`) on one of the platform's pages or on no known page: by the platform's number — his alone by
+  // itself — or by his login, and then only while no other fan of the order's page (of the platform's pages, for an
+  // order of no known page) carries that login. A login that is two fans' leaves the order as it is — erasing one of
+  // them must not blank the other's order — and the plan counts it (`customOrdersLeftAmbiguous`). A name («Том», or
+  // «Alex» where the fan is `alex`) names nobody and stays. Read before every target here: the matters about his orders
+  // follow them as the orders do.
+  const fanUsername = scope.fanId === null ? null
+    : (await app.db.execute<{ username: string | null }>(sql`select username from fans where id = ${scope.fanId}`)).rows[0]?.username ?? null;
+  const buyerRows = await app.db.execute<{ id: string; buyer: string; page_id: string | null }>(sql`
+    select id::text as id, buyer, page_id::text as page_id from custom_orders
+    where fan_id is null and buyer is not null and (page_id is null or page_id in ${scope.pageIds})`);
+  const platform = scope.input.scopeType === "fan" ? scope.input.platform : "";
+  const byBuyer: number[] = [];
+  let leftAmbiguous = 0;
+  for (const row of buyerRows.rows) {
+    const named = buyerNamesFan(row.buyer, { platform, platformUserId: ref, username: fanUsername });
+    if (named === null) continue;
+    if (named === "login") {
+      const orderPages = row.page_id === null ? scope.pageIds : [Number(row.page_id)];
+      const others = await countOf(app, sql`
+        select count(*)::text as n from fans f
+        where f.platform = ${platform} and lower(f.username) = lower(${fanUsername}) and f.id <> ${fanId}
+          and (exists (select 1 from page_fans pf where pf.fan_id = f.id and pf.platform_account_id in ${orderPages})
+            or exists (select 1 from page_dm_threads th where th.fan_id = f.id and th.platform_account_id in ${orderPages}))`);
+      if (others > 0) {
+        leftAmbiguous += 1;
+        continue;
+      }
+    }
+    byBuyer.push(Number(row.id));
+  }
+  scope.customOrdersLeftAmbiguous = leftAmbiguous;
+  const customOrderPred = byBuyer.length === 0 ? sql`fan_id = ${fanId}` : sql`(fan_id = ${fanId} or id in ${byBuyer})`;
+  // Traces of a custom with no order (0436) about the fan: his own (`fan_id`), and a finding of one of his sales (a sale's,
+  // a shift report line's: both name it by Hub's id).
+  const customFindingOfFanPred = sql`(fan_id = ${fanId}
+    or (source in ('sale', 'shift_report') and ref in (select id::text from transactions where ${txnPred})))`;
+  // What a matter or an event is about: the fan's sale, a claim or a decision on it, his custom order (by his account or
+  // the buyer's string), a trace of his custom with no order, or he himself.
   const fanObjectPred = sql`(
     (object_type = 'transaction' and object_id in (select id::text from transactions where ${txnPred}))
     or (object_type = 'sale_claim' and object_id in (select id::text from sale_claims where ${ofFanSalePred}))
     or (object_type = 'sale_owner_decision' and object_id in (select id::text from sale_owner_decisions where ${ofFanSalePred}))
-    or (object_type = 'custom_order' and object_id in (select id::text from custom_orders where fan_id = ${fanId}))
+    or (object_type = 'custom_order' and object_id in (select id::text from custom_orders where ${customOrderPred}))
+    or (object_type = 'custom_finding' and object_id in (select id::text from custom_findings where ${customFindingOfFanPred}))
     or (object_type = 'fan' and object_id in (${String(fanId)}, ${ref})))`;
   const workTextKeys = textArray(WORK_TEXT_KEYS);
 
@@ -2096,40 +2136,8 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // for, the name said in the video, notes, references: CUSTOM_CARD_FAN_TEXTS), and the words of its marks (0436): the
   // hold's reason and the issue's sentence become «фан стёрт», the owner's note on the payment goes — the order stays
   // on hold, its issue stands, its word holds. The price, the length, the face and the parts stay. The order shows
-  // «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK
-  // would only null the link). An order no fan was matched for is his when its buyer's string names him
-  // (`buyerNamesFan`) on one of the platform's pages or on no known page: by the platform's number — his alone by
-  // itself — or by his login, and then only while no other fan of the order's page (of the platform's pages, for
-  // an order of no known page) carries that login. A login that is two fans' leaves the order as it is — erasing
-  // one of them must not blank the other's order — and the plan counts it (`customOrdersLeftAmbiguous`). A name
-  // («Том», or «Alex» where the fan is `alex`) names nobody and stays.
-  const fanUsername = scope.fanId === null ? null
-    : (await app.db.execute<{ username: string | null }>(sql`select username from fans where id = ${scope.fanId}`)).rows[0]?.username ?? null;
-  const buyerRows = await app.db.execute<{ id: string; buyer: string; page_id: string | null }>(sql`
-    select id::text as id, buyer, page_id::text as page_id from custom_orders
-    where fan_id is null and buyer is not null and (page_id is null or page_id in ${scope.pageIds})`);
-  const platform = scope.input.scopeType === "fan" ? scope.input.platform : "";
-  const byBuyer: number[] = [];
-  let leftAmbiguous = 0;
-  for (const row of buyerRows.rows) {
-    const named = buyerNamesFan(row.buyer, { platform, platformUserId: ref, username: fanUsername });
-    if (named === null) continue;
-    if (named === "login") {
-      const orderPages = row.page_id === null ? scope.pageIds : [Number(row.page_id)];
-      const others = await countOf(app, sql`
-        select count(*)::text as n from fans f
-        where f.platform = ${platform} and lower(f.username) = lower(${fanUsername}) and f.id <> ${fanId}
-          and (exists (select 1 from page_fans pf where pf.fan_id = f.id and pf.platform_account_id in ${orderPages})
-            or exists (select 1 from page_dm_threads th where th.fan_id = f.id and th.platform_account_id in ${orderPages}))`);
-      if (others > 0) {
-        leftAmbiguous += 1;
-        continue;
-      }
-    }
-    byBuyer.push(Number(row.id));
-  }
-  scope.customOrdersLeftAmbiguous = leftAmbiguous;
-  const customOrderPred = byBuyer.length === 0 ? sql`fan_id = ${fanId}` : sql`(fan_id = ${fanId} or id in ${byBuyer})`;
+  // «фан стёрт» from then on (`fan_erased_at`). Before the fans row goes (its FK would only null the link). His orders
+  // are `customOrderPred` (above): his own, and the ones whose buyer's string names him alone.
   // Its messages and its history keep the facts — which message did what and when, the states, the times — and
   // lose the words: an excerpt quotes the chat, an author is a Telegram name, a revision's request, a refusal's
   // reason and a note are free text about the fan, and the history keeps copies of them — with the marks' words of
@@ -2171,11 +2179,11 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
       where ${customOrderPred}`),
   });
 
-  // Traces of a custom with no order (0436) about the fan: his own (`fan_id`), and a finding of one of his sales. The
-  // finding stays — its source, status, sums, times and order —, the fan, the quote and the reference into his chat go
-  // (`erased:<id>` keeps `(source, ref)` unique). Before the fans row goes (its FK would only null the link) and before
-  // the transactions lose him.
-  const customFindingPred = sql`(fan_id = ${fanId} or (source = 'sale' and ref in (select id::text from transactions where ${txnPred})))
+  // Traces of a custom with no order (0436) about the fan: his own (`fan_id`), and a finding of one of his sales (a sale's,
+  // a shift report line's). The finding stays — its source, status, sums, times and order —, the fan, the quote and the
+  // reference into his chat go (`erased:<id>` keeps `(source, ref)` unique). Before the fans row goes (its FK would only
+  // null the link) and before the transactions lose him.
+  const customFindingPred = sql`${customFindingOfFanPred}
     and (fan_id is not null or quote is not null or (source = 'fan_chat' and ref not like 'erased:%'))`;
   targets.push({
     plane: "hot",
