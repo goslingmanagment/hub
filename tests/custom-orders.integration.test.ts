@@ -169,14 +169,17 @@ describe("custom orders: who sees and moves what", () => {
       pageLabel: "lora-1", fan: "https://fansly.com/fan_one/posts", acceptedBy: "alice", card, telegramRef: "https://t.me/c/2600000002/6/200", another: true,
     });
     expect(created.statusCode, created.body).toBe(200);
-    const order = agentCustomOrderResponseSchema.parse(created.json()).order;
-    expect(order).toMatchObject({ state: "recorded", acceptedBy: "alice", fan: { username: "fan_one" }, telegramRefs: ["tg:2600000002/6/200"] });
+    const createdAnswer = agentCustomOrderResponseSchema.parse(created.json());
+    const order = createdAnswer.order;
+    // alice's login is no person working lora-1 in the registry: she is nobody's taker there, and the create says so.
+    expect(order).toMatchObject({ state: "recorded", acceptedBy: null, fan: { username: "fan_one" }, telegramRefs: ["tg:2600000002/6/200"] });
+    expect(createdAnswer.taker).toMatchObject({ result: "unchanged", reason: "taker_unknown" });
     // The same card again is the same order.
     const again = agentCustomOrderResponseSchema.parse((await agent("/api/v1/agent/custom-orders", { pageLabel: "lora-1", card, telegramRef: "tg:2600000002/6/200" })).json());
     expect(again).toMatchObject({ outcome: "unchanged", order: { id: order.id } });
 
     // A person edits the price; the agent's edit of it is refused, of another field goes through; a stale version is refused.
-    expect((await act("alice", order.code, { action: "edit", card: { ...card, price: "200$ чаевые" } })).statusCode).toBe(200);
+    expect((await act("boss", order.code, { action: "edit", card: { ...card, price: "200$ чаевые" } })).statusCode).toBe(200);
     const overwrite = await agent(`/api/v1/agent/custom-orders/${order.code}`, { action: "edit", card: { price: "150$" } });
     expect(overwrite.statusCode).toBe(409);
     expect(overwrite.json()).toMatchObject({ reason: "edited_by_person" });
@@ -658,10 +661,16 @@ describe("custom orders: who sees and moves what", () => {
       server!.inject({ method: "POST", url, headers: { authorization: `Bearer ${value}`, "x-client-version": "chat-extension/3.31.0" }, payload });
     const alice = await token("alice");
     const carol = await token("carol");
+    // alice is a chatter of lora-1 in the registry now: her own record names her its taker («принял»).
+    const person = (await testDb.pool.query<{ id: string }>(
+      "insert into people (code, display_name, role, state) values ('alice', 'Alice', 'chatter', 'working') returning id",
+    )).rows[0]!.id;
+    await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [users.alice, person]);
+    await testDb.pool.query("insert into person_working_pages (person_id, page_id, position) values ($1, $2, 0)", [person, pages["lora-1"]]);
     const recorded = await send(alice, "/api/v1/custom-orders", { pageLabel: "lora-1", fan: "7400000001", card: { task: "Видео 5 минут", price: "80$" } });
     expect(recorded.statusCode, recorded.body).toBe(200);
     const order = customOrderDetailResponseSchema.parse(recorded.json()).order;
-    expect(order).toMatchObject({ state: "recorded", origin: "extension", pageLabel: "lora-1" });
+    expect(order).toMatchObject({ state: "recorded", origin: "extension", pageLabel: "lora-1", acceptedBy: "alice" });
     // «Кастомы» in the frame: the board and the order through the token, as a chatter of the page reads them.
     const read = (value: string, url: string) =>
       server!.inject({ method: "GET", url, headers: { authorization: `Bearer ${value}`, "x-client-version": "chat-extension/3.31.0" } });

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { mayTakeStep, type CustomViewer } from "@agency_hub_core/contracts";
 import type { TeamFacts } from "@agency_hub_core/db";
 
-import { boardLeads, customStepLeader, ledPhasesOf, phaseLeader, shootLeaders, type CustomLeader } from "../apps/runtime/src/services/custom-orders/leaders.ts";
+import {
+  boardLeads, customMoveOf, customStepLeader, giverOf, ledPhasesOf, phaseLeader, shootLeaders, type CustomLeader,
+} from "../apps/runtime/src/services/custom-orders/leaders.ts";
 
 /**
  * Who leads each step of a custom order (products plan §4.5, package C3): the check — the team lead, else the customs
@@ -175,5 +177,64 @@ describe("the chat side's writes go by the pages the person works, not the team'
     expect(mayTakeStep(viewer, order(11), "given")).toBe(true);
     // The chatter who took the order gives it wherever it is.
     expect(mayTakeStep(viewer, order(21, 104), "given")).toBe(true);
+  });
+});
+
+// K-113 (2026-11-22): the order was shown as the customs lead's to give although a chatter took it — the taker was empty,
+// and three readers answered «who gives» three ways. One rule now (the owner's decision): the taker answers for it; with
+// none, the check's leader names the taker; whoever is on shift may give it too and is told apart.
+describe("who gives a shot order", () => {
+  const shot = (acceptedByUserId: number | null, extra: { issue?: object | null } = {}) => ({
+    pageId: 11, state: "shot" as const, acceptedByUserId, holdReason: null, payments: 1, paidWord: null, ...extra,
+  });
+  const values = { paid: "yes" as const, given: "wait" as const };
+
+  it("the taker while their login lives and they work the page; else the check's leader, who names the taker", () => {
+    expect(giverOf(FACTS, shot(104), null)).toMatchObject({ kind: "taker", who: { userId: 104 }, what: "посмотреть ролик целиком и отдать фану" });
+    // Nobody named — the check's leader, not whoever is on shift.
+    expect(giverOf(FACTS, shot(null), null)).toMatchObject({ kind: "lead", who: { userId: 101 }, what: "указать, кто принял" });
+    // A taker who no longer works the order's page, or whose login is gone, gives nothing: the lead names another.
+    expect(giverOf({ ...FACTS, working: FACTS.working.filter((row) => row.personId !== 4) }, shot(104), null)).toMatchObject({ kind: "lead" });
+    expect(giverOf({ ...FACTS, logins: FACTS.logins.filter((login) => login.userId !== 104) }, shot(104), null)).toMatchObject({ kind: "lead" });
+    // «У кого сейчас» says the same.
+    expect(customStepLeader(FACTS, shot(null), null)).toMatchObject({ phase: "give", leader: { userId: 101 } });
+  });
+
+  it("whose move is the giver's; whoever else is on shift is named beside, never instead", () => {
+    const move = customMoveOf(FACTS, shot(104), values, [101, 104], null);
+    expect(move).toMatchObject({ who: { userId: 104 }, giver: "taker", onShift: { userId: 101, name: "P1" } });
+    // The taker on shift themselves: nobody else to name.
+    expect(customMoveOf(FACTS, shot(104), values, [104], null)?.onShift).toBeUndefined();
+    expect(customMoveOf(FACTS, shot(null), values, [], null)).toMatchObject({ who: { userId: 101 }, giver: "lead" });
+  });
+
+  it("an issue on an open order is the owner's first: nobody is told to give it", () => {
+    const move = customMoveOf(FACTS, shot(104, { issue: { text: "другая карточка" } }), values, [104], null);
+    expect(move).toMatchObject({ who: { kind: "owner" }, what: "разобраться с расхождением" });
+    expect(move?.giver).toBeUndefined();
+  });
+});
+
+describe("«Принял» and the customs lead's steps", () => {
+  const viewer = (userId: number, extra: Partial<CustomViewer> = {}): CustomViewer => ({
+    userId, role: "chatter", pageIds: [11, 12, 21, 31, 41], lead: false, leads: ledPhasesOf(FACTS, userId, false), ...extra,
+  });
+  const order = (state: "recorded" | "shot" | "given" | "closed") => ({ pageId: 11, state, acceptedByUserId: 104, holdReason: null, issue: null, fanAskedAt: null });
+
+  it("is the owner's and the check's leader's, in every state; never the taker's or a chatter's", () => {
+    for (const state of ["recorded", "shot", "given", "closed"] as const) {
+      expect(mayTakeStep(viewer(1, { role: "owner" }), order(state), "accepted_by")).toBe(true);
+      expect(mayTakeStep(viewer(101), order(state), "accepted_by")).toBe(true);
+      expect(mayTakeStep(viewer(104), order(state), "accepted_by")).toBe(false);
+    }
+  });
+
+  it("the customs lead (the person right) keeps the order's steps on a model that has its own team lead", () => {
+    const customsLead = viewer(102, { lead: true });
+    expect(mayTakeStep(customsLead, order("shot"), "cancel")).toBe(true);
+    expect(mayTakeStep(customsLead, order("shot"), "deadline")).toBe(true);
+    // «Проверен» and «Принял» stay the check's leader's: the model's team lead.
+    expect(mayTakeStep(customsLead, order("recorded"), "checked")).toBe(false);
+    expect(mayTakeStep(viewer(102), order("shot"), "cancel")).toBe(false);
   });
 });

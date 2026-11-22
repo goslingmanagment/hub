@@ -255,7 +255,8 @@ export async function setCustomOrderDefaultDeadline(db: Database, orderId: numbe
 
 /**
  * The page's first message to the fan (any of `fanIds`, the accounts of one person) in his chat on the page after
- * `after`: the page answered his «where is it» (customs facts spec §7). Null — it did not. By the chat's index.
+ * `after`: the page answered his «where is it» (customs facts spec §7). A mass message answers nobody. Null — it did not.
+ * By the chat's index.
  */
 export async function findCustomPageReplyAfter(
   db: Database,
@@ -273,7 +274,8 @@ export async function findCustomPageReplyAfter(
     )
     select m.message_ref, m.occurred_at
     from chats c join message_archive m on m.account_id = ${input.pageId} and m.conversation_ref = c.conv
-    where m.is_sent_by_me and m.deleted_at is null and m.occurred_at > ${input.after.toISOString()}::timestamptz
+    where m.is_sent_by_me and m.deleted_at is null and coalesce(m.message_type, 1) <> 2
+      and m.occurred_at > ${input.after.toISOString()}::timestamptz
     order by m.occurred_at, m.message_ref
     limit 1`);
   const row = result.rows[0];

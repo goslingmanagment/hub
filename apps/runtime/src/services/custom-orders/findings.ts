@@ -17,6 +17,7 @@ import {
   findPageSummaryByLabel,
   insertCustomCardFindings,
   insertCustomFinding,
+  insertCustomFindingEvent,
   insertCustomFindingsOfSales,
   insertCustomSaleFindings,
   insertShiftReportCustomFindings,
@@ -43,7 +44,7 @@ import { ConflictError, NotFoundError } from "../errors.ts";
 import { isTestAgent, testPageIds } from "../sandbox/realm.ts";
 import type { AgentCustomScope } from "./agent.ts";
 import { checkPersonSale } from "./evidence.ts";
-import { applyCustomStep, customViewerOf, recordCustomOrder, resolveFanOnPage } from "./index.ts";
+import { applyCustomStep, customViewerOf, recordCustomOrder, recordTakerOf, resolveFanOnPage, type CustomActor } from "./index.ts";
 import { CUSTOM_UNRECORDED_KIND, unrecordedSaleOf } from "./readers.ts";
 import { mayTakeStep, seesOrder, type CustomViewer } from "./rules.ts";
 
@@ -212,35 +213,63 @@ export async function actOnCustomFinding(
 ): Promise<{ finding: CustomFinding }> {
   requireSessionUser(principal);
   const human = principal as HumanAuthPrincipal;
-  const viewer = await customViewerOf(app, human);
+  // A narrow session (from the extension, no password) resolves nothing (`isNarrowPrincipal`).
+  if (isNarrowPrincipal(human)) throw new NotFoundError("The finding was not found");
+  return actOnCustomFindingAs(app, { person: human, findingId: input.findingId, body: input.body, now, actor: { door: "workboard", userId: human.user.id } });
+}
+
+/**
+ * One answer to a finding as `person`, by the board's own rules (`mayResolveFinding`): the board's door, and an agent on
+ * the person's word (agent.ts: the request kept in the finding's history; `pageIds`/`noPage` — the key's pages, else the
+ * finding reads as not found). Every answer leaves its line in the finding's history (`custom_finding.*`).
+ */
+export async function actOnCustomFindingAs(
+  app: FindingsApp,
+  input: {
+    person: HumanAuthPrincipal; findingId: string; body: CustomFindingActionBody; now: Date; actor: CustomActor;
+    requestRef?: string; pageIds?: readonly number[]; noPage?: boolean;
+  },
+): Promise<{ finding: CustomFinding }> {
+  const { now, actor } = input;
+  const viewer = await customViewerOf(app, input.person);
   const id = Number(input.findingId);
   const seen = await findCustomFinding(app.db, id);
-  // A narrow session (from the extension, no password) resolves nothing (`isNarrowPrincipal`).
-  if (seen === null || isNarrowPrincipal(human) || !mayResolveFinding(viewer, seen)) throw new NotFoundError("The finding was not found");
+  const ofKey = (finding: CustomFindingRow) => input.pageIds === undefined
+    || (finding.pageId === null ? input.noPage === true : input.pageIds.includes(finding.pageId));
+  if (seen === null || !ofKey(seen) || !mayResolveFinding(viewer, seen)) throw new NotFoundError("The finding was not found");
   const body = input.body;
   if (body.action === "reopen" ? !byAgentDismissed(seen) : seen.status !== "open") throw body.action === "reopen" ? notReopenable() : resolvedAlready();
-  const userId = human.user.id;
-  const actor = { door: "workboard" as const, userId };
+  const userId = input.person.user.id;
+  const requestRef = input.requestRef === undefined ? {} : { requestRef: input.requestRef };
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     const finding = (await findCustomFinding(db, id, { lock: true }))!;
+    /** The answer's line in the finding's history: who, through which door, on whose word. */
+    const event = (name: string, changes: Record<string, unknown>) => insertCustomFindingEvent(db, {
+      findingId: id, event: `custom_finding.${name}`, door: actor.door === "api" ? "api" : "workboard", userId: actor.userId ?? null,
+      agentKeyId: actor.agentKeyId ?? null, onBehalfOfUserId: actor.onBehalfOfUserId ?? null, changes: { ...changes, ...requestRef }, at: now,
+    });
     if (body.action === "reopen") {
       if (!byAgentDismissed(finding) || !(await reopenCustomFinding(db, { id }))) throw notReopenable();
+      await event("reopened", {});
       return;
     }
     if (finding.status !== "open") throw resolvedAlready();
     const sale = saleOf(finding);
     const card = cardOf(finding);
+    /** A step an agent takes on the person's word is the person's, the request kept (as the board's own step). */
+    const stepWord = input.requestRef === undefined ? {} : { byPerson: true, requestRef: input.requestRef };
     /** The finding's sale paid to the order, checked first; a person's own step (it takes a sale off no other order). */
     const pay = async (orderId: number) => {
       if (sale === null) return;
       const order = (await findCustomOrder(db, orderId))!;
       if ((await checkPersonSale(db, order, sale)).already) return;
-      await applyCustomStep({ db }, { orderId, step: { action: "payment", transactionId: sale }, actor, viewer: null, now });
+      await applyCustomStep({ db }, { orderId, step: { action: "payment", transactionId: sale }, actor, viewer: null, now, ...stepWord });
     };
     switch (body.action) {
       case "dismiss":
         await resolveCustomFinding(db, { id, status: "dismissed", orderId: null, dismissReason: body.reason, userId, at: now });
+        await event("dismissed", { reason: body.reason });
         return;
       case "record": {
         // The board's «Записать кастом», filled from the finding: its page and fan, else the ones the person gives.
@@ -267,14 +296,18 @@ export async function actOnCustomFinding(
         const telegramRef = body.telegramRef === undefined ? null : parseTelegramRef(body.telegramRef);
         // The card the finding is, and the one the person gives: the order's cards (the reader finds them by them).
         const telegramRefs = [...new Set([card, telegramRef].filter((ref): ref is string => ref !== null))];
+        // «Принял»: the one chosen, else the finding's sale's one home, else the person when a chatter of the page; else nobody.
+        const taker = await recordTakerOf(db, { pageId, acceptedBy: body.acceptedBy, transactionId: sale, userId });
         const orderId = await recordCustomOrder({ db }, {
-          pageId, fanId, buyer, conversationRef, card: body.card, deadlineOn: null, acceptedByUserId: userId, origin: "workboard",
+          pageId, fanId, buyer, conversationRef, card: body.card, deadlineOn: null, acceptedByUserId: taker?.taker.userId ?? null, origin: "workboard",
+          taker: taker === null ? null : { source: taker.source, ref: taker.ref, name: taker.taker.name, person: taker.person },
           telegramRefs, actor, now,
           ...(body.priceMills === undefined ? {} : { priceMills: body.priceMills, personFields: ["priceMills"] }),
         });
         // A sale that does not hold for the new order refuses the record whole: nothing of it is kept.
         await pay(orderId);
         await resolveCustomFinding(db, { id, status: "recorded", orderId, dismissReason: null, userId, at: now });
+        await event("recorded", { code: customOrderCode(orderId) });
         return;
       }
       case "link": {
@@ -291,8 +324,9 @@ export async function actOnCustomFinding(
         if (sale === null) await requireOfOrder(db, finding, order);
         // A sale's finding pays the order it is linked to — only one of its fan and its model; a card's is its card.
         await pay(order.id);
-        if (card !== null) await applyCustomStep({ db }, { orderId: order.id, step: { action: "card", telegramRef: card }, actor, viewer: null, now });
+        if (card !== null) await applyCustomStep({ db }, { orderId: order.id, step: { action: "card", telegramRef: card }, actor, viewer: null, now, ...stepWord });
         await resolveCustomFinding(db, { id, status: "linked", orderId: order.id, dismissReason: null, userId, at: now });
+        await event("linked", { code: customOrderCode(order.id) });
         return;
       }
     }

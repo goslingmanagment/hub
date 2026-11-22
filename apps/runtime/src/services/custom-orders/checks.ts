@@ -1,4 +1,4 @@
-import { customOrderCode, type CustomOrderCheckKind } from "@agency_hub_core/contracts";
+import { customOrderCode, type CustomGiverKind, type CustomOrderCheckKind } from "@agency_hub_core/contracts";
 import {
   closeMatter,
   listClosedMattersOfKinds,
@@ -26,7 +26,7 @@ import { applyCustomStep, burnsOfRow, factsOfRow, urgencyOfRow } from "./index.t
 import { CUSTOM_UNRECORDED_KIND, customsLeadOwner, unrecordedKey, unrecordedSaleOf } from "./readers.ts";
 import { deadlinePassed, dottedDay, issueOf } from "./rules.ts";
 import { customLeaderContext } from "./index.ts";
-import { CUSTOM_GIVE_MOVE, customMoveOf, leaderOwner, phaseLeader } from "./leaders.ts";
+import { customMoveOf, giverOf, leaderOwner, phaseLeader } from "./leaders.ts";
 import { testPageIds } from "../sandbox/realm.ts";
 import { clearAnsweredAsks, setDefaultDeadlines, settleCustomDeliveries } from "./deliveries.ts";
 import { findingMatters, openFindingsForMatters, reportCardFindings, retireCustomFindingMatters, writeCustomFindings } from "./findings.ts";
@@ -44,8 +44,10 @@ import { customsFactsOn } from "./switch.ts";
  *                            lead, else the owner)
  *   custom.overdue           the deadline's day is over and it is not shot → the shooting's leader;
  *   custom.overdue_owner     the same day one line for the owner, with the count
- *   custom.shot_not_given    shot and not given for 12 h → the chatter who accepted it
- *   custom.give_on_shift     … and the person on shift on its page
+ *   custom.shot_not_given    shot and not given for 12 h → its giver (leaders.ts `giverOf`): the order's taker (a living
+ *                            login working on its page): watch the video whole and give it; with none, the check's
+ *                            leader: name the taker. Whoever is on shift may give it too and is not obliged to: the
+ *                            retired `custom.give_on_shift` is no longer opened, and its open ones close here
  *   custom.unrecorded        a tier that includes a custom, or a tip whose note says so, with no order a day
  *                            later → the chatter who led the chat when they record customs, else the lead. Only
  *                            what happens to the sale closes it: an order (resolved), «не кастом» (withdrawn),
@@ -54,9 +56,9 @@ import { customsFactsOn } from "./switch.ts";
  *                            closed as cause_gone whose sale is there after all, still such a sale, opens again
  *   custom.card_without_order a Telegram card no order has (the reader of the models' groups reports it) → the lead
  *
- * A chatter gets a matter only with the right «записывает кастомы в системе» (records_customs, off by default):
- * the obligation is a background check, never a blocker, and it starts per person; until then the lead gets the
- * chatter's findings, so every finding waits for someone. Without a lead the lead's
+ * A chatter gets an unrecorded sale's matter only with the right «записывает кастомы в системе» (records_customs, off by
+ * default): the obligation is a background check, never a blocker, and it starts per person; until then the lead gets
+ * the chatter's findings, so every finding waits for someone. Without a lead the lead's
  * matters are the team leads' role's. The pass also closes an order 72 hours after it was marked given with no revision
  * (from the mark, not the message's time: a delivery found late keeps a full window for undo and the fan's complaint):
  * the system never closes an order that was not given. Database only.
@@ -69,9 +71,10 @@ import { customsFactsOn } from "./switch.ts";
  *                            → the check's leader («Проверен» leaves the path, C8: the shooting's matter keeps only the
  *                            model's refusal)
  *   custom.not_at_model_owner  the same 48 h: one line for the owner with the count
- *   custom.overdue, custom.shot_not_given, custom.give_on_shift  the board's «Горит» (`customOrderBurnsOf`, one rule):
- *                            more than a full day past the deadline; shot and nothing sent for 12 h while giving it is the
- *                            move (`customMoveOf`). Never on hold, never «отправлен, фан не открыл»
+ *   custom.overdue, custom.shot_not_given  the board's «Горит» (`customOrderBurnsOf`, one rule): more than a full day
+ *                            past the deadline; shot and nothing sent for 12 h while giving it is the move (`customMoveOf`:
+ *                            not while an issue or a payment in conflict is the owner's). Never on hold, never «отправлен,
+ *                            фан не открыл»
  *   custom.finding           a custom with no order (findings.ts) open a day → the check's leader of its page
  *   custom.findings_owner    open three days: one line for the owner with the count
  *
@@ -119,8 +122,10 @@ export type LeadOf = MatterOwner | ((pageId: number | null) => MatterOwner);
 const leadFn = (lead: LeadOf) => (typeof lead === "function" ? lead : () => lead);
 /** Who leads a phase of a page's order (leaders.ts, the one rule); absent — `lead` for every phase. */
 export type PhaseLeadOf = (pageId: number | null, phase: "check" | "shoot") => MatterOwner;
-/** Whose move an order is, in what to do (leaders.ts `customMoveOf`, the board's one rule); null — nobody's. */
-export type MoveOf = (order: CustomOrderRow, facts: ReturnType<typeof factsOfRow>) => { what: string } | null;
+/** Whose move an order is (leaders.ts `customMoveOf`, the board's one rule): a shot order's names its giver; null — nobody's. */
+export type MoveOf = (order: CustomOrderRow, facts: ReturnType<typeof factsOfRow>) => { what: string; giver?: CustomGiverKind } | null;
+/** Who gives a shot order (leaders.ts `giverOf`): the taker, else the check's leader — as a matter's owner. */
+export type GiverOf = (order: CustomOrderRow) => { owner: MatterOwner; kind: CustomGiverKind };
 
 /** The states «просрочен» is the shooting's matter in: not shot yet. */
 const OVERDUE_STATES: readonly CustomOrderRow["state"][] = ["recorded", "paid", "checked", "at_model", "partly", "revision"];
@@ -131,10 +136,8 @@ export function orderFindings(input: {
   now: Date;
   /** Who leads customs: one owner, or by the page's model (`customsLeadOwner`, per model since 0415). */
   lead: LeadOf;
-  /** The people with records_customs. */
-  recorders: ReadonlySet<number>;
-  /** Who is on a shift now, by page label. */
-  onShift: ReadonlyMap<string, readonly number[]>;
+  /** Who gives a shot order (`giverOf`); absent — its taker as stored, else the check's leader. */
+  giverOf?: GiverOf;
   /** The test pages (sandbox/realm.ts): their orders get their own matters (the test team's), never the owner's count. */
   testPageIds?: ReadonlySet<number>;
   /** Who leads each phase (leaders.ts); absent — `lead` for every phase. */
@@ -152,6 +155,9 @@ export function orderFindings(input: {
   const { now } = input;
   const leadOf = leadFn(input.lead);
   const phaseOf = input.phaseLead ?? ((pageId: number | null) => leadOf(pageId));
+  const giverOf: GiverOf = input.giverOf ?? ((order) => (order.acceptedByUserId !== null
+    ? { owner: { userId: order.acceptedByUserId }, kind: "taker" }
+    : { owner: phaseOf(order.pageId, "check"), kind: "lead" }));
   const out = {
     "custom.not_at_model": [] as Finding[],
     "custom.not_at_model_owner": [] as Finding[],
@@ -159,6 +165,8 @@ export function orderFindings(input: {
     "custom.overdue": [] as Finding[],
     "custom.overdue_owner": [] as Finding[],
     "custom.shot_not_given": [] as Finding[],
+    // Retired (the owner, 2026-11-22: whoever is on shift may give it, never obliged): none is opened, so the pass closes
+    // the open ones by its own rule (cause gone).
     "custom.give_on_shift": [] as Finding[],
   };
   const overdue: CustomOrderRow[] = [];
@@ -175,7 +183,7 @@ export function orderFindings(input: {
     const burns = facts !== null ? new Set(burnsOfRow(order, facts, now).map((burn) => burn.kind)) : null;
     const overdueNow = OVERDUE_STATES.includes(order.state) && (burns !== null ? burns.has("overdue") : deadlinePassed(order.deadlineOn, now));
     const giveNow = burns !== null
-      ? burns.has("shot_unsent") && (input.moveOf === undefined || input.moveOf(order, facts!)?.what === CUSTOM_GIVE_MOVE)
+      ? burns.has("shot_unsent") && (input.moveOf === undefined || input.moveOf(order, facts!)?.giver !== undefined)
       : order.state === "shot" && since >= NOT_GIVEN_HOURS * HOUR_MS;
     const waitsAtStart = input.factsOn === true
       ? timer !== null
@@ -210,19 +218,15 @@ export function orderFindings(input: {
       });
     }
     if (giveNow) {
-      const acceptor = order.acceptedByUserId !== null && input.recorders.has(order.acceptedByUserId) ? order.acceptedByUserId : null;
-      const evidence = { code, shotAt: order.stateAt.toISOString() };
-      const title = `Кастом ${code} снят, отдайте фану: ${pageOf(order)}`;
+      // The taker answers for it; with none, the check's leader names who took it (or gives it themselves).
+      const giver = giverOf(order);
+      const title = giver.kind === "taker"
+        ? `Кастом ${code} снят: посмотрите ролик целиком и отдайте фану, ${pageOf(order)}`
+        : `Кастом ${code} снят, не указано, кто принял: укажите принявшего или посмотрите ролик целиком и отдайте фану, ${pageOf(order)}`;
       out["custom.shot_not_given"].push({
-        key: `custom.shot_not_given:${code}`, title, object: orderObject(order), pageIds,
-        // An order nobody accepted (imported) or a chatter without the right: the lead hands it over.
-        owner: acceptor === null ? phaseOf(order.pageId, "check") : { userId: acceptor }, evidence, link: orderLink(order),
+        key: `custom.shot_not_given:${code}`, title, object: orderObject(order), pageIds, owner: giver.owner,
+        evidence: { code, shotAt: order.stateAt.toISOString(), giver: giver.kind }, link: orderLink(order),
       });
-      const onShift = (order.pageLabel === null ? [] : input.onShift.get(order.pageLabel) ?? [])
-        .find((userId) => userId !== acceptor && input.recorders.has(userId));
-      if (onShift !== undefined) {
-        out["custom.give_on_shift"].push({ key: `custom.give_on_shift:${code}`, title, object: orderObject(order), pageIds, owner: { userId: onShift }, evidence, link: orderLink(order) });
-      }
     }
   }
   if (overdue.length > 0) {
@@ -353,6 +357,11 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
   const phaseLead: PhaseLeadOf = (pageId, phase) => leaderOwner(phaseLeader(leaders.facts, pageId, phase, leaders.fallback));
   const lead = (pageId: number | null) => phaseLead(pageId, "check");
   const recorders = new Set(recorderRows.map((row) => row.userId));
+  // Who gives a shot order: the one rule (leaders.ts `giverOf`), no right gating it.
+  const giverOfOrder: GiverOf = (order) => {
+    const giver = giverOf(leaders.facts, order, leaders.fallback);
+    return { owner: leaderOwner(giver.who), kind: giver.kind };
+  };
 
   // Marked given and quiet for three days: closed by itself (a revision moves it out of «given» first). From the mark
   // (`state_at`), not the message's own time: a delivery found late or backfilled keeps a full window. Never while
@@ -389,7 +398,7 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
   const moveOf: MoveOf = (order, facts) => customMoveOf(
     leaders.facts, order, { paid: facts.paid.value, given: facts.given.value }, order.pageLabel === null ? [] : onShift.get(order.pageLabel) ?? [], leaders.fallback,
   );
-  const findings = orderFindings({ orders, now, lead, phaseLead, recorders, onShift, testPageIds: tests, factsOn, moveOf });
+  const findings = orderFindings({ orders, now, lead, phaseLead, giverOf: giverOfOrder, testPageIds: tests, factsOn, moveOf });
   for (const kind of Object.keys(findings) as Array<keyof typeof findings>) add(await reconcile(app, kind, findings[kind], now));
 
   // A custom with no order: findings (one home) with the switch on; the two kinds of matter before them with it off.

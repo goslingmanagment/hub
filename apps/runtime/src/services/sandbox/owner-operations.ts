@@ -73,6 +73,7 @@ export const SANDBOX_OWNER_OPERATIONS: ReadonlySet<string> = new Set([
   "customOrdersDone",
   "customFindingsList",
   "customOrderChanges",
+  "customOrderTakers",
   // The owner's word on whose a sale is: a dispute or a question (the pot's too), «мимо площадки». Each names a sale or a
   // line of the test realm, else 404 (the sale-claims module's `requireDecidedOfRealm`; the list is cut to the realm).
   "saleDispute",

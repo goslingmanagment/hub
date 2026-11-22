@@ -112337,6 +112337,668 @@
         }
       }
     },
+    "/api/v1/agent/custom-findings/{findingId}": {
+      "post": {
+        "summary": "Answer a finding of a custom with no order on a person's word: record, link, dismiss or reopen it (needs write:customs and read:messages)",
+        "tags": [
+          "agent"
+        ],
+        "description": "Database only. As the board's answer by that person (`onBehalfOf`): the check's leader of the finding's page, the customs lead or the owner, else 404; `requestRef` — the Telegram message where they asked, kept in the history.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "step": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "record"
+                            ]
+                          },
+                          "card": {
+                            "type": "object",
+                            "properties": {
+                              "date": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 40
+                              },
+                              "name": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              },
+                              "price": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 300
+                              },
+                              "duration": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "task": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 3000
+                              },
+                              "photos": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1000
+                              },
+                              "clothes": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1000
+                              },
+                              "face": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "notes": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 1500
+                              },
+                              "urgency": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 100
+                              },
+                              "deadlineNote": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200
+                              },
+                              "attachments": {
+                                "maxItems": 20,
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "maxLength": 500,
+                                  "format": "uri"
+                                }
+                              },
+                              "nameInVideo": {
+                                "type": "string",
+                                "enum": [
+                                  "yes",
+                                  "no",
+                                  "unknown"
+                                ]
+                              },
+                              "wantsVideo": {
+                                "type": "boolean"
+                              },
+                              "wantsPhotos": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 500
+                              }
+                            },
+                            "additionalProperties": false
+                          },
+                          "pageLabel": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 120
+                          },
+                          "fan": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 300
+                          },
+                          "priceMills": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000000
+                          },
+                          "telegramRef": {
+                            "type": "string",
+                            "minLength": 3,
+                            "maxLength": 300
+                          },
+                          "acceptedBy": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          }
+                        },
+                        "required": [
+                          "action",
+                          "card"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "link"
+                            ]
+                          },
+                          "code": {
+                            "type": "string",
+                            "minLength": 2,
+                            "maxLength": 24
+                          }
+                        },
+                        "required": [
+                          "action",
+                          "code"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "dismiss"
+                            ]
+                          },
+                          "reason": {
+                            "type": "string",
+                            "enum": [
+                              "not_custom",
+                              "sexting",
+                              "unused",
+                              "duplicate",
+                              "test",
+                              "not_asked"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "action",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "reopen"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "action"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "onBehalfOf": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "requestRef": {
+                    "type": "string",
+                    "minLength": 3,
+                    "maxLength": 300
+                  }
+                },
+                "required": [
+                  "step",
+                  "onBehalfOf",
+                  "requestRef"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,18}$"
+            },
+            "in": "path",
+            "name": "findingId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "finding": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "sale",
+                            "fan_chat",
+                            "work_chat",
+                            "model_group",
+                            "shift_report"
+                          ]
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "pageLabel": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "fan": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "platform": {
+                                  "type": "string"
+                                },
+                                "fanRef": {
+                                  "type": "string"
+                                },
+                                "username": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "displayName": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "platform",
+                                "fanRef",
+                                "username",
+                                "displayName"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "amountMills": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "quote": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "happenedAt": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "open",
+                            "recorded",
+                            "linked",
+                            "dismissed"
+                          ]
+                        },
+                        "orderCode": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "dismissReason": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "not_custom",
+                                "sexting",
+                                "unused",
+                                "duplicate",
+                                "test",
+                                "not_asked"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "resolvedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "resolvedByAgent": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "createdAt": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "source",
+                        "ref",
+                        "pageLabel",
+                        "fan",
+                        "amountMills",
+                        "quote",
+                        "happenedAt",
+                        "status",
+                        "orderCode",
+                        "dismissReason",
+                        "resolvedAt",
+                        "resolvedByAgent",
+                        "createdAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "finding"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/custom-orders": {
       "get": {
         "summary": "Custom orders of the key's pages and of no known page, with the card text (needs write:customs); no money, the facts with read:money",
@@ -112677,10 +113339,28 @@
                               "null"
                             ]
                           },
+                          "givenBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "acceptedBy": {
                             "type": [
                               "string",
                               "null"
+                            ]
+                          },
+                          "acceptedByUserId": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "acceptedByName": {
@@ -112990,6 +113670,60 @@
                                       "none"
                                     ]
                                   },
+                                  "userId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "giver": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "taker",
+                                          "lead"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "onShift": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "userId": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "name": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "userId",
+                                          "name"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "what": {
                                     "type": "string"
                                   }
@@ -112997,6 +113731,9 @@
                                 "required": [
                                   "who",
                                   "whoKind",
+                                  "userId",
+                                  "giver",
+                                  "onShift",
                                   "what"
                                 ],
                                 "additionalProperties": false
@@ -113173,7 +113910,9 @@
                           "payments",
                           "givenAt",
                           "givenMessageRef",
+                          "givenBy",
                           "acceptedBy",
+                          "acceptedByUserId",
                           "acceptedByName",
                           "telegramRefs",
                           "contentopsRef",
@@ -113636,6 +114375,17 @@
                     "minLength": 1,
                     "maxLength": 120
                   },
+                  "authorTelegramId": {
+                    "type": "string",
+                    "pattern": "^[1-9]\\d{0,19}$"
+                  },
+                  "cardKind": {
+                    "type": "string",
+                    "enum": [
+                      "work",
+                      "model"
+                    ]
+                  },
                   "sourceText": {
                     "type": "string",
                     "minLength": 1,
@@ -113942,10 +114692,28 @@
                             "null"
                           ]
                         },
+                        "givenBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "acceptedBy": {
                           "type": [
                             "string",
                             "null"
+                          ]
+                        },
+                        "acceptedByUserId": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "acceptedByName": {
@@ -114255,6 +115023,60 @@
                                     "none"
                                   ]
                                 },
+                                "userId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "giver": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "taker",
+                                        "lead"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "onShift": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "userId": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "userId",
+                                        "name"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "what": {
                                   "type": "string"
                                 }
@@ -114262,6 +115084,9 @@
                               "required": [
                                 "who",
                                 "whoKind",
+                                "userId",
+                                "giver",
+                                "onShift",
                                 "what"
                               ],
                               "additionalProperties": false
@@ -114438,7 +115263,9 @@
                         "payments",
                         "givenAt",
                         "givenMessageRef",
+                        "givenBy",
                         "acceptedBy",
+                        "acceptedByUserId",
                         "acceptedByName",
                         "telegramRefs",
                         "contentopsRef",
@@ -114578,6 +115405,56 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "taker": {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "enum": [
+                            "set",
+                            "unchanged"
+                          ]
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "manual",
+                                "agent",
+                                "card",
+                                "sale",
+                                "backfill"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reason": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "taker_set",
+                                "person_set",
+                                "taker_unknown"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "result",
+                        "source",
+                        "reason"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -115191,13 +116068,444 @@
         }
       }
     },
+    "/api/v1/agent/custom-orders/events": {
+      "get": {
+        "summary": "What changed on the key's custom orders and findings after a cursor, the oldest first (needs write:customs and read:messages)",
+        "tags": [
+          "agent"
+        ],
+        "description": "Database only. The orders' history (`custom_order.*`) and the people's answers to findings (`custom_finding.*`) of the key's pages (an order of no known page: a live key's), at most `limit`; `next` — the cursor for the next call.",
+        "parameters": [
+          {
+            "schema": {
+              "default": 0,
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "query",
+            "name": "after",
+            "required": false
+          },
+          {
+            "schema": {
+              "default": 200,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "in": "query",
+            "name": "limit",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "agentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "object": {
+                            "type": "string",
+                            "enum": [
+                              "custom_order",
+                              "custom_finding"
+                            ]
+                          },
+                          "code": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "findingId": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "event": {
+                            "type": "string"
+                          },
+                          "door": {
+                            "type": "string"
+                          },
+                          "actor": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "login": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "login"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "agentKey": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "onBehalfOf": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "login": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "login"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "changes": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "at",
+                          "object",
+                          "code",
+                          "findingId",
+                          "event",
+                          "door",
+                          "actor",
+                          "agentKey",
+                          "onBehalfOf",
+                          "changes"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "next": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "events",
+                    "next",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/agent/custom-orders/{code}": {
       "post": {
         "summary": "Update a custom order: the card's fields, at the model, partly shot, shot, a revision, the model's refusal, a Telegram card, the deadline, an issue (needs write:customs); a payment (also read:money); «отдан» by a message, the fan, the fan's «where is it» (also read:messages)",
         "tags": [
           "agent"
         ],
-        "description": "Database only. What a step names — a sale, a message, a fan — is one Hub holds on the key's pages, checked by Hub (a page outside them is 404); a refusal is 409 with its reason.",
+        "description": "Database only. What a step names — a sale, a message, a fan — is one Hub holds on the key's pages, checked by Hub (a page outside them is 404); a refusal is 409 with its reason. `board` (also read:messages): any step of the board «Кастомы» on a person's word (`onBehalfOf`, `requestRef`), checked against that person's own rights by the board's step.",
         "requestBody": {
           "required": true,
           "content": {
@@ -115700,6 +117008,17 @@
                         "minLength": 3,
                         "maxLength": 300
                       },
+                      "authorTelegramId": {
+                        "type": "string",
+                        "pattern": "^[1-9]\\d{0,19}$"
+                      },
+                      "cardKind": {
+                        "type": "string",
+                        "enum": [
+                          "work",
+                          "model"
+                        ]
+                      },
                       "onBehalfOf": {
                         "type": "string",
                         "minLength": 1,
@@ -116140,6 +117459,17 @@
                         "minLength": 3,
                         "maxLength": 300
                       },
+                      "authorTelegramId": {
+                        "type": "string",
+                        "pattern": "^[1-9]\\d{0,19}$"
+                      },
+                      "cardKind": {
+                        "type": "string",
+                        "enum": [
+                          "work",
+                          "model"
+                        ]
+                      },
                       "onBehalfOf": {
                         "type": "string",
                         "minLength": 1,
@@ -116149,6 +117479,680 @@
                     "required": [
                       "action",
                       "telegramRef"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "accepted_by"
+                        ]
+                      },
+                      "acceptedBy": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "acceptedBy"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "board"
+                        ]
+                      },
+                      "step": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "edit"
+                                ]
+                              },
+                              "card": {
+                                "type": "object",
+                                "properties": {
+                                  "date": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 40
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "price": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 300
+                                  },
+                                  "duration": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "task": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 3000
+                                  },
+                                  "photos": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 1000
+                                  },
+                                  "clothes": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 1000
+                                  },
+                                  "face": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "notes": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 1500
+                                  },
+                                  "urgency": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 100
+                                  },
+                                  "deadlineNote": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "attachments": {
+                                    "maxItems": 20,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "maxLength": 500,
+                                      "format": "uri"
+                                    }
+                                  },
+                                  "nameInVideo": {
+                                    "type": "string",
+                                    "enum": [
+                                      "yes",
+                                      "no",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "wantsVideo": {
+                                    "type": "boolean"
+                                  },
+                                  "wantsPhotos": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 500
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              "priceMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 1000000000
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "deadline"
+                                ]
+                              },
+                              "deadlineOn": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "undoOf": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "deadlineOn"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "fan"
+                                ]
+                              },
+                              "pageLabel": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 120
+                              },
+                              "fan": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 300
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "pageLabel",
+                              "fan"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "card"
+                                ]
+                              },
+                              "telegramRef": {
+                                "type": "string",
+                                "minLength": 3,
+                                "maxLength": 300
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "telegramRef"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "payment"
+                                ]
+                              },
+                              "transactionRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "transactionRef"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "unpay"
+                                ]
+                              },
+                              "transactionRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "undoOf": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "transactionRef"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "checked"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "at_model"
+                                ]
+                              },
+                              "telegramRef": {
+                                "type": "string",
+                                "minLength": 3,
+                                "maxLength": 300
+                              },
+                              "deadlineOn": {
+                                "type": "string",
+                                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "partly"
+                                ]
+                              },
+                              "note": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "shot"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "revision"
+                                ]
+                              },
+                              "note": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              "part": {
+                                "type": "string",
+                                "enum": [
+                                  "video",
+                                  "photos"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "refused"
+                                ]
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "reason"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "given"
+                                ]
+                              },
+                              "messageRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "ungive"
+                                ]
+                              },
+                              "undoOf": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "messageRef": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64,
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "retract"
+                                ]
+                              },
+                              "retracts": {
+                                "type": "string",
+                                "minLength": 3,
+                                "maxLength": 300
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              },
+                              "undoOf": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "retracts",
+                              "reason"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "close"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "cancel"
+                                ]
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "hold"
+                                ]
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 500
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "reason"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "unhold"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "issue_clear"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "paid_word"
+                                ]
+                              },
+                              "word": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "gift",
+                                          "off_platform"
+                                        ]
+                                      },
+                                      "note": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 500
+                                      }
+                                    },
+                                    "required": [
+                                      "kind"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "word"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "fan_asked_clear"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "action": {
+                                "type": "string",
+                                "enum": [
+                                  "accepted_by"
+                                ]
+                              },
+                              "acceptedBy": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "action",
+                              "acceptedBy"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "onBehalfOf": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
+                      },
+                      "requestRef": {
+                        "type": "string",
+                        "minLength": 3,
+                        "maxLength": 300
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "step",
+                      "onBehalfOf",
+                      "requestRef"
                     ],
                     "additionalProperties": false
                   }
@@ -116453,10 +118457,28 @@
                             "null"
                           ]
                         },
+                        "givenBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "acceptedBy": {
                           "type": [
                             "string",
                             "null"
+                          ]
+                        },
+                        "acceptedByUserId": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "acceptedByName": {
@@ -116766,6 +118788,60 @@
                                     "none"
                                   ]
                                 },
+                                "userId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "giver": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "taker",
+                                        "lead"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "onShift": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "userId": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "userId",
+                                        "name"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "what": {
                                   "type": "string"
                                 }
@@ -116773,6 +118849,9 @@
                               "required": [
                                 "who",
                                 "whoKind",
+                                "userId",
+                                "giver",
+                                "onShift",
                                 "what"
                               ],
                               "additionalProperties": false
@@ -116949,7 +119028,9 @@
                         "payments",
                         "givenAt",
                         "givenMessageRef",
+                        "givenBy",
                         "acceptedBy",
+                        "acceptedByUserId",
                         "acceptedByName",
                         "telegramRefs",
                         "contentopsRef",
@@ -117089,6 +119170,56 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "taker": {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "enum": [
+                            "set",
+                            "unchanged"
+                          ]
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "manual",
+                                "agent",
+                                "card",
+                                "sale",
+                                "backfill"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reason": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "taker_set",
+                                "person_set",
+                                "taker_unknown"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "result",
+                        "source",
+                        "reason"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [
@@ -243605,10 +245736,28 @@
                               "null"
                             ]
                           },
+                          "givenBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "acceptedBy": {
                             "type": [
                               "string",
                               "null"
+                            ]
+                          },
+                          "acceptedByUserId": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "acceptedByName": {
@@ -243892,6 +246041,60 @@
                                       "none"
                                     ]
                                   },
+                                  "userId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "giver": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "taker",
+                                          "lead"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "onShift": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "userId": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "name": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "userId",
+                                          "name"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "what": {
                                     "type": "string"
                                   }
@@ -243899,6 +246102,9 @@
                                 "required": [
                                   "who",
                                   "whoKind",
+                                  "userId",
+                                  "giver",
+                                  "onShift",
                                   "what"
                                 ],
                                 "additionalProperties": false
@@ -244093,7 +246299,9 @@
                           "payments",
                           "givenAt",
                           "givenMessageRef",
+                          "givenBy",
                           "acceptedBy",
+                          "acceptedByUserId",
                           "acceptedByName",
                           "telegramRefs",
                           "contentopsRef",
@@ -244779,6 +246987,11 @@
                     "type": "string",
                     "minLength": 3,
                     "maxLength": 300
+                  },
+                  "acceptedBy": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
                   }
                 },
                 "required": [
@@ -245086,10 +247299,28 @@
                             "null"
                           ]
                         },
+                        "givenBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "acceptedBy": {
                           "type": [
                             "string",
                             "null"
+                          ]
+                        },
+                        "acceptedByUserId": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "acceptedByName": {
@@ -245373,6 +247604,60 @@
                                     "none"
                                   ]
                                 },
+                                "userId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "giver": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "taker",
+                                        "lead"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "onShift": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "userId": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "userId",
+                                        "name"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "what": {
                                   "type": "string"
                                 }
@@ -245380,6 +247665,9 @@
                               "required": [
                                 "who",
                                 "whoKind",
+                                "userId",
+                                "giver",
+                                "onShift",
                                 "what"
                               ],
                               "additionalProperties": false
@@ -245483,7 +247771,9 @@
                         "payments",
                         "givenAt",
                         "givenMessageRef",
+                        "givenBy",
                         "acceptedBy",
+                        "acceptedByUserId",
                         "acceptedByName",
                         "telegramRefs",
                         "contentopsRef",
@@ -245817,7 +248107,8 @@
                           "unhold",
                           "issue_clear",
                           "paid_word",
-                          "fan_asked_clear"
+                          "fan_asked_clear",
+                          "accepted_by"
                         ]
                       }
                     },
@@ -246618,10 +248909,28 @@
                               "null"
                             ]
                           },
+                          "givenBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "acceptedBy": {
                             "type": [
                               "string",
                               "null"
+                            ]
+                          },
+                          "acceptedByUserId": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "acceptedByName": {
@@ -246905,6 +249214,60 @@
                                       "none"
                                     ]
                                   },
+                                  "userId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "giver": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "taker",
+                                          "lead"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "onShift": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "userId": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "name": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "userId",
+                                          "name"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "what": {
                                     "type": "string"
                                   }
@@ -246912,6 +249275,9 @@
                                 "required": [
                                   "who",
                                   "whoKind",
+                                  "userId",
+                                  "giver",
+                                  "onShift",
                                   "what"
                                 ],
                                 "additionalProperties": false
@@ -247106,7 +249472,9 @@
                           "payments",
                           "givenAt",
                           "givenMessageRef",
+                          "givenBy",
                           "acceptedBy",
+                          "acceptedByUserId",
                           "acceptedByName",
                           "telegramRefs",
                           "contentopsRef",
@@ -247332,10 +249700,28 @@
                               "null"
                             ]
                           },
+                          "givenBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "acceptedBy": {
                             "type": [
                               "string",
                               "null"
+                            ]
+                          },
+                          "acceptedByUserId": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "acceptedByName": {
@@ -247619,6 +250005,60 @@
                                       "none"
                                     ]
                                   },
+                                  "userId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "giver": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "taker",
+                                          "lead"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "onShift": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "userId": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "name": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "userId",
+                                          "name"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "what": {
                                     "type": "string"
                                   }
@@ -247626,6 +250066,9 @@
                                 "required": [
                                   "who",
                                   "whoKind",
+                                  "userId",
+                                  "giver",
+                                  "onShift",
                                   "what"
                                 ],
                                 "additionalProperties": false
@@ -247820,7 +250263,9 @@
                           "payments",
                           "givenAt",
                           "givenMessageRef",
+                          "givenBy",
                           "acceptedBy",
+                          "acceptedByUserId",
                           "acceptedByName",
                           "telegramRefs",
                           "contentopsRef",
@@ -248697,6 +251142,11 @@
                         "type": "string",
                         "minLength": 3,
                         "maxLength": 300
+                      },
+                      "acceptedBy": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64
                       }
                     },
                     "required": [
@@ -249358,6 +251808,265 @@
         }
       }
     },
+    "/api/v1/custom-orders/takers": {
+      "get": {
+        "summary": "«Принял»: who may be named a custom order's taker on a page — its chatters — and whom a record names by default",
+        "tags": [
+          "admin"
+        ],
+        "description": "Database only. A page the viewer sees (else 404); the test realm's people for a test page only. The default: the sale's one home when one chatter holds it whole, else the viewer when they are a chatter of the page; never the owner or a lead. The extension's device token too: Workboard's «Кастомы» in its frame over the site, read as a chatter.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "query",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "query",
+            "name": "transactionRef",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "takers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "login": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "login",
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "suggested": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "takers",
+                    "suggested"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/custom-orders/{code}": {
       "get": {
         "summary": "One custom order: its card, payments with «Это оплата?», delivery hints, history and what the viewer may do",
@@ -249674,10 +252383,28 @@
                             "null"
                           ]
                         },
+                        "givenBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "acceptedBy": {
                           "type": [
                             "string",
                             "null"
+                          ]
+                        },
+                        "acceptedByUserId": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "acceptedByName": {
@@ -249961,6 +252688,60 @@
                                     "none"
                                   ]
                                 },
+                                "userId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "giver": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "taker",
+                                        "lead"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "onShift": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "userId": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "userId",
+                                        "name"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "what": {
                                   "type": "string"
                                 }
@@ -249968,6 +252749,9 @@
                               "required": [
                                 "who",
                                 "whoKind",
+                                "userId",
+                                "giver",
+                                "onShift",
                                 "what"
                               ],
                               "additionalProperties": false
@@ -250071,7 +252855,9 @@
                         "payments",
                         "givenAt",
                         "givenMessageRef",
+                        "givenBy",
                         "acceptedBy",
+                        "acceptedByUserId",
                         "acceptedByName",
                         "telegramRefs",
                         "contentopsRef",
@@ -250405,7 +253191,8 @@
                           "unhold",
                           "issue_clear",
                           "paid_word",
-                          "fan_asked_clear"
+                          "fan_asked_clear",
+                          "accepted_by"
                         ]
                       }
                     },
@@ -251206,6 +253993,34 @@
                       "action"
                     ],
                     "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "accepted_by"
+                        ]
+                      },
+                      "acceptedBy": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "acceptedBy"
+                    ],
+                    "additionalProperties": false
                   }
                 ]
               }
@@ -251521,10 +254336,28 @@
                             "null"
                           ]
                         },
+                        "givenBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "acceptedBy": {
                           "type": [
                             "string",
                             "null"
+                          ]
+                        },
+                        "acceptedByUserId": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "acceptedByName": {
@@ -251808,6 +254641,60 @@
                                     "none"
                                   ]
                                 },
+                                "userId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "giver": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "taker",
+                                        "lead"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "onShift": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "userId": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "userId",
+                                        "name"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "what": {
                                   "type": "string"
                                 }
@@ -251815,6 +254702,9 @@
                               "required": [
                                 "who",
                                 "whoKind",
+                                "userId",
+                                "giver",
+                                "onShift",
                                 "what"
                               ],
                               "additionalProperties": false
@@ -251918,7 +254808,9 @@
                         "payments",
                         "givenAt",
                         "givenMessageRef",
+                        "givenBy",
                         "acceptedBy",
+                        "acceptedByUserId",
                         "acceptedByName",
                         "telegramRefs",
                         "contentopsRef",
@@ -252252,7 +255144,8 @@
                           "unhold",
                           "issue_clear",
                           "paid_word",
-                          "fan_asked_clear"
+                          "fan_asked_clear",
+                          "accepted_by"
                         ]
                       }
                     },
@@ -288271,10 +291164,28 @@
                               "null"
                             ]
                           },
+                          "givenBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "acceptedBy": {
                             "type": [
                               "string",
                               "null"
+                            ]
+                          },
+                          "acceptedByUserId": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
                             ]
                           },
                           "acceptedByName": {
@@ -288584,6 +291495,60 @@
                                       "none"
                                     ]
                                   },
+                                  "userId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "giver": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "taker",
+                                          "lead"
+                                        ]
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "onShift": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "userId": {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "name": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "userId",
+                                          "name"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
                                   "what": {
                                     "type": "string"
                                   }
@@ -288591,6 +291556,9 @@
                                 "required": [
                                   "who",
                                   "whoKind",
+                                  "userId",
+                                  "giver",
+                                  "onShift",
                                   "what"
                                 ],
                                 "additionalProperties": false
@@ -288767,7 +291735,9 @@
                           "payments",
                           "givenAt",
                           "givenMessageRef",
+                          "givenBy",
                           "acceptedBy",
+                          "acceptedByUserId",
                           "acceptedByName",
                           "telegramRefs",
                           "contentopsRef",
@@ -289361,10 +292331,28 @@
                             "null"
                           ]
                         },
+                        "givenBy": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
                         "acceptedBy": {
                           "type": [
                             "string",
                             "null"
+                          ]
+                        },
+                        "acceptedByUserId": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
                           ]
                         },
                         "acceptedByName": {
@@ -289674,6 +292662,60 @@
                                     "none"
                                   ]
                                 },
+                                "userId": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "exclusiveMinimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "giver": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "taker",
+                                        "lead"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "onShift": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "userId": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
+                                        }
+                                      },
+                                      "required": [
+                                        "userId",
+                                        "name"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
                                 "what": {
                                   "type": "string"
                                 }
@@ -289681,6 +292723,9 @@
                               "required": [
                                 "who",
                                 "whoKind",
+                                "userId",
+                                "giver",
+                                "onShift",
                                 "what"
                               ],
                               "additionalProperties": false
@@ -289857,7 +292902,9 @@
                         "payments",
                         "givenAt",
                         "givenMessageRef",
+                        "givenBy",
                         "acceptedBy",
+                        "acceptedByUserId",
                         "acceptedByName",
                         "telegramRefs",
                         "contentopsRef",
@@ -289997,6 +293044,56 @@
                         ],
                         "additionalProperties": false
                       }
+                    },
+                    "taker": {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "enum": [
+                            "set",
+                            "unchanged"
+                          ]
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "manual",
+                                "agent",
+                                "card",
+                                "sale",
+                                "backfill"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "reason": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "taker_set",
+                                "person_set",
+                                "taker_unknown"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "result",
+                        "source",
+                        "reason"
+                      ],
+                      "additionalProperties": false
                     }
                   },
                   "required": [

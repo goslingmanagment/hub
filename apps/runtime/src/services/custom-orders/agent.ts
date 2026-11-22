@@ -3,6 +3,9 @@ import {
   parseCustomOrderCode,
   parseTelegramRef,
   type AgentCustomCardsBody,
+  type AgentCustomEventsQuery,
+  type AgentCustomEventsResponse,
+  type AgentCustomFindingActBody,
   type AgentCustomOrder,
   type AgentCustomOrderCreateBody,
   type AgentCustomOrdersQuery,
@@ -14,10 +17,12 @@ import {
   findCustomOrder,
   findCustomOrderIdByCard,
   findCustomPageReplyAfter,
+  findCustomTakerOnPage,
   findMatterPerson,
   findPageFanByInput,
   isCustomOrderIssueOfAgent,
   listAgentCustomOrders,
+  listCustomEventsAfter,
   listOnShiftUsersByPage,
   listOpenCustomOrdersOfFan,
   listCustomOrderCardOwners,
@@ -25,17 +30,22 @@ import {
   listCustomOrdersByIds,
   lockCustomOrderCreate,
   type CustomOrderRow,
+  type CustomTakerRow,
   type Database,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
-import type { AgentAuthPrincipal } from "../auth.ts";
+import { principalOfLogin, type AgentAuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
 import { AppError, ConflictError } from "../errors.ts";
 import { isTestAgent } from "../sandbox/realm.ts";
 import {
-  agentOrderBase, applyCustomStep, cardTextOf, customLeaderContext, messageWire, orderMessagesOf, recordCustomOrder, unlinkedSalesOf,
+  agentOrderBase, applyCustomStep, boardStepAs, cardTextOf, customLeaderContext, customViewerOf, messageWire, orderMessagesOf, recordCustomOrder,
+  unlinkedSalesOf,
   type CustomActor, type CustomEventResult, type CustomLeaderContext, type CustomMessageInput, type CustomOnShift, type CustomStep,
+  type CustomTakerResult,
 } from "./index.ts";
+import { actOnCustomFindingAs } from "./findings.ts";
+import { seesOrder } from "./rules.ts";
 import { reportUnmatchedCards } from "./checks.ts";
 import { giveByMessage, linkDeliveryPurchases } from "./deliveries.ts";
 import { checkFanAskedMessage, checkGivenMessage, checkNamedSales, deliveryPurchasesOf, modelPagesOf } from "./evidence.ts";
@@ -88,7 +98,10 @@ function inGrant(scope: AgentCustomScope, order: CustomOrderRow): boolean {
 }
 
 async function agentOrderOf(app: AgentApp, scope: AgentCustomScope, order: CustomOrderRow, now: Date): Promise<AgentCustomOrder> {
-  return agentWire(scope, order, await orderMessagesOf(app.db, order.id), now, await customLeaderContext(app));
+  const [messages, leaders, onShift] = await Promise.all([
+    orderMessagesOf(app.db, order.id), customLeaderContext(app), scope.texts ? listOnShiftUsersByPage(app.db, now) : Promise.resolve(new Map<string, number[]>()),
+  ]);
+  return agentWire(scope, order, messages, now, leaders, scope.texts ? { onShift } : undefined);
 }
 
 function agentWire(
@@ -111,9 +124,10 @@ export async function agentListCustomOrders(app: AgentApp, scope: AgentCustomSco
     pageIds: scope.pages.map((page) => page.id), noPage: !isTestAgent(scope.principal),
     open: query.state === "open" && filtered, live: query.state === "live" && filtered, orderId, telegramRef, limit: query.limit,
   });
-  // The live list to a key with read:messages: whose move each order is and whether it burns, by the board's one rule —
-  // the reader's reminders (who gives a shot order, who forwards a waiting card) read it from here.
-  const reading = query.state === "live" && filtered && scope.texts;
+  // Every read to a key with read:messages (the live list, by code, by card): whose move each order is and whether it
+  // burns, by the board's one rule — the reader's reminders (who gives a shot order, who forwards a waiting card) and its
+  // answers to people read it from here, never `leader` alone.
+  const reading = scope.texts;
   const [messages, leaders, onShift] = await Promise.all([
     listCustomOrderMessagesOf(app.db, orders.map((order) => order.id)),
     customLeaderContext(app),
@@ -193,9 +207,41 @@ export async function linkNamedSales(
   return { outcomes, changed };
 }
 
+const TAKER_REFUSALS = new Set(["taker_set", "person_set", "taker_unknown"]);
+
+/**
+ * The taker named by an agent's evidence (a login, the backfill's file), by the step `accepted_by`: only an order with
+ * none. Answers whether it changed and what it did — never a refusal: another taker, a person's decision or nobody named
+ * are the outcome's reason.
+ */
+export async function fillTakerOf(
+  app: AgentApp,
+  input: { orderId: number; taker: CustomTakerRow | null; source: "agent" | "backfill"; actor: CustomActor; now: Date },
+): Promise<{ changed: boolean; outcome: CustomTakerResult }> {
+  const report: { event: CustomEventResult | null; taker?: CustomTakerResult } = { event: null };
+  try {
+    const changed = await applyCustomStep(app, {
+      orderId: input.orderId, step: { action: "accepted_by", taker: input.taker, by: "evidence", source: input.source }, actor: input.actor, viewer: null,
+      now: input.now, report,
+    });
+    return { changed, outcome: report.taker ?? { result: changed ? "set" : "unchanged", source: input.source, reason: null } };
+  } catch (error) {
+    if (error instanceof ConflictError && TAKER_REFUSALS.has(error.reason ?? "")) {
+      return { changed: false, outcome: { result: "unchanged", source: input.source, reason: error.reason as CustomTakerResult["reason"] } };
+    }
+    throw error;
+  }
+}
+
+/** The taker a login names on the order's page (null — nobody of it works there, or the order has no page). */
+async function takerByLogin(app: AgentApp, pageId: number | null, login: string): Promise<CustomTakerRow | null> {
+  return pageId === null ? null : findCustomTakerOnPage(app.db, { pageId, login });
+}
+
 /**
  * What a create brings to an order it finds (by its card or its code) besides the card: the price, by the agent's edit
- * (a price a person set is theirs and stays), and the sales. Answers whether anything changed.
+ * (a price a person set is theirs and stays), the taker (`acceptedBy`: only while the order names none), and the sales.
+ * Answers whether anything changed.
  */
 async function applyToFound(
   app: AgentApp,
@@ -204,15 +250,27 @@ async function applyToFound(
   body: AgentCustomOrderCreateBody,
   actor: CustomActor,
   now: Date,
-): Promise<{ changed: boolean; sales: AgentCustomSaleOutcome[] | undefined }> {
+): Promise<{ changed: boolean; sales: AgentCustomSaleOutcome[] | undefined; taker: CustomTakerResult | undefined }> {
   let changed = false;
+  let taker: CustomTakerResult | undefined;
   if (body.priceMills !== undefined && body.priceMills !== order.priceMills && !order.personFields.includes("priceMills")) {
     changed = await applyCustomStep(app, { orderId: order.id, step: { action: "edit", priceMills: body.priceMills, by: "agent" }, actor, viewer: null, now });
   }
-  if (body.sales === undefined) return { changed, sales: undefined };
+  if (body.acceptedBy !== undefined) {
+    const filled = await fillTakerOf(app, { orderId: order.id, taker: await takerByLogin(app, order.pageId, body.acceptedBy), source: "agent", actor, now });
+    changed ||= filled.changed;
+    taker = filled.outcome;
+  }
+  if (body.sales === undefined) return { changed, sales: undefined, taker };
   const linked = await linkNamedSales(app, scope, order.id, body.sales, actor, now);
-  return { changed: changed || linked.changed, sales: linked.outcomes };
+  return { changed: changed || linked.changed, sales: linked.outcomes, taker };
 }
+
+/** A card's author and kind as the create's and the steps' bodies carry them (`work` names the taker). */
+const cardAuthorOf = (body: { authorTelegramId?: string | undefined; cardKind?: "work" | "model" | undefined }) => ({
+  ...(body.authorTelegramId === undefined ? {} : { authorTelegramId: body.authorTelegramId }),
+  ...(body.cardKind === undefined ? {} : { cardKind: body.cardKind }),
+});
 
 /**
  * `/tz`: a recorded order. The same Telegram card again answers its order, unchanged. A card whose text carries an
@@ -230,6 +288,7 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
   const telegramRef = body.telegramRef === undefined ? null : parseTelegramRef(body.telegramRef);
   const actorNow = async () => actorOf(scope, body.onBehalfOf === undefined ? null : await personOf(app, body.onBehalfOf));
   const withSales = <T extends object>(answer: T, sales: AgentCustomSaleOutcome[] | undefined) => (sales === undefined ? answer : { ...answer, sales });
+  const withTaker = <T extends object>(answer: T, taker: CustomTakerResult | undefined) => (taker === undefined ? answer : { ...answer, taker });
   if (telegramRef !== null) {
     const existing = await findCustomOrderIdByCard(app.db, telegramRef);
     if (existing !== null) {
@@ -240,12 +299,17 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
       if (named !== null && named !== order.id) {
         throw new ConflictError(`The card's link is ${customOrderCode(order.id)}'s and its text names ${customOrderCode(named)}`, { reason: "card_other_order" });
       }
-      const applied = body.priceMills === undefined && body.sales === undefined
-        ? { changed: false, sales: undefined }
+      const applied = body.priceMills === undefined && body.sales === undefined && body.acceptedBy === undefined
+        ? { changed: false, sales: undefined, taker: undefined }
         : await applyToFound(app, scope, order, body, await actorNow(), now);
-      return withSales({
-        order: await agentOrderOf(app, scope, (await findCustomOrder(app.db, order.id))!, now), outcome: applied.changed ? "changed" as const : "unchanged" as const, event: null,
-      }, applied.sales);
+      // The card again with its author: a work card's author names the taker of an order with none.
+      const carded = body.cardKind === "work" && body.authorTelegramId !== undefined && body.acceptedBy === undefined
+        ? await cardStep(app, order.id, { telegramRef, ...cardAuthorOf(body) }, await actorNow(), now)
+        : null;
+      return withTaker(withSales({
+        order: await agentOrderOf(app, scope, (await findCustomOrder(app.db, order.id))!, now),
+        outcome: applied.changed || carded?.changed === true ? "changed" as const : "unchanged" as const, event: null,
+      }, applied.sales), applied.taker ?? carded?.taker);
     }
   }
   const actor = await actorNow();
@@ -259,15 +323,16 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
     if (body.pageLabel !== undefined && order.pageLabel !== null && order.pageLabel !== body.pageLabel) {
       throw new ConflictError(`The card names ${order.pageLabel}'s order ${customOrderCode(code)}, not one of ${body.pageLabel}`, { reason: "code_other_page" });
     }
-    const carded = telegramRef !== null && await applyCustomStep(app, {
-      orderId: order.id, actor, viewer: null, now,
-      step: { action: "card", telegramRef, postedAt: body.postedAt === undefined ? null : new Date(body.postedAt), author: body.author ?? null },
-    });
+    const carded = telegramRef === null ? null : await cardStep(app, order.id, {
+      telegramRef, postedAt: body.postedAt === undefined ? null : new Date(body.postedAt), author: body.author ?? null,
+      // The login the create names comes first: the card's author fills only what it leaves empty.
+      ...(body.acceptedBy === undefined ? cardAuthorOf(body) : { ...(body.authorTelegramId === undefined ? {} : { authorTelegramId: body.authorTelegramId }) }),
+    }, actor, now);
     const applied = await applyToFound(app, scope, (await findCustomOrder(app.db, order.id))!, body, actor, now);
-    return withSales({
+    return withTaker(withSales({
       order: await agentOrderOf(app, scope, (await findCustomOrder(app.db, order.id))!, now),
-      outcome: carded || applied.changed ? "changed" as const : "unchanged" as const, event: null,
-    }, applied.sales);
+      outcome: carded?.changed === true || applied.changed ? "changed" as const : "unchanged" as const, event: null,
+    }, applied.sales), applied.taker ?? carded?.taker);
   }
   let pageId: number | null = null;
   let fanId: number | null = null;
@@ -291,6 +356,13 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
   // A fan that does not match stays the buyer's string, as the card names him: never a guess.
   if (fanId === null && body.fan !== undefined) buyer = body.fan.slice(0, 300);
   const pageLabel = body.pageLabel;
+  // «Принял»: the login the create names, else its work card's author by Telegram id — on the order's page, never by a name.
+  const takerEvidence = body.acceptedBy !== undefined
+    ? { taker: await takerByLogin(app, pageId, body.acceptedBy), source: "agent" as const, ref: null }
+    : body.cardKind === "work" && body.authorTelegramId !== undefined
+      ? { taker: pageId === null ? null : await findCustomTakerOnPage(app.db, { pageId, telegramUserId: body.authorTelegramId }), source: "card" as const, ref: telegramRef }
+      : null;
+  const taker = takerEvidence?.taker ?? null;
   const id = await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     if (pageId !== null && (fanId !== null || buyer !== null)) {
@@ -312,11 +384,13 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
     }
     return recordCustomOrder({ db }, {
       pageId, fanId, buyer, conversationRef, card: body.card, deadlineOn: body.deadlineOn ?? null,
-      acceptedByUserId: body.acceptedBy === undefined ? null : await personOf(app, body.acceptedBy),
+      acceptedByUserId: taker?.userId ?? null,
+      taker: taker === null ? null : { source: takerEvidence!.source, ref: takerEvidence!.ref, name: taker.name, person: false },
       origin: "agent", telegramRefs: telegramRef === null ? [] : [telegramRef], actor, now,
       sourceText: body.sourceText ?? null,
       cardPostedAt: body.postedAt === undefined ? null : new Date(body.postedAt),
       cardAuthor: body.author ?? null,
+      cardAuthorTelegramId: body.authorTelegramId ?? null,
       priceMills: body.priceMills ?? null,
       holdReason: body.holdReason ?? null,
       // A card posted earlier counts from its time (the checks and the delivery hints read it).
@@ -324,8 +398,27 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
     });
   });
   // The order is recorded; its sales are linked after it, each by its own step: one that does not hold is answered, not fatal.
+  // With no taker yet, a sale whose one home is one chatter's whole names them (the payment step).
   const sales = body.sales === undefined ? undefined : (await linkNamedSales(app, scope, id, body.sales, actor, now)).outcomes;
-  return withSales({ order: await agentOrderOf(app, scope, (await findCustomOrder(app.db, id))!, now), outcome: "created" as const, event: null }, sales);
+  const recorded = (await findCustomOrder(app.db, id))!;
+  const takerOutcome: CustomTakerResult | undefined = takerEvidence !== null && taker !== null ? { result: "set", source: takerEvidence.source, reason: null }
+    : recorded.acceptedByUserId !== null ? { result: "set", source: "sale", reason: null }
+    : takerEvidence !== null ? { result: "unchanged", source: takerEvidence.source, reason: "taker_unknown" }
+    : undefined;
+  return withTaker(withSales({ order: await agentOrderOf(app, scope, recorded, now), outcome: "created" as const, event: null }, sales), takerOutcome);
+}
+
+/** The card step with its author (a work card names the taker of an order with none): whether it changed, and the taker's outcome. */
+async function cardStep(
+  app: AgentApp,
+  orderId: number,
+  card: { telegramRef: string; postedAt?: Date | null; author?: string | null; authorTelegramId?: string; cardKind?: "work" | "model" },
+  actor: CustomActor,
+  now: Date,
+): Promise<{ changed: boolean; taker: CustomTakerResult | undefined }> {
+  const report: { event: CustomEventResult | null; taker?: CustomTakerResult } = { event: null };
+  const changed = await applyCustomStep(app, { orderId, step: { action: "card", ...card }, actor, viewer: null, now, report });
+  return { changed, taker: report.taker };
 }
 
 /** A refusal of a named sale as the payment step answers it: not found reads as the plane's 404. */
@@ -335,16 +428,26 @@ function saleRefused(verdict: Exclude<AgentCustomSaleOutcome["reason"], null>): 
   return new ConflictError(`The sale does not pay this order: ${verdict}`, { reason: verdict });
 }
 
-export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomScope, code: string, body: AgentCustomOrderUpdateBody, now: Date = new Date()) {
+export async function agentUpdateCustomOrder(app: AppContext, scope: AgentCustomScope, code: string, body: AgentCustomOrderUpdateBody, now: Date = new Date()) {
   // A step that names money or a message needs that capability besides write:customs: a key that only writes the
   // shooting gains nothing new (customs facts spec §11) — the price is money; a hold, an issue and its end are read in
   // the chats. Checked before the order is looked at.
   if ((body.action === "payment" || (body.action === "edit" && body.priceMills !== undefined)) && !scope.money) throw capabilityMissing("read:money");
   if ((body.action === "given" || body.action === "fan" || body.action === "fan_asked" || body.action === "issue" || body.action === "issue_clear"
-    || (body.action === "edit" && body.holdReason !== undefined)) && !scope.texts) throw capabilityMissing("read:messages");
+    || body.action === "board" || (body.action === "edit" && body.holdReason !== undefined)) && !scope.texts) throw capabilityMissing("read:messages");
   const id = parseCustomOrderCode(code);
   const order = id === null ? null : await findCustomOrder(app.db, id);
   if (order === null || !inGrant(scope, order)) throw notFound();
+  // On a person's word: the board's own step, as that person takes it there.
+  if (body.action === "board") {
+    const { person, requestRef } = await onWordOf(app, scope, body);
+    const viewer = await customViewerOf(app, person);
+    if (!seesOrder(viewer, order)) throw new ConflictError(`${body.onBehalfOf} does not see this order on the board`, { reason: "not_allowed" });
+    const changed = await boardStepAs(app, {
+      viewer, order, body: body.step, actor: { door: "api", agentKeyId: scope.principal.agentKeyId, onBehalfOfUserId: person.user.id }, now, requestRef,
+    });
+    return { order: await agentOrderOf(app, scope, (await findCustomOrder(app.db, order.id))!, now), outcome: changed ? "changed" as const : "unchanged" as const, event: null };
+  }
   const ref = (text: string) => parseTelegramRef(text)!;
   type MessageBody = { telegramRef?: string | undefined; at?: string | undefined; author?: string | undefined; excerpt?: string | undefined };
   const message = (input: MessageBody | undefined, eventRef: string | undefined): CustomMessageInput => ({
@@ -433,12 +536,12 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
       const beforeModel = order.state === "recorded" || order.state === "paid";
       if (!beforeModel && card !== undefined && order.telegramRefs.includes(card)) return unchanged();
       if (STEP_FROM.at_model.includes(order.state)) {
-        step = { action: "at_model", telegramRef: card };
+        step = { action: "at_model", telegramRef: card, ...cardAuthorOf(body) };
         break;
       }
       // The order is past that step already (the card copied once more): only the card is new, if any.
       if (card === undefined) return unchanged();
-      step = { action: "card", telegramRef: card };
+      step = { action: "card", telegramRef: card, ...cardAuthorOf(body) };
       break;
     }
     case "delivery":
@@ -477,8 +580,15 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
       step = { action: "message", kind: body.kind, message: message(body.message, body.eventRef) };
       break;
     case "card":
-      step = { action: "card", telegramRef: ref(body.telegramRef) };
+      step = { action: "card", telegramRef: ref(body.telegramRef), ...cardAuthorOf(body) };
       break;
+    case "accepted_by": {
+      // A login of the order's page; it fills only an order with none (409 taker_set, person_set otherwise).
+      const taker = await takerByLogin(app, order.pageId, body.acceptedBy);
+      if (taker === null) throw new ConflictError(`Nobody of the login ${body.acceptedBy} works on the order's page`, { reason: "taker_unknown" });
+      step = { action: "accepted_by", taker, by: "evidence", source: "agent" };
+      break;
+    }
   }
   // A step that names a message or an event the order already keeps changes nothing and answers `unchanged` — a
   // delivery, a revision, and a state by a message (partly, shot, refused) alike, whatever the order's state is now
@@ -501,13 +611,66 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
     // Recorded once already (a repeat after the order moved on): nothing new.
     return unchanged();
   }
-  // A message step says which event it names and whether the hub keeps it: a sender checks that, not the status.
-  const report: { event: CustomEventResult | null } = { event: null };
+  // A message step says which event it names and whether the hub keeps it: a sender checks that, not the status; a card's
+  // author, what it did to the taker.
+  const report: { event: CustomEventResult | null; taker?: CustomTakerResult } = { event: null };
   const changed = await applyCustomStep(app, { orderId: order.id, step, actor, viewer: null, now, report });
   return {
     order: await agentOrderOf(app, scope, (await findCustomOrder(app.db, order.id))!, now),
     outcome: changed ? "changed" as const : "unchanged" as const,
     event: report.event,
+    ...(report.taker === undefined || step.action === "accepted_by" ? {} : { taker: report.taker }),
+  };
+}
+
+/**
+ * The person an agent acts for on their word, and where they asked: a living login of the key's realm, as a full session
+ * of theirs would read (`principalOfLogin`) — the board's rules then give the agent no more than that person has.
+ */
+async function onWordOf(app: AppContext, scope: AgentCustomScope, body: { onBehalfOf: string; requestRef: string }): Promise<{ person: HumanAuthPrincipal; requestRef: string }> {
+  const userId = await personOf(app, body.onBehalfOf);
+  const person = await principalOfLogin(app, userId);
+  // A test key acts for the test team's people alone, a live one for the live agency's.
+  if (person === null || (person.sandbox?.test === true) !== isTestAgent(scope.principal)) {
+    throw new ConflictError(`No living person "${body.onBehalfOf}"`, { reason: "person_unknown" });
+  }
+  return { person, requestRef: parseTelegramRef(body.requestRef)! };
+}
+
+/**
+ * A finding answered on a person's word: the board's own answer (findings.ts `actOnCustomFindingAs`) as that person —
+ * the check's leader of its page, the customs lead, the owner; any other reads it as not found. A finding off the key's
+ * pages is not found either.
+ */
+export async function agentActOnCustomFinding(app: AppContext, scope: AgentCustomScope, findingId: string, body: AgentCustomFindingActBody, now: Date = new Date()) {
+  if (!scope.texts) throw capabilityMissing("read:messages");
+  const { person, requestRef } = await onWordOf(app, scope, body);
+  return actOnCustomFindingAs(app, {
+    person, findingId, body: body.step, now, requestRef,
+    actor: { door: "api", agentKeyId: scope.principal.agentKeyId, onBehalfOfUserId: person.user.id },
+    pageIds: scope.pages.map((page) => page.id), noPage: !isTestAgent(scope.principal),
+  });
+}
+
+/** At most this many events per call of the change feed. */
+const EVENTS_MAX = 200;
+
+/**
+ * What changed on the key's orders and findings after the cursor, the oldest first (the history, `object_events`): the
+ * order's code or the finding, the event, who (a person by name and login, or the key), on whose word, the changes.
+ */
+export async function agentCustomEvents(app: AgentApp, scope: AgentCustomScope, query: AgentCustomEventsQuery, now: Date = new Date()): Promise<AgentCustomEventsResponse> {
+  if (!scope.texts) throw capabilityMissing("read:messages");
+  const rows = await listCustomEventsAfter(app.db, {
+    after: query.after, pageIds: scope.pages.map((page) => page.id), noPage: !isTestAgent(scope.principal), limit: Math.min(query.limit, EVENTS_MAX),
+  });
+  return {
+    events: rows.map((row) => ({
+      id: row.id, at: row.at.toISOString(), object: row.objectType, code: row.orderId === null ? null : customOrderCode(row.orderId), findingId: row.findingId,
+      event: row.event, door: row.door, actor: row.actor, agentKey: row.agentKey, onBehalfOf: row.onBehalfOf, changes: row.changes,
+    })),
+    next: rows.at(-1)?.id ?? query.after,
+    serverNow: now.toISOString(),
   };
 }
 

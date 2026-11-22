@@ -16,7 +16,7 @@ function order(id: number, fields: Partial<CustomOrderRow>): CustomOrderRow {
   return {
     id, pageId: 1, pageLabel: "lora-1", platform: "fansly", modelName: "Lora", modelSlug: "lora", fanId: 7, fanRef: "7400000001", fanUsername: "fan_one",
     fanDisplayName: null, buyer: null, fanErasedAt: null, conversationRef: null, card: { task: "Заказ" }, deadlineOn: null, state: "recorded",
-    stateAt: NOW, stateNote: null, stateRef: null, givenMessageRef: null, givenAt: null, acceptedByUserId: 11, acceptedBy: "alice",
+    stateAt: NOW, stateNote: null, stateRef: null, givenMessageRef: null, givenAt: null, givenBy: null, acceptedByUserId: 11, acceptedBy: "alice",
     acceptedByName: "Alice", origin: "agent", contentopsRef: null, sourceText: null, partsDone: [], shotByHandAt: null, personFields: [], version: 1, openRevisions: 0,
     createdAt: NOW, updatedAt: NOW, paidGrossMills: 0, paidNetMills: 0, payments: 0, firstPaidAt: null, paymentReversed: false, telegramRefs: [],
     priceMills: null, deadlineDefault: false, paidWord: null, holdReason: null, fanAskedAt: null, fanAskedRef: null, issue: null, sentAt: null,
@@ -51,7 +51,7 @@ describe("custom checks: every finding waits for someone", () => {
     ];
     const SHOOT = { userId: 901 } as const;
     const phaseLead = (_page: number | null, phase: "check" | "shoot") => (phase === "check" ? LEAD : SHOOT);
-    const all = orderFindings({ orders, now: NOW, lead: LEAD, phaseLead, recorders: new Set(), onShift: new Map() });
+    const all = orderFindings({ orders, now: NOW, lead: LEAD, phaseLead });
     expect(all["custom.not_at_model"].map((finding) => [finding.key, finding.owner])).toEqual([["custom.not_at_model:K-101", LEAD]]);
     const shooting = all["custom.checked_not_at_model"];
     expect(shooting.map((finding) => [finding.key, finding.owner])).toEqual([
@@ -59,5 +59,33 @@ describe("custom checks: every finding waits for someone", () => {
       ["custom.checked_not_at_model:K-105", SHOOT],
     ]);
     expect(shooting[0]!.title).toContain("отказ");
+  });
+});
+
+describe("custom checks: «снят, отдайте фану» goes to the giver", () => {
+  const shot = (id: number, fields: Partial<CustomOrderRow> = {}) => order(id, { state: "shot", stateAt: new Date(NOW.getTime() - 13 * HOUR), payments: 1, ...fields });
+  const TAKER = { userId: 11 } as const;
+
+  it("the taker, asked to watch the video whole; with no taker the check's leader; no matter for whoever is on shift", () => {
+    const giverOf = (row: CustomOrderRow) => (row.acceptedByUserId !== null
+      ? { owner: { userId: row.acceptedByUserId }, kind: "taker" as const }
+      : { owner: LEAD, kind: "lead" as const });
+    const all = orderFindings({ orders: [shot(201), shot(202, { acceptedByUserId: null })], now: NOW, lead: LEAD, giverOf });
+    expect(all["custom.shot_not_given"].map((finding) => [finding.key, finding.owner])).toEqual([
+      ["custom.shot_not_given:K-201", TAKER],
+      ["custom.shot_not_given:K-202", LEAD],
+    ]);
+    expect(all["custom.shot_not_given"][0]!.title).toContain("посмотрите ролик целиком");
+    expect(all["custom.shot_not_given"][1]!.title).toContain("укажите принявшего");
+    // Retired: none is opened, so the pass closes the open ones.
+    expect(all["custom.give_on_shift"]).toEqual([]);
+  });
+
+  it("opens none while the move is not giving it (an issue is the owner's)", () => {
+    const all = orderFindings({
+      orders: [shot(203, { issue: { text: "другая карточка", by: null, at: NOW.toISOString() } })], now: NOW, lead: LEAD, factsOn: true,
+      moveOf: () => ({ what: "разобраться с расхождением" }),
+    });
+    expect(all["custom.shot_not_given"]).toEqual([]);
   });
 });

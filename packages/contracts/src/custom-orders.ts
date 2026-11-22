@@ -204,14 +204,37 @@ export type CustomOrderIssue = z.infer<typeof customOrderIssueSchema>;
  */
 export const CUSTOM_MOVE_WHO_KINDS = ["person", "shift", "model", "fan", "owner", "none"] as const;
 export type CustomMoveWhoKind = (typeof CUSTOM_MOVE_WHO_KINDS)[number];
+/**
+ * Who gives a shot order to the fan (the owner, 2026-11-22; leaders.ts `giverOf`): `taker` — the order's taker («принял»,
+ * a living login working on its page) answers for it; `lead` — nobody is the taker, the check's leader names who took it.
+ */
+export const CUSTOM_GIVER_KINDS = ["taker", "lead"] as const;
+export type CustomGiverKind = (typeof CUSTOM_GIVER_KINDS)[number];
 export const customOrderMoveSchema = z.object({
   /** The person's, the model's or the fan's name; null — the owner, or nobody named. */
   who: z.string().nullable(),
+  /** `shift` is no longer named: whoever is on shift may give a shot order, the move is the taker's (`onShift`). */
   whoKind: z.enum(CUSTOM_MOVE_WHO_KINDS),
-  /** What to do, in people's words: «передать модели», «отдать фану». */
+  /** The login of the person named (`whoKind` person); null — another kind. «Только мой ход» compares it, never a name. */
+  userId: intId.nullable(),
+  /** A shot order's move: the taker gives it, or the check's leader names the taker first; null — another move. */
+  giver: z.enum(CUSTOM_GIVER_KINDS).nullable(),
+  /** Someone else on shift on the fan's page now: they may give it too («на смене: X — тоже может отдать»); null — none. */
+  onShift: z.object({ userId: intId, name: z.string().nullable() }).nullable(),
+  /** What to do, in people's words: «передать модели», «посмотреть ролик целиком и отдать фану». */
   what: z.string(),
 });
 export type CustomOrderMove = z.infer<typeof customOrderMoveSchema>;
+
+/**
+ * Where an order's taker («принял») came from (`custom_order.accepted_by`): `manual` — a person chose it on the board;
+ * `agent` — an agent named the login; `card` — the author of the card in the chatters' work chat, by their Telegram id;
+ * `sale` — a linked sale whose one home is one chatter's whole; `backfill` — the one-off file.
+ */
+export const CUSTOM_TAKER_SOURCES = ["manual", "agent", "card", "sale", "backfill"] as const;
+export type CustomTakerSource = (typeof CUSTOM_TAKER_SOURCES)[number];
+/** A Telegram card of an order: `work` — posted in the chatters' work chat (its author took it); `model` — the copy in the model's group. */
+export const CUSTOM_CARD_KINDS = ["work", "model"] as const;
 
 /** The forwarding timer (customs facts spec C3): money linked or the owner's word, the card not at the model. */
 export const CUSTOM_TIMER_LEVELS = ["amber", "red"] as const;
@@ -267,8 +290,14 @@ export const customOrderSchema = z.object({
   payments: z.number().int().nonnegative(),
   givenAt: isoTimestamp.nullable(),
   givenMessageRef: z.string().nullable(),
-  /** Who took the order (a login); null — imported. */
+  /**
+   * «Отдал»: who sent the message that gave the order, as the extension reported the send (`client_send_attributions`),
+   * by the people registry's name; null — not known (a word, a send nobody reported).
+   */
+  givenBy: z.string().nullable(),
+  /** The order's taker («принял», a login): they answer for giving it to the fan; null — not named («не указан»). */
   acceptedBy: z.string().nullable(),
+  acceptedByUserId: intId.nullable(),
   /** The same person as the people registry names them; the login when the login has no person. */
   acceptedByName: z.string().nullable(),
   telegramRefs: z.array(z.string()),
@@ -379,11 +408,11 @@ export const customLookalikeSaleSchema = z.object({
  * The board's steps. Besides the path: `ungive` takes «отдан» back (the order is «снят» again), `retract` takes a
  * delivery back (the shooting's leader), `hold` / `unhold` the order's wait on purpose, `issue_clear` the agent's
  * sentence of a disagreement, `paid_word` the owner's word on the payment, `fan_asked_clear` the fan's «where is it»
- * answered (customs facts spec §6, §7, §9, §10).
+ * answered (customs facts spec §6, §7, §9, §10); `accepted_by` the order's taker named or corrected (in every state).
  */
 export const CUSTOM_ORDER_ACTIONS = [
   "edit", "deadline", "fan", "card", "payment", "unpay", "checked", "at_model", "partly", "shot", "revision", "refused", "given", "ungive",
-  "retract", "close", "cancel", "hold", "unhold", "issue_clear", "paid_word", "fan_asked_clear",
+  "retract", "close", "cancel", "hold", "unhold", "issue_clear", "paid_word", "fan_asked_clear", "accepted_by",
 ] as const;
 export type CustomOrderAction = (typeof CUSTOM_ORDER_ACTIONS)[number];
 
@@ -451,8 +480,10 @@ export const customOrdersBoardResponseSchema = z.object({
     /** «Ведёт кастомы»: the lead's steps on every order. The owner has them too. */
     lead: z.boolean(),
     owner: z.boolean(),
-    /** The viewer as the people registry names them (the login without a person): «Только мой ход» compares `move.who`. */
+    /** The viewer as the people registry names them (the login without a person). */
     name: z.string().nullable(),
+    /** The viewer's login: «Только мой ход» compares it with `move.userId` (never a name two people may share). */
+    userId: intId,
   }),
   /**
    * Who leads customs, for the board's header: per model of the pages the viewer sees (of the viewer's realm only), by
@@ -565,6 +596,8 @@ const note = z.string().trim().min(1).max(500);
 /** The agreed total, gross, in mills. */
 const priceMills = mills.positive().max(1_000_000_000);
 const ref = z.string().trim().min(1).max(64).regex(/^[1-9]\d{0,29}$/);
+/** A Hub login: the taker named («принял»), the person on whose word an agent writes. */
+const login = z.string().trim().min(1).max(64);
 /** A fan as a person gives it: a profile link, a username, or the platform's number. */
 const fanInput = z.string().trim().min(1).max(300);
 /** A person's undo names the history event it takes back (`history[].id`): the event records it as `undoOf`. */
@@ -616,6 +649,11 @@ export const customOrderActionBodySchema = z.discriminatedUnion("action", [
   }).strict(),
   /** The page answered the fan's «where is it»: the ask is off the order. */
   z.object({ action: z.literal("fan_asked_clear") }).strict(),
+  /**
+   * «Принял»: the order's taker, one of the page's chatters (`customOrderTakers`); null — not named. The owner's and the
+   * check's leader's, in every state. A person's taker is theirs: no evidence (a card, a sale, an agent) changes it again.
+   */
+  z.object({ action: z.literal("accepted_by"), acceptedBy: login.nullable() }).strict(),
 ]);
 export type CustomOrderActionBody = z.infer<typeof customOrderActionBodySchema>;
 
@@ -628,9 +666,31 @@ export const customOrderCreateBodySchema = z.object({
   /** The agreed total, gross (the card's `price` stays the team's words). */
   priceMills: priceMills.optional(),
   telegramRef: telegramRefInputSchema.optional(),
+  /**
+   * «Принял»: one of the page's chatters (their login, `customOrderTakers`). Absent — the sale's one home when one chatter
+   * holds it whole, else the person recording when they are a chatter working on the page, else nobody.
+   */
+  acceptedBy: login.optional(),
 }).strict().refine((body) => body.transactionRef !== undefined || body.pageLabel !== undefined, {
   message: "a sale, or a page", path: ["pageLabel"],
 });
+
+/** Who may be named an order's taker on a page («Принял»): `transactionRef` — the sale a record starts from. */
+export const customOrderTakersQuerySchema = z.object({
+  pageLabel: z.string().trim().min(1).max(120),
+  transactionRef: ref.optional(),
+}).strict();
+
+export const customOrderTakersResponseSchema = z.object({
+  /** The page's chatters: people working on it with a living login of its realm, by the registry's name. */
+  takers: z.array(z.object({ login: z.string(), name: z.string() })),
+  /**
+   * Whom a record names when the person chooses none: the sale's one home when one chatter holds it whole, else the
+   * viewer when they are one of `takers`; null — nobody (never the owner or a lead by default).
+   */
+  suggested: z.string().nullable(),
+});
+export type CustomOrderTakersResponse = z.infer<typeof customOrderTakersResponseSchema>;
 
 export const customSaleParamsSchema = z.object({ transactionRef: ref });
 export const customSaleDismissResponseSchema = z.object({ dismissed: z.boolean() });
@@ -699,6 +759,8 @@ export const customFindingActionBodySchema = z.discriminatedUnion("action", [
     /** The agreed total, gross. */
     priceMills: priceMills.optional(),
     telegramRef: telegramRefInputSchema.optional(),
+    /** «Принял», as on «Записать кастом»: absent — the finding's sale's one home, else the person when a chatter of the page. */
+    acceptedBy: login.optional(),
   }).strict(),
   z.object({ action: z.literal("link"), code: customOrderCodeSchema }).strict(),
   z.object({ action: z.literal("dismiss"), reason: z.enum(CUSTOM_FINDING_DISMISS_REASONS) }).strict(),
@@ -767,16 +829,30 @@ export const agentCustomOrdersResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
-const login = z.string().trim().min(1).max(64);
 /** Why the order waits on purpose (the fan is unreachable, a prop is awaited). */
 const holdReason = note;
+/** A Telegram user's numeric id (the card's author in the chatters' work chat). */
+const telegramUserId = z.string().trim().regex(/^[1-9]\d{0,19}$/);
+/**
+ * A card's author and kind (the reader of the chats): `work` — the card in the chatters' work chat, whose author took
+ * the order (their Telegram id names its taker when the order has none); `model` — its copy in the model's group, whose
+ * author names nobody.
+ */
+const cardAuthorFields = {
+  authorTelegramId: telegramUserId.optional(),
+  cardKind: z.enum(CUSTOM_CARD_KINDS).optional(),
+};
 
 export const agentCustomOrderCreateBodySchema = z.object({
   /** The fan's page, of the key's grant; absent — not known yet. */
   pageLabel: z.string().trim().min(1).max(120).optional(),
   /** The fan: a profile link, a username or the platform's number; unmatched it stays the buyer's string. */
   fan: fanInput.optional(),
-  /** The chatter who took the order (their login). */
+  /**
+   * The chatter who took the order (their login), one working on the order's page; absent — a `work` card's author
+   * (`authorTelegramId`), else a named sale's one home when one chatter holds it whole. It fills only an order with no taker
+   * and never fails the create: the answer's `taker` says whether it named one and why not.
+   */
   acceptedBy: login.optional(),
   card: customOrderCardSchema,
   deadlineOn: day.optional(),
@@ -794,6 +870,8 @@ export const agentCustomOrderCreateBodySchema = z.object({
   /** When the card was posted and by whom (its Telegram name): the order counts from then. */
   postedAt: isoDateTime({ offset: true }).optional(),
   author: z.string().trim().min(1).max(120).optional(),
+  /** The card's author by Telegram id and where the card is (`work` names the taker; never a name): the card's own. */
+  ...cardAuthorFields,
   /** The card's whole text as posted, without Markdown. */
   sourceText: z.string().trim().min(1).max(8000).optional(),
   /**
@@ -864,8 +942,8 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
    */
   z.object({ action: z.literal("issue"), text: z.string().trim().min(1).max(200), onBehalfOf: login.optional() }).strict(),
   z.object({ action: z.literal("issue_clear"), onBehalfOf: login.optional() }).strict(),
-  /** The card reached the model's group (its copy there, if any). */
-  z.object({ action: z.literal("at_model"), telegramRef: telegramRefInputSchema.optional(), onBehalfOf: login.optional() }).strict(),
+  /** The card reached the model's group (its copy there, if any; its author and kind as `card`'s). */
+  z.object({ action: z.literal("at_model"), telegramRef: telegramRefInputSchema.optional(), ...cardAuthorFields, onBehalfOf: login.optional() }).strict(),
   /**
    * The model delivered (a file, an album, the line «6-08 го хард.mov»): the message is kept with its excerpt;
    * `complete` — that part is whole now. The order's readiness is by its current round, per part: a part is ready
@@ -924,8 +1002,25 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
     action: z.literal("message"), kind: z.enum(["repost", "confirmation", "note"]), eventRef: customOrderEventRefSchema.optional(),
     message: agentMessageSchema, onBehalfOf: login.optional(),
   }).strict(),
-  /** Attach a Telegram card (a copy in another chat) to the order. */
-  z.object({ action: z.literal("card"), telegramRef: telegramRefInputSchema, onBehalfOf: login.optional() }).strict(),
+  /**
+   * Attach a Telegram card (a copy in another chat) to the order. A `work` card whose author (`authorTelegramId`) is a
+   * chatter working on the order's page names the taker when the order has none; a `model` card never does.
+   */
+  z.object({ action: z.literal("card"), telegramRef: telegramRefInputSchema, ...cardAuthorFields, onBehalfOf: login.optional() }).strict(),
+  /**
+   * «Принял»: the chatter who took the order (their login, working on the order's page: else 409 `taker_unknown`). Only
+   * while the order names none: another taker set is 409 `taker_set` (a person corrects it on the board); the same one is
+   * `unchanged`.
+   */
+  z.object({ action: z.literal("accepted_by"), acceptedBy: login, onBehalfOf: login.optional() }).strict(),
+  /**
+   * On a person's word: any step of the board «Кастомы» (`step`, the board's own body), as that person takes it there —
+   * `onBehalfOf` the person's login, `requestRef` the Telegram message where they asked. Hub checks the person's own
+   * rights by the board's own step (the agent never gets more than the person: 409 `not_allowed`); a value set so is the
+   * person's (an agent's or the system's evidence never overwrites it). The history keeps the key, the person and the
+   * request.
+   */
+  z.object({ action: z.literal("board"), step: customOrderActionBodySchema, onBehalfOf: login, requestRef: telegramRefInputSchema }).strict(),
 ]).superRefine((body, context) => {
   // A message step is known by its Telegram link, or by the sender's own eventRef; a repost is a card, so a link.
   if ((body.action === "delivery" || body.action === "revision" || body.action === "message") && body.message.telegramRef === undefined
@@ -981,6 +1076,16 @@ export const agentCustomOrderResponseSchema = z.object({
   event: agentCustomOrderEventSchema.nullable(),
   /** A create that named sales: each, and what became of it. Absent — none named. */
   sales: z.array(agentCustomSaleOutcomeSchema).optional(),
+  /**
+   * A call that carried evidence of the taker (`acceptedBy`, a `work` card's author, sales): `set` — it names the taker
+   * now (by `source`); `unchanged` — not, and why: `taker_set` (another taker is set: never replaced), `person_set` (a
+   * person decided the taker), `taker_unknown` (it names nobody working on the order's page). Absent — no such evidence.
+   */
+  taker: z.object({
+    result: z.enum(["set", "unchanged"]),
+    source: z.enum(CUSTOM_TAKER_SOURCES).nullable(),
+    reason: z.enum(["taker_set", "person_set", "taker_unknown"]).nullable(),
+  }).optional(),
 });
 
 /** The reader of the models' groups: the cards it found that no order has, for the lead. */
@@ -1029,6 +1134,50 @@ export const agentCustomFindingsBodySchema = z.object({
   })).min(1).max(200),
 }).strict();
 
+/**
+ * A finding answered on a person's word (`customFindingAct`'s body as `step`): the person's own rights, by the board's own
+ * answer — the check's leader of its page, the customs lead, the owner; `requestRef` — where they asked.
+ */
+export const agentCustomFindingActBodySchema = z.object({
+  step: customFindingActionBodySchema,
+  onBehalfOf: login,
+  requestRef: telegramRefInputSchema,
+}).strict();
+
+/** What changed on the key's orders and findings, after a cursor (`after`: the last event's id read; 0 — from the start). */
+export const agentCustomEventsQuerySchema = z.object({
+  after: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(200).default(200),
+}).strict();
+
+const eventPersonSchema = z.object({ name: z.string(), login: z.string() });
+export const agentCustomEventsResponseSchema = z.object({
+  /** The oldest first. */
+  events: z.array(z.object({
+    /** The event's id: the next call's `after` is the last one's. */
+    id: intId,
+    at: isoTimestamp,
+    /** An order's step (`custom_order.*`), or a person's answer to a finding (`custom_finding.*`). */
+    object: z.enum(["custom_order", "custom_finding"]),
+    /** The order's code; null — a finding's event. */
+    code: z.string().nullable(),
+    findingId: intId.nullable(),
+    event: z.string(),
+    /** extension | workboard | telegram | api (an agent key) | system | contentops. */
+    door: z.string(),
+    /** The person who took it; null — an agent key or Hub itself. */
+    actor: eventPersonSchema.nullable(),
+    /** The agent key's name; null — none. */
+    agentKey: z.string().nullable(),
+    /** On whose word an agent took it. */
+    onBehalfOf: eventPersonSchema.nullable(),
+    changes: z.record(z.string(), z.unknown()),
+  })),
+  /** The cursor for the next call: the last event's id, or `after` when there is none. */
+  next: z.number().int().nonnegative(),
+  serverNow: isoTimestamp,
+});
+
 export const agentCustomFindingsResponseSchema = z.object({
   findings: z.array(z.object({
     source: z.enum(CUSTOM_FINDING_SOURCES),
@@ -1060,3 +1209,6 @@ export type AgentCustomCardsBody = z.infer<typeof agentCustomCardsBodySchema>;
 export type AgentCustomSaleOutcome = z.infer<typeof agentCustomSaleOutcomeSchema>;
 export type AgentCustomFindingsBody = z.infer<typeof agentCustomFindingsBodySchema>;
 export type AgentCustomFindingsResponse = z.infer<typeof agentCustomFindingsResponseSchema>;
+export type AgentCustomFindingActBody = z.infer<typeof agentCustomFindingActBodySchema>;
+export type AgentCustomEventsQuery = z.infer<typeof agentCustomEventsQuerySchema>;
+export type AgentCustomEventsResponse = z.infer<typeof agentCustomEventsResponseSchema>;

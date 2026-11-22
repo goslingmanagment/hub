@@ -1,6 +1,9 @@
 import {
   agentCustomCardsBodySchema,
   agentCustomCardsResponseSchema,
+  agentCustomEventsQuerySchema,
+  agentCustomEventsResponseSchema,
+  agentCustomFindingActBodySchema,
   agentCustomFindingsBodySchema,
   agentCustomFindingsResponseSchema,
   agentCustomOrderCreateBodySchema,
@@ -21,6 +24,8 @@ import {
   customOrdersBoardResponseSchema,
   customOrdersDoneQuerySchema,
   customOrdersDoneResponseSchema,
+  customOrderTakersQuerySchema,
+  customOrderTakersResponseSchema,
   customSaleDismissResponseSchema,
   customSaleParamsSchema,
 } from "./custom-orders.ts";
@@ -107,6 +112,15 @@ export const customOrderRouteSchemas = {
     body: customFindingActionBodySchema,
     response: { 200: customFindingActionResponseSchema, ...sessionErrors },
   },
+  customOrderTakers: {
+    auth: { kind: "any" }, tags: ["admin"],
+    summary: "«Принял»: who may be named a custom order's taker on a page — its chatters — and whom a record names by default",
+    description: "Database only. A page the viewer sees (else 404); the test realm's people for a test page only. The default: the "
+      + "sale's one home when one chatter holds it whole, else the viewer when they are a chatter of the page; never the owner "
+      + "or a lead." + FRAME_TOKEN,
+    querystring: customOrderTakersQuerySchema,
+    response: { 200: customOrderTakersResponseSchema, ...sessionErrors },
+  },
   customOrderCreate: {
     auth: { kind: "any" }, tags: ["admin"],
     summary: "«Записать кастом» on the board: from a sale that looks like a custom, or on a page for a fan",
@@ -144,7 +158,8 @@ export const customOrderRouteSchemas = {
       + " the deadline, an issue (needs write:customs); a payment (also read:money); «отдан» by a message, the fan, the fan's «where is"
       + " it» (also read:messages)",
     description: "Database only. What a step names — a sale, a message, a fan — is one Hub holds on the key's pages, checked by Hub "
-      + "(a page outside them is 404); a refusal is 409 with its reason.",
+      + "(a page outside them is 404); a refusal is 409 with its reason. `board` (also read:messages): any step of the board "
+      + "«Кастомы» on a person's word (`onBehalfOf`, `requestRef`), checked against that person's own rights by the board's step.",
     params: customOrderParamsSchema,
     body: agentCustomOrderUpdateBodySchema,
     response: { 200: agentCustomOrderResponseSchema, ...agentErrors },
@@ -156,6 +171,25 @@ export const customOrderRouteSchemas = {
     description: "Database only. Each once by `(source, ref)`, on the key's pages; the check's leader of the page resolves an open one.",
     body: agentCustomFindingsBodySchema,
     response: { 200: agentCustomFindingsResponseSchema, ...agentErrors },
+  },
+  agentCustomFindingAct: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "Answer a finding of a custom with no order on a person's word: record, link, dismiss or reopen it (needs write:customs"
+      + " and read:messages)",
+    description: "Database only. As the board's answer by that person (`onBehalfOf`): the check's leader of the finding's page, the "
+      + "customs lead or the owner, else 404; `requestRef` — the Telegram message where they asked, kept in the history.",
+    params: customFindingParamsSchema,
+    body: agentCustomFindingActBodySchema,
+    response: { 200: customFindingActionResponseSchema, ...agentErrors },
+  },
+  agentCustomEvents: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "What changed on the key's custom orders and findings after a cursor, the oldest first (needs write:customs and"
+      + " read:messages)",
+    description: "Database only. The orders' history (`custom_order.*`) and the people's answers to findings (`custom_finding.*`) of "
+      + "the key's pages (an order of no known page: a live key's), at most `limit`; `next` — the cursor for the next call.",
+    querystring: agentCustomEventsQuerySchema,
+    response: { 200: agentCustomEventsResponseSchema, ...agentErrors },
   },
   agentCustomCards: {
     auth: { kind: "agentKey" }, tags: ["agent"],

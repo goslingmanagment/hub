@@ -80,7 +80,7 @@ export function boardOrderWire(
   return { ...order, ...(withCard ? { card } : {}), volume: card.duration ?? null };
 }
 
-/** The viewer as the people registry names them, else their login: «Только мой ход» compares it with `move.who`. */
+/** The viewer as the people registry names them, else their login. */
 function viewerName(leaders: CustomLeaderContext, principal: HumanAuthPrincipal): string | null {
   const personId = personOfLogin(leaders.facts, principal.user.id);
   const named = personId === null ? null : leaders.facts.people.find((person) => person.personId === personId)?.name;
@@ -200,7 +200,7 @@ export async function readCustomOrdersBoard(
   const visible = rows.filter((row) => seesOrder(viewer, row));
   const fans = [...new Set(findings.map((row) => row.fanDisplayName ?? row.fanUsername).filter((name): name is string => name !== null))];
   return {
-    viewer: { lead: leadsSteps(viewer), owner: viewer.role === "owner", name: viewerName(leaders, principal) },
+    viewer: { lead: leadsSteps(viewer), owner: viewer.role === "owner", name: viewerName(leaders, principal), userId: principal.user.id },
     // The header by the one rule, for the models of the pages the viewer sees, of their realm (never a global right).
     leads: boardLeads(leaders.facts, scope.pageIds, viewer.realm?.test === true),
     factsOn,
