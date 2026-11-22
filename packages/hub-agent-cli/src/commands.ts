@@ -27,10 +27,13 @@ import {
   agentMatterCommentBodySchema,
   agentMatterOpenBodySchema,
   agentCustomCardsBodySchema,
+  agentCustomFindingActBodySchema,
   agentCustomFindingsBodySchema,
   agentCustomOrderCreateBodySchema,
   agentCustomOrderUpdateBodySchema,
+  CUSTOM_CARD_KINDS,
   CUSTOM_FINDING_SOURCES,
+  CUSTOM_ORDER_ACTIONS,
   CUSTOM_ORDER_STATES,
   adminPersonUpdateBodySchema,
   agentPeopleQuerySchema,
@@ -1963,13 +1966,23 @@ function customHint(error: { status: number | null; code: string | null }): stri
   if (error.status === 409 && reason === "unknown_event") return "unknown_event: the order has no delivery of that ref (read its messages: hub custom list --code K-…)";
   if (error.status === 409 && reason === "event_taken") return "event_taken: this eventRef names another message of the order: an event's ref is its own";
   if (error.status === 409 && reason === "person_unknown") return "No living Hub login of that name: check --accepted-by / --on-behalf-of";
+  if (error.status === 409 && reason === "taker_unknown") return "taker_unknown: nobody of that login works on the order's page (the taker is one of its chatters)";
+  if (error.status === 409 && reason === "taker_set") {
+    return "taker_set: the order names another taker; evidence never replaces it. A person corrects it: hub custom board K-… --step"
+      + " accepted_by --accepted-by <login> --on-behalf-of <their login> --request <their message>";
+  }
+  if (error.status === 409 && reason === "person_set") return "person_set: a person decided this order's taker; only a person changes it (hub custom board … on their word)";
+  if (error.status === 409 && reason === "not_allowed") {
+    return "not_allowed: the step is not from the order's state, or (custom board) not that person's own on the board — the agent never"
+      + " gets more than the person";
+  }
   if (error.status === 404) return "No such order, or its page is outside this key's grant (an order of no known page is every key's)";
   return null;
 }
 
 const CUSTOM_STEPS = [
   "at_model", "delivery", "partly", "shot", "revision", "revision_done", "refused", "cancel", "message", "edit", "card",
-  "payment", "given", "fan", "fan_asked", "deadline", "issue", "issue_clear",
+  "payment", "given", "fan", "fan_asked", "deadline", "issue", "issue_clear", "accepted_by",
 ] as const;
 type CustomStepName = (typeof CUSTOM_STEPS)[number];
 const CUSTOM_MESSAGE_KINDS = ["repost", "confirmation", "note"] as const;
@@ -2032,10 +2045,13 @@ export function customStepBody(values: HubOptionValues, deps: HubRunDeps) {
   let body: Record<string, unknown>;
   switch (step) {
     case "at_model":
-      body = { telegramRef: readString(values, "card") };
+      body = { telegramRef: readString(values, "card"), ...customCardAuthor(values) };
       break;
     case "card":
-      body = { telegramRef: requireString(values, "card") };
+      body = { telegramRef: requireString(values, "card"), ...customCardAuthor(values) };
+      break;
+    case "accepted_by":
+      body = { acceptedBy: requireString(values, "accepted-by") };
       break;
     case "payment":
       body = { sale: customSale(requireString(values, "sale")) };
@@ -2107,6 +2123,49 @@ export function customStepBody(values: HubOptionValues, deps: HubRunDeps) {
   return checkedDraft(agentCustomOrderUpdateBodySchema, defined({ action: step, ...defined(body), onBehalfOf }));
 }
 
+/** A card's author by Telegram id (`--author-tg`) and where the card is (`--card-kind work|model`: a work card names the taker). */
+function customCardAuthor(values: HubOptionValues) {
+  return defined({ authorTelegramId: readString(values, "author-tg"), cardKind: readEnum(values, "card-kind", CUSTOM_CARD_KINDS) });
+}
+
+/** On a person's word: who (`--on-behalf-of`) and where they asked (`--request`, the Telegram message). */
+function customOnWord(values: HubOptionValues) {
+  return { onBehalfOf: requireString(values, "on-behalf-of"), requestRef: requireString(values, "request") };
+}
+
+/**
+ * `custom board`'s body: the board's own step (`--step`, the rest of its body from `--file` and the flags), on a person's
+ * word. Hub checks that person's own rights on the board.
+ */
+export function customBoardBody(values: HubOptionValues, deps: HubRunDeps) {
+  const action = requireEnum(values, "step", CUSTOM_ORDER_ACTIONS);
+  const fromFile = readJsonObject(values, deps, "file") ?? {};
+  const accepted = readString(values, "accepted-by");
+  const deadline = readString(values, "on");
+  const step = {
+    ...fromFile,
+    ...defined({
+      reason: readString(values, "reason"),
+      note: readString(values, "note"),
+      transactionRef: readString(values, "sale"),
+      messageRef: readString(values, "message"),
+      telegramRef: readString(values, "card"),
+      acceptedBy: accepted === undefined ? undefined : accepted === "none" ? null : accepted,
+      deadlineOn: deadline === undefined ? undefined : deadline === "none" ? null : deadline,
+    }),
+    action,
+  };
+  return checkedDraft(agentCustomOrderUpdateBodySchema, { action: "board", step, ...customOnWord(values) });
+}
+
+/** `custom finding`'s body: a finding's answer (`--step record|link|dismiss|reopen`, the rest from `--file` and the flags), on a person's word. */
+export function customFindingActBody(values: HubOptionValues, deps: HubRunDeps) {
+  const action = requireEnum(values, "step", ["record", "link", "dismiss", "reopen"] as const);
+  const fromFile = readJsonObject(values, deps, "file") ?? {};
+  const step = { ...fromFile, ...defined({ code: readString(values, "code"), reason: readString(values, "reason"), acceptedBy: readString(values, "accepted-by") }), action };
+  return checkedDraft(agentCustomFindingActBodySchema, { step, ...customOnWord(values) });
+}
+
 /** `custom create`'s body: the card's JSON from --file, the flags laid over it. */
 export function customCreateBody(values: HubOptionValues, deps: HubRunDeps) {
   const fromFile = readJsonObject(values, deps, "file") ?? {};
@@ -2117,6 +2176,7 @@ export function customCreateBody(values: HubOptionValues, deps: HubRunDeps) {
       fan: readString(values, "fan"),
       acceptedBy: readString(values, "accepted-by"),
       telegramRef: readString(values, "card"),
+      ...customCardAuthor(values),
       deadlineOn: readString(values, "deadline"),
       onBehalfOf: readString(values, "on-behalf-of"),
       another: readFlag(values, "another") ? true : undefined,
@@ -2205,8 +2265,10 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       file: { kind: "string", describe: "The order as a JSON object (required): {card: {task, price, duration, …}, …}; - for stdin" },
       page: { kind: "string", describe: "The fan's page, of this key's grant" },
       fan: { kind: "string", describe: "The fan: a profile link, a username or the platform's number" },
-      "accepted-by": { kind: "string", describe: "The Hub login of the chatter who took the order" },
+      "accepted-by": { kind: "string", describe: "The Hub login of the chatter who took the order (one of its page's chatters)" },
       card: { kind: "string", describe: "The card's message in Telegram, when it is posted already" },
+      "author-tg": { kind: "string", describe: "The card's author by Telegram id (digits): a work card's author names the taker, never a name" },
+      "card-kind": { kind: "string", describe: "work (the chatters' work chat: its author took the order) | model (the copy in the model's group)" },
       deadline: { kind: "string", describe: "The deadline, YYYY-MM-DD (Moscow)" },
       "on-behalf-of": { kind: "string", describe: "The Hub login on whose word the agent writes" },
       another: { kind: "boolean", describe: "One more order for a fan who has an open one on the page (else 409 open_orders)" },
@@ -2267,6 +2329,9 @@ const CUSTOM_COMMANDS: HubCommand[] = [
       reason: { kind: "string", describe: "Why the model refused, why the order is cancelled, or why the deadline moved" },
       kind: { kind: "string", describe: `A message's kind: ${CUSTOM_MESSAGE_KINDS.join(" | ")} (a repost also becomes a card of the order)` },
       card: { kind: "string", describe: "A Telegram card: its copy in the model's group (at_model), or one to attach (card)" },
+      "author-tg": { kind: "string", describe: "card, at_model: the card's author by Telegram id (digits)" },
+      "card-kind": { kind: "string", describe: "card, at_model: work (its author took the order: names the taker of an order with none) | model" },
+      "accepted-by": { kind: "string", describe: "accepted_by: the Hub login of the chatter who took the order (fills only an order with none)" },
       "card-file": { kind: "string", describe: "An edit: the changed card fields as a JSON object (null empties a field); - for stdin" },
       deadline: { kind: "string", describe: "An edit: the deadline YYYY-MM-DD (Moscow), or none" },
       "source-file": { kind: "string", describe: "An edit: the card's whole text as posted, from a file" },
@@ -2281,6 +2346,75 @@ const CUSTOM_COMMANDS: HubCommand[] = [
     },
     hint: customHint,
     run: (client, values, deps, args) => client.agentCustomOrderUpdate({ params: { code: args[0]! }, body: customStepBody(values, deps) }),
+  },
+  {
+    name: "custom board",
+    operation: "agentCustomOrderUpdate",
+    summary:
+      "On a person's word: any step of Workboard «Кастомы» on the order, as that person takes it there (--step: the board's step;"
+      + " the rest of its body from --file and the flags), --on-behalf-of their login, --request the Telegram message where they"
+      + " asked. Hub checks the person's own rights on the board (409 not_allowed: not theirs — the agent never gets more than the"
+      + " person); what it sets is the person's (no evidence overwrites it), and the history keeps this key, the person and the"
+      + " request. E.g. --step accepted_by --accepted-by <login> (none: not named), --step hold --reason …, --step unhold, --step"
+      + " ungive, --step unpay --sale <saleRef>, --step close, --step given (by their word), --step deadline --on YYYY-MM-DD,"
+      + " --step cancel --reason …. Exit 0 — changed or unchanged; 4 — refused or no answer. Needs write:customs and read:messages.",
+    example: "hub custom board K-123 --step accepted_by --accepted-by ivan-2 --on-behalf-of nikita --request https://t.me/c/2600000001/5/777",
+    arguments: CUSTOM_CODE_ARGUMENT,
+    options: {
+      step: { kind: "string", describe: `The board's step (required): ${CUSTOM_ORDER_ACTIONS.join(" | ")}` },
+      "on-behalf-of": { kind: "string", describe: "The Hub login of the person who asked (required)" },
+      request: { kind: "string", describe: "The Telegram message where they asked (required): https://t.me/c/<chat>/<topic>/<msg> or tg:…" },
+      file: { kind: "string", describe: "The rest of the board's step body as a JSON object (card, priceMills, word, part, …); - for stdin" },
+      "accepted-by": { kind: "string", describe: "accepted_by: the taker's login, or none" },
+      reason: { kind: "string", describe: "hold, refused, cancel, retract: the reason" },
+      note: { kind: "string", describe: "partly, revision: the note" },
+      sale: { kind: "string", describe: "payment, unpay: Hub's id of the sale" },
+      message: { kind: "string", describe: "given, ungive: the page's platform message id" },
+      card: { kind: "string", describe: "card, at_model: the Telegram card" },
+      on: { kind: "string", describe: "deadline: YYYY-MM-DD (Moscow), or none" },
+    },
+    hint: customHint,
+    run: (client, values, deps, args) => client.agentCustomOrderUpdate({ params: { code: args[0]! }, body: customBoardBody(values, deps) }),
+  },
+  {
+    name: "custom finding",
+    operation: "agentCustomFindingAct",
+    summary:
+      "On a person's word: answer a finding of a custom with no order as that person does on the board — --step record (the order's"
+      + " card from --file {card, pageLabel, fan, priceMills, telegramRef, acceptedBy}), link (--code K-…), dismiss (--reason"
+      + ` ${["not_custom", "sexting", "unused", "duplicate", "test", "not_asked"].join(" | ")}) or reopen; --on-behalf-of their login,`
+      + " --request where they asked. Hub checks their own right (the check's leader of the finding's page, the customs lead, the"
+      + " owner; else 404). Exit 0 — answered; 4 — refused or no answer. Needs write:customs and read:messages.",
+    example: "hub custom finding 73 --step link --code K-135 --on-behalf-of nikita --request https://t.me/c/2600000001/5/778",
+    arguments: { name: "findingId", describe: "the finding's id", min: 1, max: 1 },
+    options: {
+      step: { kind: "string", describe: "record | link | dismiss | reopen (required)" },
+      "on-behalf-of": { kind: "string", describe: "The Hub login of the person who asked (required)" },
+      request: { kind: "string", describe: "The Telegram message where they asked (required)" },
+      file: { kind: "string", describe: "record: the order as a JSON object {card, …}; - for stdin" },
+      code: { kind: "string", describe: "link: the order's code, K-<number>" },
+      reason: { kind: "string", describe: "dismiss: why it is no order" },
+      "accepted-by": { kind: "string", describe: "record: the taker's login" },
+    },
+    hint: customHint,
+    run: (client, values, deps, args) => client.agentCustomFindingAct({ params: { findingId: args[0]! }, body: customFindingActBody(values, deps) }),
+  },
+  {
+    name: "custom events",
+    operation: "agentCustomEvents",
+    summary:
+      "What changed on this key's custom orders and findings after a cursor, the oldest first: each event's id, time, the order's"
+      + " code (or the finding), the event (custom_order.* — a step; custom_finding.* — a person's answer to a finding), the door,"
+      + " who (a person by name and login, or the agent key), on whose word, and the changes. --after: the last id read (0 — from"
+      + " the start); the answer's `next` is the next call's --after. At most --limit (≤ 200). Exit 0 — answered; 4 — refused or no"
+      + " answer. Needs write:customs and read:messages.",
+    example: "hub custom events --after 120345",
+    options: {
+      after: { kind: "number", describe: "The last event id read (default 0)" },
+      limit: { kind: "number", describe: "At most this many events (default and at most 200)" },
+    },
+    hint: customHint,
+    run: (client, values) => client.agentCustomEvents({ query: defined({ after: readNumber(values, "after"), limit: readNumber(values, "limit") }) }),
   },
   {
     name: "custom cards",
