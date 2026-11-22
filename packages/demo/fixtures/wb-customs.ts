@@ -141,6 +141,8 @@ const SCENARIOS: readonly Scenario[] = [
   { state: "recorded", page: "mia-2", due: 9, stepHours: 3, paid: 0, price: 65_000 },
   { state: "given", page: "mia-1", due: 1, stepHours: 20, paid: 100, price: 310_000 },
   { state: "given", page: "ivy-1", due: -1, stepHours: 50, paid: 100, price: 145_000 },
+  // Given, and OnlyFans took the sale back after it: it burns, the owner's move, and does not close by itself.
+  { state: "given", page: "mia-of", due: 1, stepHours: 30, paid: 100, price: 95_000, reversed: true },
   { state: "closed", page: "mia-2", due: -6, stepHours: 24 * 5, paid: 100, price: 205_000 },
   { state: "closed", page: "nova-1", due: -10, stepHours: 24 * 9, paid: 100, price: 115_000 },
   { state: "closed", page: "mia-3", due: -14, stepHours: 24 * 16, paid: 100, price: 85_000 },
@@ -305,6 +307,8 @@ function factsOf(order: DemoOrder) {
  * file; whoever is on shift (every third shot order) or the acceptor for a shot one; the model while she shoots.
  */
 function demoMove(order: DemoOrder, facts: CustomOrder["facts"], fanName: string | null, modelName: string | null): CustomOrder["move"] {
+  if (order.state === "given" && order.holdReason === null && facts.paid.value === "conflict") return { who: null, whoKind: "owner", what: "разобраться с возвратом оплаты" };
+  if (order.state === "given" && order.holdReason === null && order.issue !== null) return { who: null, whoKind: "owner", what: "разобраться с расхождением" };
   if (["given", "closed", "cancelled"].includes(order.state)) return null;
   if (order.holdReason !== null) return { who: null, whoKind: "owner", what: "решить, когда продолжить" };
   if (order.state === "refused") return { who: null, whoKind: "owner", what: "решить после отказа модели" };
@@ -382,6 +386,9 @@ function wire(order: DemoOrder, now: number): CustomOrder {
   };
 }
 
+/** A given order something still stands against (it burns): the board lists it with the live ones, as Hub does. */
+const givenStands = (order: DemoOrder, now: number) => order.state === "given" && wire(order, now).burning;
+
 /** An order on the board's lists: without its card while the facts screen is on. */
 function boardWire(order: DemoOrder, now: number, withCard: boolean): CustomBoardOrder {
   const { card, ...rest } = wire(order, now);
@@ -397,7 +404,7 @@ function visible(viewer: CustomViewer, order: DemoOrder): boolean {
 
 const rightsOf = (order: DemoOrder) => ({
   pageId: pageIdOf(order.page), state: order.state, acceptedByUserId: DEMO_USERS.find((user) => user.username === order.acceptedBy)?.id ?? null,
-  holdReason: order.holdReason, issue: order.issue,
+  holdReason: order.holdReason, issue: order.issue, fanAskedAt: order.fanAskedAt,
 });
 
 function historyOf(order: DemoOrder): CustomOrderDetailResponse["history"] {
@@ -442,11 +449,11 @@ function lookalikes(request: DemoRequest): KernelOperationResponse<"customOrders
   const now = request.now.getTime();
   const viewer = viewerOf(request);
   const seeds = [
-    { ref: "6100000001", page: "mia-1", kind: "tier" as const, detail: "Master (Free long custom video, Maximum Attention) 👑", gross: 100_000, at: now - 5 * HOUR },
+    { ref: "6100000001", page: "mia-1", kind: "tier" as const, detail: "Golden Circle (free custom video every month)", gross: 100_000, at: now - 5 * HOUR },
     { ref: "6100000002", page: "nova-1", kind: "tip_note" as const, detail: "for my custom vid", gross: 60_000, at: now - 26 * HOUR },
-    { ref: "6100000003", page: "mia-2", kind: "tier" as const, detail: "Advanced (Free custom, Close friends & More Attention) 💎", gross: 50_000, at: now - 31 * HOUR },
+    { ref: "6100000003", page: "mia-2", kind: "tier" as const, detail: "Inner Room (free custom photo set)", gross: 50_000, at: now - 31 * HOUR },
     { ref: "6100000004", page: "ivy-2", kind: "tip_note" as const, detail: "custom pls, the one we talked about", gross: 80_000, at: now - 50 * HOUR },
-    { ref: "6100000005", page: "mia-3", kind: "tier" as const, detail: "Master (Free Sexting or Custom video) 👑", gross: 100_000, at: now - 70 * HOUR },
+    { ref: "6100000005", page: "mia-3", kind: "tier" as const, detail: "Velvet Pass (free custom clip or sexting)", gross: 100_000, at: now - 70 * HOUR },
   ].slice(0, sizeOf(request) === 60 ? 5 : 2);
   return seeds
     .filter((seed) => !dismissed.has(seed.ref) && !storeOf(request).some((order) => order.payments.some((payment) => payment.ref === seed.ref)))
@@ -470,8 +477,10 @@ interface DemoFinding {
   page: string | null;
   fanIndex: number | null;
   amount: number | null;
-  quote: string;
+  quote: string | null;
   hoursAgo: number;
+  /** The reader dismissed it as «не кастом». */
+  byAgent?: boolean;
 }
 
 const FINDINGS: readonly DemoFinding[] = [
@@ -481,9 +490,14 @@ const FINDINGS: readonly DemoFinding[] = [
   { id: 504, source: "sale", page: "ivy-1", fanIndex: 6, amount: 75_000, quote: "for the special video", hoursAgo: 75 },
   { id: 505, source: "work_chat", page: null, fanIndex: null, amount: null, quote: "📦 Описание заказа: йога в белом, 6 минут", hoursAgo: 20 },
   { id: 506, source: "shift_report", page: "mia-3", fanIndex: 9, amount: 45_000, quote: "кастом, фото в купальнике", hoursAgo: 40 },
+  // The reader read the chats around these two and found no custom («Отклонено агентом»): a person may bring them back.
+  { id: 507, source: "sale", page: "ivy-1", fanIndex: 2, amount: 49_500, quote: "thanks for the chat babe", hoursAgo: 22, byAgent: true },
+  { id: 508, source: "sale", page: "mia-2", fanIndex: 7, amount: 120_000, quote: null, hoursAgo: 60, byAgent: true },
 ];
-/** The findings answered in this demo: recorded, linked or dismissed. */
-const resolved = new Map<number, { status: CustomFinding["status"]; orderCode: string | null; reason: CustomFinding["dismissReason"] }>();
+/** The findings answered in this demo: recorded, linked or dismissed; the agent's dismissals until a person brings one back. */
+const resolved = new Map<number, { status: CustomFinding["status"]; orderCode: string | null; reason: CustomFinding["dismissReason"]; byAgent?: boolean }>(
+  FINDINGS.filter((finding) => finding.byAgent === true).map((finding) => [finding.id, { status: "dismissed", orderCode: null, reason: "not_custom", byAgent: true }]),
+);
 
 function findingWire(finding: DemoFinding, now: number): CustomFinding {
   const fan = finding.page === null || finding.fanIndex === null ? undefined : demoFans(finding.page)[finding.fanIndex];
@@ -495,7 +509,9 @@ function findingWire(finding: DemoFinding, now: number): CustomFinding {
     fan: fan && page ? { platform: page.platform, fanRef: fan.platformUserId, username: profile!.username ?? fan.username, displayName: profile!.displayName } : null,
     amountMills: finding.amount, quote: finding.quote, happenedAt: isoAt(now - finding.hoursAgo * HOUR),
     status: done?.status ?? "open", orderCode: done?.orderCode ?? null, dismissReason: done?.reason ?? null,
-    resolvedAt: done ? isoAt(now) : null, createdAt: isoAt(now - finding.hoursAgo * HOUR + HOUR),
+    resolvedAt: done ? isoAt(now - (done.byAgent === true ? finding.hoursAgo * HOUR - 2 * HOUR : 0)) : null,
+    resolvedByAgent: done?.byAgent === true ? "Генгар" : null,
+    createdAt: isoAt(now - finding.hoursAgo * HOUR + HOUR),
   };
 }
 
@@ -508,12 +524,25 @@ function openFindings(request: DemoRequest): CustomFinding[] {
   return FINDINGS.filter((finding) => !resolved.has(finding.id)).map((finding) => findingWire(finding, now));
 }
 
+/** «Отклонено агентом»: what the reader dismissed as «не кастом», the newest first. */
+function agentDismissed(request: DemoRequest): CustomFinding[] {
+  if (sizeOf(request) === 0 || !resolvesFindings(viewerOf(request))) return [];
+  const now = request.now.getTime();
+  return FINDINGS.filter((finding) => resolved.get(finding.id)?.byAgent === true).sort((left, right) => left.hoursAgo - right.hoursAgo)
+    .map((finding) => findingWire(finding, now));
+}
+
 function actOnFinding(request: DemoRequest, body: CustomFindingActionBody) {
   const id = Number(request.params.findingId);
   const finding = FINDINGS.find((one) => one.id === id);
   if (!finding || !resolvesFindings(viewerOf(request))) return demoError(404, "Not Found", "Находка не найдена");
-  if (resolved.has(id)) return demoError(409, "Conflict", "Находку уже разобрали");
   const now = request.now.getTime();
+  if (body.action === "reopen") {
+    if (resolved.get(id)?.byAgent !== true) return demoError(409, "Conflict", "Вернуть можно только отклонённую агентом");
+    resolved.delete(id);
+    return { finding: findingWire(finding, now) };
+  }
+  if (resolved.has(id)) return demoError(409, "Conflict", "Находку уже разобрали");
   if (body.action === "dismiss") resolved.set(id, { status: "dismissed", orderCode: null, reason: body.reason });
   if (body.action === "link") resolved.set(id, { status: "linked", orderCode: body.code, reason: null });
   if (body.action === "record") {
@@ -527,7 +556,7 @@ function actOnFinding(request: DemoRequest, body: CustomFindingActionBody) {
       payments: finding.source === "sale" && finding.amount !== null ? [{ ref: `61${finding.id}`, kind: "tip", gross: finding.amount, at: now - finding.hoursAgo * HOUR, note: null }] : [],
       givenAt: null, refs: [], partsDone: [], messages: [],
       history: [{ at: isoAt(now), event: "custom_order.recorded", actor: user.name, onBehalfOf: null, door: "workboard", changes: {} }],
-      priceMills: finding.amount, deadlineDefault: false, paidWord: null, holdReason: null, issue: null, fanAskedAt: null, sentAt: null, reversed: false,
+      priceMills: body.priceMills ?? null, deadlineDefault: false, paidWord: null, holdReason: null, issue: null, fanAskedAt: null, sentAt: null, reversed: false,
     };
     store.push(order);
     resolved.set(id, { status: "recorded", orderCode: customOrderCode(order.id), reason: null });
@@ -575,7 +604,12 @@ function act(request: DemoRequest, order: DemoOrder, body: CustomOrderActionBody
   };
   let event: string = body.action;
   switch (body.action) {
-    case "edit": order.card = body.card; event = "edited"; break;
+    case "edit":
+      if (body.card !== undefined) order.card = body.card;
+      if (body.priceMills !== undefined) order.priceMills = body.priceMills;
+      event = "edited";
+      break;
+    case "fan_asked_clear": order.fanAskedAt = null; event = "fan_asked_cleared"; break;
     case "deadline": order.deadlineOn = body.deadlineOn; order.deadlineDefault = false; break;
     case "fan": order.page = body.pageLabel; order.fanRef = demoFans(body.pageLabel)[2]?.platformUserId ?? null; order.buyer = null; event = "fan_confirmed"; break;
     case "card": order.refs.push(body.telegramRef); break;
@@ -641,10 +675,12 @@ export const wbCustomsHandlers: DemoHandlers = {
     const mine = storeOf(request).filter((order) => visible(viewer, order)).filter((order) => page === null || order.page === page || order.page === null);
     const orders = mine
       .filter((order) => (factsOn
-        ? !["given", "closed", "cancelled"].includes(order.state)
+        // The live ones, and a given one that still burns (a sale taken back, an issue): as Hub lists them.
+        ? !["given", "closed", "cancelled"].includes(order.state) || givenStands(order, now)
         : order.state !== "cancelled" && !((order.state === "given" || order.state === "closed") && (order.givenAt ?? 0) < now - 7 * DAY)))
       .sort((left, right) => left.stateAt - right.stateAt);
     const findings = factsOn ? openFindings(request) : [];
+    const dismissedByAgent = factsOn ? agentDismissed(request) : [];
     const changes = factsOn ? selfChanges(request) : [];
     const fans = [...new Set(findings.map((finding) => finding.fan?.username ?? finding.fan?.displayName).filter((name): name is string => typeof name === "string"))];
     return {
@@ -661,10 +697,16 @@ export const wbCustomsHandlers: DemoHandlers = {
         : request.cookie?.("hub-demo-customs-stale") === "1"
           ? { readerAt: isoAt(now - 3 * HOUR - 12 * 60_000), nightlyAt: isoAt(now - 9 * HOUR), readerStale: true }
           : { readerAt: isoAt(now - 12 * 60_000), nightlyAt: isoAt(now - 9 * HOUR), readerStale: false },
-      findings: { open: findings.length, amountMills: findings.reduce((sum, finding) => sum + (finding.amountMills ?? 0), 0), fans: fans.slice(0, 3) },
+      findings: {
+        open: findings.length, amountMills: findings.reduce((sum, finding) => sum + (finding.amountMills ?? 0), 0), fans: fans.slice(0, 3),
+        agentDismissed: dismissedByAgent.length,
+      },
       changes: { count: changes.length, newest: changes[0] ?? null },
       done: factsOn
-        ? { given: mine.filter((order) => order.state === "given").length, closed: mine.filter((order) => order.state === "closed" && order.stateAt >= now - 30 * DAY).length }
+        ? {
+          given: mine.filter((order) => order.state === "given" && !givenStands(order, now)).length,
+          closed: mine.filter((order) => order.state === "closed" && order.stateAt >= now - 30 * DAY).length,
+        }
         : { given: 0, closed: 0 },
       serverNow: request.now.toISOString(),
     };
@@ -675,13 +717,13 @@ export const wbCustomsHandlers: DemoHandlers = {
     const days = Number(request.query.days ?? 30) || 30;
     const mine = storeOf(request).filter((order) => visible(viewer, order)).sort((left, right) => right.stateAt - left.stateAt);
     return {
-      given: mine.filter((order) => order.state === "given").map((order) => boardWire(order, now, false)),
+      given: mine.filter((order) => order.state === "given" && !givenStands(order, now)).map((order) => boardWire(order, now, false)),
       closed: mine.filter((order) => order.state === "closed" && order.stateAt >= now - days * DAY).map((order) => boardWire(order, now, false)),
       capped: false,
       serverNow: request.now.toISOString(),
     };
   },
-  customFindingsList: (request) => ({ findings: openFindings(request), serverNow: request.now.toISOString() }),
+  customFindingsList: (request) => ({ findings: openFindings(request), dismissedByAgent: agentDismissed(request), serverNow: request.now.toISOString() }),
   customFindingAct: (request) => actOnFinding(request, request.body as CustomFindingActionBody),
   customOrderChanges: (request) => ({ changes: selfChanges(request), serverNow: request.now.toISOString() }),
   customOrder: (request) => {
@@ -694,7 +736,7 @@ export const wbCustomsHandlers: DemoHandlers = {
     return act(request, order, request.body as CustomOrderActionBody);
   },
   customOrderCreate: (request) => {
-    const body = request.body as { transactionRef?: string; pageLabel?: string; fan?: string; card: CustomOrderCard };
+    const body = request.body as { transactionRef?: string; pageLabel?: string; fan?: string; card: CustomOrderCard; priceMills?: number };
     const sale = lookalikes(request).find((one) => one.transactionRef === body.transactionRef);
     if (body.transactionRef !== undefined && !sale) return demoError(404, "Not Found", "Продажа не найдена");
     const pageLabel = sale?.pageLabel ?? body.pageLabel ?? MAIN_PAGES[0]!.label;
@@ -707,7 +749,7 @@ export const wbCustomsHandlers: DemoHandlers = {
       payments: sale ? [{ ref: sale.transactionRef, kind: sale.kind === "tier" ? "subscription" : "tip", gross: sale.grossMills, at: Date.parse(sale.at), note: sale.kind === "tip_note" ? sale.detail : null }] : [],
       givenAt: null, refs: [], partsDone: [], messages: [],
       history: [{ at: isoAt(now), event: "custom_order.recorded", actor: user.name, onBehalfOf: null, door: "workboard", changes: {} }],
-      priceMills: null, deadlineDefault: false, paidWord: null, holdReason: null, issue: null, fanAskedAt: null, sentAt: null, reversed: false,
+      priceMills: body.priceMills ?? null, deadlineDefault: false, paidWord: null, holdReason: null, issue: null, fanAskedAt: null, sentAt: null, reversed: false,
     };
     store.push(order);
     return detail(request, order);

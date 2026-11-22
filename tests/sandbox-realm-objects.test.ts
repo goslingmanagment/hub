@@ -128,6 +128,8 @@ const HANDLER_TABLES: Readonly<Record<string, string>> = {
   "customOrder code": "custom_orders",
   "customOrderAct code": "custom_orders",
   "customFindingAct code": "custom_orders",
+  "agentCustomOrders code": "custom_orders",
+  "agentCustomOrderUpdate code": "custom_orders",
   "adminPerson code": "people",
   "adminPersonUpdate code": "people",
 };

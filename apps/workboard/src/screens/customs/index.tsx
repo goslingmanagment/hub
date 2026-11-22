@@ -55,6 +55,8 @@ import {
   useDismissSale,
   type CustomPart,
 } from "./data";
+import { PriceField } from "./facts-banners";
+import { millsOfDollars } from "./facts-words";
 import "./customs.css";
 
 /**
@@ -145,16 +147,20 @@ export function RecordFromSaleModal({ sale, page: initialPage, fan: initialFan, 
   const back = useBackState("Кастомы");
   const [task, setTask] = useState("");
   const [price, setPrice] = useState("");
+  const [amount, setAmount] = useState("");
   const [pageLabel, setPageLabel] = useState(initialPage ?? "");
   const [fan, setFan] = useState(initialFan ?? "");
   const [failure, setFailure] = useState<string | null>(null);
-  const ready = task.trim() !== "" && (sale !== undefined || pageLabel !== "");
+  const priceMills = millsOfDollars(amount);
+  const ready = task.trim() !== "" && (sale !== undefined || pageLabel !== "") && priceMills !== undefined;
   const submit = () => {
     if (!ready || create.isPending) return;
     const card: CustomOrderCard = { task: task.trim(), ...(price.trim() ? { price: price.trim() } : {}) };
+    // The agreed total, when the person names it: what «оплачен» is measured by.
+    const total = priceMills !== null && priceMills !== undefined ? { priceMills } : {};
     const body = sale !== undefined
-      ? { transactionRef: sale.transactionRef, card }
-      : { pageLabel, ...(fan.trim() ? { fan: fan.trim() } : {}), card };
+      ? { transactionRef: sale.transactionRef, card, ...total }
+      : { pageLabel, ...(fan.trim() ? { fan: fan.trim() } : {}), card, ...total };
     create.mutate(body, {
       onSuccess: (detail) => {
         toast.success(`Записан ${detail.order.code}`);
@@ -201,6 +207,7 @@ export function RecordFromSaleModal({ sale, page: initialPage, fan: initialFan, 
         )}
         <Field label="Что снять">{(control) => <Textarea {...control} rows={4} value={task} onChange={(event) => setTask(event.target.value)} />}</Field>
         <Field label="Цена, как договорились" hint="Например: 100$ тир Master + 50$">{(control) => <TextInput {...control} value={price} onChange={(event) => setPrice(event.target.value)} />}</Field>
+        <PriceField value={amount} onChange={setAmount} />
         {failure && <Notice tone="danger">{failure}</Notice>}
       </div>
     </Modal>

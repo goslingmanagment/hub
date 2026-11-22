@@ -127,7 +127,12 @@ export interface CustomMoveOrder extends CustomLeaderOrder {
   holdReason: string | null;
   payments: number;
   paidWord: object | null;
+  /** The agent's sentence of a disagreement, as stored; null — none. */
+  issue?: object | null;
 }
+
+/** The move of a shot order nothing was sent of: whoever gives it to the fan (the checks' «отдайте фану» follow it). */
+export const CUSTOM_GIVE_MOVE = "отдать фану";
 
 /** Whose move it is: a leader of the rule (a person, the owner), whoever is on shift, the model, the fan. */
 export type CustomMover =
@@ -149,7 +154,8 @@ export type CustomMover =
  *   money linked (or the owner's word), not at her    the check's leader: «передать модели»
  *   recorded                                          the acceptor, else the check's leader
  *
- * Null — nobody's move: given and waiting for the fan's word, closed, cancelled.
+ * A given order with a payment in conflict or an issue standing is the owner's until it is settled (it burns and does
+ * not close by itself). Null — nobody's move: given and waiting for the fan's word, closed, cancelled.
  */
 export function customMoveOf(
   facts: TeamFacts,
@@ -160,7 +166,12 @@ export function customMoveOf(
 ): { who: CustomMover; what: string } | null {
   const check = () => phaseLeader(facts, order.pageId, "check", fallback);
   switch (order.state) {
-    case "given": case "closed": case "cancelled":
+    case "given":
+      if (order.holdReason !== null) return null;
+      if (values.paid === "conflict") return { who: OWNER, what: "разобраться с возвратом оплаты" };
+      if (order.issue !== undefined && order.issue !== null) return { who: OWNER, what: "разобраться с расхождением" };
+      return null;
+    case "closed": case "cancelled":
       return null;
     default:
       break;
@@ -174,9 +185,9 @@ export function customMoveOf(
     const userId = onShiftUserIds[0];
     if (userId !== undefined) {
       const personId = personOfLogin(facts, userId);
-      return { who: { kind: "shift", userId, personId, name: personId === null ? "" : nameOf(facts, personId) }, what: "отдать фану" };
+      return { who: { kind: "shift", userId, personId, name: personId === null ? "" : nameOf(facts, personId) }, what: CUSTOM_GIVE_MOVE };
     }
-    return { who: acceptorOf(facts, order) ?? check(), what: "отдать фану" };
+    return { who: acceptorOf(facts, order) ?? check(), what: CUSTOM_GIVE_MOVE };
   }
   if (order.state === "at_model") return { who: { kind: "model" }, what: "снять" };
   if (order.state === "partly") return { who: { kind: "model" }, what: "доснять" };

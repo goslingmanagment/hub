@@ -116,6 +116,10 @@ export const ROUTE_OBJECTS: Readonly<Record<string, Readonly<Record<string, Fiel
   customOrderAct: { code: "order" },
   // A finding linked to an order: the order's code.
   customFindingAct: { code: "order" },
+  // The agent key's door (write:customs): the order a list is cut to and the order a step is taken on. A test key's
+  // order of the live agency answers as missing; an order of no known page is the live agency's (custom-orders/agent.ts).
+  agentCustomOrders: { code: "order" },
+  agentCustomOrderUpdate: { code: "order" },
   adminPerson: { code: "personCode" },
   adminPersonUpdate: { code: "personCode" },
   // A new person's code: nobody's yet (a code of an existing person is refused by the service).

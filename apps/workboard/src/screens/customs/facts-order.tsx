@@ -13,9 +13,9 @@ import {
   ASKS, Deliveries, EditCardModal, FanForm, RevisionWaits, StepModal, type Ask,
 } from "./index";
 import { DOOR_WORDS, PAYMENT_KIND_WORDS, eventWords, fanWords, stepFailure, useCustomOrder, useCustomStep } from "./data";
-import { UndoButton } from "./facts-banners";
+import { PriceField, UndoButton } from "./facts-banners";
 import { FactNode, MoveLine, OrderPrice, reasonOf } from "./facts-row";
-import { FACT_STEPS, dueWords, factWords, fanName, toneOf } from "./facts-words";
+import { FACT_STEPS, dollarsOf, dueWords, factWords, fanName, millsOfDollars, toneOf } from "./facts-words";
 
 /**
  * The order's panel of the facts screen (customs facts spec §13), a drawer from the right over the list: the order, why
@@ -26,13 +26,19 @@ import { FACT_STEPS, dueWords, factWords, fanName, toneOf } from "./facts-words"
 
 type HistoryItem = CustomOrderDetailResponse["history"][number];
 
-/** The history events behind each fact: the newest says who set it and when. */
+/**
+ * The history events behind each fact: the newest says who set it and when — a record that brought its sale is the
+ * payment's, «отправлен, фан не открыл» the given's, a revision and a refusal the shot's.
+ */
 const FACT_EVENTS: Record<keyof CustomOrderFacts, readonly string[]> = {
-  paid: ["custom_order.payment", "custom_order.paid_word", "custom_order.payment_removed"],
+  paid: ["custom_order.payment", "custom_order.paid_word", "custom_order.payment_removed", "custom_order.recorded"],
   atModel: ["custom_order.at_model"],
-  shot: ["custom_order.shot", "custom_order.delivery", "custom_order.partly", "custom_order.settled", "custom_order.retracted"],
-  given: ["custom_order.given", "custom_order.ungiven"],
+  shot: ["custom_order.shot", "custom_order.delivery", "custom_order.partly", "custom_order.settled", "custom_order.retracted", "custom_order.revision", "custom_order.refused"],
+  given: ["custom_order.given", "custom_order.ungiven", "custom_order.sent"],
 };
+/** Whether a history event is behind the fact (a record only when it brought a sale). */
+const behindFact = (key: keyof CustomOrderFacts, item: HistoryItem) =>
+  FACT_EVENTS[key].includes(item.event) && (item.event !== "custom_order.recorded" || item.changes.transactionId !== undefined);
 
 const who = (item: HistoryItem) => item.actor ?? (item.door === "system" ? "Hub сам" : DOOR_WORDS[item.door] ?? item.door);
 
@@ -125,6 +131,43 @@ function PaidWordModal({ detail, onClose }: { detail: CustomOrderDetailResponse;
   );
 }
 
+/** «Сумма заказа»: the agreed total a person names or corrects (an agent never overwrites it then); empty — not named. */
+function PriceModal({ detail, onClose }: { detail: CustomOrderDetailResponse; onClose: () => void }) {
+  const step = useCustomStep(detail.order.code);
+  const [amount, setAmount] = useState(detail.order.priceMills !== null ? dollarsOf(detail.order.priceMills) : "");
+  const [failure, setFailure] = useState<string | null>(null);
+  const priceMills = millsOfDollars(amount);
+  const submit = () => {
+    if (priceMills === undefined || step.isPending) return;
+    step.mutate({ action: "edit", priceMills }, {
+      onSuccess: () => {
+        toast.success(priceMills === null ? "Сумма убрана" : "Сумма сохранена");
+        onClose();
+      },
+      onError: (error) => setFailure(stepFailure(error)),
+    });
+  };
+  return (
+    <Modal
+      title={`Сумма ${detail.order.code}`}
+      onClose={onClose}
+      explicitCloseOnly={step.isPending}
+      actions={(
+        <>
+          <Button onClick={onClose} disabled={step.isPending}>Отмена</Button>
+          <Button variant="primary" loading={step.isPending} disabled={priceMills === undefined} onClick={submit}>Сохранить</Button>
+        </>
+      )}
+    >
+      <div className="cf-form">
+        {detail.order.card.price && <p className="cf-muted">В карточке: {detail.order.card.price}</p>}
+        <PriceField value={amount} onChange={setAmount} />
+        {failure && <Notice tone="danger">{failure}</Notice>}
+      </div>
+    </Modal>
+  );
+}
+
 function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
   return (
     <section className="cf-sec">
@@ -140,6 +183,7 @@ function OrderBody({ detail, viewerOwner }: { detail: CustomOrderDetailResponse;
   const step = useCustomStep(order.code);
   const [ask, setAsk] = useState<Ask | null>(null);
   const [editing, setEditing] = useState(false);
+  const [pricing, setPricing] = useState(false);
   const [paidWord, setPaidWord] = useState(false);
   const due = dueWords(order);
   const tone = toneOf(order);
@@ -181,8 +225,8 @@ function OrderBody({ detail, viewerOwner }: { detail: CustomOrderDetailResponse;
         <ol className="cf-facts">
           {FACT_STEPS.map((stepOf) => {
             const fact = order.facts[stepOf.key];
-            const last = [...detail.history].reverse().find((item) => FACT_EVENTS[stepOf.key].includes(item.event));
-            const undo = undoAmong(detail, [...FACT_EVENTS[stepOf.key], ...(stepOf.key === "paid" ? ["custom_order.recorded"] : [])]);
+            const last = [...detail.history].reverse().find((item) => behindFact(stepOf.key, item));
+            const undo = undoAmong(detail, FACT_EVENTS[stepOf.key]);
             return (
               <li key={stepOf.key} className={`cf-fact cf-fact--${fact.value}`}>
                 <FactNode fact={fact} tone={tone} />
@@ -206,6 +250,7 @@ function OrderBody({ detail, viewerOwner }: { detail: CustomOrderDetailResponse;
       <Section title="Что заказал" aside={(
         <span className="cf-sec__acts">
           <Button size="sm" variant="ghost" icon={Copy} onClick={copy}>Скопировать</Button>
+          {may("edit") && <Button size="sm" variant="ghost" onClick={() => setPricing(true)}>{order.priceMills === null ? "Назвать сумму" : "Сумма"}</Button>}
           {may("edit") && <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Изменить</Button>}
         </span>
       )}>
@@ -280,12 +325,14 @@ function OrderBody({ detail, viewerOwner }: { detail: CustomOrderDetailResponse;
             {fixSteps.map((one) => <Button key={one.action} size="sm" onClick={() => setAsk(ASKS[one.action]!)}>{one.label}</Button>)}
             {may("unhold") && <Button size="sm" onClick={() => run({ action: "unhold" }, "Снят с паузы")}>Снять с паузы</Button>}
             {may("issue_clear") && <Button size="sm" onClick={() => run({ action: "issue_clear" }, "Расхождение снято")}>Снять расхождение</Button>}
+            {may("fan_asked_clear") && <Button size="sm" onClick={() => run({ action: "fan_asked_clear" }, "Отмечено: фану ответили")}>Фану ответили</Button>}
           </div>
         </div>
       </Disclosure>
 
       {ask && <StepModal ask={ask} code={order.code} initial={ask.action === "deadline" ? order.deadlineOn ?? "" : ""} parts={wantedParts(order.card)} onClose={() => setAsk(null)} />}
       {editing && <EditCardModal detail={detail} onClose={() => setEditing(false)} />}
+      {pricing && <PriceModal detail={detail} onClose={() => setPricing(false)} />}
       {paidWord && <PaidWordModal detail={detail} onClose={() => setPaidWord(false)} />}
     </div>
   );
@@ -323,12 +370,13 @@ export function OrderDrawer({ code, viewerOwner, onClose }: { code: string; view
           {order.card.price && <small>{order.card.price}</small>}
         </span>
       ) : undefined}
-      {...(detail && detail.actions.some((action) => action === "deadline" || action === "revision" || action === "cancel") ? { footer: <Footer detail={detail} /> } : {})}
+      {...(detail && detail.actions.some((action) => action === "deadline" || action === "revision" || action === "cancel") ? { footer: <Footer key={detail.order.code} detail={detail} /> } : {})}
     >
+      {/* Keyed by the order: another order opened in the same drawer starts with no modal or typed text of the one before. */}
       {read.isPending ? <Skeleton height={320} />
         : missing ? <p className="cf-muted">Заказа {code} нет, или у вас нет доступа к его странице.</p>
         : read.isError || !detail ? <ErrorState onRetry={() => void read.refetch()} retrying={read.isFetching}>Заказ не загрузился: Hub не ответил.</ErrorState>
-        : <OrderBody detail={detail} viewerOwner={viewerOwner} />}
+        : <OrderBody key={detail.order.code} detail={detail} viewerOwner={viewerOwner} />}
     </Drawer>
   );
 }

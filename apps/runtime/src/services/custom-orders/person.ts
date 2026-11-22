@@ -86,7 +86,7 @@ export async function personCustomOrders(app: PersonApp, person: HumanAuthPrinci
     pageIds = own;
     unknownPage = false;
   }
-  const rows = (await listAgentCustomOrders(app.db, { pageIds, open: true, limit: 500 }))
+  const rows = (await listAgentCustomOrders(app.db, { pageIds, noPage: unknownPage, open: true, limit: 500 }))
     .filter((order) => (order.pageId === null ? unknownPage : pageIds.includes(order.pageId)));
   const [messages, leaders] = await Promise.all([listCustomOrderMessagesOf(app.db, rows.map((order) => order.id)), customLeaderContext(app, person)]);
   return { orders: rows.map((order) => wireOf(order, (messages.get(order.id) ?? []).map(messageWire), now, leaders)), serverNow: now.toISOString() };

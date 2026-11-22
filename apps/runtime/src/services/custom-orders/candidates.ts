@@ -11,8 +11,9 @@ import { customTierOverridesNow } from "./switch.ts";
 /**
  * Заказ кастома, the reader's candidates (customs facts spec §8): Hub never guesses a custom from the stream of tips, it
  * names the sales worth reading the chat around — tips of $40 and more of the last two weeks that pay no order and have
- * no finding, and fans holding a tier that includes a custom whose current period has no resolved finding — of the
- * key's pages only. Read only; the reader posts a finding or leaves the sale.
+ * no finding, and fans holding a tier that includes a custom whose current period's sale is no finding yet — of the
+ * key's pages only. Read only; the reader posts a finding or leaves the sale. A tier bought is no custom asked for (the
+ * owner, 2026-11-22): a holder's finding is the fan's chat when he asks.
  */
 
 const DAY_MS = 86_400_000;

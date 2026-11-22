@@ -378,11 +378,12 @@ export const customLookalikeSaleSchema = z.object({
 /**
  * The board's steps. Besides the path: `ungive` takes «отдан» back (the order is «снят» again), `retract` takes a
  * delivery back (the shooting's leader), `hold` / `unhold` the order's wait on purpose, `issue_clear` the agent's
- * sentence of a disagreement, `paid_word` the owner's word on the payment (customs facts spec §6, §9, §10).
+ * sentence of a disagreement, `paid_word` the owner's word on the payment, `fan_asked_clear` the fan's «where is it»
+ * answered (customs facts spec §6, §7, §9, §10).
  */
 export const CUSTOM_ORDER_ACTIONS = [
   "edit", "deadline", "fan", "card", "payment", "unpay", "checked", "at_model", "partly", "shot", "revision", "refused", "given", "ungive",
-  "retract", "close", "cancel", "hold", "unhold", "issue_clear", "paid_word",
+  "retract", "close", "cancel", "hold", "unhold", "issue_clear", "paid_word", "fan_asked_clear",
 ] as const;
 export type CustomOrderAction = (typeof CUSTOM_ORDER_ACTIONS)[number];
 
@@ -409,7 +410,8 @@ export type CustomBoardOrder = z.infer<typeof customBoardOrderSchema>;
  */
 export const customUndoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("unpay"), transactionRef: z.string() }),
-  z.object({ action: z.literal("ungive") }),
+  /** The mark it takes back: refused when «отдан» is another message's by then. */
+  z.object({ action: z.literal("ungive"), messageRef: z.string() }),
   z.object({ action: z.literal("retract"), retracts: z.string() }),
   z.object({ action: z.literal("deadline"), deadlineOn: day.nullable() }),
 ]);
@@ -476,10 +478,13 @@ export const customOrdersBoardResponseSchema = z.object({
    */
   verified: customVerifiedSchema,
   /**
-   * The open findings the viewer resolves (`customFindingsList`): how many, their money, the first fans' names. Zero
-   * while the switch is off.
+   * The open findings the viewer resolves (`customFindingsList`): how many, their money, the first fans' names; and how
+   * many of the last two weeks an agent dismissed as «не кастом» (a person may bring one back). Zero while the switch is
+   * off.
    */
-  findings: z.object({ open: z.number().int().nonnegative(), amountMills: mills, fans: z.array(z.string()) }),
+  findings: z.object({
+    open: z.number().int().nonnegative(), amountMills: mills, fans: z.array(z.string()), agentDismissed: z.number().int().nonnegative(),
+  }),
   /** The last 24 hours' steps by the system's or an agent's door on the viewer's orders (`customOrderChanges`): how many, the newest. */
   changes: z.object({ count: z.number().int().nonnegative(), newest: customSelfChangeSchema.nullable() }),
   /** How many are given and wait for the fan's word, and closed in the last 30 days (`customOrdersDone`); zero while off. */
@@ -557,6 +562,8 @@ export const customOrderDetailResponseSchema = z.object({
 });
 
 const note = z.string().trim().min(1).max(500);
+/** The agreed total, gross, in mills. */
+const priceMills = mills.positive().max(1_000_000_000);
 const ref = z.string().trim().min(1).max(64).regex(/^[1-9]\d{0,29}$/);
 /** A fan as a person gives it: a profile link, a username, or the platform's number. */
 const fanInput = z.string().trim().min(1).max(300);
@@ -568,7 +575,8 @@ const retractsInput = z.string().trim().min(3).max(300).refine((value) => parseT
 });
 
 export const customOrderActionBodySchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("edit"), card: customOrderCardSchema }).strict(),
+  /** The card (the whole of it), and the agreed total, gross (null — not named any more): a person's, never overwritten by an agent. */
+  z.object({ action: z.literal("edit"), card: customOrderCardSchema.optional(), priceMills: priceMills.nullable().optional() }).strict(),
   z.object({ action: z.literal("deadline"), deadlineOn: day.nullable(), undoOf }).strict(),
   z.object({ action: z.literal("fan"), pageLabel: z.string().trim().min(1).max(120), fan: fanInput }).strict(),
   z.object({ action: z.literal("card"), telegramRef: telegramRefInputSchema }).strict(),
@@ -587,8 +595,11 @@ export const customOrderActionBodySchema = z.discriminatedUnion("action", [
    * saw the chat, a Fansly chat the hub does not read).
    */
   z.object({ action: z.literal("given"), messageRef: ref.optional() }).strict(),
-  /** «Не отдан»: «отдан» taken back — the order is «снят» again; the message stays off it from then on. */
-  z.object({ action: z.literal("ungive"), undoOf }).strict(),
+  /**
+   * «Не отдан»: «отдан» taken back — the order is «снят» again; the message stays off it from then on. `messageRef` — the
+   * mark the person saw: refused (409 `mark_changed`) when «отдан» is another message's by now.
+   */
+  z.object({ action: z.literal("ungive"), undoOf, messageRef: ref.optional() }).strict(),
   /** A delivery taken back by the shooting's leader (or the owner): its part stops counting. */
   z.object({ action: z.literal("retract"), retracts: retractsInput, reason: note, undoOf }).strict(),
   z.object({ action: z.literal("close") }).strict(),
@@ -603,6 +614,8 @@ export const customOrderActionBodySchema = z.discriminatedUnion("action", [
     action: z.literal("paid_word"),
     word: z.object({ kind: z.enum(CUSTOM_PAID_WORD_KINDS), note: note.optional() }).strict().nullable(),
   }).strict(),
+  /** The page answered the fan's «where is it»: the ask is off the order. */
+  z.object({ action: z.literal("fan_asked_clear") }).strict(),
 ]);
 export type CustomOrderActionBody = z.infer<typeof customOrderActionBodySchema>;
 
@@ -612,6 +625,8 @@ export const customOrderCreateBodySchema = z.object({
   pageLabel: z.string().trim().min(1).max(120).optional(),
   fan: fanInput.optional(),
   card: customOrderCardSchema,
+  /** The agreed total, gross (the card's `price` stays the team's words). */
+  priceMills: priceMills.optional(),
   telegramRef: telegramRefInputSchema.optional(),
 }).strict().refine((body) => body.transactionRef !== undefined || body.pageLabel !== undefined, {
   message: "a sale, or a page", path: ["pageLabel"],
@@ -629,8 +644,11 @@ export const customSaleDismissResponseSchema = z.object({ dismissed: z.boolean()
 export const CUSTOM_FINDING_SOURCES = ["sale", "fan_chat", "work_chat", "model_group", "shift_report"] as const;
 export type CustomFindingSource = (typeof CUSTOM_FINDING_SOURCES)[number];
 export const CUSTOM_FINDING_STATUSES = ["open", "recorded", "linked", "dismissed"] as const;
-/** Why a finding is no order: не кастом, выбрал секстинг, не воспользовался, дубль, тест. */
-export const CUSTOM_FINDING_DISMISS_REASONS = ["not_custom", "sexting", "unused", "duplicate", "test"] as const;
+/**
+ * Why a finding is no order: не кастом, выбрал секстинг, не воспользовался, дубль, тест, кастом не просил (a tier bought, no
+ * custom asked for: the owner's decision of 2026-11-22, 0437).
+ */
+export const CUSTOM_FINDING_DISMISS_REASONS = ["not_custom", "sexting", "unused", "duplicate", "test", "not_asked"] as const;
 
 export const customFindingSchema = z.object({
   id: intId,
@@ -648,32 +666,43 @@ export const customFindingSchema = z.object({
   orderCode: z.string().nullable(),
   dismissReason: z.enum(CUSTOM_FINDING_DISMISS_REASONS).nullable(),
   resolvedAt: isoTimestamp.nullable(),
+  /** The agent key that resolved it (the reader's «не кастом»), by its name; null — a person, the system, or open. */
+  resolvedByAgent: z.string().nullable(),
   createdAt: isoTimestamp,
 });
 export type CustomFinding = z.infer<typeof customFindingSchema>;
 
 export const customFindingParamsSchema = z.object({ findingId: z.string().trim().regex(/^[1-9]\d{0,18}$/) });
 
-/** «Найдено без заказа»: the open findings the viewer resolves, the newest first. */
+/**
+ * «Найдено без заказа»: the open findings the viewer resolves, the newest first; and the ones an agent dismissed as «не
+ * кастом» in the last two weeks («Отклонено агентом»), which a person may bring back (`reopen`).
+ */
 export const customFindingsListResponseSchema = z.object({
   findings: z.array(customFindingSchema),
+  dismissedByAgent: z.array(customFindingSchema),
   serverNow: isoTimestamp,
 });
 
 /**
  * A finding resolved by the check's leader of its page (the customs lead, the owner): recorded as an order (the board's
- * «Записать кастом», filled from the finding; a sale's finding brings its sale as the payment), linked to an order
- * there is (a sale's finding pays it), or dismissed with a reason from the list.
+ * «Записать кастом», filled from the finding; a sale's finding brings its sale as the payment, a card's finding its card),
+ * linked to an order there is (a sale's finding pays it, checked as the agent's sale is: the order's fan, its model, a
+ * live sale no other order holds and the platform did not take back; a card's finding attaches its card), dismissed with
+ * a reason from the list, or — dismissed by an agent — brought back (`reopen`: open again).
  */
 export const customFindingActionBodySchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("record"), card: customOrderCardSchema,
     /** The page and the fan when the finding names none. */
     pageLabel: z.string().trim().min(1).max(120).optional(), fan: fanInput.optional(),
+    /** The agreed total, gross. */
+    priceMills: priceMills.optional(),
     telegramRef: telegramRefInputSchema.optional(),
   }).strict(),
   z.object({ action: z.literal("link"), code: customOrderCodeSchema }).strict(),
   z.object({ action: z.literal("dismiss"), reason: z.enum(CUSTOM_FINDING_DISMISS_REASONS) }).strict(),
+  z.object({ action: z.literal("reopen") }).strict(),
 ]);
 export type CustomFindingActionBody = z.infer<typeof customFindingActionBodySchema>;
 
@@ -689,12 +718,17 @@ export const customFindingActionResponseSchema = z.object({ finding: customFindi
 const BOARD_ONLY_FIELDS = {
   dueLeftDays: true, deadlineDefault: true, facts: true, priceMills: true, paidWord: true, holdReason: true, issue: true, fanAskedAt: true, sentAt: true,
 } as const;
-/** The board's own reading of an order (whose move, what burns and why, the forwarding timer): never on the agent's wire. */
+/**
+ * The board's own reading of an order (whose move, what burns and why, the forwarding timer): off the agent's wire, but
+ * whose move and whether it burns on the live list to a key with `read:messages` (the reader's reminders read the
+ * board's one rule, never a copy of it).
+ */
 const BOARD_READING_FIELDS = { move: true, burning: true, reason: true, timer: true } as const;
 
 /** An order as an agent key reads it: no money but the card's own price line; the facts with `read:money`. */
 export const agentCustomOrderSchema = customOrderSchema.omit({ paidGrossMills: true, paidNetMills: true, ...BOARD_ONLY_FIELDS, ...BOARD_READING_FIELDS })
   .extend(customOrderSchema.pick(BOARD_ONLY_FIELDS).partial().shape)
+  .extend(customOrderSchema.pick({ move: true, burning: true }).partial().shape)
   .extend({
     /** The card's text with the code, as «Скопировать карточку» gives it. */
     cardText: z.string(),
@@ -702,9 +736,10 @@ export const agentCustomOrderSchema = customOrderSchema.omit({ paidGrossMills: t
     messages: z.array(customOrderMessageSchema),
     /**
      * `state=live`, to a key with `read:money`, on an order whose money is not complete (`facts.paid` not yes): the fan's
-     * sales (any account of the person) since the order was recorded, on the key's pages of the order's model, that pay
-     * no order and that no person took off this one — the newest first, at most 10. The reader reads the chat around
-     * each and names one back (`step payment --sale <saleRef>`) or leaves it; Hub never links one by its amount.
+     * sales (any account of the person) of the last 30 days, on the key's pages of the order's model, that pay no order
+     * and that no person took off this one — the newest first, at most 10 (a fan often pays before the card is written).
+     * The reader reads the chat around each and names one back (`step payment --sale <saleRef>`) or leaves it; Hub never
+     * links one by its amount.
      */
     unlinkedSales: z.array(z.object({
       saleRef: z.string(),
@@ -733,8 +768,6 @@ export const agentCustomOrdersResponseSchema = z.object({
 });
 
 const login = z.string().trim().min(1).max(64);
-/** The agreed total, gross, in mills. */
-const priceMills = mills.positive().max(1_000_000_000);
 /** Why the order waits on purpose (the fan is unreachable, a prop is awaited). */
 const holdReason = note;
 
@@ -747,8 +780,9 @@ export const agentCustomOrderCreateBodySchema = z.object({
   acceptedBy: login.optional(),
   card: customOrderCardSchema,
   deadlineOn: day.optional(),
-  /** The agreed total, gross (the card's `price` stays the team's words). */
+  /** The agreed total, gross (needs `read:money`; the card's `price` stays the team's words). */
   priceMills: priceMills.optional(),
+  /** Why the order waits on purpose (needs `read:messages`: the agent read it in the chats). */
   holdReason: holdReason.optional(),
   /**
    * The sales that pay the order, as the agent read them in the fan's chat (needs `read:money`). Hub links each that
@@ -797,7 +831,10 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("edit"), card: cardPatchSchema, deadlineOn: day.nullable().optional(),
     sourceText: z.string().trim().min(1).max(8000).optional(), ifVersion: z.number().int().positive().optional(), onBehalfOf: login.optional(),
-    /** The agreed total, gross; null — not named any more. A hold's reason; null — the order waits no more. */
+    /**
+     * The agreed total, gross; null — not named any more (needs `read:money`). A hold's reason; null — the order waits no
+     * more (needs `read:messages`).
+     */
     priceMills: priceMills.nullable().optional(), holdReason: holdReason.nullable().optional(),
   }).strict(),
   /**
@@ -808,9 +845,11 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("payment"), sale: agentSaleRequestSchema, onBehalfOf: login.optional() }).strict(),
   /**
    * «Отдан» by the page's message that carried the order (needs `read:messages`): sent by a page of the order's model
-   * among the key's pages to any account of the order's fan, after the order was recorded, with media; a priced one
-   * bought. Refused while the order has a file named by its code (Hub's own rule finds that delivery), and for a
-   * message a person took off the order. Never by a word.
+   * among the key's pages to any account of the order's fan, after the order was recorded, its last revision request and
+   * a person's last «не отдан», with media; a priced one bought — the purchase of its one priced offer becomes the order's
+   * payment in the same step (the same message named again links one the mark was set without). Refused while the order
+   * has a file named by its code (Hub's own rule finds that delivery), for a message a person took off the order, and
+   * when the order moved while it was checked (409 `version_changed`). Never by a word.
    */
   z.object({ action: z.literal("given"), messageRef: ref, onBehalfOf: login.optional() }).strict(),
   /** The order's fan (needs `read:messages`): by the platform's id on a page of the key; only while the order has none. */
@@ -819,7 +858,10 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("fan_asked"), messageRef: ref, onBehalfOf: login.optional() }).strict(),
   /** The deadline moved, as the chatter agreed with the fan: why, in a few words. Never over a person's deadline. */
   z.object({ action: z.literal("deadline"), deadlineOn: day.nullable(), reason: note, onBehalfOf: login.optional() }).strict(),
-  /** The sources disagree about the order (the card at the model differs from what the fan bought…): one sentence. */
+  /**
+   * The sources disagree about the order (the card at the model differs from what the fan bought…): one sentence (needs
+   * `read:messages`). Cleared by the agent only when it set it (409 `not_yours`: a person settles another's).
+   */
   z.object({ action: z.literal("issue"), text: z.string().trim().min(1).max(200), onBehalfOf: login.optional() }).strict(),
   z.object({ action: z.literal("issue_clear"), onBehalfOf: login.optional() }).strict(),
   /** The card reached the model's group (its copy there, if any). */

@@ -39,8 +39,8 @@ function storeForm(form: CalendarForm) {
 
 const count = (orders: readonly unknown[]) => `${orders.length} ${ruPlural(orders.length, "заказ", "заказа", "заказов")}`;
 const byPrice = (left: CustomBoardOrder, right: CustomBoardOrder) => priceOf(right) - priceOf(left) || left.id - right.id;
-/** Overdue: past its day and not on hold (a hold never burns). */
-const isLate = (order: CustomBoardOrder) => order.holdReason === null && order.dueLeftDays !== null && order.dueLeftDays < 0;
+/** Overdue: more than a full day past its day (C2, the day after is not red yet) and not on hold (a hold never burns). */
+const isLate = (order: CustomBoardOrder) => order.holdReason === null && order.dueLeftDays !== null && order.dueLeftDays <= -2;
 
 function ToneDot({ tone }: { tone: Tone }) {
   if (tone === "calm") return null;

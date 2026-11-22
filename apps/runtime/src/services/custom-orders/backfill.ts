@@ -21,6 +21,7 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 import type { AppContext } from "../../bootstrap.ts";
 import { AppError, ConflictError } from "../errors.ts";
 import { linkNamedSales } from "./agent.ts";
+import { giveByMessage } from "./deliveries.ts";
 import { checkGivenMessage, checkNamedSales, type EvidenceScope } from "./evidence.ts";
 import { applyCustomStep, type CustomActor } from "./index.ts";
 
@@ -223,7 +224,14 @@ async function backfillOrder(app: BackfillApp, scope: EvidenceScope, code: strin
       const checked = await checkGivenMessage(app.db, scope, order, messageRef).then((value) => value, (error: unknown) => reasonOf(error));
       if (typeof checked === "string") line("given", subject, "refused", checked);
       else if (apply) {
-        applied("given", subject, await step({ action: "given", messageRef, at: checked.at }));
+        // «Отдан» and the message's purchase as the order's payment, in one transaction, on the order as it was checked.
+        const current = await reread();
+        const done = await giveByMessage(app, {
+          orderId: found.id, messageRef, at: checked.at, purchaseIds: checked.purchaseIds, states: STEP_FROM.given, version: current.version, actor: SYSTEM, now,
+        }).then((value) => value, (error: unknown) => reasonOf(error));
+        if (typeof done === "string") line("given", subject, "refused", done);
+        else if (done === null) line("given", subject, "refused", "version_changed");
+        else line("given", subject, done.given ? "done" : "already");
       } else {
         line("given", subject, "would");
       }

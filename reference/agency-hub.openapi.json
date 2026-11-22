@@ -111554,7 +111554,7 @@
         "tags": [
           "agent"
         ],
-        "description": "Database only, the key's pages only: tips of $40 and more of the last 14 days that pay no order and have no finding, and fans holding a tier that includes a custom whose current period has no resolved finding. Hub records nothing from them.",
+        "description": "Database only, the key's pages only: tips of $40 and more of the last 14 days that pay no order and have no finding, and fans holding a tier that includes a custom whose current period's sale is no finding yet (a tier bought is no custom asked for: the reader writes the fan's chat as a finding when he asks). Hub records nothing from them.",
         "security": [
           {
             "agentKeyAuth": []
@@ -112968,6 +112968,47 @@
                               "null"
                             ]
                           },
+                          "move": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "who": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "whoKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person",
+                                      "shift",
+                                      "model",
+                                      "fan",
+                                      "owner",
+                                      "none"
+                                    ]
+                                  },
+                                  "what": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "who",
+                                  "whoKind",
+                                  "what"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "burning": {
+                            "type": "boolean"
+                          },
                           "cardText": {
                             "type": "string"
                           },
@@ -114191,6 +114232,47 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "move": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "who": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "whoKind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "person",
+                                    "shift",
+                                    "model",
+                                    "fan",
+                                    "owner",
+                                    "none"
+                                  ]
+                                },
+                                "what": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "who",
+                                "whoKind",
+                                "what"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "burning": {
+                          "type": "boolean"
                         },
                         "cardText": {
                           "type": "string"
@@ -116661,6 +116743,47 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "move": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "who": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "whoKind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "person",
+                                    "shift",
+                                    "model",
+                                    "fan",
+                                    "owner",
+                                    "none"
+                                  ]
+                                },
+                                "what": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "who",
+                                "whoKind",
+                                "what"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "burning": {
+                          "type": "boolean"
                         },
                         "cardText": {
                           "type": "string"
@@ -244125,12 +244248,18 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "agentDismissed": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
                         "open",
                         "amountMills",
-                        "fans"
+                        "fans",
+                        "agentDismissed"
                       ],
                       "additionalProperties": false
                     },
@@ -244214,10 +244343,14 @@
                                               "enum": [
                                                 "ungive"
                                               ]
+                                            },
+                                            "messageRef": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
-                                            "action"
+                                            "action",
+                                            "messageRef"
                                           ],
                                           "additionalProperties": false
                                         },
@@ -244633,6 +244766,11 @@
                       }
                     },
                     "additionalProperties": false
+                  },
+                  "priceMills": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1000000000
                   },
                   "telegramRef": {
                     "type": "string",
@@ -245675,7 +245813,8 @@
                           "hold",
                           "unhold",
                           "issue_clear",
-                          "paid_word"
+                          "paid_word",
+                          "fan_asked_clear"
                         ]
                       }
                     },
@@ -245970,10 +246109,14 @@
                                         "enum": [
                                           "ungive"
                                         ]
+                                      },
+                                      "messageRef": {
+                                        "type": "string"
                                       }
                                     },
                                     "required": [
-                                      "action"
+                                      "action",
+                                      "messageRef"
                                     ],
                                     "additionalProperties": false
                                   },
@@ -248024,7 +248167,8 @@
                                   "sexting",
                                   "unused",
                                   "duplicate",
-                                  "test"
+                                  "test",
+                                  "not_asked"
                                 ]
                               },
                               {
@@ -248033,6 +248177,12 @@
                             ]
                           },
                           "resolvedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "resolvedByAgent": {
                             "type": [
                               "string",
                               "null"
@@ -248055,6 +248205,162 @@
                           "orderCode",
                           "dismissReason",
                           "resolvedAt",
+                          "resolvedByAgent",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "dismissedByAgent": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "sale",
+                              "fan_chat",
+                              "work_chat",
+                              "model_group",
+                              "shift_report"
+                            ]
+                          },
+                          "ref": {
+                            "type": "string"
+                          },
+                          "pageLabel": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "fan": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "platform": {
+                                    "type": "string"
+                                  },
+                                  "fanRef": {
+                                    "type": "string"
+                                  },
+                                  "username": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "displayName": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "platform",
+                                  "fanRef",
+                                  "username",
+                                  "displayName"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "amountMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "quote": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "happenedAt": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "open",
+                              "recorded",
+                              "linked",
+                              "dismissed"
+                            ]
+                          },
+                          "orderCode": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "dismissReason": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "not_custom",
+                                  "sexting",
+                                  "unused",
+                                  "duplicate",
+                                  "test",
+                                  "not_asked"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "resolvedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "resolvedByAgent": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "source",
+                          "ref",
+                          "pageLabel",
+                          "fan",
+                          "amountMills",
+                          "quote",
+                          "happenedAt",
+                          "status",
+                          "orderCode",
+                          "dismissReason",
+                          "resolvedAt",
+                          "resolvedByAgent",
                           "createdAt"
                         ],
                         "additionalProperties": false
@@ -248066,6 +248372,7 @@
                   },
                   "required": [
                     "findings",
+                    "dismissedByAgent",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -248369,6 +248676,11 @@
                         "minLength": 1,
                         "maxLength": 300
                       },
+                      "priceMills": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 1000000000
+                      },
                       "telegramRef": {
                         "type": "string",
                         "minLength": 3,
@@ -248418,13 +248730,29 @@
                           "sexting",
                           "unused",
                           "duplicate",
-                          "test"
+                          "test",
+                          "not_asked"
                         ]
                       }
                     },
                     "required": [
                       "action",
                       "reason"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "reopen"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action"
                     ],
                     "additionalProperties": false
                   }
@@ -248566,7 +248894,8 @@
                                 "sexting",
                                 "unused",
                                 "duplicate",
-                                "test"
+                                "test",
+                                "not_asked"
                               ]
                             },
                             {
@@ -248575,6 +248904,12 @@
                           ]
                         },
                         "resolvedAt": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "resolvedByAgent": {
                           "type": [
                             "string",
                             "null"
@@ -248597,6 +248932,7 @@
                         "orderCode",
                         "dismissReason",
                         "resolvedAt",
+                        "resolvedByAgent",
                         "createdAt"
                       ],
                       "additionalProperties": false
@@ -250052,7 +250388,8 @@
                           "hold",
                           "unhold",
                           "issue_clear",
-                          "paid_word"
+                          "paid_word",
+                          "fan_asked_clear"
                         ]
                       }
                     },
@@ -250360,11 +250697,22 @@
                           }
                         },
                         "additionalProperties": false
+                      },
+                      "priceMills": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     },
                     "required": [
-                      "action",
-                      "card"
+                      "action"
                     ],
                     "additionalProperties": false
                   },
@@ -250653,6 +251001,12 @@
                         "type": "integer",
                         "exclusiveMinimum": 0,
                         "maximum": 9007199254740991
+                      },
+                      "messageRef": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[1-9]\\d{0,29}$"
                       }
                     },
                     "required": [
@@ -250819,6 +251173,21 @@
                     "required": [
                       "action",
                       "word"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "fan_asked_clear"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action"
                     ],
                     "additionalProperties": false
                   }
@@ -251866,7 +252235,8 @@
                           "hold",
                           "unhold",
                           "issue_clear",
-                          "paid_word"
+                          "paid_word",
+                          "fan_asked_clear"
                         ]
                       }
                     },
@@ -288176,6 +288546,47 @@
                               "null"
                             ]
                           },
+                          "move": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "who": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "whoKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "person",
+                                      "shift",
+                                      "model",
+                                      "fan",
+                                      "owner",
+                                      "none"
+                                    ]
+                                  },
+                                  "what": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "who",
+                                  "whoKind",
+                                  "what"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "burning": {
+                            "type": "boolean"
+                          },
                           "cardText": {
                             "type": "string"
                           },
@@ -289224,6 +289635,47 @@
                             "string",
                             "null"
                           ]
+                        },
+                        "move": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "who": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "whoKind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "person",
+                                    "shift",
+                                    "model",
+                                    "fan",
+                                    "owner",
+                                    "none"
+                                  ]
+                                },
+                                "what": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "who",
+                                "whoKind",
+                                "what"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "burning": {
+                          "type": "boolean"
                         },
                         "cardText": {
                           "type": "string"

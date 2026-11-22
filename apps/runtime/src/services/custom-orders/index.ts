@@ -1,11 +1,13 @@
 import {
   CUSTOM_STATE_WORDS,
   CUSTOMS_ROUTINES,
+  customOrderBurnsOf,
   customOrderCode,
   customOrderUrgencyOf,
   customsReaderStale,
   parseCustomOrderCode,
   parseTelegramRef,
+  type CustomBurn,
   type CustomOrder,
   type CustomOrderAction,
   type CustomOrderActionBody,
@@ -19,6 +21,7 @@ import {
   type CustomOrdersBoardResponse,
   type CustomPaidWordKind,
   type CustomUrgency,
+  type CustomUrgencyInput,
 } from "@agency_hub_core/contracts";
 import {
   addCustomOrderCard,
@@ -43,6 +46,7 @@ import {
   listCustomDeliverySuggestions,
   listCustomLookalikeSales,
   listCustomOrderActorNames,
+  listCustomOrderEvidenceOwners,
   listCustomOrderPayments,
   listCustomOrdersInStates,
   listCustomPaymentCandidates,
@@ -209,14 +213,24 @@ function moveWire(context: CustomLeaderContext | null, row: CustomOrderRow, fact
   }
 }
 
-/** Whether the order burns, why, and its forwarding timer (`customOrderUrgencyOf`): the board's and the checks' one reading. */
-export function urgencyOfRow(row: CustomOrderRow, facts: CustomOrderFacts, now: Date): CustomUrgency {
+/** What the urgency of a row is read from (`customOrderUrgencyOf`, `customOrderBurnsOf`). */
+function urgencyInputOf(row: CustomOrderRow, facts: CustomOrderFacts): CustomUrgencyInput {
   const paidWord = paidWordOf(row.paidWord);
-  return customOrderUrgencyOf({
+  return {
     state: row.state, deadlineOn: row.deadlineOn, deadlineDefault: row.deadlineDefault, stateAt: row.stateAt, stateNote: row.stateNote,
     createdAt: row.createdAt, firstPaidAt: row.firstPaidAt, payments: row.payments, paidWord: paidWord === null ? null : { at: paidWord.at },
     holdReason: row.holdReason, issue: issueOf(row.issue), fanAskedAt: row.fanAskedAt, sentAt: row.sentAt, facts,
-  }, now);
+  };
+}
+
+/** Whether the order burns, why, and its forwarding timer (`customOrderUrgencyOf`): the board's and the checks' one reading. */
+export function urgencyOfRow(row: CustomOrderRow, facts: CustomOrderFacts, now: Date): CustomUrgency {
+  return customOrderUrgencyOf(urgencyInputOf(row, facts), now);
+}
+
+/** Everything the order burns by (`customOrderBurnsOf`): the checks' matters say what the board's «Горит» says. */
+export function burnsOfRow(row: CustomOrderRow, facts: CustomOrderFacts, now: Date): CustomBurn[] {
+  return customOrderBurnsOf(urgencyInputOf(row, facts), now);
 }
 
 /** The four facts of a row (`customOrderFactsOf`). */
@@ -287,16 +301,24 @@ export function orderWire(row: CustomOrderRow, now: Date = new Date(), leaders: 
 /**
  * The order on the agent's wire and ContentOps' («Съёмка» reads the agent's shape): the session wire without money.
  * The facts and what they are read from only with `money` — an agent key holding `read:money` (`facts.paid` is about
- * the fan's money); ContentOps and every other key read it as before (customs facts spec §11).
+ * the fan's money); ContentOps and every other key read it as before (customs facts spec §11). Whose move and whether it
+ * burns with `reading` — the live list to a key holding `read:messages`: the reader's reminders follow the board's one
+ * rule (`customMoveOf`), never a copy of it; who is on shift comes in `onShift`.
  */
-export function agentOrderBase(row: CustomOrderRow, now: Date, leaders: CustomLeaderContext | null, options: { money?: boolean } = {}) {
+export function agentOrderBase(
+  row: CustomOrderRow,
+  now: Date,
+  leaders: CustomLeaderContext | null,
+  options: { money?: boolean; reading?: boolean; onShift?: CustomOnShift } = {},
+) {
   const {
     paidGrossMills: _gross, paidNetMills: _net, dueLeftDays, deadlineDefault, facts, priceMills, paidWord, holdReason, issue, fanAskedAt, sentAt,
-    // The board's reading of the order (whose move, what burns, the timer) is the board's only.
-    move: _move, burning: _burning, reason: _reason, timer: _timer, ...wire
-  } = orderWire(row, now, leaders);
-  if (options.money !== true) return wire;
-  return { ...wire, dueLeftDays, deadlineDefault, facts, priceMills, paidWord, holdReason, issue, fanAskedAt, sentAt };
+    // The board's reading of the order (whose move, what burns, the timer) is the board's, but for the reader's two.
+    move, burning, reason: _reason, timer: _timer, ...wire
+  } = orderWire(row, now, leaders, options.onShift);
+  const read = options.reading === true ? { move, burning } : {};
+  if (options.money !== true) return { ...wire, ...read };
+  return { ...wire, dueLeftDays, deadlineDefault, facts, priceMills, paidWord, holdReason, issue, fanAskedAt, sentAt, ...read };
 }
 
 export function messageWire(message: CustomOrderMessageRow): CustomOrderMessage {
@@ -378,13 +400,13 @@ export const CUSTOM_PAYING_KINDS = ["tip", "subscription", "message_purchase"] a
 
 /**
  * The agent's «это оплата?» (customs facts spec §5): the fan's sales (any account of the person) on `pageIds` — the
- * key's pages of the order's model — since the order was recorded, that pay no order and that no person took off this
- * one, the newest first. The reader reads the chat around each and names one back, or leaves it; Hub never decides by
- * the amount.
+ * key's pages of the order's model — of the last 30 days, that pay no order and that no person took off this one, the
+ * newest first. Not only since the order was recorded: a fan mostly pays first and the card is written after. The reader
+ * reads the chat around each and names one back, or leaves it; Hub never decides by the amount.
  */
 export async function unlinkedSalesOf(
   db: Database,
-  order: Pick<CustomOrderRow, "id" | "fanId" | "createdAt">,
+  order: Pick<CustomOrderRow, "id" | "fanId">,
   pageIds: readonly number[],
   now: Date,
   limit: number,
@@ -392,7 +414,7 @@ export async function unlinkedSalesOf(
   if (order.fanId === null || pageIds.length === 0) return [];
   return listCustomPaymentCandidates(db, {
     pageIds, fanIds: await personFanIds(db, order.fanId), kinds: CUSTOM_PAYING_KINDS, now, days: CUSTOM_PAYMENT_DAYS,
-    since: order.createdAt, notRejectedFor: order.id, limit,
+    notRejectedFor: order.id, limit,
   });
 }
 
@@ -521,9 +543,16 @@ export type CustomStep =
    * backfill carries it (kept in the history only).
    */
   | { action: "given"; messageRef: string | null; at: Date; note?: string | undefined }
-  /** «Отдан» taken back: «снят» again; a delivering message the system or an agent named stays off the order. */
-  | { action: "ungive"; undoOf?: number | undefined }
-  | { action: "close" }
+  /**
+   * «Отдан» taken back: «снят» again; a delivering message the system or an agent named stays off the order.
+   * `expectMessageRef` — the mark the person saw: refused when «отдан» is another message's by now.
+   */
+  | { action: "ungive"; undoOf?: number | undefined; expectMessageRef?: string | undefined }
+  /**
+   * «Закрыт». `auto` — the checks' close of a given order quiet that long: under the lock it closes only an order whose
+   * mark is that old still, with no issue and no payment in conflict (a person may have moved it since it was read).
+   */
+  | { action: "close"; auto?: { hours: number } }
   | { action: "cancel"; reason?: string | undefined }
   | { action: "delivery"; message: CustomMessageInput; part: "video" | "photos" | undefined; complete: boolean }
   | { action: "revision_done"; telegramRef: string | null; eventRef?: string | null; ordinal: number }
@@ -544,7 +573,9 @@ export type CustomStep =
   /** The owner's word on the payment; null — taken back. */
   | { action: "paid_word"; word: { kind: CustomPaidWordKind; note: string | null } | null }
   /** The fan asked where the order is: his message (checked by the door) and its time. */
-  | { action: "fan_asked"; messageRef: string; at: Date };
+  | { action: "fan_asked"; messageRef: string; at: Date }
+  /** His ask answered: by a person's word, or the page's message to him after it (the checks pass), with its time. */
+  | { action: "fan_asked_clear"; messageRef?: string; at?: Date };
 
 function patched(card: CustomOrderCard, patch: CustomOrderCardPatch): CustomOrderCard {
   const next: Record<string, unknown> = { ...card };
@@ -794,6 +825,15 @@ export async function applyCustomStep(
             throw new ConflictError("The order has its fan already, or its fan was erased", { reason: "fan_known" });
           }
           if (step.pageId === order.pageId && step.fanId === order.fanId) return false;
+          // What the order holds — its sales, the message that gave it — stays the fan's it came from: another fan takes
+          // the order only when every one of them is his (any account of the person) and of the new page's model.
+          const held = await listCustomOrderEvidenceOwners(db, { orderId: order.id, pageId: step.pageId });
+          if (held.owners.length > 0) {
+            const fans = new Set((await listPersonFans(db, step.fanId)).map((fan) => fan.id));
+            if (held.owners.some((one) => one.fanId === null || !fans.has(one.fanId) || one.modelId !== held.modelId)) {
+              throw new ConflictError("The order's payment or the message that gave it is another fan's: unlink it first", { reason: "evidence_other_fan" });
+            }
+          }
           await updateCustomOrderFields(db, order.id, { pageId: step.pageId, fanId: step.fanId, buyer: null, conversationRef: step.conversationRef }, now);
           // The buyer's string goes: the fan is known now. Its text stays out of the history (a fan's name).
           await event("fan_confirmed", { pageId: step.pageId, fanId: step.fanId, hadBuyer: order.buyer !== null });
@@ -901,6 +941,11 @@ export async function applyCustomStep(
           // given order takes «отдан» off it, and any revision the «sent, not opened» (customs facts spec §6): the files the
           // fan has or was sent are not the order's last word any more.
           if (round.about !== null && (order.state !== "revision" || order.stateNote !== round.about.note || order.stateRef !== round.about.ref)) {
+            // The message that gave it is the version sent back: never this order's delivery again by the system or an
+            // agent (a person may still name it by hand, which takes the memory away).
+            if (order.state === "given" && order.givenMessageRef !== null) {
+              await addCustomOrderRejection(db, { orderId: order.id, kind: "given", ref: order.givenMessageRef, userId: input.actor.userId ?? null, at: now });
+            }
             await move("revision", { ...round.about, clear: { given: order.state === "given", sent: true } });
           } else if (round.about !== null && order.sentAt !== null) {
             await updateCustomOrderFields(db, order.id, { sentCleared: true }, now);
@@ -992,6 +1037,9 @@ export async function applyCustomStep(
         case "ungive": {
           // «Снят» again, the mark and its message gone; a message the system or an agent named stays off the order.
           const ref = order.givenMessageRef;
+          if (step.expectMessageRef !== undefined && ref !== step.expectMessageRef) {
+            throw new ConflictError("«Отдан» is another message's by now: read the order again", { reason: "mark_changed" });
+          }
           const remembered = ref !== null && (await rememberUndo("given", ref));
           await move("shot", { clear: { given: true, sent: true } });
           await event("ungiven", { from: order.state, ...(ref === null ? { byWord: true } : { messageRef: ref }), ...(remembered ? { remembered: true } : {}), ...undo });
@@ -1040,13 +1088,26 @@ export async function applyCustomStep(
           return true;
         }
         case "fan_asked": {
-          // The ask that stands is the first one: a later message of the same kind does not move it.
-          if (order.fanAskedRef === step.messageRef || (order.fanAskedAt !== null && order.fanAskedAt.getTime() <= step.at.getTime())) return false;
+          // The ask that stands is the one the order waits by until the page answers it: another message — a later one, or
+          // an older one reported late — never moves it.
+          if (order.fanAskedAt !== null) return false;
           await updateCustomOrderFields(db, order.id, { fanAsked: { at: step.at, ref: step.messageRef } }, now);
           await event("fan_asked", { messageRef: step.messageRef, at: step.at.toISOString() });
           return true;
         }
+        case "fan_asked_clear": {
+          if (order.fanAskedAt === null) return false;
+          await updateCustomOrderFields(db, order.id, { fanAsked: null }, now);
+          await event("fan_asked_cleared", {
+            ...(step.messageRef === undefined ? {} : { messageRef: step.messageRef }), ...(step.at === undefined ? {} : { at: step.at.toISOString() }),
+          });
+          return true;
+        }
         case "close": {
+          if (step.auto !== undefined) {
+            const quiet = now.getTime() - order.stateAt.getTime() >= step.auto.hours * 3_600_000;
+            if (!quiet || issueOf(order.issue) !== null || factsOfRow(order).paid.value === "conflict") return false;
+          }
           await move("closed");
           await event("closed", {});
           return true;
@@ -1084,7 +1145,8 @@ export async function resolveFanOnPage(
 async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrderRow, body: CustomOrderActionBody, now: Date): Promise<CustomStep> {
   switch (body.action) {
     case "edit":
-      return { action: "edit", card: body.card, by: "person" };
+      // The card, and the agreed total: a person's, so an agent never overwrites it.
+      return { action: "edit", by: "person", ...(body.card === undefined ? {} : { card: body.card }), ...(body.priceMills === undefined ? {} : { priceMills: body.priceMills }) };
     case "deadline":
       return { action: "deadline", deadlineOn: body.deadlineOn, by: "person", undoOf: body.undoOf };
     case "fan": {
@@ -1117,7 +1179,7 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
       return { action: "given", messageRef: found.messageRef, at: found.at };
     }
     case "ungive":
-      return { action: "ungive", undoOf: body.undoOf };
+      return { action: "ungive", undoOf: body.undoOf, expectMessageRef: body.messageRef };
     case "retract": {
       // The board names the retraction itself, as it names a person's «Правка»: one event per version of the order.
       const link = parseTelegramRef(body.retracts);
@@ -1130,6 +1192,7 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
       return { action: "hold", reason: body.reason };
     case "unhold":
     case "issue_clear":
+    case "fan_asked_clear":
       return { action: body.action };
     case "paid_word":
       return { action: "paid_word", word: body.word === null ? null : { kind: body.word.kind, note: body.word.note ?? null } };
@@ -1213,6 +1276,8 @@ export async function recordCustomOrder(
     /** The agreed total, gross, and a wait on purpose (0436). */
     priceMills?: number | null;
     holdReason?: string | null;
+    /** The fields a person gave at the record (their price): an agent never overwrites them. */
+    personFields?: readonly string[];
     actor: CustomActor;
     createdAt?: Date;
     now?: Date;
@@ -1227,7 +1292,7 @@ export async function recordCustomOrder(
       pageId: input.pageId, fanId: input.fanId, buyer: input.buyer, conversationRef: input.conversationRef, card: input.card,
       deadlineOn: input.deadlineOn, state, acceptedByUserId: input.acceptedByUserId, origin: input.origin,
       contentopsRef: input.contentopsRef ?? null, sourceText: input.sourceText ?? null, at: input.createdAt ?? now,
-      priceMills: input.priceMills ?? null, holdReason: input.holdReason ?? null,
+      priceMills: input.priceMills ?? null, holdReason: input.holdReason ?? null, personFields: input.personFields ?? [],
     });
     if (paid) {
       const added = await addCustomOrderPayment(db, { orderId: id, transactionId: input.paymentTransactionId!, userId: input.actor.userId ?? null, at: now });
@@ -1299,6 +1364,7 @@ export async function createCustomOrderOnBoard(
     pageId, fanId, buyer: fanId === null && body.fan !== undefined ? body.fan.slice(0, 300) : null, conversationRef, card: body.card,
     deadlineOn: null, acceptedByUserId: human.user.id, origin: door, paymentTransactionId: payment,
     telegramRefs: telegramRef === null ? [] : [telegramRef], actor: { door, userId: human.user.id }, now,
+    ...(body.priceMills === undefined ? {} : { priceMills: body.priceMills, personFields: ["priceMills"] }),
   });
   return answerFor(door, await detailOf(app, viewer, (await findCustomOrder(app.db, id))!, now));
 }

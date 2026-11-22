@@ -53,7 +53,8 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
   card: ALL,
   // «100$ после готовности»: a payment may come at any step, after «отдали» too; never to a cancelled order.
   payment: [...NOT_ENDED, "closed"],
-  unpay: NOT_ENDED,
+  // As a payment: a closed order's sale taken off too (the owner's alone there).
+  unpay: [...NOT_ENDED, "closed"],
   // «Проверен» before the model; a routine «со слов из Telegram» may still put a recorded or paid order there.
   checked: ["recorded", "paid"],
   at_model: ["recorded", "paid", "checked", "refused"],
@@ -84,6 +85,8 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
   issue_clear: ALL,
   // The owner's word on the payment, as a payment: at any step, after «отдан» too; never on a cancelled order.
   paid_word: [...NOT_ENDED, "closed"],
+  // The page answered the fan's «where is it»: a standing ask can always be taken off.
+  fan_asked_clear: ALL,
 };
 
 export const STEP_TO: Partial<Readonly<Record<CustomOrderAction, CustomOrderState>>> = {
@@ -206,21 +209,25 @@ export function worksOnPage(viewer: CustomViewer, pageId: number | null): boolea
   return viewer.leads !== undefined && (viewer.leads.check.includes(pageId) || viewer.leads.shoot.includes(pageId));
 }
 
-/** A chatter's steps: a payment, «отдали» and taking it back; on their own order also its card, its fan and «отменить». */
-const CHATTER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["payment", "given", "ungive"]);
+/**
+ * A chatter's steps: a payment, «отдали» and taking it back, the fan's «where is it» answered; on their own order also its
+ * card, its fan and «отменить».
+ */
+const CHATTER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["payment", "given", "ungive", "fan_asked_clear"]);
 const OWN_ORDER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["edit", "fan", "unpay", "cancel"]);
 /** The owner's alone: his word on the payment, and settling the agent's sentence of a disagreement. */
 const OWNER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["paid_word", "issue_clear"]);
 /** A wait on purpose: the owner's and the check's leader's. */
 const HOLD_STEPS: ReadonlySet<CustomOrderAction> = new Set(["hold", "unhold"]);
 
-/** An order as the rights read it; a hold and an issue, when given, say whether there is one to take off. */
+/** An order as the rights read it; a hold, an issue and the fan's ask, when given, say whether there is one to take off. */
 export interface CustomRightsOrder {
   pageId: number | null;
   state: CustomOrderState;
   acceptedByUserId: number | null;
   holdReason?: string | null;
   issue?: unknown;
+  fanAskedAt?: unknown;
 }
 
 /** Whether the viewer may take `step` on the order now (its state included). */
@@ -228,6 +235,8 @@ export function mayTakeStep(viewer: CustomViewer, order: CustomRightsOrder, step
   if (!seesOrder(viewer, order)) return false;
   if (!STEP_FROM[step].includes(order.state)) return false;
   if ((step === "unhold" && order.holdReason === null) || (step === "issue_clear" && order.issue === null)) return false;
+  if (step === "fan_asked_clear" && order.fanAskedAt === null) return false;
+  if (step === "unpay" && order.state === "closed") return viewer.role === "owner";
   if (OWNER_STEPS.has(step)) return viewer.role === "owner";
   if (HOLD_STEPS.has(step)) {
     return viewer.role === "owner" || (viewer.leads !== undefined ? leadsPhase(viewer, order, "check") : leadsSteps(viewer));
@@ -313,8 +322,9 @@ const PAID_WORD_NOTES: Readonly<Record<CustomPaidWordKind, string>> = { gift: "�
 
 function paidFact(input: CustomFactsInput): CustomFact {
   if (input.paidWord !== null) return { value: "yes", note: PAID_WORD_NOTES[input.paidWord.kind] };
-  if (input.payments === 0) return BEFORE_MODEL.includes(input.state) ? { value: "wait" } : { value: "no" };
+  // A sale taken back is a conflict whatever money still counts: the platform may retire the original row with it.
   if (input.paymentReversed) return { value: "conflict", note: "возврат оплаты" };
+  if (input.payments === 0) return BEFORE_MODEL.includes(input.state) ? { value: "wait" } : { value: "no" };
   // Never «оплачен» while the price is unknown: the screen says what came, «получено $X».
   if (input.priceMills === null || input.priceMills <= 0) return { value: "part", note: "цена не названа" };
   return input.paidGrossMills >= input.priceMills ? { value: "yes" } : { value: "part", note: "не вся сумма" };
@@ -413,29 +423,63 @@ export function customForwardTimerOf(input: Omit<CustomUrgencyInput, "facts" | "
   return { kind: "forwarding", level: hours >= CUSTOM_FORWARD_RED_HOURS ? "red" : "amber", since: new Date(since).toISOString() };
 }
 
+/** What makes an order burn (customs facts spec §7), each with its words. */
+export type CustomBurnKind = "issue" | "fan_asked" | "paid_conflict" | "refused" | "overdue" | "shot_unsent";
+export interface CustomBurn {
+  kind: CustomBurnKind;
+  text: string;
+}
+
 /**
- * Whether an order burns and why, or what it waits for, in one line (customs facts spec §7), derived at read time.
- * Burns: an issue (its sentence is the reason), the fan asked where it is, a reversed payment, the model's refusal,
- * more than one full day past the deadline, shot and nothing sent for 12 h. An order on hold never burns.
+ * Everything an order burns by, the first being its reason (customs facts spec §7), derived at read time — the board
+ * (`customOrderUrgencyOf`) and the checks' matters read the same list, so they never disagree. An open order: an issue
+ * (its sentence), the fan asked where it is, a reversed payment, the model's refusal, more than one full day past the
+ * deadline, shot and nothing sent for 12 h. A given order, until it closes: an issue, a reversed payment — the owner
+ * settles them first. An order on hold never burns.
+ */
+export function customOrderBurnsOf(input: CustomUrgencyInput, now: Date): CustomBurn[] {
+  if (input.holdReason !== null) return [];
+  const burns: CustomBurn[] = [];
+  if (input.state === "given") {
+    if (input.issue !== null) burns.push({ kind: "issue", text: input.issue.text });
+    if (input.facts.paid.value === "conflict") burns.push({ kind: "paid_conflict", text: "Отдан, но оплата возвращена" });
+    return burns;
+  }
+  if (!OPEN.includes(input.state)) return burns;
+  const dueLeft = dueLeftDaysOf(input, now);
+  const shotHours = input.state === "shot" ? Math.floor((now.getTime() - msOf(input.stateAt)) / HOUR_MS) : 0;
+  if (input.issue !== null) burns.push({ kind: "issue", text: input.issue.text });
+  if (input.fanAskedAt !== null) burns.push({ kind: "fan_asked", text: "Фан спросил, где заказ" });
+  if (input.facts.paid.value === "conflict") burns.push({ kind: "paid_conflict", text: "Возврат оплаты" });
+  if (input.state === "refused") burns.push({ kind: "refused", text: input.stateNote ? `Отказ модели: ${input.stateNote}` : "Отказ модели" });
+  if (dueLeft !== null && dueLeft <= -OVERDUE_BURN_DAYS) burns.push({ kind: "overdue", text: `Срок прошёл: был ${deadlineWordsOf(input)}` });
+  if (input.state === "shot" && input.sentAt === null && shotHours >= CUSTOM_SHOT_UNSENT_HOURS) {
+    burns.push({ kind: "shot_unsent", text: `Снят ${shotHours} ч назад и не отправлен фану` });
+  }
+  return burns;
+}
+
+/** The deadline as the reasons name it: «21.11.2026», «21.11.2026 (примерно)». */
+function deadlineWordsOf(input: Pick<CustomUrgencyInput, "deadlineOn" | "deadlineDefault">): string {
+  return input.deadlineOn === null ? "" : `${dottedDay(input.deadlineOn)}${input.deadlineDefault ? " (примерно)" : ""}`;
+}
+
+/**
+ * Whether an order burns and why, or what it waits for, in one line (customs facts spec §7), derived at read time:
+ * the first of `customOrderBurnsOf`, else what it waits for. An order on hold never burns.
  */
 export function customOrderUrgencyOf(input: CustomUrgencyInput, now: Date): CustomUrgency {
   const timer = customForwardTimerOf(input, now);
+  const burns = customOrderBurnsOf(input, now);
   if (!OPEN.includes(input.state)) {
+    if (burns.length > 0) return { burning: true, reason: oneLine(burns[0]!.text), timer: null };
     const ended: Partial<Record<CustomOrderState, string>> = { given: "Отдан, ждём слово фана", closed: "Закрыт", cancelled: "Отменён" };
     return { burning: false, reason: ended[input.state] ?? null, timer: null };
   }
   if (input.holdReason !== null) return { burning: false, reason: oneLine(`На паузе: ${input.holdReason}`), timer };
+  if (burns.length > 0) return { burning: true, reason: oneLine(burns[0]!.text), timer };
   const dueLeft = dueLeftDaysOf(input, now);
-  const deadline = input.deadlineOn === null ? "" : `${dottedDay(input.deadlineOn)}${input.deadlineDefault ? " (примерно)" : ""}`;
-  const shotHours = input.state === "shot" ? Math.floor((now.getTime() - msOf(input.stateAt)) / HOUR_MS) : 0;
-  const burns: string[] = [];
-  if (input.issue !== null) burns.push(input.issue.text);
-  if (input.fanAskedAt !== null) burns.push("Фан спросил, где заказ");
-  if (input.facts.paid.value === "conflict") burns.push("Возврат оплаты");
-  if (input.state === "refused") burns.push(input.stateNote ? `Отказ модели: ${input.stateNote}` : "Отказ модели");
-  if (dueLeft !== null && dueLeft <= -OVERDUE_BURN_DAYS) burns.push(`Срок прошёл: был ${deadline}`);
-  if (input.state === "shot" && input.sentAt === null && shotHours >= CUSTOM_SHOT_UNSENT_HOURS) burns.push(`Снят ${shotHours} ч назад и не отправлен фану`);
-  if (burns.length > 0) return { burning: true, reason: oneLine(burns[0]!), timer };
+  const deadline = deadlineWordsOf(input);
   const due = dueLeft === 0 ? ", срок сегодня" : dueLeft === -1 ? `, срок был вчера (${deadline})` : "";
   const waits = ((): string => {
     if (input.facts.given.value === "part") return "Отправлен, фан ещё не открыл";
@@ -501,7 +545,7 @@ export function customUndoOf(
     }
     case "custom_order.given": {
       const message = text("messageRef");
-      return message !== null && order.state === "given" && order.givenMessageRef === message && may("ungive") ? { action: "ungive" } : null;
+      return message !== null && order.state === "given" && order.givenMessageRef === message && may("ungive") ? { action: "ungive", messageRef: message } : null;
     }
     case "custom_order.delivery": {
       const ref = text("eventRef") ?? text("telegramRef");
