@@ -10,6 +10,14 @@
     gap: 16px;
   }
 
+  /* «Кастомы» in the extension's frame over the site (frame.tsx): a centred column with room on its sides, not the
+     site's whole width (owner, 2026-11-22). */
+  .cus-frame-main {
+    width: 100%;
+    max-width: 1280px;
+    margin-inline: auto;
+  }
+
   .cus-muted {
     color: var(--ui-text-2);
   }

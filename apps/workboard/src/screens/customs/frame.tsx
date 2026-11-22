@@ -93,7 +93,7 @@ function FramedCustoms({ transport }: { transport: PortTransport }) {
   useShowRereads(transport);
   const board = useCustomBoard(null);
   return (
-    <main className="wb-main">
+    <main className="wb-main cus-frame-main">
       {!board.data ? <FrameWaiting collapse={collapse} />
         : board.data.factsOn ? <CustomsFactsScreen frame={frame} />
         : <CustomsBoardScreen frame={frame} />}
