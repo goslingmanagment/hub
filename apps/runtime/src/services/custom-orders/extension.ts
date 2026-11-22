@@ -72,7 +72,8 @@ function extensionCustomOf(
     paidAt: iso(order.firstPaidAt ?? (order.state === "paid" ? order.stateAt : null)),
     deliveredMessageRef: order.givenMessageRef,
     deliveredAt: iso(order.givenAt),
-    createdBy: order.acceptedBy ?? (order.origin === "import" ? "перенесён" : "Генгар"),
+    // Who took it («принял»): the taker's login; none named reads so — never the agent that wrote the card.
+    createdBy: order.acceptedBy ?? "не указан",
     createdAt: order.createdAt.toISOString(),
     deliveryCandidates: candidates,
     ...extensionStepOf(order),

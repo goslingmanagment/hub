@@ -53,6 +53,8 @@ interface DemoOrder {
   stateAt: number;
   stateNote: string | null;
   acceptedBy: string | null;
+  /** Someone other than the taker on shift on the page now (a login). */
+  onShift: string | null;
   origin: CustomOrder["origin"];
   createdAt: number;
   payments: Array<{ ref: string; kind: string; gross: number; at: number; note: string | null }>;
@@ -116,19 +118,25 @@ interface Scenario {
   imported?: boolean;
   /** Its payment (by the agent) or its approximate deadline (by Hub) came in the last day: «изменилось само». */
   recent?: boolean;
+  /** Nobody is named its taker («Принял: не указан»): the check's leader names who took it. */
+  noTaker?: boolean;
+  /** Someone other than its taker is on shift on its page now: they may give it too. */
+  onShift?: string;
 }
 
 const SCENARIOS: readonly Scenario[] = [
   { state: "at_model", page: "mia-1", due: -3, stepHours: 120, paid: 100, price: 380_000 },
   { state: "revision", page: "mia-2", due: -2, stepHours: 30, paid: 100, price: 220_000, note: "Фото тёмные: переснять у окна" },
-  { state: "shot", page: "mia-1", due: 2, stepHours: 15, paid: 100, price: 260_000 },
+  // Shot, its taker answers for it, and another chatter is on shift on the page: she may give it too.
+  { state: "shot", page: "mia-1", due: 2, stepHours: 15, paid: 100, price: 260_000, onShift: "kate.v" },
   { state: "at_model", page: "ivy-1", due: 8, stepHours: 50, paid: 100, price: 190_000, issue: "У модели в карточке другой срок, чем в заказе" },
   { state: "paid", page: "nova-1", due: null, stepHours: 60, paid: 100, price: 170_000, fanAskedHours: 20 },
   { state: "refused", page: "ivy-2", due: 4, stepHours: 10, paid: 100, price: 180_000, note: "Модель не снимает такие сцены" },
   { state: "at_model", page: "mia-of", due: 5, stepHours: 40, paid: 100, price: 140_000, reversed: true },
   { state: "shot", page: "mia-3", due: 0, stepHours: 5, paid: 50, price: 360_000, sentHours: 3 },
   { state: "at_model", page: "mia-2", due: -1, stepHours: 70, paid: 100, price: 125_000 },
-  { state: "shot", page: "mia-1", due: 2, stepHours: 2, paid: 100, price: 45_000, recent: true },
+  // Shot and nobody named its taker: the check's leader names who took it.
+  { state: "shot", page: "mia-1", due: 2, stepHours: 2, paid: 100, price: 45_000, recent: true, noTaker: true },
   { state: "partly", page: "mia-2", due: 3, stepHours: 20, paid: 100, price: 240_000, note: "Видео есть, фото ещё ждём" },
   { state: "paid", page: "ivy-1", due: 5, stepHours: 28, paid: 100, price: 155_000 },
   { state: "checked", page: "nova-1", due: 6, stepHours: 52, paid: 40, price: 230_000, approximate: true, recent: true },
@@ -228,7 +236,8 @@ function seedOrder(index: number, now: number, random: () => number): DemoOrder 
     state,
     stateAt: state === "recorded" ? createdAt : stepAt,
     stateNote: scenario?.note ?? (state === "refused" ? "Модель не снимает такие сцены" : state === "partly" ? "Видео есть, фото ещё ждём" : null),
-    acceptedBy: imported ? null : acceptor,
+    acceptedBy: imported || scenario?.noTaker === true ? null : acceptor,
+    onShift: scenario?.onShift ?? null,
     origin: imported ? "import" : index % 2 === 0 ? "extension" : "agent",
     createdAt,
     payments: paid ? [{ ref: String(8_000_000 + index), kind: index % 3 === 0 ? "subscription" : "tip", gross, at: createdAt - 15 * 60_000, note: null }] : [],
@@ -283,7 +292,7 @@ const factsOnOf = (request: DemoRequest) => request.cookie?.("hub-demo-customs-f
 const pageIdOf = (label: string | null) => (label === null ? null : DEMO_DATA_PAGES.find((page) => page.label === label)?.id ?? null);
 const TEAM_LEAD = () => demoUserByRole("team_lead").name;
 
-/** «У кого сейчас» in the demo: the check is the team lead's, the shooting a made-up content manager's, the giving its chatter's. */
+/** «У кого сейчас» in the demo: the check is the team lead's, the shooting a made-up content manager's, the giving its taker's. */
 function demoLeader(order: DemoOrder): CustomOrder["leader"] {
   const phase = customPhaseOf(order.state);
   if (phase === null) return null;
@@ -292,6 +301,8 @@ function demoLeader(order: DemoOrder): CustomOrder["leader"] {
     : nameOf(order.acceptedBy) ?? TEAM_LEAD();
   return { name, phase, product: customPhaseProduct(phase) };
 }
+
+const userIdOf = (login: string | null) => (login === null ? null : DEMO_USERS.find((user) => user.username === login)?.id ?? null);
 
 function factsOf(order: DemoOrder) {
   return customOrderFactsOf({
@@ -303,26 +314,36 @@ function factsOf(order: DemoOrder) {
 
 /**
  * Whose move in the demo, by the server's order of rules (leaders.ts `customMoveOf`) over the made-up team: the owner
- * for a hold, a refusal or a reversed payment; the content manager for a revision; the fan for a sent and unopened
- * file; whoever is on shift (every third shot order) or the acceptor for a shot one; the model while she shoots.
+ * for a hold, a refusal, a reversed payment or an issue; the content manager for a revision; the fan for a sent and
+ * unopened file; a shot one's giver — its taker, else the team lead to name the taker — with whoever else is on shift
+ * beside; the model while she shoots.
  */
 function demoMove(order: DemoOrder, facts: CustomOrder["facts"], fanName: string | null, modelName: string | null): CustomOrder["move"] {
-  if (order.state === "given" && order.holdReason === null && facts.paid.value === "conflict") return { who: null, whoKind: "owner", what: "разобраться с возвратом оплаты" };
-  if (order.state === "given" && order.holdReason === null && order.issue !== null) return { who: null, whoKind: "owner", what: "разобраться с расхождением" };
+  const lead = demoUserByRole("team_lead");
+  const none = { userId: null, giver: null, onShift: null } as const;
+  const owner = (what: string): CustomOrder["move"] => ({ who: null, whoKind: "owner", what, ...none });
+  if (order.state === "given" && order.holdReason === null && facts.paid.value === "conflict") return owner("разобраться с возвратом оплаты");
+  if (order.state === "given" && order.holdReason === null && order.issue !== null) return owner("разобраться с расхождением");
   if (["given", "closed", "cancelled"].includes(order.state)) return null;
-  if (order.holdReason !== null) return { who: null, whoKind: "owner", what: "решить, когда продолжить" };
-  if (order.state === "refused") return { who: null, whoKind: "owner", what: "решить после отказа модели" };
-  if (facts.paid.value === "conflict") return { who: null, whoKind: "owner", what: "разобраться с возвратом оплаты" };
-  if (order.state === "revision") return { who: order.page === null ? null : "Вера", whoKind: order.page === null ? "owner" : "person", what: "довести правку" };
-  if (facts.given.value === "part") return { who: fanName, whoKind: "fan", what: "открыть присланное" };
+  if (order.holdReason !== null) return owner("решить, когда продолжить");
+  if (order.state === "refused") return owner("решить после отказа модели");
+  if (facts.paid.value === "conflict") return owner("разобраться с возвратом оплаты");
+  if (order.issue !== null) return owner("разобраться с расхождением");
+  if (order.state === "revision") return order.page === null ? owner("довести правку") : { who: "Вера", whoKind: "person", what: "довести правку", ...none, userId: 900 };
+  if (facts.given.value === "part") return { who: fanName, whoKind: "fan", what: "открыть присланное", ...none };
   if (order.state === "shot") {
-    return order.id % 3 === 0
-      ? { who: "Саша", whoKind: "shift", what: "отдать фану" }
-      : { who: nameOf(order.acceptedBy) ?? demoUserByRole("team_lead").name, whoKind: "person", what: "отдать фану" };
+    const taker = userIdOf(order.acceptedBy);
+    const onShift = order.onShift === null || order.onShift === order.acceptedBy ? null : { userId: userIdOf(order.onShift)!, name: nameOf(order.onShift) };
+    return taker === null
+      ? { who: lead.name, whoKind: "person", userId: lead.id, giver: "lead", what: "указать, кто принял", onShift }
+      : { who: nameOf(order.acceptedBy), whoKind: "person", userId: taker, giver: "taker", what: "посмотреть ролик целиком и отдать фану", onShift };
   }
-  if (order.state === "at_model" || order.state === "partly") return { who: modelName, whoKind: "model", what: order.state === "partly" ? "доснять" : "снять" };
-  if (order.payments.length > 0 || order.paidWord !== null) return { who: demoUserByRole("team_lead").name, whoKind: "person", what: "передать модели" };
-  return { who: nameOf(order.acceptedBy) ?? demoUserByRole("team_lead").name, whoKind: "person", what: "получить оплату" };
+  if (order.state === "at_model" || order.state === "partly") return { who: modelName, whoKind: "model", what: order.state === "partly" ? "доснять" : "снять", ...none };
+  if (order.payments.length > 0 || order.paidWord !== null) return { who: lead.name, whoKind: "person", what: "передать модели", ...none, userId: lead.id };
+  const taker = userIdOf(order.acceptedBy);
+  return taker === null
+    ? { who: lead.name, whoKind: "person", what: "получить оплату", ...none, userId: lead.id }
+    : { who: nameOf(order.acceptedBy), whoKind: "person", what: "получить оплату", ...none, userId: taker };
 }
 
 function wire(order: DemoOrder, now: number): CustomOrder {
@@ -361,7 +382,10 @@ function wire(order: DemoOrder, now: number): CustomOrder {
     payments: order.payments.length,
     givenAt: order.givenAt === null ? null : isoAt(order.givenAt),
     givenMessageRef: order.givenAt === null ? null : String(990_000_000_000 + order.id),
+    // «Отдал»: the extension reported who sent the giving message (every other given order's, in the demo).
+    givenBy: order.givenAt === null || order.id % 2 === 1 ? null : nameOf(order.acceptedBy) ?? nameOf(demoUserByRole("chatter").username),
     acceptedBy: order.acceptedBy,
+    acceptedByUserId: userIdOf(order.acceptedBy),
     acceptedByName: nameOf(order.acceptedBy),
     telegramRefs: order.refs,
     contentopsRef: null,
@@ -403,7 +427,7 @@ function visible(viewer: CustomViewer, order: DemoOrder): boolean {
 }
 
 const rightsOf = (order: DemoOrder) => ({
-  pageId: pageIdOf(order.page), state: order.state, acceptedByUserId: DEMO_USERS.find((user) => user.username === order.acceptedBy)?.id ?? null,
+  pageId: pageIdOf(order.page), state: order.state, acceptedByUserId: userIdOf(order.acceptedBy),
   holdReason: order.holdReason, issue: order.issue, fanAskedAt: order.fanAskedAt,
 });
 
@@ -552,7 +576,8 @@ function actOnFinding(request: DemoRequest, body: CustomFindingActionBody) {
     const user = demoUserByRole(request.role);
     const order: DemoOrder = {
       id: 101 + store.length + 1000, page, fanRef: fan?.platformUserId ?? null, buyer: fan === null ? body.fan ?? null : null, card: body.card, deadlineOn: null,
-      state: finding.source === "sale" ? "paid" : "recorded", stateAt: now, stateNote: null, acceptedBy: user.username, origin: "workboard", createdAt: now,
+      state: finding.source === "sale" ? "paid" : "recorded", stateAt: now, stateNote: null,
+      acceptedBy: body.acceptedBy ?? defaultTakerOf(page, user.username), onShift: null, origin: "workboard", createdAt: now,
       payments: finding.source === "sale" && finding.amount !== null ? [{ ref: `61${finding.id}`, kind: "tip", gross: finding.amount, at: now - finding.hoursAgo * HOUR, note: null }] : [],
       givenAt: null, refs: [], partsDone: [], messages: [],
       history: [{ at: isoAt(now), event: "custom_order.recorded", actor: user.name, onBehalfOf: null, door: "workboard", changes: {} }],
@@ -563,6 +588,18 @@ function actOnFinding(request: DemoRequest, body: CustomFindingActionBody) {
   }
   return { finding: findingWire(finding, now) };
 }
+
+// ── «Принял» ────────────────────────────────────────────────────────────────
+
+/** The page's chatters, as Hub's `listCustomPageTakers`: the active chatters working on it. */
+function takersOf(page: string | null): Array<{ login: string; name: string }> {
+  if (page === null) return [];
+  return DEMO_USERS.filter((user) => user.role === "chatter" && user.active && user.pages.includes(page))
+    .map((user) => ({ login: user.username, name: user.name })).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+/** A record's taker when the person chooses none: the person recording, when they are one of the page's chatters. */
+const defaultTakerOf = (page: string | null, login: string) => (takersOf(page).some((taker) => taker.login === login) ? login : null);
 
 // ── What changed by itself ──────────────────────────────────────────────────
 
@@ -657,6 +694,12 @@ function act(request: DemoRequest, order: DemoOrder, body: CustomOrderActionBody
       break;
     case "cancel": order.payments = []; move("cancelled", body.reason ?? null); event = "cancelled"; break;
     case "close": move("closed"); event = "closed"; break;
+    case "accepted_by":
+      if (body.acceptedBy !== null && !takersOf(order.page).some((taker) => taker.login === body.acceptedBy)) {
+        return demoError(409, "Conflict", "Этот человек не работает на странице заказа");
+      }
+      order.acceptedBy = body.acceptedBy;
+      break;
     default: move(STEP_TO[body.action]!);
   }
   order.history.push({
@@ -684,7 +727,7 @@ export const wbCustomsHandlers: DemoHandlers = {
     const changes = factsOn ? selfChanges(request) : [];
     const fans = [...new Set(findings.map((finding) => finding.fan?.username ?? finding.fan?.displayName).filter((name): name is string => typeof name === "string"))];
     return {
-      viewer: { lead: viewer.lead || viewer.role !== "chatter", owner: viewer.role === "owner", name: demoUserByRole(request.role).name },
+      viewer: { lead: viewer.lead || viewer.role !== "chatter", owner: viewer.role === "owner", name: demoUserByRole(request.role).name, userId: demoUserByRole(request.role).id },
       leads: [{ model: "Mia Hart", check: "Марта", shoot: "Вера" }, { model: "Ivy Rose", check: "Марта", shoot: "Марта" }],
       factsOn,
       orders: orders.map((order) => boardWire(order, now, !factsOn)),
@@ -736,7 +779,7 @@ export const wbCustomsHandlers: DemoHandlers = {
     return act(request, order, request.body as CustomOrderActionBody);
   },
   customOrderCreate: (request) => {
-    const body = request.body as { transactionRef?: string; pageLabel?: string; fan?: string; card: CustomOrderCard; priceMills?: number };
+    const body = request.body as { transactionRef?: string; pageLabel?: string; fan?: string; card: CustomOrderCard; priceMills?: number; acceptedBy?: string };
     const sale = lookalikes(request).find((one) => one.transactionRef === body.transactionRef);
     if (body.transactionRef !== undefined && !sale) return demoError(404, "Not Found", "Продажа не найдена");
     const pageLabel = sale?.pageLabel ?? body.pageLabel ?? MAIN_PAGES[0]!.label;
@@ -745,7 +788,8 @@ export const wbCustomsHandlers: DemoHandlers = {
     const user = demoUserByRole(request.role);
     const order: DemoOrder = {
       id: 101 + store.length + 1000, page: pageLabel, fanRef: sale?.fan?.fanRef ?? null, buyer: sale ? null : body.fan ?? null, card: body.card, deadlineOn: null,
-      state: sale ? "paid" : "recorded", stateAt: now, stateNote: null, acceptedBy: user.username, origin: "workboard", createdAt: now,
+      state: sale ? "paid" : "recorded", stateAt: now, stateNote: null, acceptedBy: body.acceptedBy ?? defaultTakerOf(pageLabel, user.username), onShift: null,
+      origin: "workboard", createdAt: now,
       payments: sale ? [{ ref: sale.transactionRef, kind: sale.kind === "tier" ? "subscription" : "tip", gross: sale.grossMills, at: Date.parse(sale.at), note: sale.kind === "tip_note" ? sale.detail : null }] : [],
       givenAt: null, refs: [], partsDone: [], messages: [],
       history: [{ at: isoAt(now), event: "custom_order.recorded", actor: user.name, onBehalfOf: null, door: "workboard", changes: {} }],
@@ -753,6 +797,11 @@ export const wbCustomsHandlers: DemoHandlers = {
     };
     store.push(order);
     return detail(request, order);
+  },
+  customOrderTakers: (request) => {
+    const page = typeof request.query.pageLabel === "string" ? request.query.pageLabel : null;
+    const user = demoUserByRole(request.role);
+    return { takers: takersOf(page), suggested: defaultTakerOf(page, user.username) };
   },
   customSaleDismiss: (request) => {
     dismissed.add(request.params.transactionRef ?? "");

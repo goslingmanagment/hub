@@ -147,6 +147,7 @@ export const CLIENT_TOKEN_PROFILES = {
       "customFindingsList",
       "customOrderChanges",
       "customOrder",
+      "customOrderTakers",
 
       // chatspace-tab-state-v1: the always-on ChatSpace tab's report (the server's own hub user).
       "clientChatspaceTabState",

@@ -64,6 +64,7 @@ function expectedRefusal(_who: string, status: number, key: string): string | nu
     "400 spenderDetail": "the sampled search names no scope",
     "400 spenderSeries": "the sampled search names no scope",
     "400 saleChain": "the sampled sale names nothing",
+    "404 customOrderTakers": "the sampled page is team B's: a page the viewer does not see is not found",
     "404 crossPageFanDetail": "the sampled fan does not exist",
     "404 crossPageFanTransactions": "the sampled fan does not exist",
     "404 learnPage": "the sampled slug does not exist",

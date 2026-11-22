@@ -79,6 +79,8 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "customOrdersDone",
   "customFindingsList",
   "customOrderChanges",
+  // «Принял»: the page's chatters a taker is chosen among.
+  "customOrderTakers",
   // The page filter of «Кастомы»: the pages the person reaches.
   "pages",
   // «Начало» (package J): a newcomer's way, read. Of where payouts go it carries only whether it is written and when:

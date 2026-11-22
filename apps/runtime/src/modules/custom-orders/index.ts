@@ -5,6 +5,7 @@ import {
   createCustomOrderOnBoard,
   dismissCustomLookalike,
   readCustomOrder,
+  readCustomOrderTakers,
 } from "../../services/custom-orders/index.ts";
 import {
   readCustomFindings,
@@ -13,7 +14,9 @@ import {
   readCustomOrdersDone,
 } from "../../services/custom-orders/board.ts";
 import {
+  agentActOnCustomFinding,
   agentCreateCustomOrder,
+  agentCustomEvents,
   agentListCustomOrders,
   agentReportCustomCards,
   agentUpdateCustomOrder,
@@ -70,6 +73,11 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
   server.get("/api/v1/custom-orders/changes", { schema: routeSchemas.customOrderChanges }, async (request) => {
     const principal = await requirePrincipal(request);
     return readCustomOrderChanges(appContext, principal);
+  });
+
+  server.get("/api/v1/custom-orders/takers", { schema: routeSchemas.customOrderTakers }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return readCustomOrderTakers(appContext, principal, request.query);
   });
 
   server.post("/api/v1/custom-orders", { schema: routeSchemas.customOrderCreate }, async (request) => {
@@ -153,6 +161,19 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
     });
   });
 
+  // What changed on the key's orders and findings after a cursor (the history): people's steps on the board included.
+  server.get("/api/v1/agent/custom-orders/events", { schema: routeSchemas.agentCustomEvents }, async (request) => {
+    const { principal, scope, customScope } = await agentScope(request, "agentCustomEvents", ["read:messages"]);
+    return settled(scope, async () => {
+      const answer = await agentCustomEvents(appContext, customScope, request.query);
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId, operation: "agentCustomEvents", pageIds: scope.pageIds, verbatimText: false,
+        requestSummary: { returned: answer.events.length },
+      });
+      return answer;
+    }, (answer) => answer.events.length);
+  });
+
   server.post("/api/v1/agent/custom-orders/cards", { schema: routeSchemas.agentCustomCards }, async (request) => {
     const { principal, scope, customScope } = await agentScope(request, "agentCustomCards");
     return settled(scope, async () => {
@@ -178,6 +199,20 @@ export function registerCustomOrderRoutes(server: ApiServer, ctx: ApiModuleConte
           returned: answer.findings.length,
           outcome: `created:${count("created")}.dismissed:${count("dismissed")}.already:${count("already")}.not_found:${count("not_found")}`,
         },
+      });
+      return answer;
+    });
+  });
+
+  // A finding answered on a person's word (onBehalfOf + requestRef): the board's own answer, as that person.
+  server.post("/api/v1/agent/custom-findings/:findingId", { schema: routeSchemas.agentCustomFindingAct }, async (request) => {
+    const { principal, scope, customScope } = await agentScope(request, "agentCustomFindingAct", ["read:messages"]);
+    return settled(scope, async () => {
+      const answer = await agentActOnCustomFinding(appContext, customScope, request.params.findingId, request.body);
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId, operation: "agentCustomFindingAct",
+        pageIds: customScope.pages.filter((page) => page.pageLabel === answer.finding.pageLabel).map((page) => page.id),
+        verbatimText: false, requestSummary: { outcome: answer.finding.status, reasonCode: request.body.step.action },
       });
       return answer;
     });

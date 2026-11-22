@@ -71,6 +71,20 @@ export async function upsertSaleHomes(db: Database, rows: readonly SaleHomeRow[]
   return written;
 }
 
+/**
+ * The one login a sale's home is wholly: a person's work (`shift`, `visit`) with exactly one share, of 100%. Null — the
+ * sale has no home yet, or it is several people's, the pot's, the owner's to decide, nobody's. A custom order's taker
+ * («принял») is named by it when the order names none (services/custom-orders).
+ */
+export async function findSaleSingleHomeUser(db: Database, transactionId: number): Promise<number | null> {
+  const result = await db.execute<{ user_id: string | number | null }>(sql`
+    select (h.shares -> 0 ->> 'userId')::bigint as user_id from sale_homes h
+    where h.transaction_id = ${transactionId} and h.home in ('shift', 'visit') and jsonb_array_length(h.shares) = 1
+      and (h.shares -> 0 ->> 'percent')::numeric = 100 and h.shares -> 0 ->> 'userId' ~ '^[0-9]{1,18}$'`);
+  const id = result.rows[0]?.user_id;
+  return id === null || id === undefined ? null : Number(id);
+}
+
 /** The homes of the sales in [from, to), oldest first. */
 export async function listSaleHomes(db: Database, input: { from: Date; to: Date }): Promise<Array<SaleHomeRow & { computedAt: Date }>> {
   const result = await db.execute<{

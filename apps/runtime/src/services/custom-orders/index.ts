@@ -19,7 +19,9 @@ import {
   type CustomOrderFacts,
   type CustomOrderPayment,
   type CustomOrdersBoardResponse,
+  type CustomOrderTakersResponse,
   type CustomPaidWordKind,
+  type CustomTakerSource,
   type CustomUrgency,
   type CustomUrgencyInput,
 } from "@agency_hub_core/contracts";
@@ -36,7 +38,9 @@ import {
   findCustomOrderLastHandMove,
   findCustomOrderLinkDoor,
   findCustomSale,
+  findCustomTakerOnPage,
   findPageFanByInput,
+  findSaleSingleHomeUser,
   findPageSummaryByLabel,
   hasCustomOrderRejection,
   hasCustomOrderStepByRef,
@@ -45,11 +49,13 @@ import {
   isCustomOrderEvent,
   listCustomDeliverySuggestions,
   listCustomLookalikeSales,
+  listCustomModelPageIds,
   listCustomOrderActorNames,
   listCustomOrderEvidenceOwners,
   listCustomOrderPayments,
   listCustomOrdersInStates,
   listCustomPaymentCandidates,
+  listCustomPageTakers,
   listObjectEvents,
   listOnShiftUsersByPage,
   listPersonFans,
@@ -73,6 +79,7 @@ import {
   type CustomOrderRow,
   type CustomOrderSaleRow,
   type CustomOrderStateRow,
+  type CustomTakerRow,
   type Database,
   listTestPageIds,
   type TeamFacts,
@@ -196,7 +203,7 @@ export function leaderWire(context: CustomLeaderContext | null, row: CustomOrder
   return { name: step.leader.kind === "owner" ? null : step.leader.name || null, phase: step.phase, product: step.product };
 }
 
-/** Who is on shift now, by page label (`listOnShiftUsersByPage`): whose move a shot order is. */
+/** Who is on shift now, by page label (`listOnShiftUsersByPage`, the newest shift first): who else may give a shot order. */
 export type CustomOnShift = ReadonlyMap<string, readonly number[]>;
 
 /** Whose move on the wire (`customMoveOf`, the one rule); null — nobody's, or the rule's inputs are not at hand. */
@@ -206,12 +213,15 @@ function moveWire(context: CustomLeaderContext | null, row: CustomOrderRow, fact
   const move = customMoveOf(context.facts, row, { paid: facts.paid.value, given: facts.given.value }, onPage, context.fallback);
   if (move === null) return null;
   const { who, what } = move;
+  const give = {
+    giver: move.giver ?? null,
+    onShift: move.onShift === undefined ? null : { userId: move.onShift.userId, name: move.onShift.name || null },
+  };
   switch (who.kind) {
-    case "owner": return { who: null, whoKind: "owner", what };
-    case "person": return { who: who.name || null, whoKind: "person", what };
-    case "shift": return { who: who.name || null, whoKind: "shift", what };
-    case "model": return { who: row.modelName, whoKind: "model", what };
-    case "fan": return { who: row.fanUsername ?? row.fanDisplayName ?? row.buyer, whoKind: "fan", what };
+    case "owner": return { who: null, whoKind: "owner", userId: null, what, ...give };
+    case "person": return { who: who.name || null, whoKind: "person", userId: who.userId, what, ...give };
+    case "model": return { who: row.modelName, whoKind: "model", userId: null, what, ...give };
+    case "fan": return { who: row.fanUsername ?? row.fanDisplayName ?? row.buyer, whoKind: "fan", userId: null, what, ...give };
   }
 }
 
@@ -275,7 +285,9 @@ export function orderWire(row: CustomOrderRow, now: Date = new Date(), leaders: 
     payments: row.payments,
     givenAt: row.givenAt?.toISOString() ?? null,
     givenMessageRef: row.givenMessageRef,
+    givenBy: row.givenBy,
     acceptedBy: row.acceptedBy,
+    acceptedByUserId: row.acceptedByUserId,
     acceptedByName: row.acceptedByName,
     telegramRefs: row.telegramRefs,
     contentopsRef: row.contentopsRef,
@@ -391,7 +403,7 @@ async function personFanIds(db: Database, fanId: number | null): Promise<number[
   return (await listPersonFans(db, fanId)).map((fan) => fan.id);
 }
 
-/** «Это оплата?» of an order: the fan's tips and subscriptions on the page no order took. */
+/** «Это оплата?» of the extension's panel: the fan's sales of `kinds` on the page no order took. */
 export async function paymentCandidatesOf(db: Database, order: Pick<CustomOrderRow, "pageId" | "fanId">, kinds: readonly string[], now: Date, limit: number) {
   if (order.pageId === null || order.fanId === null) return [];
   return listCustomPaymentCandidates(db, { pageId: order.pageId, fanIds: await personFanIds(db, order.fanId), kinds, now, days: CUSTOM_PAYMENT_DAYS, limit });
@@ -399,6 +411,18 @@ export async function paymentCandidatesOf(db: Database, order: Pick<CustomOrderR
 
 /** The kinds of sale that can pay a custom: what an agent may name, and what it is offered. */
 export const CUSTOM_PAYING_KINDS = ["tip", "subscription", "message_purchase"] as const;
+
+/**
+ * The board's «Это оплата?» (the order's page, «Записать кастом» from a sale): the fan's sales (any account of the person)
+ * that can pay a custom, on every page of the order's model — as an agent is offered them (`unlinkedSalesOf`) — no order took.
+ */
+export async function boardPaymentCandidatesOf(db: Database, order: Pick<CustomOrderRow, "pageId" | "fanId">, now: Date, limit: number) {
+  if (order.pageId === null || order.fanId === null) return [];
+  return listCustomPaymentCandidates(db, {
+    pageIds: await listCustomModelPageIds(db, order.pageId), fanIds: await personFanIds(db, order.fanId), kinds: CUSTOM_PAYING_KINDS, now,
+    days: CUSTOM_PAYMENT_DAYS, limit,
+  });
+}
 
 /**
  * The agent's «это оплата?» (customs facts spec §5): the fan's sales (any account of the person) on `pageIds` — the
@@ -449,7 +473,7 @@ async function detailOf(app: CustomApp, viewer: CustomViewer, order: CustomOrder
   const working = IN_WORK.includes(order.state);
   const [payments, offered, deliveries, history, messages, leaders, onShift] = await Promise.all([
     listCustomOrderPayments(app.db, order.id),
-    order.state === "cancelled" ? Promise.resolve([]) : paymentCandidatesOf(app.db, order, ["tip", "subscription"], now, 10),
+    order.state === "cancelled" ? Promise.resolve([]) : boardPaymentCandidatesOf(app.db, order, now, 10),
     working ? deliveryCandidatesOf(app.db, order, 10) : Promise.resolve([]),
     historyOf(app.db, order.id),
     orderMessagesOf(app.db, order.id),
@@ -506,6 +530,23 @@ export interface CustomEventResult {
   result: "stored" | "already";
 }
 
+/**
+ * What a step's evidence of the taker did: `set` — it names the taker now; `unchanged` — not, and why: another taker is
+ * set (`taker_set`: evidence never replaces one), a person decided it (`person_set`), it names nobody working on the
+ * order's page (`taker_unknown`); null — the same taker again.
+ */
+export interface CustomTakerResult {
+  result: "set" | "unchanged";
+  source: CustomTakerSource | null;
+  reason: "taker_set" | "person_set" | "taker_unknown" | null;
+}
+
+/** A card's author, as the reader of the chats gives it: by Telegram id, and where the card is (`work` names the taker). */
+export interface CustomCardAuthor {
+  authorTelegramId?: string | null | undefined;
+  cardKind?: "work" | "model" | undefined;
+}
+
 /** A step as every door gives it: the board's body, the extension's and the agent's translated to it. */
 export type CustomStep =
   | {
@@ -530,11 +571,11 @@ export type CustomStep =
   | { action: "deadline"; deadlineOn: string | null; by: "person" | "agent" | "system"; reason?: string | undefined; undoOf?: number | undefined }
   /** `by: "agent"` — only while the order has no fan and its fan was not erased. */
   | { action: "fan"; pageId: number; fanId: number; conversationRef: string | null; by?: "person" | "agent" }
-  | { action: "card"; telegramRef: string; postedAt?: Date | null; author?: string | null }
+  | ({ action: "card"; telegramRef: string; postedAt?: Date | null; author?: string | null } & CustomCardAuthor)
   | { action: "payment"; transactionId: number }
   | { action: "unpay"; transactionId: number; undoOf?: number | undefined }
   | { action: "checked" }
-  | { action: "at_model"; telegramRef?: string | undefined }
+  | ({ action: "at_model"; telegramRef?: string | undefined } & CustomCardAuthor)
   | { action: "partly"; note?: string | undefined; ref?: string | undefined }
   /** A revision request: about `part`, or — none named — about the whole order. No `message`: a person's «Правка» on the board. */
   | { action: "revision"; note?: string | undefined; ref?: string | undefined; message?: CustomMessageInput; ordinal?: number; part?: CustomPart | undefined }
@@ -577,7 +618,13 @@ export type CustomStep =
   /** The fan asked where the order is: his message (checked by the door) and its time. */
   | { action: "fan_asked"; messageRef: string; at: Date }
   /** His ask answered: by a person's word, or the page's message to him after it (the checks pass), with its time. */
-  | { action: "fan_asked_clear"; messageRef?: string; at?: Date };
+  | { action: "fan_asked_clear"; messageRef?: string; at?: Date }
+  /**
+   * «Принял»: the taker (resolved by `findCustomTakerOnPage`; null — not named). A person's (`by: person`) is theirs: it
+   * replaces any and enters `person_fields`. Evidence's (an agent, the backfill) fills only an order with none: another
+   * taker set, a person's decision or nobody named is 409 with its reason.
+   */
+  | { action: "accepted_by"; taker: CustomTakerRow | null; by: "person" | "evidence"; source: CustomTakerSource; ref?: string | null };
 
 function patched(card: CustomOrderCard, patch: CustomOrderCardPatch): CustomOrderCard {
   const next: Record<string, unknown> = { ...card };
@@ -670,15 +717,26 @@ export async function applyCustomStep(
   app: CustomApp,
   input: {
     orderId: number; step: CustomStep; actor: CustomActor; viewer: CustomViewer | null; now?: Date;
-    /** A person's step carried by another product's key (ContentOps «Съёмка»): «снят» is then their own word. */
+    /**
+     * A person's step carried by another product's key (ContentOps «Съёмка») or by an agent on the person's word: what it
+     * sets is then their own (their «снят», their fields).
+     */
     byPerson?: boolean;
-    /** Filled for a message step: the event it names and whether it is kept now or was before; null — not kept. */
-    report?: { event: CustomEventResult | null };
+    /** An agent on a person's word: the Telegram message where they asked, kept in every event of the step. */
+    requestRef?: string;
+    /**
+     * Filled for a message step: the event it names and whether it is kept now or was before (null — not kept); for a step
+     * that carried evidence of the taker (a card's author, a sale), what it did (absent — none).
+     */
+    report?: { event: CustomEventResult | null; taker?: CustomTakerResult };
   },
 ): Promise<boolean> {
   const now = input.now ?? new Date();
   const step = input.step;
-  if (input.report !== undefined) input.report.event = null;
+  if (input.report !== undefined) {
+    input.report.event = null;
+    delete input.report.taker;
+  }
   return app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     if (!(await lockCustomOrder(db, input.orderId))) throw notFound();
@@ -696,7 +754,8 @@ export async function applyCustomStep(
     if (!STEP_FROM[step.action].includes(order.state)) throw notAllowed(`An order «${order.state}» takes no step «${step.action}»`);
     const event = (name: string, changes: Record<string, unknown>) => insertCustomOrderEvent(db, {
       orderId: order.id, event: `custom_order.${name}`, door: input.actor.door, userId: input.actor.userId ?? null,
-      agentKeyId: input.actor.agentKeyId ?? null, onBehalfOfUserId: input.actor.onBehalfOfUserId ?? null, changes, at: now,
+      agentKeyId: input.actor.agentKeyId ?? null, onBehalfOfUserId: input.actor.onBehalfOfUserId ?? null,
+      changes: input.requestRef === undefined ? changes : { ...changes, requestRef: input.requestRef }, at: now,
     });
     const move = (to: CustomOrderStateRow, extra: { note?: string | null; ref?: string | null; clear?: { given?: boolean; sent?: boolean; fanAsked?: boolean } } = {}) =>
       moveCustomOrder(db, { orderId: order.id, from: [order.state], to, ...extra, at: now });
@@ -761,6 +820,43 @@ export async function applyCustomStep(
       await answerCustomOrderRevisions(db, { orderId: order.id, ids: round.answered, at: now });
       await reopenCustomOrderRevisions(db, { orderId: order.id, ids: round.reopened });
       return { ...round, about: aboutOf(rows, round.open) };
+    };
+    /** The taker as this step leaves it (a step fills it at most once). */
+    let takerNow = order.acceptedByUserId;
+    const takerReport = (outcome: CustomTakerResult) => {
+      if (input.report !== undefined) input.report.taker = outcome;
+    };
+    /**
+     * The taker named by evidence (a work card's author, a sale's one home, an agent, the backfill): it fills only an order
+     * with none, and never one whose taker a person decided (their empty one too). Answers what it did.
+     */
+    const fillTaker = async (taker: CustomTakerRow | null, source: CustomTakerSource, ref: string | null): Promise<CustomTakerResult> => {
+      const outcome: CustomTakerResult = taker === null ? { result: "unchanged", source, reason: "taker_unknown" }
+        : takerNow === taker.userId ? { result: "unchanged", source, reason: null }
+        : takerNow !== null ? { result: "unchanged", source, reason: "taker_set" }
+        : order.personFields.includes("acceptedBy") ? { result: "unchanged", source, reason: "person_set" }
+        : { result: "set", source, reason: null };
+      if (outcome.result === "set") {
+        await updateCustomOrderFields(db, order.id, { acceptedByUserId: taker!.userId }, now);
+        await event("accepted_by", { from: null, to: taker!.userId, name: taker!.name, source, ...(ref === null ? {} : { ref }) });
+        takerNow = taker!.userId;
+      }
+      takerReport(outcome);
+      return outcome;
+    };
+    /** A card's author names the taker only from the chatters' work chat (the model's group copy names nobody). */
+    const takerOfCard = async (card: CustomCardAuthor & { telegramRef: string }): Promise<boolean> => {
+      if (card.cardKind !== "work" || card.authorTelegramId === undefined || card.authorTelegramId === null) return false;
+      const taker = order.pageId === null ? null : await findCustomTakerOnPage(db, { pageId: order.pageId, telegramUserId: card.authorTelegramId });
+      return (await fillTaker(taker, "card", card.telegramRef)).result === "set";
+    };
+    /** A linked sale whose one home is one chatter's whole names the taker (of a known page, while none is). */
+    const takerOfSale = async (transactionId: number): Promise<boolean> => {
+      if (order.pageId === null || (takerNow !== null && input.report === undefined)) return false;
+      const userId = await findSaleSingleHomeUser(db, transactionId);
+      if (userId === null) return false;
+      const taker = await findCustomTakerOnPage(db, { pageId: order.pageId, userId });
+      return (await fillTaker(taker, "sale", String(transactionId))).result === "set";
     };
     /** «Правка» about a request still open: the order moves there; in it already, only what it is about follows. */
     const toRevision = async (about: { note: string | null; ref: string | null }) => {
@@ -842,12 +938,17 @@ export async function applyCustomStep(
           return true;
         }
         case "card": {
-          const added = await addCustomOrderCard(db, { orderId: order.id, telegramRef: step.telegramRef, at: now, postedAt: step.postedAt ?? null, author: step.author ?? null });
+          const added = await addCustomOrderCard(db, {
+            orderId: order.id, telegramRef: step.telegramRef, at: now, postedAt: step.postedAt ?? null, author: step.author ?? null,
+            authorTelegramId: step.authorTelegramId ?? null,
+          });
           if (!added) {
-            if (order.telegramRefs.includes(step.telegramRef)) return false;
+            // The card again: its author may still name the taker (the reader repeats what it reads).
+            if (order.telegramRefs.includes(step.telegramRef)) return takerOfCard(step);
             throw new ConflictError("The Telegram card belongs to another order", { reason: "taken" });
           }
-          await event("card", { telegramRef: step.telegramRef });
+          await event("card", { telegramRef: step.telegramRef, ...(step.cardKind === undefined ? {} : { cardKind: step.cardKind }) });
+          await takerOfCard(step);
           return true;
         }
         case "payment": {
@@ -860,6 +961,7 @@ export async function applyCustomStep(
           }
           if (order.state === "recorded") await move("paid");
           await event("payment", { transactionId: step.transactionId, ...(order.state === "recorded" ? { state: "paid" } : {}) });
+          await takerOfSale(step.transactionId);
           return true;
         }
         case "unpay": {
@@ -879,11 +981,12 @@ export async function applyCustomStep(
         }
         case "at_model": {
           if (step.telegramRef !== undefined) {
-            const added = await addCustomOrderCard(db, { orderId: order.id, telegramRef: step.telegramRef, at: now });
+            const added = await addCustomOrderCard(db, { orderId: order.id, telegramRef: step.telegramRef, at: now, authorTelegramId: step.authorTelegramId ?? null });
             if (!added && !order.telegramRefs.includes(step.telegramRef)) throw new ConflictError("The Telegram card belongs to another order", { reason: "taken" });
           }
           await move("at_model");
           await event("at_model", { from: order.state, ...(step.telegramRef === undefined ? {} : { telegramRef: step.telegramRef }) });
+          if (step.telegramRef !== undefined) await takerOfCard({ ...step, telegramRef: step.telegramRef });
           return true;
         }
         case "delivery": {
@@ -1006,6 +1109,8 @@ export async function applyCustomStep(
             : round.whole ? "shot" : round.partsDone.length > 0 || round.liveDeliveries > 0 ? "partly" : "at_model";
           if (to === "revision" && round.about !== null) await toRevision(round.about);
           else if (to !== order.state) await move(to);
+          // What was taken back was the files the fan was sent: «отправлен, фан не открыл» is over with them.
+          if (retracted.length > 0 && order.sentAt !== null) await updateCustomOrderFields(db, order.id, { sentCleared: true }, now);
           await event("retracted", {
             from: order.state, to, retracts: "eventRef" in step.retracts ? step.retracts.eventRef : step.retracts.telegramRef,
             eventRef: step.message.eventRef, parts: lost, reason: step.reason,
@@ -1105,6 +1210,23 @@ export async function applyCustomStep(
           });
           return true;
         }
+        case "accepted_by": {
+          if (step.by === "evidence") {
+            const done = await fillTaker(step.taker, step.source, step.ref ?? null);
+            if (done.reason === "taker_set") throw new ConflictError("The order names another taker: a person corrects it on the board", { reason: "taker_set" });
+            if (done.reason === "person_set") throw new ConflictError("A person decided this order's taker", { reason: "person_set" });
+            if (done.reason === "taker_unknown") throw new ConflictError("Nobody of that login works on the order's page", { reason: "taker_unknown" });
+            return done.result === "set";
+          }
+          const to = step.taker?.userId ?? null;
+          if (to === order.acceptedByUserId && order.personFields.includes("acceptedBy")) return false;
+          await updateCustomOrderFields(db, order.id, { acceptedByUserId: to, personFields: [...new Set([...order.personFields, "acceptedBy"])] }, now);
+          await event("accepted_by", {
+            from: order.acceptedByUserId, to, ...(step.taker === null ? {} : { name: step.taker.name }), source: step.source,
+            ...(step.ref ? { ref: step.ref } : {}),
+          });
+          return true;
+        }
         case "close": {
           if (step.auto !== undefined) {
             const quiet = now.getTime() - order.stateAt.getTime() >= step.auto.hours * 3_600_000;
@@ -1166,7 +1288,7 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
     case "checked":
       return { action: "checked" };
     case "payment": {
-      const offered = await paymentCandidatesOf(app.db, order, ["tip", "subscription"], now, 50);
+      const offered = await boardPaymentCandidatesOf(app.db, order, now, 50);
       if (!offered.some((sale) => String(sale.transactionId) === body.transactionRef)) throw notSuggested("The payment is not suggested for this order");
       return { action: "payment", transactionId: Number(body.transactionRef) };
     }
@@ -1209,6 +1331,13 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
       return { action: "refused", reason: body.reason };
     case "cancel":
       return { action: "cancel", reason: body.reason };
+    case "accepted_by": {
+      // One of the page's chatters (`customOrderTakers`), by their login; null — not named.
+      if (body.acceptedBy === null) return { action: "accepted_by", taker: null, by: "person", source: "manual" };
+      const taker = order.pageId === null ? null : await findCustomTakerOnPage(app.db, { pageId: order.pageId, login: body.acceptedBy });
+      if (taker === null) throw new ConflictError("Nobody of that login works on the order's page", { reason: "taker_unknown" });
+      return { action: "accepted_by", taker, by: "person", source: "manual" };
+    }
   }
 }
 
@@ -1262,10 +1391,83 @@ export async function actOnCustomOrder(
   const human = principal as HumanAuthPrincipal;
   const viewer = await customViewerOf(app, human);
   const order = await visibleOrder(app, viewer, input.code);
+  await boardStepAs(app, { viewer, order, body: input.body, actor: { door, userId: human.user.id }, now });
+  return answerFor(door, await detailOf(app, viewer, (await findCustomOrder(app.db, order.id))!, now));
+}
+
+/**
+ * One step of the board taken as `viewer`, by the board's own rules: their right to it (`mayTakeStep`), the body
+ * translated (`boardStep`, the suggestions it is checked against), the step. The board's door, and an agent on a person's
+ * word (agent.ts: the person as the viewer, the request kept in the history — what it sets is the person's).
+ */
+export async function boardStepAs(
+  app: CustomApp,
+  input: { viewer: CustomViewer; order: CustomOrderRow; body: CustomOrderActionBody; actor: CustomActor; now: Date; requestRef?: string },
+): Promise<boolean> {
+  const { viewer, order, now } = input;
   if (!mayTakeStep(viewer, order, input.body.action as CustomOrderAction)) throw notAllowed();
   const step = await boardStep(app, viewer, order, input.body, now);
-  await applyCustomStep(app, { orderId: order.id, step, actor: { door, userId: human.user.id }, viewer, now });
-  return answerFor(door, await detailOf(app, viewer, (await findCustomOrder(app.db, order.id))!, now));
+  return applyCustomStep(app, {
+    orderId: order.id, step, actor: input.actor, viewer, now,
+    ...(input.requestRef === undefined ? {} : { byPerson: true, requestRef: input.requestRef }),
+  });
+}
+
+/** Whether a login is a chatter's (the role): only such a person recording an order is its taker by default. */
+async function chatterTakerOf(db: Database, pageId: number, userId: number): Promise<CustomTakerRow | null> {
+  const taker = await findCustomTakerOnPage(db, { pageId, userId });
+  return taker !== null && taker.role === "chatter" ? taker : null;
+}
+
+/** The taker a record names, and where it came from. */
+export interface CustomRecordTaker {
+  taker: CustomTakerRow;
+  source: CustomTakerSource;
+  ref: string | null;
+  /** A person chose it: it is theirs (`person_fields`). */
+  person: boolean;
+}
+
+/**
+ * Who a person's record («Записать кастом», a finding's «записать заказ») names its taker: the one they chose (one of the
+ * page's chatters, else 409 `taker_unknown`); none chosen — the sale's one home when one chatter holds it whole; else the
+ * person recording, when they are a chatter working on the page; else nobody — never the owner or a lead by default.
+ */
+export async function recordTakerOf(
+  db: Database,
+  input: { pageId: number; acceptedBy: string | undefined; transactionId: number | null; userId: number },
+): Promise<CustomRecordTaker | null> {
+  if (input.acceptedBy !== undefined) {
+    const taker = await findCustomTakerOnPage(db, { pageId: input.pageId, login: input.acceptedBy });
+    if (taker === null) throw new ConflictError("Nobody of that login works on the page", { reason: "taker_unknown" });
+    return { taker, source: "manual", ref: null, person: true };
+  }
+  const home = input.transactionId === null ? null : await findSaleSingleHomeUser(db, input.transactionId);
+  const bySale = home === null ? null : await findCustomTakerOnPage(db, { pageId: input.pageId, userId: home });
+  if (bySale !== null) return { taker: bySale, source: "sale", ref: String(input.transactionId), person: false };
+  const self = await chatterTakerOf(db, input.pageId, input.userId);
+  return self === null ? null : { taker: self, source: "manual", ref: null, person: false };
+}
+
+/**
+ * `customOrderTakers`: whom «Принял» may name on a page — its chatters (`listCustomPageTakers`) — and whom a record names
+ * when the person chooses none (`recordTakerOf` without a choice). A page the viewer does not see reads as missing.
+ */
+export async function readCustomOrderTakers(
+  app: CustomApp,
+  principal: AuthPrincipal,
+  query: { pageLabel: string; transactionRef?: string | undefined },
+): Promise<CustomOrderTakersResponse> {
+  requireBoardReader(principal);
+  const viewer = await customViewerOf(app, principal);
+  const page = await findPageSummaryByLabel(app.db, query.pageLabel);
+  if (!page || !seesOrder(viewer, { pageId: page.id })) throw new NotFoundError(`Page "${query.pageLabel}" was not found`);
+  const sale = query.transactionRef === undefined ? null : await findCustomSale(app.db, Number(query.transactionRef));
+  const [takers, suggested] = await Promise.all([
+    listCustomPageTakers(app.db, page.id),
+    recordTakerOf(app.db, { pageId: page.id, acceptedBy: undefined, transactionId: sale !== null && sale.pageId === page.id ? sale.transactionId : null, userId: principal.user.id }),
+  ]);
+  return { takers: takers.map((taker) => ({ login: taker.login, name: taker.name })), suggested: suggested?.taker.login ?? null };
 }
 
 /** A new order with its first event, its sale and its card in one transaction. Answers its id. */
@@ -1282,9 +1484,12 @@ export async function recordCustomOrder(
     origin: "extension" | "agent" | "workboard" | "import";
     contentopsRef?: string | null;
     sourceText?: string | null;
-    /** The first card's time and author (a posted card): the order counts from then. */
+    /** The first card's time and author (a posted card): the order counts from then; its author's Telegram id (0438). */
     cardPostedAt?: Date | null;
     cardAuthor?: string | null;
+    cardAuthorTelegramId?: string | null;
+    /** Where the taker (`acceptedByUserId`) came from: its `custom_order.accepted_by` event; a person's choice is theirs. */
+    taker?: { source: CustomTakerSource; ref: string | null; name: string; person: boolean } | null;
     state?: CustomOrderStateRow;
     paymentTransactionId?: number | null;
     telegramRefs?: readonly string[];
@@ -1307,14 +1512,15 @@ export async function recordCustomOrder(
       pageId: input.pageId, fanId: input.fanId, buyer: input.buyer, conversationRef: input.conversationRef, card: input.card,
       deadlineOn: input.deadlineOn, state, acceptedByUserId: input.acceptedByUserId, origin: input.origin,
       contentopsRef: input.contentopsRef ?? null, sourceText: input.sourceText ?? null, at: input.createdAt ?? now,
-      priceMills: input.priceMills ?? null, holdReason: input.holdReason ?? null, personFields: input.personFields ?? [],
+      priceMills: input.priceMills ?? null, holdReason: input.holdReason ?? null,
+      personFields: [...new Set([...(input.personFields ?? []), ...(input.taker?.person === true ? ["acceptedBy"] : [])])],
     });
     if (paid) {
       const added = await addCustomOrderPayment(db, { orderId: id, transactionId: input.paymentTransactionId!, userId: input.actor.userId ?? null, at: now });
       if (!added) throw new ConflictError("The payment is taken by another custom", { reason: "not_suggested" });
     }
     for (const [index, ref] of [...new Set(input.telegramRefs ?? [])].entries()) {
-      const first = index === 0 ? { postedAt: input.cardPostedAt ?? null, author: input.cardAuthor ?? null } : {};
+      const first = index === 0 ? { postedAt: input.cardPostedAt ?? null, author: input.cardAuthor ?? null, authorTelegramId: input.cardAuthorTelegramId ?? null } : {};
       if (!(await addCustomOrderCard(db, { orderId: id, telegramRef: ref, at: now, ...first }))) {
         throw new ConflictError("The Telegram card belongs to another order", { reason: "taken" });
       }
@@ -1332,6 +1538,14 @@ export async function recordCustomOrder(
       },
       at: now,
     });
+    if (input.acceptedByUserId !== null && input.taker !== undefined && input.taker !== null) {
+      await insertCustomOrderEvent(db, {
+        orderId: id, event: "custom_order.accepted_by", door: input.actor.door, userId: input.actor.userId ?? null,
+        agentKeyId: input.actor.agentKeyId ?? null, onBehalfOfUserId: input.actor.onBehalfOfUserId ?? null,
+        changes: { from: null, to: input.acceptedByUserId, name: input.taker.name, source: input.taker.source, ...(input.taker.ref === null ? {} : { ref: input.taker.ref }) },
+        at: now,
+      });
+    }
     return id;
   });
 }
@@ -1358,7 +1572,7 @@ export async function createCustomOrderOnBoard(
     fanId = sale.fanId;
     // A sale of the fan no order took, of the last month — or, whatever its day, one a matter «похоже на кастом без
     // заказа» still waits about (an order that holds it already refuses the payment below).
-    const offered = await paymentCandidatesOf(app.db, { pageId, fanId }, ["tip", "subscription"], now, 200);
+    const offered = await boardPaymentCandidatesOf(app.db, { pageId, fanId }, now, 200);
     if (!offered.some((one) => one.transactionId === sale.transactionId) && !(await waitingCustomSaleIds(app.db)).includes(sale.transactionId)) {
       throw notSuggested("The sale pays another order already");
     }
@@ -1375,9 +1589,12 @@ export async function createCustomOrderOnBoard(
     }
   }
   const telegramRef = body.telegramRef === undefined ? null : parseTelegramRef(body.telegramRef);
+  // «Принял»: the one chosen, else the sale's one home, else the person recording when a chatter of the page; else nobody.
+  const taker = await recordTakerOf(app.db, { pageId, acceptedBy: body.acceptedBy, transactionId: payment, userId: human.user.id });
   const id = await recordCustomOrder(app, {
     pageId, fanId, buyer: fanId === null && body.fan !== undefined ? body.fan.slice(0, 300) : null, conversationRef, card: body.card,
-    deadlineOn: null, acceptedByUserId: human.user.id, origin: door, paymentTransactionId: payment,
+    deadlineOn: null, acceptedByUserId: taker?.taker.userId ?? null, origin: door, paymentTransactionId: payment,
+    taker: taker === null ? null : { source: taker.source, ref: taker.ref, name: taker.taker.name, person: taker.person },
     telegramRefs: telegramRef === null ? [] : [telegramRef], actor: { door, userId: human.user.id }, now,
     ...(body.priceMills === undefined ? {} : { priceMills: body.priceMills, personFields: ["priceMills"] }),
   });

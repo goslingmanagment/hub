@@ -1200,6 +1200,26 @@ export async function authenticateSessionById(app: AppContext, sessionId: number
 }
 
 /**
+ * The principal of a living login as a full session of theirs would be (the same page scope and realm), with no
+ * session behind it: an agent acting on that person's word with the request named (custom-orders/agent.ts, the board's
+ * steps «со слов»), where the board's own rules read it as that person — the agent never gets more than they have.
+ * Null — no such living login, or one that may not hold a session.
+ */
+export async function principalOfLogin(app: AppContext, userId: number) {
+  const user = await getAuthenticatedUserById(app, userId);
+  if (!user || !roleCanUseSession(user.role)) {
+    return null;
+  }
+  const sandbox = await principalSandboxOf(app, user);
+  return {
+    authMethod: "session" as const,
+    user,
+    assignedPageIds: await pageScopeOfLogin(app, user),
+    ...(sandbox === undefined ? {} : { sandbox }),
+  } satisfies AuthPrincipal;
+}
+
+/**
  * Who a cookie's session is, for a check that must not write (nginx's
  * `auth_request` on every request of a name): a live FULL session's user, or
  * null. A narrow session is null here: it opens the team's place alone.

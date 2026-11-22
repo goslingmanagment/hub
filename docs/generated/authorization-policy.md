@@ -23,10 +23,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-90 routes marked "yes", and every route marked "no" refuses it with 403.
+91 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (563)
+## Routes (566)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -215,10 +215,12 @@ A full device token is not affected.
 | GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/custom-candidates` | `agentCustomCandidates` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/custom-findings` | `agentCustomFindings` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/custom-findings/:findingId` | `agentCustomFindingAct` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/custom-orders` | `agentCustomOrders` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/custom-orders` | `agentCustomOrderCreate` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/custom-orders/:code` | `agentCustomOrderUpdate` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/custom-orders/cards` | `agentCustomCards` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/custom-orders/events` | `agentCustomEvents` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/erasures` | `agentErasuresFeed` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/fan-queues` | `agentFanQueueList` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/fan-queues/:queueId` | `agentFanQueueGet` | `agentKey` | — | — | no |
@@ -400,6 +402,7 @@ A full device token is not affected.
 | GET | `/api/v1/custom-orders/findings` | `customFindingsList` | `any` | — | — | yes |
 | POST | `/api/v1/custom-orders/findings/:findingId` | `customFindingAct` | `any-session` | — | — | no |
 | POST | `/api/v1/custom-orders/sales/:transactionRef/dismiss` | `customSaleDismiss` | `any-session` | — | — | no |
+| GET | `/api/v1/custom-orders/takers` | `customOrderTakers` | `any` | — | — | yes |
 | GET | `/api/v1/fans/:platform/:platformUserId` | `crossPageFanDetail` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/:platform/:platformUserId/transactions` | `crossPageFanTransactions` | `any-session` | — | — | no |
 | GET | `/api/v1/fans/pages` | `fanPages` | `any-session` | — | — | no |

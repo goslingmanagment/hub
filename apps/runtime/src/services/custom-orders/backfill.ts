@@ -10,6 +10,7 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   findCustomOrder,
+  findCustomTakerOnPage,
   findPageFanByInput,
   listAdminPages,
   listObjectEvents,
@@ -20,7 +21,7 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { AppError, ConflictError } from "../errors.ts";
-import { linkNamedSales } from "./agent.ts";
+import { fillTakerOf, linkNamedSales } from "./agent.ts";
 import { giveByMessage } from "./deliveries.ts";
 import { checkGivenMessage, checkNamedSales, type EvidenceScope } from "./evidence.ts";
 import { applyCustomStep, type CustomActor } from "./index.ts";
@@ -31,7 +32,8 @@ import { applyCustomStep, type CustomActor } from "./index.ts";
  * sales that paid it, the message that gave it to the fan or a person's word with its day — applied through
  * `applyCustomStep` with the doors' own checks (evidence.ts). The backfill is the system's door with the owner's
  * authority: every page of the live agency is its scope, and it may write «отдан» by a person's word (the agent may
- * not). In this order: the fan, the price, the sales, «отдан». Without `apply` nothing is written: each order says
+ * not). In this order: the fan, the price, the taker («принял»: a login working on the order's page, only while the
+ * order names none), the sales, «отдан». Without `apply` nothing is written: each order says
  * what would be done and what evidence is missing or refused. With it the same again changes nothing, and what a
  * person took off an order (`custom_order_rejections`, a «не отдан») is not applied again. It never closes an order:
  * the checks pass closes it 72 hours after the mark. The file is prepared outside the repository.
@@ -48,6 +50,8 @@ const entrySchema = z.object({
   fanRef: ref.optional(),
   /** The agreed total, gross. */
   priceMills: z.number().int().positive().max(1_000_000_000).optional(),
+  /** «Принял»: the login of the chatter who took it (source `backfill`): only an order with none, one working on its page. */
+  acceptedBy: z.string().trim().min(1).max(64).optional(),
   /** The sales that paid it, as the agent door names a sale. */
   sales: z.array(agentSaleRequestSchema).min(1).max(20).optional(),
   /** The page's message that carried the order to its fan. */
@@ -69,7 +73,7 @@ type Entry = z.infer<typeof entrySchema>;
 
 /** One thing the file names for an order and what became of it. */
 export interface CustomBackfillLine {
-  what: "order" | "fan" | "price" | "sale" | "given";
+  what: "order" | "fan" | "price" | "taker" | "sale" | "given";
   /** What it names, as the file names it. */
   subject: string;
   /** would — a dry run would do it; done — done now; already — the order holds it; refused — not done (`reason`). */
@@ -193,7 +197,26 @@ async function backfillOrder(app: BackfillApp, scope: EvidenceScope, code: strin
     }
   }
 
-  // 3. The sales, each checked as the agent's (spec §5) and linked by the payment step; one that does not hold is answered.
+  // 3. The taker, by the step `accepted_by` (source backfill): it fills only an order that names none — before the sales,
+  // whose one home would otherwise name it.
+  if (entry.acceptedBy !== undefined) {
+    const subject = `taker ${entry.acceptedBy}`;
+    const taker = order.pageId === null ? null : await findCustomTakerOnPage(app.db, { pageId: order.pageId, login: entry.acceptedBy });
+    if (taker === null) line("taker", subject, "refused", "taker_unknown");
+    else if (order.acceptedByUserId === taker.userId) line("taker", subject, "already");
+    else if (order.acceptedByUserId !== null) line("taker", subject, "refused", "taker_set");
+    else if (order.personFields.includes("acceptedBy")) line("taker", subject, "refused", "person_set");
+    else if (apply) {
+      const filled = await fillTakerOf(app, { orderId: order.id, taker, source: "backfill", actor: SYSTEM, now });
+      line("taker", subject, filled.changed ? "done" : filled.outcome.reason === null ? "already" : "refused", filled.outcome.reason);
+      order = await reread();
+    } else {
+      order = { ...order, acceptedByUserId: taker.userId };
+      line("taker", subject, "would");
+    }
+  }
+
+  // 4. The sales, each checked as the agent's (spec §5) and linked by the payment step; one that does not hold is answered.
   if (entry.sales !== undefined) {
     if (apply) {
       const linked = await linkNamedSales(app, { pages: scope.pages, money: true }, order.id, entry.sales, SYSTEM, now);
@@ -212,7 +235,7 @@ async function backfillOrder(app: BackfillApp, scope: EvidenceScope, code: strin
     }
   }
 
-  // 4. «Отдан»: by the page's message, checked as the agent's (spec §6); or by a person's word, the owner's authority.
+  // 5. «Отдан»: by the page's message, checked as the agent's (spec §6); or by a person's word, the owner's authority.
   if (entry.givenMessageRef !== undefined) {
     const messageRef = entry.givenMessageRef;
     const subject = `given by message ${messageRef}`;

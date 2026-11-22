@@ -35,7 +35,9 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | System state | `PUT /api/v1/agent/system/routines`, `PUT …/system/copies` | `write:system_state` | A reporter's whole list of routines and copies, for Система → «Состояние» |
 | Content | `hub publication-*`, `post-*`, `media-look`, `vault-album-draft` | `write:publication_drafts`, `approve:*`, `withdraw:publications`, `delete:posts`, `look:media`, `read:content` | `agent-read-skill.md`, «Drafting wall posts» and after |
 | Fan queues | `hub queue-*` | `write:fan_queues` | Queues for chatters, on the word of the person who asked |
-| Custom orders | `GET/POST /api/v1/agent/custom-orders`, `POST …/custom-orders/:code`, `POST …/custom-orders/cards` (`hub custom list\|create\|step\|cards`) | `write:customs`; a payment `+ read:money`; «отдан», the fan, «where is it» `+ read:messages` | Record an order from the card (Gengar's `/tz`) with its price and the sales that paid it, write what the models' group says (at the model, deliveries in parts, revisions, refusals, cancels, messages, the deadline, an issue), report cards with no order. The agent names sales and messages Hub already holds; Hub verifies each; a person can undo it, and the undo is remembered: below |
+| Custom orders | `GET/POST /api/v1/agent/custom-orders`, `POST …/custom-orders/:code`, `POST …/custom-orders/cards` (`hub custom list\|create\|step\|cards`) | `write:customs`; a payment `+ read:money`; «отдан», the fan, «where is it» `+ read:messages` | Record an order from the card (Gengar's `/tz`) with its price, its taker and the sales that paid it, write what the models' group says (at the model, deliveries in parts, revisions, refusals, cancels, messages, the deadline, an issue), report cards with no order. The agent names sales and messages Hub already holds; Hub verifies each; a person can undo it, and the undo is remembered: below |
+| Custom orders on a person's word | `POST …/custom-orders/:code` `{action: "board"}`, `POST /api/v1/agent/custom-findings/:findingId` (`hub custom board\|finding`) | `write:customs` + `read:messages` | Any step of Workboard «Кастомы», and a finding's answer, as the person who asked takes it there (`onBehalfOf` + `requestRef`): below |
+| Custom orders: what changed | `GET /api/v1/agent/custom-orders/events?after=` (`hub custom events`) | `write:customs` + `read:messages` | The orders' history and people's answers to findings on the key's pages after a cursor, the oldest first: below |
 | Custom orders (findings) | `POST /api/v1/agent/custom-findings` (`hub custom findings post\|dismiss`) | `write:customs` + `read:money` + `read:messages` | A trace of a custom with no order the reader found, or a candidate it read as no custom: below |
 | Shift reports «со слов» | `GET /api/v1/agent/shift-reports/draft`, `GET …/claimable`, `POST …/line`, `…/comment`, `…/off-platform`, `…/submit` (`hub shift-report show\|claimable\|line\|comment\|off-platform\|submit`) | `write:shift_reports` | Gengar's `/smena` fills and hands in the report of a person whose switch «сдаёт смену в системе» is on, from the person's own words: below |
 | Shift reports (Gengar's check) | `GET /api/v1/agent/shift-reports/checks`, `POST …/checks/:candidateId` | `review:shift_reports` | The candidates handed in and waiting for the check (`checks`), on the key's pages and of its realm; the answer «замечаний нет» or proposals, never a confirmation. `awaitingConfirm`: the reports standing in «Подтвердите» — shift, candidate, person's code and name, pages, `startedAt`, `confirmSince` (when it entered «Подтвердите» for its current candidate): what the reminder «Отчёт не подтверждён сутки» reads |
@@ -89,7 +91,8 @@ holding `write:customs` alone gains none of the calls below that need more. The 
 | step `fan_asked` with `messageRef` | `read:messages` | the fan's message in a chat of the order's fan on the order's page, sent after the order was recorded (409 `before_order`). An ask the page has answered since, and any ask while one stands, change nothing (`unchanged`); Hub takes the ask off by itself once the page writes to the fan |
 | step `deadline` with `reason` | — | as `edit`: never over a deadline a person set |
 | steps `issue` (≤ 200 characters), `issue_clear` | `read:messages` | the shape; `issue_clear` only of an issue this agent set (409 `not_yours`: a person settles another's) |
-| `GET …/custom-orders?state=live` | — | the open orders and the given ones not closed yet. The facts (`facts`, `priceMills`, `holdReason`, `issue`, …) are on the wire only for a key with `read:money`; to it an order whose money is not complete also carries `unlinkedSales`: the fan's sales of the last 30 days (a fan often pays before the card), on the key's pages of the order's model, that pay no order and no person took off it (at most 10). Read the chat around one before naming it back. To a key with `read:messages` each order also carries `move` (whose move, the board's one rule) and `burning` |
+| `GET …/custom-orders?state=live` | — | the open orders and the given ones not closed yet. The facts (`facts`, `priceMills`, `holdReason`, `issue`, …) are on the wire only for a key with `read:money`; to it an order whose money is not complete also carries `unlinkedSales`: the fan's sales of the last 30 days (a fan often pays before the card), on the key's pages of the order's model, that pay no order and no person took off it (at most 10). Read the chat around one before naming it back. Every read (the list, `code`, `telegramRef`) carries `acceptedBy`, `acceptedByUserId` and `givenBy`; to a key with `read:messages` each order also carries `move` (whose move, the board's one rule: `who`, `whoKind`, `userId`, a shot order's `giver` and `onShift`) and `burning`. `leader` («у кого сейчас») follows the same rule; answer people from `move`, never from `leader` alone |
+| `create` with `acceptedBy`, `authorTelegramId` + `cardKind`; steps `card`, `at_model` with them; step `accepted_by` | — | «Принял», below |
 | `POST …/custom-findings` | `read:money` + `read:messages` | each finding once by `(source, ref)`; a sale's is Hub's sale on the key's pages (its page, fan, sum and time are Hub's). `notCustom` keeps a new one dismissed as «не кастом»; a finding Hub has stays as it is — its check's leader resolves it |
 
 The refusals are 409 with `error.reason`: `capability_missing` (in `sales`), `not_found`, `order_no_page`,
@@ -99,6 +102,56 @@ The refusals are 409 with `error.reason`: `capability_missing` (in `sales`), `no
 `create` whose card link is one order's and whose card text names another; `open_orders` for a second open order of the
 fan without `another` (two creates of one fan at once are taken one after the other). A step that needs a capability the
 key lacks is 403 `agent_capability_missing`.
+
+### «Принял»: who took an order
+
+The order's taker answers for giving a shot order to the fan: they watch the video whole and give it (the owner,
+2026-11-22). Whoever is on shift on the page may give it too, and anyone may; nobody else is obliged. With no taker the
+order's check leader names one. `move` says it: `giver: "taker"` — «посмотреть ролик целиком и отдать фану»;
+`giver: "lead"` — «указать, кто принял»; `onShift` — someone else on shift now, who may give it too.
+
+A taker is a living login of a person who works on the order's page (`person_working_pages`, of the page's realm, not a
+content manager's). It is named by a login or by a numeric Telegram id (`people.telegram_user_id`), never by a name:
+two people may share one. Its history event is `custom_order.accepted_by` `{from, to, name, source, ref}`, `source` one
+of `manual` (a person on the board), `agent`, `card`, `sale`, `backfill`.
+
+- A person's choice (the board's «Принял», «Записать кастом», a finding's «записать заказ», or `board` on their word)
+  is theirs: it replaces any taker, and no evidence changes it again (`person_fields`: `acceptedBy`).
+- Evidence fills only an order with none, and never one a person decided: `create` with `acceptedBy`; a `work` card
+  (`cardKind: "work"`, the card in the chatters' work chat) whose author's `authorTelegramId` is such a person; a
+  linked sale whose one home (`sale_homes`) is one chatter's whole; the backfill's `acceptedBy`. A `model` card (the
+  copy in the model's group) never names a taker. `create` never fails for the taker: `taker` in the answer says `set`
+  (and its `source`), or `unchanged` with `taker_set` (another is set), `person_set` (a person decided it),
+  `taker_unknown` (nobody of that login or Telegram id works on the order's page). A `card`/`at_model` step answers the
+  same `taker`.
+- Step `accepted_by` with `acceptedBy` (a login of the order's page): only while the order names none — 409
+  `taker_set` / `person_set` otherwise, `taker_unknown` for nobody of the page; the same taker again is `unchanged`. A
+  set taker is corrected by a person: the board, or `board` on their word.
+
+### On a person's word: any board step, any finding's answer
+
+When a person asks the agent to do or correct something on a custom order, the agent takes the board's own step as
+that person: `POST …/custom-orders/:code` `{action: "board", step: <the board's step body>, onBehalfOf: <their login>,
+requestRef: <the Telegram message where they asked>}` (`hub custom board K-… --step … --on-behalf-of … --request …`).
+`step` is exactly what Workboard «Кастомы» sends (`customOrderAct`'s body): hold and unhold, given by their word, ungive,
+unpay, close, cancel, checked, paid_word, accepted_by (replacing a set taker too), edit over fields a person set, the
+card, the deadline, the price…. Hub reads the person as the board does (their role, pages, teams, realm: the key's
+realm only) and checks their own right to the step by the board's own code (`boardStepAs`): the agent never gets more
+than the person (409 `not_allowed`; an order the person does not see is the same). What it sets is the person's (an
+agent's or the system's evidence never overwrites it). Every event of it records the door `api`, the key, `onBehalfOf`
+and `requestRef`. A finding is answered the same way: `POST /api/v1/agent/custom-findings/:findingId` `{step:
+<customFindingAct's body: record | link | dismiss | reopen>, onBehalfOf, requestRef}` (`hub custom finding <id> --step …`),
+by the person's own right (the check's leader of its page, the customs lead, the owner; else 404), its answer kept in
+the finding's history (`custom_finding.*`). Without `onBehalfOf` + `requestRef` the agent's door stays the verified-fact
+door above.
+
+### What changed
+
+`GET /api/v1/agent/custom-orders/events?after=<event id>&limit=` (`hub custom events --after …`): the history of the
+orders of the key's pages (and, for a live key, of no known page) — every `custom_order.*` step of every door — and
+people's answers to findings (`custom_finding.*`), after the cursor, the oldest first, at most 200: `id`, `at`, `code`
+(or `findingId`), `event`, `door`, `actor` (a person's name and login; null — a key or Hub), `agentKey`, `onBehalfOf`,
+`changes`; `next` is the next call's `after`. So the agent learns what people changed on the board.
 
 ## Shift reports «со слов»
 

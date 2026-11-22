@@ -70,6 +70,19 @@ export function useCustomChanges(enabled: boolean) {
   return useQuery({ queryKey: [...BOARD_KEY, "~changes"], queryFn: () => kernel.customOrderChanges(), enabled, refetchInterval: 60_000 });
 }
 
+/**
+ * «Принял»: the page's chatters a taker is chosen among, and whom a record names when none is chosen (the sale's one home,
+ * else the viewer when a chatter of the page). Read only while a form that asks it is open.
+ */
+export function useCustomTakers(pageLabel: string | null, transactionRef: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: ["customTakers", pageLabel ?? "", transactionRef ?? ""],
+    queryFn: () => kernel.customOrderTakers({ query: { pageLabel: pageLabel!, ...(transactionRef === undefined ? {} : { transactionRef }) } }),
+    enabled: enabled && pageLabel !== null && pageLabel !== "",
+    staleTime: 60_000,
+  });
+}
+
 /** A finding answered: recorded as an order, linked to one, dismissed. */
 export function useFindingAct() {
   const qc = useQueryClient();
@@ -170,6 +183,7 @@ export function stepFailure(error: unknown): string {
   if (status === 409 && reason === "mark_changed") return "«Отдан» уже по другому сообщению: обновите страницу.";
   if (status === 409 && reason === "evidence_other_fan") return "Оплата или сообщение заказа — другого фана: сначала уберите их.";
   if (status === 409 && reason === "not_reopenable") return "Эту находку уже разобрал человек: вернуть можно только отклонённую агентом.";
+  if (status === 409 && reason === "taker_unknown") return "Этот человек не работает на странице заказа: выберите из списка.";
   if (status === 409) return "Этот шаг сейчас недоступен: заказ уже изменился. Обновите страницу.";
   if (status === 404) return "Заказ не найден.";
   if (status === null || status >= 500) return "Hub не ответил: неизвестно, сохранилось ли.";
@@ -258,12 +272,23 @@ export const EVENT_WORDS: Record<string, string> = {
   "custom_order.fan_asked": "Фан спросил, где заказ",
   "custom_order.fan_asked_cleared": "Фану ответили",
   "custom_order.sent": "Отправлен фану, не открыт",
+  "custom_order.accepted_by": "Указан принявший",
+};
+
+/** Where a taker came from (`custom_order.accepted_by`), in words. */
+const TAKER_SOURCE_WORDS: Record<string, string> = {
+  manual: "вручную", agent: "со слов агента", card: "по автору карточки", sale: "по продаже", backfill: "при переносе",
 };
 
 /** A step of an order's history in words: the event's word, or what its changes make of it (an import, a mark taken off). */
 export function eventWords(item: { event: string; changes: Record<string, unknown> }): string {
   if (item.event === "custom_order.recorded" && item.changes.origin === "import") return "Перенесён из старых карточек";
   if (item.event === "custom_order.sent" && item.changes.cleared === true) return "Отметка «отправлен» снята";
+  if (item.event === "custom_order.accepted_by") {
+    const name = typeof item.changes.name === "string" ? item.changes.name : null;
+    const source = typeof item.changes.source === "string" ? TAKER_SOURCE_WORDS[item.changes.source] : undefined;
+    return `${name === null ? "Принявший убран" : `Принял: ${name}`}${source ? ` (${source})` : ""}`;
+  }
   return EVENT_WORDS[item.event] ?? item.event;
 }
 

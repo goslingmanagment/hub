@@ -38,6 +38,8 @@ export interface CustomOrderRow {
   stateRef: string | null;
   givenMessageRef: string | null;
   givenAt: Date | null;
+  /** «Отдал»: who sent the giving message as the extension reported it (`client_send_attributions`), by name; null — not known. */
+  givenBy: string | null;
   acceptedByUserId: number | null;
   acceptedBy: string | null;
   /** The person's name in the people registry; the login when the login has no person. */
@@ -112,6 +114,7 @@ function orderOf(row: Row): CustomOrderRow {
     stateRef: (row.state_ref as string | null) ?? null,
     givenMessageRef: (row.given_message_ref as string | null) ?? null,
     givenAt: date(row.given_at),
+    givenBy: (row.given_by as string | null) ?? null,
     acceptedByUserId: num(row.accepted_by_user_id),
     acceptedBy: (row.accepted_by as string | null) ?? null,
     acceptedByName: (row.accepted_by_name as string | null) ?? (row.accepted_by as string | null) ?? null,
@@ -159,7 +162,8 @@ const ORDER_SELECT = sql`
     coalesce(pay.gross, 0) as paid_gross, coalesce(pay.net, 0) as paid_net, coalesce(pay.n, 0) as payments, pay.first_at as first_paid_at,
     coalesce(pay.reversed, false) as payment_reversed,
     coalesce(cards.refs, '{}'::text[]) as telegram_refs,
-    o.price_mills, o.deadline_default, o.paid_word, o.hold_reason, o.fan_asked_at, o.fan_asked_ref, o.issue, o.sent_at, o.sent_message_ref
+    o.price_mills, o.deadline_default, o.paid_word, o.hold_reason, o.fan_asked_at, o.fan_asked_ref, o.issue, o.sent_at, o.sent_message_ref,
+    giver.name as given_by
   from custom_orders o
   left join pages p on p.id = o.page_id
   left join models m on m.id = p.model_id
@@ -184,7 +188,17 @@ const ORDER_SELECT = sql`
     where cp.order_id = o.id) pay on true
   left join lateral (
     select array_agg(c.telegram_ref order by c.added_at, c.telegram_ref) as refs
-    from custom_order_cards c where c.order_id = o.id) cards on true`;
+    from custom_order_cards c where c.order_id = o.id) cards on true
+  left join lateral (
+    -- «Отдал»: the extension's report of who sent the giving message, on a page of the order's model (by its key).
+    select coalesce(gp.display_name, gu.username) as name
+    from pages gpg
+    join client_send_attributions ga on ga.platform = gpg.platform and ga.page_id = gpg.id and ga.platform_message_id = o.given_message_ref
+    join users gu on gu.id = ga.user_id
+    left join person_logins gpl on gpl.user_id = ga.user_id
+    left join people gp on gp.id = gpl.person_id
+    where o.given_message_ref is not null and gpg.model_id = p.model_id
+    limit 1) giver on true`;
 
 export const CUSTOM_ORDER_ENDED_STATES: readonly CustomOrderStateRow[] = ["given", "closed", "cancelled"];
 
@@ -507,8 +521,10 @@ export interface CustomOrderFieldsPatch {
   holdReason?: string | null;
   issue?: Record<string, unknown> | null;
   fanAsked?: { at: Date; ref: string } | null;
-  /** «Отправлен, фан не открыл» taken off (a revision of an order that stays in it). */
+  /** «Отправлен, фан не открыл» taken off (a revision of an order that stays in it, a delivery taken back). */
   sentCleared?: true;
+  /** The order's taker («принял»); null — not named. */
+  acceptedByUserId?: number | null;
 }
 
 /** The order's fields (not its state). */
@@ -524,6 +540,7 @@ export async function updateCustomOrderFields(db: Database, orderId: number, pat
     sets.push(sql`fan_asked_at = ${patch.fanAsked?.at.toISOString() ?? null}::timestamptz, fan_asked_ref = ${patch.fanAsked?.ref ?? null}`);
   }
   if (patch.sentCleared === true) sets.push(sql`sent_at = null, sent_message_ref = null`);
+  if (patch.acceptedByUserId !== undefined) sets.push(sql`accepted_by_user_id = ${patch.acceptedByUserId}`);
   if (patch.card !== undefined) sets.push(sql`card = ${JSON.stringify(patch.card)}::jsonb`);
   if (patch.deadlineOn !== undefined) sets.push(sql`deadline_on = ${patch.deadlineOn}::date`);
   if (patch.pageId !== undefined) sets.push(sql`page_id = ${patch.pageId}`);
@@ -592,17 +609,26 @@ export async function removeCustomOrderPayment(db: Database, input: { orderId: n
   return (result.rowCount ?? 0) > 0;
 }
 
-/** A Telegram card is the order's; false — it belongs to an order already (this one or another). */
+/**
+ * A Telegram card is the order's; false — it belongs to an order already (this one or another). `authorTelegramId` — who
+ * posted it, by Telegram id (0438). A card the order holds already that has no author's id yet takes this one.
+ */
 export async function addCustomOrderCard(
   db: Database,
-  input: { orderId: number; telegramRef: string; at: Date; postedAt?: Date | null; author?: string | null },
+  input: { orderId: number; telegramRef: string; at: Date; postedAt?: Date | null; author?: string | null; authorTelegramId?: string | null },
 ): Promise<boolean> {
   const result = await db.execute(sql`
-    insert into custom_order_cards (telegram_ref, order_id, posted_at, author, added_at)
+    insert into custom_order_cards (telegram_ref, order_id, posted_at, author, author_telegram_id, added_at)
     values (${input.telegramRef}, ${input.orderId}, ${input.postedAt?.toISOString() ?? null}::timestamptz, ${input.author ?? null},
-      ${input.at.toISOString()}::timestamptz)
+      ${input.authorTelegramId ?? null}::bigint, ${input.at.toISOString()}::timestamptz)
     on conflict (telegram_ref) do nothing`);
-  return (result.rowCount ?? 0) > 0;
+  const added = (result.rowCount ?? 0) > 0;
+  if (!added && input.authorTelegramId !== undefined && input.authorTelegramId !== null) {
+    await db.execute(sql`
+      update custom_order_cards set author_telegram_id = ${input.authorTelegramId}::bigint
+      where telegram_ref = ${input.telegramRef} and order_id = ${input.orderId} and author_telegram_id is null`);
+  }
+  return added;
 }
 
 export type CustomOrderMessageKindRow = "repost" | "delivery" | "revision" | "confirmation" | "note";
@@ -951,11 +977,35 @@ export interface CustomPageMessageRow {
    * id), never from a media offer's recipient. Null — the chat names no fan Hub knows.
    */
   chatFanId: number | null;
-  /** A priced message bought (`ppvBoughtSql`, the one rule). */
+  /**
+   * A priced message bought: on Fansly the custom's own priced offer — the message's one priced offer, or every one of
+   * them when it has several (which of them carried the custom is not known), never any offer of it; a message priced as
+   * a whole, and on OnlyFans, the message (`ppvBoughtSql`, the one rule).
+   */
   bought: boolean;
 }
 
-/** One message by its platform id on one of `pageIds`, not deleted; null — none. */
+/**
+ * Whether the message `m`'s priced offer `po` was bought by the fan of its chat: the offer's own mark, or its purchase made
+ * after the message and not through a later message of the page that carried the same offer (as `ppvBoughtSql`).
+ */
+const offerBoughtSql = sql`(po.purchase_state = 'purchased' or exists (
+    select 1 from page_dm_threads th
+    join transactions t on t.platform_account_id = po.page_id and t.fan_id = th.fan_id
+    where th.platform_account_id = m.account_id and th.platform_conversation_id = m.conversation_ref
+      and t.canonical_type = 'message_purchase' and t.is_active and t.occurred_at >= m.occurred_at
+      and t.correlation_id in (po.media_offer_ref, po.bundle_ref)
+      and not exists (
+        select 1 from message_archive later
+        join message_media_offers lo on lo.page_id = later.account_id and lo.message_ref = later.message_ref
+        where later.account_id = m.account_id and later.conversation_ref = m.conversation_ref and later.is_sent_by_me
+          and later.occurred_at > m.occurred_at and later.occurred_at <= t.occurred_at
+          and (lo.media_offer_ref = t.correlation_id or lo.bundle_ref = t.correlation_id))))`;
+
+/** The priced offers of the message `m`. */
+const pricedOffersSql = sql`from message_media_offers po where po.page_id = m.account_id and po.message_ref = m.message_ref and coalesce(po.price_mills, 0) > 0`;
+
+/** One message by its platform id on one of `pageIds`, not deleted and not a mass message; null — none. */
 export async function findCustomPageMessage(
   db: Database,
   input: { pageIds: readonly number[]; messageRef: string },
@@ -971,9 +1021,18 @@ export async function findCustomPageMessage(
           order by th.id limit 1),
         (select f.id from fans f
           where m.platform = 'onlyfans' and f.platform = 'onlyfans' and f.platform_user_id = m.conversation_ref limit 1)) as chat_fan_id,
-      ${ppvBoughtSql({ pageId: "m.account_id", platform: "m.platform", ref: "m.message_ref", conv: "m.conversation_ref", at: "m.occurred_at" })} as bought
+      case when m.platform = 'fansly' and exists (select 1 ${pricedOffersSql}) then
+          -- The custom's own offer: one priced offer — it (a purchase the platform records for the message tells it too);
+          -- several — each of them, so the one that carried the custom is bought whichever it was.
+          case when (select count(*) ${pricedOffersSql}) = 1
+            then exists (select 1 ${pricedOffersSql} and ${offerBoughtSql})
+              or exists (select 1 from media_orders mor where mor.page_id = m.account_id and mor.message_ref = m.message_ref)
+            else not exists (select 1 ${pricedOffersSql} and not ${offerBoughtSql}) end
+        else ${ppvBoughtSql({ pageId: "m.account_id", platform: "m.platform", ref: "m.message_ref", conv: "m.conversation_ref", at: "m.occurred_at" })} end as bought
     from message_archive m
+    -- A mass message carries no custom and answers no fan (message_type 2 on Fansly).
     where m.account_id = any(${ids(input.pageIds)}) and m.message_ref = ${input.messageRef} and m.deleted_at is null
+      and coalesce(m.message_type, 1) <> 2
     order by m.occurred_at desc nulls last
     limit 1`);
   const row = result.rows[0];
@@ -1080,6 +1139,13 @@ export async function listCustomOrderEvidenceOwners(
     owners: result.rows.map((row) => ({ kind: row.kind === "given" ? "given" as const : "payment" as const, fanId: num(row.fan_id), modelId: num(row.model_id) })),
     modelId: num(model.rows[0]?.model_id),
   };
+}
+
+/** Every page of the model of `pageId` (itself included): where the fan of an order on it may have paid it. */
+export async function listCustomModelPageIds(db: Database, pageId: number): Promise<number[]> {
+  const result = await db.execute<Row>(sql`
+    select mp.id from pages p join pages mp on mp.model_id = p.model_id where p.id = ${pageId} order by mp.id`);
+  return result.rows.length === 0 ? [pageId] : result.rows.map((row) => Number(row.id));
 }
 
 /** The pages of a model, by its slug, with their model: what a person's named sale is checked against (evidence.ts). */
@@ -1393,8 +1459,9 @@ export async function listUsersWithPersonRight(
 
 /**
  * The people on a shift now, by page label (shifts, 0379: a going shift, seen in the last half hour), each page's in
- * one order — who has been on it longest first, then the lower login — so «чей ход» names the same person on every
- * read. Of the page's realm only (0414): a test login on a live page's list, or a live one on a test page's, never.
+ * one order — the newest shift first (at a change of shifts, the one coming in), then the lower login — so «на смене»
+ * names the same person on every read. Of the page's realm only (0414): a test login on a live page's list, or a live
+ * one on a test page's, never.
  */
 export async function listOnShiftUsersByPage(db: Database, now: Date): Promise<Map<string, number[]>> {
   const result = await db.execute<{ user_id: unknown; page_label: string }>(sql`
@@ -1405,7 +1472,7 @@ export async function listOnShiftUsersByPage(db: Database, now: Date): Promise<M
       and e->>'pageLabel' is not null
       and (${testPageSql(sql`p.id`)}) = (${testUserSql(sql`s.user_id`)})
     group by s.user_id, e->>'pageLabel'
-    order by e->>'pageLabel', min(s.started_at), s.user_id`);
+    order by e->>'pageLabel', max(s.started_at) desc, s.user_id`);
   const byPage = new Map<string, number[]>();
   for (const row of result.rows) {
     const list = byPage.get(row.page_label) ?? [];
@@ -1413,6 +1480,120 @@ export async function listOnShiftUsersByPage(db: Database, now: Date): Promise<M
     byPage.set(row.page_label, list);
   }
   return byPage;
+}
+
+// ── Who took an order («принял», 0438) ──────────────────────────────────────
+
+/** A login that may be named an order's taker on a page. */
+export interface CustomTakerRow {
+  userId: number;
+  login: string;
+  /** The people registry's name, else the login. */
+  name: string;
+  /** The login's Hub role (a chatter's alone is a record's default taker). */
+  role: string;
+}
+
+/**
+ * The page's chatters, THE rule of who may be an order's taker there: a person who has not left, working on the page
+ * (`person_working_pages`), of the page's realm, by their living login (not disabled or deleted, not a content
+ * manager's) — the signed-in one first, then the newest. One login per person.
+ */
+function takersSql(pageId: number, who: SQL): SQL {
+  return sql`
+    select distinct on (pe.id) u.id as user_id, u.username, u.role, coalesce(pe.display_name, u.username) as name
+    from pages pg
+    join models md on md.id = pg.model_id
+    join person_working_pages w on w.page_id = pg.id
+    join people pe on pe.id = w.person_id and pe.state <> 'left' and pe.is_test = md.is_test
+    join person_logins pl on pl.person_id = pe.id
+    join users u on u.id = pl.user_id and u.deleted_at is null and u.disabled_at is null and u.role <> 'content_manager'
+    where pg.id = ${pageId} and ${who}
+    order by pe.id, (u.password_hash is not null) desc, u.id desc`;
+}
+
+const takerOf = (row: Row): CustomTakerRow => ({ userId: Number(row.user_id), login: String(row.username), name: String(row.name), role: String(row.role) });
+
+/**
+ * The taker a person, an agent or a piece of evidence names on a page, resolved by the rule of `takersSql`: by the
+ * login's id, by a login (case-insensitive), or by a numeric Telegram id (`people.telegram_user_id`) — never by a name,
+ * which two people may share. Null — it names nobody who works on the page.
+ */
+export async function findCustomTakerOnPage(
+  db: Database,
+  input: { pageId: number; userId: number } | { pageId: number; login: string } | { pageId: number; telegramUserId: string },
+): Promise<CustomTakerRow | null> {
+  // A login (by its id or its name) is that very login; a Telegram id the person's own living login.
+  const who = "userId" in input ? sql`u.id = ${input.userId}`
+    : "login" in input ? sql`lower(u.username) = lower(${input.login})`
+    : sql`pe.telegram_user_id = ${input.telegramUserId}::bigint`;
+  const result = await db.execute<Row>(takersSql(input.pageId, who));
+  const row = result.rows[0];
+  return row === undefined ? null : takerOf(row);
+}
+
+/** Everyone who may be named an order's taker on the page (`takersSql`), by name. */
+export async function listCustomPageTakers(db: Database, pageId: number): Promise<CustomTakerRow[]> {
+  const result = await db.execute<Row>(takersSql(pageId, sql`true`));
+  return result.rows.map(takerOf).sort((left, right) => left.name.localeCompare(right.name) || left.userId - right.userId);
+}
+
+// ── What changed, for an agent (the change feed) ────────────────────────────
+
+export interface CustomEventFeedRow {
+  id: number;
+  at: Date;
+  objectType: "custom_order" | "custom_finding";
+  orderId: number | null;
+  findingId: number | null;
+  event: string;
+  door: string;
+  actor: { name: string; login: string } | null;
+  agentKey: string | null;
+  onBehalfOf: { name: string; login: string } | null;
+  changes: Record<string, unknown>;
+}
+
+/**
+ * The history of the orders (`custom_order.*`) and of the people's answers to findings (`custom_finding.*`) after the
+ * event `after`, the oldest first: of `pageIds`, and of no known page when `noPage` (the live agency's).
+ */
+export async function listCustomEventsAfter(
+  db: Database,
+  input: { after: number; pageIds: readonly number[]; noPage: boolean; limit: number },
+): Promise<CustomEventFeedRow[]> {
+  const pageOk = (column: SQL) => sql`(${column} = any(${ids(input.pageIds)}) or (${input.noPage} and ${column} is null))`;
+  const result = await db.execute<Row>(sql`
+    select e.id, e.created_at, e.object_type, e.event, e.door, e.changes,
+      case when e.object_type = 'custom_order' then o.id end as order_id, case when e.object_type = 'custom_finding' then cf.id end as finding_id,
+      au.username as actor_login, coalesce(ap.display_name, au.username) as actor_name,
+      bu.username as behalf_login, coalesce(bp.display_name, bu.username) as behalf_name, k.name as key_name
+    from object_events e
+    left join custom_orders o on o.id = (case when e.object_type = 'custom_order' and e.object_id ~ '^[0-9]{1,18}$' then e.object_id::bigint end)
+    left join custom_findings cf on cf.id = (case when e.object_type = 'custom_finding' and e.object_id ~ '^[0-9]{1,18}$' then e.object_id::bigint end)
+    left join users au on au.id = e.actor_user_id
+    left join person_logins apl on apl.user_id = e.actor_user_id left join people ap on ap.id = apl.person_id
+    left join users bu on bu.id = e.on_behalf_of_user_id
+    left join person_logins bpl on bpl.user_id = e.on_behalf_of_user_id left join people bp on bp.id = bpl.person_id
+    left join agent_keys k on k.id = e.actor_agent_key_id
+    where e.id > ${input.after} and e.object_type in ('custom_order', 'custom_finding')
+      and ((o.id is not null and ${pageOk(sql`o.page_id`)}) or (cf.id is not null and ${pageOk(sql`cf.page_id`)}))
+    order by e.id
+    limit ${input.limit}`);
+  const person = (login: unknown, name: unknown) => (login === null || login === undefined ? null : { login: String(login), name: String(name ?? login) });
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    at: date(row.created_at)!,
+    objectType: row.object_type === "custom_finding" ? "custom_finding" as const : "custom_order" as const,
+    orderId: num(row.order_id),
+    findingId: num(row.finding_id),
+    event: String(row.event),
+    door: String(row.door),
+    actor: person(row.actor_login, row.actor_name),
+    agentKey: (row.key_name as string | null) ?? null,
+    onBehalfOf: person(row.behalf_login, row.behalf_name),
+    changes: (row.changes as Record<string, unknown> | null) ?? {},
+  }));
 }
 
 /** A fan of the page by what a person gave: the platform's number or a username (case-insensitive); only one on the page. */
@@ -1445,11 +1626,14 @@ export async function hasCustomOrderStepByRef(db: Database, input: { orderId: nu
   return result.rows.length > 0;
 }
 
-/** When a person last moved the order's state by their own hand (the board, the extension); null — never. */
+/**
+ * When a person last moved the order's state by their own hand (the board, the extension, an agent on their word with
+ * the request named); null — never.
+ */
 export async function findCustomOrderLastHandMove(db: Database, orderId: number): Promise<Date | null> {
   const result = await db.execute<Row>(sql`
     select max(created_at) as at from object_events
-    where object_type = 'custom_order' and object_id = ${String(orderId)} and actor_user_id is not null
+    where object_type = 'custom_order' and object_id = ${String(orderId)} and (actor_user_id is not null or changes ? 'requestRef')
       and event = any(${texts(["at_model", "partly", "shot", "revision", "refused", "given", "closed", "cancelled"].map((step) => `custom_order.${step}`))})`);
   return date(result.rows[0]?.at);
 }
@@ -1471,6 +1655,30 @@ export async function insertCustomOrderEvent(
   await db.execute(sql`
     insert into object_events (object_type, object_id, event, actor_user_id, actor_agent_key_id, on_behalf_of_user_id, door, changes, created_at)
     values ('custom_order', ${String(input.orderId)}, ${input.event}, ${input.userId ?? null}, ${input.agentKeyId ?? null},
+      ${input.onBehalfOfUserId ?? null}, ${input.door}, ${JSON.stringify(input.changes)}::jsonb, ${input.at.toISOString()}::timestamptz)`);
+}
+
+/**
+ * A person's answer to a finding (`custom_finding.recorded|linked|dismissed|reopened`), in the finding's history: the
+ * board's and an agent's on a person's word (the agents' change feed reads it). The checks pass's and an agent's own
+ * writes of findings leave none.
+ */
+export async function insertCustomFindingEvent(
+  db: Database,
+  input: {
+    findingId: number;
+    event: string;
+    door: "workboard" | "api";
+    userId?: number | null;
+    agentKeyId?: number | null;
+    onBehalfOfUserId?: number | null;
+    changes: Record<string, unknown>;
+    at: Date;
+  },
+): Promise<void> {
+  await db.execute(sql`
+    insert into object_events (object_type, object_id, event, actor_user_id, actor_agent_key_id, on_behalf_of_user_id, door, changes, created_at)
+    values ('custom_finding', ${String(input.findingId)}, ${input.event}, ${input.userId ?? null}, ${input.agentKeyId ?? null},
       ${input.onBehalfOfUserId ?? null}, ${input.door}, ${JSON.stringify(input.changes)}::jsonb, ${input.at.toISOString()}::timestamptz)`);
 }
 

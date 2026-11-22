@@ -87,6 +87,8 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
   paid_word: [...NOT_ENDED, "closed"],
   // The page answered the fan's «where is it»: a standing ask can always be taken off.
   fan_asked_clear: ALL,
+  // Who took the order is a fact of its whole life: named or corrected in every state, a given and a closed one's too.
+  accepted_by: ALL,
 };
 
 export const STEP_TO: Partial<Readonly<Record<CustomOrderAction, CustomOrderState>>> = {
@@ -219,6 +221,8 @@ const OWN_ORDER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["edit", "fan", 
 const OWNER_STEPS: ReadonlySet<CustomOrderAction> = new Set(["paid_word", "issue_clear"]);
 /** A wait on purpose: the owner's and the check's leader's. */
 const HOLD_STEPS: ReadonlySet<CustomOrderAction> = new Set(["hold", "unhold"]);
+/** «Принял» and «Проверен»: the check's leader's (the owner's always), by the one rule. */
+const CHECK_STEPS: ReadonlySet<CustomOrderAction> = new Set(["checked", "accepted_by"]);
 
 /** An order as the rights read it; a hold, an issue and the fan's ask, when given, say whether there is one to take off. */
 export interface CustomRightsOrder {
@@ -244,11 +248,15 @@ export function mayTakeStep(viewer: CustomViewer, order: CustomRightsOrder, step
   if (viewer.leads !== undefined) {
     const check = leadsPhase(viewer, order, "check");
     const shoot = leadsPhase(viewer, order, "shoot");
-    // «Проверен» is the check's; the content side's steps the shooting's (a fan's complaint after «отдан» either's).
-    if (step === "checked") return check;
+    // «Проверен» and «Принял» are the check's; the content side's steps the shooting's (a fan's complaint after «отдан»
+    // either's).
+    if (CHECK_STEPS.has(step)) return check;
     if (SHOOT_STEPS.has(step)) return shoot || (step === "revision" && order.state === "given" && check);
-    // The card's fixes, its fan, its deadline, a payment, «отменить», «закрыть»: whoever leads a step of it.
-    if (check || shoot) return true;
+    // The card's fixes, its fan, its deadline, a payment, «отменить», «закрыть»: whoever leads a step of it — and the
+    // customs lead (the person right) on every order they see, a model with its own team lead's too.
+    if (check || shoot || viewer.lead) return true;
+  } else if (CHECK_STEPS.has(step)) {
+    return leadsSteps(viewer);
   } else if (leadsSteps(viewer)) {
     return true;
   }
@@ -410,11 +418,17 @@ const oneLine = (text: string) => {
 
 /**
  * The forwarding timer (C3): money linked or the owner's word, the card not at the model yet (recorded, paid, checked),
- * not on hold — counted from the later of the record and the first sale (or the word): amber from 24 h, red from 48 h;
- * null under 24 h and otherwise. The checks' matters read the same timer (`custom.not_at_model`, the owner's line).
+ * not on hold and no payment taken back — counted from the later of the record and the first sale (or the word): amber
+ * from 24 h, red from 48 h; null under 24 h and otherwise. The checks' matters read the same timer (`custom.not_at_model`, the owner's line).
  */
-export function customForwardTimerOf(input: Omit<CustomUrgencyInput, "facts" | "issue" | "fanAskedAt" | "sentAt" | "stateNote" | "deadlineOn" | "deadlineDefault" | "stateAt">, now: Date): CustomUrgency["timer"] {
-  if (input.holdReason !== null || !BEFORE_MODEL.includes(input.state)) return null;
+export function customForwardTimerOf(
+  input: Omit<CustomUrgencyInput, "issue" | "fanAskedAt" | "sentAt" | "stateNote" | "deadlineOn" | "deadlineDefault" | "stateAt" | "facts"> & {
+    facts: Pick<CustomOrderFacts, "paid">;
+  },
+  now: Date,
+): CustomUrgency["timer"] {
+  // A payment taken back (a reversal, a chargeback) stops it: the owner settles the money first.
+  if (input.holdReason !== null || !BEFORE_MODEL.includes(input.state) || input.facts.paid.value === "conflict") return null;
   const from = input.payments > 0 ? input.firstPaidAt : input.paidWord?.at ?? null;
   if (from === null) return null;
   const since = Math.max(msOf(input.createdAt), msOf(from));

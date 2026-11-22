@@ -1,4 +1,6 @@
-import { customPhaseOf, customPhaseProduct, type CustomFactValue, type CustomOrderState, type CustomPhase } from "@agency_hub_core/contracts";
+import {
+  customPhaseOf, customPhaseProduct, type CustomFactValue, type CustomGiverKind, type CustomOrderState, type CustomPhase,
+} from "@agency_hub_core/contracts";
 import type { MatterOwner, TeamFacts } from "@agency_hub_core/db";
 
 import { loginOfPerson, modelOfPageId, pagesOfModels, personOfLogin } from "../teams.ts";
@@ -14,7 +16,10 @@ import { loginOfPerson, modelOfPageId, pagesOfModels, personOfLogin } from "../t
  *                                                            its customs lead; else the owner. Any of the first tier
  *                                                            takes the step; the one named «у кого сейчас» is the
  *                                                            first of them (the lowest person id: stable)
- *   give   (shot → «Отдан»)                                  the chatter who took the order; else the check's leader
+ *   give   (shot → «Отдан»)                                  the order's taker («принял», `giverOf`): they answer for it;
+ *                                                            else the check's leader, who names the taker. Whoever is on
+ *                                                            shift on the page may give it too, and anyone may — whoever
+ *                                                            gives it watches the video whole first (the owner, 2026-11-22)
  *
  * An order of no known page: the person right «ведёт кастомы» (`fallback`), else the owner. A record of a person with
  * no living login leads nothing (nobody could act on it). A content manager is a person whose living login is
@@ -101,12 +106,39 @@ export interface CustomLeaderOrder {
   acceptedBy?: string | null;
 }
 
-/** The chatter who took the order, as a leader; null — nobody (imported). */
+/**
+ * The order's taker as a leader: their login while it lives (not disabled or deleted) and — an order of a known page —
+ * while their person works on that page. Null — nobody (not named, or the login or the person is gone from it): nobody
+ * could act on such a record.
+ */
 function acceptorOf(facts: TeamFacts, order: CustomLeaderOrder): CustomLeader | null {
   if (order.acceptedByUserId === null) return null;
-  const personId = facts.logins.find((login) => login.userId === order.acceptedByUserId)?.personId ?? null;
-  const name = personId !== null ? nameOf(facts, personId) : order.acceptedByName ?? order.acceptedBy ?? "";
-  return { kind: "person", personId, userId: order.acceptedByUserId, name: name || (order.acceptedBy ?? "") };
+  const personId = facts.logins.find((login) => login.userId === order.acceptedByUserId)?.personId;
+  if (personId === undefined) return null;
+  if (order.pageId !== null && !facts.working.some((row) => row.personId === personId && row.pageId === order.pageId)) return null;
+  return { kind: "person", personId, userId: order.acceptedByUserId, name: nameOf(facts, personId) || order.acceptedByName || order.acceptedBy || "" };
+}
+
+/** What the giver of a shot order does: the taker gives it, the check's leader names the taker first. */
+export const CUSTOM_GIVE_WHAT: Readonly<Record<CustomGiverKind, string>> = {
+  taker: "посмотреть ролик целиком и отдать фану",
+  lead: "указать, кто принял",
+};
+
+/**
+ * THE rule of who gives a shot order to the fan (the owner, 2026-11-22): its taker (`acceptorOf`: a living login working
+ * on its page) answers for it; with none, the check's leader, who names the taker. «У кого сейчас», whose move, the
+ * checks' «снят, отдайте фану», the extension's panel and the agent's door read it from here. Whoever is on shift is no
+ * part of it: they may give it too (`customMoveOf`'s `onShift`).
+ */
+export function giverOf(
+  facts: TeamFacts,
+  order: CustomLeaderOrder,
+  fallback: CustomLeader | null,
+): { who: CustomLeader; kind: CustomGiverKind; what: string } {
+  const taker = acceptorOf(facts, order);
+  if (taker !== null) return { who: taker, kind: "taker", what: CUSTOM_GIVE_WHAT.taker };
+  return { who: phaseLeader(facts, order.pageId, "check", fallback), kind: "lead", what: CUSTOM_GIVE_WHAT.lead };
 }
 
 /** Who leads the order's current step and where it is done; null — an ended order. */
@@ -118,7 +150,7 @@ export function customStepLeader(
   const phase = customPhaseOf(order.state);
   if (phase === null) return null;
   const product = customPhaseProduct(phase);
-  if (phase === "give") return { phase, product, leader: acceptorOf(facts, order) ?? phaseLeader(facts, order.pageId, "check", fallback) };
+  if (phase === "give") return { phase, product, leader: giverOf(facts, order, fallback).who };
   return { phase, product, leader: phaseLeader(facts, order.pageId, phase, fallback) };
 }
 
@@ -131,25 +163,31 @@ export interface CustomMoveOrder extends CustomLeaderOrder {
   issue?: object | null;
 }
 
-/** The move of a shot order nothing was sent of: whoever gives it to the fan (the checks' «отдайте фану» follow it). */
-export const CUSTOM_GIVE_MOVE = "отдать фану";
-
-/** Whose move it is: a leader of the rule (a person, the owner), whoever is on shift, the model, the fan. */
+/** Whose move it is: a leader of the rule (a person, the owner), the model, the fan. */
 export type CustomMover =
   | CustomLeader
-  | { kind: "shift"; userId: number; personId: number | null; name: string }
   | { kind: "model" }
   | { kind: "fan" };
+
+/** Whose move an order waits for and what to do; a shot order's says who gives it (`giverOf`) and who else is on shift. */
+export interface CustomMove {
+  who: CustomMover;
+  what: string;
+  /** A shot order nothing was sent of: its giver's kind (the checks' «снят, отдайте фану» follow it). */
+  giver?: CustomGiverKind;
+  /** On shift on the fan's page now, someone other than the giver: they may give it too. */
+  onShift?: { userId: number; personId: number | null; name: string };
+}
 
 /**
  * Whose move an order waits for (customs facts spec §4), the first rule that holds — the board and the matters read it
  * from here:
  *
- *   on hold, a refusal, a payment in conflict         the owner
+ *   on hold, a refusal, a payment in conflict, an issue  the owner
  *   a revision                                        the shooting's leader (the page's content manager)
  *   sent and not opened (`given: part`)               the fan
- *   shot and nothing sent                             whoever is on shift on the fan's page, else the acceptor, else the
- *                                                     check's leader
+ *   shot and nothing sent                             the giver (`giverOf`): the taker, else the check's leader to name
+ *                                                     them; whoever else is on shift on the fan's page beside (`onShift`)
  *   at the model (delivered or partly)                the model
  *   money linked (or the owner's word), not at her    the check's leader: «передать модели»
  *   recorded                                          the acceptor, else the check's leader
@@ -163,7 +201,7 @@ export function customMoveOf(
   values: { paid: CustomFactValue; given: CustomFactValue },
   onShiftUserIds: readonly number[],
   fallback: CustomLeader | null,
-): { who: CustomMover; what: string } | null {
+): CustomMove | null {
   const check = () => phaseLeader(facts, order.pageId, "check", fallback);
   switch (order.state) {
     case "given":
@@ -179,15 +217,21 @@ export function customMoveOf(
   if (order.holdReason !== null) return { who: OWNER, what: "решить, когда продолжить" };
   if (order.state === "refused") return { who: OWNER, what: "решить после отказа модели" };
   if (values.paid === "conflict") return { who: OWNER, what: "разобраться с возвратом оплаты" };
+  // The sources disagree: the owner settles it first, on an open order as on a given one.
+  if (order.issue !== undefined && order.issue !== null) return { who: OWNER, what: "разобраться с расхождением" };
   if (order.state === "revision") return { who: phaseLeader(facts, order.pageId, "shoot", fallback), what: "довести правку" };
   if (values.given === "part") return { who: { kind: "fan" }, what: "открыть присланное" };
   if (order.state === "shot") {
-    const userId = onShiftUserIds[0];
-    if (userId !== undefined) {
-      const personId = personOfLogin(facts, userId);
-      return { who: { kind: "shift", userId, personId, name: personId === null ? "" : nameOf(facts, personId) }, what: CUSTOM_GIVE_MOVE };
-    }
-    return { who: acceptorOf(facts, order) ?? check(), what: CUSTOM_GIVE_MOVE };
+    const giver = giverOf(facts, order, fallback);
+    // The newest shift on the page that is not the giver's: they may give it too, they are not obliged to.
+    const { who } = giver;
+    const isGiver = (userId: number) => who.kind === "person" && (userId === who.userId || (who.personId !== null && personOfLogin(facts, userId) === who.personId));
+    const other = onShiftUserIds.find((userId) => !isGiver(userId));
+    const personId = other === undefined ? null : personOfLogin(facts, other);
+    return {
+      who: giver.who, what: giver.what, giver: giver.kind,
+      ...(other === undefined ? {} : { onShift: { userId: other, personId, name: personId === null ? "" : nameOf(facts, personId) } }),
+    };
   }
   if (order.state === "at_model") return { who: { kind: "model" }, what: "снять" };
   if (order.state === "partly") return { who: { kind: "model" }, what: "доснять" };
