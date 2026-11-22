@@ -243324,7 +243324,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Database only. The lead (the right «ведёт кастомы») and the owner see every order; a team lead and a chatter the orders of the pages they reach. An order of no known page is the lead's, the owner's and the team leads'.",
+        "description": "Database only. The lead (the right «ведёт кастомы») and the owner see every order; a team lead and a chatter the orders of the pages they reach. An order of no known page is the lead's, the owner's and the team leads'. The extension's device token too: Workboard's «Кастомы» in its frame over the site, read as a chatter.",
         "parameters": [
           {
             "schema": {
@@ -243340,6 +243340,9 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -246023,10 +246026,13 @@
         "tags": [
           "admin"
         ],
-        "description": "Database only. The orders the board shows the viewer; an undo is the board's step (`unpay`, `ungive`, `retract`, the deadline back) sent with `undoOf`.",
+        "description": "Database only. The orders the board shows the viewer; an undo is the board's step (`unpay`, `ungive`, `retract`, the deadline back) sent with `undoOf`. The extension's device token too: Workboard's «Кастомы» in its frame over the site, read as a chatter.",
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -246385,7 +246391,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Database only. The board's visibility: the lead and the owner every order of their realm, a team lead and a chatter the orders of the pages they reach. Without the card document.",
+        "description": "Database only. The board's visibility: the lead and the owner every order of their realm, a team lead and a chatter the orders of the pages they reach. Without the card document. The extension's device token too: Workboard's «Кастомы» in its frame over the site, read as a chatter.",
         "parameters": [
           {
             "schema": {
@@ -246402,6 +246408,9 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -248042,10 +248051,13 @@
         "tags": [
           "admin"
         ],
-        "description": "Database only. The check's leader of the finding's page, the customs lead and the owner, of their realm; anyone else reads an empty list.",
+        "description": "Database only. The check's leader of the finding's page, the customs lead and the owner, of their realm; anyone else reads an empty list. The extension's device token too: Workboard's «Кастомы» in its frame over the site, read as a chatter.",
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -249352,6 +249364,7 @@
         "tags": [
           "admin"
         ],
+        "description": "Database only. The board's visibility; an order the viewer does not see reads as missing. The extension's device token too: Workboard's «Кастомы» in its frame over the site, read as a chatter.",
         "parameters": [
           {
             "schema": {
@@ -249367,6 +249380,9 @@
         "security": [
           {
             "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
           }
         ],
         "responses": {
@@ -250596,7 +250612,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Database only. The lead and the owner take every step; a chatter only theirs (a payment, «отдали» and its undo, editing and cancelling their own order); the owner alone his word on the payment and settling an issue; a hold the owner and the check's leader; a step not from the order's state is 409 `not_allowed`. Taking off a sale or a message the system or an agent applied is remembered: they never apply it to the order again. Answers the order after it. A session or the extension's device token (the fan panel's «Отдан», package R5: it reads as a chatter).",
+        "description": "Database only. The lead and the owner take every step; a chatter only theirs (a payment, «отдали» and its undo, editing and cancelling their own order); the owner alone his word on the payment and settling an issue; a hold the owner and the check's leader; a step not from the order's state is 409 `not_allowed`. Taking off a sale or a message the system or an agent applied is remembered: they never apply it to the order again. Answers the order after it. A session or the extension's device token (the fan panel's «Отдан», package R5, and the steps of Workboard's «Кастомы» in its frame): it reads as a chatter, so it takes a narrow session's steps and no other.",
         "requestBody": {
           "required": true,
           "content": {
