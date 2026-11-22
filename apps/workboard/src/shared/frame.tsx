@@ -28,7 +28,7 @@ export function useFramePort(options: { client: boolean }): FrameLink {
       }
       if (result.kind === "port") {
         held = portTransport(result.port);
-        if (client) setFrameClient(held.fetch);
+        if (client) setFrameClient(held.fetch, held.copy);
         setLink({ kind: "port", transport: held });
       } else setLink(result);
     });
@@ -40,14 +40,22 @@ export function useFramePort(options: { client: boolean }): FrameLink {
   return link;
 }
 
-/** The frame's own states before its screen: waiting for the port, opened outside the extension, an older extension. */
-export function FrameGate({ link, title, children }: { link: FrameLink; title: string; children: (transport: PortTransport) => ReactNode }) {
+/**
+ * The frame's own states before its screen: waiting for the port, opened outside the extension, an older extension.
+ * `opensFrom` — where in ChatGoose the screen opens, for the page opened outside it (the fan panel's by default).
+ */
+export function FrameGate({ link, title, opensFrom = "Этот экран открывается из панели фана в ChatGoose на Fansly или в ChatSpace.", children }: {
+  link: FrameLink;
+  title: string;
+  opensFrom?: string;
+  children: (transport: PortTransport) => ReactNode;
+}) {
   useEffect(() => {
     document.title = title;
   }, [title]);
   if (link.kind === "waiting") return <Gate waiting>Открываем…</Gate>;
   if (link.kind === "version") return <Gate><b>Обновите ChatGoose</b>Эта версия расширения не умеет открывать этот экран поверх сайта.</Gate>;
-  if (link.kind === "none") return <Gate><b>Откройте из ChatGoose</b>Этот экран открывается из панели фана в ChatGoose на Fansly или в ChatSpace.</Gate>;
+  if (link.kind === "none") return <Gate><b>Откройте из ChatGoose</b>{opensFrom}</Gate>;
   return <>{children(link.transport)}</>;
 }
 

@@ -2,7 +2,7 @@ import { loadTeamFacts, type TeamFacts, type TeamRoleKind } from "@agency_hub_co
 
 import type { AppContext } from "../bootstrap.ts";
 import { ForbiddenError } from "./errors.ts";
-import type { AuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
+import { isNarrowPrincipal, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
 import { ownerPageScope } from "./sandbox/realm.ts";
 
 /**
@@ -71,8 +71,12 @@ export function personOfLogin(facts: TeamFacts, userId: number): number | null {
   return facts.logins.find((login) => login.userId === userId)?.personId ?? null;
 }
 
+/**
+ * The owner reading as the owner: a full session or token of his. A narrow one (`isNarrowPrincipal`: a narrow web
+ * session, or the extension's own token) reads as anyone else — his teams' pages and his grant — and leads nothing.
+ */
 function isOwnerReader(principal: HumanAuthPrincipal): boolean {
-  return principal.user.role === "owner" && principal.narrowDeviceTokenId === undefined;
+  return principal.user.role === "owner" && !isNarrowPrincipal(principal);
 }
 
 /** The viewer's teams (`me`'s `teams`). The owner's lists are their own records; the owner reads every team anyway. */
@@ -109,7 +113,7 @@ export async function teamPagesFor(app: TeamsApp, principal: AuthPrincipal): Pro
 
 /** The pages of the models the principal LEADS (by records; the owner leads nothing by name, he is above). */
 export async function ledPagesFor(app: TeamsApp, principal: HumanAuthPrincipal): Promise<number[]> {
-  if (principal.narrowDeviceTokenId !== undefined) return [];
+  if (isNarrowPrincipal(principal)) return [];
   const facts = await teamFactsFor(app, principal);
   const teams = teamsOfPerson(facts, personOfLogin(facts, principal.user.id));
   return pagesOfModels(facts, teams.lead);
@@ -117,8 +121,8 @@ export async function ledPagesFor(app: TeamsApp, principal: HumanAuthPrincipal):
 
 /** Whether the principal leads the model's team (the owner: always, his word is above). */
 export async function leadsModel(app: TeamsApp, principal: HumanAuthPrincipal, modelId: number): Promise<boolean> {
+  if (isNarrowPrincipal(principal)) return false;
   if (isOwnerReader(principal)) return true;
-  if (principal.narrowDeviceTokenId !== undefined) return false;
   const facts = await teamFactsFor(app, principal);
   return teamsOfPerson(facts, personOfLogin(facts, principal.user.id)).lead.includes(modelId);
 }

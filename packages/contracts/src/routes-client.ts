@@ -208,6 +208,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "fan-account-state-v1",
   // The team's place without a password: `authWebLink` gives a one-time link that opens a narrow web session.
   "web-link-v1",
+  // Workboard's «Кастомы» in the extension's frame (`/workboard/frame/customs`): the launcher's row is drawn only then.
+  "customs-frame-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the

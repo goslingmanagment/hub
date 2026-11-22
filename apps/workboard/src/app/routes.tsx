@@ -186,6 +186,8 @@ export const router = createBrowserRouter(
     // Package R5: «Записать кастом» and «Спросить» from the extension's fan panel, in the same frame, the same way.
     { path: "frame/custom", lazy: () => import("../screens/customs/frame.js").then((m) => ({ Component: m.FrameCustomScreen })) },
     { path: "frame/ask", lazy: () => import("../screens/waiting/frame.js").then((m) => ({ Component: m.FrameAskScreen })) },
+    // The launcher's «Кастомы»: Workboard's customs facts screen over the site, the same way.
+    { path: "frame/customs", lazy: () => import("../screens/customs/frame.js").then((m) => ({ Component: m.FrameCustomsScreen })) },
     // Old addresses lead to new ones, whoever opens them (packages/ui/src/old-addresses.ts, one table).
     ...WORKBOARD_OLD_PATHS.map((path) => ({ path, element: <OldAddress /> })),
     // The board's demo pages (scenarios, the extension's part): the demo and dev servers only, never a production build.

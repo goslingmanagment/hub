@@ -138,6 +138,15 @@ export const CLIENT_TOKEN_PROFILES = {
       "customOrderCreate",
       "customOrderAct",
       "teamQuestionAsk",
+      // The launcher's «Кастомы»: Workboard's customs facts screen in the same frame reads the board, its given and
+      // closed, the findings, what changed by itself, and one order, and takes a narrow session's steps through
+      // `customOrderAct` above (a chatter's: a payment, «отдан» and its undo, their own order's card). A finding's
+      // resolution needs the password (`customFindingAct`, never here); the page list stays off.
+      "customOrdersBoard",
+      "customOrdersDone",
+      "customFindingsList",
+      "customOrderChanges",
+      "customOrder",
 
       // chatspace-tab-state-v1: the always-on ChatSpace tab's report (the server's own hub user).
       "clientChatspaceTabState",

@@ -1,4 +1,4 @@
-import { Copy, MoreHorizontal } from "lucide-react";
+import { Copy, Minimize2, MoreHorizontal } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import {
@@ -28,6 +28,7 @@ import {
   toast,
 } from "@agency_hub_core/ui";
 import { ScreenHeader } from "@/shared/ScreenHeader";
+import { inExtensionFrame } from "@/shared/hub";
 import { useBackState, useBackTarget } from "@/shared/links";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { usePageFilter } from "@/shared/usePageFilter";
@@ -46,6 +47,7 @@ import {
   leaderWords,
   fanWords,
   partsWords,
+  readFailure,
   stepFailure,
   telegramHref,
   useCustomBoard,
@@ -55,7 +57,9 @@ import {
   useDismissSale,
   type CustomPart,
 } from "./data";
+import type { CustomsFrame } from "./facts";
 import { PriceField } from "./facts-banners";
+import { OrderDrawer } from "./facts-order";
 import { millsOfDollars } from "./facts-words";
 import "./customs.css";
 
@@ -101,11 +105,12 @@ function PaidLine({ order }: { order: CustomBoardOrder }) {
   );
 }
 
-function OrderCard({ order, serverNow }: { order: CustomBoardOrder; serverNow: string }) {
+/** An order's card on the board; `opens` — where it leads (the frame: its panel over the board, `?order=`). */
+function OrderCard({ order, serverNow, opens }: { order: CustomBoardOrder; serverNow: string; opens?: string }) {
   const back = useBackState("Кастомы");
   const fan = fanWords(order);
   return (
-    <Link to={`/customs/${order.code}`} state={back} className="cus-card">
+    <Link to={opens ?? `/customs/${order.code}`} state={back} className="cus-card">
       <span className="cus-card__top">
         <span className={fan.confirmed ? "cus-card__fan" : "cus-card__fan cus-muted"}>{fan.name}</span>
         <span className="cus-card__code">{order.code}</span>
@@ -269,8 +274,15 @@ function leadsLine(leads: CustomOrdersBoardResponse["leads"]): string {
   return `Ведёт кастомы: ${leads.map((lead) => `${lead.model}: ${one(lead)}`).join("; ")}`;
 }
 
-export function CustomsBoardScreen() {
-  const { page } = usePageFilter();
+/**
+ * The column board, while the switch `customsFacts` is off (entry.tsx). In the extension's frame (`frame`, the launcher's
+ * «Кастомы», frame.tsx) the same columns without what the frame does not do: no page filter (no page list is read
+ * there), no «Записать кастом» and no look-alike sales (the fan panel's and the password's); an order opens in its
+ * panel over the board (`?order=`), the frame's one address, and «Свернуть» folds the frame away.
+ */
+export function CustomsBoardScreen({ frame }: { frame?: CustomsFrame } = {}) {
+  const filter = usePageFilter();
+  const page = frame ? null : filter.page;
   const [search, setSearch] = useSearchParams();
   // «Записать кастом» from the extension's fan panel: `?record=1&page=…&fan=…` opens the form with the fan filled in.
   const [recording, setRecording] = useState(() => search.get("record") === "1");
@@ -290,7 +302,7 @@ export function CustomsBoardScreen() {
   if (board.isPending) {
     body = <Skeleton height={320} />;
   } else if (board.isError || !data) {
-    body = <ErrorState onRetry={() => void board.refetch()} retrying={board.isFetching}>Заказы не загрузились: Hub не ответил.</ErrorState>;
+    body = <ErrorState onRetry={() => void board.refetch()} retrying={board.isFetching}>{readFailure(board.error)}</ErrorState>;
   } else {
     const byColumn = new Map(COLUMNS.map((column) => [column.id, [] as CustomBoardOrder[]]));
     for (const order of data.orders) {
@@ -313,10 +325,14 @@ export function CustomsBoardScreen() {
             <a href={telegramHref(card)} target="_blank" rel="noreferrer">Открыть карточку</a>. Найдите её заказ на доске и привяжите на его странице («Карточка в Telegram»), или запишите заказ.
           </Notice>
         )}
-        <div className="cus-actions">
-          <Button variant="primary" onClick={() => setRecording(true)}>Записать кастом</Button>
-        </div>
-        <Lookalikes sales={data.lookalikes} highlight={search.get("sale")} />
+        {!frame && (
+          <>
+            <div className="cus-actions">
+              <Button variant="primary" onClick={() => setRecording(true)}>Записать кастом</Button>
+            </div>
+            <Lookalikes sales={data.lookalikes} highlight={search.get("sale")} />
+          </>
+        )}
         {data.orders.length === 0 ? (
           <EmptyState title="Заказов пока нет">
             Кастом записывают здесь («Записать кастом»), в панели фана расширения или через Генгара командой /tz. Здесь он появится сразу.
@@ -328,7 +344,9 @@ export function CustomsBoardScreen() {
               return (
                 <section key={column.id} className="cus-col" role="listitem" aria-label={column.title}>
                   <h2 className="cus-col__title">{column.title} <span className="cus-count">{orders.length}</span></h2>
-                  {orders.length === 0 ? <p className="cus-col__empty">{column.empty}</p> : orders.map((order) => <OrderCard key={order.id} order={order} serverNow={data.serverNow} />)}
+                  {orders.length === 0 ? <p className="cus-col__empty">{column.empty}</p> : orders.map((order) => (
+                    <OrderCard key={order.id} order={order} serverNow={data.serverNow} {...(frame ? { opens: `?order=${encodeURIComponent(order.code)}` } : {})} />
+                  ))}
                 </section>
               );
             })}
@@ -343,7 +361,8 @@ export function CustomsBoardScreen() {
     <>
       <ScreenHeader
         title="Кастомы"
-        pageFilter
+        pageFilter={!frame}
+        {...(frame ? { actions: <Button icon={Minimize2} onClick={frame.collapse}>Свернуть</Button> } : {})}
         meta={meta}
         {...(data ? { updatedAt: board.dataUpdatedAt } : {})}
         onRefresh={() => void board.refetch()}
@@ -351,7 +370,18 @@ export function CustomsBoardScreen() {
         stale={board.isError && board.data !== undefined}
       />
       <div className="wb-content cus">{body}</div>
-      {recording && (
+      {frame && search.get("order") !== null && (
+        <OrderDrawer
+          code={search.get("order")!}
+          viewerOwner={data?.viewer.owner ?? false}
+          onClose={() => {
+            const next = new URLSearchParams(search);
+            next.delete("order");
+            setSearch(next);
+          }}
+        />
+      )}
+      {recording && !frame && (
         <RecordFromSaleModal
           {...(search.get("page") ? { page: search.get("page")! } : page ? { page } : {})}
           {...(search.get("fan") ? { fan: search.get("fan")! } : {})}
@@ -543,7 +573,9 @@ export function EditCardModal({ detail, onClose }: { detail: CustomOrderDetailRe
 }
 
 export function FanForm({ detail }: { detail: CustomOrderDetailResponse }) {
-  const pages = usePages();
+  // In the extension's frame no page list is read (its token is refused it): the order's page stays as it is.
+  const framed = inExtensionFrame();
+  const pages = usePages({ enabled: !framed });
   const step = useCustomStep(detail.order.code);
   const [pageLabel, setPageLabel] = useState(detail.order.pageLabel ?? "");
   const [fan, setFan] = useState(detail.order.buyer ?? "");
@@ -554,12 +586,16 @@ export function FanForm({ detail }: { detail: CustomOrderDetailResponse }) {
   });
   return (
     <div className="cus-fan-form">
-      <Field label="Страница">{(control) => (
-        <Select {...control} value={pageLabel} onChange={(event) => setPageLabel(event.target.value)}>
-          <option value="">Выберите страницу</option>
-          {(pages.data ?? []).map((page) => <option key={page.label} value={page.label}>{page.label}</option>)}
-        </Select>
-      )}</Field>
+      {framed ? (
+        <KeyValue items={[{ label: "Страница", value: pageLabel === "" ? <span className="cus-muted">не определена</span> : <PageLabel label={pageLabel} /> }]} />
+      ) : (
+        <Field label="Страница">{(control) => (
+          <Select {...control} value={pageLabel} onChange={(event) => setPageLabel(event.target.value)}>
+            <option value="">Выберите страницу</option>
+            {(pages.data ?? []).map((page) => <option key={page.label} value={page.label}>{page.label}</option>)}
+          </Select>
+        )}</Field>
+      )}
       <Field label="Фан" hint="Ссылка на профиль, ник или номер">{(control) => <TextInput {...control} value={fan} onChange={(event) => setFan(event.target.value)} />}</Field>
       <Button loading={step.isPending} disabled={pageLabel === "" || fan.trim() === ""} onClick={submit}>Подтвердить</Button>
       {failure && <Notice tone="danger">{failure}</Notice>}

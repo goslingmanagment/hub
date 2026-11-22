@@ -23,14 +23,15 @@ export function pageHeaders(isProduction: boolean): Record<string, string> {
 
 /**
  * Workboard's screens in the extension's frame (products plan 2026-11-13: package R, the «Отчёт» board; package R5, the
- * customs record form and the question window; R-protocol.md): exactly the paths of `BOARD_FRAME_PATHS` may be framed —
+ * customs record form and the question window; R-protocol.md; the launcher's «Кастомы», the customs facts screen): exactly
+ * the paths of `BOARD_FRAME_PATHS` may be framed —
  * by the two sites the extension works on — and carry no `x-frame-options`; a further frame screen joins the list by
  * name, never by a prefix. Only on the team's name (`WEB_TEAM_ORIGIN`, Workboard's one address) and on the API's root
  * name (`BOARD_FRAME_API_ORIGIN`): the same path on hub. keeps `pageHeaders`. No credential enters such a frame: its
  * page reads no cookie and starts no sign-in, every request goes to the extension over a port. Every other answer
  * keeps `pageHeaders`.
  */
-export const BOARD_FRAME_PATHS = ["/workboard/frame/report", "/workboard/frame/custom", "/workboard/frame/ask"] as const;
+export const BOARD_FRAME_PATHS = ["/workboard/frame/report", "/workboard/frame/custom", "/workboard/frame/ask", "/workboard/frame/customs"] as const;
 export const BOARD_FRAME_ANCESTORS = ["https://fansly.com", "https://chat.onlymonster.ai"] as const;
 
 /** Whether a request's path (its query and fragment aside) is one of the frame's. */

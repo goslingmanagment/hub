@@ -32,6 +32,9 @@ import { errorResponseSchema } from "./primitives.ts";
 // extension records and gives an order through these routes with its narrow
 // token and reads the orders in clientFanCard's `customs`. Database only.
 
+/** The board's reads the extension's frame calls with the device token (the launcher's «Кастомы»). */
+const FRAME_TOKEN = " The extension's device token too: Workboard's «Кастомы» in its frame over the site, read as a chatter.";
+
 const sessionErrors = {
   400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema,
   // not_allowed (the step is not the viewer's, or not from this state) | not_suggested | taken
@@ -44,39 +47,40 @@ const agentErrors = {
 
 export const customOrderRouteSchemas = {
   customOrdersBoard: {
-    auth: { kind: "any-session" }, tags: ["admin"],
+    auth: { kind: "any" }, tags: ["admin"],
     summary: "The board «Кастомы»: open custom orders by step, the given of the last week, and sales that look like a custom with no order",
     description: "Database only. The lead (the right «ведёт кастомы») and the owner see every order; a team lead and a chatter the orders "
-      + "of the pages they reach. An order of no known page is the lead's, the owner's and the team leads'.",
+      + "of the pages they reach. An order of no known page is the lead's, the owner's and the team leads'." + FRAME_TOKEN,
     querystring: customOrdersBoardQuerySchema,
     response: { 200: customOrdersBoardResponseSchema, ...sessionErrors },
   },
   customOrdersDone: {
-    auth: { kind: "any-session" }, tags: ["admin"],
+    auth: { kind: "any" }, tags: ["admin"],
     summary: "The board «Кастомы»: the orders given and waiting for the fan's word, and the closed of the last days",
     description: "Database only. The board's visibility: the lead and the owner every order of their realm, a team lead and a "
-      + "chatter the orders of the pages they reach. Without the card document.",
+      + "chatter the orders of the pages they reach. Without the card document." + FRAME_TOKEN,
     querystring: customOrdersDoneQuerySchema,
     response: { 200: customOrdersDoneResponseSchema, ...sessionErrors },
   },
   customFindingsList: {
-    auth: { kind: "any-session" }, tags: ["admin"],
+    auth: { kind: "any" }, tags: ["admin"],
     summary: "«Найдено без заказа»: the open findings of a custom with no order the viewer resolves",
     description: "Database only. The check's leader of the finding's page, the customs lead and the owner, of their realm; anyone "
-      + "else reads an empty list.",
+      + "else reads an empty list." + FRAME_TOKEN,
     response: { 200: customFindingsListResponseSchema, ...sessionErrors },
   },
   customOrderChanges: {
-    auth: { kind: "any-session" }, tags: ["admin"],
+    auth: { kind: "any" }, tags: ["admin"],
     summary: "«За сутки изменилось само»: the last 24 hours' steps of the system and the agents on the viewer's orders, each "
       + "with its undo when the viewer may take it back",
     description: "Database only. The orders the board shows the viewer; an undo is the board's step (`unpay`, `ungive`, "
-      + "`retract`, the deadline back) sent with `undoOf`.",
+      + "`retract`, the deadline back) sent with `undoOf`." + FRAME_TOKEN,
     response: { 200: customOrderChangesResponseSchema, ...sessionErrors },
   },
   customOrder: {
-    auth: { kind: "any-session" }, tags: ["admin"],
+    auth: { kind: "any" }, tags: ["admin"],
     summary: "One custom order: its card, payments with «Это оплата?», delivery hints, history and what the viewer may do",
+    description: "Database only. The board's visibility; an order the viewer does not see reads as missing." + FRAME_TOKEN,
     params: customOrderParamsSchema,
     response: { 200: customOrderDetailResponseSchema, ...sessionErrors },
   },
@@ -88,7 +92,8 @@ export const customOrderRouteSchemas = {
       + "editing and cancelling their own order); the owner alone his word on the payment and settling an issue; a hold the owner "
       + "and the check's leader; a step not from the order's state is 409 `not_allowed`. Taking off a sale or a message the system "
       + "or an agent applied is remembered: they never apply it to the order again. Answers the order after it. "
-      + "A session or the extension's device token (the fan panel's «Отдан», package R5: it reads as a chatter).",
+      + "A session or the extension's device token (the fan panel's «Отдан», package R5, and the steps of Workboard's «Кастомы» "
+      + "in its frame): it reads as a chatter, so it takes a narrow session's steps and no other.",
     params: customOrderParamsSchema,
     body: customOrderActionBodySchema,
     response: { 200: customOrderDetailResponseSchema, ...sessionErrors },

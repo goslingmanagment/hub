@@ -26,11 +26,13 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
+import type { AuthPrincipal, HumanAuthPrincipal } from "../auth.ts";
 import { NotFoundError } from "../errors.ts";
 import { personOfLogin } from "../teams.ts";
 import { FINDINGS_LOOK_BACK_DAYS, findingWire, mayResolveFinding } from "./findings.ts";
-import { customLeaderContext, customsVerifiedOf, customViewerOf, lookalikesFor, orderWire, type CustomLeaderContext, type CustomOnShift } from "./index.ts";
+import {
+  customLeaderContext, customsVerifiedOf, customViewerOf, lookalikesFor, orderWire, requireBoardReader, type CustomLeaderContext, type CustomOnShift,
+} from "./index.ts";
 import { boardLeads } from "./leaders.ts";
 import { waitingCustomSaleIds } from "./readers.ts";
 import { leadsSteps, seesOrder, stepsFor, type CustomViewer } from "./rules.ts";
@@ -170,7 +172,7 @@ export async function readCustomOrdersBoard(
   query: { pageLabel?: string | undefined },
   now: Date = new Date(),
 ): Promise<CustomOrdersBoardResponse> {
-  requireSessionUser(principal);
+  requireBoardReader(principal);
   const viewer = await customViewerOf(app, principal);
   const scope = await boardScope(app, viewer, query.pageLabel);
   const factsOn = await customsFactsOn(app);
@@ -235,7 +237,7 @@ export async function readCustomOrdersDone(
   query: { days: number },
   now: Date = new Date(),
 ): Promise<CustomOrdersDoneResponse> {
-  requireSessionUser(principal);
+  requireBoardReader(principal);
   const viewer = await customViewerOf(app, principal);
   const scope = await boardScope(app, viewer, undefined);
   const [rows, leaders] = await Promise.all([
@@ -254,7 +256,7 @@ export async function readCustomOrdersDone(
 
 /** `customFindingsList`: the open findings the viewer resolves, the newest first, and the ones an agent dismissed. */
 export async function readCustomFindings(app: BoardApp, principal: AuthPrincipal, now: Date = new Date()): Promise<CustomFindingsListResponse> {
-  requireSessionUser(principal);
+  requireBoardReader(principal);
   const viewer = await customViewerOf(app, principal);
   const [open, dismissed] = await Promise.all([findingsFor(app, viewer), agentDismissedFor(app, viewer, now)]);
   return { findings: open.map(findingWire), dismissedByAgent: dismissed.map(findingWire), serverNow: now.toISOString() };
@@ -262,7 +264,7 @@ export async function readCustomFindings(app: BoardApp, principal: AuthPrincipal
 
 /** `customOrderChanges`: the last 24 hours' steps of the system and the agents on the viewer's orders. */
 export async function readCustomOrderChanges(app: BoardApp, principal: AuthPrincipal, now: Date = new Date()): Promise<CustomOrderChangesResponse> {
-  requireSessionUser(principal);
+  requireBoardReader(principal);
   const viewer = await customViewerOf(app, principal);
   return { changes: await selfChangesFor(app, viewer, now), serverNow: now.toISOString() };
 }

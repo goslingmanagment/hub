@@ -197,6 +197,17 @@ export function isAgentPrincipal(principal: AuthPrincipal): principal is AgentAu
 }
 
 /**
+ * Whether a person's principal is NARROW, whatever the role: a narrow web session (opened from the extension, no
+ * password: `narrowDeviceTokenId`) or a device token of a client profile (the extension's own: `clientProfile`). It
+ * reads as a chatter: it leads nothing and never holds the owner's scope. The one answer for every read and step that
+ * decides by it (custom orders' viewer and findings, the team's cut in services/teams.ts). An agent key is never one:
+ * its grant decides.
+ */
+export function isNarrowPrincipal(principal: AuthPrincipal): boolean {
+  return principal.kind !== "agent" && (principal.narrowDeviceTokenId !== undefined || principal.clientProfile !== undefined);
+}
+
+/**
  * Fail-closed narrowing for every pre-agent surface. The check is an explicit
  * ALLOWLIST of the human authentication methods rather than `!== "agent"`, so a
  * future principal kind is refused by default instead of inheriting access.
