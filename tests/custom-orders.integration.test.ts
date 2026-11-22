@@ -641,9 +641,10 @@ describe("custom orders: who sees and moves what", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   // Products package R5: the extension's own narrow token records an order through the board's form in its frame and
-  // gives one («Отдан» in the fan panel) — and nothing else, whoever the person is: the customs lead's extension takes
-  // no lead step; its writes are recorded by the door `extension`.
-  it("lets the extension's narrow token record and give, and no other step, the customs lead's either", async (context) => {
+  // gives one («Отдан» in the fan panel); Workboard's «Кастомы» in the same frame (the launcher's row) reads the board
+  // and an order with it and takes a narrow session's steps — a chatter's, whoever the person is: the customs lead's
+  // extension takes no lead step; its writes are recorded by the door `extension`.
+  it("lets the extension's narrow token read the board and take a chatter's steps, no lead step, the customs lead's either", async (context) => {
     if (!server || !testDb) return context.skip();
     const token = async (username: keyof typeof PASSWORDS) => {
       const issued = await server!.inject({
@@ -661,6 +662,19 @@ describe("custom orders: who sees and moves what", () => {
     expect(recorded.statusCode, recorded.body).toBe(200);
     const order = customOrderDetailResponseSchema.parse(recorded.json()).order;
     expect(order).toMatchObject({ state: "recorded", origin: "extension", pageLabel: "lora-1" });
+    // «Кастомы» in the frame: the board and the order through the token, as a chatter of the page reads them.
+    const read = (value: string, url: string) =>
+      server!.inject({ method: "GET", url, headers: { authorization: `Bearer ${value}`, "x-client-version": "chat-extension/3.31.0" } });
+    const board = await read(alice, "/api/v1/custom-orders");
+    expect(board.statusCode, board.body).toBe(200);
+    expect(customOrdersBoardResponseSchema.parse(board.json()).orders.map((one) => one.code)).toContain(order.code);
+    const detail = await read(alice, `/api/v1/custom-orders/${order.code}`);
+    expect(detail.statusCode, detail.body).toBe(200);
+    expect(customOrderDetailResponseSchema.parse(detail.json()).actions).toContain("edit");
+    // Her own order's card, a chatter's step on the board, from the frame too.
+    const edited = await send(alice, `/api/v1/custom-orders/${order.code}`, { action: "edit", card: { task: "Видео 6 минут", price: "80$" } });
+    expect(edited.statusCode, edited.body).toBe(200);
+    expect(customOrderDetailResponseSchema.parse(edited.json()).order.card.task).toBe("Видео 6 минут");
     // The customs lead's extension: no lead step, though the same person takes it on the board.
     const checked = await send(carol, `/api/v1/custom-orders/${order.code}`, { action: "checked" });
     expect(checked.statusCode, checked.body).toBe(409);

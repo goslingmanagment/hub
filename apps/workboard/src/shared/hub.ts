@@ -39,9 +39,20 @@ export const kernel: KernelClient = new Proxy({} as KernelClient, {
   },
 });
 
+let framed = false;
+
 /** The extension's frame: the client of every screen sends its requests with this `fetch` (the port's). */
 export function setFrameClient(fetchImpl: typeof fetch): void {
   current = createClient({ baseUrl: "", fetch: fetchImpl });
+  framed = true;
+}
+
+/**
+ * Whether this page is a screen in the extension's frame (`setFrameClient`): its requests run with the extension's
+ * device token, which Hub reads as a narrow session (no password), and a sign-in never happens inside it.
+ */
+export function inExtensionFrame(): boolean {
+  return framed;
 }
 
 declare module "@tanstack/react-query" {

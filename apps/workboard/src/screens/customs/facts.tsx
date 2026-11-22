@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Minimize2, Plus } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import type { CustomBoardOrder, CustomOrdersBoardResponse } from "@agency_hub_core/contracts";
@@ -22,7 +22,16 @@ import "./facts.css";
  * three numbers, the findings of a custom with no order and what changed by itself; then «Сроки» (by how soon the fan
  * must have it) or «Календарь». A row opens the order's panel; `?order=K-123` is that panel's address (`/customs/K-123`
  * leads there). The model filter, «Только мой ход» and the view live in the address too.
+ *
+ * In the extension's frame over the site (`frame`, the launcher's «Кастомы», frame.tsx) the same screen: its session is
+ * the extension's device token, a narrow one (a finding is resolved with the password); «Записать кастом» stays the fan
+ * panel's (the frame reads no page list), and «Свернуть» folds the frame away.
  */
+
+/** The screen in the extension's frame: how it folds away there. */
+export interface CustomsFrame {
+  collapse: () => void;
+}
 
 const DONE_GROUPS = [
   { id: "given", title: "Отдано, ждём слово фана", hint: "закроется само через 72 часа без жалобы" },
@@ -165,8 +174,10 @@ function DueView({ orders, board, keep, onOpen, mine }: {
   );
 }
 
-export function CustomsFactsScreen() {
+export function CustomsFactsScreen({ frame }: { frame?: CustomsFrame } = {}) {
   const me = useMe();
+  // The frame's device token reads as a narrow session, whatever `me` answers for a token.
+  const narrow = frame !== undefined || me.narrow;
   const [search, setSearch] = useSearchParams();
   const board = useCustomBoard(null);
   const data = board.data;
@@ -230,12 +241,14 @@ export function CustomsFactsScreen() {
           </Notice>
         )}
         <div className="cf-banners">
-          <FindingsBanner summary={data.findings} narrow={me.narrow} orders={data.orders} defaultOpen={param("sale") !== null} focus={finding} onOpenOrder={openOrder} />
+          <FindingsBanner summary={data.findings} narrow={narrow} orders={data.orders} defaultOpen={param("sale") !== null} focus={finding} onOpenOrder={openOrder} />
           <ChangesBanner summary={data.changes} onOpenOrder={openOrder} />
         </div>
         {data.orders.length === 0 && data.done.given === 0 && data.done.closed === 0 ? (
           <EmptyState title="Заказов пока нет">
-            Кастом записывают здесь («Записать кастом»), в панели фана расширения или через Генгара командой /tz. Здесь он появится сразу.
+            {frame
+              ? "Кастом записывают в панели фана («Записать кастом»), в Workboard или через Генгара командой /tz. Здесь он появится сразу."
+              : "Кастом записывают здесь («Записать кастом»), в панели фана расширения или через Генгара командой /tz. Здесь он появится сразу."}
           </EmptyState>
         ) : view === "calendar" ? (
           <CalendarView orders={orders} serverNow={data.serverNow} onOpen={openOrder} />
@@ -251,7 +264,9 @@ export function CustomsFactsScreen() {
     <>
       <ScreenHeader
         title="Кастомы"
-        actions={<Button variant="primary" icon={Plus} onClick={() => setRecording(true)}>Записать кастом</Button>}
+        actions={frame
+          ? <Button icon={Minimize2} onClick={frame.collapse}>Свернуть</Button>
+          : <Button variant="primary" icon={Plus} onClick={() => setRecording(true)}>Записать кастом</Button>}
         meta={data ? <Verified verified={data.verified} /> : undefined}
         {...(data ? { updatedAt: board.dataUpdatedAt } : {})}
         onRefresh={() => void board.refetch()}
@@ -260,7 +275,7 @@ export function CustomsFactsScreen() {
       />
       <div className="wb-content cf">{body}</div>
       {openCode !== null && <OrderDrawer code={openCode} viewerOwner={data?.viewer.owner ?? false} onClose={() => setParams({ order: null })} />}
-      {recording && (
+      {recording && !frame && (
         <RecordFromSaleModal
           {...(param("page") ? { page: param("page")! } : {})}
           {...(param("fan") ? { fan: param("fan")! } : {})}

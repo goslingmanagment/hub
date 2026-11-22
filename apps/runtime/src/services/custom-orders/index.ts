@@ -479,7 +479,7 @@ async function visibleOrder(app: CustomApp, viewer: CustomViewer, code: string):
 }
 
 export async function readCustomOrder(app: CustomApp, principal: AuthPrincipal, code: string, now: Date = new Date()): Promise<CustomOrderDetailResponse> {
-  requireSessionUser(principal);
+  requireBoardReader(principal);
   const viewer = await customViewerOf(app, principal);
   return detailOf(app, viewer, await visibleOrder(app, viewer, code), now);
 }
@@ -1210,24 +1210,37 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
   }
 }
 
+/** The extension's own narrow token (its profile `chat-extension`): it reads as a chatter (customViewerOf). */
+function isExtensionToken(principal: AuthPrincipal): principal is HumanAuthPrincipal {
+  return principal.kind !== "agent" && principal.authMethod === "device_token" && principal.clientProfile === "chat-extension";
+}
+
+/**
+ * Who reads the board: a cookie session, or the extension's own narrow token — Workboard's «Кастомы» in its frame over
+ * the site (the launcher's row), whose requests the extension runs with that token. Either reads as the viewer it is;
+ * the token as a chatter whatever the role (customViewerOf), as a narrow session.
+ */
+export function requireBoardReader(principal: AuthPrincipal): asserts principal is HumanAuthPrincipal {
+  if (isExtensionToken(principal)) return;
+  requireSessionUser(principal);
+}
+
 /**
  * Who writes on the board: a cookie session, or the extension's own narrow token (products package R5) for what its
- * fan panel does — «Записать кастом» in the board's own form in its frame, and «Отдан»; it reads as a chatter
- * (customViewerOf). Answers the door the write is recorded by.
+ * fan panel does — «Записать кастом» in the board's own form in its frame, and «Отдан» — and for the steps of
+ * Workboard's «Кастомы» in the same frame. The token reads as a chatter (customViewerOf): it takes a narrow session's
+ * steps (`mayTakeStep` of that viewer) and no other, whoever the person is. Answers the door the write is recorded by.
  */
-function boardWriterDoor(principal: AuthPrincipal, action: CustomOrderAction | "record"): "workboard" | "extension" {
-  if (principal.kind !== "agent" && principal.authMethod === "device_token" && principal.clientProfile === "chat-extension") {
-    if (action !== "record" && action !== "given") throw notAllowed("From the extension an order is recorded or given; every other step is Workboard's");
-    return "extension";
-  }
+function boardWriterDoor(principal: AuthPrincipal): "workboard" | "extension" {
+  if (isExtensionToken(principal)) return "extension";
   requireSessionUser(principal);
   return "workboard";
 }
 
 /**
  * The board's steps the released extension knows (its SDK checks `actions` against the contract it was built with, from
- * before the customs facts): the answer to the extension's own token never names another — it takes none of them anyway
- * (`boardWriterDoor`) — or the extension would refuse the whole answer.
+ * before the customs facts): the answer to the extension's own token never names another, or the fan panel's «Отдан»
+ * would refuse the whole answer. Workboard's «Кастомы» in the frame reads the order again after a step (its full list).
  */
 const EXTENSION_KNOWN_ACTIONS: ReadonlySet<CustomOrderAction> = new Set([
   "edit", "deadline", "fan", "card", "payment", "unpay", "checked", "at_model", "partly", "shot", "revision", "refused", "given", "close", "cancel",
@@ -1243,7 +1256,7 @@ export async function actOnCustomOrder(
   input: { code: string; body: CustomOrderActionBody },
   now: Date = new Date(),
 ): Promise<CustomOrderDetailResponse> {
-  const door = boardWriterDoor(principal, input.body.action as CustomOrderAction);
+  const door = boardWriterDoor(principal);
   const human = principal as HumanAuthPrincipal;
   const viewer = await customViewerOf(app, human);
   const order = await visibleOrder(app, viewer, input.code);
@@ -1328,7 +1341,7 @@ export async function createCustomOrderOnBoard(
   body: CustomOrderCreateBody,
   now: Date = new Date(),
 ): Promise<CustomOrderDetailResponse> {
-  const door = boardWriterDoor(principal, "record");
+  const door = boardWriterDoor(principal);
   const human = principal as HumanAuthPrincipal;
   const viewer = await customViewerOf(app, human);
   let pageId: number;

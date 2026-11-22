@@ -1,10 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   CustomBoardOrder, CustomFindingActionBody, CustomOrder, CustomOrderActionBody, CustomOrderCreateBody, CustomOrderDetailResponse, CustomOrderState,
 } from "@agency_hub_core/contracts";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { customDeadlineWords, customLeaderWords } from "@agency_hub_core/look";
-import { kernel } from "@/shared/hub";
+import { inExtensionFrame, kernel } from "@/shared/hub";
 
 /**
  * Кастомы — the data layer and the words. One read for the board (every order
@@ -14,6 +14,17 @@ import { kernel } from "@/shared/hub";
 
 const BOARD_KEY = ["customOrders"] as const;
 const orderKey = (code: string) => ["customOrder", code] as const;
+
+/**
+ * After a step: the board, and in the extension's frame the order too — Hub answers the extension's token with the
+ * steps the released extension knows (services/custom-orders `answerFor`), so the panel reads the order's full list again.
+ */
+function refreshAfterStep(qc: QueryClient, code: string) {
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: BOARD_KEY }),
+    ...(inExtensionFrame() ? [qc.invalidateQueries({ queryKey: orderKey(code) })] : []),
+  ]);
+}
 
 export function useCustomBoard(page: string | null) {
   return useQuery({
@@ -58,7 +69,7 @@ export function useAnyCustomStep() {
     meta: { suppressGlobalError: true },
     mutationFn: (input: { code: string; body: CustomOrderActionBody }) => kernel.customOrderAct({ params: { code: input.code }, body: input.body }),
     onSuccess: (detail: CustomOrderDetailResponse) => qc.setQueryData(orderKey(detail.order.code), detail),
-    onSettled: () => qc.invalidateQueries({ queryKey: BOARD_KEY }),
+    onSettled: (_detail, _error, input) => refreshAfterStep(qc, input.code),
   });
 }
 
@@ -83,7 +94,7 @@ export function useCustomStep(code: string) {
     meta: { suppressGlobalError: true },
     mutationFn: (body: CustomOrderActionBody) => kernel.customOrderAct({ params: { code }, body }),
     onSuccess: (detail: CustomOrderDetailResponse) => qc.setQueryData(orderKey(code), detail),
-    onSettled: () => qc.invalidateQueries({ queryKey: BOARD_KEY }),
+    onSettled: () => refreshAfterStep(qc, code),
   });
 }
 

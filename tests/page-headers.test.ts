@@ -31,9 +31,13 @@ describe("the headers of every answer", () => {
     // Package R5: the customs record form and the question window, by name.
     expect(isBoardFramePath("/workboard/frame/custom?page=lora-1&fan=12")).toBe(true);
     expect(isBoardFramePath("/workboard/frame/ask?page=lora-1")).toBe(true);
+    // The launcher's «Кастомы»: the customs facts screen, by name.
+    expect(isBoardFramePath("/workboard/frame/customs")).toBe(true);
+    expect(isBoardFramePath("/workboard/frame/customs?order=K-12")).toBe(true);
     // Exactly the frame screens: another frame path is not lifted until it is listed by name.
     expect(isBoardFramePath("/workboard/frame/other")).toBe(false);
     expect(isBoardFramePath("/workboard/frame/custom/x")).toBe(false);
+    expect(isBoardFramePath("/workboard/frame/customs/K-12")).toBe(false);
     expect(isBoardFramePath("/workboard/frame/report/x")).toBe(false);
     expect(isBoardFramePath("/workboard/report/12")).toBe(false);
     expect(isBoardFramePath("/workboard/frameworks")).toBe(false);
