@@ -1,3 +1,6 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createFanslyPage, createModel, findCustomOrder, findMatterByKey, upsertTransaction } from "@agency_hub_core/db";
@@ -285,6 +288,49 @@ describe("custom orders keep themselves true: the checks pass", () => {
     expect(urgencyOfRow(row, factsOfRow(row), past)).toMatchObject({ burning: true });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("counts only the offer that carried the order's file: another clip of the message bought is neither delivery nor its money", async (context) => {
+    if (!testDb) return context.skip();
+    const order = await shotOrder();
+    const custom = await offer(await file(order));
+    const extra = await offer(String(nextRef++));
+    // One message, two priced offers: the custom and another clip.
+    const message = await send(conv.a, ago(2 * DAY), [{ offerRef: custom }, { offerRef: extra }], 20_000);
+    await purchase(fans.a, extra, ago(DAY));
+    await runCustomOrderChecks(on, T);
+    expect(await orderOf(order)).toEqual({ state: "shot", givenMessageRef: null, givenAt: null, sentAt: ago(2 * DAY).toISOString() });
+    expect(await paymentsOf(order)).toEqual([]);
+    // The fan buys the custom too: given, paid by that purchase alone.
+    const paid = await purchase(fans.a, custom, ago(HOUR));
+    await runCustomOrderChecks(on, later(HOUR));
+    expect(await orderOf(order)).toMatchObject({ state: "given", givenMessageRef: message });
+    expect(await paymentsOf(order)).toEqual([paid]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("does not close a given order whose only sale went inactive beside its reversal, nor one whose mark is fresh under the lock", async (context) => {
+    if (!testDb) return context.skip();
+    const order = await shotOrder();
+    const paid = await sale(fans.a, "tip", ago(4 * DAY));
+    await applyCustomStep(app, { orderId: order, step: { action: "payment", transactionId: paid.id }, actor: { door: "system" }, viewer: null, now: ago(4 * DAY) });
+    await applyCustomStep(app, { orderId: order, step: { action: "given", messageRef: String(nextRef++), at: ago(2 * DAY) }, actor: { door: "system" }, viewer: null, now: T });
+    // The platform retires the original row and keeps its reversal: no money counts, and it is still a sale taken back.
+    await q("update transactions set is_active = false, inactive_reason = 'missing_from_sync_window' where id = $1", [paid.id]);
+    await q(`insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+               gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, currency)
+             values ($1, $2, $3, 'reversal', 'chargeback', 'posted', 'ok', 30000, 30000, 24000, $4, 'fansly:rest', 'USD')`,
+    [pageId, fans.a, `${paid.name}:reversal`, ago(DAY).toISOString()]);
+    const row = (await findCustomOrder(app.db, order))!;
+    expect(factsOfRow(row).paid.value).toBe("conflict");
+    await runCustomOrderChecks(on, later(73 * HOUR));
+    expect((await orderOf(order)).state).toBe("given");
+
+    // A mark set again since it was read: the close under the lock reads its own age and refuses.
+    const fresh = await shotOrder();
+    await applyCustomStep(app, { orderId: fresh, step: { action: "given", messageRef: String(nextRef++), at: T }, actor: { door: "system" }, viewer: null, now: T });
+    const closed = await applyCustomStep(app, { orderId: fresh, step: { action: "close", auto: { hours: 72 } }, actor: { door: "system" }, viewer: null, now: later(HOUR) });
+    expect(closed).toBe(false);
+    expect((await orderOf(fresh)).state).toBe("given");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("never sets the default deadline again once a person took it off", async (context) => {
     if (!testDb) return context.skip();
     const order = await recordCustomOrder(app, {
@@ -339,26 +385,34 @@ describe("custom orders keep themselves true: the checks pass", () => {
     expect(await orderOf(order)).toMatchObject({ state: "revision", givenMessageRef: null });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("dismisses an open finding of a tier bought as «кастом не просил», and leaves a tip's finding open", async (context) => {
+  it("dismisses once only the findings the old tier finder wrote (the tier's name), never a fan's request or a tip; their matters close", async (context) => {
     if (!testDb) return context.skip();
-    const finding = async (saleId: number) => Number((await q(
+    await q(`insert into page_subscription_tiers (page_id, platform, tier_ref, name, pos, base_price_mills, first_observed_at, last_observed_at,
+               content_hash, source_event_id, source_observation_id, source_account_seq)
+             values ($1, 'fansly', 'tier-demo-gold', ' Demo Gold (free custom video) ', 1, 100000, now(), now(), $2, 1, 1, 1)`, [pageId, HASH]);
+    const finding = async (saleId: number, quote: string) => Number((await q(
       `insert into custom_findings (source, ref, page_id, fan_id, amount_mills, quote, happened_at, created_at)
-       values ('sale', $1, $2, $3, 30000, 'for my custom', $4, $4) returning id`,
-      [String(saleId), pageId, fans.tipper, ago(2 * DAY).toISOString()],
+       values ('sale', $1, $2, $3, 30000, $4, $5, $5) returning id`,
+      [String(saleId), pageId, fans.tipper, quote, ago(2 * DAY).toISOString()],
     )).rows[0].id);
-    const tier = await finding((await sale(fans.tipper, "subscription", ago(2 * DAY))).id);
-    const tip = await finding((await sale(fans.tipper, "tip", ago(2 * DAY))).id);
+    // The old tier finder wrote the tier's name; the reader wrote the fan's own words on another tier sale.
+    const tierOnly = await finding((await sale(fans.tipper, "subscription", ago(2 * DAY))).id, "Demo Gold (free custom video)");
+    const asked = await finding((await sale(fans.tipper, "subscription", ago(2 * DAY))).id, "how do I send you the details for my custom?");
+    const tip = await finding((await sale(fans.tipper, "tip", ago(2 * DAY))).id, "Demo Gold (free custom video)");
+    // A day old: each is a matter of the check's leader.
     await runCustomOrderChecks(on, T);
-    const rows = await q("select id, status, dismiss_reason, resolved_by_user_id, resolved_by_agent_key_id from custom_findings where id = any($1::bigint[]) order by id", [[tier, tip]]);
+    for (const id of [tierOnly, asked, tip]) expect((await findMatterByKey(app.db, `custom.finding:${id}`))?.state).toBe("open");
+
+    await q(await readFile(path.resolve("packages/db/migrations/0437_custom_findings_not_asked.sql"), "utf8"));
+    const rows = await q("select id, status, dismiss_reason, resolved_by_user_id, resolved_by_agent_key_id from custom_findings where id = any($1::bigint[]) order by id", [[tierOnly, asked, tip]]);
     expect(rows.rows.map((row) => [Number(row.id), row.status, row.dismiss_reason, row.resolved_by_user_id, row.resolved_by_agent_key_id])).toEqual([
-      [tier, "dismissed", "not_asked", null, null],
+      [tierOnly, "dismissed", "not_asked", null, null],
+      [asked, "open", null, null, null],
       [tip, "open", null, null, null],
     ]);
-    // The tip's finding waits for the check's leader; the tier's is no matter.
-    expect((await findMatterByKey(app.db, `custom.finding:${tip}`))?.state).toBe("open");
-    expect((await findMatterByKey(app.db, `custom.finding:${tier}`))?.state ?? "absent").not.toBe("open");
-    // Idempotent: the next pass finds nothing more to do.
+    // The next pass: the dismissed one's matter closes; the request and the tip still wait.
     await runCustomOrderChecks(on, later(HOUR));
-    expect((await q("select status from custom_findings where id = $1", [tip])).rows[0].status).toBe("open");
+    expect((await findMatterByKey(app.db, `custom.finding:${tierOnly}`))?.state).toBe("closed");
+    for (const id of [asked, tip]) expect((await findMatterByKey(app.db, `custom.finding:${id}`))?.state).toBe("open");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

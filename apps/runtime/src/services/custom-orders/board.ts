@@ -85,9 +85,19 @@ function viewerName(leaders: CustomLeaderContext, principal: HumanAuthPrincipal)
   return named || principal.user.username;
 }
 
+/**
+ * The pages whose findings the viewer resolves (`mayResolveFinding`, in SQL before the limit): the owner and the customs
+ * lead every page of their realm and those of no page; the check's leader of a page its findings; anyone else none.
+ */
+function resolvedPages(viewer: CustomViewer): "all" | readonly number[] {
+  return viewer.role === "owner" || viewer.lead ? "all" : viewer.leads?.check ?? [];
+}
+
 /** The open findings the viewer resolves (findings.ts, `mayResolveFinding`), of their realm. */
 async function findingsFor(app: BoardApp, viewer: CustomViewer): Promise<CustomFindingRow[]> {
-  const rows = await listBoardCustomFindings(app.db, { realm: viewer.realm?.test === true ? "test" : "live", limit: LIST_LIMIT });
+  const pageIds = resolvedPages(viewer);
+  if (pageIds !== "all" && pageIds.length === 0) return [];
+  const rows = await listBoardCustomFindings(app.db, { realm: viewer.realm?.test === true ? "test" : "live", pageIds, limit: LIST_LIMIT });
   return rows.filter((row) => mayResolveFinding(viewer, row));
 }
 
@@ -96,8 +106,10 @@ async function findingsFor(app: BoardApp, viewer: CustomViewer): Promise<CustomF
  * «не кастом» in the last two weeks that the viewer resolves, the newest first — a person may bring one back.
  */
 async function agentDismissedFor(app: BoardApp, viewer: CustomViewer, now: Date): Promise<CustomFindingRow[]> {
+  const pageIds = resolvedPages(viewer);
+  if (pageIds !== "all" && pageIds.length === 0) return [];
   const rows = await listAgentDismissedCustomFindings(app.db, {
-    realm: viewer.realm?.test === true ? "test" : "live", since: new Date(now.getTime() - FINDINGS_LOOK_BACK_DAYS * DAY_MS), limit: LIST_LIMIT,
+    realm: viewer.realm?.test === true ? "test" : "live", pageIds, since: new Date(now.getTime() - FINDINGS_LOOK_BACK_DAYS * DAY_MS), limit: LIST_LIMIT,
   });
   return rows.filter((row) => mayResolveFinding(viewer, row));
 }
@@ -114,8 +126,10 @@ function fanNameOf(row: CustomOrderRow): string | null {
  * (`customUndoOf`, the one rule the order's facts use too).
  */
 async function selfChangesFor(app: BoardApp, viewer: CustomViewer, now: Date): Promise<CustomSelfChange[]> {
+  // The board's own scope in the query (the viewer's pages, their realm), before the limit.
+  const scope = await boardScope(app, viewer, undefined);
   const rows = await listCustomOrderSelfChanges(app.db, {
-    since: new Date(now.getTime() - CHANGES_HOURS * 3_600_000), realm: viewer.realm?.test === true ? "test" : "live", limit: LIST_LIMIT,
+    since: new Date(now.getTime() - CHANGES_HOURS * 3_600_000), realm: scope.realm, pageIds: scope.pageIds, unknownPage: scope.unknownPage, limit: LIST_LIMIT,
   });
   if (rows.length === 0) return [];
   const orders = new Map((await listCustomOrdersByIds(app.db, [...new Set(rows.map((row) => row.orderId))])).map((order) => [order.id, order]));

@@ -275,6 +275,74 @@ describe("custom orders: what an agent names, checked; undo remembered", () => {
     expect((await testDb.pool.query("select state from custom_orders where id = $1", [id])).rows[0].state).toBe("recorded");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("links the bought purchase of the message the agent names with «отдан», in the same step — and on a repeat of a mark set without it", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
+    const order = async (task: string) => recordCustomOrder(app, {
+      pageId: pages["vela-1"]!, fanId: fans.a!, buyer: null, conversationRef: null, card: { task }, deadlineOn: null,
+      acceptedByUserId: bossId, origin: "agent", actor: { door: "system" }, createdAt: new Date(Date.now() - 180 * 60_000),
+    });
+    /** A PPV to fan A priced in its one offer, and his purchase of that offer after it. Answers the message and the purchase. */
+    const boughtPpv = async (messageRef: string, offerRef: string) => {
+      await q(`insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
+                 media_metadata, message_type, is_tip, tip_amount_mills, price_mills)
+               values ($1, 'fansly', 'conv-a', $2, 'model', true, $3, '', '[{"id": "1"}]'::jsonb, 1, false, 0, null)`,
+      [pages["vela-1"], messageRef, minutesAgo(60)]);
+      await q(`insert into message_media_offers (page_id, platform, message_ref, offer_ordinal, media_offer_ref, conversation_ref, fan_platform_user_id,
+                 message_created_at, price_mills, purchase_state, first_observed_at, last_observed_at, content_hash, source_event_id,
+                 source_observation_id, source_account_seq)
+               values ($1, 'fansly', $2, 0, $3, 'conv-a', '7400000999', $4, 25000, 'unknown', now(), now(), $5, 1, 1, 1)`,
+      [pages["vela-1"], messageRef, offerRef, minutesAgo(60), "2".repeat(64)]);
+      return Number((await q(
+        `insert into transactions (platform_account_id, fan_id, transaction_id, correlation_id, raw_type, canonical_type, transaction_state, raw_status,
+           gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, currency)
+         values ($1, $2, $3, $4, 'message_purchase', 'message_purchase', 'posted', 'ok', 25000, 25000, 20000, $5, 'fansly:rest', 'USD') returning id`,
+        [pages["vela-1"], fans.a, `tx-buy-${messageRef}`, offerRef, minutesAgo(40)],
+      )).rows[0].id);
+    };
+    const payments = async (id: number) => (await q("select transaction_id from custom_order_payments where order_id = $1", [id])).rows.map((row) => Number(row.transaction_id));
+
+    // The agent's «отдан»: the mark and the purchase together.
+    const fresh = await order("Ролик за купленный PPV");
+    const purchase = await boughtPpv("9600000006", "9700000006");
+    const given = await agent(`/api/v1/agent/custom-orders/K-${fresh}`, { action: "given", messageRef: "9600000006" });
+    expect(given.statusCode, given.body).toBe(200);
+    expect(agentCustomOrderResponseSchema.parse(given.json()).order).toMatchObject({ state: "given", givenMessageRef: "9600000006" });
+    expect(await payments(fresh)).toEqual([purchase]);
+
+    // An order given by that message before the purchase was linked (as production's): naming it again links it.
+    const before = await order("Ролик, отданный без оплаты");
+    const late = await boughtPpv("9600000007", "9700000007");
+    await testDb.pool.query("update custom_orders set state = 'given', given_message_ref = '9600000007', given_at = now() where id = $1", [before]);
+    const again = await agent(`/api/v1/agent/custom-orders/K-${before}`, { action: "given", messageRef: "9600000007" });
+    expect(again.statusCode, again.body).toBe(200);
+    expect(again.json()).toMatchObject({ outcome: "changed" });
+    expect(await payments(before)).toEqual([late]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses a person's change of the fan when the order's payment is another fan's; the same person's other account takes it", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
+    const sale = Number((await q(
+      `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+         gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, currency)
+       values ($1, $2, 'tx-fanchange', 'tip', 'tip', 'posted', 'ok', 30000, 30000, 24000, $3, 'fansly:rest', 'USD') returning id`,
+      [pages["vela-1"], fans.a, minutesAgo(90)],
+    )).rows[0].id);
+    const id = await recordCustomOrder(app, {
+      pageId: pages["vela-1"]!, fanId: fans.a!, buyer: null, conversationRef: null, card: { task: "Ролик с оплатой фана A" }, deadlineOn: null,
+      acceptedByUserId: bossId, origin: "workboard", paymentTransactionId: sale, actor: { door: "workboard", userId: bossId },
+      createdAt: new Date(Date.now() - 180 * 60_000),
+    });
+    const other = await act(`K-${id}`, { action: "fan", pageLabel: "vela-1", fan: "7400000103" });
+    expect(other.statusCode, other.body).toBe(409);
+    expect(other.json()).toMatchObject({ reason: "evidence_other_fan" });
+    expect(Number((await q("select fan_id from custom_orders where id = $1", [id])).rows[0].fan_id)).toBe(fans.a);
+    // His own other account on the model's other page: the evidence is his.
+    const same = await act(`K-${id}`, { action: "fan", pageLabel: "vela-2", fan: "7400000102" });
+    expect(same.statusCode, same.body).toBe(200);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("links a finding's sale to an order only when it is the order's fan's, and leaves the finding open otherwise", async (context) => {
     if (!testDb || !server) return context.skip();
     const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);

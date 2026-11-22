@@ -293,7 +293,7 @@ export function FindingsBanner({ summary, narrow, orders, defaultOpen = false, f
 export function undoBody(undo: CustomUndo, undoOf: number, reason: string): CustomOrderActionBody {
   switch (undo.action) {
     case "unpay": return { action: "unpay", transactionRef: undo.transactionRef, undoOf };
-    case "ungive": return { action: "ungive", undoOf };
+    case "ungive": return { action: "ungive", undoOf, messageRef: undo.messageRef };
     case "retract": return { action: "retract", retracts: undo.retracts, reason, undoOf };
     case "deadline": return { action: "deadline", deadlineOn: undo.deadlineOn, undoOf };
   }

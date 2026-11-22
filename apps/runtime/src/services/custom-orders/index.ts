@@ -46,6 +46,7 @@ import {
   listCustomDeliverySuggestions,
   listCustomLookalikeSales,
   listCustomOrderActorNames,
+  listCustomOrderEvidenceOwners,
   listCustomOrderPayments,
   listCustomOrdersInStates,
   listCustomPaymentCandidates,
@@ -542,9 +543,16 @@ export type CustomStep =
    * backfill carries it (kept in the history only).
    */
   | { action: "given"; messageRef: string | null; at: Date; note?: string | undefined }
-  /** «Отдан» taken back: «снят» again; a delivering message the system or an agent named stays off the order. */
-  | { action: "ungive"; undoOf?: number | undefined }
-  | { action: "close" }
+  /**
+   * «Отдан» taken back: «снят» again; a delivering message the system or an agent named stays off the order.
+   * `expectMessageRef` — the mark the person saw: refused when «отдан» is another message's by now.
+   */
+  | { action: "ungive"; undoOf?: number | undefined; expectMessageRef?: string | undefined }
+  /**
+   * «Закрыт». `auto` — the checks' close of a given order quiet that long: under the lock it closes only an order whose
+   * mark is that old still, with no issue and no payment in conflict (a person may have moved it since it was read).
+   */
+  | { action: "close"; auto?: { hours: number } }
   | { action: "cancel"; reason?: string | undefined }
   | { action: "delivery"; message: CustomMessageInput; part: "video" | "photos" | undefined; complete: boolean }
   | { action: "revision_done"; telegramRef: string | null; eventRef?: string | null; ordinal: number }
@@ -817,6 +825,15 @@ export async function applyCustomStep(
             throw new ConflictError("The order has its fan already, or its fan was erased", { reason: "fan_known" });
           }
           if (step.pageId === order.pageId && step.fanId === order.fanId) return false;
+          // What the order holds — its sales, the message that gave it — stays the fan's it came from: another fan takes
+          // the order only when every one of them is his (any account of the person) and of the new page's model.
+          const held = await listCustomOrderEvidenceOwners(db, { orderId: order.id, pageId: step.pageId });
+          if (held.owners.length > 0) {
+            const fans = new Set((await listPersonFans(db, step.fanId)).map((fan) => fan.id));
+            if (held.owners.some((one) => one.fanId === null || !fans.has(one.fanId) || one.modelId !== held.modelId)) {
+              throw new ConflictError("The order's payment or the message that gave it is another fan's: unlink it first", { reason: "evidence_other_fan" });
+            }
+          }
           await updateCustomOrderFields(db, order.id, { pageId: step.pageId, fanId: step.fanId, buyer: null, conversationRef: step.conversationRef }, now);
           // The buyer's string goes: the fan is known now. Its text stays out of the history (a fan's name).
           await event("fan_confirmed", { pageId: step.pageId, fanId: step.fanId, hadBuyer: order.buyer !== null });
@@ -1020,6 +1037,9 @@ export async function applyCustomStep(
         case "ungive": {
           // «Снят» again, the mark and its message gone; a message the system or an agent named stays off the order.
           const ref = order.givenMessageRef;
+          if (step.expectMessageRef !== undefined && ref !== step.expectMessageRef) {
+            throw new ConflictError("«Отдан» is another message's by now: read the order again", { reason: "mark_changed" });
+          }
           const remembered = ref !== null && (await rememberUndo("given", ref));
           await move("shot", { clear: { given: true, sent: true } });
           await event("ungiven", { from: order.state, ...(ref === null ? { byWord: true } : { messageRef: ref }), ...(remembered ? { remembered: true } : {}), ...undo });
@@ -1084,6 +1104,10 @@ export async function applyCustomStep(
           return true;
         }
         case "close": {
+          if (step.auto !== undefined) {
+            const quiet = now.getTime() - order.stateAt.getTime() >= step.auto.hours * 3_600_000;
+            if (!quiet || issueOf(order.issue) !== null || factsOfRow(order).paid.value === "conflict") return false;
+          }
           await move("closed");
           await event("closed", {});
           return true;
@@ -1155,7 +1179,7 @@ async function boardStep(app: CustomApp, viewer: CustomViewer, order: CustomOrde
       return { action: "given", messageRef: found.messageRef, at: found.at };
     }
     case "ungive":
-      return { action: "ungive", undoOf: body.undoOf };
+      return { action: "ungive", undoOf: body.undoOf, expectMessageRef: body.messageRef };
     case "retract": {
       // The board names the retraction itself, as it names a person's «Правка»: one event per version of the order.
       const link = parseTelegramRef(body.retracts);

@@ -53,7 +53,8 @@ export const STEP_FROM: Readonly<Record<CustomStepName, readonly CustomOrderStat
   card: ALL,
   // «100$ после готовности»: a payment may come at any step, after «отдали» too; never to a cancelled order.
   payment: [...NOT_ENDED, "closed"],
-  unpay: NOT_ENDED,
+  // As a payment: a closed order's sale taken off too (the owner's alone there).
+  unpay: [...NOT_ENDED, "closed"],
   // «Проверен» before the model; a routine «со слов из Telegram» may still put a recorded or paid order there.
   checked: ["recorded", "paid"],
   at_model: ["recorded", "paid", "checked", "refused"],
@@ -235,6 +236,7 @@ export function mayTakeStep(viewer: CustomViewer, order: CustomRightsOrder, step
   if (!STEP_FROM[step].includes(order.state)) return false;
   if ((step === "unhold" && order.holdReason === null) || (step === "issue_clear" && order.issue === null)) return false;
   if (step === "fan_asked_clear" && order.fanAskedAt === null) return false;
+  if (step === "unpay" && order.state === "closed") return viewer.role === "owner";
   if (OWNER_STEPS.has(step)) return viewer.role === "owner";
   if (HOLD_STEPS.has(step)) {
     return viewer.role === "owner" || (viewer.leads !== undefined ? leadsPhase(viewer, order, "check") : leadsSteps(viewer));
@@ -320,8 +322,9 @@ const PAID_WORD_NOTES: Readonly<Record<CustomPaidWordKind, string>> = { gift: "�
 
 function paidFact(input: CustomFactsInput): CustomFact {
   if (input.paidWord !== null) return { value: "yes", note: PAID_WORD_NOTES[input.paidWord.kind] };
-  if (input.payments === 0) return BEFORE_MODEL.includes(input.state) ? { value: "wait" } : { value: "no" };
+  // A sale taken back is a conflict whatever money still counts: the platform may retire the original row with it.
   if (input.paymentReversed) return { value: "conflict", note: "возврат оплаты" };
+  if (input.payments === 0) return BEFORE_MODEL.includes(input.state) ? { value: "wait" } : { value: "no" };
   // Never «оплачен» while the price is unknown: the screen says what came, «получено $X».
   if (input.priceMills === null || input.priceMills <= 0) return { value: "part", note: "цена не названа" };
   return input.paidGrossMills >= input.priceMills ? { value: "yes" } : { value: "part", note: "не вся сумма" };
@@ -542,7 +545,7 @@ export function customUndoOf(
     }
     case "custom_order.given": {
       const message = text("messageRef");
-      return message !== null && order.state === "given" && order.givenMessageRef === message && may("ungive") ? { action: "ungive" } : null;
+      return message !== null && order.state === "given" && order.givenMessageRef === message && may("ungive") ? { action: "ungive", messageRef: message } : null;
     }
     case "custom_order.delivery": {
       const ref = text("eventRef") ?? text("telegramRef");

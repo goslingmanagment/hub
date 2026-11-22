@@ -3,7 +3,9 @@ import {
   findCustomPageMessage,
   findTransactionIdsByPlatformRef,
   hasCustomOrderRejection,
+  listCustomMessagePurchases,
   listCustomModelPages,
+  listCustomOrderEvidenceFloors,
   listCustomOrderNamedFiles,
   listCustomSaleFacts,
   listPersonFans,
@@ -127,20 +129,27 @@ export async function checkPersonSale(db: Database, order: CustomOrderRow, trans
 /**
  * The agent's «отдан» by a message (spec §6): the order names its page and fan; the message is on a page of the
  * order's model among the key's pages (else not found), sent by the page to an account of the order's fan (the chat's
- * fan, never a media offer's recipient), after the order was recorded, with media; a priced one — its own price or an
- * offer's — bought (`ppvBoughtSql`). Refused while the order has its code-named files (the exact rule's own list,
- * `listCustomOrderNamedFiles`: Hub finds their delivery) and for a message a person took off the order. Answers the
- * message's time.
+ * fan, never a media offer's recipient), after the order was recorded and after its last revision request and a person's
+ * last «не отдан» (a message of before them is the version sent back, or the delivery taken off), with media; a priced
+ * one — its own price or an offer's — bought (`ppvBoughtSql`). Refused while the order has its code-named files (the
+ * exact rule's own list, `listCustomOrderNamedFiles`: Hub finds their delivery) and for a message a person took off the
+ * order. Answers the message's time and its purchases by the fan (`listCustomMessagePurchases`: the order's money by
+ * construction, linked with the mark).
  */
-export async function checkGivenMessage(db: Database, scope: EvidenceScope, order: CustomOrderRow, messageRef: string): Promise<{ at: Date }> {
+export async function checkGivenMessage(
+  db: Database,
+  scope: EvidenceScope,
+  order: CustomOrderRow,
+  messageRef: string,
+): Promise<{ at: Date; purchaseIds: number[] }> {
   if (order.pageId === null) throw refused("The order names no page: its fan's chat is not known", "order_no_page");
   if (order.fanId === null) throw refused("The order names no fan: whom the message went to cannot be checked", "order_no_fan");
-  const message = await findCustomPageMessage(db, { pageIds: modelPagesOf(scope, order), messageRef });
+  const pageIds = modelPagesOf(scope, order);
+  const message = await findCustomPageMessage(db, { pageIds, messageRef });
   if (message === null) throw notFound();
   if (!message.sentByPage) throw refused("The message is the fan's, not the page's", "not_page_message");
-  if (message.chatFanId === null || !(await personFanIdsOf(db, order.fanId)).has(message.chatFanId)) {
-    throw refused("The message went to another fan", "other_fan");
-  }
+  const fans = await personFanIdsOf(db, order.fanId);
+  if (message.chatFanId === null || !fans.has(message.chatFanId)) throw refused("The message went to another fan", "other_fan");
   if (message.at === null || message.at.getTime() < order.createdAt.getTime()) throw refused("The message was sent before the order was recorded", "before_order");
   if (message.media === 0) throw refused("The message carries no media", "no_media");
   if (message.priceMills > 0 && !message.bought) throw refused("The message is priced and the fan has not bought it", "not_bought");
@@ -150,7 +159,17 @@ export async function checkGivenMessage(db: Database, scope: EvidenceScope, orde
   if (await hasCustomOrderRejection(db, { orderId: order.id, kind: "given", ref: messageRef })) {
     throw refused("A person took this message off the order", "rejected");
   }
-  return { at: message.at };
+  const floor = (await listCustomOrderEvidenceFloors(db, [order.id])).get(order.id);
+  if (floor !== undefined && message.at.getTime() < floor.getTime()) {
+    throw refused("The message was sent before the order's last revision or a person's «не отдан»", "before_revision");
+  }
+  return { at: message.at, purchaseIds: await listCustomMessagePurchases(db, { pageIds: [message.pageId], messageRef, fanIds: [...fans] }) };
+}
+
+/** The purchases of the message that gave the order (an order given by it before they were linked), of its fan. */
+export async function deliveryPurchasesOf(db: Database, scope: EvidenceScope, order: CustomOrderRow, messageRef: string): Promise<number[]> {
+  if (order.fanId === null) return [];
+  return listCustomMessagePurchases(db, { pageIds: modelPagesOf(scope, order), messageRef, fanIds: [...(await personFanIdsOf(db, order.fanId))] });
 }
 
 /**

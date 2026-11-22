@@ -84,7 +84,7 @@ holding `write:customs` alone gains none of the calls below that need more. The 
 | `create` / step `edit` with `priceMills` | `read:money` | as `edit` |
 | `create` / step `edit` with `holdReason` | `read:messages` | as `edit` |
 | `create` with `sales`, step `payment` (`sale`: `{saleRef}` or `{pageLabel, transactionRef}`) | `read:money` | the sale is on a page of the order's model among the key's pages; an account's of the order's fan (any account of the person); a tip, a subscription or a message purchase; held by no other order; not reversed; not taken off this order by a person. `create` never fails because of a sale: the order is recorded and `sales` answers each — `linked`, `already`, or `refused` with its reason. A `create` that finds the order by its card or its code takes the price and the sales too |
-| step `given` with `messageRef` | `read:messages` | the page's message on a page of the order's model among the key's pages, to an account of the order's fan (the chat's fan), sent after the order was recorded, with media; a priced one (its own price or a media offer's) bought. Refused (409 `code_named_file`) while the order has its code-named files (the vault files named with its code since its last revision): Hub's own rule finds that delivery. Never by a word |
+| step `given` with `messageRef` | `read:messages` | the page's message on a page of the order's model among the key's pages, to an account of the order's fan (the chat's fan), sent after the order was recorded and after its last revision request and a person's last «не отдан» (409 `before_revision`), with media; a priced one (its own price or a media offer's) bought. The purchase of its one priced offer becomes the order's payment in the same step; the same message named again links a purchase the mark was set without. Refused (409 `code_named_file`) while the order has its code-named files (the vault files named with its code since its last revision): Hub's own rule finds that delivery; 409 `version_changed` when the order moved while it was checked (read it again). Never by a word |
 | step `fan` with `pageLabel` and `fanRef` (the fan's platform id) | `read:messages` | the fan has an account on that page; the order has no fan and its fan was not erased; the page becomes the order's when it has none (another page than the order's: 409 `other_page`) |
 | step `fan_asked` with `messageRef` | `read:messages` | the fan's message in a chat of the order's fan on the order's page, sent after the order was recorded (409 `before_order`). An ask the page has answered since, and any ask while one stands, change nothing (`unchanged`); Hub takes the ask off by itself once the page writes to the fan |
 | step `deadline` with `reason` | — | as `edit`: never over a deadline a person set |
@@ -94,9 +94,11 @@ holding `write:customs` alone gains none of the calls below that need more. The 
 
 The refusals are 409 with `error.reason`: `capability_missing` (in `sales`), `not_found`, `order_no_page`,
 `order_no_fan`, `other_model`, `other_fan`, `wrong_kind`, `taken`, `reversed`, `rejected`, `not_allowed` for a sale;
-`not_page_message`, `not_fan_message`, `before_order`, `no_media`, `not_bought`, `code_named_file`, `rejected` for a
-message; `fan_known`, `other_page`, `fan_unknown` for the fan. A step that needs a capability the key lacks is 403
-`agent_capability_missing`.
+`not_page_message`, `not_fan_message`, `before_order`, `before_revision`, `no_media`, `not_bought`, `code_named_file`,
+`rejected`, `version_changed` for a message; `fan_known`, `other_page`, `fan_unknown` for the fan; `card_other_order` for a
+`create` whose card link is one order's and whose card text names another; `open_orders` for a second open order of the
+fan without `another` (two creates of one fan at once are taken one after the other). A step that needs a capability the
+key lacks is 403 `agent_capability_missing`.
 
 ## Shift reports «со слов»
 

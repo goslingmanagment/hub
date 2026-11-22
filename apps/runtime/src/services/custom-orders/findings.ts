@@ -10,7 +10,6 @@ import {
 import {
   closeMatter,
   copyCustomSaleDismissals,
-  dismissTierCustomFindings,
   findCustomFinding,
   findCustomOrder,
   findCustomSale,
@@ -22,12 +21,16 @@ import {
   insertCustomSaleFindings,
   insertShiftReportCustomFindings,
   linkCustomFindingsToOrders,
+  findCustomPageMessage,
   listCustomFindingKeys,
+  listCustomModelPages,
   listOpenCustomFindings,
   listOpenMattersOfKinds,
+  listPersonFans,
   reopenCustomFinding,
   resolveCustomFinding,
   type CustomFindingRow,
+  type CustomOrderRow,
   type Database,
   type MatterActor,
   type MatterOwner,
@@ -37,12 +40,12 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
 import { ConflictError, NotFoundError } from "../errors.ts";
-import { isTestAgent } from "../sandbox/realm.ts";
+import { isTestAgent, testPageIds } from "../sandbox/realm.ts";
 import type { AgentCustomScope } from "./agent.ts";
 import { checkPersonSale } from "./evidence.ts";
 import { applyCustomStep, customViewerOf, recordCustomOrder, resolveFanOnPage } from "./index.ts";
 import { CUSTOM_UNRECORDED_KIND, unrecordedSaleOf } from "./readers.ts";
-import { seesOrder, type CustomViewer } from "./rules.ts";
+import { mayTakeStep, seesOrder, type CustomViewer } from "./rules.ts";
 
 /**
  * A custom with no order (customs facts spec §8): one object for every trace of it, `custom_findings`, once by
@@ -93,6 +96,7 @@ export async function agentPostCustomFindings(
 ): Promise<AgentCustomFindingsResponse> {
   const keyPages = new Map(scope.pages.map((page) => [page.id, page]));
   const findings: AgentCustomFindingsResponse["findings"] = [];
+  let tests: ReadonlySet<number> | undefined;
   for (const item of body.findings) {
     const answer = (outcome: AgentCustomFindingsResponse["findings"][number]["outcome"], id: number | null) =>
       findings.push({ source: item.source, ref: item.ref, outcome, id });
@@ -127,11 +131,25 @@ export async function agentPostCustomFindings(
         continue;
       }
       fanId = fan.fanId;
+    } else if (item.source === "fan_chat" && page !== null) {
+      // The fan's chat names its fan: the message's own chat, so his erasure finds the finding's quote (it is about him).
+      fanId = (await findCustomPageMessage(app.db, { pageIds: [page.id], messageRef: item.ref }))?.chatFanId ?? null;
     }
     const kept = await insertCustomFinding(app.db, {
       source: item.source, ref: item.ref, pageId, fanId, amountMills, quote: item.quote ?? null, happenedAt, at: now,
       ...(item.notCustom === true ? { dismissed: { reason: "not_custom" as const, agentKeyId: scope.principal.agentKeyId, userId: null } } : {}),
     });
+    // One `(source, ref)` for both realms: a finding of the other realm is none of this key's — not «already», which would
+    // tell the reader it is handled (and is an oracle across the wall).
+    if (!kept.created) {
+      const existing = await findCustomFinding(app.db, kept.id);
+      tests ??= await testPageIds(app);
+      const existingTest = existing?.pageId !== null && existing?.pageId !== undefined && tests.has(existing.pageId);
+      if (existingTest !== isTestAgent(scope.principal)) {
+        answer("not_found", null);
+        continue;
+      }
+    }
     answer(!kept.created ? "already" : item.notCustom === true ? "dismissed" : "created", kept.id);
   }
   return { findings };
@@ -160,6 +178,23 @@ const byAgentDismissed = (finding: CustomFindingRow) => finding.status === "dism
 /** The sale a finding names (Hub's id: a sale's, a shift report line's); null — none. */
 function saleOf(finding: CustomFindingRow): number | null {
   return (finding.source === "sale" || finding.source === "shift_report") && SALE_REF.test(finding.ref) ? Number(finding.ref) : null;
+}
+
+/**
+ * A finding that names a page or a fan (the fan's chat) belongs to an order of that page's model and of that fan (any
+ * account of the person): refused otherwise, as a sale of another fan or model is.
+ */
+async function requireOfOrder(db: Database, finding: CustomFindingRow, order: CustomOrderRow): Promise<void> {
+  if (finding.pageId !== null) {
+    const modelPages = order.modelSlug === null ? [] : (await listCustomModelPages(db, order.modelSlug)).map((page) => page.id);
+    if (!modelPages.includes(finding.pageId)) throw new ConflictError("The finding is another model's", { reason: "other_model" });
+  }
+  if (finding.fanId !== null) {
+    if (order.fanId === null) throw new ConflictError("The order names no fan to check the finding's against", { reason: "order_no_fan" });
+    if (!(await listPersonFans(db, order.fanId)).some((fan) => fan.id === finding.fanId)) {
+      throw new ConflictError("The finding is another fan's", { reason: "other_fan" });
+    }
+  }
 }
 
 /** The Telegram card a finding is (the work chat, the model's group); null — none. */
@@ -250,6 +285,14 @@ export async function actOnCustomFinding(
         const orderId = parseCustomOrderCode(body.code);
         const order = orderId === null ? null : await findCustomOrder(db, orderId);
         if (order === null || !seesOrder(viewer, order)) throw new NotFoundError("The custom order was not found");
+        // The order takes something of the finding: a closed or cancelled one takes nothing, and the person must be one
+        // who may change it by that step (a sale is its payment, a card its card, a chat's words its card's edit).
+        if (order.state === "closed" || order.state === "cancelled") throw new ConflictError("The order is closed or cancelled", { reason: "not_allowed" });
+        if (!mayTakeStep(viewer, order, sale !== null ? "payment" : card !== null ? "card" : "edit")) {
+          throw new ConflictError("This order is not yours to change", { reason: "not_allowed" });
+        }
+        // A finding of a fan (his chat's words) is his order's: the same person and model. A sale's is checked with it.
+        if (sale === null) await requireOfOrder(db, finding, order);
         // A sale's finding pays the order it is linked to — only one of its fan and its model; a card's is its card.
         await pay(order.id);
         if (card !== null) await applyCustomStep({ db }, { orderId: order.id, step: { action: "card", telegramRef: card }, actor, viewer: null, now });
@@ -272,7 +315,8 @@ export async function actOnCustomFinding(
  *                with no order. A sale is skipped only when it pays an order or has a finding already (a dismissed one
  *                never comes back); an open finding an order took since is linked to it. Never a purchase or renewal of
  *                a tier that includes a custom (the owner, 2026-11-22: only a fan who asked for one): its holders are the
- *                reader's candidates, and every open finding of one is dismissed as «кастом не просил» (`not_asked`).
+ *                reader's candidates; the open ones the old tier finder wrote were dismissed once as «кастом не просил»
+ *                (`not_asked`, migration 0437).
  *   switch-on    every open `custom.unrecorded` and `custom.card_without_order` matter becomes an open finding (from the
  *                moment it was opened); the two sets are compared, and only then the matters close (withdrawn) — those
  *                kinds are no longer written. «Не кастом» marks (`custom_sale_dismissals`) become dismissed findings.
@@ -348,7 +392,7 @@ export async function retireCustomFindingMatters(app: FindingsPassApp, now: Date
 /**
  * Hub's own findings of a pass: tips whose note says custom and shift reports' lines marked «кастом» of the last two
  * weeks, and the ones an order took since. Never a tier's purchase or renewal (the owner, 2026-11-22: only a fan who
- * asked for a custom): the open ones written before are dismissed as «кастом не просил» (`dismissTierFindings`).
+ * asked for a custom): the open ones written before were dismissed once as «кастом не просил» (migration 0437).
  */
 export async function writeCustomFindings(app: FindingsPassApp, input: { now: Date }): Promise<{ written: number; linked: number }> {
   const { now } = input;
@@ -357,24 +401,6 @@ export async function writeCustomFindings(app: FindingsPassApp, input: { now: Da
   const reports = await insertShiftReportCustomFindings(app.db, { since: from, now });
   const linked = await linkCustomFindingsToOrders(app.db, now);
   return { written: sales + reports, linked };
-}
-
-/**
- * The owner's decision of 2026-11-22 («только тех, кто запросил кастом, а не просто купил»): every open finding of a
- * tier's purchase or renewal is dismissed as «кастом не просил» by the system, and its matter «Кастом без заказа» closes
- * as withdrawn (the owner's line recounts by itself). Idempotent: every pass with the switch on runs it and, after the
- * first, finds nothing — or what a migrated matter of the old kind brought in since. No row is deleted. Answers how many.
- */
-export async function dismissTierFindings(app: FindingsPassApp, now: Date): Promise<number> {
-  const dismissed = await dismissTierCustomFindings(app.db, now);
-  for (const id of dismissed) {
-    try {
-      await closeMatter(app.db, { key: `custom.finding:${id}`, how: "withdrawn", writer: "server", note: "Кастом не просил: тир куплен, кастома не просили" }, SYSTEM, now);
-    } catch (error) {
-      app.logger.error({ err: error, findingId: id }, "custom checks: a tier finding's matter could not be closed");
-    }
-  }
-  return dismissed.length;
 }
 
 /** The reader's cards no order has, as findings of the models' groups (the switch on: they are no longer matters). */

@@ -22,7 +22,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { ConflictError } from "../errors.ts";
-import { applyCustomStep } from "./index.ts";
+import { applyCustomStep, type CustomActor } from "./index.ts";
 import { moscowDay } from "./rules.ts";
 
 /**
@@ -67,10 +67,12 @@ const latest = (sends: readonly CustomFileSendRow[]) => sends.reduce((last, send
 
 /**
  * The verdict of an order's files and the messages that carried them to its fan, pure: every file delivered (its first
- * free or bought message, its own or a copy's) → given by the last of those, with every purchase of the bought ones;
- * every file sent but some only priced and not bought → sent by the last message that carried one; else nothing. A
- * copy of a file is a file of the same name on another page of the model (resold there); two files of one page are two
- * files whatever their names. A message named in `rejected` is no evidence at all.
+ * free or bought message, its own or a copy's) → given by the last of those, with the purchases of every bought send of
+ * them (a file sent free first and bought after still pays the order); every file sent but some only priced and not
+ * bought → sent by the last message that carried one; else nothing. A copy of a file is a file of the same name on
+ * another page of the model (resold there) — only while that name is one file on each page: several originals of one
+ * name on a page are not told apart, and none of them stands in for another. Two files of one page are two files. A
+ * message named in `rejected` is no evidence at all.
  */
 export function deliveryVerdictOf(
   files: ReadonlyArray<Pick<CustomOrderFileRow, "pageId" | "mediaRef"> & { name?: string }>,
@@ -79,21 +81,26 @@ export function deliveryVerdictOf(
 ): CustomDeliveryVerdict {
   if (files.length === 0) return { kind: "none" };
   const usable = sends.filter((send) => !rejected.has(send.messageRef)).sort((left, right) => left.at.getTime() - right.at.getTime());
+  const keyOf = (one: { pageId: number; mediaRef: string }) => `${one.pageId}:${one.mediaRef}`;
+  const onPage = new Map<string, number>();
+  for (const file of files) if (file.name !== undefined) onPage.set(`${file.pageId}:${file.name}`, (onPage.get(`${file.pageId}:${file.name}`) ?? 0) + 1);
+  const ambiguous = new Set(files.filter((file) => file.name !== undefined && (onPage.get(`${file.pageId}:${file.name}`) ?? 0) > 1).map((file) => file.name!));
   const delivering: CustomFileSendRow[] = [];
   const carrying: CustomFileSendRow[] = [];
+  const purchases = new Set<number>();
   for (const file of files) {
-    const copies = new Set([file, ...files.filter((other) => other.name !== undefined && other.name === file.name && other.pageId !== file.pageId)]
-      .map((one) => `${one.pageId}:${one.mediaRef}`));
-    const sent = usable.filter((send) => copies.has(`${send.pageId}:${send.mediaRef}`));
+    const others = file.name === undefined || ambiguous.has(file.name) ? [] : files.filter((other) => other.name === file.name && other.pageId !== file.pageId);
+    const copies = new Set([file, ...others].map(keyOf));
+    const sent = usable.filter((send) => copies.has(keyOf(send)));
     if (sent.length === 0) return { kind: "none" };
     carrying.push(sent[0]!);
     const delivered = sent.find((send) => !send.priced || send.bought);
     if (delivered !== undefined) delivering.push(delivered);
+    for (const send of sent) if (send.priced && send.bought) for (const id of send.purchaseIds) purchases.add(id);
   }
   if (delivering.length === files.length) {
     const last = latest(delivering);
-    const purchaseIds = [...new Set(delivering.filter((send) => send.priced && send.bought).flatMap((send) => send.purchaseIds))];
-    return { kind: "given", messageRef: last.messageRef, at: last.at, purchaseIds };
+    return { kind: "given", messageRef: last.messageRef, at: last.at, purchaseIds: [...purchases] };
   }
   const last = latest(carrying);
   return { kind: "sent", messageRef: last.messageRef, at: last.at };
@@ -124,7 +131,7 @@ export async function settleCustomDeliveries(app: DeliveryApp, orders: readonly 
       const own = byOrder.get(order.id) ?? [];
       if (own.length === 0) {
         // No file of this round (none named yet, or a revision sent the named ones back): nothing was sent of it.
-        if (order.sentAt !== null && (await markSent(app, order.id, null, now))) tally.sent += 1;
+        if (order.sentAt !== null && (await markSent(app, order.id, null, now, order.version))) tally.sent += 1;
         continue;
       }
       const fanIds = (await listPersonFans(app.db, order.fanId!)).map((fan) => fan.id);
@@ -137,10 +144,14 @@ export async function settleCustomDeliveries(app: DeliveryApp, orders: readonly 
       ]);
       const verdict = deliveryVerdictOf(own, sends, rejected.given);
       if (verdict.kind === "given") {
-        const done = await markGiven(app, order.id, verdict, rejected.payment, now);
-        if (done.given) tally.given += 1;
-        tally.payments += done.payments;
-      } else if (await markSent(app, order.id, verdict.kind === "sent" ? { messageRef: verdict.messageRef, at: verdict.at } : null, now)) {
+        // Written only on the order as it was read: a revision or a person's step meanwhile leaves it to the next pass.
+        const done = await giveByMessage(app, {
+          orderId: order.id, messageRef: verdict.messageRef, at: verdict.at, purchaseIds: verdict.purchaseIds.filter((id) => !rejected.payment.has(String(id))),
+          states: EXACT_GIVEN_STATES, version: order.version, actor: SYSTEM, now,
+        });
+        if (done?.given === true) tally.given += 1;
+        tally.payments += done?.payments ?? 0;
+      } else if (await markSent(app, order.id, verdict.kind === "sent" ? { messageRef: verdict.messageRef, at: verdict.at } : null, now, order.version)) {
         tally.sent += 1;
       }
     } catch (error) {
@@ -150,48 +161,75 @@ export async function settleCustomDeliveries(app: DeliveryApp, orders: readonly 
   return tally;
 }
 
-const SYSTEM = { door: "system" as const };
+const SYSTEM: CustomActor = { door: "system" };
 
 /**
- * «Отдан» by the files, in one transaction: each bought message's purchase linked as the order's payment (one another
- * order holds, or a person took off this one, is not), then the step with the last delivering message and its time;
- * what only an order waiting for its fan holds goes. The order moved on meanwhile (a person's step): nothing.
+ * «Отдан» by a message, in one transaction under the order's lock (the exact rule's, the agent's, the backfill's): the
+ * purchases of the offer that carried the order linked as its payment (one another order holds, or a person took off
+ * this one, is not), then the step with the message and its time; what only an order waiting for its fan holds goes.
+ * Only on the order as its evidence was read (`version`) and in one of `states`: an order that moved meanwhile — a
+ * revision, a person's step — answers null and nothing is written. Else whether it was given, and how many purchases.
  */
-async function markGiven(
-  app: DeliveryApp,
-  orderId: number,
-  verdict: Extract<CustomDeliveryVerdict, { kind: "given" }>,
-  rejectedPayments: ReadonlySet<string>,
-  now: Date,
-): Promise<{ given: boolean; payments: number }> {
+export async function giveByMessage(
+  app: Pick<AppContext, "db">,
+  input: {
+    orderId: number; messageRef: string; at: Date; purchaseIds: readonly number[]; states: readonly CustomOrderStateRow[]; version: number;
+    actor: CustomActor; now: Date;
+  },
+): Promise<{ given: boolean; payments: number } | null> {
   return app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
-    if (!(await lockCustomOrder(db, orderId))) return { given: false, payments: 0 };
-    const order = (await findCustomOrder(db, orderId))!;
-    if (!EXACT_GIVEN_STATES.includes(order.state)) return { given: false, payments: 0 };
-    let payments = 0;
-    for (const transactionId of verdict.purchaseIds) {
-      if (rejectedPayments.has(String(transactionId))) continue;
-      try {
-        // A savepoint of its own: a sale another order holds is refused there and leaves this transaction whole.
-        if (await applyCustomStep({ db }, { orderId, step: { action: "payment", transactionId }, actor: SYSTEM, viewer: null, now })) payments += 1;
-      } catch (error) {
-        if (!(error instanceof ConflictError)) throw error;
-      }
-    }
-    const given = await applyCustomStep({ db }, { orderId, step: { action: "given", messageRef: verdict.messageRef, at: verdict.at }, actor: SYSTEM, viewer: null, now });
-    if (given) await clearCustomOrderWaitMarks(db, orderId, now);
+    if (!(await lockCustomOrder(db, input.orderId))) return null;
+    const order = (await findCustomOrder(db, input.orderId))!;
+    if (order.version !== input.version || !input.states.includes(order.state)) return null;
+    const payments = await linkPurchasesWithin(db, input.orderId, input.purchaseIds, input.actor, input.now);
+    const given = await applyCustomStep({ db }, {
+      orderId: input.orderId, step: { action: "given", messageRef: input.messageRef, at: input.at }, actor: input.actor, viewer: null, now: input.now,
+    });
+    if (given) await clearCustomOrderWaitMarks(db, input.orderId, input.now);
     return { given, payments };
   });
 }
 
-/** «Отправлен, фан не открыл» set to `sent` (null clears it), with its line in the order's history. Answers whether it changed. */
-async function markSent(app: DeliveryApp, orderId: number, sent: { messageRef: string; at: Date } | null, now: Date): Promise<boolean> {
+/**
+ * The purchases of the message that gave an order, linked as its payment in one transaction under its lock: an order
+ * given by that message before its purchase was linked (the agent names the message again). Answers how many.
+ */
+export async function linkDeliveryPurchases(
+  app: Pick<AppContext, "db">,
+  input: { orderId: number; purchaseIds: readonly number[]; actor: CustomActor; now: Date },
+): Promise<number> {
+  if (input.purchaseIds.length === 0) return 0;
+  return app.db.transaction(async (tx) => {
+    const db = tx as unknown as Database;
+    if (!(await lockCustomOrder(db, input.orderId))) return 0;
+    return linkPurchasesWithin(db, input.orderId, input.purchaseIds, input.actor, input.now);
+  });
+}
+
+/** Each purchase by the payment step, a savepoint of its own: one another order holds or a person took off is left out. */
+async function linkPurchasesWithin(db: Database, orderId: number, purchaseIds: readonly number[], actor: CustomActor, now: Date): Promise<number> {
+  let linked = 0;
+  for (const transactionId of purchaseIds) {
+    try {
+      if (await applyCustomStep({ db }, { orderId, step: { action: "payment", transactionId }, actor, viewer: null, now })) linked += 1;
+    } catch (error) {
+      if (!(error instanceof ConflictError)) throw error;
+    }
+  }
+  return linked;
+}
+
+/**
+ * «Отправлен, фан не открыл» set to `sent` (null clears it), with its line in the order's history, on the order as it was
+ * read (`version`). Answers whether it changed.
+ */
+async function markSent(app: DeliveryApp, orderId: number, sent: { messageRef: string; at: Date } | null, now: Date, version: number): Promise<boolean> {
   return app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     if (!(await lockCustomOrder(db, orderId))) return false;
     const order = (await findCustomOrder(db, orderId))!;
-    if (!EXACT_GIVEN_STATES.includes(order.state)) return false;
+    if (order.version !== version || !EXACT_GIVEN_STATES.includes(order.state)) return false;
     if (!(await setCustomOrderSent(db, orderId, sent, now))) return false;
     await insertCustomOrderEvent(db, {
       orderId, event: "custom_order.sent", door: "system",

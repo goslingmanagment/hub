@@ -122,6 +122,8 @@ export function stepFailure(error: unknown): string {
   if (status === 409 && reason === "order_no_page") return "У заказа не определена страница: продажу не с чем сверить.";
   if (status === 409 && reason === "reversed") return "Площадка вернула эту продажу: оплатой она не считается.";
   if (status === 409 && reason === "wrong_kind") return "Эта продажа не может оплатить кастом.";
+  if (status === 409 && reason === "mark_changed") return "«Отдан» уже по другому сообщению: обновите страницу.";
+  if (status === 409 && reason === "evidence_other_fan") return "Оплата или сообщение заказа — другого фана: сначала уберите их.";
   if (status === 409 && reason === "not_reopenable") return "Эту находку уже разобрал человек: вернуть можно только отклонённую агентом.";
   if (status === 409) return "Этот шаг сейчас недоступен: заказ уже изменился. Обновите страницу.";
   if (status === 404) return "Заказ не найден.";

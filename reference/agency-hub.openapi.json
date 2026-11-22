@@ -244343,10 +244343,14 @@
                                               "enum": [
                                                 "ungive"
                                               ]
+                                            },
+                                            "messageRef": {
+                                              "type": "string"
                                             }
                                           },
                                           "required": [
-                                            "action"
+                                            "action",
+                                            "messageRef"
                                           ],
                                           "additionalProperties": false
                                         },
@@ -246105,10 +246109,14 @@
                                         "enum": [
                                           "ungive"
                                         ]
+                                      },
+                                      "messageRef": {
+                                        "type": "string"
                                       }
                                     },
                                     "required": [
-                                      "action"
+                                      "action",
+                                      "messageRef"
                                     ],
                                     "additionalProperties": false
                                   },
@@ -250993,6 +251001,12 @@
                         "type": "integer",
                         "exclusiveMinimum": 0,
                         "maximum": 9007199254740991
+                      },
+                      "messageRef": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 64,
+                        "pattern": "^[1-9]\\d{0,29}$"
                       }
                     },
                     "required": [

@@ -117,22 +117,6 @@ export async function insertCustomSaleFindings(db: Database, input: { from: Date
 }
 
 /**
- * The open findings of a tier's purchase or renewal (a sale's finding whose sale is a subscription) dismissed as «кастом
- * не просил» (`not_asked`) by the system — the owner's decision of 2026-11-22: buying a tier that includes a custom is no
- * request for one. Idempotent (an open one only), every pass with the switch on; no row is deleted. Answers the ids.
- */
-export async function dismissTierCustomFindings(db: Database, now: Date): Promise<number[]> {
-  const result = await db.execute<Row>(sql`
-    update custom_findings f
-    set status = 'dismissed', dismiss_reason = 'not_asked', resolved_by_user_id = null, resolved_by_agent_key_id = null,
-      resolved_at = ${now.toISOString()}::timestamptz
-    from transactions t
-    where f.status = 'open' and f.source = 'sale' and f.ref ~ '^[1-9][0-9]{0,18}$' and t.id = f.ref::bigint and t.canonical_type = 'subscription'
-    returning f.id`);
-  return result.rows.map((row) => Number(row.id));
-}
-
-/**
  * The lines of the shift reports handed in since `since` (their newest versions) whose note carries the quick word
  * «кастом» and whose sale is live money (active, positive), pays no order and is no finding yet, written as open findings
  * (`shift_report`, the sale's id; the line's note is the quote). Answers how many were written.
@@ -328,8 +312,8 @@ export interface CustomCandidateTierRow {
  * sale (the newest subscription sale of the fan there in 40 days, the one that names the subscription first) pays no
  * order and has no finding of any status — an open one waits for a person already, a resolved one stays resolved — but
  * «кастом не просил» (`not_asked`): a tier bought is no request (the owner, 2026-11-22), so the reader keeps reading the
- * holder's chat and writes the chat's finding when he asks. A holder with no such sale is no candidate: the reader could
- * name nothing to resolve it by.
+ * holder's chat and writes the chat's finding when he asks — and while that finding waits for a person, he is no
+ * candidate. A holder with no such sale is no candidate: the reader could name nothing to resolve it by.
  */
 export async function listCustomCandidateTiers(
   db: Database,
@@ -362,6 +346,9 @@ export async function listCustomCandidateTiers(
       and not exists (select 1 from custom_order_payments cp where cp.transaction_id = sale.id)
       and not exists (select 1 from custom_findings cf where cf.source in ('sale', 'shift_report') and cf.ref = sale.id::text
         and cf.dismiss_reason is distinct from 'not_asked')
+      -- He asked in his chat this period, and that finding waits for a person: nothing more to read for it.
+      and not exists (select 1 from custom_findings cf where cf.source = 'fan_chat' and cf.status = 'open'
+        and cf.page_id = h.page_id and cf.fan_id = h.fan_id and cf.happened_at >= sale.occurred_at)
     order by sale.occurred_at desc nulls last, p.label, f.id
     limit ${input.limit}`);
   return result.rows.map((row) => ({

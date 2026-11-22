@@ -190,7 +190,7 @@ export const CUSTOM_ORDER_ENDED_STATES: readonly CustomOrderStateRow[] = ["given
 
 /**
  * A given order something still stands against (customs facts spec §7): the agent's sentence of a disagreement, or a sale
- * of it the platform took back with no owner's word, and no hold. It burns, so the board lists it with the live orders
+ * of it the platform took back (whether or not the original row still counts) with no owner's word, and no hold. It burns, so the board lists it with the live orders
  * (never in «Отдано, ждём слово фана»), and the checks do not close it while it stands. The same rule as the facts'
  * (`customOrderBurnsOf`), over the order `o`.
  */
@@ -199,7 +199,7 @@ const GIVEN_STANDS = sql`(o.state = 'given' and o.hold_reason is null and (o.iss
     join transactions st on st.id = sp.transaction_id
     join transactions sr on sr.platform_account_id = st.platform_account_id
       and sr.transaction_id in (st.transaction_id || ':reversal', st.transaction_id || ':chargeback')
-    where sp.order_id = o.id and st.is_active and sr.inactive_reason is distinct from 'missing_from_sync_window'))))`;
+    where sp.order_id = o.id and sr.inactive_reason is distinct from 'missing_from_sync_window'))))`;
 
 /** Which realm's orders a board reads (0414): a test viewer's are the test pages' alone, a live one's every other order. */
 export type CustomOrderRealmRow = "live" | "test";
@@ -285,12 +285,12 @@ export interface CustomOrderSelfChangeRow {
 }
 
 /**
- * The steps of the system's and the agents' doors since `since` on the orders of `realm` (from the orders changed since
- * then: every step bumps the order), the newest first.
+ * The steps of the system's and the agents' doors since `since` on the orders of `realm` and of the viewer's pages (the
+ * board's scope, before the limit), from the orders changed since then (every step bumps the order), the newest first.
  */
 export async function listCustomOrderSelfChanges(
   db: Database,
-  input: { since: Date; realm: CustomOrderRealmRow; limit: number },
+  input: { since: Date; realm: CustomOrderRealmRow; pageIds: "all" | readonly number[]; unknownPage: boolean; limit: number },
 ): Promise<CustomOrderSelfChangeRow[]> {
   const since = input.since.toISOString();
   const result = await db.execute<Row>(sql`
@@ -306,7 +306,7 @@ export async function listCustomOrderSelfChanges(
     from custom_orders o
     join object_events e on e.object_type = 'custom_order' and e.object_id = o.id::text
     where o.updated_at >= ${since}::timestamptz and e.created_at >= ${since}::timestamptz and e.door in ('system', 'api')
-      and ${input.realm === "test" ? testPageSql(sql`o.page_id`) : livePageSql(sql`o.page_id`)}
+      and ${boardScope(input)}
     order by e.id desc
     limit ${input.limit}`);
   return result.rows.map((row) => ({
@@ -413,6 +413,15 @@ export async function listCustomOrderCardOwners(db: Database, refs: readonly str
 export async function findCustomOrderIdByContentops(db: Database, contentopsRef: string): Promise<number | null> {
   const result = await db.execute<{ id: unknown }>(sql`select id from custom_orders where contentops_ref = ${contentopsRef}`);
   return num(result.rows[0]?.id);
+}
+
+/**
+ * One create of an order at a time per fan of a page (the fan, or — none confirmed — the buyer's string): the rest of
+ * the transaction holds it, so a second create waits and then reads the first one's order among the open ones.
+ */
+export async function lockCustomOrderCreate(db: Database, input: { pageId: number; fanId: number | null; buyer: string | null }): Promise<void> {
+  const who = input.fanId !== null ? `fan:${input.fanId}` : `buyer:${(input.buyer ?? "").toLowerCase()}`;
+  await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`custom_order_create:${input.pageId}:${who}`}, 0))`);
 }
 
 /** The fan's open orders on the page (the fan, or — none confirmed — the same buyer's string), the oldest first. */
@@ -1044,6 +1053,35 @@ export async function isCustomOrderIssueOfAgent(db: Database, input: { orderId: 
   return result.rows[0]?.same === true;
 }
 
+/**
+ * Whose the evidence an order holds is: each sale that pays it (its fan and its page's model), and — given by a page's
+ * message — that message's chat fan and model; and the model of `pageId` (a page the order may be moved to). A fan
+ * changed on the order must be these fans' person, on that model.
+ */
+export async function listCustomOrderEvidenceOwners(
+  db: Database,
+  input: { orderId: number; pageId: number },
+): Promise<{ owners: Array<{ kind: "payment" | "given"; fanId: number | null; modelId: number | null }>; modelId: number | null }> {
+  const result = await db.execute<Row>(sql`
+    select 'payment' as kind, t.fan_id, p.model_id from custom_order_payments cp
+    join transactions t on t.id = cp.transaction_id
+    left join pages p on p.id = t.platform_account_id
+    where cp.order_id = ${input.orderId}
+    union all
+    select 'given', coalesce(th.fan_id, ofan.id), p.model_id from custom_orders o
+    join pages op on op.id = o.page_id
+    join pages p on p.model_id = op.model_id
+    join message_archive m on m.account_id = p.id and m.platform = p.platform and m.message_ref = o.given_message_ref
+    left join page_dm_threads th on th.platform_account_id = m.account_id and th.platform_conversation_id = m.conversation_ref
+    left join fans ofan on m.platform = 'onlyfans' and ofan.platform = 'onlyfans' and ofan.platform_user_id = m.conversation_ref
+    where o.id = ${input.orderId} and o.given_message_ref is not null`);
+  const model = await db.execute<Row>(sql`select model_id from pages where id = ${input.pageId}`);
+  return {
+    owners: result.rows.map((row) => ({ kind: row.kind === "given" ? "given" as const : "payment" as const, fanId: num(row.fan_id), modelId: num(row.model_id) })),
+    modelId: num(model.rows[0]?.model_id),
+  };
+}
+
 /** The pages of a model, by its slug, with their model: what a person's named sale is checked against (evidence.ts). */
 export async function listCustomModelPages(
   db: Database,
@@ -1154,10 +1192,20 @@ export async function insertCustomFinding(
   return { id: Number(existing.rows[0]!.id), created: false };
 }
 
-/** The board's open findings of `realm` (a finding of no known page is the live agency's), with their fans, the newest first. */
-export async function listBoardCustomFindings(db: Database, input: { realm: CustomOrderRealmRow; limit: number }): Promise<CustomFindingRow[]> {
+/** Findings of `realm` (one of no known page is the live agency's) and of `pageIds` ("all" — every page, and no page). */
+function findingScope(input: { realm: CustomOrderRealmRow; pageIds: "all" | readonly number[] }): SQL {
+  const realm = input.realm === "test" ? testPageSql(sql`c.page_id`) : livePageSql(sql`c.page_id`);
+  if (input.pageIds === "all") return realm;
+  return input.pageIds.length === 0 ? sql`false` : sql`${realm} and c.page_id = any(${ids(input.pageIds)})`;
+}
+
+/** The board's open findings of `realm` and `pageIds` (the ones the viewer resolves), with their fans, the newest first. */
+export async function listBoardCustomFindings(
+  db: Database,
+  input: { realm: CustomOrderRealmRow; pageIds: "all" | readonly number[]; limit: number },
+): Promise<CustomFindingRow[]> {
   const result = await db.execute<Row>(sql`${FINDING_SELECT}
-    where c.status = 'open' and ${input.realm === "test" ? testPageSql(sql`c.page_id`) : livePageSql(sql`c.page_id`)}
+    where c.status = 'open' and ${findingScope(input)}
     order by c.happened_at desc, c.id desc
     limit ${input.limit}`);
   return result.rows.map(findingOf);
@@ -1169,11 +1217,11 @@ export async function listBoardCustomFindings(db: Database, input: { realm: Cust
  */
 export async function listAgentDismissedCustomFindings(
   db: Database,
-  input: { realm: CustomOrderRealmRow; since: Date; limit: number },
+  input: { realm: CustomOrderRealmRow; pageIds: "all" | readonly number[]; since: Date; limit: number },
 ): Promise<CustomFindingRow[]> {
   const result = await db.execute<Row>(sql`${FINDING_SELECT}
     where c.status = 'dismissed' and c.resolved_by_agent_key_id is not null and c.resolved_at >= ${input.since.toISOString()}::timestamptz
-      and ${input.realm === "test" ? testPageSql(sql`c.page_id`) : livePageSql(sql`c.page_id`)}
+      and ${findingScope(input)}
     order by c.resolved_at desc, c.id desc
     limit ${input.limit}`);
   return result.rows.map(findingOf);

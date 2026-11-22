@@ -29,7 +29,7 @@ import { customLeaderContext } from "./index.ts";
 import { CUSTOM_GIVE_MOVE, customMoveOf, leaderOwner, phaseLeader } from "./leaders.ts";
 import { testPageIds } from "../sandbox/realm.ts";
 import { clearAnsweredAsks, setDefaultDeadlines, settleCustomDeliveries } from "./deliveries.ts";
-import { dismissTierFindings, findingMatters, openFindingsForMatters, reportCardFindings, retireCustomFindingMatters, writeCustomFindings } from "./findings.ts";
+import { findingMatters, openFindingsForMatters, reportCardFindings, retireCustomFindingMatters, writeCustomFindings } from "./findings.ts";
 import { customsFactsOn } from "./switch.ts";
 
 /**
@@ -180,11 +180,12 @@ export function orderFindings(input: {
     const waitsAtStart = input.factsOn === true
       ? timer !== null
       : (order.state === "paid" || order.state === "recorded") && since >= NOT_AT_MODEL_HOURS * HOUR_MS;
-    const refusedLong = order.state === "refused" && since >= REFUSED_HOURS * HOUR_MS;
+    // An order on hold waits on purpose: its refusal is no matter while it does (as it never burns).
+    const refusedLong = order.state === "refused" && order.holdReason === null && since >= REFUSED_HOURS * HOUR_MS;
     const checkedLong = input.factsOn !== true && order.state === "checked" && since >= NOT_AT_MODEL_HOURS * HOUR_MS;
     if (waitsAtStart) {
       const title = timer !== null
-        ? `Кастом ${code} оплачен и сутки не у модели: ${pageOf(order)}`
+        ? `Кастом ${code} ${facts?.paid.value === "yes" ? "оплачен" : "частично оплачен"} и сутки не у модели: ${pageOf(order)}`
         : `Кастом ${code} ${order.state === "paid" ? "оплачен" : "записан"} и сутки не у модели: ${pageOf(order)}`;
       out["custom.not_at_model"].push({
         key: `custom.not_at_model:${code}`, title,
@@ -361,7 +362,8 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
     if (issueOf(order.issue) !== null || factsOfRow(order).paid.value === "conflict") continue;
     if (now.getTime() - order.stateAt.getTime() >= AUTO_CLOSE_HOURS * HOUR_MS) {
       try {
-        if (await applyCustomStep(app, { orderId: order.id, step: { action: "close" }, actor: { door: "system" }, viewer: null, now })) tally.autoClosed += 1;
+        const step = { action: "close" as const, auto: { hours: AUTO_CLOSE_HOURS } };
+        if (await applyCustomStep(app, { orderId: order.id, step, actor: { door: "system" }, viewer: null, now })) tally.autoClosed += 1;
       } catch (error) {
         app.logger.error({ err: error, orderId: order.id }, "custom checks: a given order could not be closed");
       }
@@ -398,8 +400,6 @@ export async function runCustomOrderChecks(app: Pick<AppContext, "db" | "logger"
       tally.findings += retired.migrated;
       const written = await writeCustomFindings(app, { now });
       tally.findings += written.written;
-      // A tier bought is no custom asked for (the owner, 2026-11-22): its open findings are dismissed, their matters closed.
-      tally.findings += await dismissTierFindings(app, now);
     } catch (error) {
       app.logger.error({ err: error }, "custom checks: the findings could not be written");
     }

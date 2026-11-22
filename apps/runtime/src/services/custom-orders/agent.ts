@@ -23,7 +23,9 @@ import {
   listCustomOrderCardOwners,
   listCustomOrderMessagesOf,
   listCustomOrdersByIds,
+  lockCustomOrderCreate,
   type CustomOrderRow,
+  type Database,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -35,7 +37,8 @@ import {
   type CustomActor, type CustomEventResult, type CustomLeaderContext, type CustomMessageInput, type CustomOnShift, type CustomStep,
 } from "./index.ts";
 import { reportUnmatchedCards } from "./checks.ts";
-import { checkFanAskedMessage, checkGivenMessage, checkNamedSales, modelPagesOf } from "./evidence.ts";
+import { giveByMessage, linkDeliveryPurchases } from "./deliveries.ts";
+import { checkFanAskedMessage, checkGivenMessage, checkNamedSales, deliveryPurchasesOf, modelPagesOf } from "./evidence.ts";
 import { dottedDay, fanInputOf, moscowDay, parseCardText, STEP_FROM } from "./rules.ts";
 
 /**
@@ -232,6 +235,11 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
     if (existing !== null) {
       const order = (await findCustomOrder(app.db, existing))!;
       if (!inGrant(scope, order)) throw notFound();
+      // The card's link is one order's and its text names another: neither is guessed, the agent sorts it out.
+      const named = body.sourceText === undefined ? null : parseCardText(body.sourceText).code;
+      if (named !== null && named !== order.id) {
+        throw new ConflictError(`The card's link is ${customOrderCode(order.id)}'s and its text names ${customOrderCode(named)}`, { reason: "card_other_order" });
+      }
       const applied = body.priceMills === undefined && body.sales === undefined
         ? { changed: false, sales: undefined }
         : await applyToFound(app, scope, order, body, await actorNow(), now);
@@ -264,6 +272,7 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
   let pageId: number | null = null;
   let fanId: number | null = null;
   let conversationRef: string | null = null;
+  let buyer: string | null = null;
   // An order of no known page is the live agency's: the test realm's key records only on its own pages.
   if (body.pageLabel === undefined && isTestAgent(scope.principal)) {
     throw new ConflictError("A test key records an order on one of its pages: pageLabel", { reason: "page_required" });
@@ -278,35 +287,41 @@ export async function agentCreateCustomOrder(app: AgentApp, scope: AgentCustomSc
       fanId = fan.fanId;
       if (page.platform === "onlyfans") conversationRef = fan.platformUserId;
     }
-    // Four doors record orders and only a card's link or code tells a repeat: an agent never silently records a
-    // second open order of the same fan on the page. It hears the open ones; one more only with `another`.
-    const buyer = fanId === null && body.fan !== undefined ? body.fan.slice(0, 300) : null;
-    if (body.another !== true && (fanId !== null || buyer !== null)) {
-      const open = await listOpenCustomOrdersOfFan(app.db, { pageId: page.id, fanId, buyer });
-      if (open.length > 0) {
-        const named = open.map((one) => `${customOrderCode(one.id)} (recorded ${dottedDay(moscowDay(one.createdAt))}, state ${one.state})`).join(", ");
-        throw new ConflictError(
-          `The fan has open orders on ${page.pageLabel}: ${named}. The card is most likely one of them (attach it: custom step <code> --step card);`
-          + " a new custom of the fan is recorded with another: true",
-          { reason: "open_orders" },
-        );
+  }
+  // A fan that does not match stays the buyer's string, as the card names him: never a guess.
+  if (fanId === null && body.fan !== undefined) buyer = body.fan.slice(0, 300);
+  const pageLabel = body.pageLabel;
+  const id = await app.db.transaction(async (tx) => {
+    const db = tx as unknown as Database;
+    if (pageId !== null && (fanId !== null || buyer !== null)) {
+      // Two `/tz` of one fan at once: the second waits for the first and then hears its order (one create at a time per
+      // fan of a page). Four doors record orders and only a card's link or code tells a repeat: an agent never silently
+      // records a second open order of the same fan on the page — it hears the open ones; one more only with `another`.
+      await lockCustomOrderCreate(db, { pageId, fanId, buyer });
+      if (body.another !== true) {
+        const open = await listOpenCustomOrdersOfFan(db, { pageId, fanId, buyer });
+        if (open.length > 0) {
+          const named = open.map((one) => `${customOrderCode(one.id)} (recorded ${dottedDay(moscowDay(one.createdAt))}, state ${one.state})`).join(", ");
+          throw new ConflictError(
+            `The fan has open orders on ${pageLabel}: ${named}. The card is most likely one of them (attach it: custom step <code> --step card);`
+            + " a new custom of the fan is recorded with another: true",
+            { reason: "open_orders" },
+          );
+        }
       }
     }
-  }
-  const id = await recordCustomOrder(app, {
-    pageId, fanId,
-    // A fan that does not match stays the buyer's string, as the card names him: never a guess.
-    buyer: fanId === null && body.fan !== undefined ? body.fan.slice(0, 300) : null,
-    conversationRef, card: body.card, deadlineOn: body.deadlineOn ?? null,
-    acceptedByUserId: body.acceptedBy === undefined ? null : await personOf(app, body.acceptedBy),
-    origin: "agent", telegramRefs: telegramRef === null ? [] : [telegramRef], actor, now,
-    sourceText: body.sourceText ?? null,
-    cardPostedAt: body.postedAt === undefined ? null : new Date(body.postedAt),
-    cardAuthor: body.author ?? null,
-    priceMills: body.priceMills ?? null,
-    holdReason: body.holdReason ?? null,
-    // A card posted earlier counts from its time (the checks and the delivery hints read it).
-    ...(body.postedAt !== undefined && Date.parse(body.postedAt) < now.getTime() ? { createdAt: new Date(body.postedAt) } : {}),
+    return recordCustomOrder({ db }, {
+      pageId, fanId, buyer, conversationRef, card: body.card, deadlineOn: body.deadlineOn ?? null,
+      acceptedByUserId: body.acceptedBy === undefined ? null : await personOf(app, body.acceptedBy),
+      origin: "agent", telegramRefs: telegramRef === null ? [] : [telegramRef], actor, now,
+      sourceText: body.sourceText ?? null,
+      cardPostedAt: body.postedAt === undefined ? null : new Date(body.postedAt),
+      cardAuthor: body.author ?? null,
+      priceMills: body.priceMills ?? null,
+      holdReason: body.holdReason ?? null,
+      // A card posted earlier counts from its time (the checks and the delivery hints read it).
+      ...(body.postedAt !== undefined && Date.parse(body.postedAt) < now.getTime() ? { createdAt: new Date(body.postedAt) } : {}),
+    });
   });
   // The order is recorded; its sales are linked after it, each by its own step: one that does not hold is answered, not fatal.
   const sales = body.sales === undefined ? undefined : (await linkNamedSales(app, scope, id, body.sales, actor, now)).outcomes;
@@ -338,6 +353,8 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
   });
   const unchanged = async () => ({ order: await agentOrderOf(app, scope, order, now), outcome: "unchanged" as const, event: null });
   let step: CustomStep;
+  /** «Отдан» by a message: the purchases that come with it (the order's money by construction). */
+  let deliveryPurchases: number[] | null = null;
   switch (body.action) {
     case "edit":
       step = {
@@ -360,10 +377,19 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
       break;
     }
     case "given": {
-      if (order.state === "given" && order.givenMessageRef === body.messageRef) return unchanged();
+      if (order.state === "given" && order.givenMessageRef === body.messageRef) {
+        // The same message again: «отдан» stands; its purchase, not linked when the mark was set, is now.
+        const linked = await linkDeliveryPurchases(app, {
+          orderId: order.id, purchaseIds: await deliveryPurchasesOf(app.db, scope, order, body.messageRef),
+          actor: actorOf(scope, body.onBehalfOf === undefined ? null : await personOf(app, body.onBehalfOf)), now,
+        });
+        if (linked === 0) return unchanged();
+        return { order: await agentOrderOf(app, scope, (await findCustomOrder(app.db, order.id))!, now), outcome: "changed" as const, event: null };
+      }
       if (!STEP_FROM.given.includes(order.state)) throw new ConflictError(`An order «${order.state}» takes no step «given»`, { reason: "not_allowed" });
       const checked = await checkGivenMessage(app.db, scope, order, body.messageRef);
       step = { action: "given", messageRef: body.messageRef, at: checked.at };
+      deliveryPurchases = checked.purchaseIds;
       break;
     }
     case "fan": {
@@ -459,6 +485,18 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
   // (the one rule is in `applyCustomStep`); a new step not from the order's state is 409 `not_allowed` (the reader
   // reports it).
   const actor = actorOf(scope, body.onBehalfOf === undefined ? null : await personOf(app, body.onBehalfOf));
+  if (step.action === "given" && step.messageRef !== null && deliveryPurchases !== null) {
+    // «Отдан» by the message and its purchase as the order's payment, in one transaction — on the order as it was checked:
+    // one that moved meanwhile (a revision, a person's step) is refused, and the agent reads it again.
+    const done = await giveByMessage(app, {
+      orderId: order.id, messageRef: step.messageRef, at: step.at, purchaseIds: deliveryPurchases, states: STEP_FROM.given, version: order.version, actor, now,
+    });
+    if (done === null) throw new ConflictError("The order changed while its delivery was checked: read it again", { reason: "version_changed" });
+    return {
+      order: await agentOrderOf(app, scope, (await findCustomOrder(app.db, order.id))!, now),
+      outcome: done.given || done.payments > 0 ? "changed" as const : "unchanged" as const, event: null,
+    };
+  }
   if (!STEP_FROM[step.action].includes(order.state) && step.action === "revision") {
     // Recorded once already (a repeat after the order moved on): nothing new.
     return unchanged();
@@ -481,12 +519,10 @@ export async function agentUpdateCustomOrder(app: AgentApp, scope: AgentCustomSc
 export async function agentReportCustomCards(app: Pick<AppContext, "db" | "logger" | "config">, scope: AgentCustomScope, body: AgentCustomCardsBody, now: Date = new Date()) {
   const cards = body.cards.map((card) => ({ ...card, telegramRef: parseTelegramRef(card.telegramRef)! }));
   const owners = await listCustomOrderCardOwners(app.db, cards.map((card) => card.telegramRef));
-  if (isTestAgent(scope.principal)) {
-    const own = new Set((await listCustomOrdersByIds(app.db, [...new Set(owners.values())])).filter((order) => order.pageId !== null && inGrant(scope, order)).map((order) => order.id));
-    const matched = [...owners].filter(([, orderId]) => own.has(orderId)).map(([telegramRef, orderId]) => ({ telegramRef, code: `K-${orderId}` }));
-    return { matched, opened: 0, closed: 0 };
-  }
-  const matched = [...owners].map(([telegramRef, orderId]) => ({ telegramRef, code: `K-${orderId}` }));
+  // A card's order is named only when it is the key's (its pages, its realm); one of another's is answered as neither.
+  const own = new Set((await listCustomOrdersByIds(app.db, [...new Set(owners.values())])).filter((order) => inGrant(scope, order)).map((order) => order.id));
+  const matched = [...owners].filter(([, orderId]) => own.has(orderId)).map(([telegramRef, orderId]) => ({ telegramRef, code: `K-${orderId}` }));
+  if (isTestAgent(scope.principal)) return { matched, opened: 0, closed: 0 };
   const unmatched = cards.filter((card) => !owners.has(card.telegramRef));
   const { opened, closed } = await reportUnmatchedCards(app, { cards: unmatched, complete: body.complete, agentKeyId: scope.principal.agentKeyId }, now);
   return { matched, opened, closed };

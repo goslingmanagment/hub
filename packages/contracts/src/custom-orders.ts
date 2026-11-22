@@ -410,7 +410,8 @@ export type CustomBoardOrder = z.infer<typeof customBoardOrderSchema>;
  */
 export const customUndoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("unpay"), transactionRef: z.string() }),
-  z.object({ action: z.literal("ungive") }),
+  /** The mark it takes back: refused when «отдан» is another message's by then. */
+  z.object({ action: z.literal("ungive"), messageRef: z.string() }),
   z.object({ action: z.literal("retract"), retracts: z.string() }),
   z.object({ action: z.literal("deadline"), deadlineOn: day.nullable() }),
 ]);
@@ -594,8 +595,11 @@ export const customOrderActionBodySchema = z.discriminatedUnion("action", [
    * saw the chat, a Fansly chat the hub does not read).
    */
   z.object({ action: z.literal("given"), messageRef: ref.optional() }).strict(),
-  /** «Не отдан»: «отдан» taken back — the order is «снят» again; the message stays off it from then on. */
-  z.object({ action: z.literal("ungive"), undoOf }).strict(),
+  /**
+   * «Не отдан»: «отдан» taken back — the order is «снят» again; the message stays off it from then on. `messageRef` — the
+   * mark the person saw: refused (409 `mark_changed`) when «отдан» is another message's by now.
+   */
+  z.object({ action: z.literal("ungive"), undoOf, messageRef: ref.optional() }).strict(),
   /** A delivery taken back by the shooting's leader (or the owner): its part stops counting. */
   z.object({ action: z.literal("retract"), retracts: retractsInput, reason: note, undoOf }).strict(),
   z.object({ action: z.literal("close") }).strict(),
@@ -841,9 +845,11 @@ export const agentCustomOrderUpdateBodySchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("payment"), sale: agentSaleRequestSchema, onBehalfOf: login.optional() }).strict(),
   /**
    * «Отдан» by the page's message that carried the order (needs `read:messages`): sent by a page of the order's model
-   * among the key's pages to any account of the order's fan, after the order was recorded, with media; a priced one
-   * bought. Refused while the order has a file named by its code (Hub's own rule finds that delivery), and for a
-   * message a person took off the order. Never by a word.
+   * among the key's pages to any account of the order's fan, after the order was recorded, its last revision request and
+   * a person's last «не отдан», with media; a priced one bought — the purchase of its one priced offer becomes the order's
+   * payment in the same step (the same message named again links one the mark was set without). Refused while the order
+   * has a file named by its code (Hub's own rule finds that delivery), for a message a person took off the order, and
+   * when the order moved while it was checked (409 `version_changed`). Never by a word.
    */
   z.object({ action: z.literal("given"), messageRef: ref, onBehalfOf: login.optional() }).strict(),
   /** The order's fan (needs `read:messages`): by the platform's id on a page of the key; only while the order has none. */
