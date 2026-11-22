@@ -7,7 +7,7 @@ import { formatAgo, formatDateTimeMsk } from "@agency_hub_core/ui/format";
 import { ScreenHeader } from "@/shared/ScreenHeader";
 import { Tiles } from "@/shared/Tiles";
 import { useMe } from "@/shared/useMe";
-import { boardNumbers, telegramHref, useCustomBoard, useCustomDone } from "./data";
+import { boardNumbers, readFailure, telegramHref, useCustomBoard, useCustomDone } from "./data";
 import { ChangesBanner, FindingsBanner } from "./facts-banners";
 import { CalendarView } from "./facts-calendar";
 import { OrderDrawer } from "./facts-order";
@@ -24,8 +24,9 @@ import "./facts.css";
  * leads there). The model filter, «Только мой ход» and the view live in the address too.
  *
  * In the extension's frame over the site (`frame`, the launcher's «Кастомы», frame.tsx) the same screen: its session is
- * the extension's device token, a narrow one (a finding is resolved with the password); «Записать кастом» stays the fan
- * panel's (the frame reads no page list), and «Свернуть» folds the frame away.
+ * the extension's device token, a narrow one (the orders of the person's own pages, whatever the role; no finding: a
+ * finding is resolved with the password); «Записать кастом» stays the fan panel's (the frame reads no page list), and
+ * «Свернуть» folds the frame away. Only while the facts are on: off, the frame shows the column board (frame.tsx).
  */
 
 /** The screen in the extension's frame: how it folds away there. */
@@ -212,7 +213,7 @@ export function CustomsFactsScreen({ frame }: { frame?: CustomsFrame } = {}) {
   if (board.isPending) {
     body = <Skeleton height={480} />;
   } else if (board.isError || !data) {
-    body = <ErrorState onRetry={() => void board.refetch()} retrying={board.isFetching}>Заказы не загрузились: Hub не ответил.</ErrorState>;
+    body = <ErrorState onRetry={() => void board.refetch()} retrying={board.isFetching}>{readFailure(board.error)}</ErrorState>;
   } else {
     const card = param("card");
     // A matter «Кастом без заказа» links to its finding (`?finding=<id>`): the block opens on it.

@@ -38,7 +38,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
+import { isNarrowPrincipal, requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
 import { ConflictError, NotFoundError } from "../errors.ts";
 import { isTestAgent, testPageIds } from "../sandbox/realm.ts";
 import type { AgentCustomScope } from "./agent.ts";
@@ -155,11 +155,6 @@ export async function agentPostCustomFindings(
   return { findings };
 }
 
-/** A narrow session (from the extension, no password) resolves nothing. */
-function isNarrow(principal: HumanAuthPrincipal): boolean {
-  return principal.narrowDeviceTokenId !== undefined || principal.clientProfile !== undefined;
-}
-
 /**
  * Who resolves a finding: the owner; the customs lead (the right «ведёт кастомы»); the check's leader of the finding's
  * page by the one rule (leaders.ts). Of the viewer's realm only.
@@ -220,7 +215,8 @@ export async function actOnCustomFinding(
   const viewer = await customViewerOf(app, human);
   const id = Number(input.findingId);
   const seen = await findCustomFinding(app.db, id);
-  if (seen === null || isNarrow(human) || !mayResolveFinding(viewer, seen)) throw new NotFoundError("The finding was not found");
+  // A narrow session (from the extension, no password) resolves nothing (`isNarrowPrincipal`).
+  if (seen === null || isNarrowPrincipal(human) || !mayResolveFinding(viewer, seen)) throw new NotFoundError("The finding was not found");
   const body = input.body;
   if (body.action === "reopen" ? !byAgentDismissed(seen) : seen.status !== "open") throw body.action === "reopen" ? notReopenable() : resolvedAlready();
   const userId = human.user.id;

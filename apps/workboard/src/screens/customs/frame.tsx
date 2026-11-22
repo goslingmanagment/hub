@@ -1,9 +1,13 @@
-import { useCallback, useEffect } from "react";
+import { Minimize2 } from "lucide-react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useSearchParams } from "react-router";
+import { Button, ErrorState, Skeleton } from "@agency_hub_core/ui";
 import { FrameGate, useFramePort } from "@/shared/frame";
+import { ScreenHeader } from "@/shared/ScreenHeader";
 import type { PortTransport } from "../report/transport";
+import { readFailure, useCustomBoard, useCustomsReread } from "./data";
 import { CustomsFactsScreen } from "./facts";
-import { RecordFromSaleModal } from "./index";
+import { CustomsBoardScreen, RecordFromSaleModal } from "./index";
 
 /**
  * `/frame/custom?page=<page>&fan=<fan ref>&name=<fan's name>`: «Записать кастом» in the extension's frame over the site
@@ -55,13 +59,44 @@ function useEscapeFolds(collapse: () => void) {
   }, [collapse]);
 }
 
-/** The facts screen in the frame, with the port's way to fold it away. */
+/** The extension says `show` on each open from the launcher: what the screen shows is read again. */
+function useShowRereads(transport: PortTransport) {
+  const reread = useCustomsReread();
+  useEffect(() => transport.on((message) => {
+    if (message.t === "show") reread();
+  }), [transport, reread]);
+}
+
+/** Before the board's first answer: the header with «Свернуть», then the wait or why the board did not come. */
+function FrameWaiting({ collapse }: { collapse: () => void }) {
+  const board = useCustomBoard(null);
+  return (
+    <>
+      <ScreenHeader title="Кастомы" actions={<Button icon={Minimize2} onClick={collapse}>Свернуть</Button>} />
+      <div className="wb-content">
+        {board.isError
+          ? <ErrorState onRetry={() => void board.refetch()} retrying={board.isFetching}>{readFailure(board.error)}</ErrorState>
+          : <Skeleton height={480} />}
+      </div>
+    </>
+  );
+}
+
+/**
+ * «Кастомы» in the frame by the live switch `customsFacts`, as entry.tsx (the board's answer carries `factsOn`): on, the
+ * facts screen; off, the column board as it was. Either with the port's way to fold it away.
+ */
 function FramedCustoms({ transport }: { transport: PortTransport }) {
   const collapse = useCallback(() => transport.post({ t: "collapse" }), [transport]);
+  const frame = useMemo(() => ({ collapse }), [collapse]);
   useEscapeFolds(collapse);
+  useShowRereads(transport);
+  const board = useCustomBoard(null);
   return (
     <main className="wb-main">
-      <CustomsFactsScreen frame={{ collapse }} />
+      {!board.data ? <FrameWaiting collapse={collapse} />
+        : board.data.factsOn ? <CustomsFactsScreen frame={frame} />
+        : <CustomsBoardScreen frame={frame} />}
     </main>
   );
 }
@@ -69,9 +104,10 @@ function FramedCustoms({ transport }: { transport: PortTransport }) {
 /**
  * `/frame/customs`: «Кастомы» in the extension's frame over the site (the launcher's row «Кастомы»): Workboard's facts
  * screen itself — «Сроки» and «Календарь», the order's panel — every request over the extension's port, run with its
- * device token, which Hub reads as a narrow session (a chatter's view and steps; a finding's resolution shows the way to
- * the password in a tab). It opens on every model with «Только мой ход» off: the address carries nothing more. The
- * screen is kept loaded while folded (the extension hides it); «Свернуть» and Esc say `collapse`.
+ * device token, which Hub reads as a narrow session (a chatter's view and steps on the person's own pages, whatever the
+ * role; no finding). It opens on every model with «Только мой ход» off: the address carries nothing more. The screen is
+ * kept loaded while folded (the extension hides it) and reads itself again on each open (`show`); «Свернуть» and Esc
+ * say `collapse`.
  */
 export function FrameCustomsScreen() {
   const link = useFramePort({ client: true });

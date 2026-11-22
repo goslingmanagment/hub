@@ -40,11 +40,27 @@ export const kernel: KernelClient = new Proxy({} as KernelClient, {
 });
 
 let framed = false;
+let frameCopy: ((text: string) => Promise<boolean>) | null = null;
 
-/** The extension's frame: the client of every screen sends its requests with this `fetch` (the port's). */
-export function setFrameClient(fetchImpl: typeof fetch): void {
+/**
+ * The extension's frame: the client of every screen sends its requests with this `fetch` (the port's); `copy` — the
+ * port's way to the clipboard (a framed page may be refused it).
+ */
+export function setFrameClient(fetchImpl: typeof fetch, copy?: (text: string) => Promise<boolean>): void {
   current = createClient({ baseUrl: "", fetch: fetchImpl });
   framed = true;
+  frameCopy = copy ?? null;
+}
+
+/** Text to the clipboard: in the extension's frame through the extension (`copy` over the port), else the browser's. */
+export async function copyText(text: string): Promise<boolean> {
+  if (frameCopy !== null) return frameCopy(text);
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

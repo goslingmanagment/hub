@@ -220,6 +220,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // POST /api/v1/auth/web-link: a one-time link into the team's place that opens a narrow web session
   // (services/signin-handoff.ts). No owner switch here: the extension's button has its own.
   "web-link-v1",
+  // Workboard's «Кастомы» in the extension's frame: `/workboard/frame/customs` may be framed by the sites
+  // (api/page-headers.ts) and the board's reads take the extension's token (routes-custom-orders.ts). The extension
+  // draws the launcher's row «Кастомы» only for a hub that lists it, so either may be released first.
+  "customs-frame-v1",
 ];
 
 /**

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { agentCustomOrderResponseSchema, customOrderDetailResponseSchema, customOrdersBoardResponseSchema } from "@agency_hub_core/contracts";
-import { addCustomOrderMessage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
+import { agentCustomOrderResponseSchema, customFindingsListResponseSchema, customOrderDetailResponseSchema, customOrdersBoardResponseSchema } from "@agency_hub_core/contracts";
+import { addCustomOrderMessage, createFanslyPage, createModel, insertAgentKey, insertCustomFinding } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -679,6 +679,28 @@ describe("custom orders: who sees and moves what", () => {
     const checked = await send(carol, `/api/v1/custom-orders/${order.code}`, { action: "checked" });
     expect(checked.statusCode, checked.body).toBe(409);
     expect((checked.json() as { reason?: string }).reason).toBe("not_allowed");
+    // Nor does it read as the lead: the orders of her own page alone (not lora-2's), no finding of the agency, and an
+    // order of no known page neither seen nor moved — what her board shows with the password.
+    const noPage = `K-${await recordCustomOrder(app, {
+      pageId: null, fanId: null, buyer: "a fan by name", conversationRef: null, card: { task: "Ролик" }, deadlineOn: null,
+      acceptedByUserId: null, origin: "import", actor: { door: "system" },
+    })}`;
+    await insertCustomFinding(app.db, {
+      source: "work_chat", ref: "tg:2600000009/1/77", pageId: null, fanId: null, amountMills: null, quote: "сделаем кастом?",
+      happenedAt: new Date(), at: new Date(),
+    });
+    expect(customFindingsListResponseSchema.parse((await get("carol", "/api/v1/custom-orders/findings")).json()).findings).not.toEqual([]);
+    const leadBoard = customOrdersBoardResponseSchema.parse((await read(carol, "/api/v1/custom-orders")).json());
+    expect(leadBoard.viewer.lead).toBe(false);
+    expect(leadBoard.orders.map((one) => one.code)).not.toContain(orders.elsewhere);
+    expect(leadBoard.orders.map((one) => one.code)).not.toContain(noPage);
+    expect(leadBoard.findings.open).toBe(0);
+    expect((await read(carol, `/api/v1/custom-orders/${orders.elsewhere}`)).statusCode).toBe(404);
+    expect((await read(carol, `/api/v1/custom-orders/${noPage}`)).statusCode).toBe(404);
+    expect((await send(carol, `/api/v1/custom-orders/${noPage}`, { action: "cancel" })).statusCode).toBe(404);
+    const leadFindings = await read(carol, "/api/v1/custom-orders/findings");
+    expect(leadFindings.statusCode, leadFindings.body).toBe(200);
+    expect(customFindingsListResponseSchema.parse(leadFindings.json()).findings).toEqual([]);
     // Not a page of hers: nothing on lora-2 through the token either.
     expect((await send(alice, "/api/v1/custom-orders", { pageLabel: "lora-2", card: { task: "x" } })).statusCode).toBe(404);
     // «Отдан» by the chatter's word, the board's own step.

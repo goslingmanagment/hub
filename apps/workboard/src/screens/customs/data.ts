@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   CustomBoardOrder, CustomFindingActionBody, CustomOrder, CustomOrderActionBody, CustomOrderCreateBody, CustomOrderDetailResponse, CustomOrderState,
@@ -16,14 +17,32 @@ const BOARD_KEY = ["customOrders"] as const;
 const orderKey = (code: string) => ["customOrder", code] as const;
 
 /**
- * After a step: the board, and in the extension's frame the order too — Hub answers the extension's token with the
- * steps the released extension knows (services/custom-orders `answerFor`), so the panel reads the order's full list again.
+ * A step's answer, the order after it, kept as the order — but not in the extension's frame: Hub answers the extension's
+ * token with the steps the released extension knows (services/custom-orders `answerFor`), so there the answer would take
+ * «Не отдан», «На паузу» and the rest off the panel. The frame reads the order again instead (`refreshAfterStep`).
  */
+function keepAnswer(qc: QueryClient, detail: CustomOrderDetailResponse) {
+  if (!inExtensionFrame()) qc.setQueryData(orderKey(detail.order.code), detail);
+}
+
+/** After a step: the board, and in the extension's frame the order too, read whole (the step waits for it). */
 function refreshAfterStep(qc: QueryClient, code: string) {
   return Promise.all([
     qc.invalidateQueries({ queryKey: BOARD_KEY }),
     ...(inExtensionFrame() ? [qc.invalidateQueries({ queryKey: orderKey(code) })] : []),
   ]);
+}
+
+/**
+ * Everything «Кастомы» shows, read again: the board with its blocks and every order read. The extension's frame does it
+ * on each open from the launcher (`show`): a custom recorded in the fan panel meanwhile is on the screen at once.
+ */
+export function useCustomsReread(): () => void {
+  const qc = useQueryClient();
+  return useCallback(() => {
+    void qc.invalidateQueries({ queryKey: BOARD_KEY });
+    void qc.invalidateQueries({ queryKey: ["customOrder"] });
+  }, [qc]);
 }
 
 export function useCustomBoard(page: string | null) {
@@ -68,7 +87,7 @@ export function useAnyCustomStep() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (input: { code: string; body: CustomOrderActionBody }) => kernel.customOrderAct({ params: { code: input.code }, body: input.body }),
-    onSuccess: (detail: CustomOrderDetailResponse) => qc.setQueryData(orderKey(detail.order.code), detail),
+    onSuccess: (detail: CustomOrderDetailResponse) => keepAnswer(qc, detail),
     onSettled: (_detail, _error, input) => refreshAfterStep(qc, input.code),
   });
 }
@@ -93,7 +112,7 @@ export function useCustomStep(code: string) {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (body: CustomOrderActionBody) => kernel.customOrderAct({ params: { code }, body }),
-    onSuccess: (detail: CustomOrderDetailResponse) => qc.setQueryData(orderKey(code), detail),
+    onSuccess: (detail: CustomOrderDetailResponse) => keepAnswer(qc, detail),
     onSettled: () => refreshAfterStep(qc, code),
   });
 }
@@ -115,6 +134,21 @@ export function useDismissSale() {
     mutationFn: (transactionRef: string) => kernel.customSaleDismiss({ params: { transactionRef } }),
     onSettled: () => qc.invalidateQueries({ queryKey: BOARD_KEY }),
   });
+}
+
+/**
+ * A read of the board refused, in words: a sign-in that is gone (401) or a door that is shut (403) says so, never
+ * «Hub не ответил». In the extension's frame a 401 is ChatGoose's sign-in (its token, `signed_out`).
+ */
+export function readFailure(error: unknown): string {
+  const status = hubErrorStatus(error);
+  if (status === 401) {
+    return inExtensionFrame()
+      ? "ChatGoose не вошёл в Hub: войдите в расширении и откройте «Кастомы» снова."
+      : "Вход закончился: войдите снова и обновите страницу.";
+  }
+  if (status === 403) return "С этого входа кастомы не видны.";
+  return "Заказы не загрузились: Hub не ответил.";
 }
 
 /** A refused step in words: the reason Hub gave, never its English. */

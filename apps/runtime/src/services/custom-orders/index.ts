@@ -79,7 +79,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
+import { isNarrowPrincipal, requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "../auth.ts";
 import { ConflictError, NotFoundError } from "../errors.ts";
 import {
   cardOf,
@@ -149,11 +149,13 @@ export async function customLeads(db: Database): Promise<Array<{ userId: number;
 /**
  * The viewer of a human principal: their role and pages, and whether their person «ведёт кастомы». A narrow session
  * (opened from the extension, no password) reads as a chatter whatever the role, as everywhere it is let in; so does the
- * extension's own narrow token (`clientProfile`: the fan panel's «Отдан» and the frame's «Записать кастом», package R5).
+ * extension's own narrow token (`clientProfile`: the fan panel's «Отдан», the frame's «Записать кастом», package R5, and
+ * Workboard's «Кастомы» in the frame). Narrow, it is never the customs lead either (`isNarrowPrincipal`): it sees the
+ * orders of its own pages alone, resolves no finding, and takes no lead's step on an order of no known page.
  */
 export async function customViewerOf(app: CustomApp, principal: HumanAuthPrincipal): Promise<CustomViewer> {
   const leads = await customLeads(app.db);
-  const narrow = principal.narrowDeviceTokenId !== undefined || principal.clientProfile !== undefined;
+  const narrow = isNarrowPrincipal(principal);
   const role = !narrow && (principal.user.role === "owner" || principal.user.role === "team_lead")
     ? principal.user.role
     : "chatter";
@@ -162,7 +164,7 @@ export async function customViewerOf(app: CustomApp, principal: HumanAuthPrincip
   // The team's cut (services/teams.ts): the pages of the viewer's teams plus the pages their login was granted.
   const team = role === "owner" ? undefined : await teamPagesFor(app, principal);
   return {
-    userId: principal.user.id, role, pageIds: team ?? principal.assignedPageIds, lead: leads.some((lead) => lead.userId === principal.user.id),
+    userId: principal.user.id, role, pageIds: team ?? principal.assignedPageIds, lead: !narrow && leads.some((lead) => lead.userId === principal.user.id),
     // What the login works: the writes of the chat's side go by it, never by the team's read cut.
     workPageIds: principal.assignedPageIds,
     // Who leads which step, by the one rule (leaders.ts): a narrow session from the extension leads nothing.

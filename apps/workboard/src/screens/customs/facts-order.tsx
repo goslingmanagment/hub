@@ -9,6 +9,7 @@ import {
   Button, Disclosure, Drawer, ErrorState, Field, Modal, Money, Notice, Select, Skeleton, StatusDot, TextInput, TimeMsk, toast,
 } from "@agency_hub_core/ui";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
+import { copyText } from "@/shared/hub";
 import {
   ASKS, Deliveries, EditCardModal, FanForm, RevisionWaits, StepModal, type Ask,
 } from "./index";
@@ -195,11 +196,12 @@ function OrderBody({ detail, viewerOwner }: { detail: CustomOrderDetailResponse;
     onSuccess: () => toast.success(done),
     onError: (error) => toast.error(stepFailure(error)),
   });
+  // In the extension's frame through the extension (`copyText`): a framed page may be refused the clipboard.
   const copy = () => {
-    void navigator.clipboard.writeText(detail.cardText).then(
-      () => toast.success("Карточка скопирована"),
-      () => toast.error("Не получилось скопировать: выделите текст карточки"),
-    );
+    void copyText(detail.cardText).then((copied) => {
+      if (copied) toast.success("Карточка скопирована");
+      else toast.error("Не получилось скопировать: выделите текст карточки");
+    });
   };
   const fixSteps = FIX_STEPS.filter((one) => may(one.action) && one.action !== main?.action && ASKS[one.action] !== undefined);
   return (

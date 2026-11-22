@@ -28,7 +28,7 @@ export function useFramePort(options: { client: boolean }): FrameLink {
       }
       if (result.kind === "port") {
         held = portTransport(result.port);
-        if (client) setFrameClient(held.fetch);
+        if (client) setFrameClient(held.fetch, held.copy);
         setLink({ kind: "port", transport: held });
       } else setLink(result);
     });
