@@ -4,12 +4,12 @@ import { createClient } from "@kernel/sdk";
 import { hubErrorStatus } from "@agency_hub_core/ui/hubClient";
 import { Gate, useFramePort } from "@/shared/frame";
 import { kernel as sessionKernel } from "@/shared/hub";
-import { ReportBoard, type Host } from "./Board";
+import { ReportBoard } from "./Board";
 import { BoardKernel, useCurrentReport, useReport } from "./data";
 import { frameState } from "./model";
 import type { PortTransport } from "./transport";
+import type { Host } from "./useBoard";
 import type { ShiftReportResponse } from "@agency_hub_core/contracts";
-import "./board.css";
 
 /**
  * The «Отчёт» board's addresses (package R, R-board.md §1): `/report/:shiftId` and `/report` in a Workboard tab on the
@@ -28,7 +28,7 @@ function Failed({ error, host, retry }: { error: unknown; host: Host; retry: () 
     <Gate>
       <b>Hub не ответил</b>
       <span>Отчёт не пришёл. Это не значит, что с ним что-то случилось.</span>
-      <button type="button" className="btn btn--line btn--sm" onClick={retry}>Ещё раз</button>
+      <button type="button" className="btn btn--sec btn--sm" onClick={retry}>Ещё раз</button>
     </Gate>
   );
 }
@@ -125,7 +125,7 @@ function UpdateExtension({ port }: { port: MessagePort | null }) {
       {port ? (
         <>
           <span>Эта версия расширения не умеет открывать отчёт поверх сайта. Пока его можно открыть во вкладке.</span>
-          <button type="button" className="btn btn--line btn--sm" disabled={asked} onClick={() => {
+          <button type="button" className="btn btn--sec btn--sm" disabled={asked} onClick={() => {
             port.postMessage({ t: "open-tab" });
             setAsked(true);
           }}>{asked ? "Открываем во вкладке…" : "Открыть во вкладке"}</button>

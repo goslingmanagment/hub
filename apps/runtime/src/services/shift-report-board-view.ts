@@ -45,7 +45,7 @@ import {
   isTestUser,
   sumSaleHomesOfShifts,
 } from "@agency_hub_core/db";
-import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
+import { moscowDayOfMs } from "@agency_hub_core/shared";
 
 import { reportSums } from "./sale-claim-rules.ts";
 import { draftFacts, draftLines, modelsOfPages, offPlatformOfRows, ruleWordsOfLine, type PageCatalog, type Subject } from "./shift-report-draft.ts";
@@ -154,7 +154,8 @@ function owner(kind: ShiftReportOwner["kind"], userId: number | null, people: Pe
     case "share": return { kind, userId, name, words: forms ? `пополам с ${forms.ins}` : "пополам" };
     case "user": return { kind, userId, name, words: forms?.gen ?? "коллеги" };
     case "pot": return { kind, userId: null, name: null, words: "общак" };
-    case "waiting": return { kind, userId, name, words: forms ? `ждёт смены ${forms.gen}` : "ждёт смены" };
+    // A waiting PPV is its sender's (it goes to their next shift): the board says «чужая», the menu names the sender.
+    case "waiting": return { kind, userId, name, words: forms?.gen ?? "коллеги" };
     case "decide": return { kind, userId: null, name: null, words: "решит владелец" };
     default: return { kind: "nobody", userId: null, name: null, words: "ничья" };
   }
@@ -187,7 +188,6 @@ function lineOwner(line: HandinVersionLine, people: People, me: number): ShiftRe
 }
 
 const sameOwner = (a: ShiftReportOwner, b: ShiftReportOwner) => a.kind === b.kind && (a.userId ?? 0) === (b.userId ?? 0);
-const plainUsd = (mills: number) => formatUsdFromMills(mills).replace(/\.00$/, "");
 
 export interface BoardRead {
   db: Database;
@@ -295,6 +295,15 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   const fans = await listHandinSaleFans(db, ids);
   const refs = await listTransactionPlatformRefs(db, ids);
   const colleagues = own ? await listHandinColleagues(db, { pageIds, exceptUserIds: subject.userIds }) : [];
+  // A word names only a colleague of the sale's own page (the write checks it there): one read a page of the shift.
+  const pageColleagues = new Map<string, Set<number>>();
+  if (own) {
+    for (const label of labels) {
+      const pageId = catalog.idOf.get(label);
+      if (pageId === undefined) continue;
+      pageColleagues.set(label, new Set((await listHandinColleagues(db, { pageIds: [pageId], exceptUserIds: subject.userIds })).map((one) => one.userId)));
+    }
+  }
   const userIds = new Set<number>([me, ...colleagues.map((one) => one.userId)]);
   for (const line of [...base, ...late]) for (const id of [line.rule.toUserId, line.rule.senderUserId, line.shareWithUserId, line.toUserId ?? null]) if (id !== null) userIds.add(id);
   for (const claim of claims) for (const id of [claim.claimantUserId, claim.sideUserId]) if (id !== null) userIds.add(id);
@@ -430,8 +439,6 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     } else if (amount <= 0) {
       reason = ruleWords;
     }
-    // A take's own words stand on a half too (never «вам $26» over «записали вы»).
-    if (current.kind === "share" && amount > 0 && !isLate && !(taken && ask?.answer === null) && !takenFromMe) reason = `вам ${plainUsd(amount)}`;
     const askWire = ask === null ? null : {
       claimId: ask.id,
       to: ask.sideUserId === null || cardDispute || paidDay ? "owner" as const : "colleague" as const,
@@ -491,7 +498,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       occurredAt: line.occurredAt ?? new Date(0).toISOString(),
       netMills: line.netMills,
       grossMills: fansly || ref === null ? null : ref.grossMills,
-      rule: { owner: rule, reason: line.rule.reason, words: ruleWords },
+      rule: { owner: rule, reason: line.rule.reason, words: ruleWords, ...(line.rule.waitsUntil !== undefined ? { waitsUntil: line.rule.waitsUntil } : {}) },
       owner: current,
       statement: line.statement,
       reasonWords: reason,
@@ -518,8 +525,9 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   };
 
   /**
-   * What a row's «чья» menu offers, and what each choice does (R-board §3, §4; arena round 3: the board on both sides): a
-   * colleague with the board is told, the sale written at once (owner, 2026-11-21); anyone else — the decider.
+   * What a row's «чья» menu offers, and what each choice does and writes (R-board §3, §4; arena round 3: the board on both
+   * sides): a colleague with the board is told, the sale written at once (owner, 2026-11-21); anyone else — the decider.
+   * `via`: a question about someone else's sale (`ask`), else the line's word (`line`).
    */
   function choicesOf(line: HandinVersionLine, current: ShiftReportOwner): NonNullable<ShiftReportRow["choices"]> {
     const rule = ruleOwner(line, people, me);
@@ -536,37 +544,45 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       return { to: "colleague", user: people.person(userId), words: `сообщим ${personNameForms(people.nameOf(userId)).dat}` };
     };
     if (line.group !== "mine") {
-      // Someone else's sale: «Моя» and «Пополам с <держатель>» only, each a question (a nobody's sale is mine at once,
-      // with the one line of why the server asks for). A sale that waits for its PPV's sender is that colleague's.
+      // Someone else's sale: the rule's own word (back to it), «Моя» and «Пополам с <держатель>», each of the two a
+      // question (a nobody's sale is mine at once, with the one line of why the server asks for). A sale that waits for
+      // its PPV's sender is that colleague's.
       const holder = line.rule.toUserId ?? (line.rule.home === "waiting" ? line.rule.senderUserId : null);
       const pot = line.rule.home === "pot" || line.rule.home === "decide";
       const mine = owner("me", null, people, me);
-      const out = [{ owner: mine, asks: askOf(holder, pot && holder === null), hint: "", current: is(mine) }];
+      const mineAsks = askOf(holder, pot && holder === null);
+      // «Моя» asks whoever holds the sale; a nobody's sale is the person's at once, by the word with its line of why.
+      const out: NonNullable<ShiftReportRow["choices"]> = [
+        { owner: rule, asks: null, hint: "", current: is(rule), via: "line" },
+        { owner: mine, asks: mineAsks, hint: "", current: is(mine), via: mineAsks === null ? "line" : "ask" },
+      ];
       if (holder !== null) {
         const half = owner("share", holder, people, me);
-        out.push({ owner: half, asks: askOf(holder, false), hint: "", current: is(half) });
+        out.push({ owner: half, asks: askOf(holder, false), hint: "", current: is(half), via: "ask" });
       }
       return out.map((one) => ({ ...one, hint: hintOf(one.owner, one.asks) }));
     }
-    // One's own sale: «Моя», «Пополам с <каждый коллега>», «<коллега>», «Общак», «Ничья»; with a colleague without the
+    // One's own sale: «Моя» (only where the rule gives it all: one's own half is no word «моё» takes), «Пополам с
+    // <коллега страницы>», «<коллега страницы>», «Общак», «Ничья», each the line's word; with a colleague without the
     // board «пополам» and «отдать» go to the decider.
     const out: NonNullable<ShiftReportRow["choices"]> = [];
     const mine = owner("me", null, people, me);
-    out.push({ owner: mine, asks: null, hint: hintOf(mine, null), current: is(mine) });
-    for (const colleague of colleagues) {
+    if (rule.kind === "me" || is(mine)) out.push({ owner: mine, asks: null, hint: hintOf(mine, null), current: is(mine), via: "line" });
+    const ofPage = colleagues.filter((one) => pageColleagues.get(line.pageLabel ?? "")?.has(one.userId) === true);
+    for (const colleague of ofPage) {
       const half = owner("share", colleague.userId, people, me);
       const asks = onBoard(colleague.userId) ? null : askOf(colleague.userId, false);
-      out.push({ owner: half, asks, hint: hintOf(half, asks), current: is(half) });
+      out.push({ owner: half, asks, hint: hintOf(half, asks), current: is(half), via: "line" });
     }
-    for (const colleague of colleagues) {
+    for (const colleague of ofPage) {
       const theirs = owner("user", colleague.userId, people, me);
       const asks = onBoard(colleague.userId) ? null : askOf(colleague.userId, false);
-      out.push({ owner: theirs, asks, hint: hintOf(theirs, asks), current: is(theirs) });
+      out.push({ owner: theirs, asks, hint: hintOf(theirs, asks), current: is(theirs), via: "line" });
     }
     const pot = owner("pot", null, people, me);
-    out.push({ owner: pot, asks: null, hint: `решит ${decider.words}`, current: is(pot) });
+    out.push({ owner: pot, asks: null, hint: `решит ${decider.words}`, current: is(pot), via: "line" });
     const nobody = owner("nobody", null, people, me);
-    out.push({ owner: nobody, asks: null, hint: hintOf(nobody, null), current: is(nobody) });
+    out.push({ owner: nobody, asks: null, hint: hintOf(nobody, null), current: is(nobody), via: "line" });
     return out;
   }
 

@@ -121,13 +121,14 @@ const personSchema = z.object({ userId: intId, name: z.string(), forms: personNa
 /**
  * Whose a sale is, as the board says it: `me` — the shift's person («моя»); `share` — half with `userId`
  * («пополам с Севой»); `user` — a colleague's («Олега»); `pot` («общак»); `nobody` («ничья»); `waiting` — a PPV that
- * waits for its sender's shift; `decide` — the owner decides by the rule (the shift's boundary, nobody wrote).
+ * goes to its sender's next shift (`userId` the sender, «Олега»); `decide` — the owner decides by the rule (the shift's
+ * boundary, nobody wrote).
  */
 export const shiftReportOwnerSchema = z.object({
   kind: z.enum(["me", "share", "user", "pot", "nobody", "waiting", "decide"]),
   userId: intId.nullable(),
   name: z.string().nullable(),
-  /** The word itself in the board's case: «моя», «пополам с Севой», «Олега», «общак», «ничья». */
+  /** The word itself in the board's case: «моя», «пополам с Севой», «Олега» (a colleague's or a waiting PPV's sender's), «общак», «ничья». */
   words: z.string(),
 });
 export type ShiftReportOwner = z.infer<typeof shiftReportOwnerSchema>;
@@ -235,8 +236,9 @@ export const shiftReportRowNoteSchema = z.object({
 });
 
 /**
- * One item of a row's «чья» menu, as the server decides it: on someone else's sale only «Моя» and «Пополам с <держатель>»;
- * on one's own «Моя», «Пополам с <каждый коллега>», «<коллега>» (отдать), «Общак», «Ничья».
+ * One item of a row's «чья» menu, as the server decides it: on someone else's sale the rule's own word (back to the
+ * rule), «Моя» and «Пополам с <держатель>»; on one's own «Моя», «Пополам с <каждый коллега>», «<коллега>» (отдать),
+ * «Общак», «Ничья».
  */
 export const shiftReportChoiceSchema = z.object({
   owner: shiftReportOwnerSchema,
@@ -252,6 +254,11 @@ export const shiftReportChoiceSchema = z.object({
   }).nullable(),
   /** The menu's grey text: «по правилу», «сообщим Олегу», «решит владелец»; empty — none. */
   hint: z.string(),
+  /**
+   * What choosing it writes: `line` — the line's word (`shiftReportLineSet`; «Моя» on a nobody's sale and a word the
+   * decider decides go with one line of why); `ask` — a question about someone else's sale (`shiftReportAsk`).
+   */
+  via: z.enum(["line", "ask"]),
   /** The current word (absent from a reader that marks it itself). */
   current: z.boolean().optional(),
 });
@@ -289,12 +296,21 @@ export const shiftReportRowSchema = z.object({
   /** What the fan paid (OnlyFans shows both); null — the site shows only the net (Fansly). */
   grossMills: mills.nullable(),
   /** The rule's word and its reason in plain words («шёл его слот до 20:00», «тип под постом»). */
-  rule: z.object({ owner: shiftReportOwnerSchema, reason: z.string(), words: z.string() }),
+  rule: z.object({
+    owner: shiftReportOwnerSchema,
+    reason: z.string(),
+    words: z.string(),
+    /**
+     * A waiting PPV (`owner.kind` waiting): the rule's last moment for its sender's shift — no shift of theirs by then,
+     * the sale is nobody's («Если смены не будет до 28 нояб., продажа станет ничьей»). Absent — not waiting, or not known.
+     */
+    waitsUntil: isoTimestamp.optional(),
+  }),
   /** The word the board shows now: the rule's, or the person's mark over it, or an answer. */
   owner: shiftReportOwnerSchema,
   /** The person's mark; null — the rule stands. */
   statement: shiftReportWordEnum.nullable(),
-  /** The grey words after the owner on line 2, as the prototype composes them («по правилу ваша», «ждём ответа Олега», «поменял Генгар», «вам $15»). */
+  /** The grey words on line 2 («по правилу ваша», «ждём ответа Олега», «поменял Генгар»); a half's share is `amountMills`. */
   reasonWords: z.string(),
   /** The tick: in the person's report. */
   ticked: z.boolean(),

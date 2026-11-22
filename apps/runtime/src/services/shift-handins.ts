@@ -634,17 +634,22 @@ export async function setShiftReportLine(
   now: Date = new Date(),
 ): Promise<{ savedAt: string }> {
   const { subject, catalog } = await writableSubject(app, actor, input.shiftId);
-  const statement: Statement | null = input.body.statement;
-  // «Олега» on one's own sale (the board, package R): given to a colleague of the sale's page, settled at once in theirs.
-  const giveTo = statement === "give" ? input.body.toUserId ?? null : null;
-  if (statement === "give" && giveTo === null) throw new BadRequestError("«Отдать» names the colleague", { reason: "give_to_missing" });
-  const note = input.body.note === undefined || input.body.note === null || input.body.note.trim() === "" ? null : input.body.note.trim();
-  const shareWith = statement === "share" ? input.body.shareWithUserId ?? null : null;
-  if (statement === "share" && shareWith === null) throw new BadRequestError("«делим с…» names the colleague", { reason: "share_with_missing" });
-
   const existing = await findHandinByShift(app.db, subject.shift.id);
   const marks = existing === null ? [] : await listHandinMarks(app.db, existing.id);
   const before = marks.find((mark) => mark.transactionId === input.transactionId);
+  // No word in the body: the comment alone, the word as it stands (written as stored: an old-way gift stays «не моё»
+  // with its question). No comment in the body: the comment as it stands. A write never carries back what it did not say.
+  const keepWord = input.body.statement === undefined;
+  const statement: Statement | null = keepWord ? before?.statement ?? null : input.body.statement ?? null;
+  // «Олега» on one's own sale (the board, package R): given to a colleague of the sale's page, settled at once in theirs.
+  const giveTo = statement === "give" ? (keepWord ? before?.toUserId : input.body.toUserId) ?? null : null;
+  if (statement === "give" && giveTo === null) throw new BadRequestError("«Отдать» names the colleague", { reason: "give_to_missing" });
+  const note = input.body.note === undefined ? before?.note ?? null
+    : input.body.note === null || input.body.note.trim() === "" ? null : input.body.note.trim();
+  const shareWith = statement === "share" ? (keepWord ? before?.shareWithUserId : input.body.shareWithUserId) ?? null : null;
+  if (statement === "share" && shareWith === null) throw new BadRequestError("«делим с…» names the colleague", { reason: "share_with_missing" });
+
+  // The word changes when its kind or its colleague does («пополам с Олегом» → «пополам с Тимуром» is a new word).
   const wordChanged = (before?.statement ?? null) !== statement || (before?.shareWithUserId ?? null) !== shareWith || (before?.toUserId ?? null) !== giveTo;
   // The person's own word on this sale already settled between the two (a take that stands, an agreement): its terms
   // made the reports' versions and the sale's home, so the line is their own now and «моя» is no word of it (the draft
@@ -666,7 +671,7 @@ export async function setShiftReportLine(
   // «Пополам» or «отдать» with a colleague who hands shifts in the old way (no board): the decider decides — a Telegram
   // post knows decisions, not agreements (arena round 3) — and no day of silence runs.
   let oldWayTo: { userId: number; pageId: number | null } | null = null;
-  if (statement !== null && (before?.statement ?? null) !== statement) {
+  if (statement !== null && wordChanged) {
     // A new word: the sale must be a line of the draft that takes it — or, «моё», a sale the person may add by hand.
     const facts = await draftFacts(app.db, subject, existing, catalog, now, marks);
     const line = facts.classified.find((one) => one.sale.transactionId === input.transactionId);

@@ -1,270 +1,364 @@
 /*
- * The «Отчёт» board (package R): the approved prototype's own CSS
- * (8-docs/2026-11-13-products/report-panel-mockups/columns.html), ported one to one and scoped under `.rb`. Class names
- * are the prototype's, so a diff against it stays readable. The palette is the ChatGoose family's (`.cg` of the
- * prototype, chat-extension packages/ui/src/kit/tokens.ts), dark whatever Workboard's theme is.
+ * The «Отчёт» board (the design of 2026-11-21, report-board-redesign/synthesis/mockup.html), scoped under `.rb`, light or
+ * dark. Every colour is a token in the block below, the one place a palette lives, each `light-dark(light, dark)` as
+ * Workboard's own tokens (packages/ui tokens.css); `color-scheme` picks the side: in a tab Workboard's choice
+ * (`data-theme` on <html>, else the system's), in the extension's frame (`.is-frame`) the scheme the frame is given
+ * (its `prefers-color-scheme`). Surfaces; the label hierarchy (secondary is the floor for what a chatter must read, at
+ * least 7:1 on every surface it stands on in both schemes; tertiary at least 4.5:1, only for what one may skip; the
+ * fourth only for lines, rings and what is switched off); one tint (Workboard's clay: its text and the press's label at
+ * least 4.5:1); green only for «сошлись» and «Учтён»; yellow only for what waits (its text at least 4.5:1). Type 13 /
+ * 15 / 17 / 24 and the total 36; a 4 pt grid.
  */
-.rb{--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;--serif:"Source Serif 4",Georgia,"Times New Roman",serif;--mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
---ink-strong:rgb(250 249 245);--ink:rgb(226 223 211);--ink-2:rgb(207 202 186);--ink-muted:rgb(163 158 147);--ink-faint:rgb(120 116 106);
---rule:rgb(46 43 38);--rule-2:rgb(58 55 47);--rule-3:rgb(77 73 64);
---surface:rgb(27 26 23);--sunk:rgb(38 36 32);--hover:rgb(46 43 38);--press:rgb(51 48 42);--raised:rgb(38 36 32);--chip:rgb(46 43 38);--field:rgb(27 26 23);--field-line:rgb(58 55 47);--draft:#2e2a21;--sel:rgb(63 43 33 / .62);
---money:rgb(97 189 100);--clay:#d97757;--clay-ink:#e08566;--clay-bg:#3f2b21;--clay-line:#61412f;
---good-ink:#54a263;--good-bg:#233a28;--good-line:#38583f;--amber-ink:#cda04b;--amber-bg:#3a3220;--amber-line:#5c4c29;
---focus-soft:rgb(217 119 87 / .28);--shadow-float:0 12px 32px -12px rgb(0 0 0 / .8),0 0 0 1px rgb(0 0 0 / .4);color-scheme:dark}
-.rb{position:fixed;inset:0;overflow-x:auto;overflow-y:hidden;background:var(--surface);color:var(--ink);font:13px/18px var(--sans);-webkit-font-smoothing:antialiased}
+.rb{
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI Variable Text","Segoe UI",system-ui,Roboto,"Helvetica Neue",Arial,sans-serif;
+  --display:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI Variable Display","Segoe UI",system-ui,Roboto,"Helvetica Neue",Arial,sans-serif;
+  --bg:light-dark(#f3f1ed,#1d1c1b);
+  --card:light-dark(#fff,rgba(255,250,240,.055));
+  --elev:light-dark(#fff,#2b2a28);
+  --inner:light-dark(rgba(40,30,20,.035),rgba(255,250,240,.045));
+  --field:light-dark(#fff,rgba(0,0,0,.18));
+  --hover:light-dark(rgba(40,30,20,.04),rgba(255,250,240,.035));
+  --fill:light-dark(rgba(40,30,20,.06),rgba(255,250,240,.08));
+  --fill-2:light-dark(rgba(40,30,20,.1),rgba(255,250,240,.13));
+  --sep:light-dark(rgba(40,30,20,.09),rgba(255,250,240,.075));
+  --line:light-dark(rgba(40,30,20,.16),rgba(255,250,240,.11));
+  --l1:light-dark(rgba(28,24,20,.9),rgba(250,248,242,.92));
+  --l2:light-dark(rgba(60,54,46,.9),rgba(240,236,228,.86));
+  --l3:light-dark(rgba(60,54,46,.74),rgba(240,236,228,.62));
+  --l4:light-dark(rgba(60,54,46,.26),rgba(240,236,228,.26));
+  --tint-fill:light-dark(#ad5230,#cf6c4a);
+  --tint-fill-h:light-dark(#964526,#d97757);
+  --on-tint:light-dark(#fff,#1d1c1b);
+  --tint:light-dark(#a84a26,#f09676);
+  --tint-soft:light-dark(rgba(201,99,63,.1),rgba(234,138,106,.12));
+  --tint-line:light-dark(rgba(201,99,63,.3),rgba(234,138,106,.34));
+  --green:light-dark(#248a3d,#45c05e);
+  --green-soft:light-dark(rgba(36,138,61,.1),rgba(69,192,94,.12));
+  --yellow:light-dark(#855c00,#e6b94a);
+  --yellow-soft:light-dark(rgba(230,185,74,.16),rgba(230,185,74,.075));
+  --yellow-line:light-dark(rgba(230,185,74,.4),rgba(230,185,74,.26));
+  --paper:light-dark(#f4f0e8,rgba(255,250,240,.045));
+  --shadow-card:0 0 0 1px var(--sep),0 1px 3px light-dark(rgba(40,30,20,.05),rgb(0 0 0 / .2));
+  --shadow-pop:0 0 0 .5px light-dark(rgba(40,30,20,.14),rgba(255,250,240,.14)),0 14px 40px light-dark(rgba(40,30,20,.16),rgb(0 0 0 / .5));
+  color-scheme:light dark;
+}
+:root[data-theme="light"] .rb:not(.is-frame){color-scheme:light}
+:root[data-theme="dark"] .rb:not(.is-frame){color-scheme:dark}
+.rb{position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg);color:var(--l1);font:15px/24px var(--sans);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
 .rb *,.rb *::before,.rb *::after{box-sizing:border-box}
 .rb button{font:inherit;color:inherit;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:inherit}
 .rb button:disabled{cursor:default}
-.rb input{font:inherit}
-.rb p{margin:0}
+.rb input,.rb textarea{font:inherit;color:inherit}
+.rb h1,.rb h2,.rb p{margin:0}
 .rb .ico{flex:none;display:block}
 .rb .grow{flex:1}
-/* the prototype's `.view`: everything positions against it; narrower than 1100 the window scrolls sideways */
-.rb .view{position:relative;min-width:1100px;height:100%}
+.rb :focus-visible{outline:2px solid var(--tint);outline-offset:2px}
+/* a sentence in the middle of the board (shared/frame.tsx `Gate`) */
+.rb .view{position:relative;flex:1;min-height:0}
+.rb .gate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;color:var(--l2);font-size:15px;line-height:22px}
+.rb .gate b{font:600 17px/24px var(--display);color:var(--l1)}
+.rb .gate .spin{width:18px;height:18px}
 
-/* ── доска «Отчёт» на всё окно ── */
-.rb .board{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;background:var(--surface);font:13px/18px var(--sans);color:var(--ink)}
-.rb .bh{flex:none;display:flex;align-items:center;gap:12px;height:42px;padding:0 8px 0 16px;border-bottom:1px solid var(--rule-2);background:var(--raised);white-space:nowrap}
-.rb .bh-t{font-size:14px;font-weight:600;color:var(--ink-strong)}
-.rb .bh-back{margin-left:-8px;text-decoration:none}
-.rb .bh-t .ico{display:inline-block;vertical-align:-3px;margin-right:7px;color:var(--clay)}
-.rb .bh-off{font-size:12.5px;color:var(--ink-faint)}
-.rb .bh-sum{margin-left:auto;font-size:12.5px;color:var(--ink-muted)}
-.rb .bh-sum b{margin-left:4px;font-size:14px;font-weight:600;color:var(--ink-strong);font-variant-numeric:tabular-nums}
-.rb .chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:99px;background:var(--chip);font-size:12px;font-weight:600;color:var(--ink-2);white-space:nowrap}
-.rb .chip.is-clay{background:var(--clay-bg);color:var(--clay-ink)}
-.rb .chip.is-good{background:var(--good-bg);color:var(--good-ink)}
+/* ── buttons, links, the spinner ── */
+.rb .btn{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:36px;padding:0 16px;border-radius:10px;font:600 15px/20px var(--sans);white-space:nowrap;text-decoration:none;transition:background .15s,color .15s}
+.rb .btn--main{background:var(--tint-fill);color:var(--on-tint)}
+.rb .btn--main:hover{background:var(--tint-fill-h)}
+.rb .btn--sec{background:var(--fill);color:var(--l1)}
+.rb .btn--sec:hover{background:var(--fill-2)}
+.rb .btn--quiet{color:var(--l2);font-weight:500}
+.rb .btn--quiet:hover{background:var(--fill);color:var(--l1)}
+.rb .btn--sm{height:32px;padding:0 12px;border-radius:8px;font-weight:500}
+.rb .btn--xs{height:28px;padding:0 12px;border-radius:8px;font-size:13px;font-weight:500}
+.rb .btn--wide{width:100%}
+.rb .btn:disabled,.rb .btn:disabled:hover{background:var(--fill);color:var(--l4)}
+.rb .lk{color:var(--tint);font-weight:500;border-radius:4px;text-decoration:none}
+.rb .lk:hover{text-decoration:underline;text-underline-offset:3px}
+.rb .lk.is-quiet{color:var(--l2)}
+.rb .spin{flex:none;display:inline-block;width:14px;height:14px;margin-top:4px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--tint);animation:rb-spin .8s linear infinite}
+@keyframes rb-spin{to{transform:rotate(360deg)}}
 
-.rb .cols{flex:1;min-height:0;display:flex;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:var(--rule-3) transparent}
-.rb .col{flex:1 1 0;min-width:330px;display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--rule-2)}
-.rb .col:last-child{border-right:0}
-.rb .col.is-empty{flex:0 0 210px;min-width:210px}
-.rb .ch{flex:none;display:flex;align-items:center;gap:7px;height:38px;padding:0 12px;border-bottom:1px solid var(--rule-2);background:var(--surface);white-space:nowrap}
-.rb .ch-n{font-size:13.5px;font-weight:600;color:var(--ink-strong)}
-.rb .ch-p{font-size:12px;color:var(--ink-faint)}
-.rb .ch .dot{width:6px;height:6px;border-radius:50%;background:var(--clay-ink)}
-.rb .ch-s{margin-left:auto;font-size:12px;color:var(--ink-muted);font-variant-numeric:tabular-nums}
-.rb .ch-s b{font-weight:600;color:var(--ink-strong)}
-.rb .cb{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--rule-3) transparent}
-.rb .emp{padding:12px;font-size:12.5px;line-height:17px;color:var(--ink-muted)}
+/* ── the head: the title, the steps, «Свернуть» ── */
+.rb .top{flex:none;height:64px;border-bottom:1px solid var(--sep)}
+.rb .top-in{display:grid;grid-template-columns:minmax(max-content,1fr) auto minmax(max-content,1fr);align-items:center;column-gap:24px;height:100%;max-width:1232px;margin:0 auto;padding:0 24px}
+.rb .top-l{grid-column:1;display:flex;align-items:center;gap:16px;min-width:0}
+.rb .top-back{margin-left:-12px}
+.rb .top-t{display:flex;align-items:baseline;gap:12px;min-width:0;white-space:nowrap}
+.rb .top-t h1{font:600 17px/24px var(--display);letter-spacing:-.01em}
+.rb .top-d{font-size:15px;color:var(--l2)}
+.rb .ro,.rb .phase{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:12px;align-self:center;background:var(--fill);color:var(--l2);font-size:13px;line-height:20px;font-weight:500}
+.rb .phase{display:none;color:var(--l1)}
+.rb .steps{grid-column:2;display:flex;align-items:center;gap:8px;margin:0;padding:0;list-style:none;font-size:13px;line-height:20px;color:var(--l3);white-space:nowrap}
+.rb .st{display:flex;align-items:center;gap:8px}
+.rb .st+.st::before{content:"";width:20px;height:1px;background:var(--line)}
+.rb .st i{width:8px;height:8px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--l3)}
+.rb .st.is-done{color:var(--l2)}
+.rb .st.is-done i{background:var(--l2);box-shadow:none}
+.rb .st.is-now{color:var(--l1);font-weight:600}
+.rb .st.is-now i{background:var(--tint-fill);box-shadow:0 0 0 3px var(--tint-soft)}
+.rb .st.is-now:last-child i{background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
+.rb .top-min{grid-column:3;justify-self:end;margin-right:-12px}
 
-/* строка продажи: не больше двух строк */
-.rb .r{display:grid;grid-template-columns:16px minmax(0,1fr) auto;column-gap:10px;padding:8px 12px 6px;border-bottom:1px solid var(--rule)}
-.rb .r:hover{background:rgb(255 255 255 / .02)}
-.rb .r.is-hl,.rb .r.is-hl:hover{background:var(--sel)}
-.rb .r.is-dim>*{opacity:.45}
-.rb .ck{grid-column:1;grid-row:1;align-self:center;display:flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:4px;box-shadow:inset 0 0 0 1.5px var(--rule-3);color:#1b1a17}
-.rb button.ck:hover{box-shadow:inset 0 0 0 1.5px var(--clay-ink)}
-.rb .ck.is-on{background:var(--clay);box-shadow:none}
-.rb button.ck.is-on:hover{background:#e58a6b;box-shadow:none}
-.rb .ck.is-mix{box-shadow:inset 0 0 0 1.5px var(--amber-ink);color:var(--amber-ink)}
-.rb .ck.is-x{box-shadow:none;border:1.5px dashed var(--rule-3)}
+/* ── the list and the rail, centred ── */
+.rb .main{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.rb .wrap{display:grid;grid-template-columns:minmax(0,820px) 340px;gap:24px;justify-content:center;align-items:start;padding:4px 24px 40px}
+.rb .list{min-width:0}
+.rb .mh{display:flex;align-items:baseline;gap:12px;margin:32px 4px 0}
+.rb .list>.mh:first-child{margin-top:16px}
+.rb .mh b{font:600 24px/32px var(--display);letter-spacing:-.015em}
+.rb .mh span{color:var(--l2)}
+.rb .banner{display:flex;align-items:center;gap:12px;margin-top:16px;padding:12px 16px;border-radius:14px;background:var(--yellow-soft);box-shadow:inset 0 0 0 1px var(--yellow-line);font-size:15px;line-height:22px}
+.rb .banner>.ico{color:var(--yellow)}
+.rb .banner .t{flex:1;min-width:0}
+.rb .banner.is-calm{background:var(--card);box-shadow:var(--shadow-card)}
+.rb .banner.is-calm>.ico{color:var(--l2)}
+
+/* ── a page: its title row over its card ── */
+.rb .pg-h{position:sticky;top:0;z-index:3;display:flex;align-items:baseline;gap:8px;padding:16px 4px 8px;background:var(--bg)}
+.rb .pg+.pg .pg-h{padding-top:20px}
+.rb .mh+.pg .pg-h{padding-top:8px}
+.rb .pg-n{font:600 17px/24px var(--display);letter-spacing:-.01em}
+.rb .pg-p{font-size:13px;line-height:20px;color:var(--l3)}
+.rb .pg-dot{width:6px;height:6px;border-radius:50%;align-self:center;background:var(--yellow)}
+.rb .pg-c{margin-left:auto;font-size:13px;line-height:20px;color:var(--l2);font-variant-numeric:tabular-nums}
+.rb .pg-s{margin-left:8px;font-weight:600;font-variant-numeric:tabular-nums}
+.rb .pg-s.is-zero{color:var(--l2);font-weight:500}
+.rb .card{padding:4px;border-radius:16px;background:var(--card);box-shadow:var(--shadow-card)}
+.rb .empty{padding:16px 12px 16px 44px;color:var(--l2)}
+
+/* a sale: two lines, an inset grouped list (the hairline starts after the tick, none under the last row) */
+.rb .row{position:relative;display:grid;grid-template-columns:20px 44px minmax(0,1fr) auto 84px 32px;column-gap:12px;align-items:start;min-height:64px;padding:10px 12px;border-radius:12px;outline:0;transition:background .12s}
+.rb .row+.row::before,.rb .row+.bf::before,.rb .bf+.row::before{content:"";position:absolute;left:44px;right:12px;top:0;height:1px;background:var(--sep)}
+.rb .row:hover::before,.rb .row:hover+.row::before,.rb .row:hover+.bf::before,.rb .row.is-sel::before,.rb .row.is-sel+.row::before,.rb .row.is-sel+.bf::before,
+.rb .bf:hover::before,.rb .bf:hover+.row::before,.rb .row.is-hl::before,.rb .row.is-hl+.row::before{opacity:0}
+.rb .row:hover{background:var(--hover)}
+.rb .row.is-sel{background:var(--hover)}
+.rb .row:focus-visible{background:var(--fill)}
+.rb .row.is-hl{animation:rb-hl 2.6s ease-out}
+@keyframes rb-hl{0%,55%{background:var(--tint-soft)}100%{background:transparent}}
+.rb .ck{grid-column:1;display:grid;place-items:center;width:20px;height:20px;margin-top:2px;border-radius:6px;box-shadow:inset 0 0 0 1.5px var(--l3);color:var(--on-tint)}
+.rb button.ck:hover{box-shadow:inset 0 0 0 1.5px var(--tint)}
+.rb .ck.is-on{background:var(--tint-fill);box-shadow:none}
+.rb button.ck.is-on:hover{background:var(--tint-fill-h)}
+.rb .ck.is-mix{box-shadow:inset 0 0 0 1.5px var(--yellow);color:var(--yellow)}
+.rb .ck.is-x{box-shadow:none;border:1.5px dashed var(--l3)}
 .rb .ck.is-none{box-shadow:none}
-.rb .r-t{grid-column:2;grid-row:1;display:flex;gap:4px;min-width:0;font-size:13px;line-height:18px;color:var(--ink-2);white-space:nowrap}
-.rb .r-t .pw{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.rb .r-t b{flex:none;font-weight:600;color:var(--ink-strong)}
-.rb .r-a{grid-column:3;grid-row:1;justify-self:end;font-size:13px;line-height:18px;font-weight:600;color:var(--ink-strong);font-variant-numeric:tabular-nums;white-space:nowrap}
-.rb .r-a .g{margin-right:7px;font-size:12px;font-weight:400;color:var(--ink-muted)}
-.rb .r-a .tm{margin-right:10px;font-size:12px;font-weight:400;color:var(--ink-muted)}
-.rb .r.is-not .r-t{color:var(--ink-muted)}
-.rb .r.is-not .r-t b{color:var(--ink-2);font-weight:500}
-.rb .r.is-not .r-a{font-weight:500;color:var(--ink-muted)}
-.rb .r2{grid-column:2 / 4;grid-row:2;display:flex;align-items:center;gap:4px;min-width:0;margin-top:1px;font-size:12px;line-height:20px;color:var(--ink-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
-.rb .r2 .sep{flex:none;color:var(--ink-faint)}
-.rb .tx{flex:none;margin-right:7px;line-height:14px;border-bottom:1px dotted var(--ink-faint);color:var(--ink-muted)}
-.rb .tx:hover{border-bottom-color:var(--clay-ink);color:var(--clay-ink)}
-/* in a tab there is no site to show the sale on: the number is plain text, its title the whole number */
-.rb .tx.is-plain,.rb .tx.is-plain:hover{border-bottom-color:transparent;color:var(--ink-muted)}
-.rb .ow{flex:none;min-width:0;display:inline-flex;align-items:center;gap:1px;height:20px;margin:0 -3px;padding:0 3px;border-radius:5px;font-size:12px;font-weight:500;color:var(--ink-2)}
-.rb .ow .ico{color:var(--ink-faint)}
-.rb .owt{min-width:0;overflow:hidden;text-overflow:ellipsis}
-.rb button.ow:hover{background:var(--hover);color:var(--ink-strong)}
-.rb button.ow:hover .ico{color:var(--ink-2)}
-.rb button.ow[aria-expanded="true"]{background:var(--press)}
-.rb .ow.is-me{font-weight:400;color:var(--ink-faint)}
-.rb .ow.is-half{flex:0 1 auto}
-.rb .ow.is-amb{color:var(--amber-ink)}
-.rb .rs{flex:0 1000 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.rb .rs.is-amb{color:var(--amber-ink)}
-.rb .rs.is-money{flex:none;color:var(--money)}
-.rb .cm{flex:none;display:inline-flex;align-items:center;gap:4px;margin-left:auto;padding-left:5px;font-size:11.5px;color:var(--ink-faint)}
-.rb .cm:hover{color:var(--ink-strong)}
-.rb .cm.is-ask{color:var(--clay-ink)}
-.rb .r2 .btn{margin-left:auto}
+.rb .ck.is-none::after{content:"";width:8px;height:1.5px;border-radius:1px;background:var(--l4)}
+.rb .tm{grid-column:2;justify-self:start;color:var(--l2);font-variant-numeric:tabular-nums}
+.rb .tm.is-find,.rb .ref{text-decoration:underline dotted;text-underline-offset:3px;text-decoration-color:var(--l3)}
+.rb .tm.is-find:hover,.rb button.ref:hover{color:var(--tint);text-decoration-color:var(--tint)}
+.rb .ds{grid-column:3;min-width:0}
+.rb .l1{color:var(--l2);overflow-wrap:anywhere}
+.rb .l1 b{color:var(--l1);font-weight:500}
+.rb .l2{font-size:13px;line-height:20px;color:var(--l2);overflow-wrap:anywhere}
+.rb .ref{color:var(--l2);font-variant-numeric:tabular-nums}
+.rb .ref.is-plain{text-decoration:none}
+.rb .why.is-wait{color:var(--yellow)}
+.rb .why.is-tint{color:var(--tint)}
+.rb .row.is-off .l1 b,.rb .row.is-before .l1 b{color:var(--l2)}
+.rb .ow{grid-column:4;display:flex;justify-content:flex-end;align-items:center;gap:8px;min-height:24px}
+.rb .pill{display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 10px;border-radius:12px;background:var(--fill);color:var(--l2);font-size:13px;line-height:20px;font-weight:500;white-space:nowrap;transition:background .12s,opacity .12s}
+.rb .pill .ico{margin-right:-4px;opacity:.75}
+.rb button.pill:hover{background:var(--fill-2);color:var(--l1)}
+.rb button.pill[aria-expanded="true"]{background:var(--fill-2);color:var(--l1);box-shadow:0 0 0 1.5px var(--tint-line)}
+.rb .pill.is-tint{background:var(--tint-soft);color:var(--tint)}
+.rb .pill.is-wait{background:var(--yellow-soft);box-shadow:inset 0 0 0 1px var(--yellow-line);color:var(--yellow)}
+.rb .pill.is-card{background:transparent;box-shadow:inset 0 0 0 1.5px var(--tint-line);color:var(--tint)}
+.rb .pill.is-hid{opacity:0}
+.rb .row:hover .pill.is-hid,.rb .row.is-sel .pill.is-hid,.rb .row:focus-within .pill.is-hid,.rb .pill.is-hid[aria-expanded="true"]{opacity:1}
+.rb .am{grid-column:5;text-align:right}
+.rb .am1{font-weight:600;color:var(--l1);font-variant-numeric:tabular-nums;white-space:nowrap}
+.rb .row.is-off .am1{color:var(--l2);font-weight:500}
+.rb .am2{font-size:13px;line-height:20px;color:var(--l2);font-variant-numeric:tabular-nums;white-space:nowrap}
+.rb .cmc{grid-column:6}
+.rb .cm{display:grid;place-items:center;width:32px;height:32px;margin-top:-4px;border-radius:8px;color:var(--l2);opacity:0;transition:opacity .12s,background .12s,color .12s}
+.rb .row:hover .cm,.rb .row.is-sel .cm,.rb .row:focus-within .cm,.rb .cm:focus-visible{opacity:1}
+.rb .cm:hover{background:var(--fill);color:var(--l1)}
+.rb .cm.is-ask{opacity:1;color:var(--yellow)}
 
-/* под строкой: комментарий, вопросы, Генгар */
-.rb .ux{grid-column:2 / 4;display:flex;flex-direction:column;gap:6px;min-width:0;margin:3px 0 4px}
-.rb .nt{display:flex;align-items:flex-start;gap:6px;min-width:0;font-size:12.5px;line-height:17px;color:var(--ink)}
-.rb .nt>.ico{margin-top:1px;color:var(--ink-faint)}
-.rb .nt .t{min-width:0;overflow-wrap:anywhere}
-.rb .nt .t.is-g{font:13.5px/18px var(--serif)}
-.rb .nt .by{flex:none;font-size:11.5px;color:var(--clay-ink)}
-.rb .frm{display:flex;flex-direction:column;gap:6px}
-.rb .frm-l{font-size:12.5px;font-weight:600;color:var(--ink-strong)}
-.rb .frm-r{display:flex;align-items:center;gap:6px}
-.rb .frm-h{font-size:12px;line-height:16px;color:var(--ink-muted)}
-.rb .qw{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
-.rb .qw button{height:22px;padding:0 9px;border-radius:99px;background:var(--chip);box-shadow:inset 0 0 0 1px var(--rule-2);font-size:12px;color:var(--ink-2)}
-.rb .qw button:hover{background:var(--clay-bg);box-shadow:inset 0 0 0 1px var(--clay-line);color:var(--clay-ink)}
-.rb .fld{flex:1;min-width:0;height:28px;padding:0 9px;border:1px solid var(--field-line);border-radius:7px;background:var(--field);color:var(--ink);font:12.5px var(--sans);outline:0}
-.rb .fld::placeholder{color:var(--ink-muted);opacity:1}
-.rb .fld:focus{border-color:var(--rule-3);box-shadow:0 0 0 2px var(--focus-soft)}
-.rb .u{display:flex;align-items:flex-start;gap:8px;padding:6px 9px;border-radius:7px;background:var(--amber-bg);box-shadow:inset 0 0 0 1px var(--amber-line);font-size:12px;line-height:17px;color:var(--ink)}
-.rb .u .t{flex:1;min-width:0}
-.rb .u b{font-weight:600}
-.rb .u-a{display:flex;gap:6px;margin-top:6px}
-.rb .gc{padding:7px 10px 8px;border:1px dashed var(--clay-line);border-radius:8px;background:var(--draft)}
-.rb .gc-h{display:flex;align-items:baseline;gap:6px;font-size:12px;line-height:17px;color:var(--ink-muted)}
-.rb .gc-h>span:not(.gc-d){flex:1;min-width:0}
-.rb .gc-h b{font-weight:600;color:var(--clay-ink)}
-.rb .gc-d{flex:none;margin-left:auto;white-space:nowrap;font-weight:600;color:var(--ink-strong);font-variant-numeric:tabular-nums}
-.rb .gc-d.is-up{color:var(--money)}
-.rb .gc-t{margin-top:3px;font:13.5px/18px var(--serif);color:var(--ink)}
-.rb .gc-a{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;line-height:16px;color:var(--ink-muted)}
-.rb .gc.is-no{border-style:solid;border-color:var(--rule-2);background:none}
-.rb .gc.is-no .gc-a{margin-top:2px;color:var(--ink-2)}
-.rb .lk{flex:none;font-size:12px;color:var(--ink-muted);white-space:nowrap}
-.rb .lk:hover{color:var(--ink-strong);text-decoration:underline}
-.rb .lk.is-clay{color:var(--clay-ink)}
+/* under a row: the strips, the forms, Gengar's card, the comment */
+.rb .ux{grid-column:3 / -1;display:flex;flex-direction:column;gap:8px;min-width:0;margin:8px 0 4px}
+.rb .miss{font-size:13px;line-height:20px;color:var(--yellow)}
+.rb .note{display:flex;align-items:flex-start;gap:8px;min-width:0;font-size:15px;line-height:22px;color:var(--l1);text-align:left}
+.rb .note>.ico{margin-top:3px;color:var(--l2)}
+.rb .note .t{min-width:0;overflow-wrap:anywhere}
+.rb .note .by{font-size:13px;color:var(--l2)}
+.rb button.note:hover .t{color:var(--l1);text-decoration:underline;text-decoration-color:var(--l3);text-underline-offset:3px}
+.rb .strip{display:flex;flex-wrap:wrap;align-items:flex-start;gap:8px 12px;padding:10px 12px;border-radius:10px;font-size:15px;line-height:22px;color:var(--l1)}
+.rb .strip>.ico{margin-top:3px;color:var(--l2)}
+.rb .strip .t{flex:1 1 280px;min-width:0}
+.rb .strip .t b{font-weight:600}
+.rb .strip .acts{display:flex;align-items:center;gap:8px;flex:none;margin-left:auto}
+.rb .strip.is-wait{background:var(--yellow-soft);box-shadow:inset 0 0 0 1px var(--yellow-line)}
+.rb .strip.is-wait>.ico{color:var(--yellow)}
+.rb .strip.is-calm{background:var(--inner)}
+.rb .form{display:flex;flex-direction:column;gap:12px;padding:12px;border-radius:12px;background:var(--inner)}
+.rb .form label{font-size:13px;line-height:20px;font-weight:600}
+.rb .form-r{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.rb .hint{font-size:13px;line-height:20px;color:var(--l2)}
+.rb .fld{flex:1;min-width:0;height:36px;padding:0 12px;border:0;border-radius:9px;background:var(--field);box-shadow:inset 0 0 0 1px var(--line);color:var(--l1);font-size:15px;line-height:22px;outline:0}
+.rb .fld::placeholder{color:var(--l3);opacity:1}
+.rb .fld:focus{box-shadow:inset 0 0 0 1px var(--tint-line),0 0 0 3px var(--tint-soft)}
+.rb textarea.fld{display:block;width:100%;height:auto;padding:8px 12px;resize:none}
+.rb .qw{display:flex;flex-wrap:wrap;gap:8px}
+.rb .qw button{height:28px;padding:0 12px;border-radius:14px;background:var(--fill);color:var(--l1);font-size:13px;line-height:20px;font-weight:500}
+.rb .qw button:hover{background:var(--tint-soft);box-shadow:inset 0 0 0 1px var(--tint-line)}
+.rb .gc{display:flex;flex-direction:column;gap:8px;padding:12px 16px;border-radius:12px;background:var(--inner);box-shadow:inset 3px 0 0 var(--tint-fill)}
+.rb .gc-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 12px;font-size:15px;line-height:22px}
+.rb .gc-who{display:inline-flex;align-items:center;gap:6px;align-self:center;font-weight:600;color:var(--tint)}
+.rb .gc-ch{flex:1;min-width:0;color:var(--l1)}
+.rb .gc-d{padding:0 8px;border-radius:7px;background:var(--fill);font-size:13px;line-height:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.rb .gc-t{font-size:15px;line-height:22px;color:var(--l2)}
+.rb .gc-a{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .gc.is-no{box-shadow:inset 3px 0 0 var(--line)}
+.rb .gc.is-no .gc-who{color:var(--l2)}
 
-/* продажи до начала смены */
-.rb .bf{display:flex;align-items:center;gap:5px;width:100%;padding:8px 12px 8px 38px;border-bottom:1px solid var(--rule);font-size:12px;line-height:18px;color:var(--ink-muted)}
-.rb .bf:hover{color:var(--ink-strong)}
-.rb .bf .ico{color:var(--ink-faint);transition:transform .12s}
-.rb .bf[aria-expanded="true"] .ico{transform:rotate(180deg)}
+/* the sales before the shift: the card's last row */
+.rb .bf{position:relative;display:grid;grid-template-columns:20px minmax(0,1fr);column-gap:24px;align-items:center;width:100%;padding:10px 12px;border-radius:12px;color:var(--l2);text-align:left}
+.rb .bf:hover{background:var(--hover);color:var(--l1)}
+.rb .bf .ico{justify-self:center;color:var(--l2);transform:rotate(-90deg);transition:transform .15s}
+.rb .bf[aria-expanded="true"] .ico{transform:none}
 
-/* кнопки семьи */
-.rb .btn{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:5px;height:28px;padding:0 10px;border-radius:7px;font:500 13px/1 var(--sans);color:var(--ink-2);white-space:nowrap}
-.rb .btn:hover{background:var(--hover);color:var(--ink-strong)}
-.rb .btn--line{background:var(--chip);box-shadow:inset 0 0 0 1px var(--rule-2);color:var(--ink-strong)}
-.rb .btn--line:hover{background:var(--clay-bg);box-shadow:inset 0 0 0 1px var(--clay-line);color:var(--clay-ink)}
-.rb .btn--line:disabled,.rb .btn--line:disabled:hover{background:none;box-shadow:inset 0 0 0 1px var(--rule-2);color:var(--ink-faint)}
-.rb .btn--main,.rb .btn--main:hover{background:var(--clay);color:#1b1a17;font-weight:600}
-.rb .btn--main:hover{background:#e58a6b}
-.rb .btn--quiet{color:var(--ink-muted)}
-.rb .btn--xs{height:22px;padding:0 8px;border-radius:6px;font-size:12px}
-.rb .btn--sm{height:26px;padding:0 9px;border-radius:6px;font-size:12.5px}
-.rb .btn--lg{height:34px;padding:0 16px;border-radius:8px;font-size:13.5px}
+/* ── the rail ── */
+.rb .rail{position:sticky;top:48px;display:flex;flex-direction:column;min-width:0;height:calc(100dvh - 136px);min-height:320px;margin-top:48px;overflow:hidden;border-radius:16px;background:var(--elev);box-shadow:var(--shadow-card)}
+.rb .rail-b{flex:1;min-height:0;overflow:auto;padding:20px;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.rb .rail-f{display:flex;flex-direction:column;gap:12px;padding:16px 20px;border-top:1px solid var(--sep)}
+.rb .btns{display:flex;gap:8px}
+.rb .btns .btn{flex:1}
+.rb .fl{display:flex;align-items:flex-start;gap:8px;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .fl span{flex:1;min-width:0}
+.rb .kq{flex:none;width:20px;height:20px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--line);font-size:13px;line-height:20px;font-weight:600;color:var(--l2);text-align:center}
+.rb .kq:hover,.rb .kq[aria-expanded="true"]{color:var(--l1);box-shadow:inset 0 0 0 1px var(--l3)}
+.rb .sum-l{display:flex;align-items:center;gap:8px;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .more{margin:-2px -8px -2px auto;padding:2px 8px;border-radius:6px;font-size:13px;line-height:20px;font-weight:500;color:var(--l2)}
+.rb .more:hover,.rb .more[aria-expanded="true"]{background:var(--fill);color:var(--l1)}
+.rb .sum-v{margin-top:4px;font:600 36px/44px var(--display);letter-spacing:-.025em;font-variant-numeric:tabular-nums}
+.rb .sum-was,.rb .sum-s{font-size:15px;line-height:22px;color:var(--l2);font-variant-numeric:tabular-nums}
+.rb .sum-s{margin-top:2px}
+.rb .blk{margin-top:24px}
+.rb .rail-b>.blk:first-child{margin-top:0}
+.rb .nts+.rc{margin-top:24px}
+.rb .blk-h,.rb .lbl{display:block;margin-bottom:4px;font-size:13px;line-height:20px;font-weight:600;color:var(--l2)}
+.rb .lbl{margin-bottom:8px}
+.rb .sub-lbl{display:block;margin:12px 0 4px;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .lbl+div .sub-lbl{margin-top:0}
+.rb .memo-ro p{margin-bottom:4px;font-size:15px;line-height:22px;overflow-wrap:anywhere}
+.rb .memo-ro b{font-weight:600}
+.rb .chk{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;list-style:none}
+.rb .chk li{display:flex;align-items:flex-start;gap:10px;font-size:15px;line-height:22px}
+.rb .chk li>.ico{margin-top:3px;color:var(--l2)}
+.rb .chk li.is-ok>.ico{color:var(--green)}
+.rb .chk li.is-wait>.ico{color:var(--yellow)}
+.rb .chk li.is-tint>.ico{color:var(--tint)}
+.rb .chk li>span{min-width:0}
+.rb .chk small{display:block;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .lks{display:flex;flex-wrap:wrap;gap:0 12px;margin-top:2px}
+.rb .prog{height:4px;margin-top:20px;overflow:hidden;border-radius:2px;background:var(--fill)}
+.rb .prog i{display:block;height:100%;border-radius:2px;background:var(--tint-fill);transition:width 1s linear}
+.rb .timer{display:flex;justify-content:space-between;margin-top:8px;font-size:13px;line-height:20px;color:var(--l2);font-variant-numeric:tabular-nums}
+.rb .nts{display:flex;flex-direction:column;gap:8px}
+.rb .nt{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-radius:10px;background:var(--fill);font-size:15px;line-height:22px}
+.rb .nt>.ico{margin-top:3px;color:var(--l2)}
+.rb .nt.is-wait{background:var(--yellow-soft);box-shadow:inset 0 0 0 1px var(--yellow-line)}
+.rb .nt.is-wait>.ico{color:var(--yellow)}
+.rb .nt .t{flex:1;min-width:0}
+.rb .bk{margin:0 -12px;padding:0;list-style:none}
+.rb .bk button{position:relative;display:flex;align-items:baseline;gap:8px;width:100%;padding:6px 12px;border-radius:8px;color:var(--l2);text-align:left}
+.rb .bk button:hover{background:var(--fill);color:var(--l1)}
+.rb .bk button.is-on{background:var(--fill);color:var(--l1)}
+.rb .bk button.is-on::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:2px;background:var(--tint-fill)}
+.rb .bk .n{min-width:0;overflow-wrap:anywhere}
+.rb .bk .p{font-size:13px;color:var(--l3);white-space:nowrap}
+.rb .bk .v{margin-left:auto;padding-left:8px;font-weight:500;color:var(--l1);font-variant-numeric:tabular-nums;white-space:nowrap}
+.rb .bk .v.is-zero{color:var(--l2)}
+.rb .bk-m{padding:8px 12px 2px;font-size:13px;line-height:20px;font-weight:600}
+.rb .offs{margin-top:8px;font-size:13px;line-height:20px;color:var(--l2)}
+/* «Отчёт учтён»: the receipt */
+.rb .rc{position:relative;margin-bottom:12px;padding:24px 20px 20px;border-radius:12px 12px 0 0;background:var(--paper)}
+/* the torn edge: whole scallops end to end, whatever the rail's width */
+.rb .rc::after{content:"";position:absolute;left:0;right:0;bottom:-7px;height:7px;background:radial-gradient(circle at 50% 0,var(--paper) 6.5px,transparent 7px) 0 0/14px 7px round no-repeat}
+.rb .rc-ic{display:grid;place-items:center;width:44px;height:44px;margin:0 auto 12px;border-radius:50%;background:var(--green-soft);color:var(--green)}
+.rb .rc-t{text-align:center;font:600 24px/32px var(--display);letter-spacing:-.015em}
+.rb .rc-s{margin-top:4px;text-align:center;font-size:13px;line-height:20px;color:var(--l2);font-variant-numeric:tabular-nums}
+.rb .perf{height:0;margin:16px -4px;border-top:1.5px dashed var(--line)}
+.rb .rl{display:flex;align-items:baseline;gap:8px;padding:2px 0}
+.rb .rl span{color:var(--l2);white-space:nowrap}
+.rb .rl i{flex:1;min-width:8px;border-bottom:1px dotted var(--l4);transform:translateY(-5px)}
+.rb .rl b{font-weight:500;font-variant-numeric:tabular-nums}
+.rb .rl.is-model span,.rb .rl.is-tot span{color:var(--l1);font-weight:600}
+.rb .rl.is-tot b{font:600 24px/32px var(--display);letter-spacing:-.015em}
+.rb .rc-off{margin-top:12px;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .rc-l{display:inline-block;margin-top:12px}
 
-/* меню владельца */
-.rb .menu{position:absolute;z-index:30;width:290px;padding:4px;border-radius:10px;background:var(--raised);box-shadow:inset 0 0 0 1px var(--rule-2),var(--shadow-float);font:13px/18px var(--sans);color:var(--ink)}
-.rb .menu i{display:block;height:1px;margin:4px 6px;background:var(--rule)}
-.rb .mi{display:flex;align-items:center;gap:6px;width:100%;height:28px;padding:0 8px 0 6px;border-radius:6px;white-space:nowrap}
-.rb .mi:hover{background:var(--hover)}
-.rb .mi-c{flex:none;width:14px;color:var(--clay-ink)}
-.rb .mi-t{flex:1}
-.rb .mi.is-on .mi-t{font-weight:600;color:var(--clay-ink)}
-.rb .mi-h{font-size:12px;color:var(--ink-muted)}
-
-/* низ доски */
-.rb .bar{position:relative;flex:none;border-top:1px solid var(--rule-2);background:var(--raised)}
-.rb .bar-st{display:flex;align-items:center;gap:22px;padding:8px 16px 0;font-size:12.5px;line-height:18px;color:var(--ink-2)}
-.rb .bar-m{display:flex;align-items:center;gap:18px;min-height:56px;padding:8px 16px}
-.rb .tot{flex:none;font-size:13px;color:var(--ink-muted);white-space:nowrap}
-.rb .tot b{margin-left:2px;font-size:18px;line-height:24px;font-weight:600;letter-spacing:-.01em;color:var(--ink-strong);font-variant-numeric:tabular-nums}
-.rb .tot s{color:var(--ink-muted)}
-.rb .tot .ico{display:inline-block;vertical-align:-2px;margin-right:4px;color:var(--good-ink)}
-.rb .memo{flex:1 1 280px;max-width:520px;min-width:180px;height:32px;font-size:13px}
-/* two models: a field per model's post, its name kept beside it */
-.rb .memo-n{display:flex;align-items:center;gap:7px;flex-basis:220px}
-.rb .memo-k{flex:none;max-width:110px;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;font-weight:600;color:var(--ink-muted);white-space:nowrap}
-.rb .memo-n .fld{height:32px;font-size:13px}
-/* the fields never push «Сдать смену» off the bar: on a medium screen they take a line of their own under it */
-.rb .bar-m:has(.memo-n){flex-wrap:wrap;row-gap:8px}
-@media (min-width:721px) and (max-width:1320px){
-  .rb .bar-m:has(.memo-n){row-gap:4px}
-  .rb .bar-m:has(.memo-n)::after{content:"";order:8;flex:0 0 100%;height:0}
-  .rb .memo-n{order:9;flex:1 1 40%;max-width:none}
-}
-.rb .hint{flex:none;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-muted);white-space:nowrap}
-.rb .hint:hover{color:var(--ink-strong)}
-.rb .hint.is-amb{color:var(--amber-ink)}
-.rb .k{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
-.rb .k>.ico{color:var(--ink-muted)}
-.rb .k.is-ok>.ico{color:var(--good-ink)}
-.rb .k.is-g>.ico{color:var(--clay-ink)}
-.rb .k.is-amb>.ico{color:var(--amber-ink)}
-.rb .k .lks{display:inline-flex;white-space:nowrap}
-.rb .k .lks .lk{margin-left:4px;font-size:12.5px}
-.rb .cf{flex:10 1 360px;max-width:760px;margin:0;font-size:13px;line-height:18px;color:var(--ink)}
-.rb .cf b{font-weight:600;color:var(--ink-strong)}
-.rb .nq{flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink-2);white-space:nowrap;overflow:hidden}
-.rb .nq .ico{color:var(--amber-ink)}
-.rb .nq.is-q .ico{color:var(--ink-muted)}
-.rb .spin{flex:none;width:12px;height:12px;border-radius:50%;border:1.5px solid var(--clay-line);border-top-color:var(--clay-ink);animation:rb-sp .9s linear infinite}
-@keyframes rb-sp{to{transform:rotate(360deg)}}
-
-.rb .toast{position:absolute;left:50%;bottom:calc(var(--tb,56px) + 14px);z-index:40;padding:8px 13px;border-radius:10px;background:var(--raised);box-shadow:inset 0 0 0 1px var(--rule-2),var(--shadow-float);font:12.5px/18px var(--sans);color:var(--ink);white-space:nowrap;opacity:0;transform:translate(-50%,6px);pointer-events:none;transition:opacity .14s,transform .14s}
+/* ── floating: «чья», «Ещё», the keys, the windows, the toast ── */
+.rb .menu,.rb .pop{position:fixed;z-index:40;max-width:calc(100vw - 16px);overflow:auto;padding:6px;border-radius:14px;background:var(--elev);box-shadow:var(--shadow-pop)}
+.rb .menu:focus,.rb .pop:focus,.rb .dlg:focus{outline:0}
+.rb .menu{width:360px}
+.rb .pop{width:320px}
+.rb .mn-h{padding:8px 10px 6px;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .mn-h b{font-weight:600;color:var(--l1)}
+.rb .mi{display:grid;grid-template-columns:18px minmax(0,1fr) auto;align-items:center;gap:8px;width:100%;min-height:36px;padding:6px 10px;border-radius:9px;text-align:left;font-size:15px;line-height:22px}
+.rb .mi:hover,.rb .mi:focus-visible{background:var(--fill-2);outline:0}
+.rb .mi-c{color:var(--tint)}
+.rb .mi.is-on .mi-t{font-weight:600}
+.rb .mi-h{font-size:13px;line-height:20px;color:var(--l2);text-align:right}
+.rb .mi:hover .mi-h,.rb .mi:focus-visible .mi-h,.rb .pi:hover span,.rb .pi:focus-visible span{color:var(--l1)}
+.rb .mn-sep{height:1px;margin:6px;background:var(--sep)}
+.rb .mg-h,.rb .mg-r{display:grid;grid-template-columns:minmax(0,1fr) 64px 64px;align-items:center}
+.rb .mg-h{padding:4px 10px 2px;font-size:13px;line-height:20px;font-weight:500;color:var(--l2)}
+.rb .mg-h span:not(:first-child){text-align:center}
+.rb .mg-r{min-height:44px;padding:2px 10px;border-radius:9px}
+.rb .mg-r:hover{background:var(--hover)}
+.rb .mg-n{min-width:0;font-size:15px;line-height:22px;overflow-wrap:anywhere}
+.rb .mg-n small{display:block;font-size:13px;line-height:18px;color:var(--l2)}
+.rb .rd{display:grid;place-items:center;justify-self:center;width:44px;height:36px;border-radius:8px}
+.rb .rd:hover,.rb .rd:focus-visible{background:var(--fill-2);outline:0}
+.rb .rd i{display:block;width:18px;height:18px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--l3)}
+.rb .rd.is-on i{box-shadow:inset 0 0 0 5px var(--tint-fill)}
+.rb .rd.is-wait i{box-shadow:inset 0 0 0 5px var(--yellow)}
+.rb .mn-f{min-height:78px;margin:6px 4px 2px;padding:10px 6px 6px;border-top:1px solid var(--sep);font-size:13px;line-height:20px}
+.rb .pi{display:block;width:100%;padding:8px 10px;border-radius:9px;text-align:left}
+.rb .pi:hover,.rb .pi:focus-visible{background:var(--fill-2);outline:0}
+.rb .pi b{display:block;font-size:15px;line-height:22px;font-weight:500}
+.rb .pi span{display:block;margin-top:2px;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .keys{padding:10px 12px 12px}
+.rb .kh{margin-bottom:6px;font-size:13px;line-height:20px;font-weight:600}
+.rb .kr{display:flex;align-items:center;gap:12px;padding:4px 0;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .kr span:first-child{flex:1;min-width:0}
+.rb .kr span:last-child{display:flex;flex:none;align-items:center;gap:4px}
+.rb kbd{min-width:22px;padding:0 6px;border-radius:6px;background:var(--fill);color:var(--l1);font:500 13px/20px var(--sans);text-align:center}
+.rb .dlg{position:fixed;z-index:40;left:50%;top:50%;display:flex;flex-direction:column;gap:10px;width:min(460px,calc(100vw - 32px));max-height:min(600px,calc(100dvh - 48px));overflow:auto;padding:16px 20px 20px;border-radius:16px;background:var(--elev);box-shadow:var(--shadow-pop);transform:translate(-50%,-50%)}
+.rb .dlg-h{display:flex;align-items:center;justify-content:space-between;gap:12px;font:600 17px/24px var(--display)}
+.rb .dlg-h .btn{margin-right:-12px}
+.rb .dlg-t{margin-top:6px;font-size:13px;line-height:20px;font-weight:600;color:var(--l2)}
+.rb .dlg-e{padding:6px 0;color:var(--l2)}
+.rb .dr{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:12px;padding:8px 0;border-top:1px solid var(--sep);font-size:15px;line-height:22px}
+.rb .dr .a{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.rb .dr .s{grid-column:1 / 3;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;font-size:13px;line-height:20px;color:var(--l2)}
+.rb .dr .s .lk{margin-left:auto}
+.rb .dr-f{grid-column:1 / 3;margin-top:8px}
+.rb .fld.is-sum{flex:0 0 112px}
+.rb .toast{position:fixed;left:50%;bottom:24px;z-index:60;max-width:min(560px,calc(100vw - 32px));padding:10px 16px;border-radius:12px;background:var(--elev);box-shadow:var(--shadow-pop);font-size:15px;line-height:22px;opacity:0;pointer-events:none;transform:translate(-50%,12px);transition:opacity .18s,transform .18s}
 .rb .toast.is-on{opacity:1;transform:translate(-50%,0)}
-.rb :focus-visible{outline:2px solid var(--clay-ink);outline-offset:1px}
-@media (prefers-reduced-motion:reduce){.rb .toast,.rb .bf .ico{transition:none}.rb .spin{animation:none}}
-/* ── what the prototype does not draw, in its look ── */
-/* «Ещё» in the bar and its panels: «Мимо площадки», «Найти продажу» */
-.rb .pnl{position:absolute;z-index:30;width:420px;max-height:min(520px,calc(100vh - 140px));overflow-y:auto;padding:10px 12px 12px;border-radius:10px;background:var(--raised);box-shadow:inset 0 0 0 1px var(--rule-2),var(--shadow-float);scrollbar-width:thin;scrollbar-color:var(--rule-3) transparent}
-.rb .pnl-h{display:flex;align-items:baseline;gap:8px;margin-bottom:8px;font-size:13px;font-weight:600;color:var(--ink-strong)}
-.rb .pnl-h .lk{margin-left:auto;font-weight:400}
-.rb .pnl-t{margin:10px 0 4px;font-size:12px;font-weight:600;color:var(--ink-muted)}
-.rb .pnl .frm-h{margin-top:2px}
-.rb .pnl .fld{height:28px}
-.rb .pnl-r{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:10px;padding:7px 0;border-top:1px solid var(--rule);font-size:12.5px;line-height:17px}
-.rb .pnl-r:first-of-type{border-top:0}
-.rb .pnl-r .a{justify-self:end;font-weight:600;color:var(--ink-strong);font-variant-numeric:tabular-nums;white-space:nowrap}
-.rb .pnl-r .s{grid-column:1 / 3;display:flex;align-items:center;gap:6px;color:var(--ink-muted)}
-.rb .pnl-r .s .lk{margin-left:auto}
-.rb .pnl-r .frm{grid-column:1 / 3;margin-top:6px}
-.rb .pnl .emp{padding:6px 0}
-/* a reader's bar: the shift's comment as text */
-.rb .memo-ro{flex:1 1 280px;max-width:640px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--ink-2)}
-.rb .memo-ro b{font-weight:600;color:var(--ink-muted)}
-/* a board that cannot be drawn: a sentence in the middle */
-.rb .gate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;color:var(--ink-muted);font-size:13.5px;line-height:20px}
-.rb .gate b{font-size:15px;font-weight:600;color:var(--ink-strong)}
-.rb .gate .spin{width:16px;height:16px}
-/* the site did not find the row («Строка на сайте не найдена: 22:30, $48, Viggo»): a quiet line under it */
-.rb .miss{font-size:12px;line-height:16px;color:var(--amber-ink)}
 
-/* «От прошлой смены (Олег): „…“»: one quiet line over the columns of one's own board */
-.rb .prev{flex:none;display:flex;align-items:center;gap:7px;min-height:30px;padding:5px 16px;border-bottom:1px solid var(--rule-2);font-size:12.5px;line-height:18px;color:var(--ink-2);white-space:nowrap}
-.rb .prev .ico{color:var(--ink-faint)}
-.rb .prev .t{min-width:0;overflow:hidden;text-overflow:ellipsis}
-/* another shift of the person that waits for them: «Не сдана ваша смена …» and the way there */
-.rb .oth{flex:none;display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 10px 4px 16px;border-bottom:1px solid var(--rule-2);font-size:12.5px;line-height:18px;color:var(--ink-2);white-space:nowrap}
-.rb .oth .ico{color:var(--ink-faint)}
-.rb .oth .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.rb .oth.is-wait{background:var(--amber-bg);border-bottom-color:var(--amber-line);color:var(--ink)}
-.rb .oth.is-wait .ico{color:var(--amber-ink)}
+/* A word with no place to break (a long login, a pasted link) breaks anywhere rather than pushes the board wider. */
+.rb .ds,.rb .banner .t,.rb .strip .t,.rb .gc-h,.rb .gc-t,.rb .gc-a,.rb .nt .t,.rb .chk li>span,.rb .dr>span,.rb .mn-h,.rb .mn-f,.rb .mi-t,
+.rb .pi,.rb .hint,.rb .fl span,.rb .offs,.rb .rc-off,.rb .toast,.rb .dlg-e{overflow-wrap:anywhere}
 
-/* a phone: one column per screen width, swiped sideways; the header and the bar wrap instead of squeezing */
-@media (max-width:720px){
-  .rb .view{min-width:0}
-  .rb .bh{flex-wrap:wrap;height:auto;row-gap:2px;padding:8px 10px 8px 14px}
-  .rb .bh-t{flex:1 1 100%;white-space:normal}
-  .rb .bh-off{display:none}
-  .rb .bh-sum:first-of-type{margin-left:0}
-  .rb .bh-sum+.btn{margin-left:auto}
-  .rb .cols{scroll-snap-type:x mandatory}
-  .rb .col,.rb .col.is-empty{flex:0 0 100%;min-width:100%;scroll-snap-align:start}
-  .rb .bar-st{flex-wrap:wrap;row-gap:4px;gap:4px 14px;padding:8px 14px 0;white-space:normal}
-  .rb .bar-st .k{flex-wrap:wrap;white-space:normal}
-  .rb .bar-st .k .lks{flex-wrap:wrap}
-  .rb .bar-m{flex-wrap:wrap;gap:8px 12px;padding:8px 14px 10px}
-  .rb .memo{flex:1 1 100%;max-width:none;order:5}
-  .rb .bar-m .hint{order:6}
-  .rb .bar-m .grow{display:none}
-  .rb .bar-m .btn--lg{order:7;flex:1 1 0}
-  .rb .cf{flex:1 1 100%}
-  .rb .nq{flex:1 1 100%;white-space:normal}
-  .rb .oth{padding:6px 10px 6px 14px;white-space:normal}
-  .rb .toast{white-space:normal;max-width:calc(100% - 32px)}
-  .rb .pnl{left:8px!important;right:8px;width:auto}
+/* A laptop: the title and the date over each other, so the steps keep their room. */
+@media (max-width:1279px){
+  .rb .top-t{flex-direction:column;align-items:flex-start;gap:0}
+  .rb .top-t h1{font-size:15px;line-height:20px}
+  .rb .top-d{font-size:13px;line-height:18px}
 }
-
-/* A narrow column (four at 1440): «Комментарий» becomes the note icon alone, so «чья» and the reason keep their room.
-   At the prototype's own width (about 500 px a column) nothing changes. */
-.rb .col{container-type:inline-size}
-.rb .cm .cm-i{display:none}
-@container (max-width:419px){
-  .rb .cm .cm-i{display:block}
-  .rb .cm .cm-w{display:none}
-  .rb .cm{padding-left:6px}
+/* Narrower than the board was made for (a phone): one column, the rail over the pages. */
+@media (max-width:999px){
+  .rb .wrap{grid-template-columns:minmax(0,1fr);padding:4px 16px 32px}
+  .rb .rail{position:static;order:-1;height:auto;min-height:0;margin-top:16px}
+  .rb .rail-b{overflow:visible}
+  .rb .top-in{padding:0 16px}
+  .rb .steps{display:none}
+  .rb .phase{display:inline-flex}
+}
+@media (prefers-reduced-motion:reduce){
+  .rb *,.rb *::before,.rb *::after{animation:none!important;transition:none!important}
 }

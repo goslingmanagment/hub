@@ -233,14 +233,15 @@ export const shiftReportLineBodySchema = z.object({
   /**
    * null — back to the rule's word. «не моё», «делим с…» on «Ваши продажи»; «моё» on «Рядом»; on the board also
    * `give` (one's own sale to a colleague, `toUserId`) and `pot` (one's own sale to the pot). A word that makes the
-   * person's share larger at someone's cost is not a mark: it is a question (`shiftReportAsk`).
+   * person's share larger at someone's cost is not a mark: it is a question (`shiftReportAsk`). Absent — the word as it
+   * stands (a comment alone).
    */
-  statement: shiftReportWordEnum.nullable(),
+  statement: shiftReportWordEnum.nullable().optional(),
   /** With «делим с…»: the colleague. */
   shareWithUserId: intId.nullable().optional(),
   /** With `give`: the colleague the sale is given to. */
   toUserId: intId.nullable().optional(),
-  /** Empty or null — none. «Моё» on «Рядом» needs one line of why. */
+  /** Empty or null — none; absent — the comment as it stands. «Моё» on «Рядом» needs one line of why. */
   note: z.string().trim().max(SHIFT_REPORT_NOTE_MAX).nullable().optional(),
 });
 

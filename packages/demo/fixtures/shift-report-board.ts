@@ -88,7 +88,8 @@ const PAGES = [
 ] as const;
 type PageId = (typeof PAGES)[number]["id"];
 
-type Own = "me" | "pot" | "oleg" | "seva" | "none" | "half:seva" | "half:oleg" | "";
+/** `wait:oleg` — Oleg's PPV that goes to his next shift (he is not on one now). */
+type Own = "me" | "pot" | "oleg" | "seva" | "none" | "half:seva" | "half:oleg" | "wait:oleg" | "";
 interface Base {
   id: number; page: PageId; day: 11 | 12 | 13; t: string; kind: "media" | "sub" | "tip"; name: string; handle: string;
   net: number; gross: number; tx: string; rule: Own; why: string; late?: boolean; lost?: boolean; before?: boolean;
@@ -102,37 +103,38 @@ const mk = (id: number, page: PageId, day: 11 | 12 | 13, t: string, kind: Base["
 
 /** The prototype's `baseRows()`, one to one. */
 const BASE: Base[] = [
-  mk(12, "m2", 13, "02:38", "media", "Harlan/Texas", "harlan_tx", 36, 0, "981341022871530944", "me", "ваш ппв из 01:55", { late: true }),
-  mk(1, "m2", 13, "02:12", "media", "Harlan/Texas", "harlan_tx", 24, 0, "981340275518826113", "me", "ваш ппв из 01:40, куплен после смены"),
+  mk(12, "m2", 13, "02:38", "media", "Harlan/Texas", "harlan_tx", 36, 0, "981341022871530944", "me", "ваш PPV из 01:55", { late: true }),
+  mk(1, "m2", 13, "02:12", "media", "Harlan/Texas", "harlan_tx", 24, 0, "981340275518826113", "me", "ваш PPV из 01:40, куплен после смены"),
   mk(2, "m2", 12, "23:48", "tip", "mossrain", "mossrain", 8, 0, "981338810264419842", "pot", "тип под постом"),
-  mk(3, "m2", 12, "22:30", "media", "Viggo", "viggo_nord", 48, 0, "981337562090745305", "me", "ваш ппв, отправлен в 22:17"),
+  mk(3, "m2", 12, "22:30", "media", "Viggo", "viggo_nord", 48, 0, "981337562090745305", "me", "ваш PPV, отправлен в 22:17"),
   mk(4, "m2", 12, "21:30", "tip", "Wren", "wren_o", 12, 0, "981336977431290668", "me", "", { lost: true }),
   mk(62, "m2", 12, "21:55", "tip", "Rowan/Canada", "rowan_k", 15, 0, "981337101552918406", "me", "тип в чате после вашего сообщения", { found: true }),
-  mk(13, "m2", 12, "21:12", "media", "Juno/Oslo", "juno_oslo", 30, 0, "981336851204477390", "half:seva", "ппв Севы из 17:20, дожали вы"),
+  mk(13, "m2", 12, "21:12", "media", "Juno/Oslo", "juno_oslo", 30, 0, "981336851204477390", "half:seva", "PPV Севы из 17:20, дожали вы"),
   mk(5, "m2", 12, "20:41", "sub", "Rowan/Canada", "rowan_k", 8, 0, "981336420187553920", "me", "подписался после вашего сообщения"),
-  mk(6, "m2", 12, "19:40", "tip", "Felix B.", "felix_b", 16, 0, "981335801669112477", "oleg", "шёл его слот до 20:00"),
+  mk(15, "m2", 12, "20:58", "media", "Kai/Berlin", "kai_b", 26, 0, "981336530221904118", "wait:oleg", "PPV от Олега, уйдёт в следующую смену Олега"),
+  mk(6, "m2", 12, "19:40", "tip", "Felix B.", "felix_b", 16, 0, "981335801669112477", "oleg", "идёт слот Олега"),
   mk(7, "m2", 12, "19:31", "tip", "Dario/Milan", "dario_mi", 40, 0, "981335714022638196", "me", "тип в чате после вашего сообщения"),
-  mk(8, "m2", 12, "19:05", "media", "Dario/Milan", "dario_mi", 32, 0, "981335468395021753", "me", "ваш ппв, отправлен в 18:51"),
-  mk(9, "m2", 12, "18:22", "media", "Dario/Milan", "dario_mi", 17.6, 0, "981335052716884031", "me", "ваш ппв, отправлен в 18:10"),
+  mk(8, "m2", 12, "19:05", "media", "Dario/Milan", "dario_mi", 32, 0, "981335468395021753", "me", "ваш PPV, отправлен в 18:51"),
+  mk(9, "m2", 12, "18:22", "media", "Dario/Milan", "dario_mi", 17.6, 0, "981335052716884031", "me", "ваш PPV, отправлен в 18:10"),
   mk(10, "m2", 12, "17:48", "media", "Vee/Spain", "vee_s", 24, 0, "981334726150397284", "", "", { before: true }),
   mk(11, "m2", 12, "16:10", "sub", "Hollis", "hollis_88", 8, 0, "981333801945562019", "", "", { before: true }),
   mk(14, "m2", 12, "15:02", "tip", "Brodie", "brodie_w", 10, 0, "981333205518640227", "", "", { before: true }),
   mk(20, "m3", 13, "01:47", "sub", "quill", "quill_q", 8, 0, "981340021773350496", "none", "фану никто не писал"),
   mk(21, "m3", 13, "00:58", "sub", "Teo", "teo_r", 4, 0, "981339520048117350", "me", "подписался после вашего сообщения"),
   mk(22, "m3", 12, "22:48", "sub", "kitecat", "kitecat", 120, 0, "981337743906228871", "me", "тир Gold после вашей переписки"),
-  mk(23, "m3", 12, "21:03", "media", "Ash/UK", "ash_w", 28, 0, "981336712558004629", "me", "ваш ппв от 10 нояб., куплен сегодня"),
+  mk(23, "m3", 12, "21:03", "media", "Ash/UK", "ash_w", 28, 0, "981336712558004629", "me", "ваш PPV от 10 нояб., куплен сегодня"),
   mk(24, "m3", 12, "15:30", "media", "Corin", "corin_v", 20, 0, "981333415280779164", "", "", { before: true }),
   mk(50, "m4", 13, "01:20", "tip", "Rook", "rook_77", 10, 0, "981339844120556017", "me", "тип в чате после вашего сообщения"),
-  mk(51, "m4", 12, "23:02", "media", "Lyle/Dublin", "lyle_d", 22, 0, "981338412093377150", "me", "ваш ппв, отправлен в 22:50"),
+  mk(51, "m4", 12, "23:02", "media", "Lyle/Dublin", "lyle_d", 22, 0, "981338412093377150", "me", "ваш PPV, отправлен в 22:50"),
   mk(52, "m4", 12, "19:15", "sub", "pepper", "pepper_v", 8, 0, "981335590412270833", "none", "фану никто не писал"),
   mk(53, "m4", 12, "17:30", "media", "Ines", "ines_c", 18, 0, "981334620044817292", "", "", { before: true }),
-  mk(30, "fr", 13, "01:52", "media", "nightowl", "nightowl_7", 20, 25, "", "seva", "ппв Севы от 11 нояб."),
-  mk(31, "fr", 13, "01:30", "media", "Oskar", "oskar_n", 14.4, 18, "", "me", "ваш ппв, отправлен в 01:12"),
-  mk(32, "fr", 13, "00:55", "media", "Oskar", "oskar_n", 14.4, 18, "", "me", "ваш ппв, отправлен в 00:41"),
-  mk(33, "fr", 13, "00:20", "media", "Juniper", "juniper_j", 12, 15, "", "me", "ваш ппв, отправлен в 00:02"),
+  mk(30, "fr", 13, "01:52", "media", "nightowl", "nightowl_7", 20, 25, "", "seva", "PPV Севы от 11 нояб."),
+  mk(31, "fr", 13, "01:30", "media", "Oskar", "oskar_n", 14.4, 18, "", "me", "ваш PPV, отправлен в 01:12"),
+  mk(32, "fr", 13, "00:55", "media", "Oskar", "oskar_n", 14.4, 18, "", "me", "ваш PPV, отправлен в 00:41"),
+  mk(33, "fr", 13, "00:20", "media", "Juniper", "juniper_j", 12, 15, "", "me", "ваш PPV, отправлен в 00:02"),
   mk(34, "fr", 12, "23:50", "tip", "marlowe", "marlowe_m", 24, 30, "", "me", "тип в чате после вашего сообщения"),
-  mk(35, "fr", 12, "23:05", "media", "marlowe", "marlowe_m", 36, 45, "", "me", "ваш ппв, отправлен в 22:58"),
-  mk(36, "fr", 12, "22:15", "media", "marlowe", "marlowe_m", 24, 30, "", "me", "ваш ппв, отправлен в 22:02"),
+  mk(35, "fr", 12, "23:05", "media", "marlowe", "marlowe_m", 36, 45, "", "me", "ваш PPV, отправлен в 22:58"),
+  mk(36, "fr", 12, "22:15", "media", "marlowe", "marlowe_m", 24, 30, "", "me", "ваш PPV, отправлен в 22:02"),
   mk(37, "fr", 12, "17:02", "media", "Benno", "benno_k", 16, 20, "", "", "", { before: true }),
   mk(40, "vip", 12, "20:20", "sub", "Bram", "bram_h", 16, 20, "", "me", "подписался после вашего сообщения"),
   mk(41, "vip", 12, "14:45", "tip", "Soren", "soren_w", 8, 10, "", "", "", { before: true }),
@@ -143,11 +145,11 @@ BASE.push(...BASE.filter((row) => row.page === "fr" || row.page === "vip").map((
 /** «Найти продажу»: sales of the days before on the shift's pages that no report of Lev's holds. */
 const CLAIMABLE: Base[] = [
   mk(60, "m2", 11, "23:14", "tip", "Rowan/Canada", "rowan_k", 15, 0, "981329101442210831", "none", "фану никто не писал"),
-  mk(61, "m3", 11, "21:40", "media", "Teo", "teo_r", 22, 0, "981328815503317702", "oleg", "ппв Олега"),
+  mk(61, "m3", 11, "21:40", "media", "Teo", "teo_r", 22, 0, "981328815503317702", "oleg", "PPV Олега"),
 ];
 const MY_NOTES: Record<number, string> = { 7: "голосовое, просил ещё", 22: "тир Gold, обещан кастом 5 минут, сдать до пятницы" };
 const G_EDITS = [
-  { id: 3, from: "me" as Own, to: "half:seva" as Own, why: "О покупке договорился Сева 11 нояб.: фан написал «возьму завтра вечером». Вы отправили ппв и закрыли продажу." },
+  { id: 3, from: "me" as Own, to: "half:seva" as Own, why: "О покупке договорился Сева 11 нояб.: фан написал «возьму завтра вечером». Вы отправили PPV и закрыли продажу." },
   { id: 20, from: "none" as Own, to: "me" as Own, why: "Владелец в чате смены в 23:52: «quill считай Льву, он его вернул»." },
 ];
 const G_NOTES: Record<number, string> = { 8: "офис, часть 2" };
@@ -183,13 +185,45 @@ function ownerOf(own: Own): ShiftReportOwner {
   const h = half(own);
   if (h) return { kind: "share", userId: WHO[h].userId, name: WHO[h].name, words: `пополам с ${personNameForms(WHO[h].name).ins}` };
   if (own === "oleg" || own === "seva") return { kind: "user", userId: WHO[own].userId, name: WHO[own].name, words: personNameForms(WHO[own].name).gen };
+  if (own === "wait:oleg") return { kind: "waiting", userId: OLEG.userId, name: OLEG.name, words: personNameForms(OLEG.name).gen };
   if (own === "pot") return { kind: "pot", userId: null, name: null, words: "общак" };
   return { kind: "nobody", userId: null, name: null, words: "ничья" };
 }
 const ruleWord = (own: Own) => (own === "me" ? "ваша" : ownerOf(own).words);
-const plainUsd = (v: number) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;
-/** Who answers a question about a sale the rule gives `rule`: the colleague, or the owner for the pot. */
-const askedOf = (rule: Own): Who | "owner" | null => (rule === "oleg" || rule === "seva" ? rule : half(rule) ?? (rule === "pot" ? "owner" : null));
+/** Who answers a question about a sale the rule gives `rule`: the colleague (a waiting PPV's sender), or the owner for the pot. */
+const askedOf = (rule: Own): Who | "owner" | null =>
+  (rule === "oleg" || rule === "seva" ? rule : rule === "wait:oleg" ? "oleg" : half(rule) ?? (rule === "pot" ? "owner" : null));
+/** A waiting PPV's last moment for its sender's shift, as Hub's rule gives it (sale-rule.ts `ppvWaitMs`: a week). */
+const waitsUntilOf = (row: Base) => at(row.day + 7, row.t);
+
+/**
+ * The row's «чья» menu as Hub offers it (shift-report-board-view.ts `choicesOf`). Oleg and Seva both hand in by the
+ * board: a word on a colleague is written at once, they are told; the pot's is the owner's.
+ */
+function choicesOf(row: Base, current: ShiftReportOwner): NonNullable<ShiftReportRow["choices"]> {
+  const is = (one: ShiftReportOwner) => one.kind === current.kind && (one.userId ?? 0) === (current.userId ?? 0);
+  type Asks = NonNullable<ShiftReportRow["choices"]>[number]["asks"];
+  const item = (own: Own, asks: Asks, via: "line" | "ask", hint?: string) => {
+    const owner = ownerOf(own);
+    return { owner, asks, via, hint: own === row.rule ? "по правилу" : hint ?? asks?.words ?? "", current: is(owner) };
+  };
+  if (row.rule !== "me" && half(row.rule) === null) {
+    const holder = askedOf(row.rule);
+    const asks: Asks = holder === null ? null : holder === "owner"
+      ? { to: "decider", user: null, words: "решит владелец" }
+      : { to: "colleague", user: person(WHO[holder]), words: `сообщим ${personNameForms(WHO[holder].name).dat}` };
+    return [
+      item(row.rule, null, "line"), item("me", asks, asks === null ? "line" : "ask"),
+      ...(holder === "oleg" || holder === "seva" ? [item(`half:${holder}`, asks, "ask")] : []),
+    ];
+  }
+  // «Моя» only where the rule gives the sale all (Hub refuses «моё» on one's own half).
+  return [
+    ...(row.rule === "me" || is(ownerOf("me")) ? [item("me", null, "line")] : []),
+    item("half:oleg", null, "line"), item("half:seva", null, "line"), item("oleg", null, "line"), item("seva", null, "line"),
+    item("pot", null, "line", "решит владелец"), item("none", null, "line"),
+  ];
+}
 
 /** A word on someone else's sale: `taken` — a colleague's, written to Lev at once (Hub since 2026-11-21); `asked` — the decider's. */
 interface Ask { to: Who | "owner"; want: Own; note: string; state: "asked" | "disputed" | "taken" }
@@ -341,11 +375,12 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
   } else if (share <= 0) {
     reasonWords = row.why;
   }
-  // The prototype's `ownerInfo`: on a half that counts, line 2 says the person's half; the reason moves to the title.
-  if (half(word) && share > 0 && !lostOpen(state, row) && !lateOpen(state, row) && !taken) reasonWords = `вам ${plainUsd(share)}`;
   const attention = lostOpen(state, row) || lateOpen(state, row) || incoming?.state === "taken"
     || (state.phase === "confirm" && (proposal?.state === "proposed" || (state.gNote?.id === row.id && note?.by === "agent")));
   const askTo = ask === null ? null : ask.to;
+  // Ticks and «чья» only in the draft; a comment in every phase (the next shift reads it); nothing in a preview.
+  // A sale a colleague wrote to themself: Lev's words on it change nothing while the take stands (Hub's rule).
+  const editable = own && !state.preview && editing && plain && !takenFromMe;
   return {
     key: sighting ? `s${row.id}` : `t${row.id}`,
     transactionId: sighting ? null : row.id,
@@ -359,7 +394,10 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     occurredAt: at(row.day, row.t),
     netMills: m(row.net),
     grossMills: fansly ? null : m(row.gross),
-    rule: { owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : ownerOf(row.lost ? "me" : row.rule), reason: row.before ? "holder" : "demo", words: row.why },
+    rule: {
+      owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : ownerOf(row.lost ? "me" : row.rule), reason: row.before ? "holder" : "demo", words: row.why,
+      ...(row.rule === "wait:oleg" ? { waitsUntil: waitsUntilOf(row) } : {}),
+    },
     owner: row.split ? ownerOf("me") : row.before ? ownerOf("oleg") : owner,
     statement: taken ? (ask!.want === "me" ? "mine" : "share")
       : word === row.rule || row.before || row.lost ? null : word === "none" ? "not_mine" : word === "me" ? "mine" : half(word) ? "share" : word === "pot" ? "pot" : "give",
@@ -395,13 +433,12 @@ function rowOf(state: State, row: Base, own: boolean): ShiftReportRow {
     } : null,
     note: note ? { text: note.text, by: note.by, byName: note.by === "agent" ? "Генгар" : note.by === "other" ? OLEG.name : LEV.name } : null,
     sighting: sighting ? { id: row.id, seenAt: at(12, "21:31"), added: state.lostAdded } : null,
-    // Ticks and «чья» only in the draft; a comment in every phase (the next shift reads it); nothing in a preview.
-    // A sale a colleague wrote to themself: Lev's words on it change nothing while the take stands (Hub's rule).
-    editable: own && !state.preview && editing && plain && !takenFromMe,
-    canNote: own && !state.preview && plain,
+    editable,
+    // A sale's comment while the report is edited or confirmed (Hub's `mayAct` note), never while it is checked or counted.
+    canNote: own && !state.preview && plain && (editing || state.phase === "confirm"),
     attention,
     // A sale Lev wrote to himself has no menu of «чья» (Hub's rule): the tick or «Отменить» takes it back.
-    ...(taken ? { choices: [] } : {}),
+    ...(editable ? { choices: taken ? [] : choicesOf(row, owner) } : {}),
     foundByHub: row.found === true,
   };
 }
@@ -444,7 +481,9 @@ function boardOf(state: State, own: boolean, nowMs: number): ShiftReportBoard {
     offShift: [{ pageLabel: "Mia-1", platform: "fansly" }],
     columns,
     candidate: handed ? {
-      id: 6_000 + state.candidates, number: state.candidates, madeAt: HANDED_IN[again ? 1 : 0], by: LEV.name, door: "workboard", cutoffAt: HANDED_IN[again ? 1 : 0],
+      // While it is checked, handed in now (the board's clock of the check runs from it); after, the prototype's clock.
+      id: 6_000 + state.candidates, number: state.candidates, by: LEV.name, door: "workboard", cutoffAt: HANDED_IN[again ? 1 : 0],
+      madeAt: state.phase === "checking" && state.submittedAtMs !== null ? new Date(state.submittedAtMs).toISOString() : HANDED_IN[again ? 1 : 0],
       count: state.submittedCount, totalMills: state.submittedMills,
       hub: {
         state: !hubDone ? "running" : state.found ? "found" : "matched",
@@ -641,7 +680,7 @@ const SCENARIOS: Record<Scenario, (nowMs: number) => State> = {
   gengarSilent: () => confirmState("silent"),
   // Seva wrote Lev's Ash/UK to himself: it counts for Seva at once (Lev's report got its version), Lev is told.
   dispute: () => {
-    const state: State = { ...countedState(), post: { copiedAt: at(13, "02:11"), seen: true, changedSinceCopy: false, late: false }, incoming: { id: 23, from: "seva", note: "этот ппв Ash я отправлял 10-го, Лев только напомнил", state: "taken" } };
+    const state: State = { ...countedState(), post: { copiedAt: at(13, "02:11"), seen: true, changedSinceCopy: false, late: false }, incoming: { id: 23, from: "seva", note: "этот PPV Ash я отправлял 10-го, Лев только напомнил", state: "taken" } };
     state.countedMills = totalOf(state);
     return state;
   },
@@ -811,7 +850,8 @@ export function demoBoardWrite(request: DemoRequest, operation: "lineSet" | "com
     }
     // lineSet
     const id = Number(request.params.transactionId);
-    const body = request.body as { statement: string | null; shareWithUserId?: number | null; toUserId?: number | null; note?: string | null };
+    // No word in the body: the comment alone, the word as it stands (Hub's rule).
+    const body = request.body as { statement?: string | null; shareWithUserId?: number | null; toUserId?: number | null; note?: string | null };
     let row = rowById(state, id);
     if (row === null) {
       const claimable = CLAIMABLE.find((sale) => sale.id === id);
@@ -820,9 +860,9 @@ export function demoBoardWrite(request: DemoRequest, operation: "lineSet" | "com
       state.extra.push(row);
       state.ok.set(id, "добавили вы");
     }
-    if (!(editing(state) || (state.phase === "confirm" && body.note !== undefined))) return refused("The report is not open for changes");
-    if (editing(state)) {
-      const own = fromWord(body, row);
+    if (!(editing(state) || (state.phase === "confirm" && body.statement === undefined))) return refused("The report is not open for changes");
+    if (editing(state) && body.statement !== undefined) {
+      const own = fromWord({ ...body, statement: body.statement }, row);
       if (own === null) return refused("A word the line does not take");
       if (own !== ownNow(state, row)) {
         setOwn(state, row, own);
