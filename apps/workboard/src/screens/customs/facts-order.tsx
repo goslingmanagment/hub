@@ -13,9 +13,9 @@ import { copyText } from "@/shared/hub";
 import {
   ASKS, Deliveries, EditCardModal, FanForm, RevisionWaits, StepModal, type Ask,
 } from "./index";
-import { DOOR_WORDS, PAYMENT_KIND_WORDS, eventWords, fanWords, stepFailure, useCustomOrder, useCustomStep } from "./data";
+import { DOOR_WORDS, PAYMENT_KIND_WORDS, eventWords, fanWords, stepFailure, useCustomOrder, useCustomStep, useCustomTakers } from "./data";
 import { PriceField, UndoButton } from "./facts-banners";
-import { FactNode, MoveLine, OrderPrice, reasonOf } from "./facts-row";
+import { FactNode, MoveLine, OrderPrice, TakerLine, reasonOf } from "./facts-row";
 import { FACT_STEPS, dollarsOf, dueWords, factWords, fanName, millsOfDollars, toneOf } from "./facts-words";
 
 /**
@@ -169,6 +169,38 @@ function PriceModal({ detail, onClose }: { detail: CustomOrderDetailResponse; on
   );
 }
 
+/**
+ * «Принял» under «Исправить»: one of the page's chatters, or not named. The owner's and the check's leader's; a person's
+ * choice is theirs — Hub's evidence (a card's author, a sale) never changes it again.
+ */
+function TakerSection({ detail }: { detail: CustomOrderDetailResponse }) {
+  const { order } = detail;
+  const step = useCustomStep(order.code);
+  const takers = useCustomTakers(order.pageLabel, undefined);
+  const [chosen, setChosen] = useState(order.acceptedBy ?? "");
+  const options = takers.data?.takers ?? [];
+  // The taker as stored, even when they no longer work the page: the list says so instead of hiding them.
+  const stale = order.acceptedBy !== null && !options.some((taker) => taker.login === order.acceptedBy);
+  const save = () => step.mutate({ action: "accepted_by", acceptedBy: chosen === "" ? null : chosen }, {
+    onSuccess: () => toast.success(chosen === "" ? "Принявший убран" : "Принявший сохранён"),
+    onError: (error) => toast.error(stepFailure(error)),
+  });
+  return (
+    <Section title="Принял">
+      <div className="cf-fix__row">
+        <Field label="Кто принял заказ" hint="Он отвечает за то, чтобы отдать снятое фану.">{(control) => (
+          <Select {...control} value={chosen} disabled={takers.isPending} onChange={(event) => setChosen(event.target.value)}>
+            <option value="">Не указан</option>
+            {stale && <option value={order.acceptedBy!}>{order.acceptedByName ?? order.acceptedBy} (не на странице)</option>}
+            {options.map((taker) => <option key={taker.login} value={taker.login}>{taker.name}</option>)}
+          </Select>
+        )}</Field>
+        <Button size="sm" loading={step.isPending} disabled={chosen === (order.acceptedBy ?? "")} onClick={save}>Сохранить</Button>
+      </div>
+    </Section>
+  );
+}
+
 function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
   return (
     <section className="cf-sec">
@@ -216,7 +248,11 @@ function OrderBody({ detail, viewerOwner }: { detail: CustomOrderDetailResponse;
       </div>
 
       <div className="cf-order__move">
-        <MoveLine order={order} />
+        <span>
+          <MoveLine order={order} full />
+          <TakerLine order={order} />
+          {order.givenBy !== null && (order.state === "given" || order.state === "closed") && <span className="cf-taker">Отдал: {order.givenBy}</span>}
+        </span>
         {main !== undefined && may(main.action) && ASKS[main.action] !== undefined && (
           <Button variant="primary" onClick={() => setAsk(ASKS[main.action]!)}>{main.label}</Button>
         )}
@@ -275,6 +311,7 @@ function OrderBody({ detail, viewerOwner }: { detail: CustomOrderDetailResponse;
 
       <Disclosure size="md" summary="Исправить" hint="если Hub не увидел сам">
         <div className="cf-fix">
+          {may("accepted_by") && <TakerSection key={order.acceptedBy ?? ""} detail={detail} />}
           <Section title="Платежи" aside={order.payments > 0 ? <Money mills={order.paidGrossMills} /> : undefined}>
             {detail.payments.length === 0 ? <p className="cf-muted">Продажи не привязаны.</p> : (
               <ul className="cf-list">

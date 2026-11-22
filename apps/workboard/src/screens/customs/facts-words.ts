@@ -98,26 +98,37 @@ export function initialsOf(name: string): string {
   return two.toUpperCase();
 }
 
-/** Whose move, «имя: что сделать» (Hub's `move`); an ended order says what it waits for instead. */
-export function moveWords(order: FactsOrder): { who: string | null; what: string | null } {
+/**
+ * Whose move, «имя: что сделать» (Hub's `move`), and for a shot order why it is theirs — «принявший», or «ведущий»
+ * while nobody is named the taker — and who else on shift may give it; an ended order says what it waits for instead.
+ */
+export function moveWords(order: FactsOrder): { who: string | null; what: string | null; why: string | null; onShift: string | null } {
   const move = order.move;
-  if (move === null && order.state === "given") return { who: null, what: "закроется само" };
-  if (move === null && order.state === "closed") return { who: null, what: "закрыт" };
-  if (move === null || move.whoKind === "none") return { who: null, what: move?.what || null };
+  const plain = { why: null, onShift: null };
+  if (move === null && order.state === "given") return { who: null, what: "закроется само", ...plain };
+  if (move === null && order.state === "closed") return { who: null, what: "закрыт", ...plain };
+  if (move === null || move.whoKind === "none") return { who: null, what: move?.what || null, ...plain };
   const who = move.who ?? { person: "Кто-то", shift: "Смена", model: order.model ?? "Модель", fan: "Фан", owner: "Владелец" }[move.whoKind];
-  return { who, what: move.what || null };
+  const why = move.giver === "taker" ? "принявший" : move.giver === "lead" ? "ведущий" : null;
+  const onShift = move.onShift === null ? null : `на смене: ${move.onShift.name ?? "другой чаттер"} — тоже может отдать`;
+  return { who, what: move.what || null, why, onShift };
+}
+
+/** «Принял: <имя>», or «Принял: не указан». */
+export function takerWords(order: Pick<FactsOrder, "acceptedByName" | "acceptedBy">): string {
+  return `Принял: ${order.acceptedByName ?? order.acceptedBy ?? "не указан"}`;
 }
 
 /**
- * «Только мой ход»: the move is the viewer's — a person's or the shift's by the viewer's name (never a fan's or a model's
- * that happens to be the same), or the owner's to the owner.
+ * «Только мой ход»: the move is the viewer's — a person's by the viewer's login (never a name two people may share, and
+ * never a fan's or a model's), or the owner's to the owner.
  */
-export function isMine(order: FactsOrder, viewer: { name: string | null; owner: boolean }): boolean {
+export function isMine(order: FactsOrder, viewer: { userId: number | null; owner: boolean }): boolean {
   const move = order.move;
   if (move === null) return false;
   if (move.whoKind === "owner") return viewer.owner;
-  if (move.whoKind !== "person" && move.whoKind !== "shift") return false;
-  return viewer.name !== null && move.who === viewer.name;
+  if (move.whoKind !== "person") return false;
+  return viewer.userId !== null && move.userId === viewer.userId;
 }
 
 /** A sum in dollars as a person types it («120», «49.50», «1 200», «$75») in mills; null — empty; undefined — no sum. */

@@ -1,6 +1,6 @@
 import type { CustomBoardOrder, CustomFact } from "@agency_hub_core/contracts";
 import { cx, Money } from "@agency_hub_core/ui";
-import { FACT_STEPS, dueWords, factWords, fanName, initialsOf, moveWords, toneOf, type FactsOrder, type Tone } from "./facts-words";
+import { FACT_STEPS, dueWords, factWords, fanName, initialsOf, moveWords, takerWords, toneOf, type FactsOrder, type Tone } from "./facts-words";
 
 /**
  * One order of the facts screen (customs facts spec §13): a row of «Сроки» and of «Расписание», on a hairline like the
@@ -43,11 +43,24 @@ export function OrderPrice({ order }: { order: Pick<CustomBoardOrder, "priceMill
   return <span className="cf-muted">—</span>;
 }
 
-/** «Имя: что сделать». */
-export function MoveLine({ order }: { order: FactsOrder }) {
+/**
+ * «Имя: что сделать», and for a shot order why it is theirs («принявший», «ведущий») and who else on shift may give it.
+ * `full` — the order's panel: the second line too.
+ */
+export function MoveLine({ order, full = false }: { order: FactsOrder; full?: boolean }) {
   const move = moveWords(order);
   if (move.who === null) return <span className="cf-move cf-move--none">{move.what ?? "ход ни за кем"}</span>;
-  return <span className="cf-move"><b>{move.who}</b>{move.what ? `: ${move.what}` : ""}</span>;
+  return (
+    <span className="cf-move">
+      <b>{move.who}</b>{move.why ? <span className="cf-muted"> ({move.why})</span> : null}{move.what ? `: ${move.what}` : ""}
+      {full && move.onShift !== null && <span className="cf-move__also">{move.onShift}</span>}
+    </span>
+  );
+}
+
+/** «Принял: <имя>» / «Принял: не указан» (quiet: a fact of the order, not a move). */
+export function TakerLine({ order }: { order: FactsOrder }) {
+  return <span className={cx("cf-taker", order.acceptedBy === null && "cf-taker--none")}>{takerWords(order)}</span>;
 }
 
 /** The circle of the fan's initials, its ring the order's tone. */
@@ -95,7 +108,7 @@ export function OrderRow({ order, onOpen, agenda = false }: { order: CustomBoard
         </span>
         {reason !== null && <span className="cf-reason">{reason}</span>}
         <span className="cf-chain-cell"><FactChain order={order} /></span>
-        <span className="cf-move-cell"><MoveLine order={order} /></span>
+        <span className="cf-move-cell"><MoveLine order={order} /><TakerLine order={order} /></span>
         <span className="cf-price"><OrderPrice order={order} /></span>
       </button>
     </li>

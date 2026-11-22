@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   CUSTOM_FINDING_DISMISS_REASONS,
-  type CustomBoardOrder, type CustomFinding, type CustomOrderActionBody, type CustomOrdersBoardResponse, type CustomSelfChange, type CustomUndo,
+  type CustomBoardOrder, type CustomFinding, type CustomOrderActionBody, type CustomOrdersBoardResponse, type CustomOrderTakersResponse, type CustomSelfChange,
+  type CustomUndo,
 } from "@agency_hub_core/contracts";
 import {
   Button, Confirm, cx, Disclosure, Field, Menu, Modal, Money, Notice, Select, Skeleton, StatusDot, Textarea, TextInput, toast,
@@ -10,7 +11,7 @@ import { formatTimeOfDay } from "@agency_hub_core/ui/format";
 import { moscowDayOf } from "@agency_hub_core/ui/moscow";
 import { PasswordWayIn } from "@/shared/PasswordWayIn";
 import { usePages } from "@/shared/usePages";
-import { stepFailure, useAnyCustomStep, useCustomChanges, useCustomFindings, useFindingAct } from "./data";
+import { stepFailure, useAnyCustomStep, useCustomChanges, useCustomFindings, useCustomTakers, useFindingAct } from "./data";
 import { changeActor, changeWords, dollarsOf, dotted, millsOfDollars } from "./facts-words";
 
 /**
@@ -39,11 +40,14 @@ function RecordFindingModal({ finding, onDone, onClose }: { finding: CustomFindi
   const [amount, setAmount] = useState(finding.amountMills !== null ? dollarsOf(finding.amountMills) : "");
   const [pageLabel, setPageLabel] = useState(finding.pageLabel ?? "");
   const [fan, setFan] = useState("");
+  const [taker, setTaker] = useState<string | null>(null);
+  const takers = useCustomTakers(pageLabel === "" ? null : pageLabel, finding.source === "sale" && /^\d+$/u.test(finding.ref) ? finding.ref : undefined);
   const [failure, setFailure] = useState<string | null>(null);
   const priceMills = millsOfDollars(amount);
   const ready = task.trim() !== "" && pageLabel !== "" && priceMills !== undefined;
   const submit = () => {
     if (!ready || act.isPending) return;
+    const acceptedBy = takerChoice(taker, takers.data);
     act.mutate({
       findingId: finding.id,
       body: {
@@ -52,6 +56,7 @@ function RecordFindingModal({ finding, onDone, onClose }: { finding: CustomFindi
         ...(priceMills !== null && priceMills !== undefined ? { priceMills } : {}),
         ...(finding.pageLabel === null ? { pageLabel } : {}),
         ...(finding.fan === null && fan.trim() ? { fan: fan.trim() } : {}),
+        ...(acceptedBy === null ? {} : { acceptedBy }),
       },
     }, {
       onSuccess: (answer) => {
@@ -92,9 +97,34 @@ function RecordFindingModal({ finding, onDone, onClose }: { finding: CustomFindi
         <Field label="Что снять">{(control) => <Textarea {...control} rows={4} value={task} onChange={(event) => setTask(event.target.value)} />}</Field>
         <Field label="Цена, как договорились" hint="Например: 100$ тир Master + 50$">{(control) => <TextInput {...control} value={price} onChange={(event) => setPrice(event.target.value)} />}</Field>
         <PriceField value={amount} onChange={setAmount} />
+        <TakerField takers={takers.data} pending={takers.isPending && pageLabel !== ""} value={taker} onChange={setTaker} />
         {failure && <Notice tone="danger">{failure}</Notice>}
       </div>
     </Modal>
+  );
+}
+
+/** The login a record names as its taker: the one chosen, else Hub's default (the sale's one home, else the viewer); null — none. */
+export function takerChoice(chosen: string | null, takers: CustomOrderTakersResponse | undefined): string | null {
+  const login = chosen ?? takers?.suggested ?? null;
+  return login === "" ? null : login;
+}
+
+/**
+ * «Принял» of a record: one of the page's chatters; Hub's default first (the sale's one home, else the person recording when
+ * a chatter of the page). With no default, «не указан» too. `value` null — untouched (the default stands).
+ */
+export function TakerField({ takers, pending, value, onChange }: {
+  takers: CustomOrderTakersResponse | undefined; pending: boolean; value: string | null; onChange: (login: string) => void;
+}) {
+  const suggested = takers?.suggested ?? null;
+  return (
+    <Field label="Принял" hint="Кто принял заказ: он отвечает за то, чтобы посмотреть снятое целиком и отдать фану.">{(control) => (
+      <Select {...control} value={value ?? suggested ?? ""} disabled={pending || takers === undefined} onChange={(event) => onChange(event.target.value)}>
+        {suggested === null && <option value="">Не указан</option>}
+        {(takers?.takers ?? []).map((one) => <option key={one.login} value={one.login}>{one.name}</option>)}
+      </Select>
+    )}</Field>
   );
 }
 

@@ -578,6 +578,18 @@
     color: var(--ui-text-3);
   }
 
+  /* «Принял»: under whose move, quiet; «на смене: … — тоже может отдать» on its own line in the order's panel. */
+  .cf-taker,
+  .cf-move__also {
+    display: block;
+    font-size: var(--ui-fs-12);
+    color: var(--ui-text-3);
+  }
+
+  .cf-taker--none {
+    color: var(--ui-warn-text);
+  }
+
   .cf-price {
     grid-area: price;
     font-weight: 500;

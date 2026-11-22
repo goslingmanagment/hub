@@ -205,7 +205,7 @@ export function CustomsFactsScreen({ frame }: { frame?: CustomsFrame } = {}) {
   };
 
   const models = useMemo(() => [...new Set((data?.orders ?? []).map((order) => order.model).filter((name): name is string => name !== null))].sort(), [data]);
-  const viewer = { name: data?.viewer.name ?? null, owner: data?.viewer.owner ?? false };
+  const viewer = { userId: data?.viewer.userId ?? null, owner: data?.viewer.owner ?? false };
   const keep = (order: CustomBoardOrder) => (model === null || order.model === model) && (!mine || isMine(order, viewer)) && matchesSearch(order, text);
   const orders = (data?.orders ?? []).filter(keep);
 

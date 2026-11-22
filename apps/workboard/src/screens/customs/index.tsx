@@ -54,11 +54,12 @@ import {
   useCustomCreate,
   useCustomOrder,
   useCustomStep,
+  useCustomTakers,
   useDismissSale,
   type CustomPart,
 } from "./data";
 import type { CustomsFrame } from "./facts";
-import { PriceField } from "./facts-banners";
+import { PriceField, TakerField, takerChoice } from "./facts-banners";
 import { OrderDrawer } from "./facts-order";
 import { millsOfDollars } from "./facts-words";
 import "./customs.css";
@@ -74,12 +75,9 @@ import "./customs.css";
 
 const BOARD_BACK = { to: "/customs", label: "Кастомы" };
 
-/**
- * Who took the order, by the registry's name, or Gengar who wrote it alone. An imported order nobody took says
- * nothing on its face: that it came over is in its history.
- */
-export function acceptorOf(order: Pick<CustomOrder, "acceptedByName" | "origin">): string | null {
-  return order.acceptedByName ?? (order.origin === "import" ? null : "Генгар");
+/** Who took the order («принял»), by the registry's name; nobody named reads «не указан» — never the agent that wrote the card. */
+export function acceptorOf(order: Pick<CustomOrder, "acceptedByName" | "acceptedBy">): string {
+  return order.acceptedByName ?? order.acceptedBy ?? "не указан";
 }
 
 function StateBadge({ order }: { order: Pick<CustomOrder, "state"> }) {
@@ -155,14 +153,18 @@ export function RecordFromSaleModal({ sale, page: initialPage, fan: initialFan, 
   const [amount, setAmount] = useState("");
   const [pageLabel, setPageLabel] = useState(initialPage ?? "");
   const [fan, setFan] = useState(initialFan ?? "");
+  const [taker, setTaker] = useState<string | null>(null);
+  const takerPage = sale?.pageLabel ?? pageLabel;
+  const takers = useCustomTakers(takerPage === "" ? null : takerPage, sale?.transactionRef);
   const [failure, setFailure] = useState<string | null>(null);
   const priceMills = millsOfDollars(amount);
   const ready = task.trim() !== "" && (sale !== undefined || pageLabel !== "") && priceMills !== undefined;
   const submit = () => {
     if (!ready || create.isPending) return;
     const card: CustomOrderCard = { task: task.trim(), ...(price.trim() ? { price: price.trim() } : {}) };
-    // The agreed total, when the person names it: what «оплачен» is measured by.
-    const total = priceMills !== null && priceMills !== undefined ? { priceMills } : {};
+    // The agreed total, when the person names it: what «оплачен» is measured by. «Принял»: the one chosen, else Hub's default.
+    const acceptedBy = takerChoice(taker, takers.data);
+    const total = { ...(priceMills !== null && priceMills !== undefined ? { priceMills } : {}), ...(acceptedBy === null ? {} : { acceptedBy }) };
     const body = sale !== undefined
       ? { transactionRef: sale.transactionRef, card, ...total }
       : { pageLabel, ...(fan.trim() ? { fan: fan.trim() } : {}), card, ...total };
@@ -213,6 +215,7 @@ export function RecordFromSaleModal({ sale, page: initialPage, fan: initialFan, 
         <Field label="Что снять">{(control) => <Textarea {...control} rows={4} value={task} onChange={(event) => setTask(event.target.value)} />}</Field>
         <Field label="Цена, как договорились" hint="Например: 100$ тир Master + 50$">{(control) => <TextInput {...control} value={price} onChange={(event) => setPrice(event.target.value)} />}</Field>
         <PriceField value={amount} onChange={setAmount} />
+        <TakerField takers={takers.data} pending={takers.isPending && takerPage !== ""} value={taker} onChange={setTaker} />
         {failure && <Notice tone="danger">{failure}</Notice>}
       </div>
     </Modal>
@@ -722,7 +725,7 @@ function OrderBody({ detail }: { detail: CustomOrderDetailResponse }) {
             ...CARD_FIELDS.filter((field) => order.card[field.key] !== undefined).map((field) => ({
               label: field.label, value: <span className="cus-pre">{String(order.card[field.key])}</span>,
             })),
-            ...(acceptorOf(order) === null ? [] : [{ label: "Принял", value: acceptorOf(order) }]),
+            { label: "Принял", value: acceptorOf(order) },
           ]} />
           <Disclosure size="md" summary="Текст карточки для модели">
             <pre className="cus-card-text">{detail.cardText}</pre>
