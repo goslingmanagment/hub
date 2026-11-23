@@ -157,7 +157,16 @@ describe("a sale's chain of money: who reads it and how much", () => {
         return answer(200, ledgerPay(url.searchParams.get("person") ?? "", from, to));
       }
       if (url.pathname === "/v1/reports") return answer(200, { from, to, reports: [] });
-      if (url.pathname === "/v1/report-days") return answer(200, { from, to, days: [] });
+      if (url.pathname === "/v1/report-days") {
+        return answer(200, {
+          from, to,
+          days: [
+            { person: "anna", report_date: "2026-11-10", page: "mia-1", model: "Mia", posted_micros: 160_000_000, draft_micros: null, diff_micros: null, state: "post_only", posted_at: "2026-11-10T23:10:00Z", report_id: null, post_id: 8, basis: "post" },
+            { person: "bella", report_date: "2026-11-10", page: "mia-1", model: "Mia", posted_micros: 160_000_000, draft_micros: null, diff_micros: null, state: "post_only", posted_at: "2026-11-10T23:10:00Z", report_id: null, post_id: 9, basis: "post" },
+            { person: "cora", report_date: "2026-11-10", page: "mia-2", model: "Mia", posted_micros: 160_000_000, draft_micros: null, diff_micros: null, state: "post_only", posted_at: "2026-11-10T23:10:00Z", report_id: null, post_id: 10, basis: "post" },
+          ],
+        });
+      }
       return answer(404, { error: "not found" });
     });
     const address = await listenOnLoopback(ledger, "the fake agency ledger");
@@ -215,8 +224,8 @@ describe("a sale's chain of money: who reads it and how much", () => {
     expect(anna).toMatchObject({ name: "anna", shareMills: 20_000, reportDate: "2026-11-10" });
     expect(anna!.shift.link).toMatch(/^\/workboard\/report\/\d+\?sale=\d+$/u);
     expect(anna!.accrual).toMatchObject({ state: "done", amountMills: 40_000, link: "/workboard/money/debts?person=anna" });
-    expect(anna!.payout).toMatchObject({ state: "done", amountMills: 40_000 });
-    expect(anna!.payout.words).toMatch(/^оплачено/u);
+    expect(anna!.payout).toMatchObject({ state: "unknown", amountMills: 40_000 });
+    expect(anna!.payout.words).toMatch(/^день оплачен, включение этой продажи не подтверждено/u);
     // Another page's sale and a nobody's sale are the owner's too.
     expect((await chainOf("boss", sales.other)).people).toHaveLength(1);
     const nobody = await chainOf("boss", sales.nobody);
@@ -236,7 +245,7 @@ describe("a sale's chain of money: who reads it and how much", () => {
     const bellas = await chainOf("bella", sales.bella);
     expect(bellas.people.map((one) => one.name)).toEqual(["bella"]);
     expect(bellas.people[0]!.accrual.state).toBe("done");
-    expect(bellas.people[0]!.payout).toMatchObject({ state: "wait", words: "к выплате" });
+    expect(bellas.people[0]!.payout).toMatchObject({ state: "wait", words: "день к выплате; включение этой продажи не подтверждено" });
     expectNoPaySums(bellas);
     // bella's shift held the page when anna's sale came: she sees whose it is, nothing of anna's report or money.
     const near = await chainOf("bella", sales.anna);
