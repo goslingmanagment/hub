@@ -296,12 +296,20 @@ What a decision does:
   same page and fan. `--answers <№>` names an open question about the same sale (or, neither naming a sale, the same
   page and fan). Anything else of the key's pages is 409 `other_sale`; a number of another page answers exactly as
   one that does not exist (409 `not_active`, `question_closed`). All of it is checked in the transaction that writes.
-- **To change a decision the owner made himself in Workboard, record the owner's own words with the owner's own
-  message**: `--sender` is the owner's Telegram id (the one the people registry holds for the person whose role is
-  owner), `--message` his message. Then `hub sale cancel <№> …` and `hub sale decide … --supersedes <№>` go the
-  usual way, and the reports follow. With any other sender — a chatter's or a lead's message retelling him, an owner
-  whose Telegram id the registry does not hold — it is 409 `owner_decision` and nothing changes. What a key recorded
-  and what was carried over from the ledger a key cancels and replaces on any message.
+- **The owner's word is the owner's to change.** Who may cancel or replace a decision through this door:
+  - one made in Workboard by a signed-in decider (`decided_by_user_id`: the owner's ruling of a dispute, or the
+    deciding lead's, «никому» of a week): nobody — 409 `owner_decision` whoever's message it comes with, the owner's
+    own included. It is changed where it was made, in Workboard;
+  - one a key recorded from the owner's own message (the message's sender, `said_by_telegram_id`, is the owner's
+    Telegram id in the people registry): only on the owner's own message. **Record the owner's own words with the
+    owner's own message**: `--sender` is the owner's Telegram id (the one the people registry holds for the person
+    whose role is owner), `--message` his message. Then `hub sale cancel <№> …` and `hub sale decide … --supersedes
+    <№>` go the usual way, and the reports follow. With any other sender — a chatter's or a lead's message retelling
+    him, an owner whose Telegram id the registry does not hold — it is 409 `owner_decision` and nothing changes;
+  - anything else a key recorded (from anyone else's message) and what was carried over from the ledger: a key
+    cancels and replaces it on any message.
+  Every decision recorded «со слов» keeps its message's sender; whether that sender is the owner is read from the
+  registry when the decision is changed. Decisions recorded before the sender was kept carry none.
 - `hub sale cancel`: the decision is cancelled and, in the same transaction, every report handed in Hub that it had
   settled gets a new version with what rules now — an agreement of the two sides, else the rule with the person's
   own word (a disputed «моё» counts nothing again) — exactly what handing in again would write. A decision it had
@@ -327,7 +335,10 @@ answered, it stays the owner's, titled «Вопрос чаттерам без о
 and, on its own line, its note (`--note`): free words of the team, shown in `--md` as written. Refusals: 400
 `bad_decision` (the kind's rules), 400 `person_unknown`, 404 a sale, a page, a decision or a question outside the
 key's grant (one that names no page included), 409 `decision_exists`, `not_active`, `question_closed`, `other_sale`,
-`owner_decision` (the owner's own decision, and the message is not the owner's).
+`owner_decision` (the owner's word: one made in Workboard, whoever's the message; one recorded from his message, and
+the message is not his), `claim_closed` (a claim of the sale closed while the decision was being written: read the
+sale again). A question is answered or closed once: a second `hub sale answer` or `hub sale close`, or one after a
+decision answered it, is 409 `question_closed` and changes nothing.
 
 Carried over from the ledger (`sale-claims:import`, on the server): run again with fresh files it writes nothing
 twice and completes what an earlier run left out — a decision the ledger marked taken into a post (`applied`: the
