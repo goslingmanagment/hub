@@ -85,14 +85,21 @@ describe("a person code names the person's live login", () => {
         kind: "owner", shares: [{ person, percent: 100 }], saidBy: "владелец", saidAt: "2026-11-20", ...SAID,
       });
       expect(said.statusCode, said.body).toBe(200);
-      return said.json().decision as { id: number; shares: Array<{ person: string | null; userId: number; percent: number }> };
+      const decision = said.json().decision as { id: number; shares: Array<{ person: string | null; percent: number }> };
+      expect(decision.shares).toMatchObject([{ person, percent: 100 }]);
+      return decision;
+    };
+    // The login a decision's share is recorded on: the door's answer names the person, the row keeps the login.
+    const sharedLogins = async (id: number) => {
+      const row = await testDb!.pool.query<{ shares: Array<{ userId: number | string }> }>("select shares from sale_owner_decisions where id = $1", [id]);
+      return row.rows[0]!.shares.map((share) => Number(share.userId));
     };
 
     const vera = await decide("vera", "7700000701");
-    expect(vera.shares).toEqual([{ person: "vera", userId: users["vera-new"], percent: 100 }]);
+    expect(await sharedLogins(vera.id)).toEqual([users["vera-new"]]);
     // No live login left: still known, by the lowest of the logins.
     const gleb = await decide("gleb", "7700000702");
-    expect(gleb.shares).toEqual([{ person: "gleb", userId: users["gleb-one"], percent: 100 }]);
+    expect(await sharedLogins(gleb.id)).toEqual([users["gleb-one"]]);
 
     const applied = await asAgent("/api/v1/agent/sale-decisions/applied", { decisionId: vera.id, person: "vera", reportDate: "2026-11-20" });
     expect(applied.statusCode, applied.body).toBe(200);
