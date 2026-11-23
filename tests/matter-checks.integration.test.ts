@@ -146,7 +146,7 @@ describe("matter checks (package K)", () => {
     }
     await insertAgentKey(app.db, {
       name: "checks-agent", keyPrefix: AGENT.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(AGENT),
-      capabilities: ["write:matters"] as never, pageIds: [pages["lora-1"]!], expiresAt: new Date(START.getTime() + 3 * DAY), createdBy: users.boss!,
+      capabilities: ["write:matters"] as never, pageIds: [pages["lora-1"]!], expiresAt: new Date(Math.max(Date.now(), START.getTime()) + 3 * DAY), createdBy: users.boss!,
     });
 
     server = await buildApiServer(app);
