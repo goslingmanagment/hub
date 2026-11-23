@@ -753,12 +753,16 @@ export async function listSaleCandidates(
   }));
 }
 
-/** The people's logins by code: who a ledger slug is in Hub. */
+/**
+ * The people's logins by code: who a ledger slug is in Hub. Every login of the person, the live ones (neither disabled
+ * nor deleted) first, each part by id: the first is the login the code names — the person's live login, else (a person
+ * whose logins are all switched off, who left) the lowest of them, so a word about someone who left is still recorded.
+ */
 export async function listLoginsByPersonCode(db: Database, codes: readonly string[]): Promise<Map<string, number[]>> {
   if (codes.length === 0) return new Map();
   const result = await db.execute<Row>(sql`
-    select p.code, array_agg(l.user_id order by l.user_id) as user_ids
-    from people p join person_logins l on l.person_id = p.id
+    select p.code, array_agg(l.user_id order by (u.deleted_at is null and u.disabled_at is null) desc, l.user_id) as user_ids
+    from people p join person_logins l on l.person_id = p.id join users u on u.id = l.user_id
     where p.code = any(${sql.param([...new Set(codes)])}::text[])
     group by p.code`);
   return new Map(result.rows.map((row) => [String(row.code), jsonOf<unknown[]>(row.user_ids, []).map(Number)]));
