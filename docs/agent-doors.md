@@ -263,7 +263,10 @@ Hub is the one home of the decisions about whose a sale is and of the questions 
 decisions of disputes, the ones carried over from the ledger, and what the team's chat agent records «со слов». The
 ledger's own writers (`ledger decision add|applied|cancel`, `ledger question add|answer|drop`, `ledger accruals
 claim|unclaim`) close after the switch and point here. Every write names the Telegram message and its sender
-(`--sender <id> --message <link>`); the person codes are the people registry's (the same as the ledger's).
+(`--sender <id> --message <link>`); the person codes are the people registry's (the same as the ledger's). A code
+names the person's live login (neither disabled nor deleted; of two live ones, the older), and a decision, a question or
+`applied` is recorded on it; a person with no live login left (who left the team) is still known, by the oldest of
+their logins.
 
 What the agent ran in the ledger, and what it runs now:
 

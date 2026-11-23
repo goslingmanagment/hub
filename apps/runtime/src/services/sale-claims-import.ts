@@ -193,8 +193,10 @@ export async function planImport(db: Database, input: { decisions: unknown; ques
   const logins = await listLoginsByPersonCode(db, [...codes]);
   const known = new Set((await listSaleDecisions(db, { limit: 5000 })).flatMap((one) => (one.ledgerDecisionId === null ? [] : [one.ledgerDecisionId])));
   const knownQuestions = new Set((await db.execute<{ id: number | string }>(sql`select ledger_question_id as id from sale_claims where ledger_question_id is not null`)).rows.map((row) => Number(row.id)));
+  // A person by the login their code names (`listLoginsByPersonCode`): the live one, else the lowest.
   const people = (await db.execute<{ code: string; name: string; user_id: number | string }>(sql`
-    select p.code, p.display_name as name, min(l.user_id) as user_id from people p join person_logins l on l.person_id = p.id group by p.code, p.display_name`)).rows;
+    select p.code, p.display_name as name, (array_agg(l.user_id order by (u.deleted_at is null and u.disabled_at is null) desc, l.user_id))[1] as user_id
+    from people p join person_logins l on l.person_id = p.id join users u on u.id = l.user_id group by p.code, p.display_name`)).rows;
 
   const homeOf = async (transactionId: number) => {
     const found = await db.execute<{ home: string; reason: string }>(sql`select home, reason from sale_homes where transaction_id = ${transactionId}`);
