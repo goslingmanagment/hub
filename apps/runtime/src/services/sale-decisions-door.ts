@@ -43,9 +43,9 @@ import { applySaleDecision, cancelSaleDecisionApplied, runSaleClaims } from "./s
  * A key changes only what is its own to change (final review, round 2). A number it names — the decision a new one
  * replaces, the question it answers, the decision it cancels or marks — is read in the transaction that writes, and must
  * be of the key's pages (one of another page, or of no page, answers exactly as a number that does not exist), about
- * the very sale of the new decision (with no sale: the same page and fan). The owner's word is the owner's to change
- * (`refuseOwners`): a decision he made himself in Workboard never through this door; one of a dispute, or recorded from
- * his own message, only on his own message, and then it goes the same path.
+ * the very sale of the new decision (with no sale: the same page and fan). The owner's word — a decision he made
+ * himself in Workboard, or one recorded from his own message — is cancelled or replaced only on the owner's own message
+ * (`refuseOwners`), and then goes the same path.
  */
 
 type DoorApp = Pick<AppContext, "db" | "config" | "logger">;
@@ -77,23 +77,16 @@ export async function isOwnersWord(db: Database, decision: Pick<SaleDecisionRow,
 }
 
 /**
- * The owner's word is changed only by the owner. One a signed-in decider made (`decided_by_user_id`: Workboard today) is
- * never changed through this door, whoever's message it comes with: it is changed where it was made. One of a dispute,
- * or recorded from the owner's own message, is changed here only on the owner's own message — its sender is the
- * owner's Telegram account in the people registry. Anyone else's message changes nothing, and the refusal says how it
- * is changed.
+ * The owner's word (`isOwnersWord`: a decision made in Workboard, or recorded from his message) is changed only on the
+ * owner's own word: the write is recorded from his message — its sender is the Telegram account the people registry
+ * gives a person whose role is owner (`isOwnerTelegramUser`; an owner with no Telegram id there has no such message).
+ * Anyone else's message changes nothing, and the refusal says how it is changed.
  */
 async function refuseOwners(
   db: Database,
   actor: Pick<DoorActor, "telegramUserId">,
   decision: Pick<SaleDecisionRow, "id" | "source" | "decidedByUserId" | "saidByTelegramId">,
 ): Promise<void> {
-  if (decision.decidedByUserId !== null) {
-    throw new ConflictError(
-      `Решение ${decision.id}: решение владельца, принятое им самим в Workboard, через агента не меняется, даже с его сообщением: его меняет только он сам в Workboard`,
-      { reason: "owner_decision" },
-    );
-  }
   if (!(await isOwnersWord(db, decision)) || (await isOwnerTelegramUser(db, actor.telegramUserId))) return;
   throw new ConflictError(
     `Решение ${decision.id}: решение владельца меняет только он сам: запишите его слова с его сообщением (--sender — Telegram id владельца, --message — его сообщение)`,
