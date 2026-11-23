@@ -32,7 +32,7 @@ function messageOf(brief: TeamLedgerPayoutPrepareResponse): string | null {
 }
 
 /** What a line is about, in one word: the tab's model, else the kind. */
-const KIND_WORD: Record<string, string> = { opening: "старый долг", other: "поправка", unsplit: "прочее" };
+const KIND_WORD: Record<string, string> = { opening: "старый долг", other: "поправка", unsplit: "прочее", rounding: "округление" };
 
 /** The memo of a manual posting: the adjustment of the line's day with its sum (to the cent). */
 function memoOf(line: Line, adjustments: readonly Adjustment[]): string | null {
