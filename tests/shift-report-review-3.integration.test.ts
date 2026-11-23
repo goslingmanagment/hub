@@ -407,55 +407,61 @@ describe("«чья продажа» and the shift report, the final review's sec
     expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 10_000, disputed: false, settled: "owner" });
   });
 
-  it("changes the owner's own decision only on the owner's own message: his Telegram id as the sender (9)", async (context) => {
+  it("changes the owner's word only on the owner's own message: his Workboard decision and one recorded from his message (9)", async (context) => {
     if (!testDb) return context.skip();
     const OWNER_SENDER = 700_000_900;
     const CHATTER_SENDER = 700_000_902;
-    /** anna's «моё» on a sale of bella's, handed in, and the owner's «первому» in Workboard: his own decision, anna's whole. */
-    const ownersDecision = async (hoursAgo: number, minutesAgo: number, net: number) => {
+    /** anna's «моё» on a sale of bella's, handed in: v1 handed in, v2 the take. */
+    const handedIn = async (hoursAgo: number, minutesAgo: number, net: number) => {
       const shift = await shiftRow(anna, hoursAgo);
       const disputed = await sale(pageOne, net, minutesAgo);
       await say(shift, disputed, "мой");
       await submit(shift);
+      return { shift, disputed };
+    };
+    /** ... and the owner's «первому» in Workboard: his own decision, anna's whole (v3). */
+    const ownersDecision = async (hoursAgo: number, minutesAgo: number, net: number) => {
+      const { shift, disputed } = await handedIn(hoursAgo, minutesAgo, net);
       const decided = await asSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId: disputed, outcome: "first" });
       expect(decided.statusCode, decided.body).toBe(200);
       const id = Number((await q("select id from sale_owner_decisions where transaction_id = $1 and state = 'active'", [disputed])).rows[0].id);
       return { shift, disputed, id };
     };
-    const first = await ownersDecision(198, 105, 13_000);
     const from = (sender: number) => ({ telegramUserId: sender, sourceRef: "https://t.me/c/1/31" });
-    const tries = async (sender: number) => [
-      await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: first.id, note: "передумал", ...from(sender) }),
-      await asKey("one", "POST", "/api/v1/agent/sale-decisions", { transactionId: first.disputed, kind: "exclude", supersedes: first.id, saidBy: "владелец", saidAt: "2026-11-12", ...from(sender) }),
-      await asKey("one", "POST", "/api/v1/agent/sale-decisions", { transactionId: first.disputed, kind: "exclude", saidBy: "владелец", saidAt: "2026-11-12", ...from(sender) }),
+    /** The three ways through the door: cancel it, replace it naming it, decide the sale again without naming it. */
+    const tries = async (target: { disputed: number; id: number }, sender: number) => [
+      await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: target.id, note: "передумал", ...from(sender) }),
+      await asKey("one", "POST", "/api/v1/agent/sale-decisions", { transactionId: target.disputed, kind: "exclude", supersedes: target.id, saidBy: "владелец", saidAt: "2026-11-12", ...from(sender) }),
+      await asKey("one", "POST", "/api/v1/agent/sale-decisions", { transactionId: target.disputed, kind: "exclude", saidBy: "владелец", saidAt: "2026-11-12", ...from(sender) }),
     ];
-    const refusedAll = async (sender: number, why: string) => {
-      for (const refused of await tries(sender)) {
+    const refusedAll = async (target: { disputed: number; id: number }, sender: number, why: string) => {
+      for (const refused of await tries(target, sender)) {
         expect([refused.statusCode, refused.json().reason], `${why}: ${refused.body}`).toEqual([409, "owner_decision"]);
         expect(refused.json().message, why).toContain("решение владельца меняет только он сам: запишите его слова с его сообщением");
       }
     };
-    const untouched = async () => {
-      expect((await q("select id::int as id, state, source from sale_owner_decisions where transaction_id = $1 order by id", [first.disputed])).rows)
-        .toEqual([{ id: first.id, state: "active", source: "dispute" }]);
-      // v1 handed in, v2 the take, v3 the owner's decision.
-      expect(await newest(first.shift, first.disputed)).toMatchObject({ version: 3, line: expect.objectContaining({ amountMills: 13_000, settled: "owner" }) });
+    /** Only the decision stands on the sale, and the report keeps v3: anna's whole, settled by it. */
+    const untouched = async (target: { shift: number; disputed: number; id: number }, source: string, net: number) => {
+      expect((await q("select id::int as id, state, source from sale_owner_decisions where transaction_id = $1 order by id", [target.disputed])).rows)
+        .toEqual([{ id: target.id, state: "active", source }]);
+      expect(await newest(target.shift, target.disputed)).toMatchObject({ version: 3, line: expect.objectContaining({ amountMills: net, settled: "owner" }) });
     };
 
     // The registry names its owner with no Telegram id: nobody's message is the owner's — never an open door.
+    const first = await ownersDecision(198, 105, 13_000);
     const person = await asSession("boss", "POST", "/api/v1/admin/people", {
       code: "boss", displayName: "boss", role: "owner", state: "working", logins: { add: [await fixtureUserId(app, "boss")] },
     });
     expect(person.statusCode, person.body).toBe(200);
     await q("update people set telegram_user_id = $1 where code = 'anna'", [CHATTER_SENDER]);
-    await refusedAll(OWNER_SENDER, "no Telegram id of the owner in the registry");
-    await untouched();
+    await refusedAll(first, OWNER_SENDER, "no Telegram id of the owner in the registry");
+    await untouched(first, "dispute", 13_000);
 
     // The registry knows the owner's Telegram id. A message of anyone else — a chatter, a stranger — still changes nothing.
     await q("update people set telegram_user_id = $1 where code = 'boss'", [OWNER_SENDER]);
-    await refusedAll(CHATTER_SENDER, "a chatter's message");
-    await refusedAll(WORDS.telegramUserId, "a stranger's message");
-    await untouched();
+    await refusedAll(first, CHATTER_SENDER, "a chatter's message");
+    await refusedAll(first, WORDS.telegramUserId, "a stranger's message");
+    await untouched(first, "dispute", 13_000);
 
     // The owner's own message replaces it — named in supersedes, as any decision is — and the report follows.
     const unnamed = await asKey("one", "POST", "/api/v1/agent/sale-decisions", {
@@ -467,8 +473,11 @@ describe("«чья продажа» and the shift report, the final review's sec
     });
     expect(replaced.statusCode, replaced.body).toBe(200);
     expect(replaced.json().versions).toEqual([{ shiftId: first.shift, version: 4 }]);
-    expect((await q("select state from sale_owner_decisions where id = $1", [first.id])).rows[0].state).toBe("superseded");
+    expect(await decisionState(first.id)).toBe("superseded");
     expect((await newest(first.shift, first.disputed)).line).toMatchObject({ amountMills: 0, disputed: false, settled: "owner" });
+    // The replacement is recorded from his message: his word too, with its sender kept.
+    expect((await q("select source, decided_by_user_id, said_by_telegram_id::int as sender from sale_owner_decisions where id = $1", [replaced.json().decision.id])).rows[0])
+      .toEqual({ source: "agent", decided_by_user_id: null, sender: OWNER_SENDER });
 
     // And cancels one: the report goes back to what rules without it — anna's word, a take again.
     const second = await ownersDecision(318, 128, 12_500);
@@ -477,8 +486,65 @@ describe("«чья продажа» and the shift report, the final review's sec
     const cancelled = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: second.id, note: "передумал", ...from(OWNER_SENDER) });
     expect(cancelled.statusCode, cancelled.body).toBe(200);
     expect(cancelled.json().versions).toEqual([{ shiftId: second.shift, version: 4 }]);
-    expect((await q("select state from sale_owner_decisions where id = $1", [second.id])).rows[0].state).toBe("cancelled");
+    expect(await decisionState(second.id)).toBe("cancelled");
     expect((await newest(second.shift, second.disputed)).line).toMatchObject({ amountMills: 12_500, disputed: false, settled: "agreed" });
+
+    // His words recorded from his own message are his word: anyone else's message changes nothing, his own cancels them.
+    const words = await handedIn(246, 118, 11_000);
+    const recorded = await asKey("one", "POST", "/api/v1/agent/sale-decisions", {
+      transactionId: words.disputed, kind: "owner", shares: [{ person: "anna", percent: 100 }], saidBy: "владелец", saidAt: "2026-11-12", ...from(OWNER_SENDER),
+    });
+    expect(recorded.statusCode, recorded.body).toBe(200);
+    expect(recorded.json().versions).toEqual([{ shiftId: words.shift, version: 3 }]);
+    const said = { ...words, id: recorded.json().decision.id as number };
+    await refusedAll(said, CHATTER_SENDER, "a chatter's message on his words");
+    await refusedAll(said, WORDS.telegramUserId, "a stranger's message on his words");
+    await untouched(said, "agent", 11_000);
+    const withdrawn = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: said.id, note: "передумал", ...from(OWNER_SENDER) });
+    expect(withdrawn.statusCode, withdrawn.body).toBe(200);
+    expect(withdrawn.json().versions).toEqual([{ shiftId: said.shift, version: 4 }]);
+    expect(await decisionState(said.id)).toBe("cancelled");
+    expect((await newest(said.shift, said.disputed)).line).toMatchObject({ amountMills: 11_000, disputed: false, settled: "agreed" });
+
+    // What a key recorded from anyone else's message stays anyone's to change.
+    const theirs = await decide("one", { transactionId: (await handedIn(342, 133, 9_000)).disputed, kind: "owner", shares: [{ person: "bella", percent: 100 }], ...from(CHATTER_SENDER) });
+    const anyone = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: theirs.id, note: "ошибка", ...from(WORDS.telegramUserId) });
+    expect(anyone.statusCode, anyone.body).toBe(200);
+    expect(await decisionState(theirs.id)).toBe("cancelled");
+  });
+
+  it("answers or closes a question once: the second answer or close is 409 and changes nothing", async (context) => {
+    if (!testDb) return context.skip();
+    const said = { telegramUserId: WORDS.telegramUserId, sourceRef: WORDS.sourceRef };
+    const answer = (questionId: number, words: string) => asKey("one", "POST", "/api/v1/agent/sale-questions/answer", { questionId, answer: words, ...said });
+    const close = (questionId: number, note: string) => asKey("one", "POST", "/api/v1/agent/sale-questions/close", { questionId, note, ...said });
+    const row = async (id: number) => (await q("select state, answer_text, close_note, decision_id from sale_claims where id = $1", [id])).rows[0];
+
+    // One after the other: the first closes it, the second of either kind is refused.
+    const asked = await ask("one", { transactionId: await sale(pageOne, 6_500, 9 * 60 + 20) });
+    expect((await answer(asked, "её")).statusCode).toBe(200);
+    expect(await row(asked)).toEqual({ state: "decided", answer_text: "её", close_note: null, decision_id: null });
+    for (const refused of [await answer(asked, "нет, его"), await close(asked, "не нужно")]) {
+      expect([refused.statusCode, refused.json().reason], refused.body).toEqual([409, "question_closed"]);
+    }
+    expect(await row(asked)).toEqual({ state: "decided", answer_text: "её", close_note: null, decision_id: null });
+
+    // At once: an answer and a close race, one of them closes it and the other writes nothing.
+    const racing = await ask("one", { transactionId: await sale(pageOne, 6_600, 9 * 60 + 25) });
+    const both = await Promise.all([answer(racing, "её"), close(racing, "не нужно")]);
+    expect(both.map((one) => one.statusCode).sort(), both.map((one) => one.body).join(" | ")).toEqual([200, 409]);
+    expect(both.find((one) => one.statusCode === 409)!.json().reason).toBe("question_closed");
+    const won = await row(racing);
+    expect(won.state).toBe("decided");
+    // The winner's words alone: the answer's, or the close's.
+    expect([won.answer_text, won.close_note]).toEqual(both[0]!.statusCode === 200 ? ["её", null] : [null, "не нужно"]);
+    // Closed, it is closed for a decision that would answer it too.
+    const closedSale = Number((await q("select transaction_id from sale_claims where id = $1", [racing])).rows[0].transaction_id);
+    const answering = await asKey("one", "POST", "/api/v1/agent/sale-decisions", {
+      transactionId: closedSale, kind: "owner", shares: [{ person: "anna", percent: 100 }], answers: racing, ...WORDS,
+    });
+    expect([answering.statusCode, answering.json().reason], answering.body).toEqual([409, "question_closed"]);
+    expect(await row(racing)).toEqual(won);
   });
 
   it("keeps a decision open for the person it gives the sale to while only someone else's report holds the line (12)", async (context) => {

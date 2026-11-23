@@ -307,9 +307,10 @@ export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: 
 }
 
 /**
- * Changes a claim: the fields given, and when. `ifState` — only while the claim is in the state the caller read it in:
- * a writer outside the settlements' turn (the claims' pass) never writes over what was committed after its read.
- * False — nothing was changed: no such claim, or it is in another state now.
+ * Changes a claim: the fields given, and when. `ifState` — only while the claim is in the state the caller read it in
+ * (or in one of the states named): a writer outside the settlements' turn (the claims' pass) never writes over what was
+ * committed after its read, and a claim is closed once. False — nothing was changed: no such claim, or it is in another
+ * state now.
  */
 export async function updateSaleClaim(
   db: Database,
@@ -319,7 +320,7 @@ export async function updateSaleClaim(
     | "escalatedAt" | "escalatedWhy" | "decisionId" | "closedAt" | "claimantVersion" | "claimantNote" | "sideShiftId" | "transactionId" | "pageId"
     | "answerText" | "closeNote" | "question" | "silenceAt" | "statement" | "shareWithUserId" | "sideUserId">>,
   at: Date,
-  options: { ifState?: SaleClaimState } = {},
+  options: { ifState?: SaleClaimState | readonly SaleClaimState[] } = {},
 ): Promise<boolean> {
   const sets = [sql`updated_at = ${at.toISOString()}::timestamptz`];
   const put = (column: string, value: unknown, cast = "") => sets.push(sql`${sql.raw(column)} = ${value}${sql.raw(cast)}`);
@@ -351,7 +352,9 @@ export async function updateSaleClaim(
   if (patch.statement !== undefined) put("statement", patch.statement);
   if (patch.shareWithUserId !== undefined) put("share_with_user_id", patch.shareWithUserId);
   if (patch.sideUserId !== undefined) put("side_user_id", patch.sideUserId);
-  const only = options.ifState === undefined ? sql`` : sql` and state = ${options.ifState}`;
+  const only = options.ifState === undefined ? sql``
+    : typeof options.ifState === "string" ? sql` and state = ${options.ifState}`
+      : sql` and state = any(${sql.param([...options.ifState])}::text[])`;
   const result = await db.execute(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only}`);
   return (result.rowCount ?? 0) > 0;
 }
@@ -419,11 +422,14 @@ export interface SaleDecisionRow {
   appliedReportDate: string | null;
   appliedAt: Date | null;
   supersededAt: Date | null;
+  /** Recorded «со слов» (0439): the Telegram id of the message's sender; null — none recorded. */
+  saidByTelegramId: number | null;
 }
 
 const DECISION_COLUMNS = sql`d.id, d.transaction_id, d.page_id, d.kind, d.shares, d.pot, d.outcome, d.rule_home, d.note, d.decided_by_user_id,
   d.decided_at, d.said_by, d.source, d.ledger_decision_id, d.ledger_ref, d.needs_link, d.state, d.said_at, d.source_link, d.agent_key_id,
-  d.cancelled_at, d.cancel_note, d.applied_user_id, to_char(d.applied_report_date, 'YYYY-MM-DD') as applied_report_date, d.applied_at, d.superseded_at`;
+  d.cancelled_at, d.cancel_note, d.applied_user_id, to_char(d.applied_report_date, 'YYYY-MM-DD') as applied_report_date, d.applied_at, d.superseded_at,
+  d.said_by_telegram_id`;
 
 function decisionOf(row: Row): SaleDecisionRow {
   return {
@@ -453,6 +459,7 @@ function decisionOf(row: Row): SaleDecisionRow {
     appliedReportDate: text(row.applied_report_date),
     appliedAt: nullableDate(row.applied_at),
     supersededAt: nullableDate(row.superseded_at),
+    saidByTelegramId: nullableNum(row.said_by_telegram_id),
   };
 }
 
@@ -514,6 +521,8 @@ export interface SaleDecisionInsert {
   saidAt?: Date | null;
   sourceLink?: string | null;
   agentKeyId?: number | null;
+  /** Recorded «со слов» (0439): the Telegram id of the message's sender. */
+  saidByTelegramId?: number | null;
 }
 
 /**
@@ -532,12 +541,13 @@ export async function insertSaleDecision(db: Database, input: SaleDecisionInsert
   }
   const result = await db.execute<Row>(sql`
     insert into sale_owner_decisions (transaction_id, page_id, kind, shares, pot, outcome, rule_home, note, decided_by_user_id, decided_at,
-      said_by, source, ledger_decision_id, ledger_ref, needs_link, created_at, said_at, source_link, agent_key_id)
+      said_by, source, ledger_decision_id, ledger_ref, needs_link, created_at, said_at, source_link, agent_key_id, said_by_telegram_id)
     values (${input.transactionId}, ${input.pageId}, ${input.kind}, ${JSON.stringify(input.shares)}::jsonb, ${input.pot}, ${input.outcome},
       ${input.ruleHome}, ${input.note}, ${input.decidedByUserId}, ${input.decidedAt.toISOString()}::timestamptz, ${input.saidBy}, ${input.source},
       ${input.ledgerDecisionId}, ${input.ledgerRef == null ? null : JSON.stringify(input.ledgerRef)}::jsonb,
       ${input.transactionId === null && input.kind !== "off_platform"}, ${at.toISOString()}::timestamptz,
-      ${input.saidAt?.toISOString() ?? null}::timestamptz, ${input.sourceLink ?? null}, ${input.agentKeyId ?? null})
+      ${input.saidAt?.toISOString() ?? null}::timestamptz, ${input.sourceLink ?? null}, ${input.agentKeyId ?? null},
+      ${input.saidByTelegramId ?? null}::bigint)
     returning id`);
   const found = await listSaleDecisions(db, { ids: [num(result.rows[0]!.id)] });
   return found[0] ?? null;

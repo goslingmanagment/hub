@@ -1376,7 +1376,9 @@ export async function applySaleDecision(
  * claim and question of the sale open now is decided with it (and `answers`, a question the sale's own do not hold),
  * and every handed-in report that holds the sale gets what it gives the report's person — their share under any of
  * their logins; a line another report of the person already holds stays at nothing here. Made on the sale, or tied to
- * it: the same.
+ * it: the same. A claim is decided only from an open state: one a writer outside the settlements' turn closed after the
+ * read (the claims' pass, a question's answer) is 409 before any report is touched, and the caller's transaction writes
+ * nothing.
  */
 async function followDecision(
   txDb: Database,
@@ -1388,9 +1390,12 @@ async function followDecision(
 ): Promise<MadeVersion[]> {
   const { transactionId, decisionId, at } = input;
   const made: MadeVersion[] = [];
-  const open = await listSaleClaims(txDb, { transactionIds: [transactionId], states: ["owner", "asked", "agreed"] });
+  const openStates = ["owner", "asked", "agreed"] as const;
+  const open = await listSaleClaims(txDb, { transactionIds: [transactionId], states: openStates });
   for (const id of new Set([...open.map((claim) => claim.id), ...(input.answers == null ? [] : [input.answers])])) {
-    await updateSaleClaim(txDb, id, { state: "decided", decisionId, closedAt: at }, at);
+    if (!(await updateSaleClaim(txDb, id, { state: "decided", decisionId, closedAt: at }, at, { ifState: openStates }))) {
+      throw new ConflictError(`Claim ${id} of the sale is no longer open: read the sale again`, { reason: "claim_closed" });
+    }
   }
   const reports = await listCurrentReportsOfSales(txDb, [transactionId]);
   const people = await listHandinPeopleOfUsers(txDb, reports.map((report) => report.userId));

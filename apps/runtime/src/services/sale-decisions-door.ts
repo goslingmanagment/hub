@@ -43,8 +43,9 @@ import { applySaleDecision, cancelSaleDecisionApplied, runSaleClaims } from "./s
  * A key changes only what is its own to change (final review, round 2). A number it names — the decision a new one
  * replaces, the question it answers, the decision it cancels or marks — is read in the transaction that writes, and must
  * be of the key's pages (one of another page, or of no page, answers exactly as a number that does not exist), about
- * the very sale of the new decision (with no sale: the same page and fan). A decision the owner made himself in
- * Workboard is cancelled or replaced only on the owner's own message (`refuseOwners`), and then goes the same path.
+ * the very sale of the new decision (with no sale: the same page and fan). The owner's word — a decision he made
+ * himself in Workboard, or one recorded from his own message — is cancelled or replaced only on the owner's own message
+ * (`refuseOwners`), and then goes the same path.
  */
 
 type DoorApp = Pick<AppContext, "db" | "config" | "logger">;
@@ -65,13 +66,28 @@ const notFound = () => new NotFoundError("Not found");
 const ofKeysPages = (actor: Pick<DoorActor, "pageIds">, pageId: number | null) => pageId !== null && actor.pageIds.includes(pageId);
 
 /**
- * A decision the owner made himself, in the interface, is changed only on the owner's own word: the write is recorded
- * from his message — its sender is the Telegram account the people registry gives a person whose role is owner
- * (`isOwnerTelegramUser`; an owner with no Telegram id there has no such message). Anyone else's message changes
- * nothing, and the refusal says how it is changed.
+ * Whether a decision is the owner's word: a dispute's (decided in the interface), one a signed-in decider made
+ * (`decided_by_user_id`), or one recorded «со слов» from a message whose sender is the Telegram account the people
+ * registry gives a person whose role is owner (`said_by_telegram_id`, `isOwnerTelegramUser`; an owner with no Telegram id
+ * there has no such message). Read as the registry stands now: nothing is relabelled.
  */
-async function refuseOwners(db: Database, actor: Pick<DoorActor, "telegramUserId">, decision: Pick<SaleDecisionRow, "id" | "source">): Promise<void> {
-  if (decision.source !== "dispute" || (await isOwnerTelegramUser(db, actor.telegramUserId))) return;
+export async function isOwnersWord(db: Database, decision: Pick<SaleDecisionRow, "source" | "decidedByUserId" | "saidByTelegramId">): Promise<boolean> {
+  if (decision.source === "dispute" || decision.decidedByUserId !== null) return true;
+  return decision.saidByTelegramId !== null && (await isOwnerTelegramUser(db, decision.saidByTelegramId));
+}
+
+/**
+ * The owner's word (`isOwnersWord`: a decision made in Workboard, or recorded from his message) is changed only on the
+ * owner's own word: the write is recorded from his message — its sender is the Telegram account the people registry
+ * gives a person whose role is owner (`isOwnerTelegramUser`; an owner with no Telegram id there has no such message).
+ * Anyone else's message changes nothing, and the refusal says how it is changed.
+ */
+async function refuseOwners(
+  db: Database,
+  actor: Pick<DoorActor, "telegramUserId">,
+  decision: Pick<SaleDecisionRow, "id" | "source" | "decidedByUserId" | "saidByTelegramId">,
+): Promise<void> {
+  if (!(await isOwnersWord(db, decision)) || (await isOwnerTelegramUser(db, actor.telegramUserId))) return;
   throw new ConflictError(
     `Решение ${decision.id}: решение владельца меняет только он сам: запишите его слова с его сообщением (--sender — Telegram id владельца, --message — его сообщение)`,
     { reason: "owner_decision" },
@@ -244,6 +260,8 @@ export async function recordSaleDecision(
     kind: hubKindOf(input.kind), shares: input.kind === "pot" || input.kind === "exclude" ? [] : shares, pot: input.pot ?? null,
     outcome: "said" as const, note: input.note ?? null, decidedByUserId: null, decidedAt: now, saidBy: input.saidBy, source: "agent" as const,
     ledgerDecisionId: null, ledgerRef: found.ref, saidAt, sourceLink: actor.sourceRef, agentKeyId: actor.agentKeyId,
+    // Whose message it was recorded from: the owner's makes it his word (`isOwnersWord`).
+    saidByTelegramId: Number.isSafeInteger(actor.telegramUserId) && actor.telegramUserId > 0 ? actor.telegramUserId : null,
   };
   let decisionId: number | null = null;
   let versions: Array<{ shiftId: number; version: number }> = [];
@@ -338,6 +356,9 @@ async function decisionWiresOf(app: DoorApp, decisions: readonly SaleDecisionRow
   const heldCodes = await listHandinPeopleOfUsers(db, [...held.values()].flat().map((one) => one.userId));
   const successors = new Map<number, number>();
   for (const one of decisions) if (one.transactionId !== null) successors.set(one.transactionId, Math.max(successors.get(one.transactionId) ?? 0, one.id));
+  // «Источник» of a decision that names no one who said it: the owner, when it is his word.
+  const ownersWord = new Set<number>();
+  for (const one of decisions) if (one.saidBy === null && (await isOwnersWord(db, one))) ownersWord.add(one.id);
   const codeOf = (userId: number) => codes.get(userId)?.code ?? heldCodes.get(userId)?.code ?? null;
   return decisions.map((decision): AgentSaleDecision => {
     const ref = decision.ledgerRef ?? {};
@@ -375,7 +396,7 @@ async function decisionWiresOf(app: DoorApp, decisions: readonly SaleDecisionRow
       kind: ledgerKindOf(decision),
       shares: decision.shares.map((share) => ({ person: codeOf(share.userId), name: names.get(share.userId) ?? `#${share.userId}`, percent: share.percent })),
       pot: decision.pot,
-      saidBy: decision.saidBy ?? (decision.source === "dispute" ? "владелец" : null),
+      saidBy: decision.saidBy ?? (ownersWord.has(decision.id) ? "владелец" : null),
       saidAt: (decision.saidAt ?? decision.decidedAt).toISOString(),
       sourceLink: decision.sourceLink,
       note: decision.note,
@@ -480,30 +501,48 @@ export async function askSaleQuestion(
   return { question: wire!, savedAt: now.toISOString() };
 }
 
-async function openQuestion(app: DoorApp, actor: Pick<DoorActor, "pageIds">, questionId: number): Promise<SaleClaimRow> {
-  const question = await findSaleClaim(app.db, questionId);
-  if (question === null || (question.kind !== "question" && question.kind !== "imported") || !ofKeysPages(actor, question.pageId)) throw notFound();
-  if (question.state !== "owner" && question.state !== "asked") throw new ConflictError("This question is already closed", { reason: "question_closed" });
-  return question;
+const OPEN_QUESTION = ["owner", "asked"] as const;
+
+/**
+ * An open question of the key's pages closed once (an answer in words, or a close with why): in the settlements' turn
+ * (`lockSaleSettlements`, then the question's row), as a decision that answers it closes it, and written only from an
+ * open state — a second answer or close, or one after a decision answered it, is 409 `question_closed` and writes
+ * nothing.
+ */
+async function closeQuestionOnce(
+  app: DoorApp,
+  actor: Pick<DoorActor, "pageIds">,
+  questionId: number,
+  patch: Parameters<typeof updateSaleClaim>[2],
+  now: Date,
+): Promise<number> {
+  const closed = () => new ConflictError("This question is already closed", { reason: "question_closed" });
+  return app.db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    await lockSaleSettlements(txDb);
+    const question = await findSaleClaim(txDb, questionId, { lock: true });
+    if (question === null || (question.kind !== "question" && question.kind !== "imported") || !ofKeysPages(actor, question.pageId)) throw notFound();
+    if (!(OPEN_QUESTION as readonly string[]).includes(question.state)) throw closed();
+    if (!(await updateSaleClaim(txDb, question.id, { ...patch, state: "decided", closedAt: now }, now, { ifState: OPEN_QUESTION }))) throw closed();
+    return question.id;
+  });
 }
 
 /** `agentSaleQuestionAnswer`: closed with an answer in words (an answer that decides the sale is a decision). */
 export async function answerSaleQuestion(app: DoorApp, actor: DoorActor, input: { questionId: number; answer: string }, now: Date = new Date()) {
-  const question = await openQuestion(app, actor, input.questionId);
-  await updateSaleClaim(app.db, question.id, {
-    state: "decided", answerText: input.answer, closedAt: now, answeredByAgentKeyId: actor.agentKeyId, answerDoor: "telegram", answerRef: actor.sourceRef,
+  const id = await closeQuestionOnce(app, actor, input.questionId, {
+    answerText: input.answer, answeredByAgentKeyId: actor.agentKeyId, answerDoor: "telegram", answerRef: actor.sourceRef,
   }, now);
   await runSaleClaims(app, now).catch(() => undefined);
-  const [wire] = await questionWires(app, [question.id]);
+  const [wire] = await questionWires(app, [id]);
   return { question: wire!, savedAt: now.toISOString() };
 }
 
 /** `agentSaleQuestionClose`: closed without an answer, with why. */
 export async function closeSaleQuestion(app: DoorApp, actor: DoorActor, input: { questionId: number; note: string }, now: Date = new Date()) {
-  const question = await openQuestion(app, actor, input.questionId);
-  await updateSaleClaim(app.db, question.id, { state: "decided", closeNote: input.note, closedAt: now }, now);
+  const id = await closeQuestionOnce(app, actor, input.questionId, { closeNote: input.note }, now);
   await runSaleClaims(app, now).catch(() => undefined);
-  const [wire] = await questionWires(app, [question.id]);
+  const [wire] = await questionWires(app, [id]);
   return { question: wire!, savedAt: now.toISOString() };
 }
 
