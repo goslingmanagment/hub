@@ -2118,7 +2118,14 @@ export function ledgerWords(ref: Record<string, unknown>, note: string | null = 
   return parts.filter((part): part is string => part !== null).join(", ");
 }
 
-export async function linkUnlinkedDecision(app: ClaimsApp, principal: HumanAuthPrincipal, input: { decisionId: number; transactionId: number }, now: Date = new Date()) {
+/**
+ * `saleDecisionLink`: the owner ties a decision carried over from the ledger to its sale. `by` — who the reports' new
+ * versions and their history name: the owner in Workboard by default; the owner's agent door names its key beside him
+ * (`ownerAgentSettleBy`).
+ */
+export async function linkUnlinkedDecision(
+  app: ClaimsApp, principal: HumanAuthPrincipal, input: { decisionId: number; transactionId: number }, now: Date = new Date(), by?: SettleBy,
+) {
   requireOwnerSession(principal);
   const sale = (await listHandinSalesByIds(app.db, [input.transactionId]))[0];
   if (sale === undefined) throw new NotFoundError("No such sale");
@@ -2141,7 +2148,7 @@ export async function linkUnlinkedDecision(app: ClaimsApp, principal: HumanAuthP
     made.push(...await followDecision(txDb, {
       transactionId: sale.transactionId, decisionId: decision.id, decision,
       madeFor: { kind: "decision", decisionId: decision.id, transactionId: sale.transactionId, outcome: "said" },
-      by: { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
+      by: by ?? { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
       at: now, paid, saleNet: sale.netMills, sale, ruleHome: sale.home?.home ?? null,
     }));
     return true;

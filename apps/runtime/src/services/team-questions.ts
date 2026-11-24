@@ -44,7 +44,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { recordAudit, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
+import { recordAudit, type AuditContext, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
 import { moscowDayOf } from "./chatter-shifts.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { slotMinute, slotTime } from "./people/index.ts";
@@ -281,7 +281,7 @@ export async function askTeamQuestion(app: QuestionsApp, principal: AuthPrincipa
 }
 
 export async function answerQuestion(
-  app: QuestionsApp, principal: AuthPrincipal, id: number, body: TeamQuestionAnswerBody, now: Date = new Date(),
+  app: QuestionsApp, principal: AuthPrincipal, id: number, body: TeamQuestionAnswerBody, now: Date = new Date(), options: SwapWriteOptions = {},
 ): Promise<TeamQuestionWriteResponse> {
   requireTeamReader(principal);
   const facts = await teamFactsFor(app, principal);
@@ -309,7 +309,7 @@ export async function answerQuestion(
     if (swap !== null) await writeSwapLines(tx, row.id, swap, principal.user.id);
   });
   if (swap !== null) {
-    await auditSwap(app, principal, row.id, swap, "person.schedule_swap");
+    await auditSwap(app, auditOfSwap(principal, options), row.id, swap, "person.schedule_swap");
     await tellCover(app, facts, row, swap, "approved", now);
   }
   const answered = (await findTeamQuestion(app.db, id))!;
@@ -494,18 +494,32 @@ async function writeSwapLines(db: Parameters<typeof insertPersonDayLine>[0], que
   await enqueueSaleHomeRefreshDays(db, swapAffectedDays(swap));
 }
 
+/**
+ * Who a swap's write is recorded by: the session's person in Workboard (`workboard`), or what a door names beside the
+ * person it acts as (the owner's agent door: `owner_agent`, the owner and the key).
+ */
+export interface SwapWriteOptions {
+  audit?: AuditContext;
+}
+
+function auditOfSwap(principal: HumanAuthPrincipal, options: SwapWriteOptions): AuditContext {
+  return options.audit ?? { source: "workboard", actorUserId: principal.user.id };
+}
+
 /** The persons' history (the audit log, as every change of a person): who covers whom, when, by whose word. */
-async function auditSwap(app: QuestionsApp, principal: HumanAuthPrincipal, questionId: number, swap: TeamQuestionSwapRow, eventType: string): Promise<void> {
+async function auditSwap(app: QuestionsApp, audit: AuditContext, questionId: number, swap: TeamQuestionSwapRow, eventType: string): Promise<void> {
   for (const [personId, role] of [[swap.coverPersonId, "cover"], [swap.absentPersonId, "off"]] as const) {
     await recordAudit(app, {
-      source: "workboard", actorUserId: principal.user.id, eventType,
+      ...audit, eventType,
       metadata: { personId, role, questionId, date: swap.date, pageIds: swap.pageIds, start: slotTime(swap.startMinute), end: slotTime(swap.endMinute) },
     });
   }
 }
 
 /** «Отменить подмену»: its decider or the owner, before the day; the lines are marked taken back, never deleted. */
-export async function revokeSwap(app: QuestionsApp, principal: AuthPrincipal, id: number, now: Date = new Date()): Promise<TeamQuestionWriteResponse> {
+export async function revokeSwap(
+  app: QuestionsApp, principal: AuthPrincipal, id: number, now: Date = new Date(), options: SwapWriteOptions = {},
+): Promise<TeamQuestionWriteResponse> {
   requireTeamReader(principal);
   const facts = await teamFactsFor(app, principal);
   const row = await findTeamQuestion(app.db, id);
@@ -519,7 +533,7 @@ export async function revokeSwap(app: QuestionsApp, principal: AuthPrincipal, id
     return count;
   });
   if (taken === 0) throw new ConflictError("Nothing to take back: the swap is not standing");
-  await auditSwap(app, principal, id, row.swap, "person.schedule_swap_revoked");
+  await auditSwap(app, auditOfSwap(principal, options), id, row.swap, "person.schedule_swap_revoked");
   await tellCover(app, facts, row, row.swap, "revoked", now);
   await openMatter(app.db, {
     key: `${ANSWERED}:${id}`,

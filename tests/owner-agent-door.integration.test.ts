@@ -260,9 +260,13 @@ describe("the owner's agent door", () => {
     expect(await calls()).toBe(before);
 
     // Arguments the operation does not name: the audit row is written (the call happened), nothing else runs.
-    const extra = await call("people.edit", { code: "anna", displayName: "Анна", rights: ["submits_shift"] });
+    const extra = await call("people.edit", { code: "anna", displayName: "Анна", anything: 1 });
     expect(extra.statusCode, extra.body).toBe(400);
     expect(await calls()).toBe(before + 1);
+    // What the door never takes (a right), anywhere in the arguments: 403 before the schema, the audit row alone (H10).
+    const never = await call("people.edit", { code: "anna", displayName: "Анна", rights: ["submits_shift"] });
+    expect(never.statusCode, never.body).toBe(403);
+    expect(await calls()).toBe(before + 2);
     const person = await testDb.pool.query("select display_name from people where code = 'anna'");
     expect(person.rows[0].display_name).toBe("anna");
 
@@ -293,9 +297,11 @@ describe("the owner's agent door", () => {
     expect(Number(audit.rows[0].actor_user_id)).toBe(boss);
     expect(audit.rows[0].metadata).toMatchObject({ code: "anna", actorAgentKeyId: ownerKeyId });
 
+    // Never the door's (H10: 403 at any depth, before the schema); a field it does not name is the schema's 400.
     for (const args of [{ rights: ["submits_shift"] }, { payTerms: [] }, { role: "team_lead" }, { logins: { add: [boss] } }, { telegram: { userId: 5 } }]) {
-      expect((await call("people.edit", { code: "anna", ...args })).statusCode, JSON.stringify(args)).toBe(400);
+      expect((await call("people.edit", { code: "anna", ...args })).statusCode, JSON.stringify(args)).toBe(403);
     }
+    expect((await call("people.edit", { code: "anna", kind: "agent" })).statusCode).toBe(400);
     // A content manager's working pages open ContentOps: the owner's own word, never the door's.
     const pages = await call("people.edit", { code: "vera", workingPageLabels: ["mia-1"] });
     expect(pages.statusCode, pages.body).toBe(409);

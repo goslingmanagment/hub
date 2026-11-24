@@ -160,8 +160,11 @@ the owner's machine (outside this repository); a change that moves a home or add
   principal (`OwnerAgentPrincipal`: neither a person nor an agent). Every call: the reason (`x-hub-owner-reason`), the
   table, the audit row (`owner_agent.call`) before it runs, the strict arguments, then the owner's own service as
   `principalOfLogin(owner)`. Its reads are projections of what is stored (`readStored*` in `shift-handins.ts`: never
-  `dueNow`); its writes name the key and the owner (`ownerAgentSettleBy`). The CLI is `hub owner …` with the owner's
-  desk key (`~/.config/hub/owner-desk`, `HUB_OWNER_KEY`), never an agent's. A decision with `decided_by_user_id`
+  `dueNow`); its writes name the key and the owner (`ownerAgentSettleBy`, `door: "api"` in `object_events`). A key of
+  `OWNER_AGENT_NEVER` anywhere in a call's arguments, or a step it never takes (a custom's payment, unpay, paid_word,
+  cancel), is 403 before the schema (`ownerAgentNeverIn`). A service whose door check is a cookie session
+  (`requireSessionUser`) gets a `…As(app, principal)` beside it for the door (custom-orders). The CLI is `hub owner …`
+  with the owner's desk key (`~/.config/hub/owner-desk`, `HUB_OWNER_KEY`), never an agent's. A decision with `decided_by_user_id`
   (Workboard or this door) is never changed through the bot door, the owner's Telegram id included.
 - **Whose an agent key is**: the agent person it is linked to (`person_agent_keys`, one writer: `insertPersonAgentKey`
   in `packages/db/src/repositories/people.ts`). An agent holds ONE live key at a time: the services (ledger, TaskIndex,

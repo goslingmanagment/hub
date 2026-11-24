@@ -506,6 +506,11 @@ async function visibleOrder(app: CustomApp, viewer: CustomViewer, code: string):
 
 export async function readCustomOrder(app: CustomApp, principal: AuthPrincipal, code: string, now: Date = new Date()): Promise<CustomOrderDetailResponse> {
   requireBoardReader(principal);
+  return customOrderAs(app, principal, code, now);
+}
+
+/** An order as `principal` reads it, the door checked by the caller (the owner's agent door AS the owner). */
+export async function customOrderAs(app: CustomApp, principal: HumanAuthPrincipal, code: string, now: Date = new Date()): Promise<CustomOrderDetailResponse> {
   const viewer = await customViewerOf(app, principal);
   return detailOf(app, viewer, await visibleOrder(app, viewer, code), now);
 }
@@ -1398,19 +1403,41 @@ export async function actOnCustomOrder(
 /**
  * One step of the board taken as `viewer`, by the board's own rules: their right to it (`mayTakeStep`), the body
  * translated (`boardStep`, the suggestions it is checked against), the step. The board's door, and an agent on a person's
- * word (agent.ts: the person as the viewer, the request kept in the history — what it sets is the person's).
+ * word (agent.ts: the person as the viewer, the request kept in the history — what it sets is the person's); `byPerson`
+ * — a key acting AS the person (the owner's agent door): what it sets is theirs, no request to keep.
  */
 export async function boardStepAs(
   app: CustomApp,
-  input: { viewer: CustomViewer; order: CustomOrderRow; body: CustomOrderActionBody; actor: CustomActor; now: Date; requestRef?: string },
+  input: { viewer: CustomViewer; order: CustomOrderRow; body: CustomOrderActionBody; actor: CustomActor; now: Date; requestRef?: string; byPerson?: boolean },
 ): Promise<boolean> {
   const { viewer, order, now } = input;
   if (!mayTakeStep(viewer, order, input.body.action as CustomOrderAction)) throw notAllowed();
   const step = await boardStep(app, viewer, order, input.body, now);
   return applyCustomStep(app, {
     orderId: order.id, step, actor: input.actor, viewer, now,
-    ...(input.requestRef === undefined ? {} : { byPerson: true, requestRef: input.requestRef }),
+    ...(input.requestRef === undefined ? (input.byPerson === true ? { byPerson: true } : {}) : { byPerson: true, requestRef: input.requestRef }),
   });
+}
+
+/**
+ * A step of an order AS the person — the owner's agent door (services/owner-agent-door.ts): the board's own step by the
+ * board's own rules, the person as the viewer (an order they do not see is not found), recorded by `actor` (the key, on
+ * whose behalf, door api); what it sets is the person's. An edit is the card's changed fields (`patch`, applied under the
+ * order's lock): the fields it does not name stay as they are. Which steps the door takes is the door's.
+ */
+export async function actOnCustomOrderAs(
+  app: CustomApp,
+  principal: HumanAuthPrincipal,
+  input: { code: string; step: CustomOrderActionBody | { action: "edit"; patch: CustomOrderCardPatch }; actor: CustomActor },
+  now: Date = new Date(),
+): Promise<{ changed: boolean; detail: CustomOrderDetailResponse }> {
+  const viewer = await customViewerOf(app, principal);
+  const order = await visibleOrder(app, viewer, input.code);
+  const step = input.step;
+  const changed = step.action === "edit" && "patch" in step
+    ? await applyCustomStep(app, { orderId: order.id, step: { action: "edit", patch: step.patch, by: "person" }, actor: input.actor, viewer, now, byPerson: true })
+    : await boardStepAs(app, { viewer, order, body: step as CustomOrderActionBody, actor: input.actor, now, byPerson: true });
+  return { changed, detail: await detailOf(app, viewer, (await findCustomOrder(app.db, order.id))!, now) };
 }
 
 /** Whether a login is a chatter's (the role): only such a person recording an order is its taker by default. */

@@ -485,7 +485,23 @@ The CLI is `hub owner …` with the owner's desk's key: `HUB_OWNER_KEY`, or `HUB
 | `sale.cancel` | `sale cancel № --note W` | Cancels an active decision; the reports it settled get a new version |
 | `sale.close` | `sale close № --note W` | Closes an open sale question without a decision, once (409 `question_closed`) |
 | `people.show` | `people show C` | A person: who, logins, pages, schedule, rights, onboarding, the owner's note. Never pay terms, payout details, keys or proposals |
-| `people.edit` | `people edit C [--display-name] [--note] [--state] [--left-on] [--working-page …] [--json '{"onboarding":…,"schedule":…}']` | Those fields of a person (kind human) and nothing else (400). A person with a content manager's login: their working pages are the owner's own (409 `content_manager_pages`) |
+| `people.edit` | `people edit C [--display-name] [--note] [--state] [--left-on] [--working-page …] [--json '{"onboarding":…,"schedule":…}']`; `people set C [--state] [--left-on D] [--working-page …] [--schedule '{…}']` | Those fields of a person (kind human) and nothing else (400; a right, a login, a key, the role, Telegram, pay terms, a proposal: 403). A person with a content manager's login: their working pages are the owner's own (409 `content_manager_pages`). `people set` is the same operation with the state, the day left, the working pages and a schedule line alone |
+| `custom.board` | `custom board [--page L]` | «Кастомы» as the owner's board shows it: the live orders, the findings' line, what changed by itself |
+| `custom.show` | `custom show K-N` | An order whole: card, messages, payments, history, the steps the owner may take |
+| `custom.step` | `custom step K-N --step S [--json '{…}']` | One step of the board as the owner, none of money: `edit` (`{"card":{…}}` — the changed fields, never «Оплата»), `deadline`, `fan`, `card`, `checked`, `at_model`, `partly`, `shot`, `revision`, `refused`, `given`, `ungive`, `retract`, `close`, `hold`, `unhold`, `issue_clear`, `fan_asked_clear`, `accepted_by`. Never `payment`, `unpay`, `paid_word`, `cancel` (it gives the order's sales back) or a price (403) |
+| `customFinding.list` | `custom-finding list` | «Найдено без заказа»: the open findings and those an agent dismissed in two weeks |
+| `customFinding.answer` | `custom-finding answer N --step dismiss\|reopen\|link\|record [--reason R] [--code K-N] [--json '{"card":…}']` | A finding answered as the owner. A finding that names a sale (a sale's, a shift report line's) is never recorded or linked here — that pays the order with the sale: 409 `finding_pays`, nothing written; the owner does it on the board. A record names no agreed total and no «Оплата» |
+| `matter.list` | `matter list [--state] [--kind] [--page] [--limit]` | The owner's matters (every one), with whether each kind is known |
+| `matter.close` | `matter close KEY --how resolved\|withdrawn\|cause_gone [--note]` | An agent's matter, closed by its writer (as the agent's door closes it). Any other kind closes through its own step — a sale's, a question's, a custom's, Hub's own pass, the ledger, ContentOps: 409 `matter_kind_service`, naming it |
+| `matter.comment` | `matter comment KEY --text W` | A comment in a matter's history, any kind's |
+| `learn.list` | `learn list` | The pages of «Обучение», each with whether the team reads it |
+| `learn.show` | `learn show SLUG` | A page with its text |
+| `learn.approve` | `learn approve SLUG [--take-back]` | The team reads the page from now (or no more). Its audit row `learn_page.approval` names the key |
+| `swap.list` | `swap list` | The approved swaps of the next 14 days |
+| `swap.approve` | `swap approve № [--text W]` | «Можно» to a swap question: the day's lines are written (once its hours began: 409 `swap_started`). Another kind of question: 409 `not_swap` |
+| `swap.revoke` | `swap revoke №` | An approved swap taken back before its day; its lines are marked |
+| `decision.unlinked` | `decision unlinked` | Decisions carried over from the ledger that name no sale yet, with the sales each may be |
+| `decision.link` | `decision link № --sale N` | Ties one to its sale of the live agency: it rules the sale from now, the reports follow as for a decision |
 
 `hub owner call <op> --json '{…}' --why …` runs any operation of the table; `hub owner ops` lists them (no call).
 
@@ -493,9 +509,12 @@ Every call, in this order: (1) the key — an `act:owner` key of an active owner
 header `x-hub-owner-reason`, 1 to 500 characters after trimming, UTF-8 percent-encoded (`encodeURIComponent`), never a
 fan's name — else 400 `owner_reason` before anything; (3) the operation — on the table, else 403; (4) the audit row
 `owner_agent.call` (the owner as actor, the key, the operation, the reason), written before anything runs — a call
-that cannot be recorded does not run; (5) the arguments by the operation's strict schema — an unknown field is 400
-`owner_agent_args`; (6) the operation, as the owner's own principal. 60 calls a minute per key; answers are
-`Cache-Control: no-store`.
+that cannot be recorded does not run; (5) nothing the door never takes anywhere in the arguments — a key of
+`OWNER_AGENT_NEVER.fields` at any depth, in any case, with or without `_` (`rights`, `payTerms`, `payoutDetails`,
+`priceMills`, `price`, `payment`, `paid_word`, `proposal`, …), or a step (`action`) of its `steps` (`payment`,
+`unpay`, `paid_word`, `cancel`) — else 403, nothing run but the audit row; (6) the arguments by the operation's strict
+schema — an unknown field is 400 `owner_agent_args`; (7) the operation, as the owner's own principal. 60 calls a
+minute per key; answers are `Cache-Control: no-store`.
 
 What it writes and how it is named:
 - A decision: `sale_owner_decisions` `source 'agent'`, `decided_by_user_id` the owner, `agent_key_id` the key. The bot
@@ -505,12 +524,19 @@ What it writes and how it is named:
   `shift_report.settled`) names the key (`actor_agent_key_id`), the owner it acts for (`on_behalf_of_user_id`) and
   the door `api`.
 - A person's change: the audit row `person.updated` under the owner, with the key in its metadata.
+- A custom's step, a finding's answer, a matter's close or comment: their history rows (`object_events`
+  `custom_order.*`, `custom_finding.*`, `matter.*`) name the key, the owner on whose behalf, door `api`, no person; what
+  the step sets is the owner's own (as his hand on the board: an agent never overwrites it).
+- A swap approved or taken back: the persons' audit rows (`person.schedule_swap`, `person.schedule_swap_revoked`) under
+  the owner, source `owner_agent`, the key in their metadata; «Обучение»'s approval: `learn_page.approval`, the same.
+- A decision tied to its sale: the reports' new versions and their history, as a decision of the door (above).
 - A read writes nothing but its own audit row (and its observation): no check runs, no phase moves, no take settles.
 
 Never on this door (a predicate and a test hold it, `OWNER_AGENT_NEVER`): keys, passwords, sessions, devices,
 invitations; erasure and deletion, the page browser, sends and broadcasts; pay terms, payout details, transfers,
 prices, discounts; configs, prompts, the pace, master switches; signing for a chatter, the test wall; people's rights,
-logins, role, Telegram.
+logins, role, Telegram; a person's proposals (their stored change may carry rights); a custom's payment, its undoing,
+the owner's word on it, its cancel and its price. The common pots' operations are not here yet.
 
 ## «Кто этот ключ»: another service accepts a hub key
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CUSTOM_ORDER_ACTIONS,
+  OWNER_AGENT_CUSTOM_STEPS,
   OWNER_AGENT_OPERATION_NAMES,
   OWNER_AGENT_OPERATION_SCHEMAS,
   routeSchemas,
@@ -18,7 +20,7 @@ import {
   type AuthPrincipal,
   type OwnerAgentPrincipal,
 } from "../apps/runtime/src/services/auth.ts";
-import { OWNER_AGENT_NEVER, OWNER_AGENT_OPERATIONS, ownerAgentNever, ownerReasonOf } from "../apps/runtime/src/services/owner-agent-door.ts";
+import { OWNER_AGENT_NEVER, OWNER_AGENT_OPERATIONS, ownerAgentNever, ownerAgentNeverIn, ownerReasonOf } from "../apps/runtime/src/services/owner-agent-door.ts";
 import { auditCtx, pageScopeFor } from "../apps/runtime/src/services/page-scope.ts";
 
 // The owner's agent door (payouts plan 2026-11-24, §1.8, H9): its key's principal is neither a person nor an agent, so
@@ -105,6 +107,9 @@ describe("the owner's agent door: its table", () => {
     // The walk reads nested fields (a schedule's slot, a share's person): the check below is not vacuous.
     expect(fieldNames(OWNER_AGENT_OPERATION_SCHEMAS["people.edit"].args)).toEqual(expect.arrayContaining(["workingPageLabels", "slot", "weekdays", "doneAt"]));
     expect(fieldNames(OWNER_AGENT_OPERATION_SCHEMAS["sale.decide"].args)).toEqual(expect.arrayContaining(["shares", "person", "percent"]));
+    // …a custom step's union and its card's patch, a finding's record.
+    expect(fieldNames(OWNER_AGENT_OPERATION_SCHEMAS["custom.step"].args)).toEqual(expect.arrayContaining(["step", "action", "card", "notes", "deadlineOn", "acceptedBy"]));
+    expect(fieldNames(OWNER_AGENT_OPERATION_SCHEMAS["customFinding.answer"].args)).toEqual(expect.arrayContaining(["step", "card", "task", "code", "reason"]));
     const never = new Set<string>(OWNER_AGENT_NEVER.fields);
     for (const op of OWNER_AGENT_OPERATION_NAMES) {
       const names = fieldNames(OWNER_AGENT_OPERATION_SCHEMAS[op].args);
@@ -128,6 +133,61 @@ describe("the owner's agent door: its table", () => {
     expect(decide.safeParse({ transactionId: 9, kind: "owner", shares: [{ person: "anna", percent: 100 }], note: "чат вела она" }).success).toBe(true);
     expect(decide.safeParse({ transactionId: 9, kind: "pot", shares: [], note: "x" }).success).toBe(false);
     expect(decide.safeParse({ transactionId: 9, kind: "owner", shares: [], note: "x", pot: "obshak" }).success).toBe(false);
+  });
+});
+
+describe("the owner's agent door: what it never takes, in the arguments (H10)", () => {
+  it("finds a never-field at any depth, in any case, with or without «_», and a never-step by its action", () => {
+    for (const args of [
+      { rights: [] },
+      { schedule: { slot: { start: "10:00", rights: ["x"] } } },
+      { onboarding: [{ step: "x", payout_details: {} }] },
+      { a: [[{ b: { PaidWord: 1 } }]] },
+      { step: { action: "edit", card: { price: "100$" } } },
+      { step: { action: "edit", priceMills: 5 } },
+      { step: { price_mills: 5 } },
+      { proposal: {} },
+      { step: { action: "payment", transactionRef: "1" } },
+      { step: { action: "unpay" } },
+      { step: { action: "PAID_WORD" } },
+      { step: { action: "cancel" } },
+    ]) {
+      expect(ownerAgentNeverIn(args), JSON.stringify(args)).not.toBeNull();
+    }
+    // What the operations do take is no never-field: a card's link, a note, a taker, a sale's id.
+    for (const args of [
+      { code: "K-1", step: { action: "card", telegramRef: "https://t.me/c/1/2" } },
+      { code: "K-1", step: { action: "accepted_by", acceptedBy: "anna" } },
+      { code: "anna", note: "x", schedule: { from: "2026-12-01", slot: null }, workingPageLabels: ["mia-1"] },
+      { decisionId: 1, transactionId: 2 },
+      { key: "agent.ask:1", text: "action" },
+    ]) {
+      expect(ownerAgentNeverIn(args), JSON.stringify(args)).toBeNull();
+    }
+    // Deeper than any operation's arguments: refused as it is.
+    let deep: Record<string, unknown> = {};
+    for (let index = 0; index < 20; index += 1) deep = { inner: deep };
+    expect(ownerAgentNeverIn(deep)).not.toBeNull();
+  });
+
+  it("takes the board's steps of no money and no other; an edit is the card's fields without its price", () => {
+    const steps = new Set<string>(OWNER_AGENT_CUSTOM_STEPS);
+    expect(OWNER_AGENT_NEVER.steps.filter((step) => steps.has(step))).toEqual([]);
+    expect(CUSTOM_ORDER_ACTIONS.filter((action) => !steps.has(action)).sort()).toEqual(["cancel", "paid_word", "payment", "unpay"]);
+    const step = OWNER_AGENT_OPERATION_SCHEMAS["custom.step"].args;
+    expect(step.safeParse({ code: "K-12", step: { action: "hold", reason: "ждём" } }).success).toBe(true);
+    expect(step.safeParse({ code: "K-12", step: { action: "edit", card: { notes: "к субботе", urgency: null } } }).success).toBe(true);
+    for (const body of [
+      { action: "payment", transactionRef: "1" }, { action: "unpay", transactionRef: "1" }, { action: "paid_word", word: null }, { action: "cancel" },
+      { action: "edit", card: { price: "200$" } }, { action: "edit", card: {} }, { action: "edit", card: { notes: "x" }, priceMills: 5 },
+    ]) {
+      expect(step.safeParse({ code: "K-12", step: body }).success, JSON.stringify(body)).toBe(false);
+    }
+    const finding = OWNER_AGENT_OPERATION_SCHEMAS["customFinding.answer"].args;
+    expect(finding.safeParse({ findingId: 3, step: { action: "dismiss", reason: "not_custom" } }).success).toBe(true);
+    expect(finding.safeParse({ findingId: 3, step: { action: "record", card: { task: "Ролик" } } }).success).toBe(true);
+    expect(finding.safeParse({ findingId: 3, step: { action: "record", card: { task: "Ролик" }, priceMills: 5 } }).success).toBe(false);
+    expect(finding.safeParse({ findingId: 3, step: { action: "record", card: { task: "Ролик", price: "100$" } } }).success).toBe(false);
   });
 });
 
