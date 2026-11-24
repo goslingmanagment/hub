@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import { livePageSql, liveUserSql, testPageSql, testUserSql } from "./realm.ts";
+import { enqueueSaleHomeRefreshForSales } from "./sale-homes.ts";
 import type { Database } from "../client.ts";
 import type { HandinVersionLine, HandinVersionOffPlatform, HandinVersionPage } from "./shift-handins.ts";
 
@@ -328,7 +329,11 @@ export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: 
     on conflict do nothing
     returning id`);
   const id = result.rows[0]?.id;
-  return id === undefined ? null : findSaleClaim(db, num(id));
+  if (id === undefined) return null;
+  if (input.state === "agreed" && input.transactionId !== null) {
+    await enqueueSaleHomeRefreshForSales(db, [input.transactionId]);
+  }
+  return findSaleClaim(db, num(id));
 }
 
 /**
@@ -380,8 +385,13 @@ export async function updateSaleClaim(
   const only = options.ifState === undefined ? sql``
     : typeof options.ifState === "string" ? sql` and state = ${options.ifState}`
       : sql` and state = any(${sql.param([...options.ifState])}::text[])`;
-  const result = await db.execute(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only}`);
-  return (result.rowCount ?? 0) > 0;
+  const result = await db.execute<Row>(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only} returning transaction_id`);
+  const updated = (result.rowCount ?? 0) > 0;
+  if (updated && (patch.state !== undefined || patch.statement !== undefined || patch.shareWithUserId !== undefined)) {
+    const txId = nullableNum(result.rows[0]?.transaction_id);
+    if (txId !== null) await enqueueSaleHomeRefreshForSales(db, [txId]);
+  }
+  return updated;
 }
 
 /**
@@ -409,8 +419,14 @@ export async function reopenSaleClaim(
       escalated_at = ${input.escalatedAt?.toISOString() ?? null}::timestamptz, escalated_why = ${input.escalatedWhy},${answer}
       decision_id = null, closed_at = null, silence_at = null,
       created_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
-    where id = ${id} and state = 'withdrawn' and kind in ('claim', 'double')`);
-  return (result.rowCount ?? 0) > 0;
+    where id = ${id} and state = 'withdrawn' and kind in ('claim', 'double')
+    returning transaction_id`);
+  const reopened = (result.rowCount ?? 0) > 0;
+  if (reopened && input.state === "agreed") {
+    const txId = nullableNum(result.rows[0]?.transaction_id);
+    if (txId !== null) await enqueueSaleHomeRefreshForSales(db, [txId]);
+  }
+  return reopened;
 }
 
 // ── The owner's decisions ────────────────────────────────────────────────────
@@ -575,23 +591,36 @@ export async function insertSaleDecision(db: Database, input: SaleDecisionInsert
       ${input.saidByTelegramId ?? null}::bigint)
     returning id`);
   const found = await listSaleDecisions(db, { ids: [num(result.rows[0]!.id)] });
+  if (input.transactionId !== null) await enqueueSaleHomeRefreshForSales(db, [input.transactionId]);
   return found[0] ?? null;
 }
 
 /** Supersedes one decision by id (a newer one names it); false — not active. */
 export async function supersedeSaleDecision(db: Database, input: { id: number; at: Date }): Promise<boolean> {
-  const result = await db.execute(sql`
+  const result = await db.execute<Row>(sql`
     update sale_owner_decisions set state = 'superseded', superseded_at = ${input.at.toISOString()}::timestamptz
-    where id = ${input.id} and state = 'active'`);
-  return (result.rowCount ?? 0) > 0;
+    where id = ${input.id} and state = 'active'
+    returning transaction_id`);
+  const updated = (result.rowCount ?? 0) > 0;
+  if (updated) {
+    const txId = nullableNum(result.rows[0]?.transaction_id);
+    if (txId !== null) await enqueueSaleHomeRefreshForSales(db, [txId]);
+  }
+  return updated;
 }
 
 /** Cancels a decision with why; false — already cancelled or superseded. */
 export async function cancelSaleDecision(db: Database, input: { id: number; note: string; at: Date }): Promise<boolean> {
-  const result = await db.execute(sql`
+  const result = await db.execute<Row>(sql`
     update sale_owner_decisions set state = 'cancelled', cancelled_at = ${input.at.toISOString()}::timestamptz, cancel_note = ${input.note}
-    where id = ${input.id} and state = 'active'`);
-  return (result.rowCount ?? 0) > 0;
+    where id = ${input.id} and state = 'active'
+    returning transaction_id`);
+  const updated = (result.rowCount ?? 0) > 0;
+  if (updated) {
+    const txId = nullableNum(result.rows[0]?.transaction_id);
+    if (txId !== null) await enqueueSaleHomeRefreshForSales(db, [txId]);
+  }
+  return updated;
 }
 
 /**
@@ -622,7 +651,9 @@ export async function linkSaleDecision(db: Database, input: { id: number; transa
   const result = await db.execute(sql`
     update sale_owner_decisions set transaction_id = ${input.transactionId}, page_id = ${input.pageId}, needs_link = false
     where id = ${input.id} and needs_link and state = 'active'`);
-  return (result.rowCount ?? 0) > 0;
+  const linked = (result.rowCount ?? 0) > 0;
+  if (linked) await enqueueSaleHomeRefreshForSales(db, [input.transactionId]);
+  return linked;
 }
 
 // ── «Мимо площадки»: the owner's word ────────────────────────────────────────

@@ -7,11 +7,11 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { realmOf } from "../../services/sandbox/realm.ts";
 
 /**
- * The team's sale facts for the agency ledger (`agentTeamSales`, ledger
- * release 2): an agent key with read:team and read:money reads the team's
- * work and every sale on its pages in a window, with the facts the ledger's
- * split rules read. No text of anyone's messages, no shift report's money:
- * facts only. Database only, read-only.
+ * The team's work and sale facts (`agentTeamSales`): an agent key with
+ * read:team and read:money reads the team's work and every sale on its pages
+ * in a window, with the facts whose a sale is computed from. Computed homes
+ * are served on `GET /api/v1/agent/sale-homes/feed`. No text of anyone's
+ * messages, no shift report's money: facts only. Database only, read-only.
  */
 
 /** A month of the team's work and sales is read in one statement budget. */

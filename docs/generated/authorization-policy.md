@@ -26,7 +26,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 91 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (566)
+## Routes (567)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -286,6 +286,7 @@ A full device token is not affected.
 | POST | `/api/v1/agent/sale-decisions/applied` | `agentSaleDecisionApplied` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/sale-decisions/cancel` | `agentSaleDecisionCancel` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/sale-decisions/feed` | `agentSaleDecisionsFeed` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/sale-homes/feed` | `agentSaleHomesFeed` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/sale-questions` | `agentSaleQuestions` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/sale-questions` | `agentSaleQuestionAsk` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/sale-questions/answer` | `agentSaleQuestionAnswer` | `agentKey` | — | — | no |

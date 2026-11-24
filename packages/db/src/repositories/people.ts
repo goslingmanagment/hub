@@ -287,19 +287,21 @@ export async function listUnlinkedLoginRows(db: Database, realm: PeopleRealm = "
   return result.rows.map(loginOf);
 }
 
-/** Every Hub login with its person (null — no person holds it) and the person's name: whose a share of a sale is. */
-export async function listLoginPeople(db: Database, realm: PeopleRealm = "live"): Promise<Array<{ userId: number; username: string; personId: number | null; displayName: string | null }>> {
+/** Every Hub login with its person (null — no person holds it), person code and display name: whose a share of a sale is. */
+export async function listLoginPeople(db: Database, realm: PeopleRealm | "both" = "live"): Promise<Array<{ userId: number; username: string; personId: number | null; personCode: string | null; displayName: string | null }>> {
+  const filter = realm === "both" ? sql`true` : loginRealmSql(realm, sql`u.id`);
   const result = await db.execute<Row>(sql`
-    select u.id as user_id, u.username, l.person_id, p.display_name
+    select u.id as user_id, u.username, l.person_id, p.code as person_code, p.display_name
       from users u
       left join person_logins l on l.user_id = u.id
       left join people p on p.id = l.person_id
-     where ${loginRealmSql(realm, sql`u.id`)}
+     where ${filter}
      order by u.id`);
   return result.rows.map((row) => ({
     userId: Number(row.user_id),
     username: String(row.username),
     personId: nullableNumber(row.person_id),
+    personCode: row.person_code === null || row.person_code === undefined ? null : String(row.person_code),
     displayName: row.display_name === null || row.display_name === undefined ? null : String(row.display_name),
   }));
 }

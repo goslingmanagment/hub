@@ -188,6 +188,8 @@ function outsideLineOf(home: Pick<ScreenHome, "kind">): OutsideHome | null {
 export interface PeopleLogins {
   /** The login's person: `person:<id>`, or `login:<userId>` for a login no person holds. */
   personOf(userId: number): string;
+  /** The person's code in the people registry; null — a login no person holds (or code absent). */
+  codeOf(userId: number): string | null;
   /** Every login of the login's person, itself first. */
   loginsOf(userId: number): readonly number[];
   /** The person's name: the registry's, else the login's username, else `hub:<id>`. */
@@ -197,7 +199,9 @@ export interface PeopleLogins {
 }
 
 /** `PeopleLogins` of the registry's rows (`listLoginPeople`). Pure. */
-export function peopleLoginsOf(rows: ReadonlyArray<{ userId: number; username: string; personId: number | null; displayName: string | null }>): PeopleLogins {
+export function peopleLoginsOf(
+  rows: ReadonlyArray<{ userId: number; username: string; personId: number | null; personCode?: string | null; displayName: string | null }>,
+): PeopleLogins {
   const byLogin = new Map(rows.map((row) => [row.userId, row]));
   const byPerson = new Map<number, number[]>();
   for (const row of rows) if (row.personId !== null) byPerson.set(row.personId, [...(byPerson.get(row.personId) ?? []), row.userId]);
@@ -206,6 +210,7 @@ export function peopleLoginsOf(rows: ReadonlyArray<{ userId: number; username: s
       const personId = byLogin.get(userId)?.personId ?? null;
       return personId === null ? `login:${userId}` : `person:${personId}`;
     },
+    codeOf: (userId) => byLogin.get(userId)?.personCode ?? null,
     loginsOf: (userId) => {
       const personId = byLogin.get(userId)?.personId ?? null;
       return personId === null ? [userId] : [userId, ...(byPerson.get(personId) ?? []).filter((other) => other !== userId)];
@@ -286,7 +291,7 @@ export function homeCredit<P extends CreditPiece>(input: {
   const day = reportDateOfSale(sale.occurredAt.getTime());
   const counts = input.counts ?? (() => true);
   const shares = home.shares.map((share): ShareCredit<P> => {
-    const land = landOf(share, sale, input.pieces, logins);
+    const land = landShare(share, sale, input.pieces, logins);
     const piece = land.piece !== null && counts(land.piece) ? land.piece : null;
     return { userId: share.userId, person: logins.personOf(share.userId), piece, elsewhere: land.elsewhere, day, mills: share.mills };
   });
@@ -304,28 +309,47 @@ export function ownMoneyShares<P>(rule: ScreensRule | null | undefined, sale: Pi
   return credit.shares.filter((share) => share.piece === null && !share.elsewhere);
 }
 
+/** Result of landing a share onto a person's work (shared by screens `homeCredit` and `sale_homes` `saleHomeRowOf`). */
+export type LandedShare<P> =
+  | { kind: "shift"; piece: P; elsewhere: false }
+  | { kind: "visit"; piece: P; elsewhere: false }
+  | { kind: "holding_shift"; piece: P; elsewhere: false }
+  | { kind: "sale_day"; piece: null; elsewhere: false }
+  | { kind: "unresolved"; piece: null; elsewhere: true };
+
 /**
- * Where a share lands: the work the rule named (`<userId>:<startedAt>`) — the same start, else the work of that login
- * holding it (a look-in that joined a shift since moved its start earlier); a work the read does not have — elsewhere.
- * The rule named none (the owner's decision or a «делим» names a login no work of which held the sale): the person's
- * shift that holds the sale, the share's own login first, then their other logins; none — no work.
+ * Where a share lands — ONE pure rule shared by screens (`homeCredit`) and computed homes (`saleHomeRowOf`):
+ * - Named `workRef` (`<userId>:<startedAt>`): take the login from `workRef`, verify that login belongs to the share's
+ *   person (`logins.personOf`), and find the work of that login at that start (exact start, else containing it — a
+ *   look-in that joined a shift moved its start earlier). If the login does not belong to the person or the work is not
+ *   found in `pieces`: `unresolved` (`elsewhere: true`, `reportDate: null` in `sale_homes`).
+ * - Unnamed `workRef` (`null`, e.g. owner decision/claim naming a login with no work holding the sale): search every
+ *   login of the share's person (own login first, then their other logins) for a shift holding the sale ->
+ *   `holding_shift`; none -> `sale_day` (proven share without work).
  */
-function landOf<P extends CreditPiece>(
+export function landShare<P extends CreditPiece>(
   share: { userId: number; workRef: string | null },
   sale: Pick<ShiftSale, "pageLabel" | "occurredAt">,
   pieces: ReadonlyMap<number, readonly P[]>,
   logins: PeopleLogins,
-): { piece: P | null; elsewhere: boolean } {
+): LandedShare<P> {
   if (share.workRef !== null) {
-    const start = Date.parse(share.workRef.slice(share.workRef.indexOf(":") + 1));
-    const own = pieces.get(share.userId) ?? [];
-    const named = own.find((piece) => piece.work.startedAt === start) ?? own.find((piece) => piece.work.startedAt <= start && start < piece.work.endedAt);
-    return named === undefined ? { piece: null, elsewhere: true } : { piece: named, elsewhere: false };
+    const colon = share.workRef.indexOf(":");
+    const workUserId = colon > 0 ? Number(share.workRef.slice(0, colon)) : Number.NaN;
+    const start = colon > 0 ? Date.parse(share.workRef.slice(colon + 1)) : Number.NaN;
+    if (!Number.isSafeInteger(workUserId) || Number.isNaN(start) || logins.personOf(workUserId) !== logins.personOf(share.userId)) {
+      return { kind: "unresolved", piece: null, elsewhere: true };
+    }
+    const list = pieces.get(workUserId) ?? [];
+    const named = list.find((piece) => piece.work.startedAt === start)
+      ?? list.find((piece) => piece.work.startedAt <= start && start < piece.work.endedAt);
+    if (named === undefined) return { kind: "unresolved", piece: null, elsewhere: true };
+    return { kind: named.work.kind, piece: named, elsewhere: false };
   }
   const at = { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() };
   for (const login of logins.loginsOf(share.userId)) {
     const holding = (pieces.get(login) ?? []).find((piece) => piece.work.kind === "shift" && workHoldsSale(piece.work, at));
-    if (holding !== undefined) return { piece: holding, elsewhere: false };
+    if (holding !== undefined) return { kind: "holding_shift", piece: holding, elsewhere: false };
   }
-  return { piece: null, elsewhere: false };
+  return { kind: "sale_day", piece: null, elsewhere: false };
 }

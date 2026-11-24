@@ -104,6 +104,8 @@ export * from "./routes-sale-chain.ts";
 export * from "./routes-sale-claims.ts";
 // «Чья продажа» «со слов» through Hub (review R2b-3).
 export * from "./routes-sale-decisions.ts";
+// The ledger's feed of computed sale homes (0441).
+export * from "./routes-sale-homes.ts";
 export * from "./routes-shift-handins.ts";
 // «Смены» and «Мои смены»: what stands between a day's shifts and the report it is paid by (`GET /api/v1/shift-report-notes`).
 export * from "./routes-shift-report-notes.ts";

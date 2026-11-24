@@ -7,28 +7,32 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   listActiveSaleDecisions,
+  listCurrentHandinVersions,
+  listHandinsOfShifts,
+  listLoginPeople,
   listSaleFacts,
   listSaleLastWriters,
+  listShiftRows,
   listShiftSales,
   listUserRoles,
+  versionReportDate,
   type Database,
+  type ShiftRowRecord,
   type ShiftSale,
 } from "@agency_hub_core/db";
 
-import { SALE_LAST_WRITER_HOURS, lastWriterQuery, readPeopleWork, workHoldsSale, type ComputedWork } from "./chatter-shifts.ts";
+import { SALE_LAST_WRITER_HOURS, dayOfWork, lastWriterQuery, readPeopleWork, workHoldsSale, type ComputedWork } from "./chatter-shifts.ts";
 import { saleKindOf } from "./sale-kinds.ts";
+import { reportDateOfShift } from "./shift-rows.ts";
 
 /**
- * `agentTeamSales` (ledger release 2): the team's work and the facts of every
- * sale on the key's pages in [from, to), for the agency ledger's split rules.
- * Facts only, the same facts «Заработок» and «Разбор смены» read: a shift
- * holds a sale by `workHoldsSale`, a look-in only one to a fan its person wrote
- * to last; the bought PPV's sender, a post tip and a Campaign contribution by
- * `listSaleFacts`; the last writer within SALE_LAST_WRITER_HOURS; the owner's
- * decision of the sale (`resolution`, `decision`). `marks` is always empty: the
- * old shift-report tables that fed it hold nothing and are read no more; the
- * field stays for the ledger's parser. Whose a sale is, and what anyone is
- * paid, the ledger decides (owner, 2026-11-08). Database only, read-only.
+ * `agentTeamSales`: the team's work (with each work's `personCode` and `reportDate`) and the facts of every sale on
+ * the key's pages in [from, to). Facts only, the same facts «Заработок» and «Разбор смены» read: a shift holds a sale
+ * by `workHoldsSale`, a look-in only one to a fan its person wrote to last; the bought PPV's sender, a post tip and a
+ * Campaign contribution by `listSaleFacts`; the last writer within SALE_LAST_WRITER_HOURS; the owner's decision of the
+ * sale (`resolution`, `decision`). `marks` is always empty and stays for backwards compatibility with the ledger's
+ * parser. Hub computes whose a sale is in `sale_homes` (`GET /api/v1/agent/sale-homes/feed`); what anyone is paid
+ * stays the ledger's. Database only, read-only.
  */
 
 const DAY_MS = 86_400_000;
@@ -55,6 +59,20 @@ export function holdersOf(
   return works
     .filter(({ userId, work }) => workHoldsSale(work, sale) && (work.kind === "shift" || userId === lastWriter))
     .map(({ userId, work }) => workRef(userId, work));
+}
+
+/** The Moscow report date of one computed work: handed-in version's date, else `shifts.report_date`, else `reportDateOfShift`/`dayOfWork`. Pure. */
+export function workReportDateOf(input: {
+  userId: number;
+  work: Pick<ComputedWork, "kind" | "startedAt" | "endedAt">;
+  shiftRows: readonly ShiftRowRecord[];
+  handedInDates: ReadonlyMap<number, string>;
+}): string {
+  if (input.work.kind === "visit") return dayOfWork(input.work);
+  const row = input.shiftRows.find((one) => one.userId === input.userId && (one.state === "going" || one.state === "closed")
+    && one.startedAt.getTime() <= input.work.startedAt && input.work.startedAt <= one.endedAt.getTime());
+  if (row !== undefined) return input.handedInDates.get(row.id) ?? row.reportDate;
+  return reportDateOfShift(input.work);
 }
 
 /** A sale's decision as the facts carry it: a split's shares are the owner's `resolution`; any kind is `decision`. */
@@ -93,12 +111,28 @@ export async function readAgentTeamSales(
   const allWorks = [...people].flatMap(([userId, person]) => person.work.map((work) => ({ userId, username: person.username, work })));
   const senders = facts.flatMap((fact) => (fact.ppvSender === null ? [] : [fact.ppvSender.userId]));
   const roles = await listUserRoles(db, [...new Set([...allWorks.map((one) => one.userId), ...senders])]);
+  const loginPeople = await listLoginPeople(db, input.realm ?? "live");
+  const personCodeOf = new Map(loginPeople.map((row) => [row.userId, row.personCode]));
+  const shiftRows = allWorks.some((one) => one.work.kind === "shift")
+    ? await listShiftRows(db, { from: new Date(workFrom.getTime() - DAY_MS), to: new Date(workTo.getTime() + DAY_MS) })
+    : [];
+  const livingShiftIds = shiftRows.filter((row) => row.state === "going" || row.state === "closed").map((row) => row.id);
+  const handins = await listHandinsOfShifts(db, livingShiftIds);
+  const submittedHandins = [...handins.values()].filter((handin) => handin.state === "submitted");
+  const currentVersions = await listCurrentHandinVersions(db, submittedHandins.map((handin) => handin.id));
+  const handedInDates = new Map<number, string>();
+  for (const handin of submittedHandins) {
+    const version = currentVersions.get(handin.id);
+    handedInDates.set(handin.shiftId, version === undefined ? handin.reportDate : versionReportDate(version, handin));
+  }
 
   const works: AgentTeamWork[] = allWorks.map(({ userId, username, work }) => ({
     ref: workRef(userId, work),
     userId,
     username,
     role: roleOf(roles.get(userId)),
+    personCode: personCodeOf.get(userId) ?? null,
+    reportDate: workReportDateOf({ userId, work, shiftRows, handedInDates }),
     kind: work.kind,
     startedAt: new Date(work.startedAt).toISOString(),
     endedAt: new Date(work.endedAt).toISOString(),

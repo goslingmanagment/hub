@@ -39,7 +39,14 @@ import {
 import { MATTERS_MIRROR_QUEUE, runMattersMirror } from "./services/matters-mirror.ts";
 import { runMatterChecks } from "./services/matter-checks.ts";
 import { CUSTOM_CHECKS_QUEUE, runCustomOrderChecks } from "./services/custom-orders/checks.ts";
-import { SALE_HOMES_QUEUE, runSaleHomesTick } from "./services/sale-homes.ts";
+import {
+  SALE_HOMES_DUE_QUEUE,
+  SALE_HOMES_QUEUE,
+  SALE_HOMES_SWEEP_QUEUE,
+  runSaleHomesDueTick,
+  runSaleHomesSweepTick,
+  runSaleHomesTick,
+} from "./services/sale-homes.ts";
 import { runShiftReportMatters } from "./services/shift-handin-matters.ts";
 import { runSaleClaims } from "./services/sale-claims.ts";
 import { runShiftReportBoardPass } from "./services/shift-report-board.ts";
@@ -481,6 +488,12 @@ export async function startWorkerServices(
   });
   await boss.work(SALE_HOMES_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
     await runSaleHomesTick(app);
+  });
+  await boss.work(SALE_HOMES_DUE_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    await runSaleHomesDueTick(app);
+  });
+  await boss.work(SALE_HOMES_SWEEP_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {
+    await runSaleHomesSweepTick(app);
   });
   // «Состояние»: Hub's own schedules and the ledger reported, every routine, copy and reporter judged into matters.
   await boss.work(SYSTEM_STATE_QUEUE, CRON_SWEEP_WORK_OPTIONS, async () => {

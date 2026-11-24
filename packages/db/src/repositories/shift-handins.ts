@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import { livePageSql, liveUserSql, testUserSql } from "./realm.ts";
+import { enqueueSaleHomeRefreshForHandin } from "./sale-homes.ts";
 import type { Database } from "../client.ts";
 
 // The shift report as an object of Hub (0400; ecosystem plan 2026-11-12,
@@ -513,6 +514,15 @@ function madeForOf(value: unknown): HandinVersionMadeFor | null {
 }
 
 /**
+ * A handed-in version's report date: its own (0408), the report's for a version older than the column. The one date of
+ * a version for every reader — the ledger's feed, the post, the sale homes feed — whatever the shift's date became
+ * after the hand-in.
+ */
+export function versionReportDate(version: Pick<HandinVersionRow, "reportDate">, handin: Pick<HandinRow, "reportDate">): string {
+  return version.reportDate ?? handin.reportDate;
+}
+
+/**
  * A new version of the report, the next number after its current one; the report becomes `submitted` with it. Run in
  * the caller's transaction after `findHandinByShift(…, { lock: true })`: two submissions never take one number.
  */
@@ -560,6 +570,11 @@ export async function insertHandinVersion(
     update shift_handins set state = 'submitted', current_version = ${version}, submitted_at = ${at}::timestamptz,
       report_date = ${input.reportDate}::date, updated_at = clock_timestamp()
     where id = ${input.handin.id}`);
+  await enqueueSaleHomeRefreshForHandin(db, {
+    shiftId: input.handin.shiftId,
+    reportDate: input.reportDate,
+    transactionIds: input.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])),
+  });
   return versionOf(result.rows[0]!);
 }
 

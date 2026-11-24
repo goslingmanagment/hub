@@ -281,6 +281,7 @@ export * from "./repositories/sale-chain.ts";
 // Claims and agreements (0404): statements that touch another person, their answers, the owner's decisions of a sale.
 export * from "./repositories/sale-claims.ts";
 export * from "./repositories/sale-decision-feed.ts";
+export * from "./repositories/sale-home-feed.ts";
 // Whose each sale is by the one rule and the screens' switch to it (0380, 0381).
 export * from "./repositories/sale-homes.ts";
 export * from "./repositories/shift-handin-check.ts";

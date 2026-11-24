@@ -23,6 +23,7 @@ import {
   listSaleFacts,
   listSaleHomes,
   listVisiblePages,
+  versionReportDate,
   type Database,
   type HandinDoor,
   type HandinMarkRow,
@@ -666,14 +667,8 @@ export function ruleWordsOfLine(line: HandinVersionLine, names: ReadonlyMap<numb
   });
 }
 
-/**
- * A handed-in version's report date: its own (0408), the report's for a version older than the column. The one date of
- * a version for every reader — the ledger's feed, the post, the copy to «Отчётность» — whatever the shift's date became
- * after the hand-in (a shift that went on past the hand-in may have moved into the next day).
- */
-export function versionReportDate(version: Pick<HandinVersionRow, "reportDate">, handin: Pick<HandinRow, "reportDate">): string {
-  return version.reportDate ?? handin.reportDate;
-}
+// Re-exported from `@agency_hub_core/db` so every reader (shift reports, sale homes, feed) shares the exact one helper.
+export { versionReportDate };
 
 /**
  * The pages a version's posts list — the one place it is decided, for the posts, their copy and the reminder to copy

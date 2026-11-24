@@ -92,6 +92,8 @@ const HUB_SCHEDULE_TITLES: Readonly<Record<string, string>> = {
   "sync.planner": "Старый сбор OnlyFans",
   "system.state": "Состояние: рутины, копии и дела",
   "team.sale-homes": "Чья продажа: дома продаж",
+  "team.sale-homes.due": "Чья продажа: пересчёт по очереди дней",
+  "team.sale-homes.sweep": "Чья продажа: ночной проход с начала правила",
   "team.shift-rows": "Смены строками",
   "team.shift-numbers": "Числа смен: таблица",
   "team.shift-numbers.check": "Числа смен: сверка с живым счётом",
