@@ -1,0 +1,169 @@
+/* Общаки: layout and forms over @agency_hub_core/ui tokens. */
+@layer components {
+  .pots {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .pots-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .pots-bar__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .pots-sub {
+    display: block;
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+  }
+
+  .pots-badges {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .pots-drawer {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .pots-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .pots-block__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .pots-block__title {
+    margin: 0;
+    color: var(--ui-text);
+    font-size: var(--ui-fs-16);
+    line-height: var(--ui-lh-16);
+    font-weight: 600;
+  }
+
+  .pots-form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .pots-form__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  @media (max-width: 640px) {
+    .pots-form__grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .pots-checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+    padding: 8px 12px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-md);
+    background: var(--ui-surface-2);
+  }
+
+  .pots-list-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .pots-list-editor__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .pots-param-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+    gap: 8px 12px;
+    align-items: center;
+  }
+
+  .pots-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-md);
+    background: var(--ui-surface-2);
+  }
+
+  .pots-dist-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-md);
+    background: var(--ui-surface);
+  }
+
+  .pots-dist-card--reversed {
+    opacity: 0.72;
+  }
+
+  .pots-dist-card__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .pots-dist-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .pots-dist-lines li {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: var(--ui-fs-14);
+  }
+
+  .pots-empty {
+    padding: 64px 24px;
+    border: 1px solid var(--ui-line);
+    border-radius: var(--ui-radius-lg);
+    background: var(--ui-surface);
+  }
+}

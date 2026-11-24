@@ -24,6 +24,7 @@ import {
   isShiftReportMatterKind,
   isReportPostMatterKind,
   isSaleClaimMatterKind,
+  isPotMatterKind,
   isTeamQuestionMatterKind,
   type AgentMatterCloseBody,
   type AgentMatterCommentBody,
@@ -521,7 +522,7 @@ export async function agentOpenMatter(app: MattersApp, scope: AgentMatterScope, 
   // question's to whoever decides — are never an agent's.
   if (isMatterMirrorKind(body.kind) || isMatterServerKind(body.kind) || isMatterCheckKind(body.kind) || isCustomOrderCheckKind(body.kind)
     || isShiftReportMatterKind(body.kind) || isMatterPersonStartKind(body.kind) || isReportPostMatterKind(body.kind)
-    || isSaleClaimMatterKind(body.kind) || isTeamQuestionMatterKind(body.kind)) {
+    || isSaleClaimMatterKind(body.kind) || isPotMatterKind(body.kind) || isTeamQuestionMatterKind(body.kind)) {
     throw notAgents(body.key);
   }
   const owner: MatterOwner = "user" in body.owner ? { userId: (await personOf(app, body.owner.user)).userId } : { role: body.owner.role };

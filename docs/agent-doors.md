@@ -46,6 +46,7 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | «Чья продажа» «со слов» | `POST /api/v1/agent/sale-decisions`, `…/cancel`, `…/applied`, `GET …/sale-decisions`; `POST /api/v1/agent/sale-questions`, `…/answer`, `…/close`, `GET …/sale-questions` (`hub sale decide\|cancel\|applied\|decisions\|ask\|answer\|close\|questions`) | `write:shift_reports` (the lists: or `read:team`) | Decisions and questions about whose a sale is, in their one home: below |
 | «Чья продажа» (the ledger's feed) | `GET /api/v1/agent/sale-decisions/feed` | `read:money` | Every change of a decision after a cursor, in the order made: what the ledger follows instead of writing its own. Below |
 | Computed sale homes (the ledger's feed) | `GET /api/v1/agent/sale-homes/feed` | `read:money` | Every change (`upsert` or `retract`) of `sale_homes` after a cursor, with `personCode`, `reportDate`, and `daySource` on every share. Test realm filtered before `held`. Below |
+| Pot distributions (the ledger's feed, K2) | `GET /api/v1/agent/pot-distributions/feed` | `read:money` | Every posted or reversed Workboard pot distribution after a cursor (`changes`, `held`, `next`, `more`, `serverNow`), in base mills. Test realm filtered before `held`. Below |
 | Claims | `GET /api/v1/agent/sale-claims`, `POST …/sale-claims/answer` | `write:shift_reports` (the list: or `read:team`) | The claims and decisions of a person or a sale; the other side's answer «со слов» |
 | Keys (for services) | `POST /api/v1/agent/keys/introspect` | `introspect:agent_keys` | Another service asks who an agent's hub key is: below |
 
@@ -459,6 +460,45 @@ land after the cursor; `limit` counts placed positions including `held`; the end
   `unresolved`), computed by the same pure `landShare` rule screens use.
 - Changes on pages outside the key's grant appear in `held` until granted, then receive a new `seq` at the end of the
   feed and come through `homes` via the cursor.
+
+## Pot distributions (K2): the ledger's feed
+
+`GET /api/v1/agent/pot-distributions/feed?since=<digits>&limit=<1..500, 200>` (`read:money`) delivers every posted or
+reversed Workboard pot distribution (0443) after the cursor, using the same `release -> place -> list` cursor mechanics
+as `sale-homes/feed` (with `is_test` filtered before `held`, `limit`, and `next`):
+
+```json
+{
+  "changes": [{
+    "seq": 12,
+    "change": "posted",
+    "at": "2026-12-02T11:25:00.000Z",
+    "distribution": {
+      "id": 101,
+      "pot": { "code": "page-mia-1", "name": "Общак mia-1", "modelSlug": "mia-hart" },
+      "day": "2026-12-02",
+      "formula": { "kind": "equal", "params": {} },
+      "inflows": [{ "transactionId": 910001, "pageLabel": "mia-1", "baseMills": 40000 }],
+      "baseMills": 40000,
+      "lines": [
+        { "personCode": "alex.k", "baseMills": 20000, "basis": "1/2" },
+        { "personCode": "kate.v", "baseMills": 20000, "basis": "1/2" }
+      ]
+    }
+  }],
+  "held": [{ "seq": 13, "distributionId": 102, "pageLabels": ["nova-1"], "reason": "page_outside_key" }],
+  "next": "13",
+  "more": false,
+  "serverNow": "2026-12-02T11:26:00.000Z"
+}
+```
+
+- Hub emits base in mills only (`baseMills`), never pay or rates; the ledger computes each person's pay from `lines`.
+- `change` is `"posted"` on initial distribution creation and `"reversed"` when reversed once (carries the same
+  distribution snapshot so the ledger can reverse its posted lines idempotently by `distribution.id`).
+- A distribution is held whenever ANY page of `pots.page_ids` or `pot_distribution_parts.page_id` is outside the key's
+  granted pages (`held[].pageLabels` lists the missing granted labels); once all its pages are granted, it receives a
+  new `seq` at the end of the feed and leaves `held`.
 
 ## The owner's agent door (`act:owner`)
 

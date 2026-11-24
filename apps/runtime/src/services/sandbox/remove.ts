@@ -155,6 +155,12 @@ async function targets(db: Database, ids: TestIds): Promise<Target[]> {
   visit({ table: "agent_keys", where: `id in (${ids.agent_keys})`, label: "agent_keys" }, 0);
   // A matter of test pages waits for a test login (0414), so its owner's key finds it; its pages say it as well.
   visit({ table: "matters", where: `page_ids && array[${ids.pages === "null" ? "" : ids.pages}]::bigint[]`, label: "matters.page_ids" }, 0);
+  // Workboard pots (0443) belong to a model (models.is_test) and name page_ids in an array: walk their child distributions/parts/feed rows too.
+  visit({
+    table: "pots",
+    where: `page_ids && array[${ids.pages === "null" ? "" : ids.pages}]::bigint[] or model_id in (select id from models where is_test)`,
+    label: "pots.page_ids",
+  }, 0);
   const existing = new Set((await db.execute<Row>(sql`select table_name || '.' || column_name as name from information_schema.columns
     where table_schema = 'public'`)).rows.map((row) => String(row.name)));
   for (const one of UNKEYED.filter((entry) => existing.has(`${entry.table}.${entry.column}`))) {

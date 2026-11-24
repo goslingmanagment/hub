@@ -486,6 +486,12 @@ export const SCREENS: readonly Screen[] = [
     keywords: "отчёты смен отчётность сумма изменена пост не разобран",
   },
   {
+    id: "money-pots", tabOf: "money", path: "/workboard/money/pots", label: "Общаки", title: "Общаки", section: "team", product: "workboard", ownerOnly: true,
+    why: "Общаки страниц и событий: баланс в базе, формулы раздачи, проведённые раздачи и архив ledger.",
+    pageFilter: "none",
+    keywords: "общаки общак раздачи баланс база формула архив ledger",
+  },
+  {
     id: "money-mine", tabOf: "money", path: "/workboard/money/mine", label: "Мои деньги", title: "Мои деньги", section: "team", product: "workboard", roles: ["team_lead", "chatter"],
     why: "Сколько вам начислено, к выплате и выплачено.",
     pageFilter: "any",

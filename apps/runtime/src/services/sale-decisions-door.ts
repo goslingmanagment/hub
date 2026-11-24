@@ -5,6 +5,7 @@ import {
   insertSaleClaim,
   insertSaleDecision,
   isOwnerTelegramUser,
+  isTestPage,
   listActiveSaleDecisions,
   listCurrentReportsOfSales,
   listHandinNames,
@@ -31,6 +32,7 @@ import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { blockerMoscowDay, payoutSaleBlockers, type PayoutSaleBlockerItem, type SaleBlockerCoverage } from "./payout-sale-blockers.ts";
+import { validatePotDecisionTarget } from "./pots.ts";
 import { applySaleDecision, cancelSaleDecisionApplied, runSaleClaims } from "./sale-claims.ts";
 
 /**
@@ -209,6 +211,7 @@ export async function recordSaleDecision(
     pot?: string | undefined; saidBy: string; saidAt: string; note?: string | undefined; supersedes?: number | undefined; answers?: number | undefined;
   },
   now: Date = new Date(),
+  options: { fetchImpl?: typeof fetch } = {},
 ): Promise<{ decision: AgentSaleDecision; versions: Array<{ shiftId: number; version: number }>; savedAt: string }> {
   const { db } = app;
   checkShares(input.kind, input.shares, input.pot);
@@ -226,6 +229,27 @@ export async function recordSaleDecision(
 
   const knownSale = sale !== null && input.kind !== "off_platform" ? sale : null;
   const about = { sale: knownSale, pageId: found.pageId, fanRef: typeof found.ref?.fanRef === "string" ? found.ref.fanRef : null };
+
+  // Validate pot coverage BEFORE opening any DB transaction (may query ledger on days < pots_from).
+  let resolvedPot: string | null = input.pot ?? null;
+  if (input.kind === "pot" && found.pageId !== null && found.pageLabel !== null) {
+    const decisionDay = knownSale !== null
+      ? moscowDayOfMs(knownSale.occurredAt.getTime())
+      : input.occurredAt !== undefined
+        ? moscowDayOfMs(instantOf(input.occurredAt).getTime())
+        : moscowDayOfMs(now.getTime());
+    const testPage = await isTestPage(db, found.pageId);
+    const validated = await validatePotDecisionTarget(app, {
+      pageId: found.pageId,
+      pageLabel: found.pageLabel,
+      day: decisionDay,
+      requestedPot: input.pot ?? null,
+      fallbackHomePot: knownSale?.home?.pot ?? null,
+      fallbackReason: knownSale?.home?.reason ?? null,
+      isTest: testPage,
+    }, options);
+    resolvedPot = validated.potCode;
+  }
 
   /**
    * What the decision replaces and what it answers, read in the transaction that writes it (in the settlements' turn,
@@ -268,7 +292,7 @@ export async function recordSaleDecision(
   };
 
   const insert = {
-    kind: hubKindOf(input.kind), shares: input.kind === "pot" || input.kind === "exclude" ? [] : shares, pot: input.pot ?? null,
+    kind: hubKindOf(input.kind), shares: input.kind === "pot" || input.kind === "exclude" ? [] : shares, pot: input.kind === "pot" ? resolvedPot : null,
     outcome: "said" as const, note: input.note ?? null, decidedByUserId: null, decidedAt: now, saidBy: input.saidBy, source: "agent" as const,
     ledgerDecisionId: null, ledgerRef: found.ref, saidAt, sourceLink: actor.sourceRef, agentKeyId: actor.agentKeyId,
     // Whose message it was recorded from: the owner's makes it his word (`isOwnersWord`).

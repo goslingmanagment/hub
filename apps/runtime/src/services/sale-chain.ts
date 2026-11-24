@@ -18,6 +18,7 @@ import {
   listHandinPeopleOfUsers,
   listHandinSalesByIds,
   listSaleClaims,
+  readPotsSwitch,
   shiftOfUsersHoldsSale,
   type CurrentReport,
   type HandinSaleRow,
@@ -617,7 +618,13 @@ export async function readSaleChain(
   let note: string | null = null;
   if (sale.home === null || people.length === 0) {
     switch (sale.home?.home) {
-      case "pot": note = "общак: делится в ledger между участниками общака, по человеку здесь не показан"; break;
+      case "pot": {
+        const { potsFrom } = await readPotsSwitch(db);
+        note = potsFrom !== null && moscowDayOf(sale.occurredAt) >= potsFrom
+          ? "общак: делится в Workboard между участниками общака, по человеку здесь не показан"
+          : "общак: делится в ledger между участниками общака, по человеку здесь не показан";
+        break;
+      }
       case "nobody": note = "ничья: ни в чей отчёт не входит, пока её не заявят"; break;
       case "waiting": note = "PPV ждёт смены отправителя: цепочка продолжится после неё"; break;
       case "decide": note = "пока владелец не решит, продажа ни в чей отчёт не входит"; break;

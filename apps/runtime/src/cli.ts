@@ -91,6 +91,7 @@ import { registerSyncChainCommands } from "./sync/cli/chain.ts";
 import { registerSaleRuleCommands } from "./services/sale-rule-cli.ts";
 import { registerShiftNumbersCommands } from "./services/shift-numbers-cli.ts";
 import { registerSaleClaimCommands } from "./services/sale-claims-cli.ts";
+import { registerPotsCommands } from "./services/pots-cli.ts";
 import { registerSyncChatsCommands } from "./sync/cli/chats.ts";
 import { registerSyncCheckCommands } from "./sync/cli/checks.ts";
 import { registerSyncExcludedCommands } from "./sync/cli/excluded.ts";
@@ -4236,6 +4237,8 @@ export function buildProgram() {
   registerShiftNumbersCommands(program);
   // Claims and agreements: the one-off carry-over of the ledger's decisions and questions, the pass (sale-claims-cli.ts).
   registerSaleClaimCommands(program);
+  // Workboard pots: the cutover switch `pots:from` (pots-cli.ts).
+  registerPotsCommands(program);
   // The test team: its seed and its (owner's word only) removal (sandbox/cli.ts).
   registerSandboxCommands(program);
 

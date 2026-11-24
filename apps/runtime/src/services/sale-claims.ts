@@ -73,6 +73,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
+import { validatePotDecisionTarget } from "./pots.ts";
 import { refreshSaleHomes } from "./sale-homes.ts";
 import { TAKE_NOTICE_MS, isTake, takeNoticeOpen, takeSettles } from "./shift-report-phases.ts";
 import {
@@ -1339,7 +1340,7 @@ export async function decideSaleDispute(
   principal: HumanAuthPrincipal,
   input: {
     transactionId?: number | undefined; claimId?: number | undefined; outcome: OwnerOutcome | "dismiss" | "pot" | "return" | "give" | "split" | "rule"; note: string | null;
-    shares?: ReadonlyArray<{ userId: number; percent: number }> | undefined; seenSides?: readonly number[] | undefined;
+    shares?: ReadonlyArray<{ userId: number; percent: number }> | undefined; seenSides?: readonly number[] | undefined; pot?: string | undefined;
   },
   now: Date = new Date(),
 ) {
@@ -1353,7 +1354,7 @@ export async function decideSaleDispute(
   if (offer !== null) {
     if (principal.user.role !== "owner" || principal.narrowDeviceTokenId !== undefined) throw new ForbiddenError("Only the owner decides");
     if (input.outcome !== "pot" && input.outcome !== "return" && input.outcome !== "nobody") throw new BadRequestError("A sale given to the pot takes «В общак», «Вернуть» or «Никому»", { reason: "pot_offer" });
-    return decidePotOffer(app, principal, { offer, outcome: input.outcome, note: input.note }, now);
+    return decidePotOffer(app, principal, { offer, outcome: input.outcome, note: input.note, pot: input.pot ?? null }, now);
   }
   if (input.outcome === "return") throw new BadRequestError("Only a sale given to the pot takes this answer", { reason: "not_pot_offer" });
   if (principal.user.role !== "owner" && open.length === 0) throw new ForbiddenError("Only the owner decides");
@@ -1430,10 +1431,25 @@ export async function decideSaleDispute(
       decision = { kind: "split", shares: [{ userId: low, percent: 50 }, { userId: high, percent: 50 }], pot: null, outcome: "half", made: "half" };
       break;
     }
-    case "pot":
-      if (!now_.pot) throw new BadRequestError("Only a sale of the pot stays in the pot", { reason: "not_pot" });
-      decision = { kind: "pot", shares: [], pot: POT_OBSHAK, outcome: "said", made: "pot" };
+    case "pot": {
+      const requestedPot = input.pot !== undefined && input.pot.trim() !== "" ? input.pot.trim() : null;
+      if (!now_.pot && requestedPot === null) throw new BadRequestError("Only a sale of the pot stays in the pot", { reason: "not_pot" });
+      let potCode: string = requestedPot ?? POT_OBSHAK;
+      if (now_.sale !== undefined) {
+        const validated = await validatePotDecisionTarget(app, {
+          pageId: now_.sale.pageId,
+          pageLabel: now_.sale.pageLabel,
+          day: moscowDay(now_.sale.occurredAt.getTime()),
+          requestedPot,
+          fallbackHomePot: now_.sale.home?.pot ?? null,
+          fallbackReason: now_.sale.home?.reason ?? null,
+          isTest: realmOf(principal) === "test",
+        });
+        potCode = validated.potCode;
+      }
+      decision = { kind: "pot", shares: [], pot: potCode, outcome: "said", made: "pot" };
       break;
+    }
     default:
       decision = { kind: "nobody", shares: [], pot: null, outcome: "nobody", made: "nobody" };
   }
@@ -2408,22 +2424,40 @@ async function potOfferOf(db: Database, transactionId: number): Promise<PotOffer
  * And what becomes of the person's word: kept «общак», withdrawn (the rule's word, the decision gives it back), «ничья».
  * Pure (tests/sale-claim-rules.test.ts).
  */
-export function potOfferDecision(outcome: "pot" | "return" | "nobody", userId: number): {
+export function potOfferDecision(outcome: "pot" | "return" | "nobody", userId: number, potCode: string = POT_OBSHAK): {
   kind: "pot" | "split" | "nobody"; shares: Array<{ userId: number; percent: number }>; pot: string | null; outcome: "said" | "first" | "nobody";
   word: "pot" | "not_mine" | null;
 } {
-  if (outcome === "pot") return { kind: "pot", shares: [], pot: POT_OBSHAK, outcome: "said", word: "pot" };
+  if (outcome === "pot") return { kind: "pot", shares: [], pot: potCode, outcome: "said", word: "pot" };
   if (outcome === "return") return { kind: "split", shares: [{ userId, percent: 100 }], pot: null, outcome: "first", word: null };
   return { kind: "nobody", shares: [], pot: null, outcome: "nobody", word: "not_mine" };
 }
 
 /** The owner's answer to an offer of the pot: a decision through `applySaleDecision` (the decisions door's own path), the word with it. */
-async function decidePotOffer(app: ClaimsApp, principal: HumanAuthPrincipal, input: { offer: PotOffer; outcome: "pot" | "return" | "nobody"; note: string | null }, now: Date) {
+async function decidePotOffer(
+  app: ClaimsApp,
+  principal: HumanAuthPrincipal,
+  input: { offer: PotOffer; outcome: "pot" | "return" | "nobody"; note: string | null; pot?: string | null },
+  now: Date,
+) {
   const { db } = app;
   const { offer } = input;
-  const decision = potOfferDecision(input.outcome, offer.userId);
   const note = input.note === null || input.note.trim() === "" ? null : input.note.trim();
   const sale = (await listHandinSalesByIds(db, [offer.transactionId]))[0];
+  let potCode: string = POT_OBSHAK;
+  if (input.outcome === "pot" && sale !== undefined) {
+    const validated = await validatePotDecisionTarget(app, {
+      pageId: sale.pageId,
+      pageLabel: sale.pageLabel,
+      day: moscowDay(sale.occurredAt.getTime()),
+      requestedPot: input.pot ?? null,
+      fallbackHomePot: sale.home?.pot ?? null,
+      fallbackReason: sale.home?.reason ?? null,
+      isTest: realmOf(principal) === "test",
+    });
+    potCode = validated.potCode;
+  }
+  const decision = potOfferDecision(input.outcome, offer.userId, potCode);
   const applied = await applySaleDecision(app, {
     transactionId: offer.transactionId,
     insert: {

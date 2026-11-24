@@ -15,6 +15,7 @@ import {
   listHandinPeopleOfUsers,
   listSaleClaims,
   listTeamSalesWithHomes,
+  readPotsSwitch,
   type HandinSaleRow,
   type HandinShift,
 } from "@agency_hub_core/db";
@@ -84,9 +85,22 @@ export function reportOfShare(input: {
 }
 
 /** The report a row shows for a home with no person (the pot, nobody's, waiting, the owner's to decide): none. Pure. */
-export function noReportOf(sale: Pick<HandinSaleRow, "home" | "occurredAt">): SaleChainLink {
+export function noReportOf(
+  sale: Pick<HandinSaleRow, "home" | "occurredAt">,
+  options: { potsFrom?: string | null; owner?: boolean } = {},
+): SaleChainLink {
   switch (sale.home?.home) {
-    case "pot": return { state: "none", words: "общак: делится в ledger, ни в чей отчёт по одной не входит", link: null, amountMills: null };
+    case "pot": {
+      if (options.potsFrom != null && moscowDayOf(sale.occurredAt) >= options.potsFrom) {
+        return {
+          state: "none",
+          words: "общак: делится в Workboard, ни в чей отчёт по одной не входит",
+          link: options.owner ? "/workboard/money/pots" : null,
+          amountMills: null,
+        };
+      }
+      return { state: "none", words: "общак: делится в ledger, ни в чей отчёт по одной не входит", link: null, amountMills: null };
+    }
     case "waiting": return { state: "wait", words: "войдёт в отчёт смены отправителя", link: null, amountMills: null };
     case "decide": return { state: "wait", words: "ни в чей отчёт, пока владелец не решит", link: null, amountMills: null };
     case "nobody": return { state: "none", words: "ни в чей отчёт, пока её не заявят", link: null, amountMills: null };
@@ -162,6 +176,8 @@ export async function readTeamSalesList(
     }
   }
 
+  const { potsFrom } = await readPotsSwitch(db);
+
   const out: TeamSalesListSale[] = shown.map((sale) => {
     const own = (sale.home?.shares ?? []).filter((share) => viewer.logins.includes(share.userId));
     const home = homeLinkOf({
@@ -174,7 +190,7 @@ export async function readTeamSalesList(
     const share = reportPersonOf(sale);
     let report: SaleChainLink;
     if (share === null) {
-      report = noReportOf(sale);
+      report = noReportOf(sale, { potsFrom, owner });
     } else {
       const mine = viewer.logins.includes(share.userId);
       const sums: ChainSums = { share: true, hubLine: true, post: owner || mine, pay: false };
