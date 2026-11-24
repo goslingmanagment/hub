@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { shiftReportResponseSchema } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel, insertAgentKey, insertSaleClaim } from "@agency_hub_core/db";
-import { sha256Hex } from "@agency_hub_core/shared";
+import { assignUserToPage, createFanslyPage, createModel, insertSaleClaim } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -13,7 +12,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
+import { handInAndConfirm, editingSession, insertReviewerAgentKey } from "./helpers/shift-report-hand-in.ts";
 
 // The board «Отчёт», round 2, the second reader. (B5) The old «после сдачи» counter counts a sale the counted report
 // holds only as a $0 line with nothing on it, as the board does. (B4) A phase is moved only from the phase it was read
@@ -238,9 +237,8 @@ describe("the board «Отчёт», round 2, the second reader", () => {
 
   it("files «не моё» with the reason when the person says «Не согласен» to Gengar's «это ваше» (B2)", async (context) => {
     if (!testDb) return context.skip();
-    await insertAgentKey(testDb.db, {
-      name: "round2b-gengar", keyPrefix: REVIEWER.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(REVIEWER),
-      capabilities: ["review:shift_reports"] as never, pageIds: [pageOne], expiresAt: new Date(Date.now() + 30 * 86_400_000), createdBy: users.boss!,
+    await insertReviewerAgentKey(testDb.db, {
+      name: "round2b-gengar", token: REVIEWER, pageIds: [pageOne], createdBy: users.boss!,
     });
     const theirs = await sale(29 * 60);
     const annas = await shiftRow("anna", 30.4, 28.6);

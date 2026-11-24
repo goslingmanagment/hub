@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { liveUserSql, testUserSql } from "./realm.ts";
 import { modelCommentsOf, type HandinDoor, type HandinPhase, type HandinVersionLine, type HandinVersionOffPlatform, type HandinVersionPage } from "./shift-handins.ts";
 
 // The «Отчёт» board (0412; products plan 2026-11-13, package R): a report's phase, the candidates «Сдать смену»
@@ -98,12 +99,14 @@ export interface CandidateRow {
    * not signed (an agent's «со слов», a re-made candidate, a board that differed), or cleared because the check changed it.
    */
   signed: { totalMills: number; count: number; at: Date } | null;
+  /** Expected reviewer agent person recorded at hand-in (0440); null — no review expected. */
+  expectedReviewerPersonId: number | null;
 }
 
 const CANDIDATE_COLUMNS = sql`c.id, c.handin_id, c.number, c.made_at, c.door, c.actor_user_id, c.agent_key_id, c.telegram_message_ref,
   c.telegram_sender_id, c.cutoff_at, c.total_mills, c.pages, c.lines, c.off_platform, c.comment, c.model_comments, c.rule_version, c.hub_check,
   c.hub_checked_at, c.gengar_answered_at, c.gengar_clean, c.superseded_at, c.superseded_by, c.confirmed_version, c.confirmed_at,
-  c.signed_total_mills, c.signed_count, c.signed_at`;
+  c.signed_total_mills, c.signed_count, c.signed_at, c.expected_reviewer_person_id`;
 
 function candidateOf(row: Row): CandidateRow {
   return {
@@ -135,6 +138,7 @@ function candidateOf(row: Row): CandidateRow {
     signed: row.signed_at === null || row.signed_at === undefined
       ? null
       : { totalMills: num(row.signed_total_mills), count: num(row.signed_count), at: date(row.signed_at) },
+    expectedReviewerPersonId: nullableNum(row.expected_reviewer_person_id),
   };
 }
 
@@ -162,6 +166,7 @@ export async function insertHandinCandidate(
     ruleVersion: string;
     hubCheck: readonly CandidateHubPage[];
     signed?: { totalMills: number; count: number } | null;
+    expectedReviewerPersonId: number | null;
     at: Date;
   },
 ): Promise<CandidateRow> {
@@ -169,13 +174,15 @@ export async function insertHandinCandidate(
   const signed = input.signed ?? null;
   const result = await db.execute<Row>(sql`
     insert into shift_handin_candidates (handin_id, number, made_at, door, actor_user_id, agent_key_id, telegram_message_ref, telegram_sender_id,
-      cutoff_at, total_mills, pages, lines, off_platform, comment, model_comments, rule_version, hub_check, signed_total_mills, signed_count, signed_at)
+      cutoff_at, total_mills, pages, lines, off_platform, comment, model_comments, rule_version, hub_check, signed_total_mills, signed_count, signed_at,
+      expected_reviewer_person_id)
     values (${input.handinId},
       (select coalesce(max(number), 0) + 1 from shift_handin_candidates where handin_id = ${input.handinId}),
       ${at}::timestamptz, ${input.door}, ${input.actorUserId}, ${input.agentKeyId}, ${input.telegramMessageRef}, ${input.telegramSenderId},
       ${input.cutoffAt.toISOString()}::timestamptz, ${input.totalMills}, ${JSON.stringify(input.pages)}::jsonb, ${JSON.stringify(input.lines)}::jsonb,
       ${JSON.stringify(input.offPlatform)}::jsonb, ${input.comment}, ${JSON.stringify(input.modelComments)}::jsonb, ${input.ruleVersion},
-      ${JSON.stringify(input.hubCheck)}::jsonb, ${signed?.totalMills ?? null}, ${signed?.count ?? null}, ${signed === null ? null : at}::timestamptz)
+      ${JSON.stringify(input.hubCheck)}::jsonb, ${signed?.totalMills ?? null}, ${signed?.count ?? null}, ${signed === null ? null : at}::timestamptz,
+      ${input.expectedReviewerPersonId})
     returning ${sql.raw(CANDIDATE_COLUMNS_RAW)}`);
   const made = candidateOf(result.rows[0]!);
   await db.execute(sql`
@@ -187,7 +194,7 @@ export async function insertHandinCandidate(
 const CANDIDATE_COLUMNS_RAW = `id, handin_id, number, made_at, door, actor_user_id, agent_key_id, telegram_message_ref,
   telegram_sender_id, cutoff_at, total_mills, pages, lines, off_platform, comment, model_comments, rule_version, hub_check,
   hub_checked_at, gengar_answered_at, gengar_clean, superseded_at, superseded_by, confirmed_version, confirmed_at,
-  signed_total_mills, signed_count, signed_at`;
+  signed_total_mills, signed_count, signed_at, expected_reviewer_person_id`;
 
 /** Every candidate of a report, oldest first. */
 export async function listHandinCandidates(db: Database, handinId: number): Promise<CandidateRow[]> {
@@ -213,13 +220,36 @@ export async function findHandinCandidate(db: Database, id: number, options: { l
   return result.rows[0] === undefined ? null : candidateOf(result.rows[0]);
 }
 
-/** Candidates that wait for Gengar's answer: not superseded, not answered, made since `since`; oldest first. */
-export async function listCandidatesAwaitingCheck(db: Database, input: { since: Date; limit: number }): Promise<Array<CandidateRow & { shiftId: number; userId: number }>> {
+/**
+ * Candidates awaiting check by `reviewerPersonId`: not superseded, unanswered, assigned to this reviewer in the key's
+ * realm with every shift page inside `pageIds`, made since `since`; filtered BEFORE `limit`, oldest first.
+ */
+export async function listCandidatesAwaitingCheck(
+  db: Database,
+  input: { reviewerPersonId: number; pageIds: readonly number[]; realm: "live" | "test"; since: Date; limit: number },
+): Promise<Array<CandidateRow & { shiftId: number; userId: number }>> {
+  const uniquePages = [...new Set(input.pageIds)];
+  if (uniquePages.length === 0) return [];
+  const realm = input.realm === "test" ? testUserSql(sql`s.user_id`) : liveUserSql(sql`s.user_id`);
   const result = await db.execute<Row>(sql`
     select ${CANDIDATE_COLUMNS}, h.shift_id, h.user_id
-    from shift_handin_candidates c join shift_handins h on h.id = c.handin_id
-    where c.superseded_at is null and c.gengar_answered_at is null and c.made_at >= ${input.since.toISOString()}::timestamptz
-    order by c.made_at, c.id limit ${input.limit}`);
+    from shift_handin_candidates c
+    join shift_handins h on h.id = c.handin_id
+    join shifts s on s.id = h.shift_id
+    where c.superseded_at is null
+      and c.gengar_answered_at is null
+      and c.expected_reviewer_person_id = ${input.reviewerPersonId}
+      and c.made_at >= ${input.since.toISOString()}::timestamptz
+      and s.state <> 'dropped'
+      and ${realm}
+      and not exists (
+        select 1
+        from jsonb_array_elements(s.pages) as sp(item)
+        left join pages pg on pg.label = sp.item ->> 'pageLabel'
+        where pg.id is null or not (pg.id = any(${ids(uniquePages)}))
+      )
+    order by c.made_at, c.id
+    limit ${input.limit}`);
   return result.rows.map((row) => ({ ...candidateOf(row), shiftId: num(row.shift_id), userId: num(row.user_id) }));
 }
 
@@ -487,21 +517,35 @@ export async function listTransactionPlatformRefs(db: Database, transactionIds: 
   return new Map(result.rows.map((row) => [num(row.id), { ref: String(row.transaction_id), grossMills: num(row.gross_amount_mills) }]));
 }
 
-/** Whether a live agent key reviews shift reports on every one of the pages (Gengar's check is then awaited). */
-/** The page sets of the live keys that review shift reports (`hasShiftReportReviewer` of many shifts, one query). */
-export async function listShiftReportReviewerPages(db: Database): Promise<number[][]> {
+/**
+ * Active reviewer agents of one realm in the people registry (`people.kind = 'agent'`, `state <> 'left'`) holding a
+ * live key (`review:shift_reports`, not revoked, not expired) whose page grant covers ALL of `pageIds`, ordered
+ * alphabetically by `people.code`. An agent with two live keys during replacement grace appears once.
+ */
+export async function listShiftReportReviewers(
+  db: Database,
+  input: { pageIds: readonly number[]; realm: "live" | "test"; at?: Date },
+): Promise<Array<{ personId: number; code: string }>> {
+  const unique = [...new Set(input.pageIds)];
+  if (unique.length === 0) return [];
+  const at = (input.at ?? new Date()).toISOString();
+  const realm = input.realm === "test" ? sql`p.is_test` : sql`not p.is_test`;
   const result = await db.execute<Row>(sql`
-    select page_ids from agent_keys
-    where 'review:shift_reports' = any(capabilities) and revoked_at is null and expires_at > now()`);
-  return result.rows.map((row) => jsonArray<unknown>(row.page_ids).map(Number));
-}
-
-export async function hasShiftReportReviewer(db: Database, pageIds: readonly number[]): Promise<boolean> {
-  if (pageIds.length === 0) return false;
-  const result = await db.execute<Row>(sql`
-    select 1 from agent_keys
-    where 'review:shift_reports' = any(capabilities) and revoked_at is null and expires_at > now()
-      and page_ids @> ${ids(pageIds)}
-    limit 1`);
-  return result.rows.length > 0;
+    select p.id, p.code
+    from people p
+    where p.kind = 'agent'
+      and p.state <> 'left'
+      and ${realm}
+      and exists (
+        select 1
+        from person_agent_keys pak
+        join agent_keys k on k.id = pak.agent_key_id
+        where pak.person_id = p.id
+          and 'review:shift_reports' = any(k.capabilities)
+          and k.revoked_at is null
+          and k.expires_at > ${at}::timestamptz
+          and k.page_ids @> ${ids(unique)}
+      )
+    order by p.code, p.id`);
+  return result.rows.map((row) => ({ personId: num(row.id), code: String(row.code) }));
 }

@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { saleDisputeResponseSchema, shiftReportResponseSchema, type SaleDisputeResponse } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
-import { sha256Hex } from "@agency_hub_core/shared";
+import { assignUserToPage, createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -12,7 +11,7 @@ import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
+import { handInAndConfirm, editingSession, insertReviewerAgentKey } from "./helpers/shift-report-hand-in.ts";
 
 // The decider's window of a disputed sale (review round 2, the third reader: N1–N3). A button names the person it gives
 // the sale to, and the decision gives it to that person — whoever asked first, in whatever order the database keeps the
@@ -301,9 +300,8 @@ describe("the decider's window of a disputed sale", () => {
   it("gives the person her sale back in her counted report after «Оставить по правилу» of a card she disagreed with (round 3, 1)", async (context) => {
     if (!testDb) return context.skip();
     const reviewer = `${AGENT_KEY_TOKEN_PREFIX}window-gengar-key`;
-    await insertAgentKey(testDb.db, {
-      name: "window-gengar", keyPrefix: reviewer.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(reviewer),
-      capabilities: ["review:shift_reports"] as never, pageIds: [pageOne], expiresAt: new Date(Date.now() + 30 * 86_400_000), createdBy: users.boss!,
+    await insertReviewerAgentKey(testDb.db, {
+      name: "window-gengar", token: reviewer, pageIds: [pageOne], createdBy: users.boss!,
     });
     const own = await sale(28.5 * 60);
     const coras = Number((await q("select id from shifts where user_id = $1 order by started_at limit 1", [users.cora])).rows[0].id);

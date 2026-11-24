@@ -1,8 +1,48 @@
 import { shiftReportConfirmResponseSchema, shiftReportResponseSchema, type ShiftReportResponse } from "@agency_hub_core/contracts";
+import { findPersonRowByCode, insertAgentKey, insertPersonAgentKey, insertPersonRow, type Database } from "@agency_hub_core/db";
+import { sha256Hex } from "@agency_hub_core/shared";
 import { expect } from "vitest";
 
+import { AGENT_KEY_TOKEN_PREFIX } from "../../apps/runtime/src/services/auth.ts";
 import { readShiftReport, type HandinPersonActor } from "../../apps/runtime/src/services/shift-handins.ts";
 import { confirmShiftReport, reopenShiftReport, submitShiftReport } from "../../apps/runtime/src/services/shift-report-board.ts";
+
+/**
+ * Inserts a live `review:shift_reports` agent key linked to an active agent person in the people registry (creating the
+ * agent person if needed). Used by tests that exercise reviewer checks after 0440.
+ */
+export async function insertReviewerAgentKey(
+  db: Database,
+  input: {
+    name: string;
+    token: string;
+    pageIds: number[];
+    createdBy: number | null;
+    agentCode?: string;
+    capabilities?: string[];
+    expiresAt?: Date;
+    isTest?: boolean;
+  },
+): Promise<{ agentKeyId: number; personId: number }> {
+  const code = input.agentCode ?? "reviewer-agent";
+  const existing = await findPersonRowByCode(db, code);
+  const person = existing ?? await insertPersonRow(db, {
+    code, displayName: code, kind: "agent", role: "agent", state: "working", leftOn: null, telegramUserId: null,
+    telegramHandle: null, reportTag: null, onboarding: [], note: null, importNotes: [], origin: "owner",
+    createdByUserId: input.createdBy, ...(input.isTest === true ? { isTest: true } : {}),
+  });
+  const key = await insertAgentKey(db, {
+    name: input.name,
+    keyPrefix: input.token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+    keyDigest: sha256Hex(input.token),
+    capabilities: input.capabilities ?? ["review:shift_reports"],
+    pageIds: input.pageIds,
+    expiresAt: input.expiresAt ?? new Date(Date.now() + 30 * 86_400_000),
+    createdBy: input.createdBy,
+  });
+  await insertPersonAgentKey(db, { personId: person.id, agentKeyId: key.id, linkedByUserId: input.createdBy });
+  return { agentKeyId: key.id, personId: person.id };
+}
 
 /**
  * The «Отчёт» board (package R): «Сдать смену» records a candidate, «Подтверждаю» makes the version. What the tests of

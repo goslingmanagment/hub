@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { shiftReportResponseSchema, type ShiftReportRow } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
-import { sha256Hex } from "@agency_hub_core/shared";
+import { assignUserToPage, createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -14,7 +13,7 @@ import { confirmShiftReport } from "../apps/runtime/src/services/shift-report-bo
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
+import { handInAndConfirm, editingSession, insertReviewerAgentKey } from "./helpers/shift-report-hand-in.ts";
 
 // The board «Отчёт», the final review's third reader. (3) A question from the draft on a sale «стык смен, решит
 // владелец» makes it nobody's until it is decided: it never counts for the one who asked meanwhile. (4) Two people who
@@ -218,9 +217,8 @@ describe("the board «Отчёт», the final review's third reader", () => {
 
   it("moves the report to «Подтвердите» when Gengar's 10 minutes are up, on read and on «Подтверждаю» (5)", async (context) => {
     if (!testDb) return context.skip();
-    await insertAgentKey(testDb.db, {
-      name: "review6-gengar", keyPrefix: REVIEWER.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(REVIEWER),
-      capabilities: ["review:shift_reports"] as never, pageIds: [pageOne], expiresAt: new Date(Date.now() + 30 * 86_400_000), createdBy: users.boss!,
+    await insertReviewerAgentKey(testDb.db, {
+      name: "review6-gengar", token: REVIEWER, pageIds: [pageOne], createdBy: users.boss!,
     });
     await sale(29 * 60);
     const shift = await shiftRow("anna", 30.4, 24.6);

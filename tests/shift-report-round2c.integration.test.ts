@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { saleDisputeResponseSchema, shiftReportResponseSchema, type ShiftReportRow } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
-import { sha256Hex } from "@agency_hub_core/shared";
+import { assignUserToPage, createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -12,7 +11,7 @@ import { refreshSaleHomes } from "../apps/runtime/src/services/sale-homes.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
+import { handInAndConfirm, editingSession, insertReviewerAgentKey } from "./helpers/shift-report-hand-in.ts";
 
 // The board «Отчёт», round 2, the third reader (N4, N5, what he did not check). (N4) «Спросить» from «Правка» of a counted
 // report stands, and a word on a sale «стык смен» never makes it the asker's without a decision. (N5) The decider sees
@@ -174,9 +173,8 @@ describe("the board «Отчёт», round 2, the third reader", () => {
 
   it("shows the decider Gengar's card, keeps the owner's question the owner's, and gives nothing back without the decider (N5, «Не проверено»)", async (context) => {
     if (!testDb) return context.skip();
-    await insertAgentKey(testDb.db, {
-      name: "round2c-gengar", keyPrefix: REVIEWER.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(REVIEWER),
-      capabilities: ["review:shift_reports"] as never, pageIds: [pageOne], expiresAt: new Date(Date.now() + 30 * 86_400_000), createdBy: users.boss!,
+    await insertReviewerAgentKey(testDb.db, {
+      name: "round2c-gengar", token: REVIEWER, pageIds: [pageOne], createdBy: users.boss!,
     });
     const own = await sale(27 * 60);
     const bellas = await shiftRow("bella", 30.5, 24.5);

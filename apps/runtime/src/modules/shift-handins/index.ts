@@ -254,7 +254,7 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportChecks", ["review:shift_reports"]);
     let delivered = 0;
     try {
-      const checks = await readShiftReportChecks(appContext, { pageIds, limit: request.query.limit, realm: realmOf(principal) });
+      const checks = await readShiftReportChecks(appContext, { agentKeyId: principal.agentKeyId, pageIds, limit: request.query.limit, realm: realmOf(principal) });
       await writeAgentAudit(db, {
         agentKeyId: principal.agentKeyId, operation: "agentShiftReportChecks", pageIds, verbatimText: false,
         requestSummary: { returned: checks.checks.length },
