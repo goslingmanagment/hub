@@ -2171,7 +2171,7 @@ export async function linkUnlinkedDecision(
     if ((await listActiveSaleDecisions(txDb, [sale.transactionId])).size > 0) {
       throw new ConflictError("The sale already has an active decision", { reason: "decision_exists" });
     }
-    if ((await listSaleClaims(txDb, { transactionIds: [sale.transactionId], states: [...OPEN_STATES], limit: 1 })).length > 0) {
+    if ((await listSaleClaims(txDb, { transactionIds: [sale.transactionId], states: ["owner", "asked"], limit: 1 })).length > 0) {
       throw new ConflictError("The sale already has a claim", { reason: "open_dispute" });
     }
     if (!(await linkSaleDecision(txDb, { id: input.decisionId, transactionId: sale.transactionId, pageId: sale.pageId, at: now }))) return false;
