@@ -107,6 +107,8 @@ function makeSale(over: Partial<HandinSaleRow> & { transactionId: number }): Han
     pageId: 1,
     pageLabel: "mia-1",
     platform: "fansly",
+    modelSlug: "mia",
+    modelName: "Mia",
     kind: "tip",
     occurredAt: new Date("2026-11-12T09:00:00.000Z"),
     netMills: 25_000,
