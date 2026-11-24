@@ -13,7 +13,7 @@ import { settleGoneShifts } from "../apps/runtime/src/services/shift-handin-chec
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { handInAndConfirm, editingSession } from "./helpers/shift-report-hand-in.ts";
+import { handInAndConfirm, editingSession, insertReviewerAgentKey } from "./helpers/shift-report-hand-in.ts";
 
 // The board «Отчёт», the review arena's round 2. (N1) A report that counts money only by «мимо площадки» counts money:
 // a merge leaves a version with nothing under the shift that is gone, a cancel too — the ledger never sums it twice or
@@ -171,9 +171,8 @@ describe("the board «Отчёт», the review arena's round 2", () => {
 
   it("never lets Gengar's card change a sale decided since: the board and «Подтверждаю» sign the decision (N3)", async (context) => {
     if (!testDb) return context.skip();
-    await insertAgentKey(testDb.db, {
-      name: "round2-gengar", keyPrefix: REVIEWER.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(REVIEWER),
-      capabilities: ["review:shift_reports"] as never, pageIds: [pageOne], expiresAt: new Date(Date.now() + 30 * 86_400_000), createdBy: users.boss!,
+    await insertReviewerAgentKey(testDb.db, {
+      name: "round2-gengar", token: REVIEWER, pageIds: [pageOne], createdBy: users.boss!,
     });
     const inserted = await q(
       `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,

@@ -10,6 +10,7 @@ import type {
 import {
   clearCandidateSignature,
   closeMatter,
+  findAgentKeyPerson,
   findHandinById,
   findHandinByShift,
   findHandinCandidate,
@@ -17,12 +18,12 @@ import {
   findLatestHandinShift,
   findHandinPersonOfUser,
   findSaleSighting,
-  hasShiftReportReviewer,
   insertHandinCandidate,
   insertHandinEvent,
   insertHandinProposal,
   insertHandinVersion,
   insertSaleClaim,
+  isTestUser,
   listCandidatesAwaitingCheck,
   listCheckingHandins,
   listCurrentReportsOfSales,
@@ -41,6 +42,7 @@ import {
   listOpenMattersOfKinds,
   listHandinSalesByIds,
   listSaleClaims,
+  listShiftReportReviewers,
   listSignedConfirmHandins,
   listUserPageAssignments,
   listUserRoles,
@@ -60,6 +62,7 @@ import {
   type CandidateRow,
   type Database,
   type HandinRow,
+  type HandinShift,
   type HandinVersionLine,
   type MatterActor,
   type ProposalRow,
@@ -152,6 +155,51 @@ async function boardFor(app: BoardApp, actor: HandinActor, shiftId: number, acti
   return { subject, catalog, handin, phase };
 }
 
+// ── Expected reviewer at hand-in (0440) ──────────────────────────────────────
+
+/**
+ * Picks the expected reviewer from active matching reviewer agents in the shift's realm.
+ * 0 -> null (no review expected). >1 -> first alphabetically by `people.code`, calling `onMultiple`.
+ */
+export function selectExpectedReviewer(
+  reviewers: ReadonlyArray<{ personId: number; code: string }>,
+  onMultiple?: (picked: { personId: number; code: string }, all: ReadonlyArray<{ personId: number; code: string }>) => void,
+): number | null {
+  if (reviewers.length === 0) return null;
+  const sorted = [...reviewers].sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : a.personId - b.personId));
+  const picked = sorted[0]!;
+  if (sorted.length > 1) onMultiple?.(picked, sorted);
+  return picked.personId;
+}
+
+/**
+ * Resolves the expected reviewer agent for a shift at hand-in: an active reviewer agent in the shift's realm
+ * (`people.kind = 'agent'`, `state <> 'left'`, live key in `person_agent_keys` + `agent_keys` with
+ * `review:shift_reports`) whose page grant covers ALL pages of the shift.
+ * 0 -> null; >1 -> first alphabetically by `people.code`, with a warning.
+ */
+export async function resolveExpectedReviewer(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { shift: Pick<HandinShift, "id" | "userId" | "pages">; catalog: Pick<PageCatalog, "idOf">; at?: Date },
+): Promise<number | null> {
+  const labels = input.shift.pages.map((page) => page.pageLabel);
+  if (labels.length === 0) return null;
+  const pageIds: number[] = [];
+  for (const label of labels) {
+    const id = input.catalog.idOf.get(label);
+    if (id === undefined) return null;
+    pageIds.push(id);
+  }
+  const realm = (await isTestUser(app.db, input.shift.userId)) ? "test" : "live";
+  const reviewers = await listShiftReportReviewers(app.db, { pageIds, realm, ...(input.at === undefined ? {} : { at: input.at }) });
+  return selectExpectedReviewer(reviewers, (picked, all) => {
+    app.logger.warn(
+      { shiftId: input.shift.id, realm, picked: picked.code, reviewers: all.map((one) => one.code) },
+      "shift report: multiple active reviewers cover all shift pages; picking first by code",
+    );
+  });
+}
+
 // ── «Сдать смену»: a candidate ───────────────────────────────────────────────
 
 /** What the person saw on the draft's bar at «Сдать смену»: its total and its count. */
@@ -172,8 +220,6 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
   if (actor.kind === "agent" && actor.sourceRef === null) throw new BadRequestError("A report is handed in «со слов» only with the message", { reason: "source_ref_required" });
   const { subject, catalog } = await boardFor(app, actor, input.shiftId, "handIn");
   const who = writer(actor);
-  const pageIds = subject.shift.pages.map((page) => catalog.idOf.get(page.pageLabel)).filter((id): id is number => id !== undefined);
-  const reviewed = await hasShiftReportReviewer(app.db, pageIds);
   // Hub's own check of each page (shift-handin-check.ts): its first states, and the wallet reads asked after the commit.
   const check = await startHubCheck(app.db, { subject, catalog });
   const hubWaits = check.pages.some((page) => page.state === "running" || page.state === "statement");
@@ -186,6 +232,7 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
     // Under the report's lock: only from a draft or «Правка» — a hand-in that lost the race to another answers 409.
     const was = phaseOf(handin);
     if (was !== "draft" && was !== "fixing") throw new PhaseConflictError(subject.shift.id, was);
+    const expectedReviewerPersonId = await resolveExpectedReviewer({ db, logger: app.logger }, { shift: subject.shift, catalog, at: now });
     const marks = await listHandinMarks(db, handin.id);
     const facts = await draftFacts(db, subject, handin, catalog, now, marks);
     const lines = draftLines(facts, marks);
@@ -203,9 +250,9 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
       handinId: handin.id, door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
       telegramMessageRef: actor.kind === "agent" ? actor.sourceRef : null, telegramSenderId: actor.kind === "agent" ? actor.telegramUserId : null,
       cutoffAt: now, totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: handin.comment, modelComments: handin.modelComments, ruleVersion: SALE_RULE.version,
-      hubCheck, signed: signed ? { totalMills: sums.totalMills, count } : null, at: now,
+      hubCheck, signed: signed ? { totalMills: sums.totalMills, count } : null, expectedReviewerPersonId, at: now,
     });
-    const next = checkLetsConfirm({ handedInAt: now, now, hubPending: hubWaits, gengarPending: reviewed }) ? "confirm" : "checking";
+    const next = checkLetsConfirm({ handedInAt: now, now, hubPending: hubWaits, gengarPending: made.expectedReviewerPersonId !== null }) ? "confirm" : "checking";
     if (!(await setHandinPhase(db, { handinId: handin.id, phase: next, at: now, from: [handin.phase] }))) throw new PhaseConflictError(subject.shift.id, was);
     await insertHandinEvent(db, {
       handinId: handin.id, event: "shift_report.handed_in", door: who.door, actorUserId: who.byUserId, agentKeyId: who.byAgentKeyId,
@@ -275,7 +322,7 @@ async function confirmCandidate(
 ): Promise<{ done: "confirmed" | "superseded" | "not_ready" | "changed"; subject: Subject | null }> {
   const now = options.now;
   // Due by now (Gengar's 10 minutes up, the checks done): «Подтвердите» before the press is judged, not at the next pass.
-  await moveWhenDue(app.db, { shiftId: input.shiftId, catalog: await pageCatalog(app.db) }, now);
+  await moveWhenDue(app.db, { shiftId: input.shiftId }, now);
   let board: Board;
   try {
     board = await boardFor(app, actor, input.shiftId, "confirm");
@@ -835,19 +882,37 @@ export async function addShiftReportSighting(app: BoardApp, actor: HandinPersonA
 
 // ── Gengar's check (review:shift_reports) ────────────────────────────────────
 
-/** `agentShiftReportChecks`: candidates handed in and waiting for Gengar's answer, every page of the shift in the key's grant. */
-export async function readShiftReportChecks(app: BoardApp, input: { pageIds: readonly number[]; limit: number; realm?: "live" | "test" }, now: Date = new Date()): Promise<AgentShiftReportChecksResponse> {
+/**
+ * `agentShiftReportChecks`: candidates handed in and waiting for this reviewer's answer (filtered by the calling key's
+ * linked person matching `expected_reviewer_person_id` BEFORE `limit`), every page of the shift in the key's grant.
+ */
+export async function readShiftReportChecks(
+  app: BoardApp,
+  input: { agentKeyId: number; pageIds: readonly number[]; limit: number; realm?: "live" | "test" },
+  now: Date = new Date(),
+): Promise<AgentShiftReportChecksResponse> {
+  const realm = input.realm ?? "live";
+  const reviewer = await findAgentKeyPerson(app.db, input.agentKeyId);
+  if (reviewer === null || reviewer.state === "left") {
+    return { checks: [], awaitingConfirm: [], serverNow: now.toISOString() };
+  }
   const granted = new Set(input.pageIds);
   // The key's realm (sandbox/realm.ts): a live key never sees a test candidate, the test team's checker only those.
   const testLogins = await testUserIds(app);
   const catalog = await pageCatalog(app.db);
-  const waiting = await listCandidatesAwaitingCheck(app.db, { since: new Date(now.getTime() - 2 * DAY_MS), limit: 200 });
+  const waiting = await listCandidatesAwaitingCheck(app.db, {
+    reviewerPersonId: reviewer.personId,
+    pageIds: input.pageIds,
+    realm,
+    since: new Date(now.getTime() - 2 * DAY_MS),
+    limit: input.limit,
+  });
   const checks: AgentShiftReportChecksResponse["checks"] = [];
   for (const one of waiting) {
     if (checks.length >= input.limit) break;
     const subject = await subjectOf(app.db, one.shiftId).catch(() => null);
     if (subject === null) continue;
-    if (testLogins.has(subject.shift.userId) !== (input.realm === "test")) continue;
+    if (testLogins.has(subject.shift.userId) !== (realm === "test")) continue;
     const labels = subject.shift.pages.map((page) => page.pageLabel);
     if (!labels.every((label) => granted.has(catalog.idOf.get(label) ?? -1))) continue;
     const ids = one.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId]));
@@ -889,11 +954,12 @@ export async function readShiftReportChecks(app: BoardApp, input: { pageIds: rea
   for (const one of await listConfirmHandins(app.db)) {
     const subject = await subjectOf(app.db, one.shiftId).catch(() => null);
     if (subject === null) continue;
-    if (testLogins.has(subject.shift.userId) !== (input.realm === "test")) continue;
+    if (testLogins.has(subject.shift.userId) !== (realm === "test")) continue;
     const labels = subject.shift.pages.map((page) => page.pageLabel);
     if (!labels.every((label) => granted.has(catalog.idOf.get(label) ?? -1))) continue;
     const candidate = (await listHandinCandidates(app.db, one.handinId)).filter((row) => row.supersededAt === null && row.confirmedAt === null).at(-1);
     if (candidate === undefined) continue;
+    if (candidate.expectedReviewerPersonId !== null && candidate.expectedReviewerPersonId !== reviewer.personId) continue;
     const names = await listHandinNames(app.db, [subject.shift.userId]);
     awaitingConfirm.push({
       shiftId: subject.shift.id,
@@ -911,8 +977,9 @@ export async function readShiftReportChecks(app: BoardApp, input: { pageIds: rea
 
 /**
  * `agentShiftReportCheckAnswer`: Gengar's answer to one candidate — «замечаний нет» (no proposal) or proposals, each a
- * sale of the candidate and a legal word. Never a confirmation. After the report is counted the proposals are late: a
- * matter for the person, cards on the counted board, nothing changed by themselves.
+ * sale of the candidate and a legal word. Never a confirmation. Verifies inside the same transaction that the calling
+ * key's linked agent person matches the candidate's stored `expected_reviewer_person_id`. After the report is counted
+ * the proposals are late: a matter for the person, cards on the counted board, nothing changed by themselves.
  */
 export async function answerShiftReportCheck(
   app: BoardApp,
@@ -931,41 +998,56 @@ export async function answerShiftReportCheck(
   const granted = new Set(input.pageIds);
   const pageIds = subject.shift.pages.map((page) => catalog.idOf.get(page.pageLabel) ?? -1);
   if (!pageIds.every((id) => granted.has(id))) throw new NotFoundError("Not found");
-  if (candidate.supersededAt !== null) return { candidateId: candidate.id, recorded: 0, late: false, superseded: true, serverNow: now.toISOString() };
-  const colleagues = new Set((await listHandinColleagues(app.db, { pageIds, exceptUserIds: subject.userIds })).map((one) => one.userId));
-  const lineOf = new Map(candidate.lines.flatMap((line) => (line.transactionId === null ? [] : [[line.transactionId, line] as const])));
-  // Validate every proposal before writing any.
-  const planned = input.body.proposals.map((proposal) => {
-    const line = lineOf.get(proposal.transactionId);
-    if (line === undefined) throw new BadRequestError("A proposal names a sale of the candidate", { reason: "not_in_candidate" });
-    if (proposal.kind === "note") {
-      if (proposal.note === undefined) throw new BadRequestError("A note proposal carries the note", { reason: "note_required" });
-      return { line, kind: "note" as const, toWord: null, toUserId: null, note: proposal.note.trim(), proposal };
-    }
-    const to = proposal.to;
-    if (to === undefined) throw new BadRequestError("An owner change says the word", { reason: "word_required" });
-    const userId = to.userId ?? null;
-    if ((to.word === "share" || to.word === "give") && (userId === null || !colleagues.has(userId))) {
-      throw new BadRequestError("«Пополам» and «отдал» name a colleague of the shift's pages", { reason: "colleague_unknown" });
-    }
-    if (to.word === "give" || to.word === "pot") {
-      if (line.group !== "mine") throw new BadRequestError("Only one's own sale is given away", { reason: "word_not_allowed" });
-    }
-    return { line, kind: "owner_change" as const, toWord: to.word as ProposalWord, toUserId: to.word === "share" || to.word === "give" ? userId : null, note: null, proposal };
-  });
-  let late = false;
-  await app.db.transaction(async (tx) => {
+  const result = await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
-    const locked = (await findHandinByShift(db, subject.shift.id, { lock: true }))!;
-    late = candidate.confirmedAt !== null || phaseOf(locked) === "counted";
-    if (!(await setCandidateGengarAnswer(db, { candidateId: candidate.id, clean: planned.length === 0, at: now }))) {
+    const locked = await findHandinByShift(db, subject.shift.id, { lock: true });
+    const lockedCandidate = await findHandinCandidate(db, input.candidateId, { lock: true });
+    if (locked === null || lockedCandidate === null || lockedCandidate.handinId !== locked.id) {
+      throw new NotFoundError("Not found");
+    }
+    // Verify calling key's linked person against the candidate's stored expected reviewer inside the same transaction.
+    const caller = await findAgentKeyPerson(db, principal.agentKeyId);
+    if (
+      caller === null
+      || caller.state === "left"
+      || lockedCandidate.expectedReviewerPersonId === null
+      || lockedCandidate.expectedReviewerPersonId !== caller.personId
+    ) {
+      throw new ForbiddenError("This candidate is assigned to another reviewer");
+    }
+    if (lockedCandidate.supersededAt !== null) {
+      return { recorded: 0, late: false, superseded: true };
+    }
+    const colleagues = new Set((await listHandinColleagues(db, { pageIds, exceptUserIds: subject.userIds })).map((one) => one.userId));
+    const lineOf = new Map(lockedCandidate.lines.flatMap((line) => (line.transactionId === null ? [] : [[line.transactionId, line] as const])));
+    // Validate every proposal before writing any.
+    const planned = input.body.proposals.map((proposal) => {
+      const line = lineOf.get(proposal.transactionId);
+      if (line === undefined) throw new BadRequestError("A proposal names a sale of the candidate", { reason: "not_in_candidate" });
+      if (proposal.kind === "note") {
+        if (proposal.note === undefined) throw new BadRequestError("A note proposal carries the note", { reason: "note_required" });
+        return { line, kind: "note" as const, toWord: null, toUserId: null, note: proposal.note.trim(), proposal };
+      }
+      const to = proposal.to;
+      if (to === undefined) throw new BadRequestError("An owner change says the word", { reason: "word_required" });
+      const userId = to.userId ?? null;
+      if ((to.word === "share" || to.word === "give") && (userId === null || !colleagues.has(userId))) {
+        throw new BadRequestError("«Пополам» and «отдал» name a colleague of the shift's pages", { reason: "colleague_unknown" });
+      }
+      if (to.word === "give" || to.word === "pot") {
+        if (line.group !== "mine") throw new BadRequestError("Only one's own sale is given away", { reason: "word_not_allowed" });
+      }
+      return { line, kind: "owner_change" as const, toWord: to.word as ProposalWord, toUserId: to.word === "share" || to.word === "give" ? userId : null, note: null, proposal };
+    });
+    const late = lockedCandidate.confirmedAt !== null || phaseOf(locked) === "counted";
+    if (!(await setCandidateGengarAnswer(db, { candidateId: lockedCandidate.id, clean: planned.length === 0, at: now }))) {
       throw new ConflictError("This candidate is already answered", { reason: "answered" });
     }
     for (const one of planned) {
       const fromWord: ProposalWord = one.line.statement ?? "rule";
       const fromUserId = one.line.statement === "share" ? one.line.shareWithUserId : one.line.statement === "give" ? one.line.toUserId ?? null : null;
       await insertHandinProposal(db, {
-        candidateId: candidate.id, handinId: locked.id, transactionId: one.line.transactionId!, kind: one.kind,
+        candidateId: lockedCandidate.id, handinId: locked.id, transactionId: one.line.transactionId!, kind: one.kind,
         fromWord: one.kind === "owner_change" ? fromWord : null, fromUserId: one.kind === "owner_change" ? fromUserId : null,
         toWord: one.toWord, toUserId: one.toUserId, note: one.note,
         deltaMills: proposalDelta(one.line, { kind: one.kind, toWord: one.toWord, toUserId: one.toUserId, note: one.note }),
@@ -973,9 +1055,12 @@ export async function answerShiftReportCheck(
         agentKeyId: principal.agentKeyId,
       }, now);
     }
+    return { recorded: planned.length, late, superseded: false };
   });
-  await runShiftReportBoardPass(app, now).catch((error: unknown) => warn(app, error, "the board's pass after Gengar's answer"));
-  return { candidateId: candidate.id, recorded: planned.length, late, superseded: false, serverNow: now.toISOString() };
+  if (!result.superseded) {
+    await runShiftReportBoardPass(app, now).catch((error: unknown) => warn(app, error, "the board's pass after Gengar's answer"));
+  }
+  return { candidateId: candidate.id, recorded: result.recorded, late: result.late, superseded: result.superseded, serverNow: now.toISOString() };
 }
 
 
@@ -995,10 +1080,9 @@ export async function runShiftReportBoardPass(app: BoardApp, now: Date = new Dat
   await runHubChecks(app, now).catch((error: unknown) => warn(app, error, "Hub's check"));
   await settleGoneShifts(app, now).catch((error: unknown) => warn(app, error, "cancelled and merged shifts"));
   await syncLateMarks(app, now).catch((error: unknown) => warn(app, error, "the «после сдачи» mark"));
-  const catalog = await pageCatalog(db);
   // The backstop: a read or «Подтверждаю» moves a report when it is due (`moveWhenDue`); this catches the rest.
   for (const one of await listCheckingHandins(db, { limit: 500 })) {
-    if (await moveWhenDue(db, { shiftId: one.shiftId, catalog }, now)) moved += 1;
+    if (await moveWhenDue(db, { shiftId: one.shiftId }, now)) moved += 1;
   }
   // Before the matters: a report counted by its signature never asks the person «Подтвердите отчёт».
   for (const one of await listSignedConfirmHandins(db, { limit: 100 })) {

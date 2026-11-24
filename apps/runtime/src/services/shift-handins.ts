@@ -368,7 +368,7 @@ async function dueNow(app: HandinApp, input: { handin: HandinRow; subject: Subje
   };
   if (phaseOf(handin) === "checking") {
     await checkReportNow(app, { handinId: handin.id, shiftId: subject.shift.id, catalog }, now).catch(logged("Hub's check"));
-    await moveWhenDue(app.db, { shiftId: subject.shift.id, catalog }, now).catch(logged("the move to «Подтвердите»"));
+    await moveWhenDue(app.db, { shiftId: subject.shift.id }, now).catch(logged("the move to «Подтвердите»"));
   }
   await settleAskedTakes(app, { handinId: handin.id, userIds: subject.userIds }, now).catch(logged("a take still asked"));
 }

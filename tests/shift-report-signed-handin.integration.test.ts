@@ -13,6 +13,7 @@ import { handInShiftReport, readShiftReportBoard, runShiftReportBoardPass } from
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
+import { insertReviewerAgentKey } from "./helpers/shift-report-hand-in.ts";
 
 // «Сдать смену» is the person's signature (owner, 2026-11-19). The hand-in carries what the person saw; equal to the
 // candidate, it is signed, and a check that changes nothing counts the report by it — the version is exactly what was
@@ -189,9 +190,8 @@ describe("«Сдать смену» as the person's signature", () => {
   it("counts a signed hand-in when Gengar is silent for 10 minutes, on the board's read, with no «Подтверждаю»", async (context) => {
     if (!testDb) return context.skip();
     // From here on Gengar reviews mia-1: a hand-in waits for his answer, 10 minutes at most.
-    await insertAgentKey(testDb.db, {
-      name: "signed-gengar", keyPrefix: REVIEWER.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(REVIEWER),
-      capabilities: ["review:shift_reports"] as never, pageIds: [pageOne], expiresAt: new Date(Date.now() + 30 * 86_400_000), createdBy: users.boss!,
+    await insertReviewerAgentKey(testDb.db, {
+      name: "signed-gengar", token: REVIEWER, pageIds: [pageOne], createdBy: users.boss!,
     });
     await sale(28.8 * 60);
     const shift = await shiftRow("anna", 29, 28.5);

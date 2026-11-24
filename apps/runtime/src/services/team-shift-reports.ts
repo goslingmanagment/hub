@@ -15,7 +15,6 @@ import {
   listHandinSaleFans,
   listHandinsOfShifts,
   listLatestHandinCandidates,
-  listShiftReportReviewerPages,
   listTeamHandinShifts,
   type CandidateRow,
   type HandinPerson,
@@ -228,10 +227,9 @@ export async function readTeamShiftReports(
   });
   const lineIds = built.flatMap((one) => [...(one.version?.lines ?? []), ...(one.candidate?.lines ?? [])])
     .flatMap((line) => (line.transactionId === null ? [] : [line.transactionId]));
-  const [fans, proposals, reviewers] = await Promise.all([
+  const [fans, proposals] = await Promise.all([
     listHandinSaleFans(db, lineIds),
     countHandinProposals(db, built.flatMap((one) => (one.candidate === null ? [] : [one.candidate.id]))),
-    built.some((one) => one.candidate !== null && one.candidate.gengarAnsweredAt === null) ? listShiftReportReviewerPages(db) : Promise.resolve([]),
   ]);
   const money = pairRowsWithMoney(rows, rule.money);
   // The reader's own shifts not handed in: their draft's total, as «Мои» shows it (a draft is its person's alone).
@@ -272,8 +270,8 @@ export async function readTeamShiftReports(
     let check: Item["check"] = null;
     if (candidate !== null) {
       const hub = hubOf({ hubCheck: candidate.hubCheck.filter((page) => visible(page.pageLabel)) });
-      const ids = shiftPages.map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined);
-      const reviewed = ids.length > 0 && reviewers.some((keyPages) => ids.every((id) => keyPages.includes(id)));
+      // Read the stored snapshot (recorded at hand-in over ALL pages of the shift, never cut to `visible`).
+      const reviewed = candidate.expectedReviewerPersonId !== null;
       check = {
         hub: hub.state,
         foundCount: hub.foundCount,

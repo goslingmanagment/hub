@@ -11,7 +11,7 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import { editingSession } from "./helpers/shift-report-hand-in.ts";
+import { editingSession, insertReviewerAgentKey } from "./helpers/shift-report-hand-in.ts";
 
 // Отчёт смены (ecosystem package F): who reads and who writes a shift's report.
 // The person hands in their own shift, only with their switch on, by their
@@ -275,10 +275,8 @@ describe("the shift report: who reads, who writes", () => {
   it("lets Gengar check a candidate and propose, never confirm; the ledger's feed never sees a candidate or a card", async (context) => {
     if (!testDb) return context.skip();
     const [one] = (await testDb.pool.query("select id from pages where label = 'mia-1'")).rows.map((row: { id: string }) => Number(row.id));
-    await insertAgentKey(testDb.db, {
-      name: "shift-reviewer", keyPrefix: KEYS.reviewer.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(KEYS.reviewer),
-      capabilities: ["review:shift_reports"] as never, pageIds: [one!], expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      createdBy: await fixtureUserId(app, "boss"),
+    await insertReviewerAgentKey(testDb.db, {
+      name: "shift-reviewer", token: KEYS.reviewer, pageIds: [one!], createdBy: await fixtureUserId(app, "boss"),
     });
     const feed = async () => agentShiftReportsFeedResponseSchema.parse((await asKey("ledger", "GET", "/api/v1/agent/shift-reports")).json());
     const fedBefore = (await feed()).reports.filter((report) => report.shiftId === shiftA);
@@ -462,8 +460,9 @@ describe("the shift report: who reads, who writes", () => {
     expect(waiting).toMatchObject({ candidateId, person: "anna", pages: ["mia-1"], confirmSince: new Date(since.phase_at).toISOString() });
     // The test realm's checker never sees a live report.
     const { readShiftReportChecks } = await import("../apps/runtime/src/services/shift-report-board.ts");
+    const reviewerKeyId = Number((await testDb.pool.query("select id from agent_keys where name = 'shift-reviewer'")).rows[0].id);
     const pageIds = (await testDb.pool.query("select id from pages")).rows.map((row: { id: string }) => Number(row.id));
-    expect((await readShiftReportChecks(app, { pageIds, limit: 50, realm: "test" })).awaitingConfirm).toEqual([]);
+    expect((await readShiftReportChecks(app, { agentKeyId: reviewerKeyId, pageIds, limit: 50, realm: "test" })).awaitingConfirm).toEqual([]);
     // Counted: no longer waiting.
     expect(shiftReportConfirmResponseSchema.parse((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftA}/confirm`, { candidateId })).json()).confirmed).toBe(true);
     expect((await checks()).awaitingConfirm.map((one) => one.shiftId)).not.toContain(shiftA);

@@ -12,7 +12,6 @@ import {
   findHandinPersonOfUser,
   hasHandinEventSince,
   listPreviousShiftComments,
-  hasShiftReportReviewer,
   listHandinMarks,
   listOffPlatform,
   listCurrentWordsOfSales,
@@ -702,7 +701,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     .map(([pageLabel, info]) => ({ pageLabel, platform: platformOf(info.platform) }))
     .sort((a, b) => a.pageLabel.localeCompare(b.pageLabel));
 
-  const reviewed = candidate === null ? false : await hasShiftReportReviewer(db, pageIds);
+  const reviewed = candidate !== null && candidate.expectedReviewerPersonId !== null;
   // «Проверка нашла изменения»: the person signed the hand-in and the check changed the report — Hub re-made the
   // candidate with what it found (a re-made one is never signed), or the signature was not applied (Gengar's card, a
   // colleague's answer, a decision since). The same hand-in: the candidates of its cutoff, the events since it.
