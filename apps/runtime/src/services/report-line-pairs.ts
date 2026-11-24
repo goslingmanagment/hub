@@ -1,6 +1,6 @@
 /**
  * Which line of a person's reports pays which of their sales: the one pairing «Смены»' note (shift-report-notes.ts)
- * and the comparison tool (sale-rule-compare.ts) both read. Pure.
+ * reads. Pure.
  *
  * People are paid by the day's report: the breakdown the chat agent saves to the agency ledger, a line a sale. A line
  * names its sale by a reference — the platform's reference of the transaction, or Hub's own id of it (the ledger
