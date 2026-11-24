@@ -85,6 +85,49 @@ describe("hub owner", () => {
     const before = calls.length;
     expect((await run(["owner", "people", "set", "anna", "--why", WHY])).exitCode).toBe(4);
     expect(calls).toHaveLength(before);
+
+    // Workboard pots (H11): list, show, create, update, preview, post, reverse, close
+    const potCases: ReadonlyArray<[string[], string, Record<string, unknown>]> = [
+      [["owner", "pot", "list"], "pot.list", {}],
+      [["owner", "pot", "show", "event-alpha"], "pot.show", { code: "event-alpha" }],
+      [
+        ["owner", "pot", "create", "event-alpha", "--name", "Event Alpha", "--model", "mia", "--page", "mia-1,mia-2", "--opens-on", "2026-12-01", "--participants-mode", "page_workers", "--formula", "equal"],
+        "pot.create",
+        {
+          code: "event-alpha", name: "Event Alpha", modelSlug: "mia", pageLabels: ["mia-1", "mia-2"],
+          opensOn: "2026-12-01", participantsMode: "page_workers", formula: { kind: "equal", params: {} },
+        },
+      ],
+      [
+        ["owner", "pot", "update", "event-alpha", "--name", "Event Alpha 2", "--closes-on", "2026-12-15"],
+        "pot.update",
+        { code: "event-alpha", name: "Event Alpha 2", closesOn: "2026-12-15" },
+      ],
+      [
+        ["owner", "pot", "preview", "event-alpha", "--day", "2026-12-05"],
+        "pot.preview",
+        { code: "event-alpha", day: "2026-12-05" },
+      ],
+      [
+        ["owner", "pot", "post", "event-alpha", "--day", "2026-12-05", "--json", "{\"parts\":[{\"transactionId\":10,\"baseMills\":25000}]}"],
+        "pot.post",
+        { code: "event-alpha", day: "2026-12-05", parts: [{ transactionId: 10, baseMills: 25000 }] },
+      ],
+      [
+        ["owner", "pot", "reverse", "42", "--reason", "перерасчёт"],
+        "pot.reverse",
+        { distributionId: 42, reason: "перерасчёт" },
+      ],
+      [["owner", "pot", "close", "event-alpha"], "pot.close", { code: "event-alpha" }],
+    ];
+    for (const [argv, op, args] of potCases) {
+      const answer = await run([...argv, "--why", WHY]);
+      expect(answer.exitCode, `${argv.join(" ")}: ${JSON.stringify(answer.document)}`).toBe(0);
+      expect(calls.at(-1), argv.join(" ")).toEqual({ operation: "ownerAgentCall", input: { body: { op, args } } });
+    }
+    const beforePotUpdate = calls.length;
+    expect((await run(["owner", "pot", "update", "event-alpha", "--why", WHY])).exitCode).toBe(4);
+    expect(calls).toHaveLength(beforePotUpdate);
   });
 
   it("sends nothing without the reason, or without the owner's desk key (an agent's key is never used)", async () => {

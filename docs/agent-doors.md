@@ -542,6 +542,14 @@ The CLI is `hub owner …` with the owner's desk's key: `HUB_OWNER_KEY`, or `HUB
 | `swap.revoke` | `swap revoke №` | An approved swap taken back before its day; its lines are marked |
 | `decision.unlinked` | `decision unlinked` | Decisions carried over from the ledger that name no sale yet, with the sales each may be |
 | `decision.link` | `decision link № --sale N` | Ties one to its sale of the live agency: it rules the sale from now, the reports follow as for a decision |
+| `pot.list` | `pot list` | Workboard pots with live base balances, unrouted pot sales, and live models/people catalog (pure DB read, no ledger call) |
+| `pot.show` | `pot show C` | One live pot by its code: eligible sales with remaining base, active participants, and distributions |
+| `pot.create` | `pot create C --name W --model M --page … --opens-on D --participants-mode … [--formula …] [--auto-post] [--json '{…}']` | Creates a live Workboard pot (page pot or event pot); writes `pot.created` audit row |
+| `pot.update` | `pot update C [--name] [--page …] [--opens-on] [--closes-on] [--intake …] [--participants-mode] [--auto-post] [--json '{…}']` | Updates an open live Workboard pot; writes `pot.updated` audit row |
+| `pot.preview` | `pot preview C [--day D] [--json '{…}']` | Pure preview of a pot distribution in base mills (writes nothing) |
+| `pot.post` | `pot post C [--day D] [--json '{…}']` | Posts an immutable pot distribution in base mills (emits K2 `posted`, writes `pot.distribution_posted` audit row) |
+| `pot.reverse` | `pot reverse № --reason W` | Reverses a posted pot distribution once (restores remaining base, emits K2 `reversed`, writes `pot.distribution_reversed` audit row) |
+| `pot.close` | `pot close C` | Closes an open live pot (historical posted distributions stay intact; writes `pot.closed` audit row) |
 
 `hub owner call <op> --json '{…}' --why …` runs any operation of the table; `hub owner ops` lists them (no call).
 
@@ -570,13 +578,17 @@ What it writes and how it is named:
 - A swap approved or taken back: the persons' audit rows (`person.schedule_swap`, `person.schedule_swap_revoked`) under
   the owner, source `owner_agent`, the key in their metadata; «Обучение»'s approval: `learn_page.approval`, the same.
 - A decision tied to its sale: the reports' new versions and their history, as a decision of the door (above).
-- A read writes nothing but its own audit row (and its observation): no check runs, no phase moves, no take settles.
+- Workboard pots (`pot.create`, `pot.update`, `pot.post`, `pot.reverse`, `pot.close`): audit rows (`pot.created`,
+  `pot.updated`, `pot.distribution_posted`, `pot.distribution_reversed`, `pot.closed`) under the owner, source
+  `owner_agent`, with the key in their metadata.
+- A read (`pot.list`, `pot.show`, `pot.preview`, and all other read operations) writes nothing but its own audit row
+  (and its observation): no check runs, no phase moves, no take settles.
 
 Never on this door (a predicate and a test hold it, `OWNER_AGENT_NEVER`): keys, passwords, sessions, devices,
 invitations; erasure and deletion, the page browser, sends and broadcasts; pay terms, payout details, transfers,
 prices, discounts; configs, prompts, the pace, master switches; signing for a chatter, the test wall; people's rights,
 logins, role, Telegram; a person's proposals (their stored change may carry rights); a custom's payment, its undoing,
-the owner's word on it, its cancel and its price. The common pots' operations are not here yet.
+the owner's word on it, its cancel and its price.
 
 ## «Кто этот ключ»: another service accepts a hub key
 

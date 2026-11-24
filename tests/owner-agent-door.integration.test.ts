@@ -456,4 +456,122 @@ describe("the owner's agent door", () => {
     const stranger = await call("sale.decide", { transactionId: disputed, kind: "owner", shares: [{ person: "t-boss", percent: 100 }], note: "x" });
     expect(stranger.statusCode, stranger.body).toBe(400);
   });
+
+  it("manages live Workboard pots (list, create, show, update, preview, post, reverse, close) with pure reads, live isolation, and audit", async (context) => {
+    if (!testDb) return context.skip();
+    // Turn pots switch on and insert a pot sale on mia-1 + a test-realm pot that must stay invisible (404).
+    await testDb.pool.query(
+      "insert into pots_switch (id, pots_from, set_by, set_at) values (true, '2026-11-18', 'test', now()) on conflict (id) do update set pots_from = '2026-11-18'",
+    );
+    const tModel = Number((await testDb.pool.query("insert into models (slug, name, is_test) values ('sandbox-door-m', 'Sandbox Door', true) returning id")).rows[0].id);
+    const tPage = (await createFanslyPage(app.db, { modelId: tModel, label: "test-door-1" }))!.id;
+    await testDb.pool.query(
+      `insert into pots (code, name, model_id, page_ids, intake_reasons, opens_on, participants_mode, participants, formula, auto_post, state)
+       values ('test-door-pot', 'Test Door Pot', $1, array[$2]::bigint[], array[]::text[], '2026-11-18',
+         'listed', '[]'::jsonb, '{"kind":"equal","params":{}}'::jsonb, false, 'open')`,
+      [tModel, tPage],
+    );
+
+    const potSale = Number((await testDb.pool.query(
+      `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+         gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
+       values ($1, 'tx-owner-door-pot-1', 'tip', 'tip', 'posted', 'ok', 60000, 60000, 60000, 0, '2026-11-20T12:00:00+03:00', 'fansly:rest', 'USD')
+       returning id`,
+      [pageOne],
+    )).rows[0].id);
+    await testDb.pool.query(
+      `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, pot, shares, rule_version, computed_at)
+       values ($1, $2, '2026-11-20T12:00:00+03:00', 60000, 'pot', 'decision', 'door-event', '[]'::jsonb, 'test', now())`,
+      [potSale, pageOne],
+    );
+
+    // 1. pot.create (live model + page label) + audit provenance
+    const created = await call("pot.create", {
+      code: "door-event",
+      name: "Door Event",
+      modelSlug: "mia",
+      pageLabels: ["mia-1"],
+      intakeReasons: [],
+      opensOn: "2026-11-18",
+      closesOn: null,
+      participantsMode: "listed",
+      participants: [
+        { personCode: "anna", fromDay: "2026-11-18", toDay: null },
+        { personCode: "bella", fromDay: "2026-11-18", toDay: null },
+      ],
+      formula: { kind: "equal", params: {} },
+      autoPost: false,
+    });
+    expect(created.statusCode, created.body).toBe(200);
+    expect(created.json().result.pot).toMatchObject({ code: "door-event", balanceMills: 60_000, state: "open" });
+
+    const createAudit = await testDb.pool.query(
+      "select actor_user_id, source, metadata from audit_events where event_type = 'pot.created' order by id desc limit 1",
+    );
+    expect(Number(createAudit.rows[0].actor_user_id)).toBe(boss);
+    expect(createAudit.rows[0]).toMatchObject({ source: "owner_agent", metadata: { code: "door-event", actorAgentKeyId: ownerKeyId } });
+
+    // 2. pot.update
+    const updated = await call("pot.update", { code: "door-event", name: "Door Event Updated" });
+    expect(updated.statusCode, updated.body).toBe(200);
+    expect(updated.json().result.pot.name).toBe("Door Event Updated");
+
+    // 3. Pure reads (pot.list, pot.show, pot.preview) write NOTHING to pot_distributions or matters, and never see test pots!
+    const distCountBefore = await count("select count(*) as n from pot_distributions");
+    const mattersBefore = await count("select count(*) as n from matters");
+    const listed = await call("pot.list", {});
+    expect(listed.statusCode, listed.body).toBe(200);
+    const listCodes = (listed.json().result.pots as Array<{ code: string }>).map((p) => p.code);
+    expect(listCodes).toContain("door-event");
+    expect(listCodes).not.toContain("test-door-pot");
+    expect(listed.json().result).not.toHaveProperty("legacyArchive");
+
+    const shown = await call("pot.show", { code: "door-event" });
+    expect(shown.statusCode, shown.body).toBe(200);
+    expect(shown.json().result.pot.balanceMills).toBe(60_000);
+    expect((await call("pot.show", { code: "test-door-pot" })).statusCode).toBe(404);
+
+    const previewed = await call("pot.preview", { code: "door-event", day: "2026-11-20" });
+    expect(previewed.statusCode, previewed.body).toBe(200);
+    expect(previewed.json().result).toMatchObject({
+      baseMills: 60_000,
+      error: null,
+      lines: [
+        { personCode: "anna", baseMills: 30_000 },
+        { personCode: "bella", baseMills: 30_000 },
+      ],
+    });
+    expect(await count("select count(*) as n from pot_distributions")).toBe(distCountBefore);
+    expect(await count("select count(*) as n from matters")).toBe(mattersBefore);
+
+    // 4. pot.post -> writes distribution + audit provenance
+    const posted = await call("pot.post", { code: "door-event", day: "2026-11-20" });
+    expect(posted.statusCode, posted.body).toBe(200);
+    const distId = posted.json().result.distribution.id as number;
+    expect(posted.json().result.distribution.baseMills).toBe(60_000);
+
+    // 5. pot.reverse -> reverses distribution + audit provenance
+    const reversed = await call("pot.reverse", { distributionId: distId, reason: "перерасчёт владельца" });
+    expect(reversed.statusCode, reversed.body).toBe(200);
+    expect(reversed.json().result.distribution.reversedReason).toBe("перерасчёт владельца");
+
+    // 6. pot.close -> closes live pot; test pot returns 404
+    expect((await call("pot.close", { code: "test-door-pot" })).statusCode).toBe(404);
+    const closedPot = await call("pot.close", { code: "door-event" });
+    expect(closedPot.statusCode, closedPot.body).toBe(200);
+    expect(closedPot.json().result.pot.state).toBe("closed");
+
+    // Verify all pot write audit events recorded owner + key provenance
+    const potAuditTypes = (await testDb.pool.query(
+      "select event_type, source, actor_user_id, metadata ->> 'actorAgentKeyId' as key_id from audit_events where event_type like 'pot.%' order by id asc",
+    )).rows;
+    expect(potAuditTypes.map((r) => r.event_type)).toEqual([
+      "pot.created", "pot.updated", "pot.distribution_posted", "pot.distribution_reversed", "pot.closed",
+    ]);
+    for (const row of potAuditTypes) {
+      expect(row.source).toBe("owner_agent");
+      expect(Number(row.actor_user_id)).toBe(boss);
+      expect(Number(row.key_id)).toBe(ownerKeyId);
+    }
+  });
 });

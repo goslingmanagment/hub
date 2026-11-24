@@ -532,7 +532,7 @@ export async function syncUnroutedPotMatter(db: Database, now: Date): Promise<nu
 export async function readPotsList(
   app: PotsApp,
   principal: HumanAuthPrincipal,
-  options: { fetchImpl?: typeof fetch; now?: Date } = {},
+  options: { fetchImpl?: typeof fetch; now?: Date; includeLegacyArchive?: boolean } = {},
 ): Promise<PotsListResponse> {
   const now = options.now ?? new Date();
   const realm = realmOf(principal);
@@ -541,9 +541,11 @@ export async function readPotsList(
     listMatterPageLabels(app.db),
     listPotCatalogModelsAndPages(app.db, realm),
     listPersonRows(app.db, realm),
-    realm === "test"
-      ? Promise.resolve({ available: false, error: "В тестовой команде архив ledger не читается", pots: [] as LegacyLedgerPot[] })
-      : readLegacyLedgerPots(app, options),
+    options.includeLegacyArchive === false
+      ? Promise.resolve({ available: false, error: null, pots: [] as LegacyLedgerPot[] })
+      : realm === "test"
+        ? Promise.resolve({ available: false, error: "В тестовой команде архив ledger не читается", pots: [] as LegacyLedgerPot[] })
+        : readLegacyLedgerPots(app, options),
   ]);
 
   return {

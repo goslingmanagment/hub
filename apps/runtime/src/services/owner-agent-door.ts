@@ -9,6 +9,7 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   findPersonRowByCode,
+  findPotByCode,
   findTeamQuestion,
   listActiveSaleDecisions,
   listHandinNames,
@@ -16,6 +17,7 @@ import {
   listHandinSalesByIds,
   listLoginsByPersonCode,
   listPersonLoginRows,
+  listPotCatalogModelsAndPages,
   listSaleClaims,
   listSaleDecisions,
   listTestPageIds,
@@ -33,6 +35,16 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, Unauthor
 import { approveLearnPage, readLearnPage, readLearnPages } from "./learn-pages.ts";
 import { closeMatterAsOwner, commentMatterAsOwner, readMattersList } from "./matters.ts";
 import { readPersonForOwner, updatePerson } from "./people/index.ts";
+import {
+  closePot,
+  createPot,
+  postPotDistribution,
+  previewPotDistribution,
+  readPotDetail,
+  readPotsList,
+  reversePotDistribution,
+  updatePotService,
+} from "./pots.ts";
 import { applySaleDecision, cancelSaleDecisionApplied, linkUnlinkedDecision, ownerAgentSettleBy, readUnlinkedDecisions } from "./sale-claims.ts";
 import { closeSaleQuestionAsOwner, saleDecisionWire, saleDecisionWires } from "./sale-decisions-door.ts";
 import { readStoredShiftReport, readStoredShiftReportVersions, readStoredShiftReports } from "./shift-handins.ts";
@@ -227,6 +239,30 @@ async function swapQuestion(app: OwnerApp, questionId: number) {
   if (row === null || !live(row.pageId)) throw new NotFoundError("No such question");
   if (row.kind !== "swap" || row.swap === null) throw new ConflictError("The question is not a swap's", { reason: "not_swap" });
   return row;
+}
+
+/** A pot of the live realm by its code, or 404 (a test pot answers as one that does not exist). */
+async function livePotByCode(db: Database, code: string) {
+  const pot = await findPotByCode(db, code);
+  if (pot === null || pot.isTest) throw new NotFoundError("Общак не найден");
+  return pot;
+}
+
+/** Resolves a live model slug and its page labels to numeric ids (404 on unknown model, 400 on page not in model). */
+async function resolveLiveModelPages(db: Database, modelSlug: string, pageLabels: readonly string[]) {
+  const catalog = await listPotCatalogModelsAndPages(db, "live");
+  const model = catalog.find((item) => item.modelSlug === modelSlug);
+  if (model === undefined) throw new NotFoundError(`Модель «${modelSlug}» не найдена`);
+  const pageByLabel = new Map(model.pages.map((page) => [page.label, page.id]));
+  const pageIds: number[] = [];
+  for (const label of pageLabels) {
+    const id = pageByLabel.get(label);
+    if (id === undefined) {
+      throw new BadRequestError(`Страница «${label}» не принадлежит модели «${modelSlug}»`, { reason: "page_not_in_model" });
+    }
+    if (!pageIds.includes(id)) pageIds.push(id);
+  }
+  return { modelId: model.modelId, pageIds };
 }
 
 export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow<K> } = {
@@ -496,6 +532,113 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
       const live = await livePageCheck(app.db);
       if (decision === undefined || !live(decision.pageId)) throw new NotFoundError("No such decision waiting for a sale");
       return linkUnlinkedDecision(app, owner, args, now, ownerAgentSettleBy(operator));
+    },
+  },
+
+  // ── Общаки в Workboard (H11) ──
+  "pot.list": {
+    console: "potsList",
+    summary: "Workboard pots with live base balances, unrouted pot sales, and live models/people catalog (no ledger call).",
+    run: async (app, owner, _operator, _args, now) => {
+      const { legacyArchive: _ignored, ...rest } = await readPotsList(app, owner, { now, includeLegacyArchive: false });
+      return rest;
+    },
+  },
+  "pot.show": {
+    console: "potDetail",
+    summary: "One pot by its code: eligible sales with remaining base, active participants, and distributions.",
+    run: async (app, owner, _operator, args, now) => {
+      const pot = await livePotByCode(app.db, args.code);
+      return readPotDetail(app, owner, pot.id, now);
+    },
+  },
+  "pot.create": {
+    console: "potCreate",
+    summary: "Create a Workboard pot (page pot or event pot) for a live model and its pages.",
+    run: async (app, owner, operator, args, now) => {
+      const { modelId, pageIds } = await resolveLiveModelPages(app.db, args.modelSlug, args.pageLabels);
+      const { modelSlug: _modelSlug, pageLabels: _pageLabels, ...rest } = args;
+      const saved = await createPot(app, owner, { ...rest, modelId, pageIds }, now);
+      await recordAudit(app, {
+        ...auditOf(operator),
+        eventType: "pot.created",
+        targetUserId: null,
+        metadata: { potId: saved.pot.id, code: saved.pot.code, modelSlug: saved.pot.modelSlug, pageLabels: saved.pot.pageLabels },
+      });
+      return saved;
+    },
+  },
+  "pot.update": {
+    console: "potUpdate",
+    summary: "Update an open Workboard pot (name, pages, intake reasons, dates, participants, formula, autoPost).",
+    run: async (app, owner, operator, args, now) => {
+      const pot = await livePotByCode(app.db, args.code);
+      const pageIds = args.pageLabels === undefined
+        ? undefined
+        : (await resolveLiveModelPages(app.db, pot.modelSlug, args.pageLabels)).pageIds;
+      const { code: _code, pageLabels: _pageLabels, ...rest } = args;
+      const saved = await updatePotService(app, owner, pot.id, { ...rest, ...(pageIds === undefined ? {} : { pageIds }) }, now);
+      await recordAudit(app, {
+        ...auditOf(operator),
+        eventType: "pot.updated",
+        targetUserId: null,
+        metadata: { potId: saved.pot.id, code: saved.pot.code },
+      });
+      return saved;
+    },
+  },
+  "pot.preview": {
+    console: "potDistributionPreview",
+    summary: "Pure preview of a pot distribution in base mills (writes nothing).",
+    run: async (app, owner, _operator, args, now) => {
+      const pot = await livePotByCode(app.db, args.code);
+      const { code: _code, ...rest } = args;
+      return previewPotDistribution(app, owner, pot.id, rest, now);
+    },
+  },
+  "pot.post": {
+    console: "potDistributionPost",
+    summary: "Post an immutable Workboard pot distribution in base mills (emits K2 posted).",
+    run: async (app, owner, operator, args, now) => {
+      const pot = await livePotByCode(app.db, args.code);
+      const { code: _code, ...rest } = args;
+      const posted = await postPotDistribution(app, owner, pot.id, rest, now);
+      await recordAudit(app, {
+        ...auditOf(operator),
+        eventType: "pot.distribution_posted",
+        targetUserId: null,
+        metadata: { potId: pot.id, code: pot.code, distributionId: posted.distribution.id, day: posted.distribution.day, baseMills: posted.distribution.baseMills },
+      });
+      return posted;
+    },
+  },
+  "pot.reverse": {
+    console: "potDistributionReverse",
+    summary: "Reverse a posted Workboard pot distribution once with a reason (restores remaining base and emits K2 reversed).",
+    run: async (app, owner, operator, args, now) => {
+      const reversed = await reversePotDistribution(app, owner, args.distributionId, { reason: args.reason }, now);
+      await recordAudit(app, {
+        ...auditOf(operator),
+        eventType: "pot.distribution_reversed",
+        targetUserId: null,
+        metadata: { distributionId: reversed.distribution.id, potId: reversed.distribution.potId, reason: args.reason },
+      });
+      return reversed;
+    },
+  },
+  "pot.close": {
+    console: "potClose",
+    summary: "Close an open Workboard pot (historical posted distributions stay intact).",
+    run: async (app, owner, operator, args, now) => {
+      const pot = await livePotByCode(app.db, args.code);
+      const closed = await closePot(app, owner, pot.id, now);
+      await recordAudit(app, {
+        ...auditOf(operator),
+        eventType: "pot.closed",
+        targetUserId: null,
+        metadata: { potId: closed.pot.id, code: closed.pot.code },
+      });
+      return closed;
     },
   },
 };

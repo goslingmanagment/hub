@@ -8,6 +8,8 @@ import type {
   PotUpdateBody,
 } from "@agency_hub_core/contracts";
 
+import { millsFromDollars, millsFromInteger, millsToNumber } from "@agency_hub_core/shared";
+
 import { demoError, type DemoHandlers } from "../core.ts";
 import { DEMO_DATA_PAGES, DEMO_MODELS, DEMO_USERS } from "../world.ts";
 
@@ -239,14 +241,21 @@ function computeDemoLines(baseMills: number, formula: PotFormula, participants: 
   }
   if (formula.kind === "weights") {
     const raw = (formula.params.weights ?? {}) as Record<string, number>;
-    const pairs = sorted.map((code) => ({ code, w: Math.max(1, Math.round(Number(raw[code] ?? 1) * 1000)) }));
-    const totalW = pairs.reduce((s, p) => s + p.w, 0);
-    let rem = baseMills;
-    const rows = pairs.map((p) => {
-      const share = Math.floor((baseMills * p.w) / totalW);
-      rem -= share;
-      return { personCode: p.code, baseMills: share, basis: `${raw[p.code] ?? 1}/${pairs.reduce((s, x) => s + Number(raw[x.code] ?? 1), 0)}` };
+    const totalBase = millsFromInteger(baseMills);
+    const pairs = sorted.map((code) => {
+      const weight = Number(raw[code] ?? 1);
+      const scaled = millsFromDollars(weight > 0 ? weight : 1);
+      return { code, weight: weight > 0 ? weight : 1, scaled: scaled > 0n ? scaled : 1n };
     });
+    const totalScaled = pairs.reduce((s, p) => s + p.scaled, 0n);
+    const totalDisplay = pairs.reduce((s, x) => s + x.weight, 0);
+    let distributed = 0n;
+    const rows = pairs.map((p) => {
+      const share = (totalBase * p.scaled) / totalScaled;
+      distributed += share;
+      return { personCode: p.code, baseMills: millsToNumber(share), basis: `по весам (${p.weight}/${totalDisplay})` };
+    });
+    const rem = Number(totalBase - distributed);
     for (let i = 0; i < rem; i++) rows[i % rows.length]!.baseMills += 1;
     return rows;
   }
