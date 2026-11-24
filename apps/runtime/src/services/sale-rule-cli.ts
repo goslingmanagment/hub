@@ -81,7 +81,7 @@ export function registerSaleRuleCommands(program: Command): void {
       try {
         const now = new Date();
         const to = options.to === undefined ? now : new Date(Math.min(now.getTime(), mskStart(String(options.to)).getTime() + DAY_MS));
-        const result = await refreshSaleHomes(app.db, { from: mskStart(String(options.from)), to, now });
+        const result = await refreshSaleHomes(app.db, { from: mskStart(String(options.from)), to });
         console.log(`sale homes: ${result.sales} sales, ${result.written} rows written`);
       } finally {
         await app.close();

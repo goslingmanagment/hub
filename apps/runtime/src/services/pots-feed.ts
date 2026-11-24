@@ -95,8 +95,8 @@ export async function readPotDistributionsFeed(
     if (dist === undefined) continue;
     changes.push({
       seq: change.seq,
-      change: change.change,
-      at: change.at.toISOString(),
+      change: dist.reversedAt === null ? change.change : "reversed",
+      at: (dist.reversedAt ?? change.at).toISOString(),
       distribution: {
         id: dist.id,
         pot: {

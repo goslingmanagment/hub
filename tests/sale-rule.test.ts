@@ -8,6 +8,7 @@ import {
   homeOfSale,
   homesOfSales,
   slotRuns,
+  splitShares,
   weekdayOfDay,
   type RuleMark,
   type RuleSale,
@@ -144,6 +145,12 @@ describe("ledger split_test.go, case by case", () => {
     expectHome(homeOfSale(one, [a, b], [], later), "decide", "no_last_writer");
     // A third chatter wrote last: still neither of theirs.
     expectHome(homeOfSale({ ...one, lastWriter: 103 }, [a, b], [], later), "decide", "no_last_writer");
+  });
+
+  it("preserves every mill in a ten-way split of a small sale", () => {
+    const shares = splitShares(7, Array.from({ length: 10 }, (_, i) => ({ userId: i + 1, percent: 10 })));
+    expect(shares.every((share) => share.mills === 0 || share.mills === 1)).toBe(true);
+    expect(shares.reduce((sum, share) => sum + share.mills, 0)).toBe(7);
   });
 
   it("a decision the owner split goes by his percents, the last taking the rounding", () => {

@@ -7,7 +7,11 @@ import {
   createFanslyPage,
   createModel,
   insertAgentKey,
+  insertSaleDecision,
   listOpenMattersOfKinds,
+  listPotDistributions,
+  listWorkingPagesOnDay,
+  placePotDistributionChanges,
   listSaleHomeRefreshDue,
   setAgentKeyPages,
 } from "@agency_hub_core/db";
@@ -15,16 +19,27 @@ import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, principalOfLogin, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import {
   POT_NO_PARTICIPANTS_KIND,
   POT_SALE_LEFT_KIND,
   POT_UNROUTED_KIND,
+  closePot,
+  createPagePots,
+  createPot,
+  postPotDistribution,
+  reconcilePotsOfDay,
+  updatePotService,
+  reversePotDistribution,
   setPotsFromSwitch,
 } from "../apps/runtime/src/services/pots.ts";
+import { createPerson, updatePerson } from "../apps/runtime/src/services/people/index.ts";
+import { cancelSaleDecisionApplied } from "../apps/runtime/src/services/sale-claims.ts";
+import { readPotDistributionsFeed } from "../apps/runtime/src/services/pots-feed.ts";
 import { recordSaleDecision } from "../apps/runtime/src/services/sale-decisions-door.ts";
 import { refreshSaleHomesForDay } from "../apps/runtime/src/services/sale-homes.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
@@ -102,6 +117,29 @@ async function insertSale(input: {
     );
   }
   return Number(res.rows[0].id);
+}
+
+async function fixturePot(tag: string, options: { autoPost?: boolean; pageWorkers?: boolean } = {}) {
+  await setPotsFromSwitch(app.db, { potsFrom: "2026-11-18", setBy: "test", at: msk("2026-11-18 09:00") });
+  const code = `synthetic-${tag}`;
+  const model = (await createModel(app.db, { slug: code, name: code }))!;
+  const page = (await createFanslyPage(app.db, { modelId: model.id, label: code }))!;
+  const owner = (await principalOfLogin(app, ownerUserId))!;
+  const now = msk("2026-12-20 18:00");
+  const worker = "synthetic-listed";
+  if (!options.pageWorkers && !(await testDb!.pool.query("select id from people where code = $1", [worker])).rowCount) {
+    await createPerson(app, { code: worker, displayName: worker, role: "chatter", state: "working" }, { source: "cli" }, msk("2026-11-01 09:00"));
+  }
+  const { pot } = await createPot(app, owner, {
+    code, name: code, modelId: model.id, pageIds: [page.id], opensOn: "2026-12-01", closesOn: null,
+    participantsMode: options.pageWorkers ? "page_workers" : "listed",
+    participants: options.pageWorkers ? [] : [{ personCode: worker, fromDay: "2026-12-01", toDay: null }],
+    intakeReasons: ["post_tip", "campaign"], formula: { kind: "equal", params: {} }, autoPost: options.autoPost ?? true,
+  }, now);
+  const sale = (day: string) => insertSale({ pageId: page.id, occurredAt: msk(`${day} 12:00`), postTip: true, netMills: 17 });
+  const refresh = (day: string) => refreshSaleHomesForDay(app.db, day, now);
+  const distributions = () => listPotDistributions(app.db, pot.id);
+  return { pot, page, owner, now, sale, refresh, distributions, worker };
 }
 
 interface K2FeedAnswer {
@@ -274,16 +312,14 @@ describe("Workboard pots (0443, H11)", () => {
     chatterCookie = String(alexLogin.headers["set-cookie"]).split(";")[0]!;
 
     // Register Alex & Kate in the people registry with working pages (mia-1, nova-1; nobody works mia-empty).
-    const r1 = await asOwner("POST", "/api/v1/admin/people", {
+    await createPerson(app, {
       code: "alex", displayName: "Alex", role: "chatter", state: "working",
       logins: { add: [alexUserId] }, workingPageLabels: ["mia-1", "nova-1"],
-    });
-    expect(r1.statusCode, r1.body).toBe(200);
-    const r2 = await asOwner("POST", "/api/v1/admin/people", {
+    }, { source: "cli" }, msk("2026-11-01 09:00"));
+    await createPerson(app, {
       code: "kate", displayName: "Kate", role: "chatter", state: "working",
       logins: { add: [kateUserId] }, workingPageLabels: ["mia-1"],
-    });
-    expect(r2.statusCode, r2.body).toBe(200);
+    }, { source: "cli" }, msk("2026-11-01 09:00"));
   }, 180_000);
 
   afterAll(async () => {
@@ -627,4 +663,218 @@ describe("Workboard pots (0443, H11)", () => {
     expect(releasedFeed.changes[0]!.distribution.inflows[0]!.transactionId).toBe(novaSale);
     expect(releasedFeed.changes[0]!.seq).toBeGreaterThan(heldSeq);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps historical parts through closure and rejects edits that remove their coverage", async (context) => {
+    if (!testDb) return context.skip();
+    const f = await fixturePot("closure");
+    const day = "2026-12-03";
+    await f.sale(day);
+    await f.refresh(day);
+    const [posted] = await f.distributions();
+    expect(posted?.reversedAt).toBeNull();
+    for (const edit of [{ intakeReasons: ["campaign"] }, { opensOn: "2026-12-04" }, { closesOn: "2026-12-02" }] satisfies Array<Parameters<typeof updatePotService>[3]>) {
+      await expect(updatePotService(app, f.owner, f.pot.id, edit, f.now))
+        .rejects.toMatchObject({ statusCode: 409, reason: "posted_coverage" });
+    }
+    await closePot(app, f.owner, f.pot.id, f.now);
+    const { created } = await createPagePots(app, f.owner, {}, f.now);
+    expect(created.find((p) => p.pageIds.includes(f.page.id))?.opensOn).toBe("2026-12-20");
+    await f.refresh(day);
+    expect((await f.distributions())[0]).toMatchObject({ id: posted!.id, reversedAt: null });
+  });
+
+  it("a manual reversal suppresses only automatic reposts until the recipients change", async (context) => {
+    if (!testDb) return context.skip();
+    const f = await fixturePot("hold");
+    const day = "2026-12-05";
+    const transactionId = await f.sale(day);
+    await f.refresh(day);
+    const [first] = await f.distributions();
+    await reversePotDistribution(app, f.owner, first!.id, { reason: "Synthetic correction" }, f.now);
+    await f.refresh(day);
+    expect(await f.distributions()).toHaveLength(1);
+    const manual = await postPotDistribution(app, f.owner, f.pot.id, { day, parts: [{ transactionId, baseMills: 5 }] }, f.now);
+    expect(manual.distribution.baseMills).toBe(5);
+    await f.refresh(day);
+    expect(await f.distributions()).toHaveLength(2);
+    const extra = "synthetic-recipient";
+    await createPerson(app, { code: extra, displayName: extra, role: "chatter", state: "working" }, { source: "cli" }, msk("2026-12-01 09:00"));
+    await updatePotService(app, f.owner, f.pot.id, {
+      participants: [...f.pot.participants, { personCode: extra, fromDay: day, toDay: null }],
+    }, f.now);
+    await f.refresh(day);
+    expect((await f.distributions()).filter((d) => d.reversedAt === null).map((d) => d.baseMills).sort()).toEqual([12, 5]);
+  });
+
+  it("keeps a manual batch and its owner matter when a different part's day is refreshed", async (context) => {
+    if (!testDb) return context.skip();
+    const f = await fixturePot("batch", { autoPost: false });
+    const days = ["2026-12-07", "2026-12-08"] as const;
+    const first = await f.sale(days[0]);
+    const second = await f.sale(days[1]);
+    for (const day of days) await f.refresh(day);
+    const posted = await postPotDistribution(app, f.owner, f.pot.id, {
+      day: days[1], parts: [first, second].map((transactionId) => ({ transactionId, baseMills: 17 })),
+    }, f.now);
+    await updatePotService(app, f.owner, f.pot.id, { autoPost: true }, f.now);
+    await testDb.pool.query("update sale_homes set home = 'nobody', pot = null where transaction_id = $1", [first]);
+    for (const day of days) {
+      await app.db.transaction((tx) => reconcilePotsOfDay(tx as unknown as AppContext["db"], day, f.now));
+      expect((await listOpenMattersOfKinds(app.db, [POT_SALE_LEFT_KIND])).map((m) => m.key))
+        .toContain(`${POT_SALE_LEFT_KIND}:${posted.distribution.id}`);
+      expect((await f.distributions())[0]?.reversedAt).toBeNull();
+    }
+    await f.refresh(days[0]);
+    expect((await listOpenMattersOfKinds(app.db, [POT_SALE_LEFT_KIND])).map((m) => m.key))
+      .not.toContain(`${POT_SALE_LEFT_KIND}:${posted.distribution.id}`);
+  });
+
+  it("uses the sale day's roster and state for auto-posts and solo suggestions", async (context) => {
+    if (!testDb) return context.skip();
+    const f = await fixturePot("roster", { pageWorkers: true });
+    const early = "2026-12-01";
+    const hire = msk("2026-12-15 09:00");
+    const late = "synthetic-late";
+    await f.sale(early);
+    await f.refresh(early);
+    await createPerson(app, { code: late, displayName: late, role: "chatter", state: "invited",
+      workingPageLabels: [f.page.label] }, { source: "cli" }, msk("2026-12-01 08:00"));
+    await updatePerson(app, late, { state: "working" }, { source: "cli" }, hire);
+    await f.refresh(early);
+    expect(await f.distributions()).toHaveLength(0);
+
+    const departed = "synthetic-departed";
+    await createUserAccount(app, { username: departed, role: "chatter" }, { source: "cli" });
+    const userId = await fixtureUserId(app, departed);
+    await createPerson(app, { code: departed, displayName: departed, role: "chatter", state: "working",
+      logins: { add: [userId] }, workingPageLabels: [f.page.label] }, { source: "cli" }, msk("2026-12-01 08:00"));
+    await updatePerson(app, departed, { workingPageLabels: [], state: "left", leftOn: "2026-12-10" }, { source: "cli" }, msk("2026-12-10 12:00"));
+    const nobody = await insertSale({ pageId: f.page.id, occurredAt: msk("2026-12-01 14:00"), netMills: 11 });
+    await f.refresh(early);
+    expect((await f.distributions())[0]?.lines).toMatchObject([{ personCode: departed, baseMills: 17 }]);
+    const suggested = await testDb.pool.query("select h.home, h.shares, p.code from sale_homes h join people p on p.id = h.suggested_person_id where h.transaction_id = $1", [nobody]);
+    expect(suggested.rows).toEqual([{ home: "nobody", shares: [], code: departed }]);
+    const sameDay = "synthetic-same-day";
+    await createPerson(app, { code: sameDay, displayName: sameDay, role: "chatter", state: "working", workingPageLabels: [f.page.label] }, { source: "cli" }, hire);
+    await updatePerson(app, sameDay, { workingPageLabels: [] }, { source: "cli" }, hire);
+    const person = (await testDb.pool.query("select id from people where code = $1", [sameDay])).rows[0]!;
+    expect(await listWorkingPagesOnDay(app.db, [Number(person.id)], "2026-12-15")).toEqual([]);
+  });
+
+  it("releases only canonical reversals across two keys and one-row pages, even after deleting the highest position", async (context) => {
+    if (!testDb) return context.skip();
+    const f = await fixturePot("feed");
+    const day = "2026-12-11";
+    const start = (await readPotDistributionsFeed(app, { pageIds: [], limit: 500 })).next;
+    await f.sale(day);
+    await f.refresh(day);
+    const [dist] = await f.distributions();
+    const secondKey = await insertAgentKey(app.db, {
+      name: "synthetic-feed-two", keyPrefix: "synthetic", keyDigest: sha256Hex("synthetic-feed-two"),
+      capabilities: ["read:money"], pageIds: [], expiresAt: new Date(Date.now() + 86_400_000), createdBy: ownerUserId,
+    });
+    const read = (key: number, since: string, granted: boolean) => readPotDistributionsFeed(app, {
+      agentKeyId: key, since, limit: 1, pageIds: granted ? [f.page.id] : [],
+    });
+    const held = await read(agentKeyId, start, false);
+    expect(held.held.some((c) => c.distributionId === dist!.id)).toBe(true);
+    await read(secondKey.id, start, false);
+    await reversePotDistribution(app, f.owner, dist!.id, { reason: "Synthetic reversal" }, f.now);
+    const canonical = await readPotDistributionsFeed(app, { pageIds: [f.page.id], since: start, limit: 1 });
+    expect(canonical.changes).toMatchObject([{ change: "reversed", at: f.now.toISOString() }]);
+    expect((await read(secondKey.id, held.next, false)).held.some((c) => c.distributionId === dist!.id)).toBe(true);
+    for (const id of [agentKeyId, secondKey.id]) {
+      const restored = await read(id, held.next, true);
+      expect(restored.changes).toMatchObject([{ change: "reversed", distribution: { id: dist!.id } }]);
+      expect(restored.held.some((c) => c.distributionId === dist!.id)).toBe(false);
+    }
+    const top = (await testDb.pool.query("select max(seq) as seq from pot_distribution_changes")).rows[0]!.seq;
+    await testDb.pool.query("delete from pot_distribution_changes where seq = $1", [top]);
+    await f.sale(day);
+    await f.refresh(day);
+    await placePotDistributionChanges(app.db);
+    expect((await read(agentKeyId, top, true)).changes[0]!.seq).toBeGreaterThan(Number(top));
+  });
+
+
+  it("requires a human recipient, a nonempty selection and a valid distribution day", async (context) => {
+    if (!testDb) return context.skip();
+    const f = await fixturePot("validation", { autoPost: false });
+    const day = "2026-12-10";
+    const transactionId = await f.sale(day);
+    await f.refresh(day);
+    const parts = [{ transactionId, baseMills: 17 }];
+    const post = (body: Parameters<typeof postPotDistribution>[3]) => postPotDistribution(app, f.owner, f.pot.id, body, f.now);
+    await expect(post({ day, parts: [] })).rejects.toMatchObject({ reason: "empty_parts" });
+    const invalid = await asOwner("POST", `/api/v1/pots/${f.pot.id}/distributions`, { day, parts: [] });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.body).toContain("empty_parts");
+    for (const wrong of ["2026-12-09", "2026-12-21"]) {
+      await expect(post({ day: wrong, parts })).rejects.toMatchObject({ reason: "invalid_distribution_day" });
+    }
+    const agent = "synthetic-calculator";
+    await createPerson(app, { code: agent, displayName: agent, kind: "agent", role: "agent", state: "working" }, { source: "cli" }, f.now);
+    for (const formula of [
+      { kind: "manual" as const, params: { shares: { [agent]: 17 } } },
+      { kind: "weights" as const, params: { weights: { [agent]: 1, [f.worker]: 1 } } },
+    ]) {
+      await expect(post({ day, parts, formula })).rejects.toMatchObject({ reason: "person_unknown" });
+    }
+    expect(await f.distributions()).toHaveLength(0);
+  });
+
+  it("flags a reduction below the posted base and a vanished sale for the owner", async (context) => {
+    if (!testDb) return context.skip();
+    const f = await fixturePot("correction");
+    const day = "2026-12-12";
+    const transactionId = await f.sale(day);
+    await f.refresh(day);
+    const [posted] = await f.distributions();
+    await testDb.pool.query("update transactions set creator_net_amount_mills = 13 where id = $1", [transactionId]);
+    await f.refresh(day);
+    expect((await listOpenMattersOfKinds(app.db, ["pot.excess_base"])).map((m) => m.evidence))
+      .toContainEqual({ transactionId, distributed: 17, netMills: 13 });
+    expect((await f.distributions())[0]?.reversedAt).toBeNull();
+    await testDb.pool.query("delete from transactions where id = $1", [transactionId]);
+    await f.refresh(day);
+    expect((await listOpenMattersOfKinds(app.db, [POT_SALE_LEFT_KIND])).map((m) => m.key))
+      .toContain(`${POT_SALE_LEFT_KIND}:${posted!.id}`);
+    expect((await f.distributions())[0]?.reversedAt).toBeNull();
+  });
+
+  it("commits cancellation before waiting for a pot editor that needs the same refresh day", async (context) => {
+    if (!testDb) return context.skip();
+    const f = await fixturePot("cancellation");
+    const day = "2026-12-13";
+    const transactionId = await f.sale(day);
+    const decision = await insertSaleDecision(app.db, {
+      transactionId, pageId: f.page.id, kind: "nobody", shares: [], pot: null, outcome: "nobody", ruleHome: "pot",
+      note: "Synthetic decision", decidedByUserId: ownerUserId, decidedAt: f.now, saidBy: "owner", source: "dispute",
+      ledgerDecisionId: null, ledgerRef: null,
+    }, f.now);
+    if (!decision) throw new Error("Synthetic decision was not created");
+    await f.refresh(day);
+    const editor = await testDb.pool.connect();
+    let cancel: Promise<unknown> | undefined;
+    try {
+      await editor.query("begin");
+      await editor.query("select pg_advisory_xact_lock(hashtextextended('workboard_pots', 0))");
+      cancel = cancelSaleDecisionApplied(app, {
+        decisionId: decision.id, note: "Synthetic cancellation",
+        by: { door: "workboard", actorUserId: ownerUserId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
+        check: async (row) => { if (!row) throw new Error("missing decision"); return row; },
+      }, f.now);
+      await waitForRowLockWait(testDb.pool, ["%pg_advisory_xact_lock%", "%workboard_pots%"], { blocked: cancel });
+      await editor.query(`insert into sale_home_refresh_due(day) values ($1)
+        on conflict (day) do update set generation = sale_home_refresh_due.generation + 1`, [day]);
+      await editor.query("commit");
+      await cancel;
+      expect((await f.distributions())[0]?.reversedAt).toBeNull();
+    } finally {
+      await editor.query("rollback");
+      editor.release();
+      await cancel;
+    }
+  });
+
 });

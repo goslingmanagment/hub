@@ -14,6 +14,7 @@ import type {
   PotUpdateBody,
 } from "@agency_hub_core/contracts";
 import {
+  clearPotAutoPostHold,
   closeMatter,
   closePotRow,
   countActivePotDistributions,
@@ -21,22 +22,23 @@ import {
   findPotByCode,
   findPotById,
   findPotDistributionById,
+  hasLiveDistributionsBefore,
+  holdPotAutoPost,
   insertPot,
   insertPotDistribution,
   listActivePotPartsForDay,
   listHandinNames,
   listMatterPageLabels,
   listOpenMattersOfKinds,
-  listPersonDayLineRows,
   listPersonRows,
-  listPersonScheduleSlotRows,
-  listPersonWorkingPageRows,
+  listPotAutoPostHolds,
   listPotCatalogModelsAndPages,
   listPotDistributions,
   listPotSaleHomesSince,
   listPots,
   listSaleHomesForPotCheck,
   lockWorkboardPots,
+  losesPostedPotCoverage,
   openMatter,
   readPotsSwitch,
   reversePotDistributionRow,
@@ -66,12 +68,11 @@ import {
   potCoversPageDay,
   resolvePotParticipants,
   routePotOfSale,
-  type PotPersonCandidate,
   type PotRoutingSpec,
 } from "./pots-rules.ts";
-import { POT_OBSHAK, type RuleSlot } from "./sale-rule.ts";
+import { POT_OBSHAK } from "./sale-rule.ts";
 import { realmOf, requireSameRealm } from "./sandbox/realm.ts";
-import { RULE_WEEKDAYS, type RuleWeekday } from "./schedule-slots.ts";
+import { loadParticipantContext, type ParticipantLookupContext } from "./page-workers.ts";
 import { dayWords } from "./shift-handin-rules.ts";
 
 /**
@@ -90,9 +91,7 @@ import { dayWords } from "./shift-handin-rules.ts";
 
 type PotsApp = Pick<AppContext, "db" | "config" | "logger">;
 
-const DAY_MS = 86_400_000;
 const SYSTEM: MatterActor = { door: "system" };
-const WEEKDAY_SET: ReadonlySet<string> = new Set(RULE_WEEKDAYS);
 
 export const POT_UNROUTED_KIND = "pot.unrouted";
 export const POT_NO_PARTICIPANTS_KIND = "pot.no_participants";
@@ -244,7 +243,7 @@ export async function validatePotDecisionTarget(
     const pot = parsed.pot;
     const pageCovered = pot.pages.includes(input.pageLabel);
     const dayCovered = pot.starts_at <= input.day && (pot.ends_at === null || input.day <= pot.ends_at);
-    if (!pageCovered || !dayCovered) {
+    if (pot.status !== "open" || !pageCovered || !dayCovered) {
       throw new ConflictError(
         `На ${input.day} общак «${explicit}» не покрывает страницу ${input.pageLabel} (срок ${pot.starts_at}..${pot.ends_at ?? "без конца"})`,
         { reason: "pot_not_covered" },
@@ -273,6 +272,10 @@ export async function setPotsFromSwitch(
       }
       await setPotsSwitch(tx, { potsFrom: null, setBy: input.setBy, at: input.at });
     } else {
+      const current = await readPotsSwitch(tx);
+      if ((current.potsFrom === null || input.potsFrom > current.potsFrom) && await hasLiveDistributionsBefore(tx, input.potsFrom)) {
+        throw new ConflictError("До выбранной даты уже есть проведённые раздачи", { reason: "distributions_exist" });
+      }
       await setPotsSwitch(tx, { potsFrom: input.potsFrom, setBy: input.setBy, at: input.at });
       await enqueueSaleHomeRefreshForPages(tx, { pageIds: null, fromDay: input.potsFrom });
     }
@@ -281,49 +284,6 @@ export async function setPotsFromSwitch(
 }
 
 // ── Participant loading helper (matches H8 `liveNobodyContext`) ──────────────
-
-interface ParticipantLookupContext {
-  people: PotPersonCandidate[];
-  workingPages: Array<{ personId: number; pageId: number }>;
-  slots: RuleSlot[];
-}
-
-async function loadParticipantContext(
-  db: Database,
-  realm: "live" | "test",
-  day: string,
-): Promise<ParticipantLookupContext> {
-  const peopleRows = await listPersonRows(db, realm);
-  const personIds = peopleRows.map((person) => person.id);
-  if (personIds.length === 0) return { people: [], workingPages: [], slots: [] };
-  const workingPages = await listPersonWorkingPageRows(db, personIds);
-  const standing = await listPersonScheduleSlotRows(db, personIds);
-  const dayMs = Date.parse(`${day}T00:00:00+03:00`);
-  const personIdSet = new Set(personIds);
-  const dayLines = Number.isNaN(dayMs)
-    ? []
-    : (await listPersonDayLineRows(db, { from: moscowDayOf(dayMs - DAY_MS), to: moscowDayOf(dayMs + DAY_MS) }))
-      .filter((row) => personIdSet.has(row.personId));
-  const slots: RuleSlot[] = [...standing, ...dayLines].map((slot) => ({
-    personId: slot.personId,
-    pageId: slot.pageId,
-    startMinute: slot.startMinute,
-    endMinute: slot.endMinute,
-    weekdays: slot.weekdays === null ? null : slot.weekdays.filter((d): d is RuleWeekday => WEEKDAY_SET.has(d)),
-    validFrom: slot.validFrom,
-    validTo: slot.validTo,
-    ...(slot.kind === null ? {} : { day: slot.kind }),
-  }));
-  const people: PotPersonCandidate[] = peopleRows.map((person) => ({
-    personId: person.id,
-    code: person.code,
-    kind: person.kind,
-    role: person.role,
-    state: person.state,
-    leftOn: person.leftOn,
-  }));
-  return { people, workingPages, slots };
-}
 
 function routingSpecsOf(pots: readonly PotRow[]): PotRoutingSpec[] {
   return pots.map((pot) => ({
@@ -339,6 +299,12 @@ function routingSpecsOf(pots: readonly PotRow[]): PotRoutingSpec[] {
 
 function uniqueReasons(reasons: readonly PotIntakeReason[]): PotIntakeReason[] {
   return [...new Set(reasons)].sort() as PotIntakeReason[];
+}
+
+function validateOpeningDay(opensOn: string, potsFrom: string | null) {
+  if (potsFrom !== null && opensOn < potsFrom) {
+    throw new BadRequestError("Дата открытия раньше даты включения общаков", { reason: "before_pots_from" });
+  }
 }
 
 function validatePotConfig(input: {
@@ -568,18 +534,18 @@ export async function readPotDetail(
   principal: HumanAuthPrincipal,
   potId: number,
   now: Date = new Date(),
+  participantDay = moscowDayOf(now.getTime()),
 ): Promise<PotDetailResponse> {
   const pot = await findPotById(app.db, potId);
   if (pot === null) throw new NotFoundError("Общак не найден");
   requireSameRealm(principal, pot.isTest, () => new NotFoundError("Общак не найден"));
 
   const realm = pot.isTest ? "test" : "live";
-  const today = moscowDayOf(now.getTime());
   const [snapshot, pages, distributions, participantCtx] = await Promise.all([
     computeRealmPotSnapshot(app.db, realm),
     listMatterPageLabels(app.db),
     listPotDistributions(app.db, pot.id),
-    loadParticipantContext(app.db, realm, today),
+    loadParticipantContext(app.db, realm, participantDay),
   ]);
 
   const routedEntries = snapshot.routedSalesByPot.get(pot.id) ?? [];
@@ -607,7 +573,7 @@ export async function readPotDetail(
   });
 
   const activeParticipants = resolvePotParticipants({
-    day: today,
+    day: participantDay,
     mode: pot.participantsMode,
     pageIds: pot.pageIds,
     listed: pot.participants,
@@ -639,7 +605,7 @@ export async function createPot(
 
   const pageIds = [...new Set(body.pageIds)].sort((a, b) => a - b);
   const people = await listPersonRows(app.db, realm);
-  const knownPeople = new Set(people.map((p) => p.code));
+  const knownPeople = new Set(people.filter((p) => p.kind === "human").map((p) => p.code));
   const intakeReasons = uniqueReasons(body.intakeReasons);
   validatePotConfig({
     pageIds,
@@ -656,6 +622,8 @@ export async function createPot(
   const created = await app.db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await lockWorkboardPots(tx);
+    const { potsFrom } = await readPotsSwitch(tx);
+    validateOpeningDay(body.opensOn, potsFrom);
     const existing = await findPotByCode(tx, body.code);
     if (existing !== null) throw new ConflictError(`Общак с кодом «${body.code}» уже существует`, { reason: "code_taken" });
     const row = await insertPot(tx, {
@@ -672,7 +640,6 @@ export async function createPot(
       autoPost: body.autoPost,
       createdByUserId: principal.user.id,
     }, now);
-    const { potsFrom } = await readPotsSwitch(tx);
     if (potsFrom !== null) {
       const fromDay = body.opensOn > potsFrom ? body.opensOn : potsFrom;
       await enqueueSaleHomeRefreshForPages(tx, { pageIds, fromDay });
@@ -701,11 +668,12 @@ export async function updatePotService(
   const model = catalog.find((one) => one.modelId === existing.modelId);
   if (model === undefined) throw new NotFoundError("Модель общака не найдена");
   const people = await listPersonRows(app.db, realm);
-  const knownPeople = new Set(people.map((p) => p.code));
+  const knownPeople = new Set(people.filter((p) => p.kind === "human").map((p) => p.code));
 
   const updated = await app.db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await lockWorkboardPots(tx);
+    const { potsFrom } = await readPotsSwitch(tx);
     const current = await findPotById(tx, potId);
     if (current === null) throw new NotFoundError("Общак не найден");
     if (current.state !== "open") throw new ConflictError("Закрытый общак нельзя редактировать", { reason: "pot_closed" });
@@ -721,6 +689,12 @@ export async function updatePotService(
     const nextFormula = body.formula ?? current.formula;
     const nextAutoPost = body.autoPost ?? current.autoPost;
 
+    if (await losesPostedPotCoverage(tx, current, {
+      pageIds: nextPageIds, opensOn: nextOpensOn, closesOn: nextClosesOn, intakeReasons: nextIntake,
+    })) {
+      throw new ConflictError("Изменение исключает продажу из проведённой раздачи", { reason: "posted_coverage" });
+    }
+    validateOpeningDay(nextOpensOn, potsFrom);
     validatePotConfig({
       pageIds: nextPageIds,
       modelPageIds: new Set(model.pages.map((p) => p.id)),
@@ -745,7 +719,6 @@ export async function updatePotService(
       autoPost: nextAutoPost,
     }, now))!;
 
-    const { potsFrom } = await readPotsSwitch(tx);
     if (potsFrom !== null) {
       const affectedPages = [...new Set([...current.pageIds, ...nextPageIds])];
       const earliestOpen = current.opensOn < nextOpensOn ? current.opensOn : nextOpensOn;
@@ -807,7 +780,7 @@ export async function createPagePots(
     const tx = raw as unknown as Database;
     await lockWorkboardPots(tx);
     const { potsFrom } = await readPotsSwitch(tx);
-    const opensOn = body.opensOn ?? potsFrom ?? today;
+    if (body.opensOn !== undefined) validateOpeningDay(body.opensOn, potsFrom);
     const existing = await listPots(tx, realm);
     const usedCodes = new Set(existing.map((p) => p.code));
     const affectedPageIds: number[] = [];
@@ -825,6 +798,8 @@ export async function createPagePots(
           skippedPageLabels.push(page.label);
           continue;
         }
+        const replacement = existing.some((pot) => pot.state === "closed" && pot.pageIds.includes(page.id));
+        const opensOn = body.opensOn ?? (replacement && (potsFrom === null || today > potsFrom) ? today : potsFrom ?? today);
         const baseCode = `page-${page.label.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || String(page.id)}`.slice(0, 58);
         let code = baseCode;
         let suffix = 2;
@@ -853,7 +828,7 @@ export async function createPagePots(
     }
 
     if (potsFrom !== null && affectedPageIds.length > 0) {
-      const fromDay = opensOn > potsFrom ? opensOn : potsFrom;
+      const fromDay = createdRows.map((pot) => pot.opensOn).sort()[0]!;
       await enqueueSaleHomeRefreshForPages(tx, { pageIds: affectedPageIds, fromDay });
     }
   });
@@ -881,6 +856,7 @@ async function prepareDistributionParts(
   ok: true;
   parts: Array<{ transactionId: number; pageId: number; pageLabel: string; baseMills: number }>;
   baseMills: number;
+  earliestSaleDay: string;
 } | {
   ok: false;
   reason: string;
@@ -891,7 +867,10 @@ async function prepareDistributionParts(
   }
   const specs = routingSpecsOf(input.realmPots);
 
-  if (input.requestedParts !== undefined && input.requestedParts.length > 0) {
+  if (input.requestedParts !== undefined) {
+    if (input.requestedParts.length === 0) {
+      return { ok: false, reason: "empty_parts", message: "Выберите хотя бы одну продажу" };
+    }
     const seenTx = new Set<number>();
     for (const part of input.requestedParts) {
       if (!Number.isSafeInteger(part.baseMills) || part.baseMills <= 0) {
@@ -932,7 +911,7 @@ async function prepareDistributionParts(
       parts.push({ transactionId: home.transactionId, pageId: home.pageId, pageLabel: home.pageLabel, baseMills: req.baseMills });
       baseMills += req.baseMills;
     }
-    return { ok: true, parts, baseMills };
+    return { ok: true, parts, baseMills, earliestSaleDay: [...homes.values()].map((home) => home.day).sort()[0]! };
   }
 
   // Default: all currently eligible sales routed to this pot with remaining base > 0.
@@ -944,18 +923,28 @@ async function prepareDistributionParts(
   const distributedAll = await sumActiveDistributedByTransactions(db, sales.map((s) => s.transactionId));
   const parts: Array<{ transactionId: number; pageId: number; pageLabel: string; baseMills: number }> = [];
   let baseMills = 0;
+  let earliestSaleDay = "";
   for (const sale of sales) {
     const routed = routePotOfSale(sale, specs, input.potsFrom);
     if (routed.status !== "routed" || routed.potId !== input.pot.id) continue;
     const remaining = sale.netMills - (distributedAll.get(sale.transactionId) ?? 0);
     if (remaining <= 0) continue;
+    if (!earliestSaleDay) earliestSaleDay = sale.day;
     parts.push({ transactionId: sale.transactionId, pageId: sale.pageId, pageLabel: sale.pageLabel, baseMills: remaining });
     baseMills += remaining;
   }
   if (parts.length === 0 || baseMills <= 0) {
     return { ok: false, reason: "empty_balance", message: "Нет свободного остатка базы для распределения" };
   }
-  return { ok: true, parts, baseMills };
+  return { ok: true, parts, baseMills, earliestSaleDay };
+}
+
+async function unknownFormulaPeople(db: Database, realm: "live" | "test", formula: PotFormula, recipients: readonly string[]) {
+  const people = await listPersonRows(db, realm);
+  const humans = new Set(people.filter((p) => p.kind === "human").map((p) => p.code));
+  const entries = formula.kind === "manual" ? formula.params.shares : formula.params.weights;
+  const named = entries && typeof entries === "object" ? Object.keys(entries).map((code) => code.trim()).filter(Boolean) : [];
+  return [...new Set([...recipients, ...named])].filter((code) => !humans.has(code));
 }
 
 /** Pure preview («Распределить»): zero DB writes. */
@@ -1017,7 +1006,8 @@ export async function previewPotDistribution(
   }
 
   const prepared = await prepareDistributionParts(app.db, { pot, realmPots, potsFrom, requestedParts: body.parts });
-  if (!prepared.ok) {
+  const dayError = prepared.ok && (day < prepared.earliestSaleDay || day > moscowDayOf(now.getTime()));
+  if (!prepared.ok || dayError) {
     return {
       potId: pot.id,
       day,
@@ -1026,7 +1016,7 @@ export async function previewPotDistribution(
       parts: [],
       baseMills: 0,
       lines: [],
-      error: { reason: prepared.reason, message: prepared.message },
+      error: prepared.ok ? { reason: "invalid_distribution_day", message: "Проверьте день раздачи" } : { reason: prepared.reason, message: prepared.message },
       serverNow: now.toISOString(),
     };
   }
@@ -1047,9 +1037,8 @@ export async function previewPotDistribution(
   }
 
   // For manual formula, also validate that all named people exist in the realm's people registry.
-  if (computed.normalizedFormula.kind === "manual") {
-    const knownCodes = new Set(participantCtx.people.map((p) => p.code));
-    const unknown = computed.lines.filter((line) => !knownCodes.has(line.personCode)).map((line) => line.personCode);
+  if (computed.normalizedFormula.kind !== "equal") {
+    const unknown = await unknownFormulaPeople(app.db, realm, formula, computed.lines.map((line) => line.personCode));
     if (unknown.length > 0) {
       return {
         potId: pot.id,
@@ -1117,6 +1106,9 @@ export async function postPotDistribution(
       throw new ConflictError(prepared.message, { reason: prepared.reason });
     }
 
+    if (day > moscowDayOf(now.getTime()) || day < prepared.earliestSaleDay) {
+      throw new BadRequestError("День раздачи должен быть между первой продажей и сегодняшним днём", { reason: "invalid_distribution_day" });
+    }
     const participantCtx = await loadParticipantContext(tx, realm, day);
     const participants = resolvePotParticipants({
       day,
@@ -1134,8 +1126,7 @@ export async function postPotDistribution(
       throw new ConflictError(computed.message, { reason: computed.reason });
     }
 
-    const knownCodes = new Set(participantCtx.people.map((p) => p.code));
-    const unknown = computed.lines.filter((line) => !knownCodes.has(line.personCode)).map((line) => line.personCode);
+    const unknown = await unknownFormulaPeople(tx, realm, formula, computed.lines.map((line) => line.personCode));
     if (unknown.length > 0) {
       throw new BadRequestError(`Неизвестные коды людей: ${unknown.join(", ")}`, { reason: "person_unknown" });
     }
@@ -1161,6 +1152,31 @@ export async function postPotDistribution(
   if (realm === "live") await syncUnroutedPotMatter(app.db, now).catch(() => undefined);
   const [wire] = await toDistributionWires(app.db, [created]);
   return { distribution: wire!, savedAt: now.toISOString() };
+}
+
+async function syncExcessBaseMatters(tx: Database, checkedHomes: ReadonlyMap<number, PotSaleHomeRow>, now: Date) {
+  if (!checkedHomes.size) return 0;
+  let mattersTouched = 0;
+  const open = new Set((await listOpenMattersOfKinds(tx, ["pot.excess_base"])).map((matter) => matter.key));
+  const totals = await sumActiveDistributedByTransactions(tx, [...checkedHomes.keys()]);
+  for (const sale of checkedHomes.values()) {
+    if (sale.isTest) continue;
+    const distributed = totals.get(sale.transactionId) ?? 0;
+    const key = `pot.excess_base:${sale.transactionId}`;
+    if (distributed > sale.netMills) {
+      const opened = await openMatter(tx, {
+        key, kind: "pot.excess_base", source: "server", object: null, owner: { role: "owner" }, money: true,
+        title: "Распределённая база превышает уточнённую сумму продажи", pageIds: [sale.pageId],
+        evidence: { transactionId: sale.transactionId, distributed, netMills: sale.netMills },
+        link: "/workboard/money/pots",
+      }, SYSTEM, now);
+      if (opened.transition !== "unchanged") mattersTouched += 1;
+    } else if (open.has(key)) {
+      const closed = await closeMatter(tx, { key, how: "resolved", writer: "server" }, SYSTEM, now);
+      if (closed.transition === "closed") mattersTouched += 1;
+    }
+  }
+  return mattersTouched;
 }
 
 /** Reverses a posted distribution once with a mandatory reason, restoring remaining base and emitting K2 `reversed`. */
@@ -1190,7 +1206,17 @@ export async function reversePotDistribution(
       at: now,
     });
     if (!ok) throw new ConflictError("Раздача уже сторнирована", { reason: "already_reversed" });
+    if (existing.postedByUserId === null && existing.parts.length === 1) {
+      const current = (await findPotById(tx, pot.id))!;
+      const ctx = await loadParticipantContext(tx, current.isTest ? "test" : "live", existing.day);
+      const participants = resolvePotParticipants({
+        ...ctx, day: existing.day, mode: current.participantsMode, pageIds: current.pageIds, listed: current.participants,
+      });
+      await holdPotAutoPost(tx, existing.parts[0]!.transactionId, pot.id, participants);
+    }
     if (!pot.isTest) {
+      const homes = await listSaleHomesForPotCheck(tx, existing.parts.map((part) => part.transactionId));
+      await syncExcessBaseMatters(tx, homes, now);
       await closeMatter(tx, { key: `${POT_SALE_LEFT_KIND}:${distributionId}`, how: "resolved", writer: "server" }, SYSTEM, now);
     }
     return (await findPotDistributionById(tx, distributionId))!;
@@ -1226,12 +1252,11 @@ export async function reconcilePotsOfDay(
   day: string,
   now: Date,
 ): Promise<ReconcilePotsDayResult> {
+  await lockWorkboardPots(tx);
   const { potsFrom } = await readPotsSwitch(tx);
   if (potsFrom === null || day < potsFrom) {
     return { autoPosted: 0, autoReversed: 0, mattersTouched: 0 };
   }
-
-  await lockWorkboardPots(tx);
 
   let autoPosted = 0;
   let autoReversed = 0;
@@ -1251,29 +1276,16 @@ export async function reconcilePotsOfDay(
   const activeParts = await listActivePotPartsForDay(tx, day);
   const checkedHomes = await listSaleHomesForPotCheck(tx, activeParts.map((part) => part.transactionId));
   const reversedDistIds = new Set<number>();
-  const manualLeftDistributions = new Map<number, { potCode: string; potName: string; pageIds: Set<number>; txIds: number[] }>();
-  const checkedManualDistIds = new Set<number>();
+  const needsOwnerReview = new Map<number, { potCode: string; potName: string; pageIds: Set<number>; txIds: number[] }>();
+  const checkedLiveDistIds = new Set<number>();
 
   for (const part of activeParts) {
-    const realm = part.isTest ? "test" : "live";
     const currentHome = checkedHomes.get(part.transactionId);
-    const left = hasSaleLeftPot(
-      {
-        potId: part.potId,
-        potCode: part.potCode,
-        potPageIds: part.potPageIds,
-        potOpensOn: part.potOpensOn,
-        potClosesOn: part.potClosesOn,
-        potState: part.potState,
-      },
-      currentHome,
-      specsByRealm[realm],
-      potsFrom,
-    );
-    if (!part.autoPost && !part.isTest) checkedManualDistIds.add(part.distributionId);
+    const left = hasSaleLeftPot(part.potCode, currentHome, potsFrom);
+    if (!part.isTest) checkedLiveDistIds.add(part.distributionId);
     if (!left) continue;
 
-    if (part.autoPost) {
+    if (currentHome !== undefined && part.autoPosted && currentHome.canonicalType !== "chargeback") {
       if (!reversedDistIds.has(part.distributionId)) {
         const ok = await reversePotDistributionRow(tx, {
           distributionId: part.distributionId,
@@ -1285,7 +1297,7 @@ export async function reconcilePotsOfDay(
         reversedDistIds.add(part.distributionId);
       }
     } else if (!part.isTest) {
-      const entry = manualLeftDistributions.get(part.distributionId) ?? {
+      const entry = needsOwnerReview.get(part.distributionId) ?? {
         potCode: part.potCode,
         potName: part.potName,
         pageIds: new Set<number>(),
@@ -1293,11 +1305,11 @@ export async function reconcilePotsOfDay(
       };
       entry.pageIds.add(part.pageId);
       entry.txIds.push(part.transactionId);
-      manualLeftDistributions.set(part.distributionId, entry);
+      needsOwnerReview.set(part.distributionId, entry);
     }
   }
 
-  for (const [distId, info] of manualLeftDistributions) {
+  for (const [distId, info] of needsOwnerReview) {
     const opened = await openMatter(tx, {
       key: `${POT_SALE_LEFT_KIND}:${distId}`,
       kind: POT_SALE_LEFT_KIND,
@@ -1312,11 +1324,14 @@ export async function reconcilePotsOfDay(
     }, SYSTEM, now);
     if (opened.transition !== "unchanged") mattersTouched += 1;
   }
-  for (const distId of checkedManualDistIds) {
-    if (manualLeftDistributions.has(distId)) continue;
-    const closed = await closeMatter(tx, { key: `${POT_SALE_LEFT_KIND}:${distId}`, how: "resolved", writer: "server" }, SYSTEM, now);
+  for (const matter of await listOpenMattersOfKinds(tx, [POT_SALE_LEFT_KIND])) {
+    const distId = Number(matter.evidence.distributionId);
+    if (!checkedLiveDistIds.has(distId) || needsOwnerReview.has(distId)) continue;
+    const closed = await closeMatter(tx, { key: matter.key, how: "resolved", writer: "server" }, SYSTEM, now);
     if (closed.transition === "closed") mattersTouched += 1;
   }
+
+  mattersTouched += await syncExcessBaseMatters(tx, checkedHomes, now);
 
   // 2. Auto-post remaining base for sales on `day` routed to open `auto_post = true` pots.
   const dayPotSales = await listPotSaleHomesSince(tx, { sinceDay: day, day, realm: "both" });
@@ -1325,7 +1340,33 @@ export async function reconcilePotsOfDay(
   const potById = new Map(allPots.map((p) => [p.id, p]));
   const wantNoParticipants = new Set<string>();
 
+  const heldTransactions = new Set<number>();
+  const holds = await listPotAutoPostHolds(tx, day);
+  const heldHomes = await listSaleHomesForPotCheck(tx, holds.map((hold) => hold.transactionId));
+  async function participantsOf(pot: PotRow) {
+    const realm = pot.isTest ? "test" : "live";
+    let ctx = participantCtxCache.get(realm);
+    if (ctx === undefined) {
+      ctx = await loadParticipantContext(tx, realm, day);
+      participantCtxCache.set(realm, ctx);
+    }
+    return resolvePotParticipants({ ...ctx, day, mode: pot.participantsMode, pageIds: pot.pageIds, listed: pot.participants });
+  }
+  for (const hold of holds) {
+    const sale = heldHomes.get(hold.transactionId);
+    const route = sale && routePotOfSale(sale, specsByRealm[sale.isTest ? "test" : "live"], potsFrom);
+    if (route?.status === "routed" && route.potId === hold.potId) {
+      const current = await participantsOf(potById.get(route.potId)!);
+      if (current.length === hold.participants.length && current.every((code, i) => code === hold.participants[i])) {
+        heldTransactions.add(hold.transactionId);
+        continue;
+      }
+    }
+    await clearPotAutoPostHold(tx, hold.transactionId, hold.potId);
+  }
+
   for (const sale of dayPotSales) {
+    if (heldTransactions.has(sale.transactionId)) continue;
     const realm = sale.isTest ? "test" : "live";
     const routed = routePotOfSale(sale, specsByRealm[realm], potsFrom);
     if (routed.status !== "routed") continue;
@@ -1336,20 +1377,7 @@ export async function reconcilePotsOfDay(
     const remaining = sale.netMills - already;
     if (remaining <= 0) continue;
 
-    let ctx = participantCtxCache.get(realm);
-    if (ctx === undefined) {
-      ctx = await loadParticipantContext(tx, realm, day);
-      participantCtxCache.set(realm, ctx);
-    }
-    const participants = resolvePotParticipants({
-      day,
-      mode: pot.participantsMode,
-      pageIds: pot.pageIds,
-      listed: pot.participants,
-      people: ctx.people,
-      workingPages: ctx.workingPages,
-      slots: ctx.slots,
-    });
+    const participants = await participantsOf(pot);
     const noPartKey = `${POT_NO_PARTICIPANTS_KIND}:${pot.code}:${day}`;
     if (participants.length === 0) {
       if (!pot.isTest) {

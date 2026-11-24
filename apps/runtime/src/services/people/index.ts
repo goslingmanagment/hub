@@ -68,6 +68,7 @@ import {
   replacePersonRights,
   replacePersonWorkingPages,
   rewritePersonScheduleSlot,
+  setStaffingDay,
   updatePersonRow,
   upsertPersonPayTerm,
   type PersonAgentKeyRow,
@@ -579,7 +580,7 @@ async function applySchedule(db: Db, personId: number, pageId: number | null, sc
 }
 
 /** Writes a resolved change of an existing person (the row is locked by the caller); moves updated_at. */
-async function applyChange(db: Db, person: PersonRow, change: ResolvedChange, audit: AuditContext): Promise<PersonRow> {
+async function applyChange(db: Db, person: PersonRow, change: ResolvedChange, audit: AuditContext, fromDay: string): Promise<PersonRow> {
   const byUserId = audit.actorUserId ?? null;
   try {
     const prevWorkingPageIds = change.workingPageIds !== undefined
@@ -600,7 +601,7 @@ async function applyChange(db: Db, person: PersonRow, change: ResolvedChange, au
     const affectedUsers = [...new Set([...change.loginsAdd, ...change.loginsRemove, ...prevLoginIds])];
     if (affectedUsers.length > 0) await enqueueSaleHomeRefreshForUsers(db, affectedUsers);
     if (change.workingPageIds !== undefined) {
-      await enqueueSaleHomeRefreshForPages(db, { pageIds: [...new Set([...prevWorkingPageIds, ...change.workingPageIds])], fromDay: null });
+      await enqueueSaleHomeRefreshForPages(db, { pageIds: [...new Set([...prevWorkingPageIds, ...change.workingPageIds])], fromDay });
     }
     if (change.schedule !== undefined) {
       await enqueueSaleHomeRefreshForPages(db, {
@@ -637,10 +638,12 @@ function subjectOf(row: PersonRow): Subject {
 // ── the owner's writes ───────────────────────────────────────────────────────
 
 /** Changes an existing person in the caller's transaction. */
-async function updatePersonTx(db: Db, code: string, fields: ChangeFields, audit: AuditContext): Promise<PersonRow> {
+async function updatePersonTx(db: Db, code: string, fields: ChangeFields, audit: AuditContext, now = new Date()): Promise<PersonRow> {
+  const fromDay = toBusinessDate(now);
+  await setStaffingDay(db, fromDay);
   const person = await requirePerson(db, code, { lock: true });
   const change = await resolveChange(db, subjectOf(person), fields);
-  const updated = await applyChange(db, person, change, audit);
+  const updated = await applyChange(db, person, change, audit, fromDay);
   await recordAudit({ db }, { ...audit, eventType: "person.updated", metadata: changeMetadata(person.code, change) });
   return updated;
 }
@@ -651,7 +654,7 @@ export async function updatePerson(app: Pick<AppContext, "db">, code: string, bo
     const row = await requirePerson(app.db, code);
     requireSameRealm(principal, row.isTest, () => new NotFoundError(`No person «${code}»`));
   }
-  return withAuditTransaction(app, async (db) => personDetail(db, await updatePersonTx(db, code, body, audit), now));
+  return withAuditTransaction(app, async (db) => personDetail(db, await updatePersonTx(db, code, body, audit, now), now));
 }
 
 interface CreatedPerson {
@@ -668,7 +671,10 @@ async function createPersonTx(
   origin: PersonRowOrigin,
   importNotes: PersonImportNoteRow[] = [],
   isTest = false,
+  now = new Date(),
 ): Promise<CreatedPerson> {
+  const fromDay = toBusinessDate(now);
+  await setStaffingDay(db, fromDay);
   const { code, kind: givenKind, invite, payTerms, leadModelSlugs, ...fields } = body;
   if (leadModelSlugs !== undefined && leadModelSlugs.length > 0 && (fields.role !== "team_lead" || (givenKind ?? "human") !== "human")) {
     throw new BadRequestError("«Ведёт команды» is a team lead's");
@@ -705,7 +711,7 @@ async function createPersonTx(
     return conflictOf(error);
   }
   // The record is written; the rest hangs off it through the same edit.
-  row = await applyChange(db, row, { ...change, patch: {} }, audit);
+  row = await applyChange(db, row, { ...change, patch: {} }, audit, fromDay);
   // Money, in the same transaction: a refused term (a model that does not exist, not a human) leaves nothing behind.
   for (const term of payTerms ?? []) row = await setPayTermTx(db, row, term, audit);
   // «Ведёт команды»: the `lead` records in the same transaction (team-roles.ts' one record table); a model of the other
@@ -756,7 +762,7 @@ function refuseForeignLogins(principal: AuthPrincipal | undefined, body: { login
 export async function createPerson(app: AppContext, body: AdminPersonCreateBody, audit: AuditContext, now = new Date(), principal?: AuthPrincipal) {
   refuseForeignLogins(principal, body);
   return withAuditTransaction(app, async (db) => {
-    const created = await createPersonTx(app, db, body, audit, "owner", [], principal !== undefined && realmOf(principal) === "test");
+    const created = await createPersonTx(app, db, body, audit, "owner", [], principal !== undefined && realmOf(principal) === "test", now);
     const detail = await personDetail(db, created.row, now);
     return {
       ...detail,
@@ -932,9 +938,9 @@ export async function decidePersonProposal(
     if (body.decision === "accept") {
       if (change.kind === "update") {
         if (!person) throw new NotFoundError("The person of the proposal is gone");
-        person = await updatePersonTx(db, person.code, change.change, audit);
+        person = await updatePersonTx(db, person.code, change.change, audit, now);
       } else {
-        const created = await createPersonTx(app, db, change.person, audit, "proposal");
+        const created = await createPersonTx(app, db, change.person, audit, "proposal", [], false, now);
         person = created.row;
         createdId = created.row.id;
       }

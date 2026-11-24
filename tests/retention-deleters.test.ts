@@ -81,6 +81,8 @@ const SANCTIONED_DELETER_FILES = [
   // rows (publication_media) and of extra attachments (publication_attachments).
   // Hub's own draft content, never a captured fact.
   "packages/db/src/repositories/publications.ts",
+  // Release a manual auto-post hold once its route or participants change.
+  "packages/db/src/repositories/pots.ts",
   // Project Browser (stage 3 PR 16): `remove-profile` — the owner's removal of
   // a page browser profile no page has (its row of configuration: container,
   // sealed secrets, the proxy given for the page to be). Never scheduled, never

@@ -209,4 +209,18 @@ describe("the decisions feed", () => {
       slow.release();
     }
   });
+
+  it("places the next change beyond a deleted high-water row", async (context) => {
+    if (!testDb) return context.skip();
+    const decision = async () => {
+      await testDb!.pool.query(`insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, decided_at, source, needs_link)
+        values ($1, $2, 'nobody', '[]', 'nobody', now(), 'dispute', false)`, [await nobodysSale(7), pageOne]);
+    };
+    await decision();
+    const top = (await feed("0")).next;
+    await testDb.pool.query("delete from sale_decision_changes where seq = $1", [top]);
+    await decision();
+    expect(Number((await feed(top)).next)).toBeGreaterThan(Number(top));
+  });
+
 });

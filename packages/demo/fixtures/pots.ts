@@ -184,9 +184,9 @@ function activeDistributedByTx(): Map<number, number> {
   return out;
 }
 
-function activeParticipantsOf(pot: DemoPotRecord): string[] {
+function activeParticipantsOf(pot: DemoPotRecord, day: string): string[] {
   if (pot.participantsMode === "listed") {
-    return [...new Set(pot.participants.map((p) => p.personCode))].sort();
+    return [...new Set(pot.participants.filter((p) => p.fromDay <= day && (p.toDay === null || p.toDay >= day)).map((p) => p.personCode))].sort();
   }
   const labels = new Set(pot.pageIds.map((id) => PAGE_LABEL_BY_ID.get(id)).filter((v): v is string => v !== undefined));
   return DEMO_USERS
@@ -298,7 +298,7 @@ export const potsHandlers: DemoHandlers = {
     serverNow: now.toISOString(),
   }),
 
-  potDetail: ({ params, now }): KernelOperationResponse<"potDetail"> | ReturnType<typeof demoError> => {
+  potDetail: ({ params, query, now }): KernelOperationResponse<"potDetail"> | ReturnType<typeof demoError> => {
     const potId = Number(params.potId);
     const pot = demoPots.find((p) => p.id === potId);
     if (!pot) return demoError(404, "not_found", "Общак не найден");
@@ -311,7 +311,7 @@ export const potsHandlers: DemoHandlers = {
     return {
       potsFrom: "2026-12-01",
       pot: summarizePot(pot),
-      activeParticipants: activeParticipantsOf(pot),
+      activeParticipants: activeParticipantsOf(pot, String(query.day ?? "2026-12-03")),
       sales: demoPotSales
         .filter((s) => s.potCode === pot.code)
         .map((s) => {
@@ -436,7 +436,7 @@ export const potsHandlers: DemoHandlers = {
     const req = (body ?? {}) as { day?: string; formula?: PotFormula; parts?: Array<{ transactionId: number; baseMills: number }> };
     const day = req.day ?? "2026-12-03";
     const formula = req.formula ?? pot.formula;
-    const participants = activeParticipantsOf(pot);
+    const participants = activeParticipantsOf(pot, day);
     const distAll = activeDistributedByTx();
     const parts = (req.parts ?? demoPotSales.filter((s) => s.potCode === pot.code).map((s) => ({
       transactionId: s.transactionId,
@@ -467,7 +467,7 @@ export const potsHandlers: DemoHandlers = {
     const req = (body ?? {}) as { day?: string; formula?: PotFormula; parts?: Array<{ transactionId: number; baseMills: number }> };
     const day = req.day ?? "2026-12-03";
     const formula = req.formula ?? pot.formula;
-    const participants = activeParticipantsOf(pot);
+    const participants = activeParticipantsOf(pot, day);
     const distAll = activeDistributedByTx();
     const parts = (req.parts ?? demoPotSales.filter((s) => s.potCode === pot.code).map((s) => ({
       transactionId: s.transactionId,

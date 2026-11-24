@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { saleNobodyResponseSchema, shiftReportResponseSchema } from "@agency_hub_core/contracts";
+import { saleNobodyResponseSchema, shiftReportResponseSchema, type AdminPersonCreateBody } from "@agency_hub_core/contracts";
 import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
 import { moscowDayOfMs, sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { createPerson } from "../apps/runtime/src/services/people/index.ts";
 import { cancelSaleDecisionApplied } from "../apps/runtime/src/services/sale-claims.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -160,10 +161,7 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     // - solo-1 has ONLY anna as working page (live single-chatter suggestion -> anna!)
     // - shared-1 has BOTH anna and bella (live suggestion -> null!)
     // - cora has no working pages (so she doesn't break solo-1 uniqueness)
-    const register = async (body: Record<string, unknown>) => {
-      const res = await rawSession("boss", "POST", "/api/v1/admin/people", body);
-      expect(res.statusCode, res.body).toBe(200);
-    };
+    const register = (body: AdminPersonCreateBody) => createPerson(app, body, { source: "cli" }, new Date("2026-01-01T09:00:00Z"));
     await register({
       code: "anna", displayName: "Anna", role: "chatter", state: "working",
       rights: ["submits_shift"], logins: { add: [users.anna!] }, workingPageLabels: ["solo-1", "shared-1"],

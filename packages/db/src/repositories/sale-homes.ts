@@ -32,6 +32,7 @@ export interface SaleHomeShareRow {
 }
 
 export interface SaleHomeRow {
+  suggestedPersonId?: number | null;
   transactionId: number;
   pageId: number;
   occurredAt: Date;
@@ -54,6 +55,7 @@ export async function upsertSaleHomes(db: Database, rows: readonly SaleHomeRow[]
   let written = 0;
   for (let at = 0; at < rows.length; at += UPSERT_BATCH) {
     const batch = rows.slice(at, at + UPSERT_BATCH).map((row) => ({
+      suggested_person_id: row.suggestedPersonId ?? null,
       transaction_id: row.transactionId,
       page_id: row.pageId,
       occurred_at: row.occurredAt.toISOString(),
@@ -66,20 +68,20 @@ export async function upsertSaleHomes(db: Database, rows: readonly SaleHomeRow[]
       rule_version: row.ruleVersion,
     }));
     const result = await db.execute(sql`
-      insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, pot, waits_until, shares, rule_version, computed_at)
-      select r.transaction_id, r.page_id, r.occurred_at, r.net_mills, r.home, r.reason, r.pot, r.waits_until, r.shares, r.rule_version,
+      insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, pot, waits_until, shares, rule_version, suggested_person_id, computed_at)
+      select r.transaction_id, r.page_id, r.occurred_at, r.net_mills, r.home, r.reason, r.pot, r.waits_until, r.shares, r.rule_version, r.suggested_person_id,
         ${computedAt.toISOString()}::timestamptz
       from jsonb_to_recordset(${JSON.stringify(batch)}::jsonb) as r(
         transaction_id bigint, page_id bigint, occurred_at timestamptz, net_mills bigint, home text, reason text, pot text,
-        waits_until timestamptz, shares jsonb, rule_version text)
+        waits_until timestamptz, shares jsonb, rule_version text, suggested_person_id bigint)
       on conflict (transaction_id) do update set
         page_id = excluded.page_id, occurred_at = excluded.occurred_at, net_mills = excluded.net_mills, home = excluded.home,
         reason = excluded.reason, pot = excluded.pot, waits_until = excluded.waits_until, shares = excluded.shares,
-        rule_version = excluded.rule_version, computed_at = excluded.computed_at
+        suggested_person_id = excluded.suggested_person_id, rule_version = excluded.rule_version, computed_at = excluded.computed_at
       where (sale_homes.page_id, sale_homes.occurred_at, sale_homes.net_mills, sale_homes.home, sale_homes.reason, sale_homes.pot,
-             sale_homes.waits_until, sale_homes.shares, sale_homes.rule_version)
+             sale_homes.waits_until, sale_homes.shares, sale_homes.rule_version, sale_homes.suggested_person_id)
         is distinct from (excluded.page_id, excluded.occurred_at, excluded.net_mills, excluded.home, excluded.reason, excluded.pot,
-             excluded.waits_until, excluded.shares, excluded.rule_version)`);
+             excluded.waits_until, excluded.shares, excluded.rule_version, excluded.suggested_person_id)`);
     written += result.rowCount ?? 0;
   }
   return written;
@@ -103,9 +105,9 @@ export async function findSaleSingleHomeUser(db: Database, transactionId: number
 export async function listSaleHomes(db: Database, input: { from: Date; to: Date }): Promise<Array<SaleHomeRow & { computedAt: Date }>> {
   const result = await db.execute<{
     transaction_id: string | number; page_id: string | number; occurred_at: Date | string; net_mills: string | number; home: string;
-    reason: string; pot: string | null; waits_until: Date | string | null; shares: SaleHomeShareRow[]; rule_version: string; computed_at: Date | string;
+    suggested_person_id: string | number | null; reason: string; pot: string | null; waits_until: Date | string | null; shares: SaleHomeShareRow[]; rule_version: string; computed_at: Date | string;
   }>(sql`
-    select transaction_id, page_id, occurred_at, net_mills, home, reason, pot, waits_until, shares, rule_version, computed_at
+    select transaction_id, page_id, occurred_at, net_mills, home, reason, pot, waits_until, shares, rule_version, suggested_person_id, computed_at
     from sale_homes
     where occurred_at >= ${input.from.toISOString()}::timestamptz and occurred_at < ${input.to.toISOString()}::timestamptz
     order by occurred_at, transaction_id`);
@@ -120,6 +122,7 @@ export async function listSaleHomes(db: Database, input: { from: Date; to: Date 
     waitsUntil: row.waits_until === null ? null : new Date(row.waits_until),
     shares: row.shares,
     ruleVersion: row.rule_version,
+    suggestedPersonId: row.suggested_person_id === null ? null : Number(row.suggested_person_id),
     computedAt: new Date(row.computed_at),
   }));
 }
@@ -289,6 +292,8 @@ export async function enqueueSaleHomeRefreshDays(db: Database, days: readonly st
     insert into sale_home_refresh_due (day, generation, queued_at)
     select d, 1, clock_timestamp()
     from unnest(${sql.param(unique)}::date[]) as d
+    where d <= (statement_timestamp() at time zone 'Europe/Moscow')::date
+    order by d
     on conflict (day) do update set
       generation = sale_home_refresh_due.generation + 1,
       queued_at = clock_timestamp()`);
@@ -311,6 +316,7 @@ export async function enqueueSaleHomeRefreshForSales(db: Database, transactionId
       where transaction_id = any(${ids(unique)})
     ) d
     where day >= ${SALE_RULE_SINCE_DAY}::date
+    order by day
     on conflict (day) do update set
       generation = sale_home_refresh_due.generation + 1,
       queued_at = clock_timestamp()`);
@@ -358,6 +364,7 @@ export async function enqueueSaleHomeRefreshForHandin(
       ${prevPart}
     ) d
     where day >= ${SALE_RULE_SINCE_DAY}::date
+    order by day
     on conflict (day) do update set
       generation = sale_home_refresh_due.generation + 1,
       queued_at = clock_timestamp()`);
@@ -399,6 +406,7 @@ export async function enqueueSaleHomeRefreshForUsers(db: Database, userIds: read
       where c.user_id = any(${ids(unique)}) and c.observed_at >= ${SALE_RULE_SINCE_ISO}::timestamptz
     ) d
     where day >= ${SALE_RULE_SINCE_DAY}::date and day <= (clock_timestamp() at time zone 'Europe/Moscow')::date
+    order by day
     on conflict (day) do update set
       generation = sale_home_refresh_due.generation + 1,
       queued_at = clock_timestamp()`);
@@ -430,6 +438,7 @@ export async function enqueueSaleHomeRefreshForPages(
       where occurred_at >= ${fromIso}::timestamptz and occurred_at <= clock_timestamp() ${homePage}
     ) d
     where day >= ${fromDay}::date and day <= (clock_timestamp() at time zone 'Europe/Moscow')::date
+    order by day
     on conflict (day) do update set
       generation = sale_home_refresh_due.generation + 1,
       queued_at = clock_timestamp()`);

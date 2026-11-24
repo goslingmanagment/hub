@@ -46,6 +46,7 @@ export interface PotDistributionHydratedRow {
   potName: string;
   modelSlug: string;
   potPageIds: number[];
+  reversedAt: Date | null;
   day: string;
   formula: PotFormulaRow;
   baseMills: number;
@@ -76,7 +77,7 @@ export async function placePotDistributionChanges(db: Database): Promise<number>
     const placed = await tx.execute(sql`
       update pot_distribution_changes c set seq = placed.seq
       from (
-        select id, (select coalesce(max(seq), 0) from pot_distribution_changes) + row_number() over (order by id) as seq
+        select id, (select last_seq from feed_positions where feed = 'pot_distribution_changes') + row_number() over (order by id) as seq
         from pot_distribution_changes where seq is null
       ) placed
       where c.id = placed.id`);
@@ -97,10 +98,16 @@ export async function releasePotDistributionChangesHeld(
   return db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('pot_distribution_changes', 0))`);
+    // A reversal supersedes its post even when the reversal has not been placed yet.
+    await tx.execute(sql`
+      delete from pot_distribution_feed_held k using pot_distribution_changes old
+      where k.change_id = old.id and k.agent_key_id = ${input.agentKeyId} and old.is_test = ${input.isTest}
+        and exists (select 1 from pot_distribution_changes newer
+          where newer.distribution_id = old.distribution_id and newer.id > old.id)`);
     const moved = await tx.execute<Row>(sql`
       update pot_distribution_changes c set seq = ready.seq
       from (
-        select old.id, (select coalesce(max(seq), 0) from pot_distribution_changes) + row_number() over (order by old.seq, old.id) as seq
+        select old.id, (select last_seq from feed_positions where feed = 'pot_distribution_changes') + row_number() over (order by old.seq, old.id) as seq
         from pot_distribution_feed_held k
         join pot_distribution_changes old on old.id = k.change_id
         join pot_distributions d on d.id = old.distribution_id
@@ -179,7 +186,7 @@ export async function listPotDistributionsForFeed(
 
   const distResult = await db.execute<Row>(sql`
     select d.id, d.pot_id, p.code as pot_code, p.name as pot_name, m.slug as model_slug, p.page_ids as pot_page_ids,
-      to_char(d.day, 'YYYY-MM-DD') as day, d.formula, d.base_mills, d.lines
+      to_char(d.day, 'YYYY-MM-DD') as day, d.formula, d.base_mills, d.lines, d.reversed_at
     from pot_distributions d
     join pots p on p.id = d.pot_id
     join models m on m.id = p.model_id
@@ -219,6 +226,7 @@ export async function listPotDistributionsForFeed(
       potName: String(row.pot_name),
       modelSlug: String(row.model_slug),
       potPageIds,
+      reversedAt: row.reversed_at == null ? null : new Date(String(row.reversed_at)),
       day: String(row.day),
       formula: {
         kind: formula.kind,

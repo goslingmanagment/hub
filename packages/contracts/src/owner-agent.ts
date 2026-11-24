@@ -380,7 +380,7 @@ const potDistributionArgs = z.object({
   code: potCodeSchema,
   day: businessDate.optional(),
   formula: potFormulaSchema.strict().optional(),
-  parts: z.array(potDistributionPartInputSchema.strict()).max(1000).optional(),
+  parts: z.array(potDistributionPartInputSchema.strict()).min(1, "empty_parts").max(1000).optional(),
 }).strict();
 
 const potReverseArgs = z.object({

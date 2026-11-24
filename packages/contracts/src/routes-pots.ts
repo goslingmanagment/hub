@@ -9,7 +9,7 @@ import { businessDate, errorResponseSchema, intId, isoTimestamp, mills } from ".
 
 // ── Matter kinds owned by the pots service ───────────────────────────────────
 
-export const POT_MATTER_KINDS = ["pot.unrouted", "pot.no_participants", "pot.sale_left"] as const;
+export const POT_MATTER_KINDS = ["pot.unrouted", "pot.no_participants", "pot.sale_left", "pot.excess_base"] as const;
 export type PotMatterKind = (typeof POT_MATTER_KINDS)[number];
 const POT_MATTER_KIND_SET: ReadonlySet<string> = new Set(POT_MATTER_KINDS);
 export function isPotMatterKind(kind: string): boolean {
@@ -228,7 +228,7 @@ export const potDistributionPartInputSchema = z.object({
 export const potDistributionRequestBodySchema = z.object({
   day: businessDate.optional(),
   formula: potFormulaSchema.optional(),
-  parts: z.array(potDistributionPartInputSchema).max(1000).optional(),
+  parts: z.array(potDistributionPartInputSchema).min(1, "empty_parts").max(1000).optional(),
 });
 
 export const potDistributionPreviewResponseSchema = z.object({
@@ -349,6 +349,7 @@ export const potsRouteSchemas = {
     tags: ["pots"],
     summary: "Single pot detail: eligible sales with remaining base, active participants, and distributions",
     params: potIdParamsSchema,
+    querystring: z.object({ day: businessDate.optional() }),
     response: { 200: potDetailResponseSchema, ...ownerErrors },
   },
   potCreate: {

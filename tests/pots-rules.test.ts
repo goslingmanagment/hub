@@ -72,6 +72,17 @@ describe("Workboard pots pure rules (H11)", () => {
       })).toMatchObject({ ok: false, reason: "invalid_weights" });
     });
 
+    it("rejects nonnumeric and unrepresentable weights and requires active participants", () => {
+      for (const weight of [true, Number.MAX_VALUE]) {
+        expect(computePotDistributionLines({
+          baseMills: 7, formula: { kind: "weights", params: { weights: { synthetic: weight } } }, participants: ["synthetic"],
+        })).toMatchObject({ ok: false, reason: "invalid_weights" });
+      }
+      expect(computePotDistributionLines({
+        baseMills: 7, formula: { kind: "weights", params: { weights: { synthetic: 1 } } }, participants: [],
+      })).toMatchObject({ ok: false, reason: "no_participants" });
+    });
+
     it("validates manual formula sum === baseMills and sorts participants", () => {
       const ok = computePotDistributionLines({
         baseMills: 50_000,
@@ -259,41 +270,29 @@ describe("Workboard pots pure rules (H11)", () => {
 
     it("does NOT mark already-distributed sales as having left when a pot is closed, but DOES when sale moves out", () => {
       const closedPagePot: PotRoutingSpec = { ...pagePot, state: "closed" };
-      const part = {
-        potId: closedPagePot.id,
-        potCode: closedPagePot.code,
-        potPageIds: closedPagePot.pageIds,
-        potOpensOn: closedPagePot.opensOn,
-        potClosesOn: closedPagePot.closesOn,
-        potState: "closed" as const,
-      };
-
       // Still home=pot on same page & day -> closing the pot does NOT trigger reversal!
       expect(hasSaleLeftPot(
-        part,
+        closedPagePot.code,
         { pageId: 11, day: "2026-12-02", home: "pot", reason: "post_tip", pot: "obshak" },
-        [closedPagePot],
         "2026-12-01",
       )).toBe(false);
 
       // Sale moved to a chatter's shift -> HAS left!
       expect(hasSaleLeftPot(
-        part,
+        closedPagePot.code,
         { pageId: 11, day: "2026-12-02", home: "shift", reason: "decision", pot: null },
-        [closedPagePot],
         "2026-12-01",
       )).toBe(true);
 
       // Sale moved to another explicit pot -> HAS left!
       expect(hasSaleLeftPot(
-        part,
+        closedPagePot.code,
         { pageId: 11, day: "2026-12-02", home: "pot", reason: "decision", pot: "winter-event" },
-        [closedPagePot, eventPot],
         "2026-12-01",
       )).toBe(true);
 
       // Sale vanished (undefined) -> HAS left!
-      expect(hasSaleLeftPot(part, undefined, [closedPagePot], "2026-12-01")).toBe(true);
+      expect(hasSaleLeftPot(closedPagePot.code, undefined, "2026-12-01")).toBe(true);
     });
   });
 });
