@@ -137,8 +137,22 @@ function homeLink(home: Home, sale: Sale, now: Date, viewer: Viewer): Chain["hom
   };
 }
 
+function pageModelOf(pageLabel: string): string {
+  const name = pageLabel.split("-")[0] ?? "mia";
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 /** «Начисление» and «Выплата» from the person's day in the ledger's book, as Hub's `payLinksOf` reads it. */
-function payLinks(user: DemoUser, reportDate: string, pay: boolean, link: string | null, now: Date): { accrual: Link; payout: Link } {
+function payLinks(input: {
+  user: DemoUser;
+  reportDate: string;
+  model: string;
+  hubReport: { version: number; status: "counted" | "disputed" | "zero" } | null;
+  pay: boolean;
+  link: string | null;
+  now: Date;
+}): { accrual: Link; payout: Link } {
+  const { user, reportDate, model, hubReport, pay, link, now } = input;
   // Up to a month on, as Hub reads it: the payout that paid the day is in.
   const until = [mskDay(now.getTime()), addDays(reportDate, 30)].sort()[0]!;
   const book = demoPersonPay(user.username, reportDate, until < reportDate ? reportDate : until, now);
@@ -147,23 +161,52 @@ function payLinks(user: DemoUser, reportDate: string, pay: boolean, link: string
     return { accrual: { state: "unknown", words, link, amountMills: null }, payout: { state: "unknown", words, link, amountMills: null } };
   }
   const date = dayWords(reportDate);
-  const days = book.days.filter((one) => one.date === reportDate);
+  const days = book.days.filter((one) => one.date === reportDate && one.model === model);
   const accrued = days.reduce((sum, one) => sum + one.amountMills, 0);
   const paid = days.reduce((sum, one) => sum + one.paidMills, 0);
   const unpaid = days.reduce((sum, one) => sum + one.unpaidMills, 0);
+  const statusWord = (status: "counted" | "disputed" | "zero") => (status === "counted" ? "засчитано" : status === "disputed" ? "спорно" : "ноль");
   if (accrued <= 0) {
+    const payout: Link = hubReport !== null
+      ? { state: hubReport.status === "disputed" ? "open" : "none", words: `в версии ${hubReport.version} — ${statusWord(hubReport.status)}; день по модели ${model} не начислен`, link, amountMills: null }
+      : { state: "none", words: "платить пока нечего", link, amountMills: null };
     return {
-      accrual: { state: "wait", words: `за ${date} пока не начислено: ledger начисляет по отчёту дня`, link, amountMills: null },
-      payout: { state: "none", words: "платить пока нечего", link, amountMills: null },
+      accrual: { state: "wait", words: `за ${date} по модели ${model} пока не начислено: ledger начисляет по отчёту дня`, link, amountMills: null },
+      payout,
     };
   }
+  const source = days[0]?.source ?? "reports";
+  const basis = source === "sheet" ? "sheet" : source === "facts" ? "facts" : hubReport !== null ? "hub" : "post";
+  const basisWord = basis === "hub" ? "отчёт Hub" : basis === "post" ? "пост" : basis === "sheet" ? "таблица" : "факты";
   const by = new Set(days.flatMap((one) => one.paidBy));
   const dates = [...new Set(book.payouts.filter((one) => by.has(one.document)).map((one) => one.date))].sort();
   const on = dates.length === 0 ? "" : ` ${dates.map(dayWords).join(", ")}`;
-  const accrual: Link = { state: "done", words: `начислено за ${date}${pay ? `: ${money(accrued)} за день` : ", за день целиком"}`, link, amountMills: pay ? accrued : null };
-  if (unpaid <= 0) return { accrual, payout: { state: "done", words: `оплачено${on}`, link, amountMills: pay ? paid : null } };
-  if (paid > 0) return { accrual, payout: { state: "wait", words: `оплачено частично${on}, остальное к выплате${pay ? `: ${money(unpaid)}` : ""}`, link, amountMills: pay ? paid : null } };
-  return { accrual, payout: { state: "wait", words: `к выплате${pay ? `: ${money(unpaid)}` : ""}`, link, amountMills: null } };
+  const accrual: Link = {
+    state: "done",
+    words: `начислено за ${date} по модели ${model} (${basisWord})${pay ? `: ${money(accrued)} за день` : ", за день целиком"}`,
+    link,
+    amountMills: pay ? accrued : null,
+  };
+  if (basis === "hub" && hubReport !== null) {
+    const dayPay = unpaid <= 0
+      ? `день по модели ${model} оплачен полностью${on}`
+      : paid > 0
+        ? `день по модели ${model} оплачен частично${on}, остальное к выплате${pay ? `: ${money(unpaid)}` : ""}`
+        : `день по модели ${model} к выплате${pay ? `: ${money(unpaid)}` : ""}`;
+    const state: Link["state"] = hubReport.status === "disputed" ? "open" : hubReport.status === "zero" ? "none" : unpaid <= 0 ? "done" : "wait";
+    return {
+      accrual,
+      payout: { state, words: `в версии ${hubReport.version} — ${statusWord(hubReport.status)}; ${dayPay}`, link, amountMills: pay && paid > 0 ? paid : null },
+    };
+  }
+  if (unpaid <= 0) {
+    const onNote = dates.length === 0 ? "" : ` (${dates.map(dayWords).join(", ")})`;
+    return { accrual, payout: { state: "unknown", words: `день оплачен, включение этой продажи не подтверждено${onNote}`, link, amountMills: pay && paid > 0 ? paid : null } };
+  }
+  if (paid > 0) {
+    return { accrual, payout: { state: "wait", words: `день оплачен частично${on}, остальное к выплате${pay ? `: ${money(unpaid)}` : ""}; включение этой продажи не подтверждено`, link, amountMills: pay ? paid : null } };
+  }
+  return { accrual, payout: { state: "wait", words: `день к выплате${pay ? `: ${money(unpaid)}` : ""}; включение этой продажи не подтверждено`, link, amountMills: null } };
 }
 
 function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: Viewer, request: DemoRequest): Chain["people"][number] {
@@ -184,6 +227,9 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
   let report: Link;
   // A console row's sale names no line of the demo's shifts: the shift's version stands for the one holding it.
   const line = entry?.handed?.line ?? (entry !== null && entry.handed !== null && entry.line === null ? { amountMills: share.mills, statement: null, disputed: false } : null);
+  const hubReport = entry !== null && entry.handed !== null && line !== null
+    ? { version: entry.handed.version, status: (line.disputed ? "disputed" : line.amountMills > 0 ? "counted" : "zero") as "counted" | "disputed" | "zero" }
+    : null;
   if (entry !== null && entry.handed !== null && line !== null) {
     const counted = line.amountMills > 0 ? `засчитано ${money(line.amountMills)}` : "в отчёте с нулём";
     const said = line.statement === "not_mine" ? ", «не моё»" : line.statement === "share" ? ", «делим»" : line.statement === "mine" ? ", «моё»" : "";
@@ -208,7 +254,10 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
     return { userId: share.user.id, name: share.user.name, shareMills: share.mills, reportDate, shift, report, accrual: ownerOnly, payout: ownerOnly };
   }
   const payLink = viewer.kind === "owner" ? `/workboard/money/debts?person=${encodeURIComponent(share.user.username)}` : own ? "/workboard/my/shifts" : null;
-  return { userId: share.user.id, name: share.user.name, shareMills: share.mills, reportDate, shift, report, ...payLinks(share.user, reportDate, sums.pay, payLink, request.now) };
+  return {
+    userId: share.user.id, name: share.user.name, shareMills: share.mills, reportDate, shift, report,
+    ...payLinks({ user: share.user, reportDate, model: pageModelOf(sale.pageLabel), hubReport, pay: sums.pay, link: payLink, now: request.now }),
+  };
 }
 
 function chainOf(request: DemoRequest, viewer: Viewer, sale: Sale, home: Home, involved: boolean): Chain | DemoReply {

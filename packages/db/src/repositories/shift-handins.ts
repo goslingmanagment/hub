@@ -963,6 +963,8 @@ export interface HandinSaleRow {
   pageId: number;
   pageLabel: string;
   platform: string;
+  modelSlug: string;
+  modelName: string;
   kind: string;
   occurredAt: Date;
   netMills: number;
@@ -972,11 +974,13 @@ export interface HandinSaleRow {
 }
 
 const SALE_SELECT = sql`
-  select t.id, t.platform_account_id as page_id, p.label, p.platform, t.canonical_type::text as kind, t.occurred_at,
+  select t.id, t.platform_account_id as page_id, p.label, p.platform, m.slug as model_slug, m.name as model_name,
+    t.canonical_type::text as kind, t.occurred_at,
     t.creator_net_amount_mills as net, f.platform_user_id as fan_ref, coalesce(f.display_name, f.username) as fan_name, f.username as fan_username,
     h.home, h.reason, h.pot, h.shares
   from transactions t
   join pages p on p.id = t.platform_account_id
+  join models m on m.id = p.model_id
   left join fans f on f.id = t.fan_id
   left join sale_homes h on h.transaction_id = t.id`;
 
@@ -986,6 +990,8 @@ function saleOf(row: Row): HandinSaleRow {
     pageId: num(row.page_id),
     pageLabel: String(row.label),
     platform: String(row.platform),
+    modelSlug: String(row.model_slug),
+    modelName: String(row.model_name),
     kind: String(row.kind),
     occurredAt: date(row.occurred_at),
     netMills: num(row.net),
