@@ -582,8 +582,10 @@ export async function listSaleDecisions(
   if (input.transactionIds !== undefined) where.push(sql`d.transaction_id = any(${ids(input.transactionIds)})`);
   if (input.needsLink !== undefined) where.push(sql`d.needs_link = ${input.needsLink}`);
   if (input.activeOnly === true) where.push(sql`d.state = 'active'`);
-  if (input.realm === "live") where.push(sql`d.page_id is not null and ${livePageSql(sql`d.page_id`)}`);
-  if (input.realm === "test") where.push(sql`d.page_id is not null and ${testPageSql(sql`d.page_id`)}`);
+  if (input.realm !== undefined) {
+    const page = sql`coalesce(d.page_id, (select p.id from pages p where p.label = d.ledger_ref->>'pageLabel'))`;
+    where.push(input.realm === "test" ? testPageSql(page) : livePageSql(page));
+  }
   if (input.userIds !== undefined) {
     where.push(sql`exists (select 1 from jsonb_array_elements(d.shares) as s where (s ->> 'userId')::bigint = any(${ids(input.userIds)}))`);
   }
@@ -743,19 +745,8 @@ export async function applySaleDelivery(db: Database, input: { id: number; userI
   return true;
 }
 
-/**
- * Links an imported decision the ledger's text did not tie to a sale: it takes the sale and becomes the sale's active
- * decision (one before it superseded). False — not one waiting for a link, or no longer active (cancelled, replaced):
- * then nothing is written, and the sale keeps the decision that rules it. The decision's own row is taken first, so
- * it stays what it was read as until the caller's transaction ends.
- */
+/** Ties a still-active, unlinked decision. The caller checks the target in the settlements' turn. */
 export async function linkSaleDecision(db: Database, input: { id: number; transactionId: number; pageId: number; at: Date }): Promise<boolean> {
-  const waiting = await db.execute<Row>(sql`
-    select id from sale_owner_decisions where id = ${input.id} and needs_link and state = 'active' for update`);
-  if (waiting.rows.length === 0) return false;
-  await db.execute(sql`
-    update sale_owner_decisions set state = 'superseded', superseded_at = ${input.at.toISOString()}::timestamptz
-    where transaction_id = ${input.transactionId} and state = 'active' and id <> ${input.id}`);
   const result = await db.execute(sql`
     update sale_owner_decisions set transaction_id = ${input.transactionId}, page_id = ${input.pageId}, needs_link = false
     where id = ${input.id} and needs_link and state = 'active'`);

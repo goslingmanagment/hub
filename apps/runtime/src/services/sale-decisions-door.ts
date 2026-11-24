@@ -32,6 +32,7 @@ import {
 import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { recordOwnerWrite, type OperatorContext } from "./auth.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { blockerMoscowDay, payoutSaleBlockers, type PayoutSaleBlockerItem, type SaleBlockerCoverage } from "./payout-sale-blockers.ts";
 import { validatePotDecisionTarget } from "./pots.ts";
@@ -588,6 +589,7 @@ async function closeQuestionOnce(
   questionId: number,
   patch: Parameters<typeof updateSaleClaim>[2],
   now: Date,
+  operator?: OperatorContext,
 ): Promise<number> {
   const closed = () => new ConflictError("This question is already closed", { reason: "question_closed" });
   return app.db.transaction(async (tx) => {
@@ -597,6 +599,9 @@ async function closeQuestionOnce(
     if (question === null || (question.kind !== "question" && question.kind !== "imported") || !mayClose(question.pageId)) throw notFound();
     if (!(OPEN_QUESTION as readonly string[]).includes(question.state)) throw closed();
     if (!(await updateSaleClaim(txDb, question.id, { ...patch, state: "decided", closedAt: now }, now, { ifState: OPEN_QUESTION }))) throw closed();
+    if (operator) {
+      await recordOwnerWrite(txDb, operator.onBehalfOfUserId, operator, "sale.question_closed", { questionId, closeNote: patch.closeNote });
+    }
     return question.id;
   });
 }
@@ -623,9 +628,9 @@ export async function closeSaleQuestion(app: DoorApp, actor: DoorActor, input: {
  * The owner's agent door's close (owner-agent-door.ts `sale.close`): an open question of the live agency — a page's,
  * or one of no page the owner reviews — closed with why, once, as `closeSaleQuestion` closes one (the same guard).
  */
-export async function closeSaleQuestionAsOwner(app: DoorApp, input: { questionId: number; note: string }, now: Date = new Date()) {
+export async function closeSaleQuestionAsOwner(app: DoorApp, input: { questionId: number; note: string }, operator: OperatorContext, now: Date = new Date()) {
   const test = new Set(await listTestPageIds(app.db));
-  const id = await closeQuestionOnce(app, (pageId) => pageId === null || !test.has(pageId), input.questionId, { closeNote: input.note }, now);
+  const id = await closeQuestionOnce(app, (pageId) => pageId === null || !test.has(pageId), input.questionId, { closeNote: input.note }, now, operator);
   await runSaleClaims(app, now).catch(() => undefined);
   const [wire] = await questionWires(app, [id]);
   return { question: wire! };

@@ -1,15 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
+import { assignUserToPage, createFanslyPage, createModel, insertAgentKey, recordAgentKeyUse } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { introspectAgentKey, issueOwnerAgentKey, replaceAgentKey, updateAgentKeyCapabilities } from "../apps/runtime/src/services/agent-keys.ts";
-import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { AGENT_KEY_TOKEN_PREFIX, authenticateAgentKey, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import { setPersonPayTerm } from "../apps/runtime/src/services/people/index.ts";
 import { runSaleClaims } from "../apps/runtime/src/services/sale-claims.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { editingSession, handInAndConfirm, insertReviewerAgentKey } from "./helpers/shift-report-hand-in.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
@@ -246,6 +247,43 @@ describe("the owner's agent door", () => {
     expect(listed.json().find((key: { id: number }) => key.id === ownerKeyId)).toMatchObject({ capabilities: ["act:owner"], agent: null });
   });
 
+  it("keeps the issued deadline and records only authenticated uses of an owner key", async (context) => {
+    if (!testDb) return context.skip();
+    const name = "fixture-owner";
+    await createUserAccount(app, { username: name, role: "owner", password: "fixture-owner-password" }, AUDIT);
+    const owner = await fixtureUserId(app, name);
+    const { token, key } = await issueOwnerAgentKey(app, { name: "fixture-week", ownerLogin: name, expiresInDays: 7 }, AUDIT);
+    const state = async () => (await testDb!.pool.query("select last_used_at, expires_at from agent_keys where id = $1", [key.id])).rows[0];
+    const before = await state();
+    expect(before.last_used_at).toBeNull();
+    for (const [role, disabled] of [["owner", true], ["chatter", false]] as const) {
+      await testDb.pool.query("update users set role = $2, disabled_at = case when $3 then now() end where id = $1", [owner, role, disabled]);
+      expect(await authenticateAgentKey(app, token)).toBeNull();
+      expect(await state()).toEqual(before);
+    }
+    await testDb.pool.query("update users set role = 'owner' where id = $1", [owner]);
+    expect(await authenticateAgentKey(app, token)).toMatchObject({ kind: "owner_agent", agentKeyId: key.id });
+    const used = await state();
+    expect(used.last_used_at).toBeInstanceOf(Date);
+    expect(used.expires_at).toEqual(before.expires_at);
+    expect(await recordAgentKeyUse(app.db, { id: key.id, now: before.expires_at })).toBeNull();
+    expect(await state()).toEqual(used);
+
+    const request = { method: "POST" as const, url: "/api/v1/owner-agent/call", payload: { op: "people.show", args: { code: "boss" } } };
+    const remaining = [];
+    for (const authorization of [`Bearer ${token}`, `  bEaReR   ${token}  `]) {
+      const response = await server!.inject({ ...request, headers: { authorization, "x-hub-owner-reason": "fixture" } });
+      expect(response.statusCode, response.body).toBe(200);
+      remaining.push(Number(response.headers["x-ratelimit-remaining"]));
+    }
+    expect(remaining[0]).toBeGreaterThan(0);
+    expect(remaining[1]).toBe(remaining[0]! - 1);
+    const last = await state();
+    await testDb.pool.query("update users set disabled_at = now(), deleted_at = now(), password_hash = null where id = $1", [owner]);
+    expect(await authenticateAgentKey(app, token)).toBeNull();
+    expect(await state()).toEqual(last);
+  });
+
   it("reaches its own route alone: every other route of the server refuses it", async (context) => {
     if (!testDb) return context.skip();
     const admitted: string[] = [];
@@ -273,7 +311,7 @@ describe("the owner's agent door", () => {
   it("takes the reason first, then the table, then writes the audit, then reads the arguments", async (context) => {
     if (!testDb) return context.skip();
     const before = await calls();
-    for (const why of [null, "", "   ", "я".repeat(501)]) {
+    for (const why of [null, "", "   ", "я".repeat(501), "fixture\u0000reason", "fixture\nreason"]) {
       const refused = await call("people.show", { code: "anna" }, { why });
       expect(refused.statusCode, `${String(why).slice(0, 10)}: ${refused.body}`).toBe(400);
       expect(refused.json().reason).toBe("owner_reason");
@@ -334,6 +372,45 @@ describe("the owner's agent door", () => {
     expect((await call("people.edit", { code: "vera", displayName: "Вера" })).statusCode).toBe(200);
     const pagesOfAnna = await call("people.edit", { code: "anna", workingPageLabels: ["mia-1"] });
     expect(pagesOfAnna.statusCode, pagesOfAnna.body).toBe(200);
+  });
+
+  it("protects access by registry and login role, including a change committed while the edit waits", async (context) => {
+    if (!testDb) return context.skip();
+    const issued = await issueOwnerAgentKey(app, { name: "fixture-people", ownerLogin: "boss", expiresInDays: 7 }, AUDIT);
+    const edit = (code: string, fields: Record<string, unknown>) => call("people.edit", { code, ...fields }, { key: issued.token });
+    await testDb.pool.query(`insert into people (code, display_name, role, state, left_on) values
+      ('fixture-manager', 'Fixture manager', 'content_manager', 'left', current_date),
+      ('fixture-owner', 'Fixture owner', 'owner', 'working', null),
+      ('fixture-race', 'Fixture race', 'chatter', 'working', null)`);
+    // These two records exercise a protected login on a registry record of a different role.
+    await testDb.pool.query("update people set role = 'chatter' where code in ('boss', 'vera')");
+    try {
+      for (const code of ["fixture-owner", "boss"]) {
+        expect((await edit(code, { note: "fixture" })).statusCode).toBe(409);
+      }
+      for (const code of ["fixture-manager", "vera"]) {
+        for (const patch of [{ leftOn: null }, { state: "working" }, { workingPageLabels: [] }]) {
+          expect((await edit(code, patch)).statusCode).toBe(409);
+        }
+        expect((await edit(code, { note: "fixture" })).statusCode).toBe(200);
+      }
+    } finally {
+      await testDb.pool.query("update people set role = 'owner' where code = 'boss'");
+      await testDb.pool.query("update people set role = 'content_manager' where code = 'vera'");
+    }
+    const writer = await testDb.pool.connect();
+    try {
+      await writer.query("begin");
+      await writer.query("update people set role = 'content_manager' where code = 'fixture-race'");
+      const waiting = edit("fixture-race", { state: "left" }).then((response) => response);
+      await waitForRowLockWait(testDb.pool, ["%from people p%for update%"], { blocked: waiting });
+      await writer.query("commit");
+      expect((await waiting).statusCode).toBe(409);
+    } finally {
+      await writer.query("rollback");
+      writer.release();
+    }
+    expect((await testDb.pool.query("select state from people where code = 'fixture-race'")).rows[0].state).toBe("working");
   });
 
   it("reads stored shift reports and writes nothing but its audit rows", async (context) => {
@@ -470,9 +547,18 @@ describe("the owner's agent door", () => {
     expect(refused.json().reason).toBe("open_dispute");
     expect(await count("select count(*) as n from sale_owner_decisions where transaction_id = $1", [disputed])).toBe(0);
     expect((await call("sale.show", { transactionId: disputed })).json().result.openDispute).toBe(true);
+    await testDb.pool.query("alter table audit_events add constraint fixture_close_audit check (event_type <> 'sale.question_closed') not valid");
+    try {
+      expect((await call("sale.close", { questionId, note: "fixture" })).statusCode).toBe(500);
+      expect((await testDb.pool.query("select closed_at from sale_claims where id = $1", [questionId])).rows[0].closed_at).toBeNull();
+    } finally {
+      await testDb.pool.query("alter table audit_events drop constraint fixture_close_audit");
+    }
     const closed = await call("sale.close", { questionId, note: "разобрались сами" });
     expect(closed.statusCode, closed.body).toBe(200);
     expect(closed.json().result.question.status).toBe("closed");
+    const closeAudit = await testDb.pool.query("select metadata from audit_events where event_type = 'sale.question_closed'");
+    expect(closeAudit.rows).toEqual([{ metadata: expect.objectContaining({ questionId, agentKeyId: ownerKeyId, onBehalfOfUserId: boss, reason: WHY }) }]);
     const twice = await call("sale.close", { questionId, note: "ещё раз" });
     expect(twice.statusCode).toBe(409);
     expect(twice.json().reason).toBe("question_closed");
@@ -569,10 +655,22 @@ describe("the owner's agent door", () => {
     expect(await count("select count(*) as n from matters")).toBe(mattersBefore);
 
     // 4. pot.post -> writes distribution + audit provenance
-    const posted = await call("pot.post", { code: "door-event", day: "2026-11-20" });
+    await testDb.pool.query("alter table audit_events add constraint fixture_post_audit check (event_type <> 'pot.distribution_posted') not valid");
+    try {
+      const failed = await call("pot.post", { code: "door-event", day: "2026-11-20" });
+      expect(failed.statusCode).toBe(500);
+      expect(await count("select count(*) as n from pot_distributions")).toBe(distCountBefore);
+    } finally {
+      await testDb.pool.query("alter table audit_events drop constraint fixture_post_audit");
+    }
+    const postingKey = await issueOwnerAgentKey(app, { name: "fixture-post", ownerLogin: "boss", expiresInDays: 7 }, AUDIT);
+    const posted = await call("pot.post", { code: "door-event", day: "2026-11-20" }, { key: postingKey.token });
     expect(posted.statusCode, posted.body).toBe(200);
     const distId = posted.json().result.distribution.id as number;
     expect(posted.json().result.distribution.baseMills).toBe(60_000);
+
+    const attribution = await testDb.pool.query("select agent_key_id::int as key, posted_by_user_id::int as owner from pot_distributions where id = $1", [distId]);
+    expect(attribution.rows).toEqual([{ key: postingKey.key.id, owner: boss }]);
 
     // 5. pot.reverse -> reverses distribution + audit provenance
     const reversed = await call("pot.reverse", { distributionId: distId, reason: "перерасчёт владельца" });
@@ -587,7 +685,7 @@ describe("the owner's agent door", () => {
 
     // Verify all pot write audit events recorded owner + key provenance
     const potAuditTypes = (await testDb.pool.query(
-      "select event_type, source, actor_user_id, metadata ->> 'actorAgentKeyId' as key_id from audit_events where event_type like 'pot.%' order by id asc",
+      "select event_type, source, actor_user_id, metadata from audit_events where event_type like 'pot.%' order by id asc",
     )).rows;
     expect(potAuditTypes.map((r) => r.event_type)).toEqual([
       "pot.created", "pot.updated", "pot.distribution_posted", "pot.distribution_reversed", "pot.closed",
@@ -595,7 +693,26 @@ describe("the owner's agent door", () => {
     for (const row of potAuditTypes) {
       expect(row.source).toBe("owner_agent");
       expect(Number(row.actor_user_id)).toBe(boss);
-      expect(Number(row.key_id)).toBe(ownerKeyId);
+      const keyId = row.event_type === "pot.distribution_posted" ? postingKey.key.id : ownerKeyId;
+      expect(row.metadata).toMatchObject({ agentKeyId: keyId, actorAgentKeyId: keyId, onBehalfOfUserId: boss, reason: WHY });
     }
+    await testDb.pool.query("delete from agent_keys where id = $1", [postingKey.key.id]);
+    const detached = await testDb.pool.query("select agent_key_id, reversed_at from pot_distributions where id = $1", [distId]);
+    expect(detached.rows).toEqual([{ agent_key_id: null, reversed_at: expect.any(Date) }]);
+  });
+
+  it("attributes a sale added to a previously submitted report to the owner key", async (context) => {
+    if (!testDb) return context.skip();
+    const shift = await insertShift(anna, "2026-11-15T07:00:00Z", "2026-11-15T15:00:00Z");
+    const report = await handInAndConfirm(asSession, "anna", shift);
+    const transactionId = await bellasSale("fixture-added-line", 400);
+    await testDb.pool.query("update transactions set occurred_at = $1 where id = $2", [`${report.shift.reportDate}T12:00:00Z`, transactionId]);
+    const { token, key } = await issueOwnerAgentKey(app, { name: "fixture-delivery", ownerLogin: "boss", expiresInDays: 7 }, AUDIT);
+    const result = await call("sale.decide", { transactionId, kind: "owner", shares: [{ person: "anna", percent: 100 }], note: "fixture" }, { key: token });
+    expect(result.statusCode, result.body).toBe(200);
+    const event = await testDb.pool.query(`select e.door, e.actor_agent_key_id::int as key, e.on_behalf_of_user_id::int as owner, e.changes->>'reason' as reason
+      from object_events e join shift_handins h on e.object_id = h.id::text where h.shift_id = $1 and e.event = 'shift_report.settled'
+      and e.changes->>'transactionId' = $2`, [shift, String(transactionId)]);
+    expect(event.rows).toEqual([{ door: "api", key: key.id, owner: boss, reason: WHY }]);
   });
 });

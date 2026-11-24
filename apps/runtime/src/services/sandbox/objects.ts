@@ -134,10 +134,8 @@ export const ROUTE_OBJECTS: Readonly<Record<string, Readonly<Record<string, Fiel
   adminConfigUpdate: { key: "none", patches: "none" },
   // A batch of fans by their platform ids, read through the batch's own page or model (the route's pageLabel/modelSlug).
   spenderBatch: { fans: "none" },
-  // The owner's agent door (owner-agent-door.ts): its operation's arguments name a sale question (a row of sale_claims)
-  // and the rest by their own names; the key is live, so an object of the test realm is missing. A person's `code` is
-  // the services' own to answer (a test person is their 404): a hidden code would fail the code's own pattern (a 400).
-  ownerAgentCall: { args: "nested", questionId: "claim" },
+  // The operation disambiguates questionId inside args: sale.close names a claim, swaps name team questions.
+  ownerAgentCall: { args: "nested" },
 };
 
 /** Which object a route's field names; undefined — the field is not classified. */
@@ -207,19 +205,20 @@ function namedValues(
 ): NamedValue[] {
   const out: NamedValue[] = [];
   const named = (value: unknown) => typeof value === "number" || (typeof value === "string" && value.length > 0);
-  const walk = (part: unknown, depth: number) => {
+  const walk = (part: unknown, depth: number, operation?: unknown) => {
     // Only what a JSON parser makes: a plain object or an array. A raw body (a webhook's Buffer), a typed array, a date
     // or a class instance is never entered — a Buffer would be walked byte by byte.
     if (depth > 4 || !isPlainContainer(part)) return;
     if (Array.isArray(part)) {
-      for (const one of part) walk(one, depth + 1);
+      for (const one of part) walk(one, depth + 1, operation);
       return;
     }
     const record = part as Record<string, unknown>;
     for (const [field, raw] of Object.entries(record)) {
-      const kind = fieldObject(routeKey, field);
+      const kind = routeKey === "ownerAgentCall" && operation === "sale.close" && field === "questionId"
+        ? "claim" : fieldObject(routeKey, field);
       if (kind === "pageLabel" && checked !== undefined && checked.holder === record && checked.field === field) continue;
-      if (kind === "nested") walk(raw, depth + 1);
+      if (kind === "nested") walk(raw, depth + 1, field === "args" && depth === 0 ? record.op : operation);
       if (kind === undefined || kind === "none" || kind === "nested") continue;
       if (Array.isArray(raw)) {
         raw.forEach((value, index) => { if (named(value)) out.push({ holder: raw, at: index, kind, value: String(value) }); });

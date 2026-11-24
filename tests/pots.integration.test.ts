@@ -418,6 +418,9 @@ describe("Workboard pots (0443, H11)", () => {
     expect(createdPayload.created.map((p) => p.code).sort()).toEqual(["page-mia-1", "page-mia-empty", "page-nova-1"]);
     expect(createdPayload.created.every((p) => p.autoPost)).toBe(true);
 
+    const audit = await testDb.pool.query("select source, metadata from audit_events where event_type = 'pot.create_page_pots'");
+    expect(audit.rows).toEqual([{ source: "workboard", metadata: { potIds: createRes.json().created.map((pot: { id: number }) => pot.id), skippedPageLabels: [] } }]);
+
     const repeatRes = await asOwner("POST", "/api/v1/pots/create-page-pots", { opensOn: "2026-11-18" });
     expect(repeatRes.statusCode).toBe(200);
     expect((repeatRes.json() as { created: unknown[]; skippedPageLabels: string[] }).created).toHaveLength(0);

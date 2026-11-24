@@ -375,15 +375,16 @@ export async function insertPotDistribution(
     lines: readonly PotDistributionLineRow[];
     parts: ReadonlyArray<{ transactionId: number; pageId: number; baseMills: number }>;
     postedByUserId: number | null;
+    agentKeyId?: number | null;
     postedAt: Date;
   },
 ): Promise<PotDistributionRow> {
   const inserted = await db.execute<{ id: string | number }>(sql`
-    insert into pot_distributions (pot_id, day, formula, base_mills, lines, posted_at, posted_by_user_id)
+    insert into pot_distributions (pot_id, day, formula, base_mills, lines, posted_at, posted_by_user_id, agent_key_id)
     values (
       ${input.potId}, ${input.day}::date, ${JSON.stringify(input.formula)}::jsonb,
       ${input.baseMills}, ${JSON.stringify(input.lines)}::jsonb,
-      ${input.postedAt.toISOString()}::timestamptz, ${input.postedByUserId}
+      ${input.postedAt.toISOString()}::timestamptz, ${input.postedByUserId}, ${input.agentKeyId ?? null}
     ) returning id`);
   const distributionId = num(inserted.rows[0]!.id);
   const partsPayload = input.parts.map((part) => ({
