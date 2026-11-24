@@ -16,7 +16,7 @@ import {
   type ReportView,
   type SoloPageCandidate,
 } from "../apps/runtime/src/services/sale-claim-rules.ts";
-import { SALE_RULE, homeOfSale, homesOfSales, type RuleMark, type RuleSale, type RuleWork } from "../apps/runtime/src/services/sale-rule.ts";
+import { homeOfSale, homesOfSales, type RuleMark, type RuleSale, type RuleWork } from "../apps/runtime/src/services/sale-rule.ts";
 
 // Заявки и договорённости (package G): what people say moves a sale's home only when the people the rule names agree,
 // and the owner's decision comes before the rule; which statements of handed-in reports reach another person; what a
@@ -50,9 +50,6 @@ describe("the rule: the owner's decision and agreeing statements first", () => {
     expect(claimOnly).toMatchObject({ kind: "shift", reason: "holder", shares: [{ userId: 102, mills: 36_000 }] });
     const agreed = homeOfSale({ ...base, marks: [said(101, "mine"), said(102, "not_mine")] }, [holder, other], [], later);
     expect(agreed).toMatchObject({ kind: "shift", reason: "agreed", shares: [{ userId: 101, mills: 36_000, percent: 100 }] });
-    // The rule as Go has it does not take agreement before itself.
-    expect(homeOfSale({ ...base, marks: [said(101, "mine"), said(102, "not_mine")] }, [holder, other], [], later, { ...SALE_RULE, ownerAndAgreementFirst: false }))
-      .toMatchObject({ reason: "holder" });
   });
 
   it("splits a holder's sale in halves when both say «делим» naming each other, the odd mill to the lower user id", () => {
@@ -91,7 +88,12 @@ describe("the rule: the owner's decision and agreeing statements first", () => {
       sale("2026-11-05 21:00", 12_000, []),
       { ...sale("2026-11-05 13:30", 24_000, [holder, other]), lastWriter: 101 },
     ];
-    expect(homesOfSales(sales, [holder, other], [], later)).toEqual(homesOfSales(sales, [holder, other], [], later, { ...SALE_RULE, ownerAndAgreementFirst: false }));
+    expect(homesOfSales(sales, [holder, other], [], later).map((one) => [one.kind, one.reason])).toEqual([
+      ["decide", "no_last_writer"],
+      ["shift", "holder"],
+      ["nobody", "no_holder"],
+      ["shift", "last_writer"],
+    ]);
   });
 });
 

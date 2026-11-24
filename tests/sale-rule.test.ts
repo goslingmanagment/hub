@@ -1,13 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentTeamSale, AgentTeamSalesResponse, AgentTeamWork } from "@agency_hub_core/contracts";
 import type { PersonScheduleSlotRow } from "@agency_hub_core/db";
 
 import { leftAtOf, ruleSlotsOf } from "../apps/runtime/src/services/sale-homes.ts";
-import { slotsOfFile } from "../apps/runtime/src/services/sale-rule-cli.ts";
-import { compareSaleRule, type LedgerExport, type LedgerFactHome } from "../apps/runtime/src/services/sale-rule-compare.ts";
 import {
-  LEDGER_GO_RULE,
   POT_OBSHAK,
   homeOfSale,
   homesOfSales,
@@ -22,10 +18,8 @@ import {
   type SaleShare,
 } from "../apps/runtime/src/services/sale-rule.ts";
 
-// Whose a sale is (sale-rule.ts). The first block is ledger's internal/split/split_test.go (origin/main 52968b6) case
-// by case: the same inputs give the same homes, so Hub's port and ledger's Go are pinned to one set of examples. The
-// owner's newer answers (Gengar's SKILL.md §4, 2026-11-12) follow, each against Go's answer for the same facts.
-// Synthetic team: chatters 101, 102 and 103, a team lead 201; pages page-a and page-b; times are Moscow, November 2026.
+// Whose a sale is (sale-rule.ts). Synthetic team: chatters 101, 102 and 103, a team lead 201;
+// pages page-a and page-b; times are Moscow, November 2026.
 
 const PAGE_A = 1;
 const msk = (at: string) => Date.parse(`${at.replace(" ", "T")}:00+03:00`);
@@ -285,15 +279,13 @@ describe("the owner's claim of a nobody's sale", () => {
   });
 });
 
-// The owner's newer answers (Gengar's SKILL.md §4.2 and §4.4, 2026-11-12). Each beside Go's answer (LEDGER_GO_RULE).
-describe("the owner's answers newer than ledger's Go", () => {
+// Left sender and slot junction rules (owner, 2026-11-12).
+describe("left sender and slot junction rules", () => {
   it("a PPV of a sender who left the team is the shift's it was bought in", () => {
     const holder = shift(101, "2026-11-05 13:00", "2026-11-05 20:00");
     const left = msk("2026-11-04 12:00");
     const ppv = ppvBy(sale("ppv", "2026-11-05 14:00", 24_000, holder), 102, "chatter", left);
     expectHome(homeOfSale(ppv, [holder], [], later), "shift", "ppv_sender_left", whole100(holder, 24_000));
-    // Go: the sender's PPV, no shift of theirs within the wait — nobody's.
-    expectHome(homeOfSale(ppv, [holder], [], later, LEDGER_GO_RULE), "nobody", "ppv_sender_no_shift");
     // Within the wait it does not wait for a shift that will not come.
     expectHome(homeOfSale(ppv, [holder], [], msk("2026-11-06 12:00")), "shift", "ppv_sender_left", whole100(holder, 24_000));
     // Nobody held the page: nobody's, as any sale no shift held.
@@ -324,8 +316,7 @@ describe("the owner's answers newer than ledger's Go", () => {
     const got = homeOfSale(subscription, [evening, night], slots, later);
     expectHome(got, "shift", "slot_owner", whole100(night, 4_000));
     expect(got.slotJunction).toBe(true);
-    // Go knows no slots: it waits for the owner. So does this rule with no slots given.
-    expectHome(homeOfSale(subscription, [evening, night], slots, later, LEDGER_GO_RULE), "decide", "no_last_writer");
+    // With no slots given: waits for the owner.
     expectHome(homeOfSale(subscription, [evening, night], [], later), "decide", "no_last_writer");
     // A holder outside the slot who last wrote to the fan sold it personally; the one in the slot keeps hers.
     expectHome(homeOfSale({ ...subscription, lastWriter: 101 }, [evening, night], slots, later), "shift", "last_writer", whole100(evening, 4_000));
@@ -528,142 +519,5 @@ describe("the people registry's slots and leaving", () => {
     const leftAt = leftAtOf({ ...none, personLeft: { leftOn: "2026-11-04", recordedAt: dateAt("2026-11-12 11:51") } });
     expectHome(homeOfSale(ppvBy(sale("ppv", "2026-11-05 14:00", 24_000, holder), 102, "chatter", leftAt), [holder], [], later),
       "shift", "ppv_sender_left", whole100(holder, 24_000));
-  });
-
-  it("reads a slots file written before weekdays as every day", () => {
-    expect(slotsOfFile([{ personId: 101, pageId: null, startMinute: 960, endMinute: 0, validFrom: null, validTo: null }]))
-      .toEqual([{ personId: 101, pageId: null, startMinute: 960, endMinute: 0, weekdays: null, validFrom: null, validTo: null }]);
-    expect(() => slotsOfFile([{ personId: 101, startMinute: 960, endMinute: 0, weekdays: ["fri", "funday"] }])).toThrow(/weekdays/);
-  });
-});
-
-// The comparison's range (sale-rule-compare.ts): a work is whole in the day of its middle, as Workboard counts it.
-describe("the comparison's range edge", () => {
-  const iso = (at: string) => new Date(msk(at)).toISOString();
-  const work = (user: number, from: string, to: string): AgentTeamWork => ({
-    ref: `${user}:${iso(from)}`, userId: user, username: `chatter-${user}`, role: "chatter", kind: "shift", startedAt: iso(from),
-    endedAt: iso(to), ongoing: false, workedMinutes: 300, pages: [{ pageLabel: "page-a", messages: 40, salesFrom: iso(from) }],
-  });
-  const teamSale = (ref: string, at: string, net: number, ...holders: AgentTeamWork[]): AgentTeamSale => ({
-    transactionRef: ref, pageLabel: "page-a", platform: "onlyfans", fanRef: "fan-1", kind: "tip", netMills: net, occurredAt: iso(at),
-    holders: holders.map((one) => one.ref), ppvSender: null, ppvSentAt: null, ppvWithoutAuthor: false, postTip: false, campaign: false,
-    lastWriterUserId: null, writers: [], marks: [], resolution: null, decision: null,
-  });
-  const factRow = (ref: string, at: string, net: number, user: number, holder: AgentTeamWork, day: string): LedgerFactHome => ({
-    ref, seq: 0, window: "w", at: iso(at), page: "page-a", kind: "tip", netMicros: net * 1000, home: "shift", reason: "holder",
-    userId: user, username: `chatter-${user}`, person: null, workRef: holder.ref, shareMicros: net * 1000, day,
-  });
-
-  it("counts an evening shift's sales past the last midnight in its day, and leaves the next day's shifts out", () => {
-    const evening = work(101, "2026-11-11 18:00", "2026-11-12 02:00");
-    const nextMorning = work(102, "2026-11-12 09:00", "2026-11-12 15:00");
-    const sales = [
-      teamSale("1", "2026-11-11 20:00", 300_000, evening),
-      teamSale("2", "2026-11-12 01:00", 430_000, evening),
-      teamSale("3", "2026-11-12 10:00", 50_000, nextMorning),
-    ];
-    const answer: AgentTeamSalesResponse = {
-      from: iso("2026-11-10 00:00"), to: iso("2026-11-13 00:00"), workFrom: iso("2026-11-02 00:00"), workTo: iso("2026-11-12 18:00"),
-      pages: ["page-a"], works: [evening, nextMorning], sales, serverNow: iso("2026-11-12 18:00"),
-    };
-    const ledger: LedgerExport = {
-      windows: [], works: new Map(), sales: new Map(), pages: ["page-a"], claims: [], layouts: [], layoutLines: [], posted: [],
-      homes: [
-        factRow("1", "2026-11-11 20:00", 300_000, 101, evening, "2026-11-11"),
-        factRow("2", "2026-11-12 01:00", 430_000, 101, evening, "2026-11-11"),
-        factRow("3", "2026-11-12 10:00", 50_000, 102, nextMorning, "2026-11-12"),
-      ],
-    };
-    const report = compareSaleRule({
-      first: "2026-11-11", last: "2026-11-11", hubNow: new Date(msk("2026-11-12 18:00")), hub: [{ window: null, answer }], ledger,
-      leftAt: new Map(), pageIds: new Map([["page-a", PAGE_A]]), slots: [], slotsSource: "none", platformRefOf: new Map(),
-      workboard: [{ userId: 101, username: "chatter-101", daily: [{ date: "2026-11-11", salesNetMills: 730_000 }] }],
-    });
-    expect(report.sales.map((one) => one.ref)).toEqual(["1", "2"]);
-    expect(report.sales.every((one) => one.same)).toBe(true);
-    expect(report.days.map(({ person, day, workboardMills, ruleMills, factsMills }) => ({ person, day, workboardMills, ruleMills, factsMills })))
-      .toEqual([{ person: "chatter-101", day: "2026-11-11", workboardMills: 730_000, ruleMills: 730_000, factsMills: 730_000 }]);
-  });
-
-  // Gengar's layouts against the rule, by the one pairing of report lines with sales (report-line-pairs.ts).
-  describe("a sale paid in a layout as «долёт»", () => {
-    const shiftOf = work(101, "2026-11-11 12:00", "2026-11-11 20:00");
-    const lastWeek = work(101, "2026-11-06 12:00", "2026-11-06 20:00");
-    const inTime = teamSale("11", "2026-11-11 13:00", 40_000, shiftOf);
-    const lateByHubId = teamSale("12", "2026-11-11 19:40", 15_990, shiftOf);
-    const lateInWords = teamSale("13", "2026-11-11 19:55", 8_000, shiftOf);
-    const neverPaid = teamSale("14", "2026-11-11 18:00", 21_000, shiftOf);
-    const weekBefore = teamSale("5", "2026-11-06 19:50", 9_990, lastWeek);
-    const answerOf = (from: string, to: string, works: AgentTeamWork[], sales: AgentTeamSale[]): AgentTeamSalesResponse => ({
-      from: iso(from), to: iso(to), workFrom: iso("2026-11-02 00:00"), workTo: iso("2026-11-14 18:00"), pages: ["page-a"], works, sales, serverNow: iso("2026-11-14 18:00"),
-    });
-    const layout = (id: number, reportDate: string, totalMicros: number) => ({
-      id, person: null, userId: 101, username: "chatter-101", reportDate, totalMicros, status: "posted",
-    });
-    const compare = (ledger: Partial<LedgerExport>) => compareSaleRule({
-      first: "2026-11-11", last: "2026-11-11", hubNow: new Date(msk("2026-11-14 18:00")),
-      hub: [{ window: null, answer: answerOf("2026-11-10 00:00", "2026-11-13 00:00", [shiftOf], [inTime, neverPaid, lateByHubId, lateInWords]) }],
-      lead: { windows: [{ window: null, answer: answerOf("2026-11-03 00:00", "2026-11-10 00:00", [lastWeek], [weekBefore]) }], slots: [] },
-      ledger: {
-        windows: [], works: new Map(), sales: new Map(), pages: ["page-a"], claims: [], layouts: [], layoutLines: [], posted: [],
-        // The ledger's facts agree with Hub's rule: only the layouts are in question here.
-        homes: [inTime, neverPaid, lateByHubId, lateInWords].map((sale) => factRow(sale.transactionRef, "2026-11-11 13:00", sale.netMills, 101, shiftOf, "2026-11-11")),
-        ...ledger,
-      },
-      leftAt: new Map(), pageIds: new Map([["page-a", PAGE_A]]), slots: [], slotsSource: "none", workboard: [],
-      // Hub knows both numbers of its own sales: a layout's line names a sale by the platform's.
-      platformRefOf: new Map(["5", "11", "12", "13", "14"].map((ref) => [ref, `pf-${ref}`])),
-    });
-
-    it("is paid, not «not in the layout»: by the platform's reference, by Hub's id, by the words of an older add", () => {
-      const report = compare({
-        // Wednesday's layout was cut before the late sales; Thursday's (past the range) pays them, and counts one more by word.
-        layouts: [layout(1, "2026-11-11", 49_990_000), layout(2, "2026-11-12", 35_990_000)],
-        layoutLines: [
-          { reportId: 1, ref: "pf-11", page: "page-a", netMicros: 40_000_000 },
-          // The week before's sale, added in words: Hub's facts of those days are read for it.
-          { reportId: 1, ref: null, page: "page-a", netMicros: 9_990_000, what: "долёт ппв 19:50 от 06.11" },
-          { reportId: 2, ref: "12", page: "page-a", netMicros: 15_990_000, what: "долёт" },
-          { reportId: 2, ref: null, page: "page-a", netMicros: 8_000_000, what: "долёт: тип 19:55" },
-          { reportId: 2, ref: null, page: "page-a", netMicros: 12_000_000, what: "перевод мимо площадки" },
-        ],
-      });
-      const bySale = Object.fromEntries(report.sales.map((one) => [one.ref, { gengar: one.gengar, missing: one.missingFromLayout }]));
-      expect(bySale).toEqual({
-        "11": { gengar: [{ person: "chatter-101", mills: 40_000 }], missing: [] },
-        "12": { gengar: [{ person: "chatter-101", mills: 15_990 }], missing: [] },
-        "13": { gengar: [{ person: "chatter-101", mills: 8_000 }], missing: [] },
-        "14": { gengar: [], missing: ["chatter-101 2026-11-11"] },
-      });
-      // Over the range: the one sale no line pays; nothing by word in Wednesday's layout (the week before's is paid).
-      expect(report.people).toEqual([{ person: "chatter-101", userId: null, unreported: { count: 1, mills: 21_000 }, byWordsMills: 0 }]);
-      // The layout of the day after the range pays sales; it is no day of the range.
-      expect(report.days.map((day) => [day.day, day.layoutMills])).toEqual([["2026-11-11", 49_990]]);
-    });
-
-    it("an amount no sale of the person answers for is «по словам», on the range's layouts only", () => {
-      const report = compare({
-        layouts: [layout(1, "2026-11-11", 96_990_000), layout(2, "2026-11-12", 30_000_000)],
-        layoutLines: [
-          { reportId: 1, ref: "pf-11", page: "page-a", netMicros: 40_000_000 },
-          { reportId: 1, ref: "pf-12", page: "page-a", netMicros: 15_990_000 },
-          { reportId: 1, ref: "pf-13", page: "page-a", netMicros: 8_000_000 },
-          { reportId: 1, ref: "pf-14", page: "page-a", netMicros: 21_000_000 },
-          { reportId: 1, ref: null, page: "page-a", netMicros: 12_000_000, what: "перевод мимо площадки" },
-          // A reference that is none of the person's sales, and a second line of a sale already paid.
-          { reportId: 1, ref: "pf-of-someone-else", page: "page-a", netMicros: 25_000_000, what: "ппв другой смены" },
-          { reportId: 2, ref: "pf-14", page: "page-a", netMicros: 21_000_000, what: "долёт" },
-          { reportId: 2, ref: null, page: "page-a", netMicros: 9_000_000, what: "со слов" },
-        ],
-      });
-      expect(report.sales.every((one) => one.missingFromLayout.length === 0)).toBe(true);
-      expect(report.people).toEqual([{ person: "chatter-101", userId: null, unreported: { count: 0, mills: 0 }, byWordsMills: 37_000 }]);
-    });
-
-    it("someone with no layout of the range is missing from none", () => {
-      const report = compare({});
-      expect(report.sales.flatMap((one) => one.missingFromLayout)).toEqual([]);
-      expect(report.people).toEqual([]);
-    });
   });
 });

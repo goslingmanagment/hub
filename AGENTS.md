@@ -125,8 +125,7 @@ the owner's machine (outside this repository); a change that moves a home or add
   (`saleChain`, agents `agentSaleChain` / `hub sale-chain`), it computes nothing anew and says «неизвестно» when a
   source does not answer. Shown only by `SaleChainTrigger` (`packages/ui/src/components/SaleChain.tsx`): the sale's amount.
 - **What stands between a day's shifts and its report**: `services/shift-report-notes.ts` (`shiftReportNotes`),
-  on the one pairing of report lines with sales, `services/report-line-pairs.ts` (the CLI `sale-rule:compare` reads the
-  same). A report line names its sale by reference (an amount added by hand too: the ledger's
+  on the one pairing of report lines with sales, `services/report-line-pairs.ts`. A report line names its sale by reference (an amount added by hand too: the ledger's
   `adds[].transaction_ref`). «Смены» and «Мои смены» show its named differences («не в отчёте», «в отчёте по
   словам», «в посте иначе»), never a second sum compared in a browser.
 - **A custom order**: `services/custom-orders/` (table `custom_orders`, code `K-123`): one order from the fan's chat

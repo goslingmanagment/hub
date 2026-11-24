@@ -5,10 +5,7 @@ import { weekdayOfDay, type RuleWeekday } from "./schedule-slots.ts";
 
 /**
  * Whose a sale is: one rule for the whole of Hub, a pure function of the facts
- * (`now` is an argument). A port of the agency ledger's `internal/split`
- * (split.go and marks.go, ledger origin/main 52968b6) with the owner's newer
- * answers of Gengar's shift report skill (SKILL.md §4, 2026-11-12), each behind
- * its own line of SALE_RULE. The homes it gives are written to `sale_homes`
+ * (`now` is an argument). The homes it gives are written to `sale_homes`
  * (sale-homes.ts), read by Hub's screens, and served to the ledger on
  * `GET /api/v1/agent/sale-homes/feed`.
  *
@@ -18,39 +15,34 @@ import { weekdayOfDay, type RuleWeekday } from "./schedule-slots.ts";
  *     their own shift or look-in that holds it; else in their shift going at
  *     the purchase, on another page; else in their next shift, if it begins
  *     within SALE_RULE.ppvWaitMs (till then it waits, later nobody's). A PPV of
- *     a team lead or the owner has no sender here. NEWER (owner, 2026-10-20 and
- *     2026-11-12, `senderLeftGoesToHolders`): when no shift of a sender who has
- *     left the team takes it, it goes by the shifts that held it, as 3.
+ *     a team lead or the owner has no sender here. When no shift of a sender who
+ *     has left the team takes it, it goes by the shifts that held it, as 3.
  *  2. A tip under a wall post and an OnlyFans Campaign contribution are the
  *     page's pot (общак), no shift's.
  *  3. The rest by the shifts that hold the sale (H): one person's — theirs;
  *     several — the one whose person last wrote to the fan (48 h, Hub's fact);
- *     none of them — NEWER (owner, 2026-11-12 10:36, `junctionToSlotOwner`):
- *     the one person of H whose schedule slot on the page runs at the sale
- *     (`slots`, an argument), when exactly one does, whether or not she wrote;
- *     else it waits for a decision (the owner's split of the disputed sale, or
- *     the chatters' confirmed marks when they agree). A holder outside the slot
- *     who last wrote keeps it («sold it personally»): that is the last-writer
- *     step above, before the slot is asked. No shift holds it: the look-in
- *     whose person last wrote, else nobody's.
+ *     none of them — the one person of H whose schedule slot on the page runs at
+ *     the sale (`slots`, an argument), when exactly one does, whether or not she
+ *     wrote; else it waits for a decision (the owner's split of the disputed
+ *     sale, or the chatters' confirmed marks when they agree). A holder outside
+ *     the slot who last wrote keeps it («sold it personally»): that is the
+ *     last-writer step above, before the slot is asked. No shift holds it: the
+ *     look-in whose person last wrote, else nobody's.
  *  4. A sale before the rule, or one the old rule gives to work of a Moscow day
  *     before it (the night of 1 November past midnight), is before the rule.
- *  5. A nobody's sale the owner gave to a person who claimed it (ledger's
- *     sale_claims) is theirs whole, on no work. A claim moves no other home:
- *     when later facts find a holder, the claim stops applying.
+ *  5. A nobody's sale the owner gave to a person who claimed it is theirs whole,
+ *     on no work. A claim moves no other home: when later facts find a holder,
+ *     the claim stops applying.
  *
- * Before all of it but 4 (plan §4.1, `ownerAndAgreementFirst`): the owner's
- * decision of a sale — his split, «никому», a pot — and the statements of the
- * people the rule gives it to agreeing to give it away, in Go's own forms
- * only: one «моё» with every person of the home saying «не моё», two «делим»
+ * Before all of it but 4: the owner's decision of a sale — his split, «никому»,
+ * a pot — and the statements of the people the rule gives it to agreeing to give
+ * it away: one «моё» with every person of the home saying «не моё», two «делим»
  * naming each other with the rest of the home saying «не моё», everyone of the
  * home saying «не моё». A claim alone never moves a home (a nobody's sale, a
- * pot's, one the owner must decide keep theirs); at a junction Go's marks stand
- * as they are (a lone «моё» there settles it). Go: off.
+ * pot's, one the owner must decide keep theirs); at a junction marks stand as
+ * they are (a lone «моё» there settles it).
  *
- * The same examples pin this file and ledger's Go (tests/sale-rule.test.ts is
- * split_test.go case by case). Money is mills, split through money.ts as the
- * ledger splits it.
+ * Money is mills, split through money.ts.
  */
 
 const DAY_MS = 86_400_000;
@@ -70,12 +62,6 @@ export const SALE_RULE = {
    * (chatter-shifts.ts SALE_LAST_WRITER_HOURS): the screens read the same one.
    */
   lastWriterHours: SALE_LAST_WRITER_HOURS,
-  /** A PPV of a sender who left the team goes by the shifts that held it (owner, 2026-10-20, 2026-11-12). Go: off. */
-  senderLeftGoesToHolders: true,
-  /** At a junction where no holder wrote last, the one holder whose schedule slot runs takes it (owner, 2026-11-12). Go: off. */
-  junctionToSlotOwner: true,
-  /** The owner's decision and the agreeing statements of the people the rule names come before the rule (plan §4.1). Go: off. */
-  ownerAndAgreementFirst: true,
 } as const;
 
 export type SaleRuleConfig = {
@@ -83,14 +69,6 @@ export type SaleRuleConfig = {
   readonly since: number;
   readonly ppvWaitMs: number;
   readonly lastWriterHours: number;
-  readonly senderLeftGoesToHolders: boolean;
-  readonly junctionToSlotOwner: boolean;
-  readonly ownerAndAgreementFirst: boolean;
-};
-
-/** Ledger's Go `internal/split` as it stands: the owner's newer answers off. For the comparison with `fact_homes`. */
-export const LEDGER_GO_RULE: SaleRuleConfig = {
-  ...SALE_RULE, version: "ledger-go", senderLeftGoesToHolders: false, junctionToSlotOwner: false, ownerAndAgreementFirst: false,
 };
 
 /** The kinds of a home. */
@@ -386,7 +364,7 @@ const homeOf = (
 
 function home(rule: SaleRuleConfig, sale: RuleSale, ix: Index, now: number): SaleHome {
   const found = ruleHome(rule, sale, ix, now);
-  if (rule.ownerAndAgreementFirst && found.kind !== "before_rule") {
+  if (found.kind !== "before_rule") {
     const first = ownerOrAgreed(sale, found, ix);
     if (first !== null) return first;
   }
@@ -424,7 +402,7 @@ function ruleHome(rule: SaleRuleConfig, sale: RuleSale, ix: Index, now: number):
       const own = homeOfSender(rule, sale, sender.userId, [...shifts, ...visits], ix, now);
       const left = sender.leftAt !== null && sender.leftAt <= now;
       const noShiftTakesIt = own.kind === "waiting" || own.reason === "ppv_sender_no_shift";
-      if (!(rule.senderLeftGoesToHolders && left && noShiftTakesIt)) return own;
+      if (!(left && noShiftTakesIt)) return own;
       // A sender who left the team: the PPV is the shift's that held it (owner, 2026-10-20 and 2026-11-12).
       const byHolders = holdersHome(rule, sale, shifts, visits, old, ix);
       return byHolders.shares.length > 0 ? { ...byHolders, reason: "ppv_sender_left" } : byHolders;
@@ -447,12 +425,10 @@ function holdersHome(rule: SaleRuleConfig, sale: RuleSale, shifts: readonly Rule
   if (oneUser(old) && oneUser(shifts)) return whole(old[0]!, sale.netMills, "holder");
   if (oneUser(old)) return whole(old[0]!, sale.netMills, "last_writer");
   // Several people's shifts, none of them wrote last: the one whose slot runs, else the owner decides.
-  if (rule.junctionToSlotOwner) {
-    const slotted = [...new Set(shifts.map((work) => work.userId))]
-      .filter((personId) => slotRuns(ix.slots, { personId, pageId: sale.pageId, at: sale.occurredAt }));
-    if (slotted.length === 1) {
-      return { ...whole(shifts.find((work) => work.userId === slotted[0])!, sale.netMills, "slot_owner"), slotJunction: true };
-    }
+  const slotted = [...new Set(shifts.map((work) => work.userId))]
+    .filter((personId) => slotRuns(ix.slots, { personId, pageId: sale.pageId, at: sale.occurredAt }));
+  if (slotted.length === 1) {
+    return { ...whole(shifts.find((work) => work.userId === slotted[0])!, sale.netMills, "slot_owner"), slotJunction: true };
   }
   return { ...decide(sale, [...shifts, ...visits], shifts, ix), slotJunction: true };
 }

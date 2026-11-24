@@ -1,22 +1,17 @@
-import { readFile } from "node:fs/promises";
-
 import { InvalidArgumentError, type Command } from "commander";
 
 import { createDb, createPool, readSaleRuleSwitch, setSaleRuleSwitch } from "@agency_hub_core/db";
 
 import { createAppContext } from "../bootstrap.ts";
-import { NO_SLOTS, refreshSaleHomes, registrySlots, type SaleSlotProvider } from "./sale-homes.ts";
+import { refreshSaleHomes } from "./sale-homes.ts";
 import { formatBeforeAfter, runBeforeAfter } from "./sale-rule-before-after.ts";
-import { formatSaleRuleComparison, ledgerCli, runSaleRuleComparison } from "./sale-rule-compare.ts";
-import { RULE_WEEKDAYS, type RuleSlot, type RuleWeekday } from "./sale-rule.ts";
 import { syncShiftRowsSince } from "./shift-rows.ts";
 
 /**
  * The one rule of whose a sale is and the shift rows, from a terminal:
- *  - `sale-rule:compare` — read-only on both sides: Hub's homes by the rule against the ledger's `fact_homes`, Gengar's
- *    layouts and the posted reports (sale-rule-compare.ts). It forces its own session read-only and refuses to run
- *    if the database does not say so. With `--before-after`, Hub alone: «было и стало» of the screens' switch
- *    (sale-rule-before-after.ts), «Смены» off and on from `--screens-from`.
+ *  - `sale-rule:compare` — read-only on Hub alone: «было и стало» of the screens' switch (sale-rule-before-after.ts),
+ *    «Смены» off and on from `--screens-from`. It forces its own session read-only and refuses to run if the database
+ *    does not say so.
  *  - `sale-homes:refresh`, `shifts:sync` — write Hub's own shadow tables (`sale_homes`, `shifts`), as their jobs do.
  *  - `sale-rule:switch` — the screens' switch to the rule (off until the owner's date).
  */
@@ -37,25 +32,6 @@ function parseDays(value: string): number {
 
 const mskStart = (day: string) => new Date(`${day}T00:00:00+03:00`);
 
-/** A slots file's RuleSlot[]; a slot without `weekdays` runs every day (files written before the registry). */
-export function slotsOfFile(value: unknown): RuleSlot[] {
-  if (!Array.isArray(value)) throw new Error("--slots: a JSON array of slots");
-  const days: ReadonlySet<string> = new Set(RULE_WEEKDAYS);
-  return value.map((one: Partial<RuleSlot> & { weekdays?: unknown }, at): RuleSlot => {
-    if (typeof one.personId !== "number" || typeof one.startMinute !== "number" || typeof one.endMinute !== "number") {
-      throw new Error(`--slots: slot ${at} needs personId, startMinute, endMinute`);
-    }
-    const weekdays = one.weekdays ?? null;
-    if (weekdays !== null && !(Array.isArray(weekdays) && weekdays.every((day) => days.has(String(day))))) {
-      throw new Error(`--slots: slot ${at} has weekdays other than ${RULE_WEEKDAYS.join(", ")}`);
-    }
-    return {
-      personId: one.personId, pageId: one.pageId ?? null, startMinute: one.startMinute, endMinute: one.endMinute,
-      weekdays: weekdays as RuleWeekday[] | null, validFrom: one.validFrom ?? null, validTo: one.validTo ?? null,
-    };
-  });
-}
-
 /** A connection string whose every session is read-only, whatever the string already sets. */
 export function readOnlyConnectionString(url: string): string {
   const parsed = new URL(url);
@@ -67,18 +43,12 @@ export function readOnlyConnectionString(url: string): string {
 export function registerSaleRuleCommands(program: Command): void {
   program
     .command("sale-rule:compare")
-    .description("Whose each sale is: Hub's rule against the ledger's fact_homes, Gengar's layouts and the posts (read-only)")
+    .description("«Было и стало» of the screens' switch: «Смены» off and on, per person and day (read-only)")
     .requiredOption("--from <day>", "first Moscow day, YYYY-MM-DD", parseDay)
     .option("--to <day>", "last Moscow day, YYYY-MM-DD (default: --from)", parseDay)
-    .option("--ledger-bin <path>", "the ledger CLI: `ledger sql --json`, SELECT only, its own credentials (not with --before-after)")
-    .option("--before-after", "«было и стало» of the screens' switch: «Смены» off and on, per person and day, and every sale that moves")
-    .option("--screens-from <day>", "with --before-after: the switch's first Moscow day (default: --from)", parseDay)
-    .option("--homes <stored|live>", "with --before-after: the homes as the screens read them (stored, the open window now) or all computed now", "stored")
-    .option(
-      "--slots <registry|none|file>",
-      "the people's schedule slots: registry (the people registry, as the job), none, or a JSON file of sale-rule.ts RuleSlot[]",
-      "registry",
-    )
+    .option("--before-after", "«было и стало» of the screens' switch (default and only mode)")
+    .option("--screens-from <day>", "the switch's first Moscow day (default: --from)", parseDay)
+    .option("--homes <stored|live>", "the homes as the screens read them (stored, the open window now) or all computed now", "stored")
     .option("--json", "the whole comparison as JSON")
     .action(async (options) => {
       const url = process.env.DATABASE_URL;
@@ -86,26 +56,16 @@ export function registerSaleRuleCommands(program: Command): void {
       const first = options.from as string;
       const last = (options.to as string | undefined) ?? first;
       if (last < first) throw new Error("--to is before --from");
-      if (options.beforeAfter !== true && typeof options.ledgerBin !== "string") throw new Error("--ledger-bin is required (or --before-after)");
       if (options.homes !== "stored" && options.homes !== "live") throw new Error("--homes: stored or live");
-      const given = String(options.slots);
-      const fromFile = given === "registry" || given === "none" ? null : slotsOfFile(JSON.parse(await readFile(given, "utf8")));
       const pool = createPool(readOnlyConnectionString(url), { applicationName: "hub-sale-rule-compare" });
       try {
         const db = createDb(pool);
         const check = await pool.query<{ default_transaction_read_only: string }>("show default_transaction_read_only");
         if (check.rows[0]?.default_transaction_read_only !== "on") throw new Error("the session is not read-only: refusing to run");
-        if (options.beforeAfter === true) {
-          const report = await runBeforeAfter(db, {
-            first, last, screensFrom: (options.screensFrom as string | undefined) ?? first, live: options.homes === "live", now: new Date(),
-          });
-          console.log(options.json ? JSON.stringify(report, null, 2) : formatBeforeAfter(report));
-          return;
-        }
-        const slots: SaleSlotProvider = fromFile !== null ? { slotsFor: async () => fromFile } : given === "registry" ? registrySlots(db) : NO_SLOTS;
-        const slotsSource = fromFile !== null ? "file" : given === "registry" ? "registry" : "none";
-        const report = await runSaleRuleComparison(db, { first, last, now: new Date(), ledger: ledgerCli(String(options.ledgerBin)), slots, slotsSource });
-        console.log(options.json ? JSON.stringify(report, null, 2) : formatSaleRuleComparison(report));
+        const report = await runBeforeAfter(db, {
+          first, last, screensFrom: (options.screensFrom as string | undefined) ?? first, live: options.homes === "live", now: new Date(),
+        });
+        console.log(options.json ? JSON.stringify(report, null, 2) : formatBeforeAfter(report));
       } finally {
         await pool.end();
       }

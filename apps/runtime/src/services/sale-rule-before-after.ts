@@ -9,7 +9,7 @@ import { reportDateOfSale, reportDateOfShift } from "./shift-rows.ts";
 import { teamShiftSalesRead, type TeamShiftSalesRead } from "./team-shift-sales.ts";
 
 /**
- * «Было и стало» of the screens' switch (sale-rule-compare's mode `--before-after`), for the orchestrator to show the
+ * «Было и стало» of the screens' switch (`sale-rule:compare --before-after`), for the orchestrator to show the
  * owner before setting the date. Read-only. For a range of Moscow days, «Смены» read twice the way the screen reads
  * it — the switch off, and on from `screensFrom` — and the rule on its own:
  *
