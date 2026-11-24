@@ -153,7 +153,9 @@ describe("the owner's agent door", () => {
     await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [await fixtureUserId(app, "tboss"), tPerson]);
     await setPersonPayTerm(app, "anna", { modelSlug: "mia", validFrom: "2026-11-01", shareBasisPoints: 2_500, fixPerShiftMills: 7_000 }, AUDIT);
 
-    shiftA = await insertShift(anna, "2026-11-10T15:00:00Z", "2026-11-10T23:00:00Z");
+    // The claims pass only sees recent reports. The sale added by hand comes after this shift.
+    const shiftStart = Date.now() - 2 * 86_400_000;
+    shiftA = await insertShift(anna, new Date(shiftStart).toISOString(), new Date(shiftStart + 8 * 3_600_000).toISOString());
     shiftB = await insertShift(bella, "2026-11-10T07:00:00Z", "2026-11-10T15:00:00Z");
     shiftR = await insertShift(anna, "2026-11-11T15:00:00Z", "2026-11-11T23:00:00Z");
 
@@ -193,9 +195,22 @@ describe("the owner's agent door", () => {
     const receipt = { decisionId, person: "anna", reportDate: "2026-11-24" };
     const bot = await asWriter("/api/v1/agent/sale-decisions/applied", receipt);
     expect([bot.statusCode, bot.json().reason]).toEqual([409, "owner_decision"]);
+    await testDb.pool.query("alter table audit_events add constraint fixture_reject_receipt check (event_type <> 'sale.decision_applied') not valid");
+    try {
+      expect((await call("sale.applied", receipt)).statusCode).toBe(500);
+    } finally {
+      await testDb.pool.query("alter table audit_events drop constraint fixture_reject_receipt");
+    }
     const first = await call("sale.applied", receipt);
     expect(first.statusCode, first.body).toBe(200);
     expect((await call("sale.applied", receipt)).statusCode).toBe(409);
+    const audit = await testDb.pool.query(
+      "select actor_user_id::int as owner, source, metadata from audit_events where event_type = 'sale.decision_applied' and metadata->>'decisionId' = $1",
+      [String(decisionId)],
+    );
+    expect(audit.rows).toMatchObject([{ owner: boss, source: "owner_agent", metadata: {
+      ...receipt, recipientUserId: anna, agentKeyId: ownerKeyId, onBehalfOfUserId: boss, reason: WHY,
+    } }]);
     const state = await testDb.pool.query("select recipient_user_id::int as recipient, state from sale_decision_deliveries where decision_id = $1", [decisionId]);
     expect(state.rows).toEqual(expect.arrayContaining([{ recipient: anna, state: "applied" }, { recipient: bella, state: "pending" }]));
     const waiting = await rawSession("boss", "GET", "/api/v1/sale-nobody");

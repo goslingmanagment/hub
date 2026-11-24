@@ -28,6 +28,7 @@ import {
   createPagePots,
   createPot,
   postPotDistribution,
+  previewPotDistribution,
   reconcilePotsOfDay,
   updatePotService,
   reversePotDistribution,
@@ -160,6 +161,7 @@ interface K2FeedAnswer {
   held: Array<{
     seq: number;
     distributionId: number;
+    modelSlug: string;
     pageLabels: string[];
     reason: "page_outside_key";
   }>;
@@ -657,12 +659,17 @@ describe("Workboard pots (0443, H11)", () => {
     const heldSeq = heldFeed.held[0]!.seq;
     const cursorAfterHeld = heldFeed.next;
 
+    const persisted = await readK2Feed(`?since=${cursorAfterHeld}`);
+    expect(persisted.held).toEqual(heldFeed.held);
+
     // 3. Grant nova-1 to the key -> released from held and re-placed at a NEW seq > heldSeq!
     await setAgentKeyPages(app.db, { id: agentKeyId, pageIds: [pageMia1, pageEmpty, pageNova1] });
     const releasedFeed = await readK2Feed(`?since=${cursorAfterHeld}`);
     expect(releasedFeed.held).toHaveLength(0);
     expect(releasedFeed.changes).toHaveLength(1);
     expect(releasedFeed.changes[0]!.distribution.id).toBe(heldDistId);
+    expect(heldFeed.held[0]!.modelSlug).toBe(releasedFeed.changes[0]!.distribution.pot.modelSlug);
+    expect(heldFeed.held[0]!.modelSlug).toBe("nova");
     expect(releasedFeed.changes[0]!.distribution.inflows[0]!.transactionId).toBe(novaSale);
     expect(releasedFeed.changes[0]!.seq).toBeGreaterThan(heldSeq);
   }, INTEGRATION_TEST_TIMEOUT_MS);
@@ -707,6 +714,29 @@ describe("Workboard pots (0443, H11)", () => {
     }, f.now);
     await f.refresh(day);
     expect((await f.distributions()).filter((d) => d.reversedAt === null).map((d) => d.baseMills).sort()).toEqual([12, 5]);
+  });
+
+  it("holds every reversed manual part against its sale-day roster and allows edits after reversal", async (context) => {
+    if (!testDb) return context.skip();
+    const f = await fixturePot("manual-hold", { autoPost: false });
+    const days = ["2026-12-13", "2026-12-14"] as const;
+    const parts = [];
+    for (const day of days) {
+      parts.push({ transactionId: await f.sale(day), baseMills: 17 });
+      await f.refresh(day);
+    }
+    const lead = "synthetic-batch-lead";
+    await createPerson(app, { code: lead, displayName: lead, role: "team_lead", state: "working" }, { source: "cli" }, f.now);
+    await updatePotService(app, f.owner, f.pot.id, {
+      autoPost: true, participants: [...f.pot.participants, { personCode: lead, fromDay: days[1], toDay: null }],
+    }, f.now);
+    const posted = await postPotDistribution(app, f.owner, f.pot.id, { day: days[1], parts }, f.now);
+    const narrowing = { opensOn: days[1] };
+    await expect(updatePotService(app, f.owner, f.pot.id, narrowing, f.now)).rejects.toMatchObject({ reason: "posted_coverage" });
+    await reversePotDistribution(app, f.owner, posted.distribution.id, { reason: "Batch correction" }, f.now);
+    for (const day of days) await f.refresh(day);
+    expect(await f.distributions()).toMatchObject([{ id: posted.distribution.id, reversedAt: f.now }]);
+    expect((await updatePotService(app, f.owner, f.pot.id, narrowing, f.now)).pot.opensOn).toBe(days[1]);
   });
 
   it("keeps a manual batch and its owner matter when a different part's day is refreshed", async (context) => {
@@ -817,11 +847,21 @@ describe("Workboard pots (0443, H11)", () => {
     }
     const agent = "synthetic-calculator";
     await createPerson(app, { code: agent, displayName: agent, kind: "agent", role: "agent", state: "working" }, { source: "cli" }, f.now);
-    for (const formula of [
-      { kind: "manual" as const, params: { shares: { [agent]: 17 } } },
-      { kind: "weights" as const, params: { weights: { [agent]: 1, [f.worker]: 1 } } },
-    ]) {
-      await expect(post({ day, parts, formula })).rejects.toMatchObject({ reason: "person_unknown" });
+    const excluded = [agent];
+    for (const role of ["owner", "content_manager"] as const) {
+      const code = `synthetic-formula-${role.replace("_", "-")}`;
+      await createPerson(app, { code, displayName: code, role, state: "working" }, { source: "cli" }, f.now);
+      excluded.push(code);
+    }
+    for (const person of excluded) {
+      for (const formula of [
+        { kind: "manual" as const, params: { shares: { [person]: 17 } } },
+        { kind: "weights" as const, params: { weights: { [person]: 1, [f.worker]: 1 } } },
+      ]) {
+        const body = { day, parts, formula };
+        expect((await previewPotDistribution(app, f.owner, f.pot.id, body, f.now)).error?.reason).toBe("person_unknown");
+        await expect(post(body)).rejects.toMatchObject({ reason: "person_unknown" });
+      }
     }
     expect(await f.distributions()).toHaveLength(0);
   });

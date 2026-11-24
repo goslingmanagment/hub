@@ -1,9 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { holdHandinFeedVersions, insertAgentKey } from "@agency_hub_core/db";
+import { sha256Hex } from "@agency_hub_core/shared";
+
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { readShiftReportsFeed } from "../apps/runtime/src/services/shift-handins.ts";
-import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
@@ -48,6 +51,7 @@ describe("the ledger's feed under out-of-order commits", () => {
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();
     if (!testDb) return;
+    await resetIntegrationDatabase(testDb.pool);
     app = createTestAppContext(testDb);
     await createUserAccount(app, { username: "feeder", role: "chatter" }, { source: "cli" });
     userId = await fixtureUserId(app, "feeder");
@@ -79,6 +83,23 @@ describe("the ledger's feed under out-of-order commits", () => {
     const second = await feedFrom(first.next);
     const served = [...first.reports, ...second.reports].map((one) => one.id);
     expect(served.sort((x, y) => x - y)).toEqual([b, a]);
+  });
+
+  it("places versions past an issued cursor after the highest feed row disappears", async (context) => {
+    if (!testDb) return context.skip();
+    const start = (await feedFrom(undefined)).next;
+    const key = await insertAgentKey(app.db, { name: "fixture-feed", keyPrefix: "fixture", keyDigest: sha256Hex("fixture-feed"),
+      capabilities: ["read:money", "read:team"], pageIds: [], createdBy: userId, expiresAt: new Date(Date.now() + 86_400_000) });
+    const held = Number((await testDb.pool.query(VERSION, [await handin(), 15, userId])).rows[0].id);
+    const top = Number((await testDb.pool.query(VERSION, [await handin(), 15, userId])).rows[0].id);
+    const issued = await feedFrom(start);
+    expect(issued.reports.map((one) => one.id)).toEqual([held, top]);
+    await holdHandinFeedVersions(app.db, { agentKeyId: key.id, versionIds: [held] });
+    await testDb.pool.query("delete from shift_handin_feed where seq = $1", [issued.next]);
+    const next = await readShiftReportsFeed(app, { agentKeyId: key.id, pageIds: [], since: issued.next, limit: 100 });
+    expect(next.reports.map((one) => one.id)).toEqual([held, top]);
+    expect(next.reports[0]!.seq).toBeGreaterThan(Number(issued.next));
+    expect(next.reports[1]!.seq).toBeGreaterThan(next.reports[0]!.seq);
   });
 
   it("serves a version whose transaction committed after a later id was served", async (context) => {

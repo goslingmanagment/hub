@@ -175907,6 +175907,9 @@
                             "exclusiveMinimum": 0,
                             "maximum": 9007199254740991
                           },
+                          "modelSlug": {
+                            "type": "string"
+                          },
                           "pageLabels": {
                             "type": "array",
                             "items": {
@@ -175923,6 +175926,7 @@
                         "required": [
                           "seq",
                           "distributionId",
+                          "modelSlug",
                           "pageLabels",
                           "reason"
                         ],

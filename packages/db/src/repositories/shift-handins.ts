@@ -642,7 +642,7 @@ export async function placeHandinVersionsInFeed(db: Database): Promise<number> {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('shift_handin_feed', 0))`);
     const placed = await tx.execute(sql`
       insert into shift_handin_feed (seq, version_id)
-      select (select coalesce(max(seq), 0) from shift_handin_feed) + row_number() over (order by v.id), v.id
+      select (select last_seq from feed_positions where feed = 'shift_handin_feed') + row_number() over (order by v.id), v.id
       from shift_handin_versions v
       where not exists (select 1 from shift_handin_feed f where f.version_id = v.id)
       order by v.id`);
@@ -734,7 +734,7 @@ export async function releaseHandinFeedHeld(db: Database, input: { agentKeyId: n
     const moved = await tx.execute<Row>(sql`
       update shift_handin_feed f set seq = ready.seq, placed_at = clock_timestamp()
       from (
-        select old.version_id, (select coalesce(max(seq), 0) from shift_handin_feed) + row_number() over (order by old.seq) as seq
+        select old.version_id, (select last_seq from feed_positions where feed = 'shift_handin_feed') + row_number() over (order by old.seq) as seq
         from shift_handin_feed_held k
         join shift_handin_feed old on old.version_id = k.version_id
         join shift_handin_versions v on v.id = k.version_id
@@ -1022,6 +1022,16 @@ function saleOf(row: Row): HandinSaleRow {
       home: String(row.home), reason: String(row.reason), pot: text(row.pot), shares: jsonArray<{ userId: number; workRef: string | null; shiftId: number | null; mills: number }>(row.shares),
     },
   };
+}
+
+/** Check the page grant against the stored transactions, including sales added to a shift from another page. */
+export async function areHandinSalesOnPages(db: Database, transactionIds: readonly number[], pageIds: readonly number[]): Promise<boolean> {
+  const distinct = [...new Set(transactionIds)];
+  if (distinct.length === 0) return true;
+  const result = await db.execute<{ covered: number }>(sql`
+    select count(*)::int as covered from transactions
+    where id = any(${ids(distinct)}) and platform_account_id = any(${ids(pageIds)})`);
+  return result.rows[0]!.covered === distinct.length;
 }
 
 /** The sales named, with their homes: the lines a person added by hand. Money a fan paid only (no refund or reversal). */

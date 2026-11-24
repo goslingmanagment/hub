@@ -204,6 +204,12 @@ describe("expected reviewer snapshot at hand-in (OA-002)", () => {
     const visible = agentShiftReportChecksResponseSchema.parse(result.json()).checks.find((one) => one.candidateId === id);
     expect(visible).toBeDefined();
     expect(visible!.lines.map((one) => one.transactionId)).not.toContain(external);
+    const answer = await asBearer(token, "POST", `/api/v1/agent/shift-reports/checks/${id}`, {
+      proposals: [{ transactionId: external, kind: "note", note: "Fixture note", why: "Fixture review" }],
+    });
+    expect(answer.statusCode, answer.body).toBe(404);
+    expect((await candidateRow(id)).gengarAnsweredAt).toBeNull();
+    expect((await q("select id from shift_handin_proposals where candidate_id = $1", [id])).rows).toEqual([]);
   });
 
   it("issuing, revoking, or rotating a reviewer key does not change the phase of an already handed-in shift", async (context) => {
