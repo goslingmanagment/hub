@@ -44,10 +44,11 @@ const teamScreens: RouteObject[] = [
   // The team's tabs of «Продажи» (a chatter's session never reaches their operations): «Возврат фанов», «Рассылки».
   { path: "sales/win-back", lazy: () => import("../screens/sales/team.js").then((m) => ({ Component: m.WinBackScreen })) },
   { path: "sales/mass", lazy: () => import("../screens/sales/team.js").then((m) => ({ Component: m.MassScreen })) },
-  // «Деньги» of the owner (it was «Выплаты» at `/payouts`, which leads here): «Долги» and «Отчёты»; Hub answers the
+  // «Деньги» of the owner (it was «Выплаты» at `/payouts`, which leads here): «Долги», «Отчёты» and «Общаки»; Hub answers the
   // owner's session alone.
   { path: "money/debts", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
   { path: "money/reports", lazy: () => import("../screens/payouts/index.js").then((m) => ({ Component: m.PayoutsScreen })) },
+  { path: "money/pots", lazy: () => import("../screens/pots/index.js").then((m) => ({ Component: m.PotsScreen })) },
 ];
 
 /**

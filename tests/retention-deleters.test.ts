@@ -244,6 +244,9 @@ const SANCTIONED_DELETER_FILES = [
   // The ledger's feed of computed sale homes (0441): a change held back for an agent key is released from that key's
   // held list once granted. Queue hygiene of Hub's own bookkeeping, never a fact.
   "packages/db/src/repositories/sale-home-feed.ts",
+  // The ledger's feed of Workboard pot distributions (0443): a change held back for an agent key is released from that
+  // key's held list once every page of the pot and distribution is granted. Queue hygiene, never a fact.
+  "packages/db/src/repositories/pot-distribution-feed.ts",
   // Computed sale homes and refresh-due queue (0380, 0441): refresh removes vanished sales from the derived `sale_homes`
   // projection (emitting `retract` on the feed) and clears completed `sale_home_refresh_due` day markers by generation.
   "packages/db/src/repositories/sale-homes.ts",

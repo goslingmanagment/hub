@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 92 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (571)
+## Routes (581)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -271,6 +271,7 @@ A full device token is not affected.
 | GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/people/proposals` | `agentPersonProposals` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/people/proposals` | `agentPersonProposalCreate` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/pot-distributions/feed` | `agentPotDistributionsFeed` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/publications/:id` | `agentPublicationGet` | `agentKey` | — | — | no |
 | PUT | `/api/v1/agent/publications/:id` | `agentPublicationUpdate` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/publications/:id/cancel` | `agentPublicationCancel` | `agentKey` | — | — | no |
@@ -515,6 +516,15 @@ A full device token is not affected.
 | POST | `/api/v1/person/stats/comments` | `personContentComments` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/stats/content` | `personCreatorStatsContent` | `agentKey` | — | — | no |
 | POST | `/api/v1/person/stats/media` | `personCreatorStatsMedia` | `agentKey` | — | — | no |
+| GET | `/api/v1/pots` | `potsList` | `owner-session` | — | — | no |
+| POST | `/api/v1/pots` | `potCreate` | `owner-session` | — | — | no |
+| GET | `/api/v1/pots/:potId` | `potDetail` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/pots/:potId` | `potUpdate` | `owner-session` | — | — | no |
+| POST | `/api/v1/pots/:potId/close` | `potClose` | `owner-session` | — | — | no |
+| POST | `/api/v1/pots/:potId/distributions` | `potDistributionPost` | `owner-session` | — | — | no |
+| POST | `/api/v1/pots/:potId/preview` | `potDistributionPreview` | `owner-session` | — | — | no |
+| POST | `/api/v1/pots/create-page-pots` | `potsCreatePagePots` | `owner-session` | — | — | no |
+| POST | `/api/v1/pots/distributions/:distributionId/reverse` | `potDistributionReverse` | `owner-session` | — | — | no |
 | GET | `/api/v1/public/vault-upload-files/:token` | `publicVaultUploadFile` | `public` | — | — | — |
 | GET | `/api/v1/reports` | `reportsList` | `session` | — | — | no |
 | GET | `/api/v1/reports/:slug` | `reportGet` | `session` | — | — | no |

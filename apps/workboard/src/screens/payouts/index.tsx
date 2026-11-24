@@ -25,11 +25,12 @@ import "./payouts.css";
  * for nothing.
  */
 
-type View = "debts" | "reports";
+type View = "debts" | "reports" | "pots";
 
 const VIEWS: ReadonlyArray<{ value: View; label: string }> = [
   { value: "debts", label: "Долги" },
   { value: "reports", label: "Отчёты" },
+  { value: "pots", label: "Общаки" },
 ];
 
 export function PayoutsScreen() {

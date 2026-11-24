@@ -132,9 +132,20 @@ the owner's machine (outside this repository); a change that moves a home or add
   to the fan's hands. Doors: the extension's fan panel, Workboard «Кастомы», agents (`hub custom …`); ContentOps
   reads orders and reports files, it never closes one. Its checks (`custom-orders/checks.ts`) are the one writer of
   what waits about an order; who leads customs is `customsLeadOwner` (`custom-orders/readers.ts`).
+- **A pot**: Workboard pots (`services/pots.ts`, pure formulas/routing/participants `pots-rules.ts`, K2 feed
+  `pots-feed.ts`, tables `pots_switch`, `pots`, `pot_distributions`, `pot_distribution_parts`,
+  `pot_distribution_changes`, `pot_distribution_feed_held`, 0443). Hub holds only base in mills (never pay or rates):
+  a pot's balance is derived live from `sale_homes` (`home = 'pot'`, day >= `pots_from`) minus non-reversed
+  `pot_distribution_parts` across ALL pots; `postPotDistribution` and `reconcilePotsOfDay` take `lockWorkboardPots`
+  (strict lock order `settlements -> refresh_day -> pots`, never held across ledger HTTP). Distributions are immutable
+  except reversing once (`reversed_at`, `reversed_reason`); the ledger reads them on
+  `GET /api/v1/agent/pot-distributions/feed` (`read:money`). Before `pots_from` (or while null), deciding a sale into
+  a pot checks coverage against the ledger and writes no Hub distribution; `pots:from` switches the cutover day
+  (`--off` refused once any active distribution exists).
 - **People's pay**: the ledger's. Hub only reads it (`ledgerGet`: a person's days, the payout calculation, checks,
-  report days, the month card) and shows it; `payMillsOf` (`services/ledger-payouts.ts`) is the one conversion. No
-  pay number is computed in Hub, and none reaches a session that does not see it today.
+  report days, the month card) and shows it; `payMillsOf` (`services/ledger-payouts.ts`) is the one conversion. Workboard
+  pots hold and emit distribution base in mills while the ledger still computes pay from it. No pay number is computed in
+  Hub, and none reaches a session that does not see it today.
 - **A traffic source**: Hub's (tables `traffic_channels`, `traffic_contractors`, `traffic_channel_contractors`,
   `traffic_link_bindings`; one writer, `packages/db/src/repositories/traffic-bindings.ts`, the owner's CLI
   `traffic:*`): its contractor terms and link bindings with dates. What was paid to a contractor is the ledger's journal,

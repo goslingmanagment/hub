@@ -8,6 +8,7 @@ import { moneyHandlers } from "./money.ts";
 import { pageHandlers } from "./page.ts";
 import { peopleHandlers } from "./people.ts";
 import { personStartHandlers } from "./person-start.ts";
+import { potsHandlers } from "./pots.ts";
 import { publishOfHandlers } from "./publish-of.ts";
 import { settingsHandlers } from "./settings.ts";
 import { saleChainHandlers } from "./sale-chain.ts";
@@ -64,6 +65,8 @@ const AREAS: Readonly<Record<string, DemoHandlers>> = {
   "shift-report-notes": shiftReportNoteHandlers,
   // «Начало»: a newcomer's way to the first shift, by the scenario's stage, and where they are paid (person-start.ts).
   "person-start": personStartHandlers,
+  // Workboard «Деньги → Общаки» (H11): pots, preview, distributions and reversals kept in memory (pots.ts).
+  pots: potsHandlers,
   // Заявки: claims of a sale, their answers, the owner's disputes and «мимо площадки», kept in memory (sale-claims.ts).
   "sale-claims": saleClaimHandlers,
   // Цепочка продажи: from a line, a dispute or a console row, the sale's chain of money as Hub reads it (sale-chain.ts).

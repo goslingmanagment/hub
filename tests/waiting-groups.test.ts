@@ -7,6 +7,7 @@ import {
   MATTER_MIRROR_KINDS,
   MATTER_PERSON_START_KINDS,
   MATTER_SERVER_KINDS,
+  POT_MATTER_KINDS,
   REPORT_POST_MATTER_KINDS,
   SALE_CLAIM_MATTER_KINDS,
   SHIFT_REPORT_MATTER_KINDS,
@@ -31,6 +32,7 @@ const PACKAGE_KINDS: Readonly<Record<string, readonly string[]>> = {
   "posts to fix (K)": REPORT_POST_MATTER_KINDS,
   "custom checks (I)": CUSTOM_ORDER_CHECK_KINDS,
   "claims (G)": SALE_CLAIM_MATTER_KINDS,
+  "pots (H11)": POT_MATTER_KINDS,
   "questions (W)": TEAM_QUESTION_MATTER_KINDS,
 };
 

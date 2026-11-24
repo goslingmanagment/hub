@@ -266,6 +266,10 @@ export * from "./repositories/people.ts";
 // «Начало» of a newcomer (0402): the facts its steps close by, and where a person's payouts go.
 export * from "./repositories/person-start.ts";
 export * from "./repositories/post-comments.ts";
+// Workboard pots (0443): K2 distributions feed (`pot_distribution_changes`, `pot_distribution_feed_held`).
+export * from "./repositories/pot-distribution-feed.ts";
+// Workboard pots (0443): switch, pots, immutable distributions and parts.
+export * from "./repositories/pots.ts";
 export * from "./repositories/ppv-purchase-facts.ts";
 export * from "./repositories/publication-files.ts";
 // Publications: the media a page can publish, for the agents who draft (plan PR 10).

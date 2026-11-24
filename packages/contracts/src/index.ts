@@ -98,6 +98,8 @@ export * from "./routes-page-browser.ts";
 export * from "./routes-people-messages.ts";
 // The people registry (team list, the owner's card and writes, the agent feed and proposals), spread by routes.ts.
 export * from "./routes-people.ts";
+// Workboard pots (0443, H11): owner pot management, distributions, and K2 feed.
+export * from "./routes-pots.ts";
 export * from "./routes-publication-files.ts";
 // Publications: wall posts through Hub (owner + agent drafts), spread by routes.ts.
 export * from "./routes-publications.ts";

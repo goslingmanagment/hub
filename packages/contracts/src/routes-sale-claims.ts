@@ -111,6 +111,8 @@ export const saleDisputeDecideBodySchema = z.object({
   outcome: z.enum(SALE_DISPUTE_OUTCOMES_WITH_DISMISS),
   /** With `give` / `split`: the people the button named, as the window gave them. */
   shares: z.array(z.object({ userId: intId, percent: z.number().int().min(1).max(100) })).max(3).optional(),
+  /** With `pot`: explicit target pot code (Workboard pot on days >= pots_from, or ledger pot slug before it). */
+  pot: z.string().trim().min(1).max(64).optional(),
   /** The sides the window showed (its `parties`): when they are no longer the sides now, 409 `sides_changed`. */
   seenSides: z.array(intId).max(20).optional(),
   /** Why: kept with the decision. */

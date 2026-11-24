@@ -50,6 +50,7 @@ import {
 import { NO_SLOTS, registrySlots, type SaleSlotProvider } from "./schedule-slots.ts";
 import { reportDateOfSale, reportDateOfShift } from "./shift-rows.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import { reconcilePotsOfDay } from "./pots.ts";
 
 /**
  * Whose each sale is, kept current in `sale_homes` (0380) and served to downstream consumers on
@@ -412,6 +413,7 @@ export async function refreshSaleHomesForDay(
       pageIds: [...pageIds.values()],
       keepTransactionIds: rows.map((row) => row.transactionId),
     });
+    await reconcilePotsOfDay(tx, day, effectiveNow);
     if (generation !== null) {
       await completeSaleHomeRefreshDue(tx, { day, generation });
     }

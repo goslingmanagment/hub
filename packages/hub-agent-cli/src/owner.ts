@@ -390,4 +390,132 @@ export const HUB_OWNER_COMMANDS: readonly HubCommand[] = [
     options: { sale: { kind: "number", describe: "The sale by Hub's id (required)" } },
     run: (client, values, _deps, args) => call(client, "decision.link", { decisionId: id(args[0], "<decision №>"), transactionId: id(text(values, "sale"), "--sale") }),
   }),
+
+  // ── Общаки в Workboard (H11) ──
+  command({
+    name: "owner pot list",
+    summary: "Workboard pots with live base balances, unrouted pot sales, and models/people catalog.",
+    options: {},
+    run: (client) => call(client, "pot.list", {}),
+  }),
+  command({
+    name: "owner pot show",
+    summary: "One pot by its code: eligible sales with remaining base, active participants, and distributions.",
+    arguments: { name: "<code>", describe: "The pot's code", min: 1, max: 1 },
+    options: {},
+    run: (client, _values, _deps, args) => call(client, "pot.show", { code: args[0]! }),
+  }),
+  command({
+    name: "owner pot create",
+    summary: "Create a Workboard pot (page pot or event pot) for a live model and its pages.",
+    example: "hub owner pot create winter-promo --name \"Зимний ивент\" --model mia --page mia-1,mia-2 --opens-on 2026-12-01 --participants-mode page_workers --formula equal --why \"открываем общак\"",
+    arguments: { name: "<code>", describe: "The new pot's code", min: 1, max: 1 },
+    options: {
+      name: { kind: "string", describe: "Display name (required)" },
+      model: { kind: "string", describe: "Live model slug (required)" },
+      page: { kind: "list", describe: "Page labels of the model, comma-separated or repeated (required)" },
+      intake: { kind: "list", describe: "Auto-intake reasons: post_tip, campaign (omit for event pot)" },
+      "opens-on": { kind: "string", describe: "First Moscow day YYYY-MM-DD (required)" },
+      "closes-on": { kind: "string", describe: "Last Moscow day YYYY-MM-DD (optional)" },
+      "participants-mode": { kind: "string", describe: "page_workers | listed (required)" },
+      formula: { kind: "string", describe: "equal | weights | manual (default equal; full formula object via --json)" },
+      "auto-post": { kind: "boolean", describe: "Auto-post equal distributions per sale" },
+      json: { kind: "string", describe: "Additional fields as JSON: {\"participants\":[…], \"formula\":{\"kind\":\"weights\",\"params\":…}}" },
+    },
+    run: (client, values, _deps, args) => {
+      const extra = jsonArgs(values);
+      const closesOn = text(values, "closes-on");
+      const formulaKind = text(values, "formula");
+      return call(client, "pot.create", {
+        ...extra,
+        ...defined({
+          code: args[0]!,
+          name: required(values, "name"),
+          modelSlug: required(values, "model"),
+          pageLabels: list(values, "page"),
+          intakeReasons: values.intake === undefined ? undefined : list(values, "intake"),
+          opensOn: required(values, "opens-on"),
+          closesOn: closesOn === undefined ? undefined : closesOn.trim() === "" ? null : closesOn,
+          participantsMode: required(values, "participants-mode"),
+          formula: formulaKind === undefined ? (extra.formula ?? { kind: "equal", params: {} }) : { kind: formulaKind, params: {} },
+          autoPost: values["auto-post"] === undefined ? undefined : values["auto-post"] === true,
+        }),
+      });
+    },
+  }),
+  command({
+    name: "owner pot update",
+    summary: "Update an open Workboard pot (name, pages, intake, dates, participants, formula, autoPost).",
+    arguments: { name: "<code>", describe: "The pot's code", min: 1, max: 1 },
+    options: {
+      name: { kind: "string", describe: "Display name" },
+      page: { kind: "list", describe: "Page labels of the pot's model" },
+      intake: { kind: "list", describe: "Auto-intake reasons: post_tip, campaign (empty for event pot)" },
+      "opens-on": { kind: "string", describe: "First Moscow day YYYY-MM-DD" },
+      "closes-on": { kind: "string", describe: "Last Moscow day YYYY-MM-DD (empty clears)" },
+      "participants-mode": { kind: "string", describe: "page_workers | listed" },
+      "auto-post": { kind: "boolean", describe: "Auto-post equal distributions per sale" },
+      json: { kind: "string", describe: "Fields as JSON: {\"formula\":…, \"participants\":…, \"autoPost\":false}" },
+    },
+    run: (client, values, _deps, args) => {
+      const closesOn = text(values, "closes-on");
+      const fields = {
+        ...jsonArgs(values),
+        ...defined({
+          name: text(values, "name"),
+          pageLabels: values.page === undefined ? undefined : list(values, "page"),
+          intakeReasons: values.intake === undefined ? undefined : list(values, "intake"),
+          opensOn: text(values, "opens-on"),
+          closesOn: closesOn === undefined ? undefined : closesOn.trim() === "" ? null : closesOn,
+          participantsMode: text(values, "participants-mode"),
+          autoPost: values["auto-post"] === undefined ? undefined : values["auto-post"] === true,
+        }),
+      };
+      if (Object.keys(fields).length === 0) throw new HubUsageError("nothing to change");
+      return call(client, "pot.update", { ...fields, code: args[0]! });
+    },
+  }),
+  command({
+    name: "owner pot preview",
+    summary: "Pure preview of a pot distribution in base mills (writes nothing).",
+    arguments: { name: "<code>", describe: "The pot's code", min: 1, max: 1 },
+    options: {
+      day: { kind: "string", describe: "Distribution Moscow day YYYY-MM-DD" },
+      json: { kind: "string", describe: "Optional overrides as JSON: {\"formula\":…, \"parts\":[{\"transactionId\":…,\"baseMills\":…}]}" },
+    },
+    run: (client, values, _deps, args) => call(client, "pot.preview", {
+      ...jsonArgs(values),
+      ...defined({ code: args[0]!, day: text(values, "day") }),
+    }),
+  }),
+  command({
+    name: "owner pot post",
+    summary: "Post an immutable Workboard pot distribution in base mills.",
+    arguments: { name: "<code>", describe: "The pot's code", min: 1, max: 1 },
+    options: {
+      day: { kind: "string", describe: "Distribution Moscow day YYYY-MM-DD" },
+      json: { kind: "string", describe: "Optional overrides as JSON: {\"formula\":…, \"parts\":[{\"transactionId\":…,\"baseMills\":…}]}" },
+    },
+    run: (client, values, _deps, args) => call(client, "pot.post", {
+      ...jsonArgs(values),
+      ...defined({ code: args[0]!, day: text(values, "day") }),
+    }),
+  }),
+  command({
+    name: "owner pot reverse",
+    summary: "Reverse a posted Workboard pot distribution once with a mandatory reason.",
+    arguments: { name: "<distribution №>", describe: "The distribution's id", min: 1, max: 1 },
+    options: { reason: { kind: "string", describe: "Why the distribution is reversed (required)" } },
+    run: (client, values, _deps, args) => call(client, "pot.reverse", {
+      distributionId: id(args[0], "<distribution №>"),
+      reason: required(values, "reason"),
+    }),
+  }),
+  command({
+    name: "owner pot close",
+    summary: "Close an open Workboard pot (historical distributions remain intact).",
+    arguments: { name: "<code>", describe: "The pot's code", min: 1, max: 1 },
+    options: {},
+    run: (client, _values, _deps, args) => call(client, "pot.close", { code: args[0]! }),
+  }),
 ];

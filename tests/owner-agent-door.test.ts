@@ -110,6 +110,8 @@ describe("the owner's agent door: its table", () => {
     // …a custom step's union and its card's patch, a finding's record.
     expect(fieldNames(OWNER_AGENT_OPERATION_SCHEMAS["custom.step"].args)).toEqual(expect.arrayContaining(["step", "action", "card", "notes", "deadlineOn", "acceptedBy"]));
     expect(fieldNames(OWNER_AGENT_OPERATION_SCHEMAS["customFinding.answer"].args)).toEqual(expect.arrayContaining(["step", "card", "task", "code", "reason"]));
+    expect(fieldNames(OWNER_AGENT_OPERATION_SCHEMAS["pot.create"].args)).toEqual(expect.arrayContaining(["code", "modelSlug", "pageLabels", "formula", "participants"]));
+    expect(fieldNames(OWNER_AGENT_OPERATION_SCHEMAS["pot.post"].args)).toEqual(expect.arrayContaining(["code", "day", "formula", "parts", "transactionId", "baseMills"]));
     const never = new Set<string>(OWNER_AGENT_NEVER.fields);
     for (const op of OWNER_AGENT_OPERATION_NAMES) {
       const names = fieldNames(OWNER_AGENT_OPERATION_SCHEMAS[op].args);

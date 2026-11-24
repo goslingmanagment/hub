@@ -65,8 +65,8 @@ const REPORT_KINDS: ReadonlySet<string> = new Set(["ledger.report_post", "ledger
 /** The group of a matter's kind. */
 export function waitingGroupOf(kind: string): WaitingGroupId {
   if (INFO.has(kind)) return "info";
-  // Whose a sale is: the ledger's questions and the claims' disputes (package G).
-  if (kind === "ledger.sale_question" || kind.startsWith("sale.")) return "questions";
+  // Whose a sale is: the ledger's questions, the claims' disputes (package G), and Workboard pot health/matters (H11).
+  if (kind === "ledger.sale_question" || kind.startsWith("sale.") || kind.startsWith("pot.")) return "questions";
   // A question to whoever decides and its answer (routes-team-questions.ts).
   if (kind.startsWith("question.")) return "asks";
   // The shift's report: the ledger's posts and paid days, the author's post to fix, «мимо площадки», the hand-in (F).

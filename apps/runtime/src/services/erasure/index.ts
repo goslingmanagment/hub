@@ -2279,6 +2279,10 @@ export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[]
     table: "sale_home_changes",
     reason: "Feed change-log of computed sale homes (0441): stores only numeric transaction/page ids, realm flag, op and timestamps, never fan data; retract rows emitted when erasure deletes sale_homes must survive so downstream consumers learn to remove those sales.",
   },
+  {
+    table: "pot_distribution_parts",
+    reason: "Immutable posted Workboard pot distribution parts (0443): stores only numeric distribution/transaction/page ids and base mills, never fan data; accounting history survives with the pages catalog row.",
+  },
 ];
 
 async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget[]> {

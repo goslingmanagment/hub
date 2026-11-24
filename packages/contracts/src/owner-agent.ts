@@ -52,6 +52,20 @@ import {
 import { personStartSchema } from "./person-start.ts";
 import { businessDate, errorResponseSchema, intId, isoDateTime, isoTimestamp, mills } from "./primitives.ts";
 import { learnPageApproveResponseSchema, learnPageResponseSchema, learnPagesResponseSchema } from "./routes-learn.ts";
+import {
+  POT_INTAKE_REASONS,
+  POT_PARTICIPANTS_MODES,
+  potCodeSchema,
+  potDetailResponseSchema,
+  potDistributionPartInputSchema,
+  potDistributionPostResponseSchema,
+  potDistributionPreviewResponseSchema,
+  potDistributionReverseResponseSchema,
+  potFormulaSchema,
+  potMutateResponseSchema,
+  potParticipantPeriodSchema,
+  potsListResponseSchema,
+} from "./routes-pots.ts";
 import { saleDecisionLinkResponseSchema, saleDecisionsUnlinkedResponseSchema } from "./routes-sale-claims.ts";
 import { agentSaleDecisionSchema, agentSaleQuestionSchema } from "./routes-sale-decisions.ts";
 import {
@@ -330,6 +344,50 @@ const swapRevokeArgs = z.object({ questionId: id }).strict();
 
 const decisionLinkArgs = z.object({ decisionId: id, transactionId: id }).strict();
 
+// ── Общаки в Workboard (H11) ─────────────────────────────────────────────────
+
+const potListResult = potsListResponseSchema.omit({ legacyArchive: true });
+const potCodeArgs = z.object({ code: potCodeSchema }).strict();
+
+const potCreateArgs = z.object({
+  code: potCodeSchema,
+  name: z.string().trim().min(1).max(160),
+  modelSlug: z.string().trim().min(1).max(120),
+  pageLabels: z.array(z.string().trim().min(1).max(120)).min(1).max(100),
+  intakeReasons: z.array(z.enum(POT_INTAKE_REASONS)).max(2).default([]),
+  opensOn: businessDate,
+  closesOn: businessDate.nullable().default(null),
+  participantsMode: z.enum(POT_PARTICIPANTS_MODES),
+  participants: z.array(potParticipantPeriodSchema.strict()).max(200).default([]),
+  formula: potFormulaSchema.strict(),
+  autoPost: z.boolean().default(false),
+}).strict();
+
+const potUpdateArgs = z.object({
+  code: potCodeSchema,
+  name: z.string().trim().min(1).max(160).optional(),
+  pageLabels: z.array(z.string().trim().min(1).max(120)).min(1).max(100).optional(),
+  intakeReasons: z.array(z.enum(POT_INTAKE_REASONS)).max(2).optional(),
+  opensOn: businessDate.optional(),
+  closesOn: businessDate.nullable().optional(),
+  participantsMode: z.enum(POT_PARTICIPANTS_MODES).optional(),
+  participants: z.array(potParticipantPeriodSchema.strict()).max(200).optional(),
+  formula: potFormulaSchema.strict().optional(),
+  autoPost: z.boolean().optional(),
+}).strict().refine((body) => Object.entries(body).some(([key, value]) => key !== "code" && value !== undefined), "nothing to change");
+
+const potDistributionArgs = z.object({
+  code: potCodeSchema,
+  day: businessDate.optional(),
+  formula: potFormulaSchema.strict().optional(),
+  parts: z.array(potDistributionPartInputSchema.strict()).max(1000).optional(),
+}).strict();
+
+const potReverseArgs = z.object({
+  distributionId: id,
+  reason: z.string().trim().min(1).max(500),
+}).strict();
+
 const none = z.object({}).strict();
 
 // ── The table ────────────────────────────────────────────────────────────────
@@ -361,6 +419,15 @@ export const OWNER_AGENT_OPERATION_SCHEMAS = {
   "swap.revoke": { args: swapRevokeArgs, result: teamQuestionWriteResponseSchema, writes: true },
   "decision.unlinked": { args: none, result: saleDecisionsUnlinkedResponseSchema, writes: false },
   "decision.link": { args: decisionLinkArgs, result: saleDecisionLinkResponseSchema, writes: true },
+  // Workboard pots (H11).
+  "pot.list": { args: none, result: potListResult, writes: false },
+  "pot.show": { args: potCodeArgs, result: potDetailResponseSchema, writes: false },
+  "pot.create": { args: potCreateArgs, result: potMutateResponseSchema, writes: true },
+  "pot.update": { args: potUpdateArgs, result: potMutateResponseSchema, writes: true },
+  "pot.preview": { args: potDistributionArgs, result: potDistributionPreviewResponseSchema, writes: false },
+  "pot.post": { args: potDistributionArgs, result: potDistributionPostResponseSchema, writes: true },
+  "pot.reverse": { args: potReverseArgs, result: potDistributionReverseResponseSchema, writes: true },
+  "pot.close": { args: potCodeArgs, result: potMutateResponseSchema, writes: true },
 } as const satisfies Record<string, { args: z.ZodType; result: z.ZodType; writes: boolean }>;
 
 export type OwnerAgentOperation = keyof typeof OWNER_AGENT_OPERATION_SCHEMAS;
