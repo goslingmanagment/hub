@@ -337,9 +337,10 @@ export async function enqueueSaleHomeRefreshForHandin(
     ? sql`
       union
       select (t.occurred_at at time zone 'Europe/Moscow')::date as day
-      from shift_handin_lines l
-      join transactions t on t.id = l.transaction_id
-      where l.handin_id = ${input.handinId} and l.version = ${input.previousVersion} and l.transaction_id is not null`
+      from shift_handin_versions v
+      cross join lateral jsonb_array_elements(v.lines) as l(line)
+      join transactions t on (l.line ->> 'transactionId') ~ '^[0-9]{1,18}$' and t.id = (l.line ->> 'transactionId')::bigint
+      where v.handin_id = ${input.handinId} and v.version = ${input.previousVersion}`
     : sql``;
   await db.execute(sql`
     insert into sale_home_refresh_due (day, generation, queued_at)
