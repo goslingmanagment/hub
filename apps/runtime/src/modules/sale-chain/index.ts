@@ -27,7 +27,7 @@ export function registerSaleChainRoutes(server: ApiServer, ctx: ApiModuleContext
     const viewer: ChainViewer = role === "owner"
       ? { kind: "owner" }
       : role === "team_lead"
-        ? { kind: "team_lead", pageIds }
+        ? { kind: "team_lead", userId: principal.user.id, pageIds }
         : { kind: "chatter", userId: principal.user.id, pageIds };
     // The sale must be of the principal's realm; a test realm's chain asks the ledger nothing.
     return readSaleChain(appContext, viewer, request.query, { realmOf: principal });

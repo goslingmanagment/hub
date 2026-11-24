@@ -260,8 +260,9 @@ function person(share: Home["shares"][number], sale: Sale, home: Home, viewer: V
   };
 }
 
-function chainOf(request: DemoRequest, viewer: Viewer, sale: Sale, home: Home, involved: boolean): Chain | DemoReply {
+function chainOf(request: DemoRequest, viewer: Viewer, sale: Sale, home: Home, involved: boolean, hasOwnLineOrClaim = false): Chain | DemoReply {
   if (viewer.kind !== "owner" && !viewer.user.pages.includes(sale.pageLabel)) return notFound();
+  if (viewer.kind !== "owner" && home.kind === "nobody" && !hasOwnLineOrClaim) return notFound();
   if (viewer.kind === "chatter" && !involved) return notFound();
   const shown = viewer.kind === "chatter" ? home.shares.filter((share) => share.user.id === viewer.user.id) : home.shares;
   let note: string | null = null;
@@ -337,6 +338,7 @@ function teamSalesList(request: DemoRequest): TeamSalesListResponse | DemoReply 
       const found = lineSale(request.now, one.transactionId);
       if (found === null) return [];
       const home = homeOfLines(found.entries, found.sale, request.now);
+      if (viewer.kind !== "owner" && home.kind === "nobody") return [];
       return [{ ...found, home, filter: filterOf(home), mine: home.shares.some((share) => share.user.id === me) }];
     });
   const counts = Object.fromEntries(HOME_FILTERS.map((key) => [key, rows.filter((row) => key === "all" || (key === "mine" ? row.mine : row.filter === key)).length])) as TeamSalesListResponse["counts"];

@@ -55,8 +55,8 @@ async function insertShift(userId: number, startedAt: Date, endedAt: Date, repor
   return Number(result.rows[0].id);
 }
 
-/** A sale of mia-1 `minutesAgo` before now and its home: bella's shift, nobody's, or the pot's. */
-async function sale(net: number, minutesAgo: number, home: "bella" | "nobody" | "pot"): Promise<number> {
+/** A sale of mia-1 `minutesAgo` before now and its home: bella's shift, anna's shift, nobody's, or the pot's. */
+async function sale(net: number, minutesAgo: number, home: "bella" | "anna" | "nobody" | "pot", shiftIdOverride?: number): Promise<number> {
   refs += 1;
   const inserted = await testDb!.pool.query(
     `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
@@ -66,13 +66,25 @@ async function sale(net: number, minutesAgo: number, home: "bella" | "nobody" | 
     [pageOne, `tx-review2-${refs}`, net + 4_000, net, 4_000, minutesAgo],
   );
   const id = Number(inserted.rows[0].id);
-  const shares = home !== "bella" ? [] : [{ userId: bella, workRef: null, shiftId: shiftB, percent: 100, mills: net }];
+  const shares = home === "bella"
+    ? [{ userId: bella, workRef: null, shiftId: shiftIdOverride ?? shiftB, percent: 100, mills: net }]
+    : home === "anna"
+      ? [{ userId: anna, workRef: null, shiftId: shiftIdOverride ?? null, percent: 100, mills: net }]
+      : [];
+  const homeKind = home === "bella" || home === "anna" ? "shift" : home;
   await testDb!.pool.query(
     `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at, pot)
      values ($1, $2, $3, $4, $5, $6, $7::jsonb, 'test', now(), $8)`,
-    [id, pageOne, inserted.rows[0].occurred_at, net, home === "bella" ? "shift" : home, home === "nobody" ? "no_holder" : home === "pot" ? "post_tip" : "holder",
+    [id, pageOne, inserted.rows[0].occurred_at, net, homeKind, home === "nobody" ? "no_holder" : home === "pot" ? "post_tip" : "holder",
       JSON.stringify(shares), home === "pot" ? "obshak" : null],
   );
+  if (home === "anna") {
+    await testDb!.pool.query(
+      `insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, source, state, decided_at, applied_at, applied_user_id)
+       values ($1, $2, 'split', $3::jsonb, 'first', 'dispute', 'active', now(), now(), $4)`,
+      [id, pageOne, JSON.stringify([{ userId: anna, percent: 100 }]), anna],
+    );
+  }
   return id;
 }
 
@@ -150,11 +162,10 @@ describe("the shift report, review round 2b", () => {
   it("counts a disputed «моё» nowhere until it is settled, and says what is claimed (2)", async (context) => {
     if (!testDb) return context.skip();
     const shift = await insertShift(anna, new Date(Date.now() - 30 * 3_600_000), new Date(Date.now() - 25 * 3_600_000), new Date(Date.now() - 27 * 3_600_000).toISOString().slice(0, 10));
-    const own = await sale(10_000, 50, "nobody");
+    const own = await sale(10_000, 1_650, "anna", shift);
     const disputed = await sale(16_001, 60, "pot");
-    for (const [id, note] of [[own, "ничья, моя"], [disputed, "мой фан"]] as const) {
-      expect((await asSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${id}`, { statement: "mine", note })).statusCode).toBe(200);
-    }
+    expect(own).toBeGreaterThan(0);
+    expect((await asSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${disputed}`, { statement: "mine", note: "мой фан" })).statusCode).toBe(200);
     // The draft: the line stays, says the claim, counts nothing.
     const draft = shiftReportResponseSchema.parse((await asSession("anna", "GET", `/api/v1/shift-reports/${shift}`)).json()).view!;
     expect(draft.lines.find((line) => line.transactionId === disputed)).toMatchObject({ amountMills: 0, claimedMills: 16_001, disputed: true });

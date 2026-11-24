@@ -45,6 +45,7 @@ import {
   agentShiftReportCommentBodySchema,
   agentShiftReportLineBodySchema,
   agentShiftReportOffPlatformBodySchema,
+  agentShiftReportReportSaleBodySchema,
   agentShiftReportSubmitBodySchema,
   SHIFT_REPORT_COMMENT_MAX,
   SHIFT_REPORT_NOTE_MAX,
@@ -2529,6 +2530,13 @@ function shiftReportHint(error: { status: number | null; code: string | null }):
     return "not_claimable: this sale cannot be added by hand: it is not in hub shift-report claimable (another report of the"
       + " person holds it, its page is not theirs, or it is older than 7 days)";
   }
+  if (error.status === 404 && reason === "sale_not_matched") {
+    return "sale_not_matched: no unique sale matched on the person's granted pages (0 or multiple matches): ask for the exact"
+      + " transaction reference (--ref) or exact fan + amount";
+  }
+  if (error.status === 409 && reason === "already_decided") {
+    return "already_decided: the owner has already decided this sale";
+  }
   if (error.status === 404) {
     return "Not found: no such person (Telegram id or code in the people registry) or shift, the person has no shift yet, a"
       + " page of the shift is outside this key's grant, or the sale is not a line of the draft (read hub shift-report show)";
@@ -2866,24 +2874,51 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
       "Set the person's word on one sale of the draft, from their message: --statement not_mine («не моё», counts 0) or"
       + " share («делим с…», half the net, --share-with the colleague) on a line of «Ваши продажи»; mine («это моё», --note"
       + " with one line of why) on a line of «Рядом» or on a sale of hub shift-report claimable, which adds it to the report"
-      + " (counted, disputed when the rule gives it to someone else); rule takes the word back. --note alone: send the"
-      + " line's current word with it (rule when `statement` is null). Saved at once; the draft is recounted. Only the"
-      + " person's own words in their own message, never the agent's inference. Exit 0 — saved; 4 — refused (403: their"
-      + " switch is off; 409 sender_not_person; 400 statement_not_allowed, note_required, share_with_unknown; 404"
-      + " not_claimable) or no answer. Needs write:shift_reports.",
+      + " (counted 0, disputed until settled); rule takes the word back. Or with --report-sale: report an unlisted/hidden sale"
+      + " directly to the owner by --ref <transactionRef> OR (--fan <fan> --amount <dollars>) plus --note — matches strictly 1"
+      + " sale on the person's granted pages and opens a disputed line (0) + owner claim without leaking hidden sales. Saved at"
+      + " once. Only the person's own words in their own message, never the agent's inference. Exit 0 — saved; 4 — refused"
+      + " (403: switch off; 409 sender_not_person, already_decided; 400 statement_not_allowed, note_required, share_with_unknown;"
+      + " 404 not_claimable, sale_not_matched) or no answer. Needs write:shift_reports.",
     example: 'hub shift-report line --shift 4512 --sale 98765 --statement not_mine --note "PPV отправлял сменщик" --sender 700000111 --message https://t.me/c/2600000001/2001',
     options: {
       shift: SHIFT_REPORT_SHIFT_OPTION,
-      sale: { kind: "number", describe: "The sale: transactionId of a line in show, or of a sale in claimable (required)" },
-      statement: { kind: "string", describe: `The person's word (required): ${SHIFT_REPORT_LINE_WORDS.join(" | ")}` },
+      sale: { kind: "number", describe: "The sale: transactionId of a line in show, or of a sale in claimable (required unless --report-sale)" },
+      statement: { kind: "string", describe: `The person's word (required unless --report-sale): ${SHIFT_REPORT_LINE_WORDS.join(" | ")}` },
       "share-with": { kind: "string", describe: "With share: the colleague, by user id or by name as show's `colleagues` print it" },
-      note: { kind: "string", describe: `A note on the line in the person's words, up to ${SHIFT_REPORT_NOTE_MAX} characters; required with mine` },
+      "report-sale": { kind: "boolean", describe: "Report an exact sale to the owner («Сообщить владельцу») by --ref or (--fan + --amount) and --note" },
+      ref: { kind: "string", describe: "With --report-sale: exact platform transaction reference or Hub transaction id" },
+      fan: { kind: "string", describe: "With --report-sale (paired with --amount): fan username, display name, or platform id" },
+      amount: { kind: "string", describe: "With --report-sale (paired with --fan): sale amount in dollars, e.g. 25 or 19.99" },
+      note: { kind: "string", describe: `A note on the line in the person's words, up to ${SHIFT_REPORT_NOTE_MAX} characters; required with mine and --report-sale` },
       sender: SHIFT_REPORT_SENDER_OPTION,
       message: SHIFT_REPORT_MESSAGE_OPTION,
     },
     hint: shiftReportHint,
     run: async (client, values) => {
       const shiftId = requireId(values, "shift");
+      if (values["report-sale"] === true) {
+        if (values.sale !== undefined || values.statement !== undefined || values["share-with"] !== undefined) {
+          throw new HubUsageError("--report-sale does not take --sale, --statement or --share-with");
+        }
+        const transactionRef = readString(values, "ref");
+        const fan = readString(values, "fan");
+        const amountMills = hubDollarsToMills(values, "amount", "positive");
+        if (transactionRef === undefined && (fan === undefined || amountMills === undefined)) {
+          throw new HubUsageError("--report-sale needs --ref <transactionRef> OR both --fan <fan> and --amount <dollars>");
+        }
+        if (transactionRef !== undefined && (fan !== undefined || amountMills !== undefined)) {
+          throw new HubUsageError("--report-sale takes either --ref OR (--fan + --amount), not both");
+        }
+        const note = requireString(values, "note");
+        const words = shiftReportWords(values, false);
+        return client.agentShiftReportReportSale({
+          body: checkedDraft(agentShiftReportReportSaleBodySchema, defined({ shiftId, transactionRef, fan, amountMills, note, ...words })),
+        });
+      }
+      if (values.ref !== undefined || values.fan !== undefined || values.amount !== undefined) {
+        throw new HubUsageError("--ref, --fan and --amount go only with --report-sale");
+      }
       const transactionId = requireId(values, "sale");
       const word = requireEnum(values, "statement", SHIFT_REPORT_LINE_WORDS);
       const statement = word === "rule" ? null : word;

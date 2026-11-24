@@ -341,14 +341,17 @@ describe("a sale's chain of money: who reads it and how much", () => {
     expect(owner.sales.find((sale) => sale.transactionId === sales.nobody)?.home).toMatchObject({ kind: "nobody", state: "none" });
     expect(ids(await list("boss", "&home=nobody"))).toEqual([sales.nobody]);
 
-    // A team lead: their pages only, every chain of them.
+    // A team lead: their pages only, never hidden `nobody` sales (H8); every visible chain of them.
     const lead = await list("lead");
-    expect(ids(lead)).toEqual([sales.anna, sales.bella, sales.nobody].sort((a, b) => a - b));
+    expect(ids(lead)).toEqual([sales.anna, sales.bella].sort((a, b) => a - b));
+    expect(lead.counts).toMatchObject({ all: 2, people: 2, nobody: 0 });
     expect(lead.sales.every((sale) => sale.chain)).toBe(true);
+    expect((await asSession("lead", `/api/v1/sales/${sales.nobody}/chain`)).statusCode).toBe(404);
 
-    // A chatter: the sales of their pages, the chain of their own only; «Мои» is theirs.
+    // A chatter: the sales of their pages except hidden `nobody` sales (H8), the chain of their own only; «Мои» is theirs.
     const anna = await list("anna");
-    expect(ids(anna)).toEqual([sales.anna, sales.bella, sales.nobody].sort((a, b) => a - b));
+    expect(ids(anna)).toEqual([sales.anna, sales.bella].sort((a, b) => a - b));
+    expect(anna.counts.nobody).toBe(0);
     expect(anna.sales.filter((sale) => sale.chain).map((sale) => sale.transactionId)).toEqual([sales.anna]);
     expect(anna.sales.find((sale) => sale.transactionId === sales.bella)?.people).toEqual([{ userId: await fixtureUserId(app, "bella"), name: "bella", mine: false }]);
     expect(anna.counts.mine).toBe(1);

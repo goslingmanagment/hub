@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { isTeamHiddenSaleHome } from "../apps/runtime/src/services/sale-rule.ts";
 import {
   claimedSale,
   classifySale,
   lineAmount,
   pageSums,
   postTexts,
+  reasonWords,
   slotWindowOf,
   type DraftContext,
   type DraftSale,
@@ -92,11 +94,13 @@ describe("which sales a shift's draft holds", () => {
     expect(classifySale(lookIn, context())).toMatchObject({ group: "mine", added: true });
   });
 
-  it("keeps a sale the person said «не моё» of as their own line with the word, whatever the rule made of it since", () => {
-    // Its home's only person said «не моё»: by the rule it is nobody's now. Without the word it is a sale nearby.
+  it("keeps a sale the person said «не моё» of as their own line with the word, even when it became nobody's (hidden from «Рядом»)", () => {
+    // Its home's only person said «не моё»: by the rule it is nobody's now. Without the word it is hidden from «Рядом» (H8).
     const nobodys = { kind: "nobody" as const, reason: "agreed" as const, pot: null, shares: [] };
     const held = sale({ transactionId: 31, home: nobodys });
-    expect(classifySale(held, context())).toMatchObject({ group: "near" });
+    expect(isTeamHiddenSaleHome(nobodys.kind)).toBe(true);
+    expect(isTeamHiddenSaleHome("shift")).toBe(false);
+    expect(classifySale(held, context())).toBeNull();
     const kept = classifySale(held, context({ notMine: new Set([31]) }));
     expect(kept).toMatchObject({ group: "mine", added: false, shareMills: 0, toUserId: null });
     // A «долёт» the person said it of, read by id once its home names them no more: outside the window, still theirs.
@@ -155,24 +159,27 @@ describe("the report's window and sales added by hand", () => {
       .toEqual({ from: Date.parse("2026-11-09T12:00:00+03:00"), to: Date.parse("2026-11-09T20:00:00+03:00"), pageIds: [11, 12] });
   });
 
-  it("shows a sale nobody held in the report's window nearby, «ничья», and «моё» counts it plainly", () => {
+  it("hides a sale nobody held from «Рядом», and «моё» on a nobody's sale counts 0 (disputed, routed to the owner)", () => {
     const nobody = sale({
       transactionId: 21, heldByShift: false, inReportWindow: true, netMills: 4_000,
       home: { kind: "nobody", reason: "no_holder", pot: null, shares: [] },
     });
-    expect(classifySale(nobody, context())).toMatchObject({ group: "near", toUserId: null });
+    expect(classifySale(nobody, context())).toBeNull();
     expect(classifySale({ ...nobody, inReportWindow: false }, context())).toBeNull();
-    expect(lineAmount({ group: "near", netMills: 4_000, shareMills: 0, homeKind: "nobody", statement: "mine", alreadyIn: false })).toEqual({ amountMills: 4_000, disputed: false });
+    expect(lineAmount({ group: "near", netMills: 4_000, shareMills: 0, homeKind: "nobody", statement: "mine", alreadyIn: false }))
+      .toEqual({ amountMills: 0, disputed: true, claimedMills: 4_000 });
   });
 
-  it("counts a sale added by hand only with «моё»: plainly when nobody's; disputed — claimed, counting nothing — when the rule or another report gives it away", () => {
+  it("counts a sale added by hand with «моё» as disputed (0 until settled), including nobody's sales", () => {
     const base = { group: "mine" as const, netMills: 120_000, shareMills: 0, alreadyIn: false, claimed: true };
-    expect(lineAmount({ ...base, homeKind: "nobody", statement: "mine" })).toEqual({ amountMills: 120_000, disputed: false });
+    expect(lineAmount({ ...base, homeKind: "nobody", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
     expect(lineAmount({ ...base, homeKind: "shift", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
     expect(lineAmount({ ...base, homeKind: "nobody", statement: "mine", otherReport: true })).toEqual({ amountMills: 0, disputed: true, claimedMills: 120_000 });
     expect(lineAmount({ ...base, homeKind: "nobody", statement: null })).toEqual({ amountMills: 0, disputed: false });
+    expect(lineAmount({ ...base, shareMills: 120_000, homeKind: "shift", statement: "mine" })).toEqual({ amountMills: 120_000, disputed: false });
     const added = claimedSale(sale({ transactionId: 22, source: "before", home: { kind: "shift", reason: "last_writer", pot: null, shares: [{ userId: OTHER, workRef: "9:x", shiftId: 7, mills: 120_000 }] } }), context(), false);
     expect(added).toMatchObject({ group: "mine", added: true, claimed: true, toUserId: OTHER, shareMills: 0 });
+    expect(reasonWords({ group: "mine", added: true, reason: "owner_claim", homeKind: "shift", toName: null, senderName: null, alreadyIn: null })).toBe("отдано владельцем");
   });
 });
 
@@ -184,8 +191,8 @@ describe("what a line counts", () => {
     expect(lineAmount({ ...base, group: "mine", statement: "share" })).toEqual({ amountMills: 20_000, disputed: false });
     expect(lineAmount({ ...base, netMills: 7_201, group: "mine", statement: "share" }).amountMills).toBe(3_601);
   });
-  it("counts «моё» on a near sale whole when nobody's; when someone else's it is disputed: claimed, counting nothing until settled", () => {
-    expect(lineAmount({ ...base, shareMills: 0, homeKind: "nobody", group: "near", statement: "mine" })).toEqual({ amountMills: 40_000, disputed: false });
+  it("counts «моё» on any near sale as disputed (0 until settled), including nobody's", () => {
+    expect(lineAmount({ ...base, shareMills: 0, homeKind: "nobody", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
     expect(lineAmount({ ...base, shareMills: 0, homeKind: "shift", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
     expect(lineAmount({ ...base, shareMills: 0, homeKind: "pot", group: "near", statement: "mine" })).toEqual({ amountMills: 0, disputed: true, claimedMills: 40_000 });
     expect(lineAmount({ ...base, shareMills: 0, group: "near", statement: null })).toEqual({ amountMills: 0, disputed: false });
@@ -201,7 +208,7 @@ describe("the draft's lines and sums", () => {
       classified: [
         classifySale(sale({ transactionId: 1 }), context())!,
         classifySale(sale({ transactionId: 2, pageLabel: "page-2", netMills: 10_000, home: { kind: "shift", reason: "holder", pot: null, shares: [{ userId: ME, workRef: WORK, shiftId: null, mills: 10_000 }] } }), context())!,
-        classifySale(sale({ transactionId: 3, home: { kind: "nobody", reason: "no_holder", pot: null, shares: [] } }), context())!,
+        claimedSale(sale({ transactionId: 3, home: { kind: "nobody", reason: "no_holder", pot: null, shares: [] } }), context(), false),
       ],
       senders: new Map<number, number>(),
     };
@@ -212,17 +219,17 @@ describe("the draft's lines and sums", () => {
       { transactionId: 2, statement: "mine", shareWithUserId: null, note: "обещал вернуться", updatedAt: at },
       { transactionId: 3, statement: "mine", shareWithUserId: null, note: "договорился в личке", updatedAt: at },
     ]);
-    expect(lines.map((line) => [line.transactionId, line.group, line.statement, line.amountMills, line.disputed])).toEqual([
-      [1, "mine", "share", 20_000, false],
-      [2, "mine", null, 10_000, false],
-      [3, "near", "mine", 40_000, false],
+    expect(lines.map((line) => [line.transactionId, line.group, line.statement, line.amountMills, line.disputed, line.claimedMills ?? null])).toEqual([
+      [1, "mine", "share", 20_000, false, null],
+      [2, "mine", null, 10_000, false, null],
+      [3, "mine", "mine", 0, true, 40_000],
     ]);
     expect(lines[0]!.shareWithUserId).toBe(OTHER);
     expect(lines[1]!.note).toBe("обещал вернуться");
     const sums = pageSums(lines.filter((line) => line.group === "mine" || line.amountMills !== 0), ["page-1", "page-2", "page-3"]);
     expect(sums).toEqual({
-      pages: [{ pageLabel: "page-1", amountMills: 60_000 }, { pageLabel: "page-2", amountMills: 10_000 }, { pageLabel: "page-3", amountMills: 0 }],
-      totalMills: 70_000,
+      pages: [{ pageLabel: "page-1", amountMills: 20_000 }, { pageLabel: "page-2", amountMills: 10_000 }, { pageLabel: "page-3", amountMills: 0 }],
+      totalMills: 30_000,
     });
   });
 });

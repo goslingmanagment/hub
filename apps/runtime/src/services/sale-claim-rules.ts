@@ -1,7 +1,8 @@
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
-import type { RuleMark } from "./sale-rule.ts";
+import type { RuleMark, RuleSlot } from "./sale-rule.ts";
 import { halvesOf, splitShares } from "./sale-rule.ts";
+import { slotOccurrencesOf } from "./schedule-slots.ts";
 import { dayWords, pageSums } from "./shift-handin-rules.ts";
 
 /**
@@ -131,7 +132,7 @@ export function deriveClaims(reports: readonly ReportView[]): DerivedClaim[] {
         out.push({ ...base(report, line), kind: "claim", statement: "mine", shareWithUserId: null, sideUserId: userId, sideShiftId: shiftId });
         pairs.add(pairKey(sale, report.userId, userId));
       }
-      if (sides.size === 0 && line.rule.home !== "nobody" && line.rule.home !== "decide") {
+      if (sides.size === 0 && line.rule.home !== "decide") {
         out.push({ ...base(report, line), kind: "claim", statement: "mine", shareWithUserId: null, sideUserId: null, sideShiftId: null });
       }
     }
@@ -464,5 +465,87 @@ export function disputeAnswersOf(input: { sides: readonly number[]; pot: boolean
   else if (input.ruleNamesSomeone) out.push({ key: "rule", outcome: "rule", shares: [] });
   out.push({ key: "nobody", outcome: "nobody", shares: [] });
   return out;
+}
+
+// ── Live single-chatter suggestion for open nobody (`no_holder`) sales (H8) ─
+
+export interface SoloPageCandidate {
+  personId: number;
+  code: string;
+  displayName: string;
+  kind: string;
+  role: string;
+  state: string;
+  leftOn: string | null;
+}
+
+export interface SoloPageSuggestion {
+  personId: number;
+  userId: number;
+  code: string;
+  name: string;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Live owner suggestion for a `no_holder` (`home === 'nobody'`) sale on `saleDay` and `pageId` (H8):
+ * among active (not left on or before `saleDay`) chat-team humans (`chatter` / `team_lead`), takes the union of
+ * people linked to `pageId` via `person_working_pages` and people with an active schedule slot/swap occurrence on
+ * `pageId` on `saleDay` (`slots` keyed by `people.id` in `RuleSlot.personId`).
+ * Suggests that person (with their live Hub login, or lowest login if none live) ONLY when the set has exact size 1;
+ * returns `null` for 0, >=2, or if the sole person has no Hub login. Pure.
+ */
+export function suggestSoloPagePerson(input: {
+  pageId: number;
+  saleDay: string;
+  people: readonly SoloPageCandidate[];
+  workingPages: ReadonlyArray<{ personId: number; pageId: number }>;
+  logins: ReadonlyArray<{ personId: number; userId: number; disabledAt: Date | null; deletedAt: Date | null }>;
+  slots: readonly RuleSlot[];
+}): SoloPageSuggestion | null {
+  const dayStart = Date.parse(`${input.saleDay}T00:00:00+03:00`);
+  if (Number.isNaN(dayStart)) return null;
+  const dayEnd = dayStart + DAY_MS;
+
+  const workingByPerson = new Map<number, number[]>();
+  for (const row of input.workingPages) {
+    const list = workingByPerson.get(row.personId);
+    if (list === undefined) workingByPerson.set(row.personId, [row.pageId]);
+    else if (!list.includes(row.pageId)) list.push(row.pageId);
+  }
+
+  const eligible: SoloPageCandidate[] = [];
+  for (const person of input.people) {
+    if (person.kind !== "human" || (person.role !== "chatter" && person.role !== "team_lead")) continue;
+    // Active on saleDay: not left, OR left strictly AFTER saleDay.
+    const activeOnDay = person.state !== "left" || (person.leftOn !== null && person.leftOn > input.saleDay);
+    if (!activeOnDay) continue;
+    const pages = workingByPerson.get(person.personId) ?? [];
+    if (pages.includes(input.pageId)) {
+      eligible.push(person);
+      continue;
+    }
+    const runs = slotOccurrencesOf(input.slots, {
+      userIds: new Set([person.personId]),
+      from: dayStart,
+      to: dayEnd,
+      pagesOfAll: pages,
+    });
+    if (runs.some((run) => run.pageId === input.pageId)) eligible.push(person);
+  }
+
+  if (eligible.length !== 1) return null;
+  const sole = eligible[0]!;
+  const personLogins = input.logins
+    .filter((login) => login.personId === sole.personId)
+    .sort((a, b) => {
+      const aLive = a.disabledAt === null && a.deletedAt === null ? 1 : 0;
+      const bLive = b.disabledAt === null && b.deletedAt === null ? 1 : 0;
+      return bLive - aLive || a.userId - b.userId;
+    });
+  const login = personLogins[0];
+  if (login === undefined) return null;
+  return { personId: sole.personId, userId: login.userId, code: sole.code, name: sole.displayName };
 }
 

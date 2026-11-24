@@ -51,8 +51,8 @@ async function insertShift(userId: number, pages: string[], startedAt: Date, end
   return Number(result.rows[0].id);
 }
 
-/** A sale of a page `minutesAgo` before now and its home: bella's shift, or nobody's. */
-async function sale(pageId: number, net: number, minutesAgo: number, home: "bella" | "nobody"): Promise<number> {
+/** A sale of a page `minutesAgo` before now and its home: bella's shift, anna's shift, or nobody's. */
+async function sale(pageId: number, net: number, minutesAgo: number, home: "bella" | "anna" | "nobody", shiftIdOverride?: number): Promise<number> {
   refs += 1;
   const inserted = await testDb!.pool.query(
     `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
@@ -62,12 +62,21 @@ async function sale(pageId: number, net: number, minutesAgo: number, home: "bell
     [pageId, `tx-review-${refs}`, net + 4_000, net, 4_000, minutesAgo],
   );
   const id = Number(inserted.rows[0].id);
-  const shares = home === "nobody" ? [] : [{ userId: bella, workRef: null, shiftId: shiftB, percent: 100, mills: net }];
+  const shares = home === "nobody"
+    ? []
+    : [{ userId: home === "anna" ? anna : bella, workRef: null, shiftId: shiftIdOverride ?? shiftB, percent: 100, mills: net }];
   await testDb!.pool.query(
     `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at)
      values ($1, $2, $3, $4, $5, $6, $7::jsonb, 'test', now())`,
     [id, pageId, inserted.rows[0].occurred_at, net, home === "nobody" ? "nobody" : "shift", home === "nobody" ? "no_holder" : "holder", JSON.stringify(shares)],
   );
+  if (home === "anna") {
+    await testDb!.pool.query(
+      `insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, source, state, decided_at, applied_at, applied_user_id)
+       values ($1, $2, 'split', $3::jsonb, 'first', 'dispute', 'active', now(), now(), $4)`,
+      [id, pageId, JSON.stringify([{ userId: anna, percent: 100 }]), anna],
+    );
+  }
   return id;
 }
 
@@ -189,11 +198,10 @@ describe("the shift report after a settled claim, and a reader of one page", () 
 
   it("shows a reader of one page of a two-page report that page's sums alone: body, totals, history and list (R2-c)", async (context) => {
     if (!testDb) return context.skip();
-    const one = await sale(pageOne, 10_000, 80, "nobody");
-    const two = await sale(pageTwo, 6_000, 90, "nobody");
-    for (const id of [one, two]) {
-      expect((await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftTwoPages}/lines/${id}`, { statement: "mine", note: "ничья, моя" })).statusCode).toBe(200);
-    }
+    const one = await sale(pageOne, 10_000, 2_850, "anna", shiftTwoPages);
+    const two = await sale(pageTwo, 6_000, 2_840, "anna", shiftTwoPages);
+    expect(one).toBeGreaterThan(0);
+    expect(two).toBeGreaterThan(0);
     const added = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftTwoPages}/off-platform`, { amountMills: 50_000, fromWhom: "фан", whatFor: "кастом" });
     expect(added.statusCode, added.body).toBe(200);
     await submit(shiftTwoPages);

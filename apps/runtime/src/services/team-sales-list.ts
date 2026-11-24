@@ -114,7 +114,7 @@ export async function readTeamSalesList(
 
   const { sales, counts } = await listTeamSalesWithHomes(db, {
     pageIds: pages, from: window.from, to: window.to, filter: query.home, userIds: viewer.logins,
-    limit: TEAM_SALES_LIST_PAGE + 1, offset: query.offset,
+    limit: TEAM_SALES_LIST_PAGE + 1, offset: query.offset, hideNobody: !viewer.owner,
   });
   const shown = sales.slice(0, TEAM_SALES_LIST_PAGE);
   const saleIds = shown.map((sale) => sale.transactionId);

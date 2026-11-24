@@ -569,6 +569,8 @@ export async function listSaleDecisions(
     open?: boolean;
     /** Decided (or said) on this day or later. */
     since?: Date;
+    /** Filter by page realm in SQL. */
+    realm?: "live" | "test";
   },
 ): Promise<SaleDecisionRow[]> {
   const where = [sql`true`];
@@ -578,6 +580,8 @@ export async function listSaleDecisions(
   if (input.transactionIds !== undefined) where.push(sql`d.transaction_id = any(${ids(input.transactionIds)})`);
   if (input.needsLink !== undefined) where.push(sql`d.needs_link = ${input.needsLink}`);
   if (input.activeOnly === true) where.push(sql`d.state = 'active'`);
+  if (input.realm === "live") where.push(sql`d.page_id is not null and ${livePageSql(sql`d.page_id`)}`);
+  if (input.realm === "test") where.push(sql`d.page_id is not null and ${testPageSql(sql`d.page_id`)}`);
   if (input.userIds !== undefined) {
     where.push(sql`exists (select 1 from jsonb_array_elements(d.shares) as s where (s ->> 'userId')::bigint = any(${ids(input.userIds)}))`);
   }
@@ -788,6 +792,30 @@ export async function listDaysHandedIn(db: Database, input: { from: string; to: 
     having bool_and(h.state is not distinct from 'submitted')
     order by s.report_date`);
   return result.rows.map((row) => String(row.day));
+}
+
+/** All unowned (`nobody` / `decide`) sales in `realm` from `since`, regardless of week close, newest first. */
+export async function listOpenUnownedSales(
+  db: Database,
+  input: { since: Date; realm?: "live" | "test" },
+): Promise<Array<{ transactionId: number; pageId: number; occurredAt: Date; netMills: number; home: string; reason: string; day: string }>> {
+  const pageSql = input.realm === "test" ? testPageSql(sql`h.page_id`) : livePageSql(sql`h.page_id`);
+  const result = await db.execute<Row>(sql`
+    select h.transaction_id, h.page_id, h.occurred_at, h.net_mills, h.home, h.reason,
+      to_char(h.occurred_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day
+    from sale_homes h
+    where h.home in ('nobody', 'decide') and ${pageSql}
+      and h.occurred_at >= ${input.since.toISOString()}::timestamptz
+    order by h.occurred_at desc, h.transaction_id desc`);
+  return result.rows.map((row) => ({
+    transactionId: num(row.transaction_id),
+    pageId: num(row.page_id),
+    occurredAt: date(row.occurred_at),
+    netMills: num(row.net_mills),
+    home: String(row.home),
+    reason: String(row.reason),
+    day: String(row.day),
+  }));
 }
 
 /** The sales of the Moscow days whose home is nobody's or the owner's to decide, as `sale_homes` keeps them. */

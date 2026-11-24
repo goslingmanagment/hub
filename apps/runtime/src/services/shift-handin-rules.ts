@@ -1,7 +1,7 @@
 import { personNameForms } from "@agency_hub_core/contracts";
 import { formatUsdFromMills, millsPercentOf, millsRoundedTo, millsToNumber } from "@agency_hub_core/shared";
 
-import type { RuleSlot, SaleHomeKind, SaleHomeReason } from "./sale-rule.ts";
+import { isTeamHiddenSaleHome, type RuleSlot, type SaleHomeKind, type SaleHomeReason } from "./sale-rule.ts";
 import { slotOccurrencesOf } from "./schedule-slots.ts";
 
 /**
@@ -141,6 +141,11 @@ export function classifySale(sale: DraftSale, context: DraftContext): Classified
   if (context.notMine?.has(sale.transactionId) === true) {
     return { sale, group: "mine", added: sale.source !== "window", shareMills: 0, toUserId: other?.userId ?? null, alreadyIn };
   }
+  // Nobody's sales are hidden from chatters and team leads (H8): never shown in «Рядом» (own «не моё» lines stay above),
+  // except when this report's own current version already holds the sale (e.g. the person said «не моё» making it
+  // `nobody` and just cleared the word back to null before re-submitting).
+  const heldByThisReport = reported !== undefined && reported.handinId === context.handinId;
+  if (isTeamHiddenSaleHome(sale.home.kind) && !heldByThisReport) return null;
   if (sale.source === "window" && (sale.heldByShift || sale.inReportWindow)) {
     return { sale, group: "near", added: false, shareMills: 0, toUserId: other?.userId ?? null, alreadyIn };
   }
@@ -224,8 +229,8 @@ export function lineAmount(input: {
   if (input.statement !== "mine") return { amountMills: 0, disputed: false };
   // The rule's home already gives the person a share of a sale they added (agreed, decided): that share, settled.
   if (input.claimed === true && input.shareMills > 0) return { amountMills: input.shareMills, disputed: false };
-  const disputed = input.homeKind !== "nobody" || input.otherReport === true;
-  return disputed ? { amountMills: 0, disputed: true, claimedMills: input.netMills } : { amountMills: input.netMills, disputed: false };
+  // «Моё» on any near/added sale (including nobody's, H8): disputed, counts 0 until settled by the colleague or owner.
+  return { amountMills: 0, disputed: true, claimedMills: input.netMills };
 }
 
 /**
@@ -276,6 +281,7 @@ export function reasonWords(input: {
     return input.toName !== null ? `по правилу ${input.toName}` : "по правилу не ваша";
   }
   if (input.group === "mine") {
+    if (input.reason === "owner_claim" || input.reason === "owner_split") return "отдано владельцем";
     if (input.added) return "долёт: по правилу ваша, в отчёт своей смены не вошла";
     switch (input.reason) {
       case "ppv_sender": return "ваш PPV";
@@ -286,8 +292,6 @@ export function reasonWords(input: {
       case "last_writer": return "держали несколько смен, последними фану писали вы";
       case "slot_owner": return "стык смен: шёл ваш слот";
       case "look_in_last_writer": return "заход: последними фану писали вы";
-      case "owner_claim": return "ничья, отдана вам владельцем";
-      case "owner_split": return "раздел владельца";
       case "marks": return "по меткам чаттеров";
       case "agreed": return "по согласию второй стороны";
       default: return "ваша по правилу";

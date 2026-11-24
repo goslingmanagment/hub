@@ -254,6 +254,40 @@ export const shiftReportCommentBodySchema = z.object({
   modelSlug: z.string().trim().min(1).max(100).optional(),
 });
 
+/** «Сообщить владельцу» (H8): exact match by transactionRef OR (fan + amountMills), within caller's granted pages and realm. */
+const shiftReportReportSaleFields = {
+  /** Platform transaction reference or Hub transaction id. */
+  transactionRef: z.string().trim().min(1).max(120).optional(),
+  /** Fan username, display name, or platform id (paired with `amountMills`). */
+  fan: z.string().trim().min(1).max(200).optional(),
+  /** Sale amount in mills (paired with `fan`). */
+  amountMills: mills.min(1).max(100_000_000).optional(),
+  /** Required one-line explanation for the owner. */
+  note: z.string().trim().min(1).max(SHIFT_REPORT_NOTE_MAX),
+};
+
+export const shiftReportReportSaleBodySchema = z.object(shiftReportReportSaleFields).refine(
+  (body) => body.transactionRef !== undefined || (body.fan !== undefined && body.amountMills !== undefined),
+  "name transactionRef or fan with amountMills",
+);
+
+export const shiftReportReportSaleResponseSchema = z.object({
+  transactionId: intId,
+  savedAt: isoTimestamp,
+});
+
+export const agentShiftReportReportSaleBodySchema = z.object({
+  shiftId: intId,
+  ...shiftReportReportSaleFields,
+  /** The sender of the Telegram message: must be the person's, else 409 `sender_not_person`. */
+  telegramUserId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  /** Optional message reference. */
+  sourceRef: z.string().trim().min(1).max(300).optional(),
+}).refine(
+  (body) => body.transactionRef !== undefined || (body.fan !== undefined && body.amountMills !== undefined),
+  "name transactionRef or fan with amountMills",
+);
+
 export const shiftReportOffPlatformBodySchema = z.object({
   amountMills: mills.min(1).max(100_000_000),
   fromWhom: z.string().trim().min(1).max(200),
@@ -833,6 +867,8 @@ export type ShiftReportLineFacts = z.infer<typeof shiftReportLineFactsSchema>;
 export type ShiftReportBody = z.infer<typeof shiftReportBodySchema>;
 export type ShiftReportResponse = z.infer<typeof shiftReportResponseSchema>;
 export type ShiftReportLineBody = z.infer<typeof shiftReportLineBodySchema>;
+export type ShiftReportReportSaleBody = z.infer<typeof shiftReportReportSaleBodySchema>;
+export type ShiftReportReportSaleResponse = z.infer<typeof shiftReportReportSaleResponseSchema>;
 export type ShiftReportOffPlatformBody = z.infer<typeof shiftReportOffPlatformBodySchema>;
 export type ShiftReportsListResponse = z.infer<typeof shiftReportsListResponseSchema>;
 export type ShiftReportClaimableResponse = z.infer<typeof shiftReportClaimableResponseSchema>;
@@ -888,6 +924,14 @@ export const shiftHandinRouteSchemas = {
     params: shiftReportLineParamsSchema,
     body: shiftReportLineBodySchema,
     response: { 200: shiftReportSavedResponseSchema, ...personErrors, 409: shiftReportPhaseConflictSchema },
+  },
+  shiftReportReportSale: {
+    auth: { kind: "any" }, tags: ["client"],
+    summary: "«Сообщить владельцу»: report an exact sale by transactionRef or fan + amount without revealing hidden sales",
+    description: `${ANY} Own shift, switched on. Matches strictly 1 sale within caller's granted pages and realm; 0 or >1 matches return the identical 404 refusal with no candidate list. On exact match, adds a disputed «моё» line (counts 0) and opens an owner claim without a respondent.`,
+    params: shiftReportParamsSchema,
+    body: shiftReportReportSaleBodySchema,
+    response: { 200: shiftReportReportSaleResponseSchema, ...personErrors, 409: shiftReportPhaseConflictSchema },
   },
   shiftReportCommentSet: {
     auth: { kind: "any" }, tags: ["client"],
@@ -945,6 +989,13 @@ export const shiftHandinRouteSchemas = {
     description: "The sender's Telegram id must be the person's: else 409 `sender_not_person`.",
     body: agentShiftReportLineBodySchema,
     response: { 200: shiftReportSavedResponseSchema, ...agentErrors },
+  },
+  agentShiftReportReportSale: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "Report an exact sale to the owner «со слов» (needs write:shift_reports)",
+    description: "Exact match by transactionRef or fan + amount within the person's pages, key's grant, and realm; 0 or >1 matches return the identical 404 refusal. Adds a disputed «моё» line (counts 0) and opens an owner claim without a respondent.",
+    body: agentShiftReportReportSaleBodySchema,
+    response: { 200: shiftReportReportSaleResponseSchema, ...agentErrors },
   },
   agentShiftReportCommentSet: {
     auth: { kind: "agentKey" }, tags: ["agent"],

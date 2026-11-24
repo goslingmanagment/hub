@@ -163,8 +163,8 @@ const toCent = (mills: number) => millsToNumber(millsRoundedTo(mills, "cent"));
 type Claimable = KernelOperationResponse<"shiftReportClaimable">["sales"][number];
 
 /**
- * What «Добавить → продажу» offers the demo chatter: two nobody's subscriptions of the weekend and a tip a colleague's
- * shift took the night before — the cases a chatter today adds by words.
+ * What «Добавить → продажу» offers the demo chatter: colleague sales of the last 7 days (nobody's sales are hidden
+ * from chatters and team leads, H8).
  */
 function claimableOf(user: DemoUser, now: Date): Claimable[] {
   const fans = salesOf(shiftsOf(user, now)[1] ?? shiftsOf(user, now)[0]!, 9, user).map((sale) => sale.fan);
@@ -176,8 +176,6 @@ function claimableOf(user: DemoUser, now: Date): Claimable[] {
       fan: { fanRef: one?.platformUserId ?? null, name: one?.displayName ?? null, username: one?.username ?? null }, home, words };
   };
   return [
-    row(1, 3, 14, "mia-1", "subscription", 12_800, "nobody", "ничья: страницу никто не держал", 0),
-    row(2, 4, 11, "mia-1", "subscription", 12_800, "nobody", "ничья: страницу никто не держал", 1),
     row(3, 1, 23, "mia-2", "tip", 32_000, "shift", "последним фану писал Денис", 2),
     row(4, 1, 23, "mia-2", "subscription", 96_000, "shift", "последним фану писал Денис", 2),
   ];
@@ -189,7 +187,7 @@ function claimedLine(sale: Claimable, word: Word): ShiftReportLine {
     netMills: sale.netMills, fan: sale.fan,
     rule: { home: sale.home, reason: sale.home === "nobody" ? "no_holder" : "last_writer", words: sale.home === "nobody" ? "по правилу ничья" : sale.words, toUserId: null, toName: null, shareMills: 0 },
     statement: "mine", shareWithUserId: null, shareWithName: null, note: word.note,
-    amountMills: sale.home === "nobody" ? sale.netMills : 0, claimedMills: sale.home === "nobody" ? null : sale.netMills, added: true, disputed: sale.home !== "nobody", alreadyIn: null,
+    amountMills: 0, claimedMills: sale.netMills, added: true, disputed: true, alreadyIn: null,
     facts: { ppv: null, lastWriter: null, writers: [], holders: null, ownSlotRunning: null, otherReports: [], pot: null, renewalOf: null },
   };
 }
@@ -559,6 +557,11 @@ export const shiftReportHandlers: DemoHandlers = {
       statement: body.statement, shareWithUserId: share, shareWithName: DEMO_USERS.find((user) => user.id === share)?.name ?? null, note: body.note?.trim() || null,
     });
     return { savedAt: request.now.toISOString() };
+  },
+  shiftReportReportSale: (request) => {
+    const found = writable(request);
+    if (isReply(found)) return found;
+    return { transactionId: 990_003, savedAt: request.now.toISOString() };
   },
   shiftReportCommentSet: (request) => {
     const board = demoBoardWrite(request, "comment");

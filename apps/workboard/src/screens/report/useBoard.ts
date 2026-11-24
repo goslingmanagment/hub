@@ -107,6 +107,8 @@ export function useBoard({ report, host, transport, light }: {
       const reason = error instanceof KernelApiError ? (error.body as { reason?: unknown } | null)?.reason : undefined;
       toast(reason === "claim_settled" ? "Эта продажа уже решена: изменить её может только решающий"
         : reason === "card_dispute" ? "Продажа ждёт решающего. Передумали? Нажмите «Вернуть правку»"
+        : reason === "sale_not_matched" ? "Не удалось точно найти продажу. Укажите номер транзакции или точные данные фана и сумму."
+        : reason === "already_decided" ? "По этой продаже уже есть решение владельца"
         : phaseConflictReport(error) !== null ? "Сейчас это не меняется: доска обновилась"
         : status === 401 && host === "frame" ? "ChatGoose не вошёл в Hub: войдите в расширении"
         : status === null || status >= 500 ? "Hub не ответил: неизвестно, сохранилось ли" : "Не получилось. Hub вернул ошибку");

@@ -348,9 +348,9 @@ export function demoClaimMatters(now: Date): DemoClaimMatter[] {
   const week = nobodyWeek(now);
   if (week.sales.length > 0) {
     out.push({
-      kind: "sale.nobody_week", key: `sale.nobody_week:${week.from}`,
-      title: `Ничьи продажи за неделю с ${DAY_MONTH.format(new Date(`${week.from}T12:00:00+03:00`))} по ${DAY_MONTH.format(new Date(`${week.to}T12:00:00+03:00`))}: ${week.sales.length} на ${money(week.sales.reduce((sum, sale) => sum + sale.netMills, 0))}`,
-      pages: [], owner: { kind: "role", role: "owner" }, money: true, evidence: { week: week.from, count: week.sales.length }, link: `/workboard/waiting?nobody=${week.from}#questions`, agoMs: 26 * HOUR_MS,
+      kind: "sale.nobody_week", key: "sale.nobody_week:open",
+      title: `Ничьи продажи: ${week.sales.length} на ${money(week.sales.reduce((sum, sale) => sum + sale.netMills, 0))}`,
+      pages: [], owner: { kind: "role", role: "owner" }, money: true, evidence: { count: week.sales.length }, link: "/workboard/waiting?nobody=1#questions", agoMs: 26 * HOUR_MS,
     });
   }
   if (potOffer.decided === null) {
@@ -377,6 +377,8 @@ function nobodyWeek(now: Date) {
   const weekday = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
   const from = mskDay(Date.parse(`${today}T12:00:00+03:00`) - weekday * DAY_MS - (weekday < 2 ? 7 * DAY_MS : 0));
   const to = mskDay(Date.parse(`${from}T12:00:00+03:00`) + 6 * DAY_MS);
+  const alex = ALEX();
+  const kate = KATE();
   const lena = LENA();
   const sales = chatterWorld(lena, now).shifts.flatMap((shift) => shift.sales).filter((sale) => sale.kind !== "ppv").slice(0, 7);
   const kept = world(now).kept;
@@ -389,7 +391,14 @@ function nobodyWeek(now: Date) {
       fan: { fanRef: sale.fan.platformUserId, name: sale.fanName ?? sale.fan.displayName, username: sale.fan.username },
       home: index === 4 ? "decide" : "nobody",
       words: index === 4 ? "держали несколько смен, фану никто из них не писал" : "страницу никто не держал",
+      suggestion: index % 3 === 0 ? { personId: alex.id, userId: alex.id, code: "alex", name: alex.name } : null,
     })),
+    candidates: [
+      { userId: alex.id, code: "alex", name: alex.name, workingPageLabels: ["mia-1", "mia-2"] },
+      { userId: kate.id, code: "kate", name: kate.name, workingPageLabels: ["mia-1"] },
+      { userId: lena.id, code: "lena", name: lena.name, workingPageLabels: ["mia-1", "mia-2"] },
+    ],
+    waitingDecisions: [] as KernelOperationResponse<"saleNobody">["waitingDecisions"],
   };
 }
 
@@ -553,9 +562,19 @@ export const saleClaimHandlers: DemoHandlers = {
   saleNobodyKeep: (request) => {
     const denied = ownerOnly(request);
     if (denied) return denied;
+    const body = (request.body ?? {}) as { transactionIds?: number[] };
     const week = nobodyWeek(request.now);
-    for (const sale of week.sales) world(request.now).kept.add(sale.transactionId);
-    return { kept: week.sales.length, savedAt: request.now.toISOString() };
+    const wanted = body.transactionIds ? new Set(body.transactionIds) : null;
+    const target = week.sales.filter((sale) => wanted === null || wanted.has(sale.transactionId));
+    for (const sale of target) world(request.now).kept.add(sale.transactionId);
+    return { kept: target.length, savedAt: request.now.toISOString() };
+  },
+  saleNobodyGive: (request) => {
+    const denied = ownerOnly(request);
+    if (denied) return denied;
+    const body = request.body as { transactionId: number; userId: number };
+    world(request.now).kept.add(body.transactionId);
+    return { decisionId: 9901, status: "waiting_report", versions: [], savedAt: request.now.toISOString() };
   },
   saleDecisionsUnlinked: (request) => {
     const denied = ownerOnly(request);

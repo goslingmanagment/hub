@@ -17,9 +17,11 @@ import {
   findHandinPersonOfUser,
   findHandinShift,
   findLatestHandinShift,
+  findSalesForReportClaim,
   insertHandinEvent,
   insertOffPlatform,
   insertSaleClaim,
+  listActiveSaleDecisions,
   listCurrentHandinVersions,
   listHandinAgentKeyNames,
   listHandinColleagues,
@@ -42,6 +44,7 @@ import {
   listOpenPotOffers,
   listReportedSales,
   listSaleClaims,
+  lockSaleSettlements,
   updateSaleClaim,
   reopenSaleClaim,
   openMatter,
@@ -261,7 +264,7 @@ export function madeForWords(madeFor: HandinVersionMadeFor | null, actorName: st
   if (madeFor.kind === "decision" && madeFor.decisionId === null) {
     return madeFor.outcome === "merged" ? "смена объединена с другой" : madeFor.outcome === "moved" ? "отчёт перенесён в объединённую смену" : "смена отменена";
   }
-  if (madeFor.kind === "decision") return madeFor.outcome === "cancelled" ? "решение о продаже отменено" : "решение о продаже, записанное со слов";
+  if (madeFor.kind === "decision") return madeFor.outcome === "cancelled" ? "решение о продаже отменено" : madeFor.outcome === "said" ? "решение о продаже, записанное со слов" : "решение владельца о продаже";
   switch (madeFor.outcome) {
     case "agreed": return `согласие${actorName ? `: ${actorName}` : " второй стороны"}`;
     case "taken": return `записано по слову${actorName ? `: ${actorName}` : " коллеги"}`;
@@ -763,7 +766,7 @@ async function claimableSales(db: Database, subject: Subject, actor: HandinActor
     const granted = new Set(actor.pageIds);
     pageIds = pageIds.filter((id) => granted.has(id));
   }
-  const rows = await listHandinSalesOnPages(db, { pageIds, from: new Date(now.getTime() - CLAIMABLE_DAYS * DAY_MS), to: now, limit: CLAIMABLE_LIMIT });
+  const rows = await listHandinSalesOnPages(db, { pageIds, from: new Date(now.getTime() - CLAIMABLE_DAYS * DAY_MS), to: now, limit: CLAIMABLE_LIMIT, hideNobody: true });
   const reported = await listReportedSales(db, { userIds: subject.userIds, since: new Date(now.getTime() - (CLAIMABLE_DAYS + 3) * DAY_MS).toISOString().slice(0, 10) });
   return rows.filter((row) => {
     const held = reported.get(row.transactionId);
@@ -772,8 +775,132 @@ async function claimableSales(db: Database, subject: Subject, actor: HandinActor
 }
 
 /**
- * `shiftReportClaimable`: what «Добавить → продажу» offers — the person's own writer only — nobody's sales first,
- * then the rest, the newest first, each with whose it is by the rule in plain words.
+ * «Сообщить владельцу» (H8): one service operation behind both the Workboard add-sale dialog and
+ * `hub shift-report line --report-sale`. Finds a sale strictly within the caller's granted pages and realm by exact
+ * `transactionRef` OR (`fan` + `amountMills`). 0 or >1 matches return the identical refusal with NO candidate list so
+ * hidden sales' existence/count is never leaked. Exact 1 match adds a disputed «моё» line (counts 0) and opens an owner
+ * claim without a respondent under `lockSaleSettlements`.
+ */
+export async function reportSaleToOwner(
+  app: HandinApp,
+  actor: HandinActor,
+  input: {
+    shiftId: number;
+    transactionRef?: string | undefined;
+    fan?: string | undefined;
+    amountMills?: number | undefined;
+    note: string;
+  },
+  now: Date = new Date(),
+): Promise<{ transactionId: number; savedAt: string }> {
+  const { subject } = await writableSubject(app, actor, input.shiftId);
+  const note = input.note.trim();
+  if (note === "") throw new BadRequestError("Укажите короткое пояснение, почему продажа ваша", { reason: "note_required" });
+  const ref = input.transactionRef?.trim() ?? "";
+  const fan = input.fan?.trim() ?? "";
+  if (ref === "" && (fan === "" || input.amountMills === undefined || input.amountMills <= 0)) {
+    throw new BadRequestError("Укажите номер транзакции или фана и сумму", { reason: "sale_query_required" });
+  }
+  let pageIds = await listHandinAccessiblePageIds(app.db, subject.userIds);
+  if (actor.kind === "agent") {
+    const granted = new Set(actor.pageIds);
+    pageIds = pageIds.filter((id) => granted.has(id));
+  }
+  const realm = (await userIsTest(app, subject.shift.userId)) ? "test" : "live";
+  const matches = await findSalesForReportClaim(app.db, {
+    pageIds,
+    realm,
+    ...(ref !== "" ? { transactionRef: ref } : { fan, amountMills: input.amountMills }),
+    limit: 2,
+  });
+  // Security invariant (H8): 0 matches, >1 matches, out-of-grant, and cross-realm all return the exact same error.
+  if (matches.length !== 1) {
+    throw new NotFoundError("Не удалось точно найти продажу. Укажите номер транзакции или точные данные фана и сумму.", { reason: "sale_not_matched" });
+  }
+  const sale = matches[0]!;
+  const who = writer(actor);
+  await app.db.transaction(async (tx) => {
+    const db = tx as unknown as Database;
+    await lockSaleSettlements(db);
+    const existing = await findHandinByShift(db, subject.shift.id, { lock: true });
+    const phase = phaseOf(existing);
+    if (boardOn(subject) && phase !== "draft" && phase !== "fixing") {
+      throw new PhaseConflictError(subject.shift.id, phase);
+    }
+    const activeDecision = (await listActiveSaleDecisions(db, [sale.transactionId])).get(sale.transactionId);
+    if (activeDecision !== undefined) {
+      throw new ConflictError("По этой продаже уже есть решение владельца", { reason: "already_decided" });
+    }
+    const handin = existing ?? await handinFor(db, subject);
+    await setHandinMark(db, {
+      handinId: handin.id,
+      transactionId: sale.transactionId,
+      statement: "mine",
+      shareWithUserId: null,
+      toUserId: null,
+      note,
+      byUserId: who.byUserId,
+      byAgentKeyId: who.byAgentKeyId,
+      at: now,
+    });
+    const claimFields = {
+      pageId: sale.pageId,
+      kind: "claim" as const,
+      claimantVersion: null,
+      statement: "mine" as const,
+      shareWithUserId: null,
+      claimantNote: note,
+      claimedAt: now,
+      sideShiftId: null,
+      state: "owner" as const,
+      escalatedAt: now,
+      escalatedWhy: "no_side" as const,
+    };
+    const known = (await listSaleClaims(db, { transactionIds: [sale.transactionId] }))
+      .find((claim) => claim.claimantHandinId === handin.id && claim.sideUserId === null);
+    if (known === undefined) {
+      await insertSaleClaim(db, {
+        ...claimFields,
+        transactionId: sale.transactionId,
+        claimantUserId: subject.shift.userId,
+        claimantHandinId: handin.id,
+        sideUserId: null,
+        origin: "draft",
+      }, now);
+    } else if (known.state === "withdrawn") {
+      await reopenSaleClaim(db, known.id, claimFields, now);
+    } else if (known.state === "asked" || known.state === "owner") {
+      await updateSaleClaim(db, known.id, {
+        claimantNote: note,
+        statement: "mine",
+        state: "owner",
+        escalatedAt: known.escalatedAt ?? now,
+        escalatedWhy: known.escalatedWhy ?? "no_side",
+      }, now);
+    }
+    await insertHandinEvent(db, {
+      handinId: handin.id,
+      event: "shift_report.sale_reported",
+      door: who.door,
+      actorUserId: who.byUserId,
+      agentKeyId: who.byAgentKeyId,
+      onBehalfOfUserId: actor.kind === "agent" ? subject.shift.userId : null,
+      changes: {
+        transactionId: sale.transactionId,
+        ...(actor.kind === "agent" && actor.sourceRef !== null ? { sourceRef: actor.sourceRef } : {}),
+      },
+      at: now,
+    });
+  });
+  await runSaleClaims(app, now).catch((error: unknown) => {
+    app.logger.warn({ shiftId: subject.shift.id, transactionId: sale.transactionId, err: error instanceof Error ? error.message : String(error) }, "shift report: sale claims pass after report-sale failed");
+  });
+  return { transactionId: sale.transactionId, savedAt: now.toISOString() };
+}
+
+/**
+ * `shiftReportClaimable`: what «Добавить → продажу» offers — the person's own writer only — nobody's sales hidden
+ * (H8), the newest first, each with whose it is by the rule in plain words.
  */
 export async function readShiftReportClaimable(app: HandinApp, actor: HandinActor, shiftId: number, now: Date = new Date()): Promise<ShiftReportClaimableResponse> {
   const { subject } = await writableSubject(app, actor, shiftId);
@@ -807,7 +934,7 @@ export async function readShiftReportClaimable(app: HandinApp, actor: HandinActo
       words,
     };
   });
-  sales.sort((a, b) => Number(b.home === "nobody") - Number(a.home === "nobody") || b.occurredAt.localeCompare(a.occurredAt));
+  sales.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
   return { sales, serverNow: now.toISOString() };
 }
 

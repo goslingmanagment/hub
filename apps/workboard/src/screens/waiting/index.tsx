@@ -155,7 +155,9 @@ export function WaitingScreen() {
       {isOwner && Number.isSafeInteger(offPlatformParam) && offPlatformParam > 0 && (
         <OffPlatformModal key={offPlatformParam} shiftId={offPlatformParam} onClose={() => setParam("offPlatform", null)} />
       )}
-      {isOwner && nobodyParam !== null && /^\d{4}-\d{2}-\d{2}$/.test(nobodyParam) && <NobodyModal key={nobodyParam} week={nobodyParam} onClose={() => setParam("nobody", null)} />}
+      {isOwner && nobodyParam !== null && nobodyParam !== "" && (
+        <NobodyModal key={nobodyParam} week={/^\d{4}-\d{2}-\d{2}$/.test(nobodyParam) ? nobodyParam : undefined} onClose={() => setParam("nobody", null)} />
+      )}
       {isOwner && unlinkedParam && <UnlinkedModal onClose={() => setParam("unlinked", null)} />}
       {Number.isSafeInteger(questionParam) && questionParam > 0 && (
         <QuestionModal key={questionParam} id={questionParam} onClose={() => setParam("question", null)} />

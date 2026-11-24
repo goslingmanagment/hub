@@ -453,6 +453,25 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .wt-nobody__line--rich {
+    grid-template-columns: 132px minmax(0, 1fr) auto;
+    row-gap: var(--ui-space-2);
+  }
+
+  .wt-nobody__act {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ui-space-2);
+  }
+
+  .wt-nobody__pick {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ui-space-2);
+  }
+
   .wt-nobody__when {
     color: var(--ui-text-3);
   }

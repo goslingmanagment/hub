@@ -148,4 +148,43 @@ describe("hub shift-report", () => {
     expect(hint(off)).not.toBe(hint(missing));
     expect(sender.document.error).toMatchObject({ status: 409, reason: "sender_not_person" });
   });
+
+  it("supports --report-sale with --ref or (--fan + --amount) and rejects malformed inputs before calling Hub", async () => {
+    const { calls, run } = hub({
+      agentShiftReportReportSale: () => ({ transactionId: 8001, savedAt: "2026-11-11T00:00:00.000Z" }),
+    });
+    // Missing query or note, or mixing --ref with --fan/--sale: refused locally with exit 4.
+    for (const argv of [
+      ["--report-sale", "--note", "моя"],
+      ["--report-sale", "--fan", "fan_a", "--note", "моя"],
+      ["--report-sale", "--amount", "20", "--note", "моя"],
+      ["--report-sale", "--ref", "tx-1"],
+      ["--report-sale", "--ref", "tx-1", "--fan", "fan_a", "--amount", "20", "--note", "моя"],
+      ["--report-sale", "--sale", "9001", "--ref", "tx-1", "--note", "моя"],
+      ["--ref", "tx-1", "--sale", "9001", "--statement", "mine", "--note", "моя"],
+    ]) {
+      const bad = await run(["shift-report", "line", "--shift", "41", "--sender", SENDER, ...argv]);
+      expect(bad.exitCode, argv.join(" ")).toBe(4);
+    }
+    expect(calls).toEqual([]);
+
+    const byRef = await run([
+      "shift-report", "line", "--shift", "41", "--report-sale", "--ref", "tx-abc", "--note", "фан купил после моего сообщения", "--sender", SENDER, "--message", MESSAGE,
+    ]);
+    expect(byRef.exitCode).toBe(0);
+    const byFan = await run([
+      "shift-report", "line", "--shift", "41", "--report-sale", "--fan", "fan_a", "--amount", "19.99", "--note", "кастом оплатил", "--sender", SENDER,
+    ]);
+    expect(byFan.exitCode).toBe(0);
+    expect(calls).toEqual([
+      {
+        operation: "agentShiftReportReportSale",
+        input: { body: { shiftId: 41, transactionRef: "tx-abc", note: "фан купил после моего сообщения", telegramUserId: 700_000_111, sourceRef: MESSAGE } },
+      },
+      {
+        operation: "agentShiftReportReportSale",
+        input: { body: { shiftId: 41, fan: "fan_a", amountMills: 19_990, note: "кастом оплатил", telegramUserId: 700_000_111 } },
+      },
+    ]);
+  });
 });

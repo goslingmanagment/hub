@@ -11,6 +11,7 @@ import {
   readShiftReport,
   readShiftReportClaimable,
   readShiftReportsFeed,
+  reportSaleToOwner,
   setShiftReportComment,
   setShiftReportLine,
   withdrawShiftReportOffPlatform,
@@ -94,6 +95,17 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
     const actor = await person(request);
     return withFreshBoard(reply, actor, request.params.shiftId, () => setShiftReportLine(appContext, actor, {
       shiftId: request.params.shiftId, transactionId: request.params.transactionId, body: request.body,
+    }));
+  });
+
+  server.post("/api/v1/shift-reports/:shiftId/report-sale", { schema: routeSchemas.shiftReportReportSale }, async (request, reply) => {
+    const actor = await person(request);
+    return withFreshBoard(reply, actor, request.params.shiftId, () => reportSaleToOwner(appContext, actor, {
+      shiftId: request.params.shiftId,
+      transactionRef: request.body.transactionRef,
+      fan: request.body.fan,
+      amountMills: request.body.amountMills,
+      note: request.body.note,
     }));
   });
 
@@ -212,6 +224,21 @@ export function registerShiftHandinRoutes(server: ApiServer, ctx: ApiModuleConte
         shiftId: request.body.shiftId, transactionId: request.body.transactionId, body: request.body,
       });
       await audit(principal, "agentShiftReportLineSet", { shiftId: request.body.shiftId });
+      return saved;
+    });
+  });
+
+  server.post("/api/v1/agent/shift-reports/report-sale", { schema: routeSchemas.agentShiftReportReportSale }, async (request) => {
+    const { principal, scope, pageIds } = await agentScope(request, "agentShiftReportReportSale", ["write:shift_reports"]);
+    return settled(scope, async () => {
+      const saved = await reportSaleToOwner(appContext, handinAgentActorOf(principal, pageIds, request.body), {
+        shiftId: request.body.shiftId,
+        transactionRef: request.body.transactionRef,
+        fan: request.body.fan,
+        amountMills: request.body.amountMills,
+        note: request.body.note,
+      });
+      await audit(principal, "agentShiftReportReportSale", { shiftId: request.body.shiftId });
       return saved;
     });
   });

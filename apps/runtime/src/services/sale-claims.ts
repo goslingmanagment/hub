@@ -11,6 +11,7 @@ import type {
 import { personNameForms } from "@agency_hub_core/contracts";
 import { formatUsdFromMills, moscowDayOfMs as moscowDay } from "@agency_hub_core/shared";
 import {
+  ensureHandin,
   listHandinMarks,
   listOpenPotOffers,
   setHandinMark,
@@ -33,18 +34,23 @@ import {
   listCurrentHandinVersions,
   listCurrentReportsOfSales,
   listCurrentReportsSince,
-  listDaysHandedIn,
   listHandinNames,
   listHandinProposals,
   listHandinPeopleOfUsers,
   listHandinSalesByIds,
   listMatterPageLabels,
   listOpenMattersOfKinds,
+  listOpenUnownedSales,
   listPendingOffPlatform,
+  listPersonDayLineRows,
+  listPersonLoginRows,
+  listPersonRows,
+  listPersonScheduleSlotRows,
+  listPersonWorkingPageRows,
+  listRecipientDayHandins,
   listSaleCandidates,
   listSaleClaims,
   listSaleDecisions,
-  listUnownedSales,
   lockSaleSettlements,
   openMatter,
   reopenSaleClaim,
@@ -67,7 +73,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
-import { moscowWeekStart, refreshSaleHomes } from "./sale-homes.ts";
+import { refreshSaleHomes } from "./sale-homes.ts";
 import { TAKE_NOTICE_MS, isTake, takeNoticeOpen, takeSettles } from "./shift-report-phases.ts";
 import {
   claimStands,
@@ -76,17 +82,19 @@ import {
   disputeAnswersOf,
   disputeSidesOf,
   disputeTitle,
-  nobodyWeekTitle,
   offPlatformTitle,
   reportSums,
   settledShareOf,
   settledVersion,
   shareAfter,
+  suggestSoloPagePerson,
   type DerivedClaim,
   type OwnerOutcome,
   type ReportView,
+  type SoloPageSuggestion,
 } from "./sale-claim-rules.ts";
-import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, halvesOf, type SaleHomeReason } from "./sale-rule.ts";
+import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, halvesOf, splitShares, type RuleSlot, type SaleHomeReason } from "./sale-rule.ts";
+import { RULE_WEEKDAYS, type RuleWeekday } from "./schedule-slots.ts";
 import { realmOf, testUserIds } from "./sandbox/realm.ts";
 import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, teamFactsFor, type Decider } from "./teams.ts";
 import { dayWords } from "./shift-handin-rules.ts";
@@ -189,7 +197,8 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
 
   // New claims: a take of a colleague's sale (written `asked`, settled at once below), or the owner's at once.
   const derivedSales = [...new Set(derived.map((one) => one.transactionId))];
-  const known = new Map((await listSaleClaims(db, { transactionIds: derivedSales })).map((claim) => [claimKey(claim.claimantHandinId, claim.transactionId, claim.sideUserId), claim]));
+  const knownList = await listSaleClaims(db, { transactionIds: derivedSales });
+  const known = new Map(knownList.map((claim) => [claimKey(claim.claimantHandinId, claim.transactionId, claim.sideUserId), claim]));
   const sales = new Map((await listHandinSalesByIds(db, derivedSales)).map((sale) => [sale.transactionId, sale]));
   const people = await listHandinPeopleOfUsers(db, [...new Set(derived.flatMap((one) => (one.sideUserId === null ? [] : [one.sideUserId])))]);
   for (const claim of derived) {
@@ -198,6 +207,12 @@ export async function runSaleClaims(app: Pick<AppContext, "db" | "logger">, now:
       if (existing.claimantVersion !== claim.claimantVersion && OPEN_STATES.includes(existing.state as typeof OPEN_STATES[number])) {
         await updateSaleClaim(db, existing.id, { claimantVersion: claim.claimantVersion, claimantNote: claim.note }, now, { ifState: existing.state });
       }
+      continue;
+    }
+    // If a home later flips to `nobody` (producing sideUserId=null), never open a duplicate no-side claim while the same
+    // report already has a live/disputed claim on this sale against a side.
+    if (claim.sideUserId === null && knownList.some((other) => other.claimantHandinId === claim.claimantHandinId
+      && other.transactionId === claim.transactionId && other.state !== "withdrawn")) {
       continue;
     }
     const sale = sales.get(claim.transactionId);
@@ -493,45 +508,42 @@ async function syncOffPlatformMatters(app: Pick<AppContext, "db">, now: Date): P
 }
 
 /**
- * The week's sales nobody claimed: of the days all of whose shifts are handed in, the sales whose home is nobody's or
- * the owner's to decide, that no report counts and the owner has not decided. Pure on its inputs.
+ * All open unowned (`nobody` / `decide`) sales in `realm` from `SALE_RULE.since`, regardless of week close (H8):
+ * excludes sales already counted/claimed in a current submitted report or with an active owner decision.
  */
-async function nobodyOfWeek(db: Database, weekStart: number, now: Date): Promise<{ from: string; to: string; days: string[]; sales: Array<Awaited<ReturnType<typeof listUnownedSales>>[number]> }> {
-  const from = moscowDay(weekStart);
-  const to = moscowDay(weekStart + 6 * DAY_MS);
-  const today = moscowDay(now.getTime());
-  const days = await listDaysHandedIn(db, { from, to: to < today ? to : today });
-  const unowned = await listUnownedSales(db, { days });
+async function openNobodySales(
+  db: Database,
+  realm: "live" | "test" = "live",
+): Promise<Array<Awaited<ReturnType<typeof listOpenUnownedSales>>[number]>> {
+  const unowned = await listOpenUnownedSales(db, { since: new Date(SALE_RULE.since), realm });
   const ids = unowned.map((sale) => sale.transactionId);
   const counted = new Set((await listCurrentReportsOfSales(db, ids)).flatMap((report) => report.lines
     .filter((line) => line.transactionId !== null && (line.amountMills > 0 || (line.claimedMills ?? 0) > 0)).map((line) => line.transactionId!)));
   const decided = await listActiveSaleDecisions(db, ids);
-  return { from, to, days, sales: unowned.filter((sale) => !counted.has(sale.transactionId) && !decided.has(sale.transactionId)) };
+  return unowned.filter((sale) => !counted.has(sale.transactionId) && !decided.has(sale.transactionId));
 }
 
 async function syncNobodyWeek(app: Pick<AppContext, "db">, now: Date): Promise<number> {
   const { db } = app;
   let touched = 0;
-  const thisWeek = moscowWeekStart(now.getTime());
+  const sales = await openNobodySales(db, "live");
+  const key = `${SALE_NOBODY_WEEK_KIND}:open`;
   const want = new Set<string>();
-  for (const start of [thisWeek - 7 * DAY_MS, thisWeek]) {
-    if (start + 7 * DAY_MS <= SALE_RULE.since) continue;
-    const week = await nobodyOfWeek(db, start, now);
-    const key = `${SALE_NOBODY_WEEK_KIND}:${week.from}`;
-    if (week.sales.length === 0) continue;
+  if (sales.length > 0) {
     want.add(key);
-    const mills = week.sales.reduce((sum, sale) => sum + sale.netMills, 0);
+    const mills = sales.reduce((sum, sale) => sum + sale.netMills, 0);
+    const days = [...new Set(sales.map((sale) => sale.day))].sort();
     const opened = await openMatter(db, {
       key,
       kind: SALE_NOBODY_WEEK_KIND,
       source: "server",
-      title: nobodyWeekTitle({ count: week.sales.length, mills, from: week.from, to: week.to }),
+      title: `Ничьи продажи: ${sales.length} на ${money(mills)}`,
       object: null,
       pageIds: [],
       owner: { role: "owner" },
       money: true,
-      evidence: { week: week.from, count: week.sales.length, totalMills: mills, days: week.days, transactionIds: week.sales.slice(0, 200).map((sale) => sale.transactionId) },
-      link: `/workboard/waiting?nobody=${week.from}#questions`,
+      evidence: { count: sales.length, totalMills: mills, days, transactionIds: sales.slice(0, 200).map((sale) => sale.transactionId) },
+      link: "/workboard/waiting?nobody=1#questions",
     }, SYSTEM, now);
     if (opened.transition !== "unchanged") touched += 1;
   }
@@ -673,6 +685,117 @@ async function settleReport(
     onBehalfOfUserId: null, changes: { version: version.version, transactionId: input.transactionId, amountMills, madeFor: input.madeFor }, at: input.at,
   });
   return { shiftId: input.shiftId, version: version.version, versionId: version.id, dayPaid };
+}
+
+/**
+ * Delivers a sale granted by an owner decision into a recipient's already-submitted report when that report does not
+ * yet contain the sale (H8 «Отдать <имя>» case (b), shared with H9). Creates a new system version adding the line
+ * (`settled: "owner"`, `added: true`) and updating page/total sums; delegates to `settleReport` if the line exists.
+ */
+async function deliverSaleToReport(
+  db: Database,
+  input: {
+    shiftId: number;
+    sale: HandinSaleRow;
+    amountMills: number;
+    reason: "owner_claim" | "owner_split";
+    madeFor: HandinVersionMadeFor;
+    by: SettleBy;
+    at: Date;
+    dayPaid: boolean | null;
+  },
+): Promise<MadeVersion | null> {
+  const handin = await findHandinByShift(db, input.shiftId, { lock: true });
+  if (handin === null || handin.state !== "submitted") return null;
+  const current = (await listCurrentHandinVersions(db, [handin.id])).get(handin.id);
+  if (current === undefined) return null;
+  if (current.lines.some((one) => one.transactionId === input.sale.transactionId)) {
+    return settleReport(db, {
+      shiftId: input.shiftId,
+      transactionId: input.sale.transactionId,
+      to: { amountMills: input.amountMills, settled: "owner" },
+      madeFor: input.madeFor,
+      by: input.by,
+      at: input.at,
+      dayPaid: input.dayPaid,
+    });
+  }
+  const addedLine: HandinVersionLine = {
+    transactionId: input.sale.transactionId,
+    offPlatformId: null,
+    group: "mine",
+    pageLabel: input.sale.pageLabel,
+    kind: input.sale.kind,
+    occurredAt: input.sale.occurredAt.toISOString(),
+    netMills: input.sale.netMills,
+    rule: {
+      home: "shift",
+      reason: input.reason,
+      shareMills: input.amountMills,
+      toUserId: null,
+      senderUserId: null,
+    },
+    statement: null,
+    shareWithUserId: null,
+    note: null,
+    amountMills: input.amountMills,
+    added: true,
+    disputed: false,
+    alreadyIn: null,
+    settled: "owner",
+  };
+  const lines = [...current.lines, addedLine];
+  const pages = current.pages.map((page) => page.pageLabel);
+  const made = { lines, ...reportSums(lines, pages, current.offPlatform) };
+  const dayPaid = input.dayPaid;
+  const telegram = input.by.door === "telegram" && input.by.agentKeyId !== null && input.by.telegramMessageRef !== null && input.by.telegramSenderId !== null;
+  const version = await insertHandinVersion(db, {
+    handin,
+    door: telegram ? "telegram" : input.by.door === "telegram" ? "workboard" : input.by.door,
+    actorUserId: input.by.actorUserId,
+    agentKeyId: telegram ? input.by.agentKeyId : null,
+    telegramMessageRef: telegram ? input.by.telegramMessageRef : null,
+    telegramSenderId: telegram ? input.by.telegramSenderId : null,
+    totalMills: made.totalMills,
+    pages: made.pages,
+    lines: made.lines,
+    offPlatform: current.offPlatform,
+    comment: current.comment,
+    modelComments: current.modelComments,
+    dayPaid,
+    ruleVersion: SALE_RULE.version,
+    madeFor: input.madeFor,
+    reportDate: handin.reportDate,
+    at: input.at,
+  });
+  await insertHandinEvent(db, {
+    handinId: handin.id, event: "shift_report.settled", door: "system", actorUserId: input.by.actorUserId, agentKeyId: input.by.agentKeyId,
+    onBehalfOfUserId: null, changes: { version: version.version, transactionId: input.sale.transactionId, amountMills: input.amountMills, madeFor: input.madeFor }, at: input.at,
+  });
+  return { shiftId: input.shiftId, version: version.version, versionId: version.id, dayPaid };
+}
+
+/** Collects submitted reports for `split` decision delivery targets so `paidDaysOf` runs BEFORE `lockSaleSettlements`. */
+async function deliveryPaidTargets(
+  db: Database,
+  decision: { kind: SaleDecisionRow["kind"]; shares: ReadonlyArray<{ userId: number; percent: number }> },
+  sale: HandinSaleRow | undefined,
+): Promise<Array<{ shiftId: number; userId: number; reportDate: string }>> {
+  if (decision.kind !== "split" || sale === undefined) return [];
+  const positiveUsers = decision.shares.filter((share) => share.percent > 0).map((share) => share.userId);
+  if (positiveUsers.length === 0) return [];
+  const landingDay = moscowDay(sale.occurredAt.getTime());
+  const people = await listHandinPeopleOfUsers(db, positiveUsers);
+  const targets: Array<{ shiftId: number; userId: number; reportDate: string }> = [];
+  for (const userId of positiveUsers) {
+    const logins = people.get(userId)?.userIds ?? [userId];
+    for (const row of await listRecipientDayHandins(db, { userIds: logins, reportDate: landingDay })) {
+      if (row.handinState === "submitted") {
+        targets.push({ shiftId: row.shiftId, userId: row.userId, reportDate: row.reportDate });
+      }
+    }
+  }
+  return targets;
 }
 
 /**
@@ -1347,7 +1470,9 @@ export async function applySaleDecision(
   const { db } = app;
   const { transactionId } = input;
   const made: MadeVersion[] = [];
-  const paid = await paidDaysOf(app, await listCurrentReportsOfSales(db, [transactionId]));
+  const existingReports = await listCurrentReportsOfSales(db, [transactionId]);
+  const deliveryTargets = await deliveryPaidTargets(db, { kind: input.insert.kind, shares: input.insert.shares }, sale);
+  const paid = await paidDaysOf(app, [...existingReports, ...deliveryTargets]);
   let decisionId: number | null = null;
   await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
@@ -1361,6 +1486,7 @@ export async function applySaleDecision(
     made.push(...await followDecision(txDb, {
       transactionId, decisionId, decision: { kind: input.insert.kind, shares: input.insert.shares }, answers: also.answers ?? null,
       madeFor: input.madeFor(decisionId), by: input.by, at: now, paid, saleNet: sale?.netMills ?? 0,
+      sale, ruleHome: sale?.home?.home ?? null,
     }));
   });
   await afterPaid(app, made, now);
@@ -1386,6 +1512,8 @@ async function followDecision(
     transactionId: number; decisionId: number | null; answers?: number | null;
     decision: { kind: SaleDecisionRow["kind"]; shares: ReadonlyArray<{ userId: number; percent: number }> };
     madeFor: HandinVersionMadeFor; by: SettleBy; at: Date; paid: ReadonlyMap<number, boolean | null>; saleNet: number;
+    sale?: HandinSaleRow | undefined;
+    ruleHome?: string | null;
   },
 ): Promise<MadeVersion[]> {
   const { transactionId, decisionId, at } = input;
@@ -1400,12 +1528,15 @@ async function followDecision(
   const reports = await listCurrentReportsOfSales(txDb, [transactionId]);
   const people = await listHandinPeopleOfUsers(txDb, reports.map((report) => report.userId));
   const net = reports.flatMap((report) => report.lines).find((line) => line.transactionId === transactionId)?.netMills ?? input.saleNet;
+  const coveredUsers = new Set<number>();
   for (const report of reports) {
     const line = report.lines.find((one) => one.transactionId === transactionId);
     // Another report of the person holds the sale: it counts there, nothing here.
     if (line === undefined || line.alreadyIn != null) continue;
+    const logins = people.get(report.userId)?.userIds ?? [report.userId];
+    for (const loginId of logins) coveredUsers.add(loginId);
     const amount = settledShareOf({
-      netMills: net, userIds: new Set(people.get(report.userId)?.userIds ?? [report.userId]), decision: input.decision, agreed: [],
+      netMills: net, userIds: new Set(logins), decision: input.decision, agreed: [],
     })?.amountMills ?? 0;
     if (line.amountMills === 0 && !line.disputed && amount === 0) continue;
     const one = await settleReport(txDb, {
@@ -1413,6 +1544,54 @@ async function followDecision(
       madeFor: input.madeFor, by: input.by, at, dayPaid: input.paid.get(report.shiftId) ?? null,
     });
     if (one !== null) made.push(one);
+  }
+  // Delivery for recipients not yet holding the sale in a submitted report (H8 «Отдать <имя>», shared with H9):
+  // (a) open shift-report draft for landingDay -> ensure open handin so draft pulls line «отдано владельцем»;
+  // (b) handed-in report for landingDay -> create system version adding the line (paid day opens afterPaid);
+  // (c) no shift/report on landingDay -> leave applied_at IS NULL so next shift's draft pulls it automatically.
+  if (input.decision.kind === "split") {
+    const saleRow = input.sale ?? (await listHandinSalesByIds(txDb, [transactionId]))[0];
+    const positive = input.decision.shares.filter((share) => share.percent > 0);
+    if (saleRow !== undefined && positive.length > 0) {
+      const splitNet = net > 0 ? net : saleRow.netMills;
+      const allocations = splitShares(splitNet, positive);
+      const landingDay = moscowDay(saleRow.occurredAt.getTime());
+      const recipientPeople = await listHandinPeopleOfUsers(txDb, allocations.map((share) => share.userId));
+      const reason = allocations.length === 1 && input.ruleHome === "nobody" ? "owner_claim" : "owner_split";
+      for (const allocation of allocations) {
+        if (allocation.mills <= 0) continue;
+        const logins = recipientPeople.get(allocation.userId)?.userIds ?? [allocation.userId];
+        if (logins.some((id) => coveredUsers.has(id))) continue;
+        const dayRows = await listRecipientDayHandins(txDb, { userIds: logins, reportDate: landingDay });
+        const openCandidates = dayRows.filter((row) => row.handinState === null || row.handinState === "open");
+        const openRow = openCandidates.find((row) => row.pages.includes(saleRow.pageLabel)) ?? openCandidates[0];
+        if (openRow !== undefined) {
+          await ensureHandin(txDb, {
+            shiftId: openRow.shiftId,
+            userId: openRow.userId,
+            personId: recipientPeople.get(openRow.userId)?.personId ?? null,
+            reportDate: openRow.reportDate,
+          });
+          continue;
+        }
+        const submittedCandidates = dayRows.filter((row) => row.handinState === "submitted");
+        const submittedRow = submittedCandidates.find((row) => row.pages.includes(saleRow.pageLabel)) ?? submittedCandidates[0];
+        if (submittedRow !== undefined) {
+          const one = await deliverSaleToReport(txDb, {
+            shiftId: submittedRow.shiftId,
+            sale: saleRow,
+            amountMills: allocation.mills,
+            reason,
+            madeFor: input.madeFor,
+            by: input.by,
+            at,
+            dayPaid: input.paid.get(submittedRow.shiftId) ?? null,
+          });
+          if (one !== null) made.push(one);
+          for (const loginId of logins) coveredUsers.add(loginId);
+        }
+      }
+    }
   }
   return made;
 }
@@ -1580,45 +1759,306 @@ export async function decideOffPlatformLine(
   return { state, version: done?.version ?? null, savedAt: now.toISOString() };
 }
 
-// ── The week's sales nobody claimed ──────────────────────────────────────────
+// ── Open nobody sales (owner view, live solo-page suggestion) ────────────────
 
-export async function readSaleNobody(app: ClaimsApp, principal: HumanAuthPrincipal, query: { week: string }, now: Date = new Date()): Promise<SaleNobodyResponse> {
+const WEEKDAY_SET: ReadonlySet<string> = new Set(RULE_WEEKDAYS);
+
+/**
+ * Computes live single-chatter suggestions for open `nobody` (`no_holder`) sales in `realm` (H8, zero new tables)
+ * and builds the realm's candidate list of active chat-team members so the owner can give any sale to another person.
+ */
+async function liveNobodyContext(
+  db: Database,
+  sales: ReadonlyArray<{ transactionId: number; pageId: number; occurredAt: Date; home: string; reason: string; day: string }>,
+  realm: "live" | "test",
+): Promise<{
+  suggestions: Map<number, SoloPageSuggestion | null>;
+  candidates: SaleNobodyResponse["candidates"];
+}> {
+  const people = await listPersonRows(db, realm);
+  const personIds = people.map((person) => person.id);
+  const workingPages = personIds.length === 0 ? [] : await listPersonWorkingPageRows(db, personIds);
+  const logins = personIds.length === 0 ? [] : await listPersonLoginRows(db, personIds);
+
+  const loginOfPerson = new Map<number, number>();
+  for (const person of people) {
+    const sorted = logins
+      .filter((login) => login.personId === person.id)
+      .sort((a, b) => Number(b.disabledAt === null && b.deletedAt === null) - Number(a.disabledAt === null && a.deletedAt === null) || a.userId - b.userId);
+    if (sorted[0] !== undefined) loginOfPerson.set(person.id, sorted[0].userId);
+  }
+  const labelsOfPerson = new Map<number, string[]>();
+  for (const row of workingPages) {
+    labelsOfPerson.set(row.personId, [...(labelsOfPerson.get(row.personId) ?? []), row.label]);
+  }
+  const candidates: SaleNobodyResponse["candidates"] = people
+    .filter((person) => person.kind === "human" && (person.role === "chatter" || person.role === "team_lead") && person.state !== "left" && loginOfPerson.has(person.id))
+    .map((person) => ({
+      userId: loginOfPerson.get(person.id)!,
+      code: person.code,
+      name: person.displayName,
+      workingPageLabels: labelsOfPerson.get(person.id) ?? [],
+    }));
+
+  const suggestions = new Map<number, SoloPageSuggestion | null>();
+  const targetSales = sales.filter((sale) => sale.home === "nobody" && sale.reason === "no_holder");
+  if (targetSales.length === 0 || personIds.length === 0) return { suggestions, candidates };
+
+  const minMs = Math.min(...targetSales.map((sale) => sale.occurredAt.getTime())) - DAY_MS;
+  const maxMs = Math.max(...targetSales.map((sale) => sale.occurredAt.getTime())) + DAY_MS;
+  const standing = await listPersonScheduleSlotRows(db, personIds);
+  const personIdSet = new Set(personIds);
+  const dayLines = (await listPersonDayLineRows(db, { from: moscowDay(minMs), to: moscowDay(maxMs) }))
+    .filter((row) => personIdSet.has(row.personId));
+  const slots: RuleSlot[] = [...standing, ...dayLines].map((slot) => ({
+    personId: slot.personId,
+    pageId: slot.pageId,
+    startMinute: slot.startMinute,
+    endMinute: slot.endMinute,
+    weekdays: slot.weekdays === null ? null : slot.weekdays.filter((day): day is RuleWeekday => WEEKDAY_SET.has(day)),
+    validFrom: slot.validFrom,
+    validTo: slot.validTo,
+    ...(slot.kind === null ? {} : { day: slot.kind }),
+  }));
+
+  const candidatePeople = people.map((person) => ({
+    personId: person.id,
+    code: person.code,
+    displayName: person.displayName,
+    kind: person.kind,
+    role: person.role,
+    state: person.state,
+    leftOn: person.leftOn,
+  }));
+
+  for (const sale of targetSales) {
+    suggestions.set(
+      sale.transactionId,
+      suggestSoloPagePerson({
+        pageId: sale.pageId,
+        saleDay: sale.day,
+        people: candidatePeople,
+        workingPages,
+        logins,
+        slots,
+      }),
+    );
+  }
+  return { suggestions, candidates };
+}
+
+/** Active unapplied `split` decisions still waiting for a recipient's shift report («ждёт отчёта»). */
+async function waitingNobodyDecisions(db: Database, realm: "live" | "test"): Promise<SaleNobodyResponse["waitingDecisions"]> {
+  const active = (await listSaleDecisions(db, { open: true, realm, limit: 500 }))
+    .filter((decision) => decision.kind === "split" && decision.transactionId !== null && decision.shares.some((share) => share.percent > 0));
+  if (active.length === 0) return [];
+  const saleIds = [...new Set(active.map((decision) => decision.transactionId!))];
+  const [sales, reports] = await Promise.all([
+    listHandinSalesByIds(db, saleIds),
+    listCurrentReportsOfSales(db, saleIds),
+  ]);
+  const saleMap = new Map(sales.map((sale) => [sale.transactionId, sale]));
+  const shareUserIds = [...new Set(active.flatMap((decision) => decision.shares.map((share) => share.userId)))];
+  const [people, names] = await Promise.all([
+    listHandinPeopleOfUsers(db, shareUserIds),
+    listHandinNames(db, shareUserIds),
+  ]);
+  const heldUsersBySale = new Map<number, Set<number>>();
+  for (const report of reports) {
+    for (const line of report.lines) {
+      if (line.transactionId === null || (line.amountMills <= 0 && (line.claimedMills ?? 0) <= 0 && line.settled === undefined)) continue;
+      const set = heldUsersBySale.get(line.transactionId) ?? new Set<number>();
+      set.add(report.userId);
+      heldUsersBySale.set(line.transactionId, set);
+    }
+  }
+  const out: SaleNobodyResponse["waitingDecisions"] = [];
+  for (const decision of active) {
+    const sale = saleMap.get(decision.transactionId!);
+    if (sale === undefined) continue;
+    const holders = heldUsersBySale.get(sale.transactionId) ?? new Set<number>();
+    const waitingShares = decision.shares.filter((share) => {
+      if (share.percent <= 0) return false;
+      const logins = people.get(share.userId)?.userIds ?? [share.userId];
+      return !logins.some((loginId) => holders.has(loginId));
+    });
+    if (waitingShares.length === 0) continue;
+    out.push({
+      decisionId: decision.id,
+      transactionId: sale.transactionId,
+      pageLabel: sale.pageLabel,
+      platform: sale.platform,
+      kind: sale.kind,
+      occurredAt: sale.occurredAt.toISOString(),
+      netMills: sale.netMills,
+      fan: sale.fan,
+      recipients: waitingShares.map((share) => {
+        const person = people.get(share.userId);
+        return {
+          userId: share.userId,
+          name: names.get(share.userId) ?? `#${share.userId}`,
+          code: person?.code ?? null,
+          isLeft: person?.state === "left",
+          percent: share.percent,
+        };
+      }),
+      decidedAt: decision.decidedAt.toISOString(),
+      note: decision.note,
+    });
+  }
+  return out;
+}
+
+export async function readSaleNobody(
+  app: ClaimsApp,
+  principal: HumanAuthPrincipal,
+  _query: { week?: string | undefined } = {},
+  now: Date = new Date(),
+): Promise<SaleNobodyResponse> {
   requireOwnerSession(principal);
-  const start = moscowWeekStart(Date.parse(`${query.week}T12:00:00+03:00`));
-  const week = await nobodyOfWeek(app.db, start, now);
-  const rows = new Map((await listHandinSalesByIds(app.db, week.sales.map((sale) => sale.transactionId))).map((row) => [row.transactionId, row]));
-  const sales = week.sales.flatMap((sale) => {
+  const realm = realmOf(principal);
+  const open = await openNobodySales(app.db, realm);
+  const [saleRows, context, waitingDecisions] = await Promise.all([
+    listHandinSalesByIds(app.db, open.map((sale) => sale.transactionId)),
+    liveNobodyContext(app.db, open, realm),
+    waitingNobodyDecisions(app.db, realm),
+  ]);
+  const rows = new Map(saleRows.map((row) => [row.transactionId, row]));
+  const sales = open.flatMap((sale) => {
     const row = rows.get(sale.transactionId);
     if (row === undefined) return [];
     return [{
-      transactionId: row.transactionId, pageLabel: row.pageLabel, platform: row.platform, kind: row.kind, occurredAt: row.occurredAt.toISOString(),
-      netMills: row.netMills, fan: row.fan, home: sale.home,
+      transactionId: row.transactionId,
+      pageLabel: row.pageLabel,
+      platform: row.platform,
+      kind: row.kind,
+      occurredAt: row.occurredAt.toISOString(),
+      netMills: row.netMills,
+      fan: row.fan,
+      home: sale.home,
       words: sale.home === "decide" ? "держали несколько смен, фану никто из них не писал" : SALE_HOME_REASON_TEXT[sale.reason as SaleHomeReason] ?? sale.reason,
+      suggestion: context.suggestions.get(row.transactionId) ?? null,
     }];
   });
-  return { from: week.from, to: week.to, days: week.days, sales, totalMills: sales.reduce((sum, sale) => sum + sale.netMills, 0), serverNow: now.toISOString() };
+  const days = [...new Set(open.map((sale) => sale.day))].sort();
+  const today = moscowDay(now.getTime());
+  return {
+    from: days[0] ?? today,
+    to: days.at(-1) ?? today,
+    days,
+    sales,
+    candidates: context.candidates,
+    waitingDecisions,
+    totalMills: sales.reduce((sum, sale) => sum + sale.netMills, 0),
+    serverNow: now.toISOString(),
+  };
 }
 
-/** `saleNobodyKeep`: the owner leaves the week's unclaimed sales nobody's: each is his decision «никому». */
-export async function keepSalesNobody(app: ClaimsApp, principal: HumanAuthPrincipal, input: { week: string; transactionIds?: readonly number[] | undefined }, now: Date = new Date()) {
+/**
+ * `saleNobodyGive`: owner gives an open nobody/decide sale to a recipient («Отдать <имя>», H8).
+ * Validates sale & recipient in the owner's realm, checks open state under `lockSaleSettlements` (409 on stale/already
+ * decided), writes the decision, and delivers via `applySaleDecision` ((a) open draft, (b) system version on submitted
+ * report, or (c) waiting for next shift).
+ */
+export async function giveNobodySale(
+  app: ClaimsApp,
+  principal: HumanAuthPrincipal,
+  input: { transactionId: number; userId: number; note?: string | null | undefined },
+  now: Date = new Date(),
+): Promise<{ decisionId: number; status: "delivered" | "draft" | "waiting_report"; versions: Array<{ shiftId: number; version: number }>; savedAt: string }> {
   requireOwnerSession(principal);
-  const start = moscowWeekStart(Date.parse(`${input.week}T12:00:00+03:00`));
-  const week = await nobodyOfWeek(app.db, start, now);
+  const { db } = app;
+  const realm = realmOf(principal);
+  const sale = (await listHandinSalesByIds(db, [input.transactionId]))[0];
+  if (sale === undefined) throw new NotFoundError("No such sale");
+  const names = await listHandinNames(db, [input.userId]);
+  const testUsers = await testUserIds(app);
+  if (!names.has(input.userId) || testUsers.has(input.userId) !== (realm === "test")) {
+    throw new NotFoundError("No such user");
+  }
+  const note = input.note === undefined || input.note === null || input.note.trim() === "" ? null : input.note.trim();
+  const applied = await applySaleDecision(app, {
+    transactionId: sale.transactionId,
+    insert: {
+      kind: "split",
+      shares: [{ userId: input.userId, percent: 100 }],
+      pot: null,
+      outcome: "first",
+      note,
+      decidedByUserId: principal.user.id,
+      decidedAt: now,
+      saidBy: null,
+      source: "dispute",
+      ledgerDecisionId: null,
+      ledgerRef: null,
+    },
+    first: async (txDb) => {
+      const active = (await listActiveSaleDecisions(txDb, [sale.transactionId])).get(sale.transactionId);
+      if (active !== undefined) {
+        throw new ConflictError("По этой продаже уже есть активное решение", { reason: "already_decided" });
+      }
+      const fresh = (await listHandinSalesByIds(txDb, [sale.transactionId]))[0];
+      if (fresh === undefined) throw new NotFoundError("No such sale");
+      if (fresh.home?.home !== "nobody" && fresh.home?.home !== "decide") {
+        throw new ConflictError("Эта продажа уже не ничья: обновите список", { reason: "not_nobody" });
+      }
+      const reports = await listCurrentReportsOfSales(txDb, [sale.transactionId]);
+      const alreadyCounted = reports.some((report) => report.lines.some((line) => line.transactionId === sale.transactionId && (line.amountMills > 0 || (line.claimedMills ?? 0) > 0)));
+      if (alreadyCounted) {
+        throw new ConflictError("Эта продажа уже есть в сданном отчёте: обновите список", { reason: "already_decided" });
+      }
+      return {};
+    },
+    madeFor: (id) => ({ kind: "decision", decisionId: id ?? 0, transactionId: sale.transactionId, outcome: "said" }),
+    by: { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
+  }, sale, now);
+
+  let status: "delivered" | "draft" | "waiting_report";
+  if (applied.versions.length > 0) {
+    status = "delivered";
+  } else {
+    const person = (await listHandinPeopleOfUsers(db, [input.userId])).get(input.userId);
+    const logins = person?.userIds ?? [input.userId];
+    const dayRows = await listRecipientDayHandins(db, { userIds: logins, reportDate: moscowDay(sale.occurredAt.getTime()) });
+    status = dayRows.some((row) => row.handinState === null || row.handinState === "open") ? "draft" : "waiting_report";
+  }
+  return {
+    decisionId: applied.decisionId!,
+    status,
+    versions: applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })),
+    savedAt: now.toISOString(),
+  };
+}
+
+/** `saleNobodyKeep`: the owner leaves open unclaimed sales nobody's: each is his decision «никому». */
+export async function keepSalesNobody(app: ClaimsApp, principal: HumanAuthPrincipal, input: { week?: string | undefined; transactionIds?: readonly number[] | undefined }, now: Date = new Date()) {
+  requireOwnerSession(principal);
+  const realm = realmOf(principal);
+  const open = await openNobodySales(app.db, realm);
   const wanted = input.transactionIds === undefined ? null : new Set(input.transactionIds);
-  const sales = week.sales.filter((sale) => wanted === null || wanted.has(sale.transactionId));
+  const sales = open.filter((sale) => wanted === null || wanted.has(sale.transactionId));
+  let kept = 0;
   await app.db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     await lockSaleSettlements(txDb);
+    const active = await listActiveSaleDecisions(txDb, sales.map((sale) => sale.transactionId));
+    if (wanted !== null) {
+      for (const id of wanted) {
+        if (active.has(id)) throw new ConflictError("Часть продаж уже решена: обновите список", { reason: "already_decided" });
+      }
+    }
     for (const sale of sales) {
+      if (active.has(sale.transactionId)) continue;
       await insertSaleDecision(txDb, {
         transactionId: sale.transactionId, pageId: sale.pageId, kind: "nobody", shares: [], pot: null, outcome: "nobody", ruleHome: sale.home,
         note: "ничья: никто не заявил, владелец оставил", decidedByUserId: principal.user.id, decidedAt: now, saidBy: null, source: "dispute",
         ledgerDecisionId: null, ledgerRef: null,
       }, now);
+      kept += 1;
     }
   });
   await syncNobodyWeek(app, now);
-  return { kept: sales.length, savedAt: now.toISOString() };
+  return { kept, savedAt: now.toISOString() };
 }
 
 // ── Decisions carried over from the ledger, tied to a sale by the owner ──────
@@ -1676,7 +2116,9 @@ export async function linkUnlinkedDecision(app: ClaimsApp, principal: HumanAuthP
   // Tied to its sale, it rules the sale from now exactly as a decision made on it (and replaces the one that ruled it):
   // the sale's open claims are decided with it and the reports that hold the sale get what it gives. The ledger is
   // asked about paid days before any lock.
-  const paid = await paidDaysOf(app, await listCurrentReportsOfSales(app.db, [sale.transactionId]));
+  const existingReports = await listCurrentReportsOfSales(app.db, [sale.transactionId]);
+  const deliveryTargets = await deliveryPaidTargets(app.db, decision, sale);
+  const paid = await paidDaysOf(app, [...existingReports, ...deliveryTargets]);
   const made: MadeVersion[] = [];
   const linked = await app.db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
@@ -1686,7 +2128,7 @@ export async function linkUnlinkedDecision(app: ClaimsApp, principal: HumanAuthP
       transactionId: sale.transactionId, decisionId: decision.id, decision,
       madeFor: { kind: "decision", decisionId: decision.id, transactionId: sale.transactionId, outcome: "said" },
       by: { door: "workboard", actorUserId: principal.user.id, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null },
-      at: now, paid, saleNet: sale.netMills,
+      at: now, paid, saleNet: sale.netMills, sale, ruleHome: sale.home?.home ?? null,
     }));
     return true;
   });

@@ -263,7 +263,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
 
   // Sales of the same pages and day before the shift began: folded into one row a page.
   const start = subject.shift.startedAt.getTime();
-  const before = (await listHandinSalesOnPages(db, { pageIds, from: new Date(moscowDayStart(start)), to: subject.shift.startedAt, limit: 500 }))
+  const before = (await listHandinSalesOnPages(db, { pageIds, from: new Date(moscowDayStart(start)), to: subject.shift.startedAt, limit: 500, hideNobody: true }))
     .filter((sale) => !baseIds.has(sale.transactionId));
   // The person's own shifts (`ownShiftsOf`): the others that wait for them head the board — a sale of an earlier shift
   // not handed in counts only in that shift's report, so this board points there — and a sale of theirs folded below
@@ -429,8 +429,10 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     } else if (proposal !== null && proposal.state === "declined" && counted) {
       reason = `Генгар предлагал иначе, решит ${rowDecider.words}`;
     } else if (line.settled === "owner") {
-      // Decided by the decider («общак, решил владелец», «моя, решил владелец»): the word is what the decision gives.
-      reason = `решил ${decidedBy(id, line)}`;
+      // Decided by the decider («отдано владельцем» when delivered/given by the owner; else «решил владелец»).
+      reason = amount > 0 && (line.rule.reason === "owner_claim" || (line.added && line.statement === null))
+        ? "отдано владельцем"
+        : `решил ${decidedBy(id, line)}`;
       // The losing side: whose the decision made it — a colleague, the pot, nobody — never «моя» at $0 (round 2, P3).
       if (amount <= 0) current = decidedOwner(id) ?? current;
     } else if (!sameOwner(current, rule)) {
@@ -547,7 +549,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       // question (a nobody's sale is mine at once, with the one line of why the server asks for). A sale that waits for
       // its PPV's sender is that colleague's.
       const holder = line.rule.toUserId ?? (line.rule.home === "waiting" ? line.rule.senderUserId : null);
-      const pot = line.rule.home === "pot" || line.rule.home === "decide";
+      const pot = line.rule.home === "pot" || line.rule.home === "decide" || line.rule.home === "nobody";
       const mine = owner("me", null, people, me);
       const mineAsks = askOf(holder, pot && holder === null);
       // «Моя» asks whoever holds the sale; a nobody's sale is the person's at once, by the word with its line of why.

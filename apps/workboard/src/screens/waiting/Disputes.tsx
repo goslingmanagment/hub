@@ -258,27 +258,74 @@ export function OffPlatformModal({ shiftId, onClose }: { shiftId: number; onClos
   );
 }
 
-/** The week's sales nobody claimed: the list, and «оставить ничьими». */
-export function NobodyModal({ week, onClose }: { week: string; onClose: () => void }) {
-  const done = useDone(onClose);
-  const read = useQuery({ queryKey: ["sale-claims", "nobody", week], queryFn: () => kernel.saleNobody({ query: { week } }) });
+/** All open nobody sales (owner-only, H8): live solo-page suggestion, «Отдать <имя>», pick another person, «Оставить», and «Ждёт отчёта». */
+export function NobodyModal({ week, onClose }: { week?: string | undefined; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const [picked, setPicked] = useState<Record<number, number>>({});
+  const read = useQuery({
+    queryKey: ["sale-claims", "nobody", week ?? "all"],
+    queryFn: () => kernel.saleNobody({ query: week ? { week } : {} }),
+  });
+  const refresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ["matters"] });
+    void queryClient.invalidateQueries({ queryKey: ["sale-claims"] });
+    void read.refetch();
+  };
+  const give = useMutation({
+    mutationFn: (input: { transactionId: number; userId: number; name: string }) =>
+      kernel.saleNobodyGive({ body: { transactionId: input.transactionId, userId: input.userId } }),
+    onError: (error) => {
+      const reason = error instanceof KernelApiError ? (error.body as { reason?: unknown } | null)?.reason : undefined;
+      if (reason === "already_decided" || reason === "not_nobody") {
+        toast.error("Эта продажа уже решена: список обновлён");
+        refresh();
+      }
+    },
+    onSuccess: (answer, vars) => {
+      toast.success(
+        answer.status === "delivered"
+          ? `Отдано ${vars.name}: отчёт получил новую версию`
+          : answer.status === "draft"
+            ? `Отдано ${vars.name}: добавлено в открытый черновик`
+            : `Отдано ${vars.name}: ждёт следующего отчёта`,
+      );
+      refresh();
+    },
+  });
   const keep = useMutation({
-    mutationFn: () => kernel.saleNobodyKeep({ body: { week } }),
-    onSuccess: (answer) => {
+    mutationFn: (transactionIds?: number[]) =>
+      kernel.saleNobodyKeep({ body: { ...(week ? { week } : {}), ...(transactionIds ? { transactionIds } : {}) } }),
+    onError: (error) => {
+      const reason = error instanceof KernelApiError ? (error.body as { reason?: unknown } | null)?.reason : undefined;
+      if (reason === "already_decided") {
+        toast.error("Часть продаж уже решена: список обновлён");
+        refresh();
+      }
+    },
+    onSuccess: (answer, vars) => {
       toast.success(`Оставлены ничьими: ${answer.kept}`);
-      done();
+      if (vars === undefined) {
+        void queryClient.invalidateQueries({ queryKey: ["matters"] });
+        void queryClient.invalidateQueries({ queryKey: ["sale-claims"] });
+        onClose();
+      } else {
+        refresh();
+      }
     },
   });
   const data = read.data;
+  const candidates = data?.candidates ?? [];
+  const waiting = data?.waitingDecisions ?? [];
+  const busy = give.isPending || keep.isPending;
   return (
     <Modal
-      title="Ничьи продажи за неделю"
+      title="Ничьи продажи"
       size="wide"
       onClose={onClose}
       actions={data && data.sales.length > 0 ? (
         <>
           <Button variant="ghost" onClick={onClose}>Закрыть</Button>
-          <Button variant="primary" loading={keep.isPending} onClick={() => keep.mutate()}>Оставить ничьими</Button>
+          <Button variant="primary" loading={keep.isPending && keep.variables === undefined} disabled={busy} onClick={() => keep.mutate(undefined)}>Оставить все ничьими</Button>
         </>
       ) : undefined}
     >
@@ -287,28 +334,107 @@ export function NobodyModal({ week, onClose }: { week: string; onClose: () => vo
       {data && (
         <div className="wt-modal">
           <p className="wt-modal__hint">
-            С {formatDay(`${data.from}T12:00:00+03:00`)} по {formatDay(`${data.to}T12:00:00+03:00`)}, только дни, где сданы все смены
-            ({data.days.map((day) => formatDay(`${day}T12:00:00+03:00`)).join(", ") || "пока ни одного"}). Эти продажи не взял ни один отчёт;
-            чаттеры этих смен видят их в своих черновиках и могут добавить.
+            Все открытые ничьи продажи независимо от закрытия недели. Чаттеры и тимлиды их не видят.
+            Если на странице один активный чаттер, показана подсказка — решение всё равно за вами.
           </p>
-          {data.sales.length === 0 ? <p className="wt-modal__hint">Ничьих продаж нет.</p> : (
+          {data.sales.length === 0 ? <p className="wt-modal__hint">Открытых ничьих продаж нет.</p> : (
             <>
               <ul className="wt-nobody">
-                {data.sales.map((sale) => (
-                  <li key={sale.transactionId} className="wt-nobody__line">
-                    <span className="wt-nobody__when">{formatDateTime(sale.occurredAt)}</span>
-                    <span className="wt-nobody__what">
-                      <PageLabel label={sale.pageLabel} />
-                      <Fan name={sale.fan.name} username={sale.fan.username} fanRef={sale.fan.fanRef ?? ""} />
-                      <span className="wt-sale__kind">{kindWord(sale.kind)}</span>
-                      <span className="wt-nobody__why">{sale.words}</span>
-                    </span>
-                    <Money mills={sale.netMills} />
-                  </li>
-                ))}
+                {data.sales.map((sale) => {
+                  const chosenId = picked[sale.transactionId] ?? 0;
+                  const chosen = candidates.find((candidate) => candidate.userId === chosenId) ?? null;
+                  return (
+                    <li key={sale.transactionId} className="wt-nobody__line wt-nobody__line--rich">
+                      <span className="wt-nobody__when">{formatDateTime(sale.occurredAt)}</span>
+                      <span className="wt-nobody__what">
+                        <PageLabel label={sale.pageLabel} />
+                        <Fan name={sale.fan.name} username={sale.fan.username} fanRef={sale.fan.fanRef ?? ""} />
+                        <span className="wt-sale__kind">{kindWord(sale.kind)}</span>
+                        <span className="wt-nobody__why">{sale.words}</span>
+                        {sale.suggestion && (
+                          <Badge tone="info">один чаттер на странице: {sale.suggestion.name}</Badge>
+                        )}
+                      </span>
+                      <span className="wt-sale__money"><ChainMoney saleId={sale.transactionId}><Money mills={sale.netMills} /></ChainMoney></span>
+                      <div className="wt-nobody__act">
+                        {sale.suggestion && (
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            loading={give.isPending && give.variables?.transactionId === sale.transactionId && give.variables.userId === sale.suggestion.userId}
+                            disabled={busy}
+                            onClick={() => give.mutate({ transactionId: sale.transactionId, userId: sale.suggestion!.userId, name: sale.suggestion!.name })}
+                          >
+                            Отдать {sale.suggestion.name}
+                          </Button>
+                        )}
+                        {candidates.length > 0 && (
+                          <span className="wt-nobody__pick">
+                            <Select
+                              value={chosenId === 0 ? "" : String(chosenId)}
+                              onChange={(event) => setPicked((prev) => ({ ...prev, [sale.transactionId]: Number(event.target.value) || 0 }))}
+                              aria-label="Кому отдать продажу"
+                            >
+                              <option value="">{sale.suggestion ? "Другому…" : "Кому отдать…"}</option>
+                              {candidates.map((candidate) => (
+                                <option key={candidate.userId} value={String(candidate.userId)}>
+                                  {candidate.name}{candidate.workingPageLabels.includes(sale.pageLabel) ? " (страница)" : ""}
+                                </option>
+                              ))}
+                            </Select>
+                            {chosen && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                loading={give.isPending && give.variables?.transactionId === sale.transactionId && give.variables.userId === chosen.userId}
+                                disabled={busy}
+                                onClick={() => give.mutate({ transactionId: sale.transactionId, userId: chosen.userId, name: chosen.name })}
+                              >
+                                Отдать
+                              </Button>
+                            )}
+                          </span>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          loading={keep.isPending && keep.variables?.includes(sale.transactionId)}
+                          disabled={busy}
+                          onClick={() => keep.mutate([sale.transactionId])}
+                        >
+                          Никому
+                        </Button>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
               <p className="wt-nobody__total">{plural(data.sales.length, "продажа", "продажи", "продаж")} на <Money mills={data.totalMills} strong /></p>
             </>
+          )}
+          {waiting.length > 0 && (
+            <section className="wt-modal__block" aria-label="Ждёт отчёта">
+              <h3 className="wt-modal__title">Ждёт отчёта <Badge tone="warning">{waiting.length}</Badge></h3>
+              <p className="wt-modal__hint">Отдано владельцем: попадёт в черновик следующей смены получателя. Ушедшему человеку отметьте применение командой sale applied.</p>
+              <ul className="wt-nobody">
+                {waiting.map((one) => (
+                  <li key={one.decisionId} className="wt-nobody__line">
+                    <span className="wt-nobody__when">{formatDateTime(one.occurredAt)}</span>
+                    <span className="wt-nobody__what">
+                      <PageLabel label={one.pageLabel} />
+                      <Fan name={one.fan.name} username={one.fan.username} fanRef={one.fan.fanRef ?? ""} />
+                      <span className="wt-sale__kind">{kindWord(one.kind)}</span>
+                      {one.recipients.map((recipient) => (
+                        <Badge key={recipient.userId} tone={recipient.isLeft ? "off" : "warning"}>
+                          {recipient.name}{recipient.percent < 100 ? ` ${recipient.percent}%` : ""} · {recipient.isLeft ? "ушёл, ждёт sale applied" : "ждёт отчёта"}
+                        </Badge>
+                      ))}
+                    </span>
+                    <ChainMoney saleId={one.transactionId}><Money mills={one.netMills} /></ChainMoney>
+                  </li>
+                ))}
+              </ul>
+            </section>
           )}
         </div>
       )}
