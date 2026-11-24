@@ -2805,7 +2805,8 @@ const SALE_SAID_COMMANDS: HubCommand[] = [
       + " for (replaces `ledger question list --md`). Needs write:shift_reports or read:team.",
     example: "hub sale questions --open --person anna --md",
     options: {
-      open: { kind: "boolean", describe: "Only the open ones" },
+      open: { kind: "boolean", describe: "Only open questions (default with --person)" },
+      "include-closed": { kind: "boolean", describe: "Include closed questions" },
       person: { kind: "string", describe: "Filter to one person (registry code, person id, login id, or username)" },
       from: { kind: "string", describe: "Only on or after this Moscow day (ГГГГ-ММ-ДД)" },
       to: { kind: "string", describe: "Only on or before this Moscow day (ГГГГ-ММ-ДД)" },
@@ -2813,7 +2814,7 @@ const SALE_SAID_COMMANDS: HubCommand[] = [
     },
     run: (client, values) => client.agentSaleQuestions({
       query: {
-        open: values.open === true ? "true" : "false",
+        open: values.open === true || (readString(values, "person") !== undefined && values["include-closed"] !== true) ? "true" : "false",
         format: values.md === true ? "md" : "json",
         ...defined({
           person: readString(values, "person"),

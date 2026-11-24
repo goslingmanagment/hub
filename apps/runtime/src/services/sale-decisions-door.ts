@@ -1,5 +1,6 @@
 import type { AgentSaleDecision, AgentSaleQuestion } from "@agency_hub_core/contracts";
 import {
+  applySaleDelivery,
   findSaleClaim,
   findSaleIdByPlatformRef,
   insertSaleClaim,
@@ -16,9 +17,10 @@ import {
   listMatterPageLabels,
   listSaleClaims,
   listSaleDecisions,
+  listSaleDeliveries,
   listTestPageIds,
   lockSaleSettlements,
-  markSaleDecisionApplied,
+  scheduleSaleDeliveries,
   supersedeSaleDecision,
   updateSaleClaim,
   type Database,
@@ -215,16 +217,17 @@ export async function recordSaleDecision(
 ): Promise<{ decision: AgentSaleDecision; versions: Array<{ shiftId: number; version: number }>; savedAt: string }> {
   const { db } = app;
   checkShares(input.kind, input.shares, input.pot);
-  const logins = await listLoginsByPersonCode(db, input.shares.map((share) => share.person));
-  const unknown = input.shares.filter((share) => (logins.get(share.person) ?? []).length === 0).map((share) => share.person);
-  if (unknown.length > 0) throw new BadRequestError(`No person with the code: ${unknown.join(", ")}`, { reason: "person_unknown" });
-  const shares = input.shares.map((share) => ({ userId: logins.get(share.person)![0]!, percent: share.percent }));
   const saidAt = instantOf(input.saidAt);
 
   // Money outside the platform names no sale: only its page.
   const found = input.kind === "off_platform"
     ? await saleOf(db, actor.pageIds, { pageLabel: input.pageLabel, fanRef: input.fanRef, occurredAt: input.occurredAt, netMills: input.netMills })
     : await saleOf(db, actor.pageIds, input);
+  const test = found.pageId !== null && await isTestPage(db, found.pageId);
+  const logins = await listLoginsByPersonCode(db, input.shares.map((share) => share.person), test ? "test" : "live");
+  const unknown = input.shares.filter((share) => (logins.get(share.person) ?? []).length === 0).map((share) => share.person);
+  if (unknown.length > 0) throw new BadRequestError(`No person with the code: ${unknown.join(", ")}`, { reason: "person_unknown" });
+  const shares = input.shares.map((share) => ({ userId: logins.get(share.person)![0]!, percent: share.percent }));
   const sale = found.sale;
 
   const knownSale = sale !== null && input.kind !== "off_platform" ? sale : null;
@@ -321,6 +324,7 @@ export async function recordSaleDecision(
       const also = await named(txDb);
       const saved = await insertSaleDecision(txDb, { ...insert, transactionId: null, pageId: found.pageId, ruleHome: null }, now);
       decisionId = saved?.id ?? null;
+      if (saved !== null) await scheduleSaleDeliveries(txDb, saved);
       if (also.supersedes !== null && !(await supersedeSaleDecision(txDb, { id: also.supersedes, at: now }))) {
         throw new ConflictError("The decision it replaces is not active", { reason: "not_active" });
       }
@@ -352,16 +356,30 @@ export async function cancelSaleDecisionSaid(app: DoorApp, actor: DoorActor, inp
 }
 
 /** `agentSaleDecisionApplied`: taken into a person's post of a date. */
-export async function markSaleDecisionTaken(app: DoorApp, actor: DoorActor | Pick<DoorActor, "pageIds">, input: { decisionId: number; person: string; reportDate: string }, now: Date = new Date()) {
-  const { db } = app;
-  const decision = (await listSaleDecisions(db, { ids: [input.decisionId] }))[0];
-  if (decision === undefined || !ofKeysPages(actor, decision.pageId)) throw notFound();
-  const userId = (await listLoginsByPersonCode(db, [input.person])).get(input.person)?.[0];
-  if (userId === undefined) throw new BadRequestError(`No person with the code: ${input.person}`, { reason: "person_unknown" });
-  if (!(await markSaleDecisionApplied(db, { id: decision.id, userId, reportDate: input.reportDate, at: now }))) {
-    throw new ConflictError("Only an active decision not taken in yet", { reason: "not_open" });
-  }
-  const [wire] = await decisionWires(app, [decision.id]);
+export async function markSaleDecisionTaken(
+  app: DoorApp, actor: DoorActor | { owner: true }, input: { decisionId: number; person: string; reportDate: string }, now: Date = new Date(),
+) {
+  await app.db.transaction(async (tx) => {
+    const db = tx as unknown as Database;
+    await lockSaleSettlements(db);
+    const [decision] = await listSaleDecisions(db, { ids: [input.decisionId] });
+    if (decision === undefined) throw notFound();
+    const test = decision.pageId !== null && await isTestPage(db, decision.pageId);
+    if ("owner" in actor) {
+      if (test) throw notFound();
+    } else {
+      if (!ofKeysPages(actor, decision.pageId)) throw notFound();
+      await refuseOwners(db, actor, decision);
+    }
+    const logins = (await listLoginsByPersonCode(db, [input.person], test ? "test" : "live")).get(input.person);
+    if (logins === undefined) throw new BadRequestError("Unknown person", { reason: "person_unknown" });
+    const share = decision.shares.find((one) => one.percent > 0 && logins.includes(one.userId));
+    if (share === undefined) throw new BadRequestError("This person has no share of the decision", { reason: "not_recipient" });
+    if (decision.state !== "active" || !(await applySaleDelivery(db, { id: decision.id, userId: share.userId, reportDate: input.reportDate, at: now }))) {
+      throw new ConflictError("Only an active share not yet taken into a report can be applied", { reason: "not_open" });
+    }
+  });
+  const [wire] = await decisionWires(app, [input.decisionId]);
   return { decision: wire!, versions: [], savedAt: now.toISOString() };
 }
 
@@ -388,6 +406,13 @@ async function decisionWiresOf(app: DoorApp, decisions: readonly SaleDecisionRow
       held.set(line.transactionId, [...(held.get(line.transactionId) ?? []), { userId: report.userId, reportDate: report.reportDate }]);
     }
   }
+  const deliveryRows = await listSaleDeliveries(db, { decisionIds: decisions.map((one) => one.id) });
+  const byDecision = new Map<number, typeof deliveryRows>();
+  for (const row of deliveryRows) {
+    const list = byDecision.get(row.decision.id) ?? [];
+    list.push(row);
+    byDecision.set(row.decision.id, list);
+  }
   const heldCodes = await listHandinPeopleOfUsers(db, [...held.values()].flat().map((one) => one.userId));
   const successors = new Map<number, number>();
   for (const one of decisions) if (one.transactionId !== null) successors.set(one.transactionId, Math.max(successors.get(one.transactionId) ?? 0, one.id));
@@ -400,11 +425,23 @@ async function decisionWiresOf(app: DoorApp, decisions: readonly SaleDecisionRow
     const sale = decision.transactionId === null ? undefined : sales.get(decision.transactionId);
     const fan = decision.transactionId === null ? undefined : fans.get(decision.transactionId);
     const holders = decision.transactionId === null ? [] : held.get(decision.transactionId) ?? [];
+    const deliveries = byDecision.get(decision.id) ?? [];
     let status: AgentSaleDecision["status"];
     let statusWords: string;
     if (decision.state === "cancelled") [status, statusWords] = ["cancelled", `отменено: ${decision.cancelNote ?? ""}`];
     else if (decision.state === "superseded") [status, statusWords] = ["superseded", "заменено новым решением"];
-    else if (decision.appliedAt !== null) {
+    else if (deliveries.length) {
+      const waiting = deliveries.filter((row) => row.state === "pending");
+      status = waiting.length ? "open" : deliveries.every((row) => row.state === "declined") ? "declined"
+        : deliveries.some((row) => row.state === "applied" && row.shiftId === null) ? "applied" : "held";
+      const words = deliveries.map((row) => {
+        const person = codeOf(row.recipient) ?? `#${row.recipient}`;
+        if (row.state === "pending") return `ждёт отчёта: ${person}`;
+        if (row.state === "declined") return `${person}: не моё`;
+        return `${row.shiftId === null ? "учтено в отчёте" : "в отчёте, сданном в системе"}: ${person} за ${row.reportDate}`;
+      });
+      statusWords = holders.length === 0 && waiting.length === deliveries.length ? "открыто, ждёт отчёта" : words.join("; ");
+    } else if (decision.appliedAt !== null) {
       status = "applied";
       statusWords = `учтено в отчёте ${decision.appliedUserId === null ? "?" : codeOf(decision.appliedUserId) ?? `#${decision.appliedUserId}`} за ${decision.appliedReportDate ?? "?"}`;
     } else {
@@ -500,7 +537,8 @@ export async function askSaleQuestion(
 ): Promise<{ question: AgentSaleQuestion; savedAt: string }> {
   const { db } = app;
   const found = await saleOf(db, actor.pageIds, input);
-  const logins = await listLoginsByPersonCode(db, input.people);
+  const test = found.pageId !== null && await isTestPage(db, found.pageId);
+  const logins = await listLoginsByPersonCode(db, input.people, test ? "test" : "live");
   const unknown = input.people.filter((code) => (logins.get(code) ?? []).length === 0);
   if (unknown.length > 0) throw new BadRequestError(`No person with the code: ${unknown.join(", ")}`, { reason: "person_unknown" });
   const people = input.people.map((code) => logins.get(code)![0]!);

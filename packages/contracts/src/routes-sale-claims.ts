@@ -221,8 +221,8 @@ export const saleNobodyResponseSchema = z.object({
 });
 export const saleNobodyKeepBodySchema = z.object({
   week: businessDate.optional(),
-  /** The sales the owner leaves nobody's; absent — every open nobody sale. */
-  transactionIds: z.array(intId).max(500).optional(),
+  /** The exact sales shown to the owner. */
+  transactionIds: z.array(intId).min(1),
 });
 export const saleNobodyKeepResponseSchema = z.object({ kept: z.number().int().nonnegative(), savedAt: isoTimestamp });
 export const saleNobodyGiveBodySchema = z.object({

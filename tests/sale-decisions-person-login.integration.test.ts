@@ -101,6 +101,18 @@ describe("a person code names the person's live login", () => {
     const gleb = await decide("gleb", "7700000702");
     expect(await sharedLogins(gleb.id)).toEqual([users["gleb-one"]]);
 
+    const receipt = { decisionId: vera.id, reportDate: "2026-11-20" };
+    const outsider = await asAgent("/api/v1/agent/sale-decisions/applied", { ...receipt, person: "gleb" });
+    expect([outsider.statusCode, outsider.json().reason]).toEqual([400, "not_recipient"]);
+    await createUserAccount(app, { username: "fixture-realm-login", role: "chatter" }, AUDIT);
+    const fixtureLogin = await fixtureUserId(app, "fixture-realm-login");
+    await testDb.pool.query(`with p as (insert into people (code, display_name, role, state, is_test)
+      values ('fixture-realm', 'Fixture Realm', 'chatter', 'working', true) returning id)
+      insert into person_logins (person_id, user_id) select id, $1 from p`, [fixtureLogin]);
+    await expect(testDb.pool.query("insert into sale_decision_deliveries (decision_id, recipient_user_id) values ($1, $2)",
+      [vera.id, fixtureLogin])).rejects.toMatchObject({ code: "23514" });
+    const otherRealm = await asAgent("/api/v1/agent/sale-decisions/applied", { ...receipt, person: "fixture-realm" });
+    expect([otherRealm.statusCode, otherRealm.json().reason]).toEqual([400, "person_unknown"]);
     const applied = await asAgent("/api/v1/agent/sale-decisions/applied", { decisionId: vera.id, person: "vera", reportDate: "2026-11-20" });
     expect(applied.statusCode, applied.body).toBe(200);
     const taken = await testDb.pool.query("select applied_user_id from sale_owner_decisions where id = $1", [vera.id]);

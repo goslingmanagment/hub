@@ -195,6 +195,20 @@ export function hubReportEvidenceOf(report: Pick<CurrentReport, "version" | "lin
   return { version: report.version, status };
 }
 
+/** The latest counted line across a person's logins, falling back to a report that only references the sale. */
+export function reportHoldingSale(reports: readonly CurrentReport[], logins: readonly number[], transactionId: number): CurrentReport | null {
+  let mentioned: CurrentReport | null = null;
+  for (let i = reports.length - 1; i >= 0; i--) {
+    const report = reports[i]!;
+    if (!logins.includes(report.userId)) continue;
+    const line = report.lines.find((one) => one.transactionId === transactionId);
+    if (line === undefined) continue;
+    if (line.alreadyIn == null) return report;
+    mentioned ??= report;
+  }
+  return mentioned;
+}
+
 /**
  * The report day of a person's share in the chain: the handed-in Hub version's date first; else the owner's decision's
  * `appliedReportDate` (when it names this person or no specific login); else the shift's report date; else the sale's
@@ -539,7 +553,7 @@ export async function readSaleChain(
     const person = codes.get(userId) ?? null;
     const logins = person?.userIds ?? [userId];
     // Отчёт: Hub's handed-in version holding the sale first, else the ledger's report of the day.
-    const handedIn = reports.filter((report) => logins.includes(report.userId)).at(-1) ?? null;
+    const handedIn = reportHoldingSale(reports, logins, sale.transactionId);
     const reportDate = chainReportDateOf({ handedIn, decision, logins, shift, occurredAt: sale.occurredAt });
     let report: SaleChainLink;
     let model: string | null = null;

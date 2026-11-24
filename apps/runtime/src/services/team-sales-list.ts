@@ -26,7 +26,7 @@ import type { AuthPrincipal } from "./auth.ts";
 import { teamReadPages } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
-import { TEST_REALM_NO_MONEY, homeLinkOf, hubReportLinkOf, postReportLinkOf, type ChainSums } from "./sale-chain.ts";
+import { TEST_REALM_NO_MONEY, homeLinkOf, hubReportLinkOf, postReportLinkOf, reportHoldingSale, type ChainSums } from "./sale-chain.ts";
 import { realmOf } from "./sandbox/realm.ts";
 import { requireTeamReader } from "./teams.ts";
 
@@ -156,7 +156,7 @@ export async function readTeamSalesList(
   };
   const handedInOf = (sale: HandinSaleRow, userId: number) => {
     const logins = people.get(userId)?.userIds ?? [userId];
-    return reports.filter((report) => logins.includes(report.userId) && report.lines.some((line) => line.transactionId === sale.transactionId)).at(-1) ?? null;
+    return reportHoldingSale(reports, logins, sale.transactionId);
   };
   const reportDateOf = (sale: HandinSaleRow, share: { userId: number; shiftId: number | null }) =>
     handedInOf(sale, share.userId)?.reportDate ?? (share.shiftId === null ? null : shifts.get(share.shiftId)?.reportDate) ?? moscowDayOf(sale.occurredAt);

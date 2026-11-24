@@ -132,7 +132,7 @@ export function deriveClaims(reports: readonly ReportView[]): DerivedClaim[] {
         out.push({ ...base(report, line), kind: "claim", statement: "mine", shareWithUserId: null, sideUserId: userId, sideShiftId: shiftId });
         pairs.add(pairKey(sale, report.userId, userId));
       }
-      if (sides.size === 0 && line.rule.home !== "decide") {
+      if (sides.size === 0) {
         out.push({ ...base(report, line), kind: "claim", statement: "mine", shareWithUserId: null, sideUserId: null, sideShiftId: null });
       }
     }

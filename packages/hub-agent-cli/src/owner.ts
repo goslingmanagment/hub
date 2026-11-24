@@ -172,6 +172,15 @@ export const HUB_OWNER_COMMANDS: readonly HubCommand[] = [
     })),
   }),
   command({
+    name: "owner sale applied",
+    summary: "Record which report took one recipient's share.",
+    arguments: { name: "<decision №>", describe: "Decision number", min: 1, max: 1 },
+    options: { person: { kind: "string", describe: "Recipient code" }, date: { kind: "string", describe: "Report date" } },
+    run: (client, values, _deps, args) => call(client, "sale.applied", {
+      decisionId: id(args[0], "<decision №>"), person: required(values, "person"), reportDate: required(values, "date"),
+    }),
+  }),
+  command({
     name: "owner sale cancel",
     summary: "Cancel an active decision, with why: the reports it settled get a new version with what rules now.",
     arguments: { name: "<decision №>", describe: "The decision's number", min: 1, max: 1 },

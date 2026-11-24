@@ -181,6 +181,30 @@ describe("the owner's agent door", () => {
     await testDb?.stop();
   });
 
+  it("applies a split independently for each recipient through the owner's door", async (context) => {
+    if (!testDb) return context.skip();
+    const transactionId = await bellasSale("fixture-delivery-split", 1234);
+    const decided = await call("sale.decide", { transactionId, kind: "split", shares: [
+      { person: "anna", percent: 50 }, { person: "bella", percent: 50 },
+    ], note: "split fixture" });
+    expect(decided.statusCode, decided.body).toBe(200);
+    const decisionId = decided.json().result.decision.id as number;
+    const receipt = { decisionId, person: "anna", reportDate: "2026-11-24" };
+    const bot = await asWriter("/api/v1/agent/sale-decisions/applied", receipt);
+    expect([bot.statusCode, bot.json().reason]).toEqual([409, "owner_decision"]);
+    const first = await call("sale.applied", receipt);
+    expect(first.statusCode, first.body).toBe(200);
+    expect((await call("sale.applied", receipt)).statusCode).toBe(409);
+    const state = await testDb.pool.query("select recipient_user_id::int as recipient, state from sale_decision_deliveries where decision_id = $1", [decisionId]);
+    expect(state.rows).toEqual(expect.arrayContaining([{ recipient: anna, state: "applied" }, { recipient: bella, state: "pending" }]));
+    const waiting = await rawSession("boss", "GET", "/api/v1/sale-nobody");
+    expect(waiting.json().waitingDecisions.find((one: { decisionId: number }) => one.decisionId === decisionId).recipients)
+      .toEqual([expect.objectContaining({ userId: bella })]);
+    expect((await call("sale.applied", { ...receipt, person: "bella" })).statusCode).toBe(200);
+    const closed = await testDb.pool.query("select applied_at from sale_owner_decisions where id = $1", [decisionId]);
+    expect(closed.rows[0].applied_at).not.toBeNull();
+  });
+
   it("is issued by the server alone, for a live owner, holding act:owner and nothing else", async (context) => {
     if (!testDb) return context.skip();
     const row = await testDb.pool.query("select capabilities, page_ids, acts_as_user_id from agent_keys where id = $1", [ownerKeyId]);

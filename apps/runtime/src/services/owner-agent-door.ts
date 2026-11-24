@@ -46,7 +46,7 @@ import {
   updatePotService,
 } from "./pots.ts";
 import { applySaleDecision, cancelSaleDecisionApplied, linkUnlinkedDecision, ownerAgentSettleBy, readUnlinkedDecisions } from "./sale-claims.ts";
-import { closeSaleQuestionAsOwner, saleDecisionWire, saleDecisionWires } from "./sale-decisions-door.ts";
+import { closeSaleQuestionAsOwner, markSaleDecisionTaken, saleDecisionWire, saleDecisionWires } from "./sale-decisions-door.ts";
 import { readStoredShiftReport, readStoredShiftReportVersions, readStoredShiftReports } from "./shift-handins.ts";
 import { answerQuestion, readTeamSwaps, revokeSwap } from "./team-questions.ts";
 
@@ -367,6 +367,14 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
       const decision = applied.decisionId === null ? null : await saleDecisionWire(app, applied.decisionId);
       if (decision === null) throw new ConflictError("The decision was not written", { reason: "not_written" });
       return { decision, versions: applied.versions.map((one) => ({ shiftId: one.shiftId, version: one.version })) };
+    },
+  },
+  "sale.applied": {
+    console: "agentSaleDecisionApplied",
+    summary: "Record the report date for one recipient of an active decision.",
+    run: async (app, _owner, _operator, args, now) => {
+      const { decision, versions } = await markSaleDecisionTaken(app, { owner: true }, args, now);
+      return { decision, versions };
     },
   },
   "sale.cancel": {

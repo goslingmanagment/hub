@@ -888,15 +888,17 @@ export async function signableOf(db: Database, input: { subject: Subject; catalo
   const { subject, catalog, handin, candidate } = input;
   const proposals = (await listHandinProposals(db, handin.id)).filter((one) => one.candidateId === candidate.id);
   const marks = await listHandinMarks(db, handin.id);
-  const draft = draftLines(await draftFacts(db, subject, handin, catalog, candidate.cutoffAt, marks), marks);
+  const facts = await draftFacts(db, subject, handin, catalog, candidate.cutoffAt, marks, candidate.lines);
+  const draft = draftLines(facts, marks);
+  const candidateLines = candidate.lines.filter((line) => line.transactionId === null || !facts.unavailableDeliveries.has(line.transactionId));
   // The cards kept are written as the person's words at «Подтверждаю» — never one a decision or an agreement outranks.
-  const settledNow = new Map(withSettlementsNow(candidate.lines, draft).flatMap((line) => (line.transactionId === null ? [] : [[line.transactionId, line] as const])));
+  const settledNow = new Map(withSettlementsNow(candidateLines, draft).flatMap((line) => (line.transactionId === null ? [] : [[line.transactionId, line] as const])));
   const applied = proposals.filter((one) => {
     const line = settledNow.get(one.transactionId);
     return one.state === "proposed" && (line === undefined || !cardSuperseded(one, line));
   });
   const oldWay = await oldWayGives(db, applied);
-  const lines = signedLines({ candidate: candidate.lines, draft, proposals, notes: new Map(marks.map((mark) => [mark.transactionId, mark.note])), oldWay });
+  const lines = signedLines({ candidate: candidateLines, draft, proposals, notes: new Map(marks.map((mark) => [mark.transactionId, mark.note])), oldWay });
   const offPlatform = offPlatformOfRows(await listOffPlatform(db, handin.id), catalog.labelOf);
   const sums = reportSums(lines, candidate.pages.map((page) => page.pageLabel), offPlatform);
   return { lines, offPlatform, sums, count: lines.filter((line) => line.amountMills > 0).length, proposals, applied, oldWay };

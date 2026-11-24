@@ -68,7 +68,7 @@ async function insertSale(input: {
   ref: string;
   netMills: number;
   occurredAt: string;
-  home: "nobody" | "shift" | "decide";
+  home: "nobody" | "shift" | "decide" | null;
   reason: string;
   shares?: Array<{ userId: number; workRef: string | null; shiftId: number | null; percent: number; mills: number }>;
 }): Promise<number> {
@@ -80,6 +80,7 @@ async function insertSale(input: {
     [input.pageId, input.fanId, input.ref, input.netMills, input.netMills, input.occurredAt],
   );
   const id = Number(tx.rows[0]!.id);
+  if (input.home === null) return id;
   await testDb!.pool.query(
     `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at)
      values ($1, $2, $3, $4, $5, $6, $7::jsonb, '2026-11-12.1', now())`,
@@ -270,12 +271,19 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     const rAmbig = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnna}/report-sale`, { fan: "fan_alpha", amountMills: 15_000, note: "моя" });
     const rOther = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnna}/report-sale`, { transactionRef: "h8-other-grant", note: "моя" });
     const rRealm = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnna}/report-sale`, { transactionRef: "h8-test-realm", note: "моя" });
-    for (const res of [rZero, rAmbig, rOther, rRealm]) {
+    const kept = await insertSale({ pageId: soloPage, fanId: fanAlpha, ref: "fixture-kept", netMills: 1230,
+      home: "nobody", reason: "no_holder", occurredAt: new Date(now).toISOString() });
+    expect((await rawSession("boss", "POST", "/api/v1/sale-nobody/keep", { transactionIds: [kept] })).statusCode).toBe(200);
+    const attempt = (ref: string) => rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnna}/report-sale`, { transactionRef: ref, note: "fixture" });
+    const agreed = await insertSale({ pageId: soloPage, fanId: fanAlpha, ref: "fixture-colleague", netMills: 4321,
+      home: "shift", reason: "agreed", occurredAt: new Date(now).toISOString() });
+    for (const res of [rZero, rAmbig, rOther, rRealm, await attempt("fixture-kept"), await attempt("fixture-colleague")]) {
       expect(res.statusCode).toBe(404);
       expect(res.body).toBe(rZero.body);
       expect(res.json()).toMatchObject({ reason: "sale_not_matched" });
     }
 
+    expect((await testDb.pool.query("select id from sale_claims where transaction_id = $1", [agreed])).rows).toEqual([]);
     // Exact 1 match via human door (transactionRef): disputed $0 line + owner claim without respondent.
     const okHuman = await rawSession("anna", "POST", `/api/v1/shift-reports/${shiftAnna}/report-sale`, {
       transactionRef: "h8-rep-human", note: "общалась с фаном в чате",
@@ -355,6 +363,14 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     const bellaBoardRow = bellaDraft.board?.columns.flatMap((col) => col.rows).find((row) => row.transactionId === saleA);
     expect(bellaBoardRow?.reasonWords).toBe("отдано владельцем");
 
+    const decline = await asSession("bella", "PUT", `/api/v1/shift-reports/${shiftBellaOpen}/lines/${saleA}`, { statement: "not_mine" });
+    expect(decline.statusCode, decline.body).toBe(200);
+    const declined = shiftReportResponseSchema.parse((await rawSession("bella", "GET", `/api/v1/shift-reports/${shiftBellaOpen}`)).json());
+    expect(declined.view?.lines.find((one) => one.transactionId === saleA)?.amountMills).toBe(0);
+    const later = await insertShift(users.bella!, "shared-1", "2026-11-19T08:00:00Z", "2026-11-19T12:00:00Z");
+    const next = shiftReportResponseSchema.parse((await rawSession("bella", "GET", `/api/v1/shift-reports/${later}`)).json());
+    expect(next.view?.lines.some((one) => one.transactionId === saleA)).toBe(false);
+
     // (b) Already handed-in report on dayB for anna (report does NOT initially hold saleB).
     const shiftAnnaSub = await insertShift(users.anna!, "solo-1", `${dayB}T10:00:00+03:00`, `${dayB}T18:00:00+03:00`, "closed");
     await handInAndConfirm(asSession, "anna", shiftAnnaSub);
@@ -422,4 +438,96 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     const laterDraft = shiftReportResponseSchema.parse((await rawSession("cora", "GET", `/api/v1/shift-reports/${shiftCoraLater}`)).json());
     expect(laterDraft.view?.lines.find((line) => line.transactionId === saleC1)).toBeUndefined();
   });
+  it("leaves historical decisions out of new drafts and skips pre-board and frozen shifts for new deliveries", async (context) => {
+    if (!testDb) return context.skip();
+    const at = "2026-11-21T09:00:00Z";
+    const fixture = (ref: string) => insertSale({ pageId: soloPage, fanId: fanAlpha, ref,
+      occurredAt: at, netMills: 2345, home: "nobody", reason: "no_holder" });
+    const old = await fixture("fixture-external-history");
+    await testDb.pool.query(`insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, decided_at, source)
+      values ($1, $2, 'split', $3, 'first', $4, 'dispute')`,
+    [old, soloPage, JSON.stringify([{ userId: users.cora, percent: 100 }]), at]);
+    for (const phase of ["checking", "confirm"]) {
+      const frozen = await insertShift(users.cora!, "solo-1", at, "2026-11-21T15:00:00Z");
+      await testDb.pool.query("insert into shift_handins (shift_id, user_id, report_date, phase) values ($1, $2, '2026-11-21', $3)",
+        [frozen, users.cora, phase]);
+    }
+    const preBoard = await insertShift(users.cora!, "solo-1", "2026-10-25T09:00:00Z", "2026-10-25T17:00:00Z");
+    const fresh = await fixture("fixture-new-delivery");
+    const give = await rawSession("boss", "POST", "/api/v1/sale-nobody/give", { transactionId: fresh, userId: users.cora });
+    expect(give.json()).toMatchObject({ status: "waiting_report" });
+    const waiting = saleNobodyResponseSchema.parse((await rawSession("boss", "GET", "/api/v1/sale-nobody")).json());
+    expect(waiting.waitingDecisions.map((one) => one.transactionId)).not.toContain(old);
+    const wrong = await testDb.pool.query("select shift_id from sale_decision_deliveries where decision_id = $1", [give.json().decisionId]);
+    expect(wrong.rows).toEqual([{ shift_id: null }]);
+    const rows = async (shift: number) => shiftReportResponseSchema.parse((await rawSession("cora", "GET", `/api/v1/shift-reports/${shift}`)).json())
+      .view?.lines.map((one) => one.transactionId) ?? [];
+    expect(await rows(preBoard)).not.toContain(fresh);
+    const landing = await insertShift(users.cora!, "solo-1", "2026-11-22T09:00:00Z", "2026-11-22T17:00:00Z");
+    expect(await rows(landing)).toContain(fresh);
+    expect(await rows(landing)).not.toContain(old);
+  });
+
+  it("filters stored and uncomputed nobody sales before both team shift responses and their sums", async (context) => {
+    if (!testDb) return context.skip();
+    const start = new Date(Date.now() - 30 * 3_600_000);
+    const at = new Date(start.getTime() + 3_600_000).toISOString();
+    await testDb.pool.query(`insert into chatter_activity_minutes (user_id, page_id, minute, input)
+      select $1, $2, date_trunc('minute', $3::timestamptz) + n * interval '1 min', true from generate_series(0, 180) n`,
+    [users.anna, soloPage, start]);
+    await testDb.pool.query(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id,
+      source, priced, with_media, observed_at) select 'fansly', $1, (10000 + n)::text, '10101', $2,
+      'fansly-extension', false, false, $3::timestamptz + n * interval '3 min' from generate_series(0, 59) n`,
+    [soloPage, users.anna, start]);
+    const sale = (ref: string, amount: number, home: "nobody" | null, time = at) => insertSale({
+      pageId: soloPage, fanId: fanAlpha, ref, netMills: amount, home, reason: "no_holder", occurredAt: time,
+    });
+    const stored = await sale("fixture-in-shift", 1111, "nobody");
+    const fresh = await sale("fixture-before-refresh", 2222, null);
+    await testDb.pool.query(`insert into sale_owner_decisions (transaction_id, page_id, kind, outcome, decided_at, source)
+      values ($1, $2, 'nobody', 'nobody', now(), 'dispute')`, [fresh, soloPage]);
+    const outsideTime = new Date(start.getTime() - 4 * 3_600_000).toISOString();
+    await sale("fixture-outside", 3333, "nobody", outsideTime);
+    const path = `/api/v1/team/shift-review?userId=${users.anna}&at=${encodeURIComponent(at)}`;
+    for (const who of ["boss", "anna", "lena"]) {
+      const review = await rawSession(who, "GET", path);
+      expect(review.statusCode, review.body).toBe(200);
+      const details = review.json();
+      const refs = [...details.sales, ...details.beforeSales, ...details.laterSales].map((row) => row.saleRef);
+      const page = details.shift.pages.find((row: { pageLabel: string }) => row.pageLabel === "solo-1");
+      const sales = await rawSession(who, "GET", "/api/v1/team/shift-sales?days=3&pageLabel=solo-1");
+      expect(sales.statusCode, sales.body).toBe(200);
+      const outside = sales.json().outside;
+      if (who === "boss") {
+        expect(refs).toEqual(expect.arrayContaining([String(stored), String(fresh)]));
+        expect(page.sales.netMills).toBeGreaterThanOrEqual(3333);
+        expect(outside.sales).toContainEqual(expect.objectContaining({ netMills: 3333 }));
+      } else {
+        expect(refs).not.toContain(String(stored));
+        expect(refs).not.toContain(String(fresh));
+        expect(page.sales.netMills).toBe(0);
+        for (const row of [outside, ...outside.daily, ...outside.pages]) expect(row.nobodyNetMills).toBe(0);
+        expect(outside.sales).not.toContainEqual(expect.objectContaining({ netMills: 3333 }));
+      }
+    }
+  });
+
+  it("keeps just the displayed sales and rejects a stale selection atomically", async (context) => {
+    if (!testDb) return context.skip();
+    const make = (ref: string) => insertSale({ pageId: soloPage, fanId: fanAlpha, ref, netMills: 1000,
+      occurredAt: new Date().toISOString(), home: "nobody", reason: "no_holder" });
+    const shown = await make("fixture-shown");
+    const unseen = await make("fixture-unseen");
+    const keep = (body: Record<string, unknown>) => rawSession("boss", "POST", "/api/v1/sale-nobody/keep", body);
+    expect((await keep({})).statusCode).toBe(400);
+    expect((await keep({ transactionIds: [shown] })).json().kept).toBe(1);
+    expect((await keep({ transactionIds: [unseen, shown] })).statusCode).toBe(409);
+    const contested = await make("fixture-challenged");
+    await testDb.pool.query(`insert into sale_claims (transaction_id, page_id, kind, state, asked_of, question, claimed_at)
+      values ($1, $2, 'question', 'owner', 'owner', 'Fixture question', now())`, [contested, soloPage]);
+    expect((await keep({ transactionIds: [unseen, contested] })).statusCode).toBe(409);
+    expect((await rawSession("boss", "POST", "/api/v1/sale-nobody/give", { transactionId: contested, userId: users.anna })).statusCode).toBe(409);
+    expect((await testDb.pool.query("select id from sale_owner_decisions where transaction_id = $1", [unseen])).rows).toEqual([]);
+  });
+
 });

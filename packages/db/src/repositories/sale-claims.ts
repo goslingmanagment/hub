@@ -574,7 +574,9 @@ export async function listSaleDecisions(
   },
 ): Promise<SaleDecisionRow[]> {
   const where = [sql`true`];
-  if (input.open === true) where.push(sql`d.state = 'active' and d.applied_at is null`);
+  if (input.open === true) where.push(sql`d.state = 'active' and d.applied_at is null and (
+    not exists (select 1 from sale_decision_deliveries x where x.decision_id = d.id)
+    or exists (select 1 from sale_decision_deliveries x where x.decision_id = d.id and x.state = 'pending'))`);
   if (input.since !== undefined) where.push(sql`coalesce(d.said_at, d.decided_at) >= ${input.since.toISOString()}::timestamptz`);
   if (input.ids !== undefined) where.push(sql`d.id = any(${ids(input.ids)})`);
   if (input.transactionIds !== undefined) where.push(sql`d.transaction_id = any(${ids(input.transactionIds)})`);
@@ -589,6 +591,51 @@ export async function listSaleDecisions(
     select ${DECISION_COLUMNS} from sale_owner_decisions d where ${sql.join(where, sql` and `)}
     order by d.id desc limit ${input.limit ?? 5000}`);
   return result.rows.map(decisionOf);
+}
+
+/** Only decisions created through the settlement path schedule new deliveries. */
+export async function scheduleSaleDeliveries(db: Database, decision: SaleDecisionRow): Promise<void> {
+  if (decision.kind !== "split" || decision.pageId === null) return;
+  const users = decision.shares.filter((share) => share.percent > 0).map((share) => share.userId);
+  const written = await db.execute(sql`
+    insert into sale_decision_deliveries (decision_id, recipient_user_id)
+    select ${decision.id}, u.id from users u where u.id = any(${ids(users)})
+      and ${testUserSql(sql`u.id`)} = ${testPageSql(sql`${decision.pageId}::bigint`)}`);
+  if (written.rowCount !== users.length) throw new Error("A decision recipient is outside the sale's realm");
+}
+
+export async function listSaleDeliveries(db: Database, input: {
+  userIds?: readonly number[]; realm?: "live" | "test"; pendingOnly?: boolean; decisionIds?: readonly number[]; linkedOnly?: boolean;
+  draft?: { shiftId: number; transactionIds: readonly number[] };
+}) {
+  const result = await db.execute<Row>(sql`
+    select ${DECISION_COLUMNS}, x.recipient_user_id, x.state as delivery_state, x.shift_id, to_char(x.report_date, 'YYYY-MM-DD') as delivery_date
+    from sale_decision_deliveries x join sale_owner_decisions d on d.id = x.decision_id
+    where d.state = 'active'
+      and ${testUserSql(sql`x.recipient_user_id`)} = ${testPageSql(sql`d.page_id`)}
+      ${input.userIds === undefined ? sql`` : sql`and x.recipient_user_id = any(${ids(input.userIds)})`}
+      ${input.realm === undefined ? sql`` : sql`and ${testPageSql(sql`d.page_id`)} = ${input.realm === "test"}`}
+      ${input.decisionIds === undefined ? sql`` : sql`and d.id = any(${ids(input.decisionIds)})`}
+      ${input.linkedOnly ? sql`and d.transaction_id is not null` : sql``}
+      ${input.draft === undefined ? sql`` : sql`and (x.state = 'pending' or x.shift_id = ${input.draft.shiftId} or d.transaction_id = any(${ids(input.draft.transactionIds)}))`}
+      ${input.pendingOnly ? sql`and x.state = 'pending'` : sql``}
+    order by d.id desc, x.recipient_user_id`);
+  return result.rows.map((row) => ({ decision: decisionOf(row), recipient: num(row.recipient_user_id),
+    state: row.delivery_state as "pending" | "applied" | "declined", shiftId: nullableNum(row.shift_id), reportDate: text(row.delivery_date) }));
+}
+
+/** Settle or reserve just this person's deliveries in the same transaction as their report or draft word. */
+export async function updateReportDeliveries(db: Database, input: {
+  transactionIds: readonly number[]; userId: number; shiftId: number; state: "pending" | "applied" | "declined"; reportDate: string;
+}): Promise<void> {
+  if (!input.transactionIds.length) return;
+  await db.execute(sql`
+    update sale_decision_deliveries x set state = ${input.state}, shift_id = ${input.shiftId}, report_date = ${input.reportDate}::date
+    from sale_owner_decisions d where d.id = x.decision_id and d.state = 'active' and x.state = 'pending'
+      and d.transaction_id = any(${ids(input.transactionIds)}) and (x.shift_id is null or x.shift_id = ${input.shiftId})
+      and (x.recipient_user_id = ${input.userId} or exists (
+        select 1 from person_logins a join person_logins b using (person_id)
+        where a.user_id = x.recipient_user_id and b.user_id = ${input.userId}))`);
 }
 
 export interface SaleDecisionInsert {
@@ -681,6 +728,19 @@ export async function markSaleDecisionApplied(db: Database, input: { id: number;
       applied_at = ${input.at.toISOString()}::timestamptz
     where id = ${input.id} and state = 'active' and applied_at is null`);
   return (result.rowCount ?? 0) > 0;
+}
+
+/** Under the settlements lock, acknowledge only this recipient. Older decisions keep their single receipt. */
+export async function applySaleDelivery(db: Database, input: { id: number; userId: number; reportDate: string; at: Date }): Promise<boolean> {
+  const has = await db.execute(sql`select 1 from sale_decision_deliveries where decision_id = ${input.id} limit 1`);
+  if (!has.rows.length) return markSaleDecisionApplied(db, input);
+  const applied = await db.execute(sql`
+    update sale_decision_deliveries set state = 'applied', report_date = ${input.reportDate}::date, shift_id = null
+    where decision_id = ${input.id} and recipient_user_id = ${input.userId} and state = 'pending'`);
+  if (!applied.rowCount) return false;
+  const pending = await db.execute(sql`select 1 from sale_decision_deliveries where decision_id = ${input.id} and state = 'pending' limit 1`);
+  if (!pending.rows.length) await markSaleDecisionApplied(db, input);
+  return true;
 }
 
 /**
@@ -797,7 +857,7 @@ export async function listDaysHandedIn(db: Database, input: { from: string; to: 
 /** All unowned (`nobody` / `decide`) sales in `realm` from `since`, regardless of week close, newest first. */
 export async function listOpenUnownedSales(
   db: Database,
-  input: { since: Date; realm?: "live" | "test" },
+  input: { since: Date; realm?: "live" | "test"; transactionIds?: readonly number[] | undefined },
 ): Promise<Array<{ transactionId: number; pageId: number; occurredAt: Date; netMills: number; home: string; reason: string; day: string }>> {
   const pageSql = input.realm === "test" ? testPageSql(sql`h.page_id`) : livePageSql(sql`h.page_id`);
   const result = await db.execute<Row>(sql`
@@ -805,6 +865,7 @@ export async function listOpenUnownedSales(
       to_char(h.occurred_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as day
     from sale_homes h
     where h.home in ('nobody', 'decide') and ${pageSql}
+      ${input.transactionIds === undefined ? sql`` : sql`and h.transaction_id = any(${ids(input.transactionIds)})`}
       and h.occurred_at >= ${input.since.toISOString()}::timestamptz
     order by h.occurred_at desc, h.transaction_id desc`);
   return result.rows.map((row) => ({
@@ -896,12 +957,12 @@ export async function listSaleCandidates(
  * nor deleted) first, each part by id: the first is the login the code names — the person's live login, else (a person
  * whose logins are all switched off, who left) the lowest of them, so a word about someone who left is still recorded.
  */
-export async function listLoginsByPersonCode(db: Database, codes: readonly string[]): Promise<Map<string, number[]>> {
+export async function listLoginsByPersonCode(db: Database, codes: readonly string[], realm: "live" | "test" = "live"): Promise<Map<string, number[]>> {
   if (codes.length === 0) return new Map();
   const result = await db.execute<Row>(sql`
     select p.code, array_agg(l.user_id order by (u.deleted_at is null and u.disabled_at is null) desc, l.user_id) as user_ids
     from people p join person_logins l on l.person_id = p.id join users u on u.id = l.user_id
-    where p.code = any(${sql.param([...new Set(codes)])}::text[])
+    where p.is_test = ${realm === "test"} and p.code = any(${sql.param([...new Set(codes)])}::text[])
     group by p.code`);
   return new Map(result.rows.map((row) => [String(row.code), jsonOf<unknown[]>(row.user_ids, []).map(Number)]));
 }

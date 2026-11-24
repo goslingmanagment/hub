@@ -172,6 +172,17 @@ describe("the decider's window of a disputed sale", () => {
     expect((await decisionOf(pot))?.shares).toEqual([{ userId: users.anna, percent: 100 }]);
   });
 
+  it("accepts only one concurrent decision or dismissal for an open question", async (context) => {
+    if (!testDb) return context.skip();
+    const transactionId = await sale(10 * 60);
+    await q(`insert into sale_claims (transaction_id, page_id, kind, state, asked_of, question, claimed_at)
+      values ($1, $2, 'question', 'owner', 'owner', 'Fixture question', now())`, [transactionId, pageOne]);
+    const decide = (outcome: string) => rawSession("boss", "POST", "/api/v1/sale-disputes/decide", { transactionId, outcome, note: null });
+    const results = await Promise.all([decide("dismiss"), decide("nobody")]);
+    expect(results.map((one) => one.statusCode).sort(), results.map((one) => one.body).join("\n")).toEqual([200, 409]);
+    expect((await q("select state from sale_claims where transaction_id = $1", [transactionId])).rows).toEqual([{ state: "decided" }]);
+  });
+
   it("lets a sale of the pot stay in the pot (N2)", async (context) => {
     if (!testDb) return context.skip();
     const pot = await sale(12 * 60, true);
@@ -181,6 +192,18 @@ describe("the decider's window of a disputed sale", () => {
     expect(stays).toBeDefined();
     await press(pot, shown, stays!);
     expect(await decisionOf(pot)).toMatchObject({ kind: "pot" });
+  });
+
+  it("keeps a submitted mine statement on a junction in the owner's dispute queue", async (context) => {
+    if (!testDb) return context.skip();
+    const junction = await sale(20 * 60);
+    const shift = await shiftRow("anna", 23.5, 17.5);
+    const word = await asSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${junction}`, { statement: "mine", note: "fixture claim" });
+    expect(word.statusCode, word.body).toBe(200);
+    await handInAndConfirm(asSession, "anna", shift);
+    await runSaleClaims(app);
+    expect(await counted(shift, junction)).toBe(0);
+    expect((await windowOf(junction)).claims).toContainEqual(expect.objectContaining({ state: "owner", statement: "mine" }));
   });
 
   it("lets a sale «стык смен» go to the other shift or in halves (N2)", async (context) => {

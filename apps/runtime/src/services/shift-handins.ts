@@ -22,7 +22,6 @@ import {
   insertHandinEvent,
   insertOffPlatform,
   insertSaleClaim,
-  listActiveSaleDecisions,
   listCurrentHandinVersions,
   listHandinAgentKeyNames,
   listHandinColleagues,
@@ -46,6 +45,7 @@ import {
   listReportedSales,
   listSaleClaims,
   lockSaleSettlements,
+  updateReportDeliveries,
   updateSaleClaim,
   reopenSaleClaim,
   openMatter,
@@ -809,6 +809,7 @@ export async function setShiftReportLine(
   const who = writer(actor);
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
+    await lockSaleSettlements(db);
     const handin = await handinFor(db, subject);
     // Given to a colleague without the board: the person's share goes now (their «не моё»), the colleague's waits for the
     // decider; «пополам» keeps the person's half and the other half waits.
@@ -817,6 +818,10 @@ export async function setShiftReportLine(
       handinId: handin.id, transactionId: input.transactionId, statement: written, shareWithUserId: shareWith, toUserId: written === "give" ? giveTo : null, note,
       byUserId: who.byUserId, byAgentKeyId: who.byAgentKeyId, at: now,
     });
+    if (wordChanged && written === "not_mine") {
+      await updateReportDeliveries(db, { transactionIds: [input.transactionId], userId: subject.shift.userId,
+        shiftId: subject.shift.id, state: "declined", reportDate: handin.reportDate });
+    }
     if (wordChanged) {
       // A new word takes back a question asked from the draft about this sale.
       for (const claim of (await listSaleClaims(db, { transactionIds: [input.transactionId], states: ["asked", "owner"] }))) {
@@ -906,29 +911,25 @@ export async function reportSaleToOwner(
     pageIds = pageIds.filter((id) => granted.has(id));
   }
   const realm = (await userIsTest(app, subject.shift.userId)) ? "test" : "live";
-  const matches = await findSalesForReportClaim(app.db, {
-    pageIds,
-    realm,
-    ...(ref !== "" ? { transactionRef: ref } : { fan, amountMills: input.amountMills }),
-    limit: 2,
-  });
-  // Security invariant (H8): 0 matches, >1 matches, out-of-grant, and cross-realm all return the exact same error.
-  if (matches.length !== 1) {
-    throw new NotFoundError("Не удалось точно найти продажу. Укажите номер транзакции или точные данные фана и сумму.", { reason: "sale_not_matched" });
-  }
-  const sale = matches[0]!;
   const who = writer(actor);
-  await app.db.transaction(async (tx) => {
+  const sale = await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
+    const matches = await findSalesForReportClaim(db, {
+      pageIds,
+      realm,
+      ...(ref !== "" ? { transactionRef: ref } : { fan, amountMills: input.amountMills }),
+      limit: 2,
+    });
+    // Security invariant (H8): 0 matches, >1 matches, out-of-grant, and cross-realm all return the exact same error.
+    if (matches.length !== 1) {
+      throw new NotFoundError("Не удалось точно найти продажу. Укажите номер транзакции или точные данные фана и сумму.", { reason: "sale_not_matched" });
+    }
+    const sale = matches[0]!;
     const existing = await findHandinByShift(db, subject.shift.id, { lock: true });
     const phase = phaseOf(existing);
     if (boardOn(subject) && phase !== "draft" && phase !== "fixing") {
       throw new PhaseConflictError(subject.shift.id, phase);
-    }
-    const activeDecision = (await listActiveSaleDecisions(db, [sale.transactionId])).get(sale.transactionId);
-    if (activeDecision !== undefined) {
-      throw new ConflictError("По этой продаже уже есть решение владельца", { reason: "already_decided" });
     }
     const handin = existing ?? await handinFor(db, subject);
     await setHandinMark(db, {
@@ -990,6 +991,7 @@ export async function reportSaleToOwner(
       },
       at: now,
     });
+    return sale;
   });
   await runSaleClaims(app, now).catch((error: unknown) => {
     app.logger.warn({ shiftId: subject.shift.id, transactionId: sale.transactionId, err: error instanceof Error ? error.message : String(error) }, "shift report: sale claims pass after report-sale failed");

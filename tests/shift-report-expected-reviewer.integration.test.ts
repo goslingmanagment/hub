@@ -181,6 +181,31 @@ describe("expected reviewer snapshot at hand-in (OA-002)", () => {
     await testDb?.stop();
   });
 
+  it("only serves granted lines when an owner delivers a sale from another page into a candidate", async (context) => {
+    if (!testDb) return context.skip();
+    await revokeAllReviewerKeys();
+    const token = `${AGENT_KEY_TOKEN_PREFIX}fixture-line-scope`;
+    await insertReviewerAgentKey(testDb.db, {
+      token, name: "fixture-line-scope", pageIds: [pageMia], createdBy: users.boss!, agentCode: "fixture-reviewer",
+    });
+    const pages = (await q("select label from pages where id = $1", [pageMia])).rows;
+    const shift = await insertShift([pages[0].label as string], 4, 1);
+    const time = new Date(Date.now() - 3 * HOUR_MS);
+    const external = await insertSaleForShift(shift, pageNova, time, 1234);
+    await q(`insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at)
+      values ($1, $2, $3, 1234, 'nobody', 'no_holder', '[]', 'fixture', now())`, [external, pageNova, time]);
+    const given = await asSession("boss", "POST", "/api/v1/sale-nobody/give", { transactionId: external, userId: users.anna });
+    expect(given.statusCode, given.body).toBe(200);
+    const sent = await handInShiftReport(app, annaActor(), { shiftId: shift });
+    const id = sent.board!.candidate!.id;
+    const stored = await q("select lines from shift_handin_candidates where id = $1", [id]);
+    expect(stored.rows[0].lines).toContainEqual(expect.objectContaining({ transactionId: external, amountMills: 1234 }));
+    const result = await asBearer(token, "GET", "/api/v1/agent/shift-reports/checks");
+    const visible = agentShiftReportChecksResponseSchema.parse(result.json()).checks.find((one) => one.candidateId === id);
+    expect(visible).toBeDefined();
+    expect(visible!.lines.map((one) => one.transactionId)).not.toContain(external);
+  });
+
   it("issuing, revoking, or rotating a reviewer key does not change the phase of an already handed-in shift", async (context) => {
     if (!testDb) return context.skip();
     await revokeAllReviewerKeys();
