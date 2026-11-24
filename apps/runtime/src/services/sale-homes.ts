@@ -50,6 +50,7 @@ import {
 import { NO_SLOTS, registrySlots, type SaleSlotProvider } from "./schedule-slots.ts";
 import { reportDateOfSale, reportDateOfShift } from "./shift-rows.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
+import { soloPageSuggestions } from "./page-workers.ts";
 import { reconcilePotsOfDay } from "./pots.ts";
 
 /**
@@ -375,8 +376,8 @@ export function moscowDaysInRange(from: Date, to: Date): string[] {
 export async function refreshSaleHomesForDay(
   db: Database,
   day: string,
-  now?: Date,
-  options?: { /** Test seam: runs after reading inputs & generation, before writing/completing. */ afterRead?: () => Promise<void> },
+  now?: Date | (() => Date),
+  options?: { /** Test seam: runs after reading inputs & generation, before writing/completing. */ afterRead?: () => Promise<void>; deferPots?: boolean },
 ): Promise<{ sales: number; written: number; retracted: number }> {
   if (day < moscowDayOf(SALE_RULE.since)) return { sales: 0, written: 0, retracted: 0 };
   const dayStart = new Date(`${day}T00:00:00+03:00`);
@@ -386,13 +387,14 @@ export async function refreshSaleHomesForDay(
     await lockSaleHomeRefreshDay(tx, day);
     // Read the effective clock AFTER acquiring the day lock so a slow sweep never overwrites a fresher pass across a
     // PPV deadline or clears a current-day generation with a stale cutoff.
-    const effectiveNow = now ?? new Date();
+    const effectiveNow = typeof now === "function" ? now() : now ?? new Date();
     const dayEnd = new Date(Math.min(effectiveNow.getTime(), dayStart.getTime() + DAY_MS));
     if (!(dayStart.getTime() < dayEnd.getTime())) return { sales: 0, written: 0, retracted: 0 };
     const generation = await readSaleHomeRefreshGeneration(tx, day);
     // Take the shared erasure fence in sorted page-id order BEFORE reading sales so an in-flight page erasure commits
     // first (and any later erasure waits for this write before deleting), preventing resurrection of erased homes.
-    const activePages = [...await listVisiblePages(tx), ...await listVisiblePages(tx, await listTestPageIds(tx))];
+    const testPages = new Set(await listTestPageIds(tx));
+    const activePages = [...await listVisiblePages(tx), ...await listVisiblePages(tx, [...testPages])];
     const sortedPageIds = [...new Set(activePages.map((page) => page.id))].sort((a, b) => a - b);
     for (const pageId of sortedPageIds) {
       await acquireErasureFenceSharedLock(tx, pageId);
@@ -406,6 +408,11 @@ export async function refreshSaleHomesForDay(
       const pageId = pageIds.get(sale.pageLabel);
       return pageId === undefined ? [] : [saleHomeRowOf({ sale, home: homes[at]!, pageId, pieces, logins, shiftRows, handedInDates, rule: SALE_RULE })];
     });
+    for (const realm of ["live", "test"] as const) {
+      const scoped = rows.filter((row) => testPages.has(row.pageId) === (realm === "test"));
+      const suggestions = await soloPageSuggestions(tx, realm, scoped.map((row) => ({ ...row, day })));
+      for (const row of scoped) row.suggestedPersonId = suggestions.get(row.transactionId)?.personId ?? null;
+    }
     const written = await upsertSaleHomes(tx, rows, effectiveNow);
     const retracted = await deleteVanishedSaleHomesInWindow(tx, {
       from: dayStart,
@@ -413,6 +420,7 @@ export async function refreshSaleHomesForDay(
       pageIds: [...pageIds.values()],
       keepTransactionIds: rows.map((row) => row.transactionId),
     });
+    if (options?.deferPots) return { sales: rows.length, written, retracted };
     await reconcilePotsOfDay(tx, day, effectiveNow);
     if (generation !== null) {
       await completeSaleHomeRefreshDue(tx, { day, generation });
@@ -422,16 +430,23 @@ export async function refreshSaleHomesForDay(
 }
 
 /** Recomputes the homes of every Moscow day in [from, to) through the single per-day refresh handler. */
-export async function refreshSaleHomes(db: Database, input: { from: Date; to: Date; now?: Date }): Promise<{ sales: number; written: number; retracted: number }> {
+export async function refreshSaleHomes(db: Database, input: { from: Date; to: Date; now?: Date; onDayError?: (day: string, err: unknown) => void }): Promise<{ sales: number; written: number; retracted: number }> {
   let sales = 0;
   let written = 0;
   let retracted = 0;
+  const failures: unknown[] = [];
   for (const day of moscowDaysInRange(input.from, input.to)) {
-    const one = await refreshSaleHomesForDay(db, day, input.now);
-    sales += one.sales;
-    written += one.written;
-    retracted += one.retracted;
+    try {
+      const one = await refreshSaleHomesForDay(db, day, input.now);
+      sales += one.sales;
+      written += one.written;
+      retracted += one.retracted;
+    } catch (error) {
+      if (input.onDayError) input.onDayError(day, error);
+      else failures.push(error);
+    }
   }
+  if (failures.length > 0) throw new AggregateError(failures, "Sale home refresh failed for one or more days");
   return { sales, written, retracted };
 }
 
@@ -454,10 +469,14 @@ export async function runSaleHomesDueTick(app: Pick<AppContext, "db" | "logger">
   let written = 0;
   let retracted = 0;
   for (const entry of due) {
-    const one = await refreshSaleHomesForDay(app.db, entry.day, now);
-    sales += one.sales;
-    written += one.written;
-    retracted += one.retracted;
+    try {
+      const one = await refreshSaleHomesForDay(app.db, entry.day, now);
+      sales += one.sales;
+      written += one.written;
+      retracted += one.retracted;
+    } catch (err) {
+      app.logger.warn({ day: entry.day, err }, "Sale home refresh failed; the day remains queued");
+    }
   }
   if (written + retracted > 0) app.logger.info({ days: due.length, sales, written, retracted }, "sale homes due pass refreshed");
   return { days: due.length, sales, written, retracted };
@@ -467,7 +486,7 @@ export async function runSaleHomesDueTick(app: Pick<AppContext, "db" | "logger">
 export async function runSaleHomesTick(app: Pick<AppContext, "db" | "logger">, now?: Date): Promise<{ sales: number; written: number; retracted: number }> {
   const windowNow = now ?? new Date();
   const from = new Date(Math.max(SALE_RULE.since, moscowWeekStart(windowNow.getTime()) - 7 * DAY_MS));
-  const result = await refreshSaleHomes(app.db, { from, to: windowNow, ...(now === undefined ? {} : { now }) });
+  const result = await refreshSaleHomes(app.db, { from, to: windowNow, onDayError: (day, err) => app.logger.warn({ day, err }, "Sale home refresh failed"), ...(now === undefined ? {} : { now }) });
   const due = await runSaleHomesDueTick(app, now);
   const total = { sales: result.sales + due.sales, written: result.written + due.written, retracted: result.retracted + due.retracted };
   if (total.written + total.retracted > 0) app.logger.info(total, "sale homes refreshed");
@@ -477,7 +496,7 @@ export async function runSaleHomesTick(app: Pick<AppContext, "db" | "logger">, n
 /** Nightly sweep: recomputes every Moscow day from `SALE_RULE.since` through today and retracts vanished sales. */
 export async function runSaleHomesSweepTick(app: Pick<AppContext, "db" | "logger">, now?: Date): Promise<{ sales: number; written: number; retracted: number }> {
   const windowNow = now ?? new Date();
-  const result = await refreshSaleHomes(app.db, { from: new Date(SALE_RULE.since), to: windowNow, ...(now === undefined ? {} : { now }) });
+  const result = await refreshSaleHomes(app.db, { from: new Date(SALE_RULE.since), to: windowNow, onDayError: (day, err) => app.logger.warn({ day, err }, "Sale home refresh failed"), ...(now === undefined ? {} : { now }) });
   if (result.written + result.retracted > 0) app.logger.info(result, "sale homes nightly sweep complete");
   return result;
 }

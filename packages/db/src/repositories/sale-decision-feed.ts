@@ -31,7 +31,7 @@ export async function placeSaleDecisionChanges(db: Database): Promise<number> {
     const placed = await tx.execute(sql`
       update sale_decision_changes c set seq = placed.seq
       from (
-        select id, (select coalesce(max(seq), 0) from sale_decision_changes) + row_number() over (order by id) as seq
+        select id, (select last_seq from feed_positions where feed = 'sale_decision_changes') + row_number() over (order by id) as seq
         from sale_decision_changes where seq is null
       ) placed
       where c.id = placed.id`);
@@ -87,7 +87,7 @@ export async function releaseSaleDecisionChangesHeld(db: Database, input: { agen
     const moved = await tx.execute<Row>(sql`
       update sale_decision_changes c set seq = ready.seq
       from (
-        select old.id, (select coalesce(max(seq), 0) from sale_decision_changes) + row_number() over (order by old.seq, old.id) as seq
+        select old.id, (select last_seq from feed_positions where feed = 'sale_decision_changes') + row_number() over (order by old.seq, old.id) as seq
         from sale_decision_feed_held k
         join sale_decision_changes old on old.id = k.change_id
         join sale_owner_decisions d on d.id = old.decision_id

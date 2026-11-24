@@ -58,7 +58,8 @@ export function PotsScreen() {
   const [search, setParam] = useSearchParam();
   const queryClient = useQueryClient();
 
-  const [subView, setSubView] = useState<SubView>("pots");
+  const tab = search.get("tab");
+  const subView: SubView = tab === "unrouted" || tab === "archive" ? tab : "pots";
   const [createOpen, setCreateOpen] = useState(false);
   const [pagePotsConfirm, setPagePotsConfirm] = useState(false);
 
@@ -325,7 +326,7 @@ export function PotsScreen() {
               <Segmented<SubView>
                 label="Подразделы общаков"
                 value={subView}
-                onChange={setSubView}
+                onChange={(value) => setParam("tab", value === "pots" ? null : value)}
                 options={[
                   { value: "pots", label: `Общаки (${data.pots.length})` },
                   { value: "unrouted", label: `Без общака (${data.unroutedCount})` },
@@ -410,6 +411,7 @@ export function PotsScreen() {
           models={data.models}
           people={data.people}
           defaultOpensOn={data.potsFrom}
+          closedPageIds={data.pots.filter((p) => p.state === "closed").flatMap((p) => p.pageIds)}
           onClose={() => setCreateOpen(false)}
           onSaved={(saved) => setParam("pot", saved.code)}
         />

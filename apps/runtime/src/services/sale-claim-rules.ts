@@ -519,7 +519,7 @@ export function suggestSoloPagePerson(input: {
   for (const person of input.people) {
     if (person.kind !== "human" || (person.role !== "chatter" && person.role !== "team_lead")) continue;
     // Active on saleDay: not left, OR left strictly AFTER saleDay.
-    const activeOnDay = person.state !== "left" || (person.leftOn !== null && person.leftOn > input.saleDay);
+    const activeOnDay = person.state === "working" || (person.state === "left" && person.leftOn !== null && person.leftOn > input.saleDay);
     if (!activeOnDay) continue;
     const pages = workingByPerson.get(person.personId) ?? [];
     if (pages.includes(input.pageId)) {

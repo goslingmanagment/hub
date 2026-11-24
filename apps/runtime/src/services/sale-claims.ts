@@ -42,15 +42,14 @@ import {
   listOpenMattersOfKinds,
   listOpenUnownedSales,
   listPendingOffPlatform,
-  listPersonDayLineRows,
   listPersonLoginRows,
   listPersonRows,
-  listPersonScheduleSlotRows,
   listPersonWorkingPageRows,
   listRecipientDayHandins,
   listSaleCandidates,
   listSaleClaims,
   listSaleDecisions,
+  lockSaleHomeRefreshDay,
   lockSaleSettlements,
   openMatter,
   reopenSaleClaim,
@@ -74,7 +73,7 @@ import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { validatePotDecisionTarget } from "./pots.ts";
-import { refreshSaleHomes } from "./sale-homes.ts";
+import { refreshSaleHomesForDay } from "./sale-homes.ts";
 import { TAKE_NOTICE_MS, isTake, takeNoticeOpen, takeSettles } from "./shift-report-phases.ts";
 import {
   claimStands,
@@ -88,14 +87,13 @@ import {
   settledShareOf,
   settledVersion,
   shareAfter,
-  suggestSoloPagePerson,
   type DerivedClaim,
   type OwnerOutcome,
   type ReportView,
   type SoloPageSuggestion,
 } from "./sale-claim-rules.ts";
-import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, halvesOf, splitShares, type RuleSlot, type SaleHomeReason } from "./sale-rule.ts";
-import { RULE_WEEKDAYS, type RuleWeekday } from "./schedule-slots.ts";
+import { POT_OBSHAK, SALE_RULE, SALE_HOME_REASON_TEXT, halvesOf, splitShares, type SaleHomeReason } from "./sale-rule.ts";
+import { soloPageSuggestions } from "./page-workers.ts";
 import { realmOf, testUserIds } from "./sandbox/realm.ts";
 import { deciderOf, modelOfPageId, personOfLogin, personsOfLogins, teamFactsFor, type Decider } from "./teams.ts";
 import { dayWords } from "./shift-handin-rules.ts";
@@ -857,19 +855,24 @@ async function afterPaid(app: ClaimsApp, made: readonly MadeVersion[], now: Date
   }
 }
 
+/** Advance the caller's effective time by the time spent waiting for database locks. */
+function refreshClock(now: Date): () => Date {
+  const start = performance.now();
+  return () => new Date(now.getTime() + Math.floor(performance.now() - start));
+}
+
 /**
  * The sale's Moscow day computed again (never a day before the rule), on `db` — the pool, or the caller's transaction
  * when what follows in it reads the home (a cancel: the reports go back to the rule's home, so it is computed first and
  * a failure fails the cancel whole).
  */
-async function refreshHomeWithin(db: Database, occurredAt: Date | null, now: Date): Promise<void> {
+async function refreshHomeWithin(db: Database, occurredAt: Date | null, now: Date | (() => Date)): Promise<void> {
   if (occurredAt === null || occurredAt.getTime() < SALE_RULE.since) return;
-  const from = new Date(`${moscowDay(occurredAt.getTime())}T00:00:00+03:00`);
-  await refreshSaleHomes(db, { from, to: new Date(Math.min(now.getTime(), from.getTime() + DAY_MS)), now });
+  await refreshSaleHomesForDay(db, moscowDay(occurredAt.getTime()), typeof now === "function" ? now : refreshClock(now));
 }
 
 /** The sale's Moscow day computed again after a commit: its home follows the agreement or the decision at once. */
-async function refreshHomeOf(app: ClaimsApp, occurredAt: Date | null, now: Date) {
+async function refreshHomeOf(app: ClaimsApp, occurredAt: Date | null, now: Date | (() => Date)) {
   await refreshHomeWithin(app.db, occurredAt, now).catch((error: unknown) => {
     app.logger.warn({ at: occurredAt?.toISOString(), err: error instanceof Error ? error.message : String(error) }, "sale claims: the sale's home was not computed again; the hourly job will");
   });
@@ -1655,17 +1658,21 @@ export async function cancelSaleDecisionApplied(
   now: Date,
 ): Promise<{ versions: MadeVersion[] }> {
   const { db } = app;
+  const clock = refreshClock(now);
   const before = await input.check((await listSaleDecisions(db, { ids: [input.decisionId] }))[0] ?? null, db);
   const paid = before.transactionId === null ? new Map<number, boolean | null>() : await paidDaysOf(app, await listCurrentReportsOfSales(db, [before.transactionId]));
   const made: MadeVersion[] = [];
-  await db.transaction(async (tx) => {
+  const saleDay = await db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     await lockSaleSettlements(txDb);
     const decision = await input.check((await listSaleDecisions(txDb, { ids: [input.decisionId] }))[0] ?? null, txDb);
+    const saleId = decision.transactionId;
+    const sale = saleId === null ? undefined : (await listHandinSalesByIds(txDb, [saleId]))[0];
+    const day = sale === undefined ? null : moscowDay(sale.occurredAt.getTime());
+    if (day !== null) await lockSaleHomeRefreshDay(txDb, day);
     if (!(await cancelSaleDecision(txDb, { id: decision.id, note: input.note, at: now }))) {
       throw new ConflictError("Only an active decision is cancelled", { reason: "not_active" });
     }
-    const saleId = decision.transactionId;
     const unruled = saleId !== null && !(await listActiveSaleDecisions(txDb, [saleId])).has(saleId);
     // What a decision closed and nothing decides now: the claims and questions of the sale, when no decision rules it
     // (also the ones a decision this one had replaced closed), and a question with no sale that this one answered.
@@ -1680,7 +1687,8 @@ export async function cancelSaleDecisionApplied(
     for (const claim of agreed) await updateSaleClaim(txDb, claim.id, { state: "agreed", decisionId: null, closedAt: claim.answeredAt }, now);
     let again: DerivedClaim[] = [];
     if (unruled) {
-      await refreshHomeWithin(txDb, (await listHandinSalesByIds(txDb, [saleId]))[0]?.occurredAt ?? null, now);
+      // Reports need the new home in this transaction. Pot writers may be waiting for our due row.
+      if (day !== null) await refreshSaleHomesForDay(txDb, day, clock, { deferPots: true });
       made.push(...await reportsBackToDraft(txDb, {
         transactionId: saleId, holds: (line) => line.settled === "owner",
         madeFor: { kind: "decision", decisionId: decision.id, transactionId: saleId, outcome: "cancelled" }, by: input.by, paid, at: now,
@@ -1693,7 +1701,10 @@ export async function cancelSaleDecisionApplied(
         || again.some((one) => one.kind === claim.kind && one.claimantHandinId === claim.claimantHandinId && one.sideUserId === claim.sideUserId);
       if (stands) await updateSaleClaim(txDb, claim.id, waitsAgain(claim, now), now);
     }
+    return unruled ? day : null;
   });
+  // The due generation stays queued until the post-commit refresh succeeds.
+  if (saleDay !== null) await refreshHomeOf(app, new Date(`${saleDay}T00:00:00+03:00`), clock);
   await afterPaid(app, made, now);
   await runSaleClaims(app, now).catch((error: unknown) => {
     app.logger.warn({ decisionId: input.decisionId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the pass after a cancelled decision failed; the next one will");
@@ -1789,14 +1800,9 @@ export async function decideOffPlatformLine(
   return { state, version: done?.version ?? null, savedAt: now.toISOString() };
 }
 
-// ── Open nobody sales (owner view, live solo-page suggestion) ────────────────
+// ── Open nobody sales ────────────────────────────────────────────────────────
 
-const WEEKDAY_SET: ReadonlySet<string> = new Set(RULE_WEEKDAYS);
-
-/**
- * Computes live single-chatter suggestions for open `nobody` (`no_holder`) sales in `realm` (H8, zero new tables)
- * and builds the realm's candidate list of active chat-team members so the owner can give any sale to another person.
- */
+/** Suggest the sale day's sole worker and list current candidates for the owner's manual decision. */
 async function liveNobodyContext(
   db: Database,
   sales: ReadonlyArray<{ transactionId: number; pageId: number; occurredAt: Date; home: string; reason: string; day: string }>,
@@ -1822,7 +1828,7 @@ async function liveNobodyContext(
     labelsOfPerson.set(row.personId, [...(labelsOfPerson.get(row.personId) ?? []), row.label]);
   }
   const candidates: SaleNobodyResponse["candidates"] = people
-    .filter((person) => person.kind === "human" && (person.role === "chatter" || person.role === "team_lead") && person.state !== "left" && loginOfPerson.has(person.id))
+    .filter((person) => person.kind === "human" && (person.role === "chatter" || person.role === "team_lead") && person.state === "working" && loginOfPerson.has(person.id))
     .map((person) => ({
       userId: loginOfPerson.get(person.id)!,
       code: person.code,
@@ -1830,50 +1836,7 @@ async function liveNobodyContext(
       workingPageLabels: labelsOfPerson.get(person.id) ?? [],
     }));
 
-  const suggestions = new Map<number, SoloPageSuggestion | null>();
-  const targetSales = sales.filter((sale) => sale.home === "nobody" && sale.reason === "no_holder");
-  if (targetSales.length === 0 || personIds.length === 0) return { suggestions, candidates };
-
-  const minMs = Math.min(...targetSales.map((sale) => sale.occurredAt.getTime())) - DAY_MS;
-  const maxMs = Math.max(...targetSales.map((sale) => sale.occurredAt.getTime())) + DAY_MS;
-  const standing = await listPersonScheduleSlotRows(db, personIds);
-  const personIdSet = new Set(personIds);
-  const dayLines = (await listPersonDayLineRows(db, { from: moscowDay(minMs), to: moscowDay(maxMs) }))
-    .filter((row) => personIdSet.has(row.personId));
-  const slots: RuleSlot[] = [...standing, ...dayLines].map((slot) => ({
-    personId: slot.personId,
-    pageId: slot.pageId,
-    startMinute: slot.startMinute,
-    endMinute: slot.endMinute,
-    weekdays: slot.weekdays === null ? null : slot.weekdays.filter((day): day is RuleWeekday => WEEKDAY_SET.has(day)),
-    validFrom: slot.validFrom,
-    validTo: slot.validTo,
-    ...(slot.kind === null ? {} : { day: slot.kind }),
-  }));
-
-  const candidatePeople = people.map((person) => ({
-    personId: person.id,
-    code: person.code,
-    displayName: person.displayName,
-    kind: person.kind,
-    role: person.role,
-    state: person.state,
-    leftOn: person.leftOn,
-  }));
-
-  for (const sale of targetSales) {
-    suggestions.set(
-      sale.transactionId,
-      suggestSoloPagePerson({
-        pageId: sale.pageId,
-        saleDay: sale.day,
-        people: candidatePeople,
-        workingPages,
-        logins,
-        slots,
-      }),
-    );
-  }
+  const suggestions = await soloPageSuggestions(db, realm, sales);
   return { suggestions, candidates };
 }
 

@@ -575,4 +575,17 @@ describe("the sale homes feed", () => {
     // Every emitted entry for the restored sale reflects the current live home (`upsert`), NEVER `retract`.
     expect(entries.every((e) => e.op === "upsert" && e.home === "shift")).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("places the next change beyond a deleted high-water row", async (context) => {
+    if (!testDb) return context.skip();
+    const change = () => testDb!.pool.query(`insert into sale_home_changes (transaction_id, page_id, is_test, op)
+      values (1, $1, false, 'retract')`, [pageOne]);
+    await change();
+    const top = (await readSaleHomesFeed(app, { pageIds: [pageOne], limit: 500 })).next;
+    await testDb.pool.query("delete from sale_home_changes where seq = $1", [top]);
+    await change();
+    const next = await readSaleHomesFeed(app, { pageIds: [pageOne], since: top, limit: 1 });
+    expect(next.homes[0]!.seq).toBeGreaterThan(Number(top));
+  });
+
 });

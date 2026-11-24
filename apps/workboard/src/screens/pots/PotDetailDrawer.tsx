@@ -34,6 +34,7 @@ import {
 import { formatDateTime, formatDay } from "@agency_hub_core/ui/format";
 import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { kernel } from "@/shared/hub";
+import { useSearchParam } from "@/shared/useSearchParam";
 import { ChainMoney } from "@/shared/saleChain";
 import { PotFormModal } from "./PotFormModal";
 
@@ -52,9 +53,12 @@ interface PotDetailDrawerProps {
 
 export function PotDetailDrawer({ pot, models, people, onClose }: PotDetailDrawerProps) {
   const queryClient = useQueryClient();
+  const [search, setParam] = useSearchParam();
+  const requestedDay = search.get("day") ?? "";
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(requestedDay) ? requestedDay : moscowToday();
   const detailQuery = useQuery({
-    queryKey: ["pot", pot.id] as const,
-    queryFn: () => kernel.potDetail({ params: { potId: pot.id } }),
+    queryKey: ["pot", pot.id, day] as const,
+    queryFn: () => kernel.potDetail({ params: { potId: pot.id }, query: { day } }),
   });
 
   const [editOpen, setEditOpen] = useState(false);
@@ -65,7 +69,6 @@ export function PotDetailDrawer({ pot, models, people, onClose }: PotDetailDrawe
   const [reverseError, setReverseError] = useState<string | null>(null);
 
   // Distribution composer state
-  const [day, setDay] = useState<string>(() => moscowToday());
   const [formulaKind, setFormulaKind] = useState<PotFormula["kind"]>(pot.formula.kind);
   const [excludedTxIds, setExcludedTxIds] = useState<Set<number>>(() => new Set());
   const [weightInputs, setWeightInputs] = useState<Record<string, string>>(() => {
@@ -149,13 +152,14 @@ export function PotDetailDrawer({ pot, models, people, onClose }: PotDetailDrawe
   });
 
   const postMutation = useMutation({
-    mutationFn: async () => {
-      const formula = buildFormulaPayload();
-      return kernel.potDistributionPost({
-        params: { potId: currentPot.id },
-        body: { day, formula, parts: selectedParts },
-      });
-    },
+    mutationFn: (confirmed: PotDistributionPreviewResponse) => kernel.potDistributionPost({
+      params: { potId: confirmed.potId },
+      body: {
+        day: confirmed.day,
+        formula: confirmed.formula,
+        parts: confirmed.parts.map(({ transactionId, baseMills }) => ({ transactionId, baseMills })),
+      },
+    }),
     onSuccess: () => {
       setPostConfirm(false);
       setPreview(null);
@@ -337,7 +341,7 @@ export function PotDetailDrawer({ pot, models, people, onClose }: PotDetailDrawe
                           type="date"
                           value={day}
                           onChange={(e) => {
-                            setDay(e.target.value);
+                            setParam("day", e.target.value || null);
                             setPreview(null);
                           }}
                         />
@@ -551,7 +555,7 @@ export function PotDetailDrawer({ pot, models, people, onClose }: PotDetailDrawe
           confirmLabel="Провести"
           pendingLabel="Проводим…"
           isPending={postMutation.isPending}
-          onConfirm={() => postMutation.mutate()}
+          onConfirm={() => postMutation.mutate(preview)}
           onClose={() => setPostConfirm(false)}
         />
       )}

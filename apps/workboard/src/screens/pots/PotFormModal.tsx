@@ -13,6 +13,7 @@ interface PotFormModalProps {
   pot?: PotSummary;
   models: readonly CatalogModel[];
   people: readonly CatalogPerson[];
+  closedPageIds?: readonly number[];
   defaultOpensOn?: string | null;
   onClose: () => void;
   onSaved?: (pot: PotSummary) => void;
@@ -33,7 +34,7 @@ function initialWeights(formula: PotFormula | undefined): WeightEntry[] {
   }));
 }
 
-export function PotFormModal({ mode, pot, models, people, defaultOpensOn, onClose, onSaved }: PotFormModalProps) {
+export function PotFormModal({ mode, pot, models, people, defaultOpensOn, closedPageIds = [], onClose, onSaved }: PotFormModalProps) {
   const queryClient = useQueryClient();
   const today = moscowToday();
   const firstModel = models[0];
@@ -47,7 +48,9 @@ export function PotFormModal({ mode, pot, models, people, defaultOpensOn, onClos
   );
   const [postTip, setPostTip] = useState<boolean>(pot ? pot.intakeReasons.includes("post_tip") : false);
   const [campaign, setCampaign] = useState<boolean>(pot ? pot.intakeReasons.includes("campaign") : false);
-  const [opensOn, setOpensOn] = useState<string>(pot?.opensOn ?? defaultOpensOn ?? today);
+  const [chosenOpensOn, setOpensOn] = useState<string | undefined>(pot?.opensOn);
+  const replacement = pageIds.some((id) => closedPageIds.includes(id));
+  const opensOn = chosenOpensOn ?? (replacement && today > (defaultOpensOn ?? "") ? today : defaultOpensOn ?? today);
   const [closesOn, setClosesOn] = useState<string>(pot?.closesOn ?? "");
   const [participantsMode, setParticipantsMode] = useState<"page_workers" | "listed">(pot?.participantsMode ?? "page_workers");
   const [participants, setParticipants] = useState<PotParticipantPeriod[]>(pot?.participants ?? []);

@@ -4,6 +4,7 @@ import {
   getOnlyfansFeedTransactionId,
   insertOnlyfansFeedMoneyClaim,
   listOnlyfansFeedMoneyCandidates,
+  enqueueSaleHomeRefreshForSales,
   refineOnlyfansFeedWsTransaction,
   settleOnlyfansFeedMoneyClaim,
   type Database,
@@ -250,6 +251,7 @@ export async function applyFeedMoneySighting(
         rawStatus: sighting.rawStatus,
         sourceObservationId: sighting.observationId,
       });
+      await enqueueSaleHomeRefreshForSales(db, [match.id]);
     }
     const settled = await settle();
     const reversed = await reverse(match.transactionId);

@@ -7,9 +7,12 @@ import {
   findUserByUsername,
   insertPersonLogin,
   insertPersonRow,
+  setStaffingDay,
   type Database,
   type PersonRowRole,
 } from "@agency_hub_core/db";
+
+import { toBusinessDate } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { createAccountLinkForUserId } from "../account-links.ts";
@@ -758,6 +761,7 @@ export async function seedSandbox(app: AppContext, input: SandboxSeedInput): Pro
   const targets = await resolveStandInTargets(app.db, input.standIn ?? []);
   const result = await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
+    await setStaffingDay(db, toBusinessDate(now));
     const model = await ensureModel(db);
     const pages = await ensurePages(db, model.id);
     const standIns = await ensureStandIns(db, model.id, targets);

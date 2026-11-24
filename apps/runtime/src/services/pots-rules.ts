@@ -91,17 +91,14 @@ export function computePotDistributionLines(input: {
       for (const [rawCode, rawValue] of weightEntries) {
         const code = rawCode.trim();
         if (code === "") continue;
-        const weight = typeof rawValue === "number" ? rawValue : Number(rawValue);
-        if (!Number.isFinite(weight) || weight < 0) {
+        const weight = typeof rawValue === "number" || (typeof rawValue === "string" && rawValue.trim() !== "") ? Number(rawValue) : NaN;
+        if (!Number.isSafeInteger(Math.round(weight * Number(WEIGHT_SCALE))) || weight < 0) {
           return { ok: false, reason: "invalid_weights", message: `Неверный вес для ${code}` };
         }
         if (weight > 0) weightMap.set(code, weight);
       }
 
-      // If active participants are supplied, intersect with weighted participants; otherwise use weighted codes directly.
-      const chosen = participants.length > 0
-        ? participants.filter((code) => weightMap.has(code))
-        : [...weightMap.keys()].sort(compareCode);
+      const chosen = participants.filter((code) => weightMap.has(code));
 
       if (chosen.length === 0) {
         return { ok: false, reason: "no_participants", message: "Нет активных участников с положительным весом" };
@@ -150,7 +147,7 @@ export function computePotDistributionLines(input: {
           return { ok: false, reason: "duplicate_participant", message: `Участник ${personCode} указан дважды` };
         }
         seen.add(personCode);
-        const amount = typeof rawValue === "number" ? rawValue : Number(rawValue);
+        const amount = typeof rawValue === "number" || (typeof rawValue === "string" && rawValue.trim() !== "") ? Number(rawValue) : NaN;
         if (!Number.isSafeInteger(amount) || amount < 0) {
           return { ok: false, reason: "invalid_manual_shares", message: `Неверная доля базы для ${personCode}` };
         }
@@ -165,7 +162,7 @@ export function computePotDistributionLines(input: {
         return {
           ok: false,
           reason: "manual_sum_mismatch",
-          message: `Сумма ручных долей (${millsToNumber(sum)} mills) не равна базе раздачи (${input.baseMills} mills)`,
+          message: `Сумма ручных долей (${sum} mills) не равна базе раздачи (${input.baseMills} mills)`,
         };
       }
       const normalizedShares: Record<string, number> = {};
@@ -233,7 +230,7 @@ export function resolvePotParticipants(input: {
   const codes: string[] = [];
   for (const person of input.people) {
     if (person.kind !== "human" || (person.role !== "chatter" && person.role !== "team_lead")) continue;
-    const activeOnDay = person.state !== "left" || (person.leftOn !== null && person.leftOn > input.day);
+    const activeOnDay = person.state === "working" || (person.state === "left" && person.leftOn !== null && person.leftOn > input.day);
     if (!activeOnDay) continue;
     const pages = workingByPerson.get(person.personId) ?? [];
     if (pages.some((pageId) => targetPages.has(pageId))) {
@@ -345,32 +342,12 @@ export function routePotOfSale(
  * having left the pot! Pure.
  */
 export function hasSaleLeftPot(
-  part: {
-    potId: number;
-    potCode: string;
-    potPageIds: readonly number[];
-    potOpensOn: string;
-    potClosesOn: string | null;
-    potState: "open" | "closed";
-  },
+  potCode: string,
   currentHome: PotRoutingSale | undefined,
-  realmPots: readonly PotRoutingSpec[],
   potsFrom: string | null,
 ): boolean {
-  if (currentHome === undefined) return true;
-  if (currentHome.home !== "pot") return true;
+  if (currentHome === undefined || currentHome.home !== "pot") return true;
   if (potsFrom === null || currentHome.day < potsFrom) return true;
-  if (!potCoversPageDay({ pageIds: part.potPageIds, opensOn: part.potOpensOn, closesOn: part.potClosesOn }, currentHome.pageId, currentHome.day)) {
-    return true;
-  }
-  const explicit = currentHome.pot !== null && currentHome.pot.trim() !== "" && currentHome.pot !== POT_OBSHAK ? currentHome.pot.trim() : null;
-  if (explicit !== null) {
-    return explicit !== part.potCode;
-  }
-  const routed = routePotOfSale(currentHome, realmPots, potsFrom);
-  if (routed.status === "routed") {
-    return routed.potId !== part.potId;
-  }
-  // A closed pot keeps its historical distributed sales; an open pot that stopped matching (e.g. intake edited) left.
-  return part.potState !== "closed";
+  const explicit = currentHome.pot?.trim();
+  return Boolean(explicit && explicit !== POT_OBSHAK && explicit !== potCode);
 }

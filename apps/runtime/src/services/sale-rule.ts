@@ -53,6 +53,8 @@ const DAY_MS = 86_400_000;
  */
 export const SALE_RULE = {
   version: "2026-11-12.1",
+  /** A lone page worker is an owner suggestion. Only a decision gives them the sale. */
+  soloPageToChatter: false,
   /** The first instant the rule settles; its Moscow date is the first day of work it pays (owner, 2026-11-08). */
   since: Date.parse("2026-11-02T00:00:00+03:00"),
   /** How long a chatter's bought PPV waits for its sender's next shift (owner, 2026-11-08). */
@@ -522,7 +524,10 @@ export function splitShares(
 ): SaleShare[] {
   let given = 0;
   return resolution.map((share, at): SaleShare => {
-    const mills = at === resolution.length - 1 ? net - given : millsToNumber(millsPercentOf(net, share.percent));
+    const remaining = net - given;
+    const rounded = at === resolution.length - 1 ? remaining : millsToNumber(millsPercentOf(net, share.percent));
+    // Independent rounding can exhaust a small sale before its last share.
+    const mills = net < 0 ? Math.max(remaining, rounded) : Math.min(remaining, rounded);
     given += mills;
     return { workRef: workRefOf(share.userId), userId: share.userId, percent: share.percent, mills };
   });

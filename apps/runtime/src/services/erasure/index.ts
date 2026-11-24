@@ -2259,6 +2259,7 @@ export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[]
     table: "user_page_assignments",
     reason: "User-to-page authorization is agency catalog configuration, not captured creator or fan data; offboarding access is a separate owner action.",
   },
+  { table: "person_working_page_periods", reason: "Dated staffing assignments remain with the page catalog for historical distribution decisions." },
   {
     table: "person_working_pages",
     reason: "The people registry's staffing (who works the page), agency configuration and not captured creator or fan data; the pages catalog row it names stays.",

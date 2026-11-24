@@ -47,7 +47,7 @@ export function registerPotsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   });
 
   server.get("/api/v1/pots/:potId", { schema: routeSchemas.potDetail }, async (request) => {
-    return readPotDetail(appContext, await owner(request), request.params.potId);
+    return readPotDetail(appContext, await owner(request), request.params.potId, new Date(), request.query.day);
   });
 
   server.patch("/api/v1/pots/:potId", { schema: routeSchemas.potUpdate }, async (request) => {

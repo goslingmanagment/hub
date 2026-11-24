@@ -282,6 +282,11 @@ export async function resetIntegrationDatabase(
   }
   // A fresh healthy disk sample for the operator console.
   await seedHealthyStorageSample(pool);
+  // Every change log was cleared by this test reset, including its durable position.
+  await pool.query(`do $$ begin if to_regclass('feed_positions') is not null then
+    insert into feed_positions(feed, last_seq) values
+      ('sale_decision_changes', 0), ('sale_home_changes', 0), ('pot_distribution_changes', 0);
+  end if; end $$`);
   // Explicit fixture reset of the migration-owned singleton. Runtime never
   // reconstructs a missing policy state from env or enables a lost policy.
   await pool.query(`do $$ begin if to_regclass('ofapi_collection_state') is not null then

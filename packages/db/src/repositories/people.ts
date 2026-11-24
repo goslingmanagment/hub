@@ -538,6 +538,25 @@ export async function listPersonWorkingPageRows(db: Database, personIds?: readon
   }));
 }
 
+/** Use one Moscow day for roster and state changes in the registry writer's transaction. */
+export async function setStaffingDay(db: Database, day: string): Promise<void> {
+  await db.execute(sql`select set_config('agency_hub.staffing_day', ${day}, true)`);
+}
+
+export async function listWorkingPeopleOnDay(db: Database, realm: PeopleRealm, day: string): Promise<PersonRow[]> {
+  const result = await db.execute<Row>(sql`
+    select ${PERSON_COLUMNS} from people p join person_working_periods w on w.person_id = p.id
+    where ${personRealmSql(realm)} and w.from_day <= ${day}::date and (w.to_day is null or w.to_day >= ${day}::date)`);
+  return result.rows.map((row) => personOf({ ...row, state: "working" }));
+}
+
+export async function listWorkingPagesOnDay(db: Database, personIds: readonly number[], day: string) {
+  const result = await db.execute<Row>(sql`
+    select person_id, page_id from person_working_page_periods where person_id = any(${ids(personIds)})
+      and from_day <= ${day}::date and (to_day is null or to_day >= ${day}::date)`);
+  return result.rows.map((row) => ({ personId: Number(row.person_id), pageId: Number(row.page_id) }));
+}
+
 /** The person's working pages become exactly `pageIds`, in that order. */
 export async function replacePersonWorkingPages(db: Database, personId: number, pageIds: readonly number[]) {
   await db.execute(sql`delete from person_working_pages where person_id = ${personId}`);

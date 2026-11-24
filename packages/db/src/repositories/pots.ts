@@ -78,8 +78,64 @@ export async function setPotsSwitch(db: Database, input: { potsFrom: string | nu
 
 export async function countActivePotDistributions(db: Database): Promise<number> {
   const result = await db.execute<{ n: string | number }>(sql`
-    select count(*)::bigint as n from pot_distributions where reversed_at is null`);
+    select count(*)::bigint as n from pot_distributions where reversed_at is null and not hub_pot_is_test(pot_id)`);
   return num(result.rows[0]?.n ?? 0);
+}
+
+/** A later cutover must preserve even reversed live postings and each part's original sale day. */
+export async function hasLiveDistributionsBefore(db: Database, day: string): Promise<boolean> {
+  const result = await db.execute<{ found: boolean }>(sql`
+    select exists (select 1 from pot_distributions d
+      left join pot_distribution_parts pp on pp.distribution_id = d.id
+      left join transactions t on t.id = pp.transaction_id
+      where not hub_pot_is_test(d.pot_id) and (d.day < ${day}::date
+        or coalesce(pp.sale_day, (t.occurred_at at time zone 'Europe/Moscow')::date) < ${day}::date)) as found`);
+  return result.rows[0]!.found;
+}
+
+export async function losesPostedPotCoverage(db: Database, pot: PotRow, next: {
+  pageIds: readonly number[]; opensOn: string; closesOn: string | null; intakeReasons: readonly PotIntakeReason[];
+}): Promise<boolean> {
+  const removedPages = pot.pageIds.filter((id) => !next.pageIds.includes(id));
+  const removed = pot.intakeReasons.filter((reason) => !next.intakeReasons.includes(reason));
+  const result = await db.execute<{ found: boolean }>(sql`
+    select exists (
+      select 1 from pot_distribution_parts pp join pot_distributions d on d.id = pp.distribution_id
+      left join transactions t on t.id = pp.transaction_id
+      left join sale_homes h on h.transaction_id = pp.transaction_id
+      cross join lateral (select coalesce(pp.sale_day, (coalesce(t.occurred_at, h.occurred_at) at time zone 'Europe/Moscow')::date) as day,
+        coalesce(pp.intake, case when h.home = 'pot' then
+          case when coalesce(nullif(h.pot, ''), 'obshak') <> 'obshak' then 'explicit' else h.reason end end) as intake) sale
+      where d.pot_id = ${pot.id} and (
+        pp.page_id = any(${ids(removedPages)})
+        or (${next.opensOn}::date > ${pot.opensOn}::date and (sale.day is null or sale.day < ${next.opensOn}::date))
+        or (${next.closesOn}::date is not null and (${pot.closesOn}::date is null or ${next.closesOn}::date < ${pot.closesOn}::date)
+          and (sale.day is null or sale.day > ${next.closesOn}::date))
+        or (cardinality(${textArr(removed)}) > 0 and (sale.intake is null
+          or sale.intake = any(${textArr(removed)})
+          or (sale.intake not in ('post_tip', 'campaign', 'explicit') and cardinality(${textArr(next.intakeReasons)}) = 0)))
+      )) as found`);
+  return result.rows[0]!.found;
+}
+
+export async function holdPotAutoPost(db: Database, transactionId: number, potId: number, participants: readonly string[]) {
+  await db.execute(sql`
+    insert into pot_auto_post_holds (transaction_id, pot_id, participants)
+    select id, ${potId}, ${textArr(participants)} from transactions where id = ${transactionId}
+    on conflict (transaction_id, pot_id) do update set participants = excluded.participants`);
+}
+
+export async function listPotAutoPostHolds(db: Database, day: string) {
+  const result = await db.execute<Row>(sql`
+    select h.* from pot_auto_post_holds h join transactions t on t.id = h.transaction_id
+    where (t.occurred_at at time zone 'Europe/Moscow')::date = ${day}::date`);
+  return result.rows.map((row) => ({
+    transactionId: num(row.transaction_id), potId: num(row.pot_id), participants: strArray(row.participants),
+  }));
+}
+
+export async function clearPotAutoPostHold(db: Database, transactionId: number, potId: number) {
+  await db.execute(sql`delete from pot_auto_post_holds where transaction_id = ${transactionId} and pot_id = ${potId}`);
 }
 
 // ── Pots (`pots`) ────────────────────────────────────────────────────────────
@@ -515,7 +571,7 @@ export async function listPotSaleHomesSince(
     from sale_homes h
     join pages p on p.id = h.page_id
     join models m on m.id = p.model_id
-    left join transactions t on t.id = h.transaction_id
+    join transactions t on t.id = h.transaction_id
     where h.home = 'pot'
       and h.occurred_at >= ${fromIso}::timestamptz
       and h.net_mills > 0
@@ -538,7 +594,7 @@ export async function listSaleHomesForPotCheck(db: Database, transactionIds: rea
     from sale_homes h
     join pages p on p.id = h.page_id
     join models m on m.id = p.model_id
-    left join transactions t on t.id = h.transaction_id
+    join transactions t on t.id = h.transaction_id
     where h.transaction_id = any(${ids(unique)})`);
   return new Map(result.rows.map((row) => {
     const item = potSaleHomeOf(row);
@@ -567,11 +623,13 @@ export interface ActivePotPartForReconcile {
  * Active (non-reversed) distribution parts whose sale occurred on Moscow `day` (or whose transaction vanished and whose
  * distribution is on `day`). Used by `reconcilePotsOfDay` to detect sales that moved out of a pot.
  */
-export async function listActivePotPartsForDay(db: Database, day: string): Promise<ActivePotPartForReconcile[]> {
+export async function listActivePotPartsForDay(db: Database, day: string): Promise<Array<ActivePotPartForReconcile & { autoPosted: boolean }>> {
   const dayStart = `${day}T00:00:00+03:00`;
   const result = await db.execute<Row>(sql`
     select d.id as distribution_id, d.pot_id, to_char(d.day, 'YYYY-MM-DD') as distribution_day,
-      p.code as pot_code, p.name as pot_name, p.auto_post, p.page_ids as pot_page_ids,
+      p.code as pot_code, p.name as pot_name,
+      p.auto_post, (d.posted_by_user_id is null and count(*) over (partition by d.id) = 1) as auto_posted,
+      p.page_ids as pot_page_ids,
       to_char(p.opens_on, 'YYYY-MM-DD') as pot_opens_on,
       to_char(p.closes_on, 'YYYY-MM-DD') as pot_closes_on,
       p.state as pot_state, m.is_test,
@@ -580,12 +638,12 @@ export async function listActivePotPartsForDay(db: Database, day: string): Promi
     join pot_distributions d on d.id = pp.distribution_id
     join pots p on p.id = d.pot_id
     join models m on m.id = p.model_id
-    left join transactions t on t.id = pp.transaction_id
-    where d.reversed_at is null
-      and (
+    where d.reversed_at is null and exists (
+      select 1 from pot_distribution_parts affected left join transactions t on t.id = affected.transaction_id
+      where affected.distribution_id = d.id and (
         (t.occurred_at >= ${dayStart}::timestamptz and t.occurred_at < (${dayStart}::timestamptz + interval '1 day'))
-        or (t.id is null and d.day = ${day}::date)
-      )
+        or (t.id is null and coalesce(affected.sale_day, d.day) = ${day}::date)
+      ))
     order by d.id, pp.transaction_id`);
   return result.rows.map((row) => ({
     distributionId: num(row.distribution_id),
@@ -593,6 +651,7 @@ export async function listActivePotPartsForDay(db: Database, day: string): Promi
     potCode: String(row.pot_code),
     potName: String(row.pot_name),
     autoPost: Boolean(row.auto_post),
+    autoPosted: Boolean(row.auto_posted),
     potPageIds: numArray(row.pot_page_ids),
     potOpensOn: String(row.pot_opens_on),
     potClosesOn: text(row.pot_closes_on),

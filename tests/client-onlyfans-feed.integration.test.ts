@@ -303,8 +303,11 @@ describe("the OnlyFans feed route", () => {
     const one = tip();
     const two = tip();
     expect(await ok([one, two])).toMatchObject({ taken: 2 });
+    await testDb!.pool.query("delete from sale_home_refresh_due");
     // The ledger lists both under its own ids, with their nets: each claims one row, none is added.
     expect(await ok([ledger({ amountNet: 4.1 }), ledger({ amountNet: 4.1 })])).toMatchObject({ taken: 2 });
+    const due = await testDb!.pool.query("select 1 from sale_home_refresh_due where day = ($1::timestamptz at time zone 'Europe/Moscow')::date", [one.observedAt]);
+    expect(due.rowCount).toBe(1);
     let rows = await money();
     expect(rows.map((row) => [row.source, row.gross, row.net])).toEqual([
       ["chatspace:ws", "5000", "4100"],

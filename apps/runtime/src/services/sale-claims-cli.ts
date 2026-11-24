@@ -52,7 +52,7 @@ export function registerSaleClaimCommands(program: Command): void {
         const written = await applyImport(app.db, plan, now);
         for (const day of written.days) {
           const from = new Date(`${day}T00:00:00+03:00`);
-          await refreshSaleHomes(app.db, { from, to: new Date(Math.min(now.getTime(), from.getTime() + 86_400_000)), now });
+          await refreshSaleHomes(app.db, { from, to: new Date(Math.min(now.getTime(), from.getTime() + 86_400_000)) });
         }
         await runSaleClaims(app, now);
         console.log(`carried over: ${written.decisions} decisions, ${written.questions} questions; of the ones carried over before: `
