@@ -33,6 +33,8 @@ export * from "./ofapi-smart-links.ts";
 export * from "./ofapi-vendor-usage.ts";
 export * from "./outreach.ts";
 export * from "./own-shift-rows.ts";
+// The owner's agent door (`act:owner`, `/api/v1/owner-agent/call`), spread by routes.ts.
+export * from "./owner-agent.ts";
 export * from "./people-message-kinds.ts";
 export * from "./people-messages.ts";
 export * from "./people-paths.ts";

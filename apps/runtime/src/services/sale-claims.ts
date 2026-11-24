@@ -586,6 +586,12 @@ interface SettleBy {
   agentKeyId: number | null;
   telegramMessageRef: string | null;
   telegramSenderId: number | null;
+  /**
+   * The owner's agent door (owner-agent-door.ts, payouts plan §1.8): the owner the key acts for. Its history
+   * (`object_events`) names the key (`agentKeyId`), the owner on whose behalf (`on_behalf_of_user_id`) and the door
+   * `api`; the version it makes stays the owner's own Workboard one (`door: workboard`, `actorUserId` the owner, no key).
+   */
+  onBehalfOfUserId?: number;
 }
 
 /**
@@ -680,9 +686,10 @@ async function settleReport(
     at: input.at,
   });
   const amountMills = made.lines.find((one) => one.transactionId === input.transactionId)?.amountMills ?? 0;
+  const onBehalf = input.by.onBehalfOfUserId ?? null;
   await insertHandinEvent(db, {
-    handinId: handin.id, event: "shift_report.settled", door: "system", actorUserId: input.by.actorUserId, agentKeyId: input.by.agentKeyId,
-    onBehalfOfUserId: null, changes: { version: version.version, transactionId: input.transactionId, amountMills, madeFor: input.madeFor }, at: input.at,
+    handinId: handin.id, event: "shift_report.settled", door: onBehalf === null ? "system" : "api", actorUserId: input.by.actorUserId, agentKeyId: input.by.agentKeyId,
+    onBehalfOfUserId: onBehalf, changes: { version: version.version, transactionId: input.transactionId, amountMills, madeFor: input.madeFor }, at: input.at,
   });
   return { shiftId: input.shiftId, version: version.version, versionId: version.id, dayPaid };
 }
@@ -988,6 +995,13 @@ export async function paidDaysOfSale(app: ClaimsApp, transactionId: number): Pro
 /** Who a person's own press on the board is, for the versions it makes. */
 export const personSettleBy = (actor: { door: HandinDoor; userId: number }): SettleBy =>
   ({ door: actor.door, actorUserId: actor.userId, agentKeyId: null, telegramMessageRef: null, telegramSenderId: null });
+
+/**
+ * The owner's agent door's word (owner-agent-door.ts): the owner's own Workboard version (`door: workboard`, the owner,
+ * no key — 0400's rule and the ledger's reading stay as they are), its history naming the key and the owner it acts for.
+ */
+export const ownerAgentSettleBy = (operator: { agentKeyId: number; ownerUserId: number }): SettleBy =>
+  ({ door: "workboard", actorUserId: operator.ownerUserId, agentKeyId: operator.agentKeyId, telegramMessageRef: null, telegramSenderId: null, onBehalfOfUserId: operator.ownerUserId });
 
 export type { MadeVersion, SettleBy };
 

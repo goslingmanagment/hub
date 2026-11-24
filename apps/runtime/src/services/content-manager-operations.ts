@@ -24,6 +24,6 @@ const REFUSAL = "Ваше рабочее место в ContentOps: в Hub и Wor
 
 /** The refusal of an operation off the table to a content manager's login; null for anyone else or an operation on it. */
 export function contentManagerRefusal(routeKey: string, principal: AuthPrincipal | null | undefined): ForbiddenError | null {
-  if (!principal || principal.kind === "agent" || principal.user.role !== "content_manager") return null;
+  if (!principal || principal.kind !== undefined || principal.user.role !== "content_manager") return null;
   return CONTENT_MANAGER_OPERATIONS.has(routeKey) ? null : new ForbiddenError(REFUSAL);
 }

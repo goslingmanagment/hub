@@ -103,6 +103,8 @@ export function pagesOfModels(facts: TeamFacts, modelIds: readonly number[]): nu
  */
 export async function teamPagesFor(app: TeamsApp, principal: AuthPrincipal): Promise<number[] | undefined> {
   if (principal.kind === "agent") return principal.pageIds;
+  // The owner's agent door reads no team itself: its operations run as the owner (owner-agent-door.ts).
+  if (principal.kind === "owner_agent") return [];
   if (isOwnerReader(principal)) return ownerPageScope(principal);
   const facts = await teamFactsFor(app, principal);
   const teams = teamsOfPerson(facts, personOfLogin(facts, principal.user.id));

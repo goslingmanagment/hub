@@ -235,7 +235,7 @@ export interface PersonLoginRow {
   personId: number;
   userId: number;
   username: string;
-  role: "owner" | "team_lead" | "chatter";
+  role: "owner" | "team_lead" | "chatter" | "content_manager";
   hasPassword: boolean;
   disabledAt: Date | null;
   deletedAt: Date | null;

@@ -17,6 +17,10 @@ export function pageScopeFor(principal: AuthPrincipal) {
   if (isAgentPrincipal(principal)) {
     return principal.pageIds;
   }
+  // The owner's agent door reaches no page itself: its operations run as the owner's principal (owner-agent-door.ts).
+  if (principal.kind === "owner_agent") {
+    return [];
+  }
   // The test realm (services/sandbox/realm.ts): a test owner sees the test pages only; a live owner every page but
   // those (no filter at all while there is no test page).
   return principal.user.role === "owner" ? ownerPageScope(principal) : principal.assignedPageIds;
@@ -82,6 +86,13 @@ export const auditCtx = (principal: AuthPrincipal) => (
       actorUserId: null,
       actorAgentKeyId: principal.agentKeyId,
     }
+    : principal.kind === "owner_agent"
+      // The owner's agent door: the owner it acts as, and the key beside him (owner-agent-door.ts names both).
+      ? {
+        source: "owner_agent" as const,
+        actorUserId: principal.ownerUserId,
+        actorAgentKeyId: principal.agentKeyId,
+      }
     : {
       source: "api" as const,
       actorUserId: principal.user.id,

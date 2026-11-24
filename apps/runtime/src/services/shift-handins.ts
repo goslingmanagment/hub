@@ -17,6 +17,7 @@ import {
   findHandinPersonOfUser,
   findHandinShift,
   findLatestHandinShift,
+  findPersonRowByCode,
   findSalesForReportClaim,
   insertHandinEvent,
   insertOffPlatform,
@@ -451,17 +452,7 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
   });
 
   return {
-    shift: {
-      id: subject.shift.id,
-      userId: subject.shift.userId,
-      personName: subject.person?.displayName ?? names.get(subject.shift.userId) ?? "",
-      ongoing: subject.shift.state === "going",
-      startedAt: subject.shift.startedAt.toISOString(),
-      endedAt: subject.shift.endedAt.toISOString(),
-      workedMinutes: subject.shift.workedMinutes,
-      reportDate: reportDateOf(subject.shift, handin),
-      pages: shiftPageLabels(subject.shift),
-    },
+    shift: shiftWireOf(subject, handin, names),
     access: access.access,
     enabled: subject.enabled,
     canEdit: own && subject.enabled,
@@ -483,6 +474,21 @@ export async function readSubject(app: HandinApp, actor: HandinActor, subject: S
       actor: { access: access.access, kind: actor.kind, enabled: subject.enabled },
     }),
     serverNow: now.toISOString(),
+  };
+}
+
+/** The shift as a report's answer names it. Pure. */
+function shiftWireOf(subject: Subject, handin: HandinRow | null, names: ReadonlyMap<number, string>): ShiftReportResponse["shift"] {
+  return {
+    id: subject.shift.id,
+    userId: subject.shift.userId,
+    personName: subject.person?.displayName ?? names.get(subject.shift.userId) ?? "",
+    ongoing: subject.shift.state === "going",
+    startedAt: subject.shift.startedAt.toISOString(),
+    endedAt: subject.shift.endedAt.toISOString(),
+    workedMinutes: subject.shift.workedMinutes,
+    reportDate: reportDateOf(subject.shift, handin),
+    pages: shiftPageLabels(subject.shift),
   };
 }
 
@@ -603,27 +609,120 @@ export async function listShiftReports(
     enabledSince: person?.submitsShiftSince?.toISOString() ?? null,
     shifts: shifts.map((shift) => {
       const handin = handins.get(shift.id) ?? null;
-      const version = handin === null ? null : versions.get(handin.id) ?? null;
-      const total = version === null ? null : versionTotalFor(version, cutTo);
-      // The board's phase, read as the board reads it (shift-report-board-view.ts): «Мои смены» names the next step by it.
-      const phase = boardOn({ person, shift }) ? phaseOf(handin) : null;
+      const item = shiftListItemOf(shift, handin, handin === null ? null : versions.get(handin.id) ?? null, person, cutTo);
       return {
-        phase,
-        postCopied: own && phase === "counted" ? handin?.postCopiedAt != null : null,
+        ...item,
+        postCopied: own && item.phase === "counted" ? handin?.postCopiedAt != null : null,
         draftTotalMills: drafts.get(shift.id) ?? null,
-        shiftId: shift.id,
-        startedAt: shift.startedAt.toISOString(),
-        endedAt: shift.endedAt.toISOString(),
-        ongoing: shift.state === "going",
-        reportDate: reportDateOf(shift, handin),
-        pages: shiftPageLabels(shift),
-        state: handin?.state ?? "open",
-        version: version?.version ?? null,
-        submittedAt: version?.submittedAt.toISOString() ?? null,
-        totalMills: total,
       };
     }),
     serverNow: now.toISOString(),
+  };
+}
+
+/** A shift of a list with its stored report: the newest version's number and total (cut to the reader's pages). Pure. */
+function shiftListItemOf(shift: HandinShift, handin: HandinRow | null, version: HandinVersionRow | null, person: HandinPerson | null, cutTo: Set<string> | null) {
+  return {
+    // The board's phase, read as the board reads it (shift-report-board-view.ts): «Мои смены» names the next step by it.
+    phase: boardOn({ person, shift }) ? phaseOf(handin) : null,
+    shiftId: shift.id,
+    startedAt: shift.startedAt.toISOString(),
+    endedAt: shift.endedAt.toISOString(),
+    ongoing: shift.state === "going",
+    reportDate: reportDateOf(shift, handin),
+    pages: shiftPageLabels(shift),
+    state: handin?.state ?? ("open" as const),
+    version: version?.version ?? null,
+    submittedAt: version?.submittedAt.toISOString() ?? null,
+    totalMills: version === null ? null : versionTotalFor(version, cutTo),
+  };
+}
+
+// ── What is stored, read as it is: the owner's agent door ───────────────────
+//
+// The owner's agent door (payouts plan 2026-11-24, §1.8; owner-agent-door.ts) reads a report as STORED: the shift row,
+// its hand-in and its versions, projected whole, as the owner sees them. Nothing is due here — no check, no phase moved,
+// no take settled (`dueNow` never runs), no draft computed — and nothing is written. The live realm only: a shift of a
+// test person answers as one that does not exist.
+
+const MAX_LIST_DAYS = 62;
+
+function windowOf(from: string, to: string): { fromAt: Date; toAt: Date } {
+  const fromAt = new Date(`${from}T00:00:00+03:00`);
+  const toAt = new Date(Date.parse(`${to}T00:00:00+03:00`) + DAY_MS);
+  if (!(toAt > fromAt) || toAt.getTime() - fromAt.getTime() > MAX_LIST_DAYS * DAY_MS) throw new BadRequestError(`from..to must be 1 to ${MAX_LIST_DAYS} Moscow days`);
+  return { fromAt, toAt };
+}
+
+async function storedSubject(app: HandinApp, shiftId: number): Promise<Subject> {
+  const subject = await subjectOf(app.db, shiftId);
+  if (await userIsTest(app, subject.shift.userId)) throw notFound();
+  return subject;
+}
+
+/** A person's shifts of a window with their stored reports (every login of theirs). */
+export async function readStoredShiftReports(app: HandinApp, input: { person: string; from: string; to: string }) {
+  const { db } = app;
+  const { fromAt, toAt } = windowOf(input.from, input.to);
+  const row = await findPersonRowByCode(db, input.person);
+  if (row === null || row.isTest) throw notFound();
+  const userIds = (await findHandinPersonBy(db, { code: row.code }))?.userIds ?? [];
+  const person = userIds.length === 0 ? null : (await listHandinPeopleOfUsers(db, [userIds[0]!])).get(userIds[0]!) ?? null;
+  const shifts = userIds.length === 0 ? [] : await listHandinShifts(db, { userIds, from: fromAt, to: toAt });
+  const handins = await listHandinsOfShifts(db, shifts.map((shift) => shift.id));
+  const versions = await listCurrentHandinVersions(db, [...handins.values()].map((handin) => handin.id));
+  return {
+    person: { code: row.code, displayName: row.displayName },
+    shifts: shifts.map((shift) => {
+      const handin = handins.get(shift.id) ?? null;
+      return shiftListItemOf(shift, handin, handin === null ? null : versions.get(handin.id) ?? null, person, null);
+    }),
+  };
+}
+
+/** A shift's stored report: the version asked for (the newest when none is), whole; null — nothing handed in. */
+export async function readStoredShiftReport(app: HandinApp, input: { shiftId: number; version?: number | undefined }) {
+  const { db } = app;
+  const subject = await storedSubject(app, input.shiftId);
+  const handin = await findHandinByShift(db, subject.shift.id);
+  const versions = handin === null ? [] : await listHandinVersions(db, handin.id);
+  const latest = versions.at(-1) ?? null;
+  const shown = input.version === undefined ? latest : versions.find((one) => one.version === input.version) ?? null;
+  if (input.version !== undefined && shown === null) throw new NotFoundError(`The shift has no version ${input.version}`);
+  const catalog = await pageCatalog(db);
+  const names = await listHandinNames(db, [
+    subject.shift.userId,
+    ...(shown?.lines ?? []).flatMap((line) => [line.rule.toUserId, line.rule.senderUserId, line.shareWithUserId]),
+    ...versions.map((version) => version.actorUserId),
+  ].filter((id): id is number => id !== null));
+  const fans = await listHandinSaleFans(db, (shown?.lines ?? []).flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])));
+  const keyNames = await listHandinAgentKeyNames(db, versions.flatMap((version) => (version.agentKeyId === null ? [] : [version.agentKeyId])));
+  const context: ViewContext = { details: new Map(), catalog, names, fans };
+  return {
+    shift: shiftWireOf(subject, handin, names),
+    state: handin?.state ?? ("open" as const),
+    phase: handin === null || !boardOn(subject) ? null : phaseOf(handin),
+    view: shown === null ? null : bodyOf({
+      source: "version", version: shown, subject, lines: shown.lines, offPlatform: shown.offPlatform.map((line) => ({ ...line })),
+      comment: shown.comment, modelComments: shown.modelComments, shiftPages: shown.pages.map((page) => page.pageLabel), cutTo: null,
+      computedAt: shown.submittedAt, context,
+    }),
+    latest: latest === null ? null : versionSummary(latest, names, keyNames, null),
+  };
+}
+
+/** A shift's stored versions, newest first. */
+export async function readStoredShiftReportVersions(app: HandinApp, input: { shiftId: number }) {
+  const { db } = app;
+  const subject = await storedSubject(app, input.shiftId);
+  const handin = await findHandinByShift(db, subject.shift.id);
+  const versions = handin === null ? [] : await listHandinVersions(db, handin.id);
+  const names = await listHandinNames(db, versions.map((version) => version.actorUserId).filter((id): id is number => id !== null));
+  const keyNames = await listHandinAgentKeyNames(db, versions.flatMap((version) => (version.agentKeyId === null ? [] : [version.agentKeyId])));
+  return {
+    shiftId: subject.shift.id,
+    state: handin?.state ?? ("open" as const),
+    versions: [...versions].reverse().map((version) => versionSummary(version, names, keyNames, null)),
   };
 }
 

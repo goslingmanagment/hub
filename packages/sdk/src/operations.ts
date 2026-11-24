@@ -413,6 +413,7 @@ export const kernelOperations = {
   overview: { method: "GET", path: "/api/v1/overview" },
   overviewRevenue: { method: "GET", path: "/api/v1/overview/revenue" },
   overviewRevenueDaily: { method: "GET", path: "/api/v1/overview/revenue/daily" },
+  ownerAgentCall: { method: "POST", path: "/api/v1/owner-agent/call" },
   pageBrowserDraftDelete: { method: "DELETE", path: "/api/v1/page-browser/drafts/:name" },
   pageBrowserDraftSave: { method: "PUT", path: "/api/v1/page-browser/drafts/:name" },
   pageBrowserDrafts: { method: "GET", path: "/api/v1/page-browser/drafts" },

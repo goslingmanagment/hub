@@ -509,6 +509,13 @@ export interface HubCommand {
    * it would be a flag's value silently ignored.
    */
   arguments?: { name: string; describe: string; min: number; max: number | null };
+  /**
+   * The key it runs with: absent — the agent's (`HUB_AGENT_KEY`); `owner-desk` — the owner's agent door's
+   * (`HUB_OWNER_KEY`, owner.ts), which also sends the owner's `--why` with the call.
+   */
+  profile?: "owner-desk";
+  /** Answers from this build alone: no key, no call. */
+  offline?: true;
   run(client: KernelClient, values: HubOptionValues, deps: HubRunDeps, args: readonly string[]): Promise<unknown>;
 }
 

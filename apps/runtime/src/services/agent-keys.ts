@@ -8,9 +8,12 @@ import {
   findReplacementPairKey,
   findPageSummaryByLabel,
   findPersonRowByCode,
+  findUserById,
+  findUserByUsername,
   getAgentKeyById,
   insertAgentKey,
   insertPersonAgentKey,
+  isTestUser,
   listAgentKeyLastCalls,
   listAgentKeyPeople,
   listAgentKeys,
@@ -22,11 +25,12 @@ import {
   type AgentKeyRow,
 } from "@agency_hub_core/db";
 import {
-  AGENT_CAPABILITIES,
+  AGENT_KEY_CAPABILITIES,
   AGENT_KEY_INTROSPECT_CACHE_SECONDS,
   AGENT_KEY_INTROSPECT_STALE_SECONDS,
+  OWNER_AGENT_CAPABILITY,
   isServiceKeyCapabilities,
-  type AgentCapability,
+  type AgentKeyCapability,
   type AgentKeyCreateBody,
   type AgentKeyIntrospectResponse,
   type AgentKeyItem,
@@ -90,9 +94,22 @@ interface AgentKeyAudit {
 
 /** Deduplicated, in the matrix's own order, so "before" and "after" compare as
  *  sets and a listing reads the same whichever order the set was ticked in. */
-export function canonicalCapabilities(capabilities: readonly string[]): AgentCapability[] {
+export function canonicalCapabilities(capabilities: readonly string[]): AgentKeyCapability[] {
   const wanted = new Set(capabilities);
-  return AGENT_CAPABILITIES.filter((capability) => wanted.has(capability));
+  return AGENT_KEY_CAPABILITIES.filter((capability) => wanted.has(capability));
+}
+
+/**
+ * The owner's agent door's key (`act:owner`, 0442) is the server CLI's alone: issued by `owner-agent-keys:issue` and
+ * rotated by revoking it and issuing another there. The dashboard's issuance, «Изменить права», the CLI's page and
+ * capability changes and «Выпустить на замену» refuse it — asked for, or the key being one (409).
+ */
+function refuseOwnerAgentKey(capabilities: readonly string[], what: string): void {
+  if (!capabilities.includes(OWNER_AGENT_CAPABILITY)) return;
+  throw new ConflictError(
+    `${what}: the owner's agent key (act:owner) is issued and rotated only by the server CLI (owner-agent-keys:issue; to rotate, revoke it and issue another)`,
+    { reason: "owner_agent_key" },
+  );
 }
 
 /**
@@ -302,6 +319,7 @@ export async function issueAgentKey(
   input: AgentKeyCreateBody,
   audit: AgentKeyAudit,
 ): Promise<{ token: string; key: AgentKeyItem }> {
+  refuseOwnerAgentKey(input.capabilities, "Not issued here");
   const labelById = new Map<number, string>();
   const pageIds: number[] = [];
   for (const label of input.pageLabels) {
@@ -349,6 +367,7 @@ export async function replaceAgentKey(
   if (existing.expiresAt.getTime() <= Date.now()) {
     throw new ConflictError(`Agent key "${existing.name}" has expired: there is nothing to replace; issue a new key`);
   }
+  refuseOwnerAgentKey(existing.capabilities, `Agent key "${existing.name}" is not replaced here`);
   const agent = await findAgentKeyPerson(app.db, existing.id);
   if (agent === null) {
     throw new ConflictError(
@@ -470,13 +489,15 @@ async function lockLiveAgentKey(
  */
 export async function updateAgentKeyCapabilities(
   app: AppContext,
-  input: { id: number; capabilities: readonly AgentCapability[]; note?: string },
+  input: { id: number; capabilities: readonly AgentKeyCapability[]; note?: string },
   audit: AgentKeyAudit,
 ): Promise<AgentKeyItem> {
   const after = canonicalCapabilities(input.capabilities);
+  refuseOwnerAgentKey(after, "Not granted here");
 
   const row = await withAuditTransaction(app, async (dbTx) => {
     const { existing, now } = await lockLiveAgentKey(dbTx, input.id);
+    refuseOwnerAgentKey(existing.capabilities, `Agent key "${existing.name}" is not changed here`);
 
     const before = canonicalCapabilities(existing.capabilities);
     if (before.length === after.length && before.every((capability, index) => capability === after[index])) {
@@ -529,8 +550,9 @@ export async function introspectAgentKey(
 ): Promise<AgentKeyIntrospectResponse & { subjectKeyId: number | null }> {
   const cache = { cacheSeconds: AGENT_KEY_INTROSPECT_CACHE_SECONDS, staleSeconds: AGENT_KEY_INTROSPECT_STALE_SECONDS } as const;
   const row = await findAgentKeyIntrospection(app.db, keyDigest);
+  // The owner's agent door's key is no agent's key for another service, whoever asks (0442).
   if (
-    row === null || row.revokedAt !== null || row.expiresAt.getTime() <= now.getTime()
+    row === null || row.actsAsOwner || row.revokedAt !== null || row.expiresAt.getTime() <= now.getTime()
     || row.person === null || row.person.kind !== "agent" || row.person.state === "left"
   ) {
     return { active: false, ...cache, subjectKeyId: row?.agentKeyId ?? null };
@@ -576,6 +598,7 @@ export async function updateAgentKeyPages(
 
   const row = await withAuditTransaction(app, async (dbTx) => {
     const { existing, now } = await lockLiveAgentKey(dbTx, input.id);
+    refuseOwnerAgentKey(existing.capabilities, `Agent key "${existing.name}" is not changed here`);
 
     const current = existing.pageIds.length === 0 ? [] : await listPagesByIds(dbTx, existing.pageIds);
     const labelById = new Map(current.map((page) => [page.id, page.label]));
@@ -633,4 +656,64 @@ export async function updateAgentKeyPages(
 
   const [labelById, extras] = await Promise.all([resolvePageLabels(app, [row]), keyExtras(app, [row])]);
   return agentKeyItem(row, labelById, extras(row));
+}
+
+/**
+ * Issues the owner's agent door's key (`act:owner`, payouts plan 2026-11-24 §1.8, 0442): the server CLI's alone
+ * (`owner-agent-keys:issue`), never a route. The key acts as `ownerLogin` — an active owner of the live realm (the test
+ * team's owner never) — holds `act:owner` alone and no page, and belongs to no agent: no service gives it an agent's
+ * rights (`introspectAgentKey` answers it inactive). Audited as agent_key.issued under the owner who asked, in the
+ * key's transaction. The token is returned this once.
+ */
+export async function issueOwnerAgentKey(
+  app: AppContext,
+  input: { name: string; ownerLogin: string; expiresInDays: number },
+  audit: AgentKeyAudit,
+): Promise<{ token: string; key: AgentKeyItem; ownerUserId: number }> {
+  const login = await findUserByUsername(app.db, input.ownerLogin.trim().toLowerCase());
+  const owner = login === undefined ? null : await findUserById(app.db, login.id);
+  if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+    throw new BadRequestError(`«${input.ownerLogin}» is not an active owner's login`);
+  }
+  if (await isTestUser(app.db, owner.id)) {
+    throw new BadRequestError(`«${input.ownerLogin}» is the test team's owner: the owner's agent door is the live owner's alone`);
+  }
+  const tokenBody = randomToken(24);
+  const token = `${AGENT_KEY_TOKEN_PREFIX}${tokenBody}`;
+  const keyPrefix = `${AGENT_KEY_TOKEN_PREFIX}${tokenBody.slice(0, AGENT_KEY_DISPLAY_LENGTH)}`;
+  const createdAt = new Date();
+  let row: AgentKeyRow;
+  try {
+    row = await withAuditTransaction(app, async (dbTx) => {
+      const created = await insertAgentKey(dbTx, {
+        name: input.name,
+        keyPrefix,
+        keyDigest: sha256Hex(token),
+        capabilities: [OWNER_AGENT_CAPABILITY],
+        pageIds: [],
+        expiresAt: new Date(createdAt.getTime() + input.expiresInDays * DAY_MS),
+        createdBy: audit.actorUserId ?? null,
+        createdAt,
+        actsAsUserId: owner.id,
+      });
+      await recordAudit({ db: dbTx }, {
+        ...audit,
+        eventType: "agent_key.issued",
+        metadata: {
+          agentKeyId: created.id,
+          name: created.name,
+          keyPrefix,
+          capabilities: created.capabilities,
+          pageLabels: [],
+          expiresAt: created.expiresAt.toISOString(),
+          agentCode: null,
+          actsAsUserId: owner.id,
+        },
+      });
+      return created;
+    });
+  } catch (error) {
+    rethrowAsHttp(error);
+  }
+  return { token, key: agentKeyItem(row, new Map(), { agent: null, lastCall: null }), ownerUserId: owner.id };
 }

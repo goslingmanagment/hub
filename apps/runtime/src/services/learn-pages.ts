@@ -19,7 +19,7 @@ import { requireTeamReader } from "./teams.ts";
 type LearnApp = Pick<AppContext, "db">;
 
 function ownerOf(principal: AuthPrincipal): boolean {
-  return principal.kind !== "agent" && principal.user.role === "owner" && principal.narrowDeviceTokenId === undefined && !isTestPrincipal(principal);
+  return principal.kind === undefined && principal.user.role === "owner" && principal.narrowDeviceTokenId === undefined && !isTestPrincipal(principal);
 }
 
 function wire(row: LearnPageRow, now: Date): LearnPageMeta {

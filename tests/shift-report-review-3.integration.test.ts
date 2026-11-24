@@ -407,7 +407,7 @@ describe("«чья продажа» and the shift report, the final review's sec
     expect((await newest(shift, disputed)).line).toMatchObject({ amountMills: 10_000, disputed: false, settled: "owner" });
   });
 
-  it("changes the owner's word only on the owner's own message: his Workboard decision and one recorded from his message (9)", async (context) => {
+  it("changes the owner's word recorded from his message only on his own message; his Workboard decision never through this door (9)", async (context) => {
     if (!testDb) return context.skip();
     const OWNER_SENDER = 700_000_900;
     const CHATTER_SENDER = 700_000_902;
@@ -437,7 +437,7 @@ describe("«чья продажа» and the shift report, the final review's sec
     const refusedAll = async (target: { disputed: number; id: number }, sender: number, why: string) => {
       for (const refused of await tries(target, sender)) {
         expect([refused.statusCode, refused.json().reason], `${why}: ${refused.body}`).toEqual([409, "owner_decision"]);
-        expect(refused.json().message, why).toContain("решение владельца меняет только он сам: запишите его слова с его сообщением");
+        expect(refused.json().message, why).toContain("меняет только он сам");
       }
     };
     /** Only the decision stands on the sale, and the report keeps v3: anna's whole, settled by it. */
@@ -463,31 +463,10 @@ describe("«чья продажа» and the shift report, the final review's sec
     await refusedAll(first, WORDS.telegramUserId, "a stranger's message");
     await untouched(first, "dispute", 13_000);
 
-    // The owner's own message replaces it — named in supersedes, as any decision is — and the report follows.
-    const unnamed = await asKey("one", "POST", "/api/v1/agent/sale-decisions", {
-      transactionId: first.disputed, kind: "owner", shares: [{ person: "bella", percent: 100 }], saidBy: "владелец", saidAt: "2026-11-12", ...from(OWNER_SENDER),
-    });
-    expect([unnamed.statusCode, unnamed.json().reason], unnamed.body).toEqual([409, "decision_exists"]);
-    const replaced = await asKey("one", "POST", "/api/v1/agent/sale-decisions", {
-      transactionId: first.disputed, kind: "owner", shares: [{ person: "bella", percent: 100 }], supersedes: first.id, saidBy: "владелец", saidAt: "2026-11-12", ...from(OWNER_SENDER),
-    });
-    expect(replaced.statusCode, replaced.body).toBe(200);
-    expect(replaced.json().versions).toEqual([{ shiftId: first.shift, version: 4 }]);
-    expect(await decisionState(first.id)).toBe("superseded");
-    expect((await newest(first.shift, first.disputed)).line).toMatchObject({ amountMills: 0, disputed: false, settled: "owner" });
-    // The replacement is recorded from his message: his word too, with its sender kept.
-    expect((await q("select source, decided_by_user_id, said_by_telegram_id::int as sender from sale_owner_decisions where id = $1", [replaced.json().decision.id])).rows[0])
-      .toEqual({ source: "agent", decided_by_user_id: null, sender: OWNER_SENDER });
-
-    // And cancels one: the report goes back to what rules without it — anna's word, a take again.
-    const second = await ownersDecision(318, 128, 12_500);
-    const strangers = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: second.id, note: "ошибка", ...from(CHATTER_SENDER) });
-    expect([strangers.statusCode, strangers.json().reason]).toEqual([409, "owner_decision"]);
-    const cancelled = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: second.id, note: "передумал", ...from(OWNER_SENDER) });
-    expect(cancelled.statusCode, cancelled.body).toBe(200);
-    expect(cancelled.json().versions).toEqual([{ shiftId: second.shift, version: 4 }]);
-    expect(await decisionState(second.id)).toBe("cancelled");
-    expect((await newest(second.shift, second.disputed)).line).toMatchObject({ amountMills: 12_500, disputed: false, settled: "agreed" });
+    // Nor does the owner's own message: a decision he made himself (decided_by_user_id) is changed only by his own
+    // principal — Workboard, or the owner's agent door — never through the bot door (payouts plan §11).
+    await refusedAll(first, OWNER_SENDER, "the owner's own message on his Workboard decision");
+    await untouched(first, "dispute", 13_000);
 
     // His words recorded from his own message are his word: anyone else's message changes nothing, his own cancels them.
     const words = await handedIn(246, 118, 11_000);
@@ -500,10 +479,29 @@ describe("«чья продажа» and the shift report, the final review's sec
     await refusedAll(said, CHATTER_SENDER, "a chatter's message on his words");
     await refusedAll(said, WORDS.telegramUserId, "a stranger's message on his words");
     await untouched(said, "agent", 11_000);
-    const withdrawn = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: said.id, note: "передумал", ...from(OWNER_SENDER) });
+    // His own message replaces them — named in supersedes, as any decision is — and the report follows.
+    const unnamed = await asKey("one", "POST", "/api/v1/agent/sale-decisions", {
+      transactionId: said.disputed, kind: "owner", shares: [{ person: "bella", percent: 100 }], saidBy: "владелец", saidAt: "2026-11-12", ...from(OWNER_SENDER),
+    });
+    expect([unnamed.statusCode, unnamed.json().reason], unnamed.body).toEqual([409, "decision_exists"]);
+    const replaced = await asKey("one", "POST", "/api/v1/agent/sale-decisions", {
+      transactionId: said.disputed, kind: "owner", shares: [{ person: "bella", percent: 100 }], supersedes: said.id, saidBy: "владелец", saidAt: "2026-11-12", ...from(OWNER_SENDER),
+    });
+    expect(replaced.statusCode, replaced.body).toBe(200);
+    expect(replaced.json().versions).toEqual([{ shiftId: said.shift, version: 4 }]);
+    expect(await decisionState(said.id)).toBe("superseded");
+    expect((await newest(said.shift, said.disputed)).line).toMatchObject({ amountMills: 0, disputed: false, settled: "owner" });
+    // The replacement is recorded from his message: his word too, with its sender kept.
+    expect((await q("select source, decided_by_user_id, said_by_telegram_id::int as sender from sale_owner_decisions where id = $1", [replaced.json().decision.id])).rows[0])
+      .toEqual({ source: "agent", decided_by_user_id: null, sender: OWNER_SENDER });
+    // And his own message cancels it: the report goes back to what rules without it — anna's word, a take again.
+    const replacement = { ...said, id: replaced.json().decision.id as number };
+    const strangers = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: replacement.id, note: "ошибка", ...from(CHATTER_SENDER) });
+    expect([strangers.statusCode, strangers.json().reason]).toEqual([409, "owner_decision"]);
+    const withdrawn = await asKey("one", "POST", "/api/v1/agent/sale-decisions/cancel", { decisionId: replacement.id, note: "передумал", ...from(OWNER_SENDER) });
     expect(withdrawn.statusCode, withdrawn.body).toBe(200);
-    expect(withdrawn.json().versions).toEqual([{ shiftId: said.shift, version: 4 }]);
-    expect(await decisionState(said.id)).toBe("cancelled");
+    expect(withdrawn.json().versions).toEqual([{ shiftId: said.shift, version: 5 }]);
+    expect(await decisionState(replacement.id)).toBe("cancelled");
     expect((await newest(said.shift, said.disputed)).line).toMatchObject({ amountMills: 11_000, disputed: false, settled: "agreed" });
 
     // What a key recorded from anyone else's message stays anyone's to change.

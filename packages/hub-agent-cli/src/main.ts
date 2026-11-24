@@ -20,9 +20,11 @@ import { hubCheckedClient, hubOptionHelp } from "./contract.ts";
 import {
   HUB_CREDENTIALS_PATH,
   HUB_DEFAULT_BASE_URL,
+  HUB_OWNER_DESK_PATH,
   HubCredentialsError,
   resolveHubCredentials,
 } from "./credentials.ts";
+import { HUB_OWNER_COMMANDS, ownerReasonHeaders } from "./owner.ts";
 import { createHubFileUpload, nodeHubLocalFiles, type HubFileUpload, type HubLocalFiles } from "./upload.ts";
 
 /**
@@ -57,6 +59,14 @@ import { createHubFileUpload, nodeHubLocalFiles, type HubFileUpload, type HubLoc
  * cannot send, and its answer is validated against the same contract schema.
  */
 
+/** Every command: the agent's, and the owner's desk's (`hub owner …`). */
+const ALL_COMMANDS: readonly HubCommand[] = [...HUB_COMMANDS, ...HUB_OWNER_COMMANDS];
+
+/** A command by its words: one (`threads`), two (`report put`) or three (`owner sale show`). */
+function commandNamed(name: string): HubCommand | undefined {
+  return findHubCommand(name) ?? HUB_OWNER_COMMANDS.find((command) => command.name === name);
+}
+
 /** The call succeeded. NOT a completeness verdict: `blockers` can be non-empty. */
 export const HUB_EXIT_OK = 0;
 /** The answer came back with blockers, and --fail-on-partial was passed. */
@@ -81,7 +91,7 @@ export interface HubCliDeps {
   argv: readonly string[];
   env: Record<string, string | undefined>;
   /** Injected by tests; production builds one from the resolved credentials. */
-  createHubClient?: (options: { baseUrl: string; token: string }) => KernelClient;
+  createHubClient?: (options: { baseUrl: string; token: string; headers?: Record<string, string> }) => KernelClient;
   readFile?: (path: string) => string | null;
   fileMode?: (path: string) => number | null;
   /** The composites' clock (`history-status --wait`); injected by tests. */
@@ -136,9 +146,9 @@ function usageDocument(
         }
         : {
           commands: Object.fromEntries(
-            HUB_COMMANDS.map((entry) => [entry.name, entry.summary]),
+            ALL_COMMANDS.map((entry) => [entry.name, entry.summary]),
           ),
-          credentials: `HUB_AGENT_KEY, or HUB_AGENT_KEY=... in ${HUB_CREDENTIALS_PATH}`,
+          credentials: `HUB_AGENT_KEY, or HUB_AGENT_KEY=... in ${HUB_CREDENTIALS_PATH}; hub owner …: HUB_OWNER_KEY, or HUB_OWNER_KEY=... in ${HUB_OWNER_DESK_PATH}`,
           baseUrl: `HUB_BASE_URL (default ${HUB_DEFAULT_BASE_URL})`,
           exitCodes: {
             "0": "call succeeded; `blockers` may still be non-empty, read it",
@@ -235,13 +245,13 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     };
   }
 
-  // A command is one word (`threads`) or two (`report put`): the longer name wins.
-  const [firstWord, secondWord] = globals.positionals;
-  const twoWords = firstWord !== undefined && secondWord !== undefined ? findHubCommand(`${firstWord} ${secondWord}`) : undefined;
-  const commandWords = twoWords === undefined ? 1 : 2;
-  const commandName = twoWords === undefined ? firstWord : `${firstWord} ${secondWord}`;
+  // A command is one word (`threads`), two (`report put`) or three (`owner sale show`): the longest name wins.
+  const words = globals.positionals;
+  const longest = [3, 2].find((count) => words.length >= count && commandNamed(words.slice(0, count).join(" ")) !== undefined);
+  const commandWords = longest ?? 1;
+  const commandName = words.length === 0 ? undefined : words.slice(0, commandWords).join(" ");
   if (commandName === undefined || globals.values.help === true) {
-    const command = commandName === undefined ? undefined : findHubCommand(commandName);
+    const command = commandName === undefined ? undefined : commandNamed(commandName);
     return {
       exitCode: HUB_EXIT_ERROR,
       document: usageDocument(
@@ -251,7 +261,7 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     };
   }
 
-  const command = findHubCommand(commandName);
+  const command = commandNamed(commandName);
   if (!command) {
     return {
       exitCode: HUB_EXIT_ERROR,
@@ -313,10 +323,25 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     };
   }
 
+  if (command.offline === true) {
+    const data = await command.run(undefined as never, values, undefined as never, args);
+    return { exitCode: HUB_EXIT_OK, document: { ok: true, operation: null, exitCode: HUB_EXIT_OK, blockers: [], data } };
+  }
+
+  // The owner's desk sends the owner's reason with every call; without one nothing leaves.
+  let headers: Record<string, string> | undefined;
+  try {
+    headers = command.profile === "owner-desk" ? ownerReasonHeaders(values) : undefined;
+  } catch (error) {
+    if (error instanceof HubUsageError) return { exitCode: HUB_EXIT_ERROR, document: usageDocument(error.message, command) };
+    throw error;
+  }
+
   let credentials;
   try {
     credentials = resolveHubCredentials({
       env: deps.env,
+      ...(command.profile === undefined ? {} : { profile: command.profile }),
       ...(deps.readFile ? { readFile: deps.readFile } : {}),
       ...(deps.fileMode ? { fileMode: deps.fileMode } : {}),
     });
@@ -332,8 +357,9 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     ?? ((input) => createClient({
       baseUrl: input.baseUrl,
       auth: { mode: "bearer", token: () => input.token },
+      ...(input.headers === undefined ? {} : { headers: input.headers }),
     }));
-  const client = createHubClient({ baseUrl, token: credentials.token });
+  const client = createHubClient({ baseUrl, token: credentials.token, ...(headers === undefined ? {} : { headers }) });
 
   const runDeps: HubRunDeps = {
     readFile: deps.readFile ?? readLocalFile,

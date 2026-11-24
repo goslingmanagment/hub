@@ -15,6 +15,7 @@ import {
   listMatterPageLabels,
   listSaleClaims,
   listSaleDecisions,
+  listTestPageIds,
   lockSaleSettlements,
   markSaleDecisionApplied,
   supersedeSaleDecision,
@@ -88,6 +89,15 @@ async function refuseOwners(
   actor: Pick<DoorActor, "telegramUserId">,
   decision: Pick<SaleDecisionRow, "id" | "source" | "decidedByUserId" | "saidByTelegramId">,
 ): Promise<void> {
+  // A decision a signed-in owner made (Workboard, or the owner's agent door: `decided_by_user_id`) is changed only by
+  // the owner's own principal, never through this door — not even with the owner's Telegram id (payouts plan §11,
+  // «Защита слова владельца»). The owner's word recorded from his message (`said_by_telegram_id`) keeps today's rule.
+  if (decision.decidedByUserId !== null) {
+    throw new ConflictError(
+      `Решение ${decision.id}: решение владельца, принятое им самим (в Workboard или его агентом), меняет только он сам — не через эту дверь`,
+      { reason: "owner_decision" },
+    );
+  }
   if (!(await isOwnersWord(db, decision)) || (await isOwnerTelegramUser(db, actor.telegramUserId))) return;
   throw new ConflictError(
     `Решение ${decision.id}: решение владельца меняет только он сам: запишите его слова с его сообщением (--sender — Telegram id владельца, --message — его сообщение)`,
@@ -512,7 +522,7 @@ const OPEN_QUESTION = ["owner", "asked"] as const;
  */
 async function closeQuestionOnce(
   app: DoorApp,
-  actor: Pick<DoorActor, "pageIds">,
+  mayClose: (pageId: number | null) => boolean,
   questionId: number,
   patch: Parameters<typeof updateSaleClaim>[2],
   now: Date,
@@ -522,7 +532,7 @@ async function closeQuestionOnce(
     const txDb = tx as unknown as Database;
     await lockSaleSettlements(txDb);
     const question = await findSaleClaim(txDb, questionId, { lock: true });
-    if (question === null || (question.kind !== "question" && question.kind !== "imported") || !ofKeysPages(actor, question.pageId)) throw notFound();
+    if (question === null || (question.kind !== "question" && question.kind !== "imported") || !mayClose(question.pageId)) throw notFound();
     if (!(OPEN_QUESTION as readonly string[]).includes(question.state)) throw closed();
     if (!(await updateSaleClaim(txDb, question.id, { ...patch, state: "decided", closedAt: now }, now, { ifState: OPEN_QUESTION }))) throw closed();
     return question.id;
@@ -531,7 +541,7 @@ async function closeQuestionOnce(
 
 /** `agentSaleQuestionAnswer`: closed with an answer in words (an answer that decides the sale is a decision). */
 export async function answerSaleQuestion(app: DoorApp, actor: DoorActor, input: { questionId: number; answer: string }, now: Date = new Date()) {
-  const id = await closeQuestionOnce(app, actor, input.questionId, {
+  const id = await closeQuestionOnce(app, (pageId) => ofKeysPages(actor, pageId), input.questionId, {
     answerText: input.answer, answeredByAgentKeyId: actor.agentKeyId, answerDoor: "telegram", answerRef: actor.sourceRef,
   }, now);
   await runSaleClaims(app, now).catch(() => undefined);
@@ -541,10 +551,32 @@ export async function answerSaleQuestion(app: DoorApp, actor: DoorActor, input: 
 
 /** `agentSaleQuestionClose`: closed without an answer, with why. */
 export async function closeSaleQuestion(app: DoorApp, actor: DoorActor, input: { questionId: number; note: string }, now: Date = new Date()) {
-  const id = await closeQuestionOnce(app, actor, input.questionId, { closeNote: input.note }, now);
+  const id = await closeQuestionOnce(app, (pageId) => ofKeysPages(actor, pageId), input.questionId, { closeNote: input.note }, now);
   await runSaleClaims(app, now).catch(() => undefined);
   const [wire] = await questionWires(app, [id]);
   return { question: wire!, savedAt: now.toISOString() };
+}
+
+/**
+ * The owner's agent door's close (owner-agent-door.ts `sale.close`): an open question of the live agency — a page's,
+ * or one of no page the owner reviews — closed with why, once, as `closeSaleQuestion` closes one (the same guard).
+ */
+export async function closeSaleQuestionAsOwner(app: DoorApp, input: { questionId: number; note: string }, now: Date = new Date()) {
+  const test = new Set(await listTestPageIds(app.db));
+  const id = await closeQuestionOnce(app, (pageId) => pageId === null || !test.has(pageId), input.questionId, { closeNote: input.note }, now);
+  await runSaleClaims(app, now).catch(() => undefined);
+  const [wire] = await questionWires(app, [id]);
+  return { question: wire! };
+}
+
+/** Every decision about one sale as the door serves them, oldest first (the owner's agent door's `sale.show`). */
+export async function saleDecisionWires(app: DoorApp, transactionId: number): Promise<AgentSaleDecision[]> {
+  return decisionWiresOf(app, (await listSaleDecisions(app.db, { transactionIds: [transactionId] })).reverse());
+}
+
+/** One decision as the door serves it (after the owner's agent door's write). */
+export async function saleDecisionWire(app: DoorApp, decisionId: number): Promise<AgentSaleDecision | null> {
+  return (await decisionWires(app, [decisionId]))[0] ?? null;
 }
 
 async function questionWires(app: DoorApp, ids: readonly number[]): Promise<AgentSaleQuestion[]> {

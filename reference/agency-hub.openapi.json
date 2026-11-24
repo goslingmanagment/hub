@@ -25,6 +25,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "Agent Read Plane key (prefix agency_hub_agent_)"
+      },
+      "ownerAgentKeyAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The owner's agent door key (act:owner, prefix agency_hub_agent_); x-hub-owner-reason on every call"
       }
     },
     "schemas": {}
@@ -134448,7 +134453,7 @@
                   },
                   "capabilities": {
                     "minItems": 1,
-                    "maxItems": 26,
+                    "maxItems": 27,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -134478,7 +134483,8 @@
                         "introspect:agent_keys",
                         "write:customs",
                         "write:shift_reports",
-                        "review:shift_reports"
+                        "review:shift_reports",
+                        "act:owner"
                       ]
                     }
                   },
@@ -134569,7 +134575,8 @@
                               "introspect:agent_keys",
                               "write:customs",
                               "write:shift_reports",
-                              "review:shift_reports"
+                              "review:shift_reports",
+                              "act:owner"
                             ]
                           }
                         },
@@ -134946,7 +134953,8 @@
                             "introspect:agent_keys",
                             "write:customs",
                             "write:shift_reports",
-                            "review:shift_reports"
+                            "review:shift_reports",
+                            "act:owner"
                           ]
                         }
                       },
@@ -135435,7 +135443,7 @@
                 "type": "object",
                 "properties": {
                   "capabilities": {
-                    "maxItems": 26,
+                    "maxItems": 27,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -135465,7 +135473,8 @@
                         "introspect:agent_keys",
                         "write:customs",
                         "write:shift_reports",
-                        "review:shift_reports"
+                        "review:shift_reports",
+                        "act:owner"
                       ]
                     }
                   }
@@ -135544,7 +135553,8 @@
                           "introspect:agent_keys",
                           "write:customs",
                           "write:shift_reports",
-                          "review:shift_reports"
+                          "review:shift_reports",
+                          "act:owner"
                         ]
                       }
                     },
@@ -135960,7 +135970,8 @@
                               "introspect:agent_keys",
                               "write:customs",
                               "write:shift_reports",
-                              "review:shift_reports"
+                              "review:shift_reports",
+                              "act:owner"
                             ]
                           }
                         },
@@ -136133,7 +136144,8 @@
                               "introspect:agent_keys",
                               "write:customs",
                               "write:shift_reports",
-                              "review:shift_reports"
+                              "review:shift_reports",
+                              "act:owner"
                             ]
                           }
                         },
@@ -263719,6 +263731,286 @@
             }
           },
           "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/owner-agent/call": {
+      "post": {
+        "summary": "The owner's agent door: one operation of its table, as the owner, with the owner's reason (x-hub-owner-reason)",
+        "tags": [
+          "owner-agent"
+        ],
+        "description": "Only an act:owner key, issued by the server CLI (owner-agent-keys:issue), and nothing else reaches it. The reason is required (1 to 500 characters, percent-encoded UTF-8); the call is audited before it runs.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "args": {
+                    "default": {},
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ownerAgentKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "op": {
+                      "type": "string"
+                    },
+                    "result": {},
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "op",
+                    "result",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "429": {
             "description": "Default Response",
             "content": {
               "application/json": {

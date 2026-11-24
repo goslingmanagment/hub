@@ -22,6 +22,6 @@ export const CONSOLE_ONLY_READS: ReadonlySet<string> = new Set([
 
 /** The refusal of a console-only read to a team lead; null for anyone else or another operation. */
 export function teamLeadRefusal(routeKey: string, principal: AuthPrincipal | null | undefined): ForbiddenError | null {
-  if (!principal || principal.kind === "agent" || principal.user.role !== "team_lead" || !CONSOLE_ONLY_READS.has(routeKey)) return null;
+  if (!principal || principal.kind !== undefined || principal.user.role !== "team_lead" || !CONSOLE_ONLY_READS.has(routeKey)) return null;
   return new ForbiddenError("Это раздел Hub, он у владельца. Ваше рабочее место в Workboard.");
 }

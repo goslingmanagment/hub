@@ -1,7 +1,7 @@
 import { Fragment, useState } from "react";
 import { toast } from "sonner";
 
-import { AGENT_CAPABILITIES, isServiceKeyCapabilities, type AgentCapability, type AgentKeyItem } from "@agency_hub_core/contracts";
+import { AGENT_CAPABILITIES, isServiceKeyCapabilities, type AgentKeyCapability, type AgentKeyItem } from "@agency_hub_core/contracts";
 import {
   useAdminPages,
   useAgentKeys,
@@ -42,7 +42,7 @@ import { freshOf, platformName, RowChevron } from "../shared.js";
  * works one more day and ends by itself. While both work neither changes.
  */
 
-const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
+const CAPABILITY_HELP: Readonly<Record<AgentKeyCapability, string>> = {
   "read:messages": "Текст сообщений целиком: переписки и фрагменты в поиске",
   "read:money": "Операции, суммы трат, цены подписок",
   "read:observations_envelope": "Записи журнала сбора: только описание, без содержимого",
@@ -69,9 +69,11 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "write:customs": "Вести заказы кастомов своих страниц: заводить заказ по карточке, править её, отмечать, что модель сдала частично, сняла, правит или отказалась, привязывать карточку из Telegram. Оплату и «отдали» отмечают люди",
   "write:shift_reports": "Отчёт смены со слов чаттера (/smena): читать его черновик, ставить «не моё», «делим», «моё», заметки, комментарий и «мимо площадки», сдавать смену. Каждая запись — с Telegram id отправителя, он должен быть этого человека; сдача — ещё и со ссылкой на сообщение",
   "review:shift_reports": "Проверять сданный отчёт смены: читать сданные отчёты своих страниц и отвечать «замечаний нет» или предлагать правки карточкой под продажей. Подтверждает отчёт только сам чаттер",
+  // The owner's agent door: never ticked here (the server CLI issues such a key), only named in a listing.
+  "act:owner": "Дверь владельца: действует от имени владельца, с причиной в каждом вызове. Выпускается и меняется только командой на сервере",
 };
 
-const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
+const CAPABILITY_SHORT: Readonly<Record<AgentKeyCapability, string>> = {
   "read:messages": "Читать переписку",
   "read:money": "Читать деньги",
   "read:observations_envelope": "Журнал сбора: описание",
@@ -98,6 +100,7 @@ const CAPABILITY_SHORT: Readonly<Record<AgentCapability, string>> = {
   "write:customs": "Вести заказы кастомов",
   "write:shift_reports": "Вести отчёт смены со слов",
   "review:shift_reports": "Проверять отчёт смены",
+  "act:owner": "Дверь владельца",
 };
 
 const INPUT = "input";
@@ -118,8 +121,8 @@ function CapabilityCheckboxes({
   value,
   onChange,
 }: {
-  value: AgentCapability[];
-  onChange: (next: AgentCapability[]) => void;
+  value: AgentKeyCapability[];
+  onChange: (next: AgentKeyCapability[]) => void;
 }) {
   return (
     <div className="sys-checks">
@@ -452,7 +455,7 @@ function CreateAgentKeyModal({
   const agents = useKeyAgents();
   const [name, setName] = useState("");
   const [agentCode, setAgentCode] = useState("");
-  const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
+  const [capabilities, setCapabilities] = useState<AgentKeyCapability[]>([]);
   const [pageLabels, setPageLabels] = useState<string[]>([]);
   const [expiresInDays, setExpiresInDays] = useState(90);
 
@@ -592,7 +595,7 @@ function EditAgentKeyCapabilitiesModal({
   onClose: () => void;
 }) {
   const update = useUpdateAgentKeyCapabilities();
-  const [capabilities, setCapabilities] = useState<AgentCapability[]>(agentKey.capabilities);
+  const [capabilities, setCapabilities] = useState<AgentKeyCapability[]>(agentKey.capabilities);
 
   const unchanged = capabilities.length === agentKey.capabilities.length
     && capabilities.every((capability) => agentKey.capabilities.includes(capability));

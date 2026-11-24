@@ -3508,6 +3508,9 @@ export const agentKeys = pgTable(
     /** When a replacement was issued for this key: `expiresAt` is final from then (the grace day) and use no
      *  longer slides it. Null: not replaced. Written only by `insertPersonAgentKey` (repositories/people.ts). */
     replacedAt: timestamp("replaced_at", { withTimezone: true }),
+    /** The owner's login an `act:owner` key acts as (0442, the owner's agent door); null for every other key. */
+    actsAsUserId: bigint("acts_as_user_id", { mode: "number" })
+      .references(() => users.id, { onDelete: "restrict" }),
   },
   (table) => ({
     expiryIdx: index("agent_keys_expiry_idx").on(table.expiresAt),
@@ -3538,8 +3541,16 @@ export const agentKeys = pgTable(
         'introspect:agent_keys',
         'write:customs',
         'write:shift_reports',
-        'review:shift_reports'
+        'review:shift_reports',
+        'act:owner'
       ]::text[]
+    `),
+    // The owner's agent door (0442): an `act:owner` key names the owner's login it acts as, and holds nothing else.
+    actsAsCheck: check("agent_keys_acts_as_check", sql`
+      ('act:owner' = any(${table.capabilities})) = (${table.actsAsUserId} is not null)
+    `),
+    actOwnerAloneCheck: check("agent_keys_act_owner_alone_check", sql`
+      not ('act:owner' = any(${table.capabilities})) or (cardinality(${table.capabilities}) = 1 and cardinality(${table.pageIds}) = 0)
     `),
     expiresAtCheck: check("agent_keys_expires_at_check", sql`
       ${table.expiresAt} > ${table.createdAt}

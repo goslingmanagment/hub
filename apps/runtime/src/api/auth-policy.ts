@@ -9,6 +9,7 @@ import {
   requireDeviceTokenUser,
   requireHumanPrincipal,
   requireOwner,
+  requireOwnerAgentPrincipal,
   requireSessionUser,
   type AuthPrincipal,
 } from "../services/auth.ts";
@@ -119,6 +120,10 @@ export async function computeAuthPolicyVerdict(
       // The agent plane is one-way: this kind admits agent keys and nothing else.
       kindVerdict = guardVerdict(() => requireAgentPrincipal(principal), "agent_key_required");
       break;
+    case "ownerAgentKey":
+      // The owner's agent door: its act:owner key and nothing else (every other kind refuses that key by its own check).
+      kindVerdict = guardVerdict(() => requireOwnerAgentPrincipal(principal), "owner_agent_key_required");
+      break;
     case "any":
       // "any" is an ALLOWLIST of the pre-agent authentication methods, not a
       // wildcard. Every kind above already refuses an agent key by its own
@@ -133,7 +138,7 @@ export async function computeAuthPolicyVerdict(
   // `roles` names HUMAN roles; an agent key has none and can never satisfy one.
   // (Unreachable while `agentKey` is the only kind an agent passes and carries no
   // roles — the check is written so that adding roles there cannot open a hole.)
-  if (auth.roles && (isAgentPrincipal(principal) || !auth.roles.includes(principal.user.role))) {
+  if (auth.roles && (principal.kind !== undefined || !auth.roles.includes(principal.user.role))) {
     return { allow: false, statusCode: 403, reason: "role_not_allowed" };
   }
 

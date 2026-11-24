@@ -30,6 +30,7 @@ import {
 } from "./publications.ts";
 import { mediaLookRouteSchemas } from "./routes-media-looks.ts";
 import { agentDoorRouteSchemas } from "./agent-doors.ts";
+import { ownerAgentRouteSchemas } from "./owner-agent.ts";
 import { agentTeamRouteSchemas } from "./agent-team.ts";
 import { fanQueueRouteSchemas } from "./routes-fan-queues.ts";
 import { outreachRouteSchemas } from "./routes-outreach.ts";
@@ -4760,6 +4761,9 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 //   device-token   device-token bearer only (current-device self-service)
 //   agentKey       Agent Read Plane machine key only — there is no human behind
 //                  this principal (agent-read slice 0b; no route declares it yet)
+//   ownerAgentKey  the owner's agent door's `act:owner` key only (payouts plan
+//                  2026-11-24, §1.8): no other principal is admitted, and the
+//                  key is admitted by no other kind
 //   any            any authenticated principal that predates the agent plane;
 //                  finer scoping stays in the service. NOT a wildcard: an agent
 //                  key is refused here exactly as it is on every kind but agentKey
@@ -4770,7 +4774,7 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 // admits an agent: it names human roles.
 export const routeAuthPolicySchema = z
   .object({
-    kind: z.enum(["public", "hmac", "monitoring", "session", "any-session", "owner-session", "apiKey", "device-token", "agentKey", "any"]),
+    kind: z.enum(["public", "hmac", "monitoring", "session", "any-session", "owner-session", "apiKey", "device-token", "agentKey", "ownerAgentKey", "any"]),
     roles: z.array(userRoleEnum).nonempty().optional(),
     scope: z.enum(["page", "none"]).optional(),
   })
@@ -4804,6 +4808,9 @@ export function routeSecurityFromAuth(
     // which is precisely what the middleware refuses.
     case "agentKey":
       return [{ agentKeyAuth: [] }];
+    // The owner's agent door: its own scheme, for the same reason — no other bearer reaches it, and it reaches nothing else.
+    case "ownerAgentKey":
+      return [{ ownerAgentKeyAuth: [] }];
     case "any":
       return [{ cookieAuth: [] }, { bearerAuth: [] }];
     default:
@@ -8142,7 +8149,8 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof saleDecisionRouteSchemas
   & typeof saleHomesRouteSchemas
   & typeof workboardTodayRouteSchemas
-  & typeof personDoorRouteSchemas;
+  & typeof personDoorRouteSchemas
+  & typeof ownerAgentRouteSchemas;
 export const routeSchemas: RouteSchemas = {
   ...baseRouteSchemas,
   ...ofapiActionRouteSchemas,
@@ -8174,6 +8182,7 @@ export const routeSchemas: RouteSchemas = {
   ...saleHomesRouteSchemas,
   ...workboardTodayRouteSchemas,
   ...personDoorRouteSchemas,
+  ...ownerAgentRouteSchemas,
 };
 export type AdminUser = z.infer<typeof adminUserSchema>;
 export type AssignedPage = z.infer<typeof assignedPageSchema>;

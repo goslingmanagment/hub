@@ -1,6 +1,6 @@
 import { narrowWebSessionAllows } from "@agency_hub_core/contracts";
 
-import { isAgentPrincipal, type AuthPrincipal } from "./auth.ts";
+import type { AuthPrincipal } from "./auth.ts";
 import { ForbiddenError } from "./errors.ts";
 
 /** The narrow web session's refusal: a plain 403 with no `reason`, as the narrow token's. */
@@ -13,7 +13,7 @@ export const NARROW_WEB_SESSION_REFUSAL_MESSAGE = "This sign-in opens only the t
  * principal. Only a session with `narrowDeviceTokenId` is narrowed.
  */
 export function narrowWebSessionRefusal(routeKey: string, principal: AuthPrincipal | null): ForbiddenError | null {
-  if (principal === null || isAgentPrincipal(principal) || principal.narrowDeviceTokenId === undefined) {
+  if (principal === null || principal.kind !== undefined || principal.narrowDeviceTokenId === undefined) {
     return null;
   }
   return narrowWebSessionAllows(routeKey) ? null : new ForbiddenError(NARROW_WEB_SESSION_REFUSAL_MESSAGE);

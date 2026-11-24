@@ -29,8 +29,25 @@ export const HUB_DEFAULT_BASE_URL = "https://hub.gosling-agency.ru";
 
 export const HUB_CREDENTIALS_PATH = join(homedir(), ".config", "hub", "credentials");
 
+/**
+ * The owner's desk (`hub owner …`, the owner's agent door): its own key, `HUB_OWNER_KEY`, from the environment or
+ * `~/.config/hub/owner-desk`, never the agent's key and never the agent's file — so a cron with the agent's key
+ * can never call the owner's door, and `hub owner …` never falls back to an agent's key.
+ */
+export const HUB_OWNER_DESK_PATH = join(homedir(), ".config", "hub", "owner-desk");
+
+/** Which key a command runs with: an agent's (every command), or the owner's desk (`hub owner …`). */
+export type HubCredentialsProfile = "agent" | "owner-desk";
+
+const PROFILES: Record<HubCredentialsProfile, { path: string; keyVar: string }> = {
+  agent: { path: HUB_CREDENTIALS_PATH, keyVar: "HUB_AGENT_KEY" },
+  "owner-desk": { path: HUB_OWNER_DESK_PATH, keyVar: "HUB_OWNER_KEY" },
+};
+
 export interface HubCredentialsInput {
   env: Record<string, string | undefined>;
+  /** Absent — the agent's. */
+  profile?: HubCredentialsProfile;
   /** Injected by tests; production reads the real file. */
   readFile?: (path: string) => string | null;
   /** Injected by tests; production stats the real file. `null` = no such file. */
@@ -110,24 +127,25 @@ export class HubCredentialsError extends Error {}
  * never quietly land on the wrong deployment because a flag was left set.
  */
 export function resolveHubCredentials(input: HubCredentialsInput): HubCredentials {
+  const { path, keyVar } = PROFILES[input.profile ?? "agent"];
   const readFile = input.readFile ?? defaultReadFile;
-  const mode = (input.fileMode ?? defaultFileMode)(HUB_CREDENTIALS_PATH);
+  const mode = (input.fileMode ?? defaultFileMode)(path);
   if (mode !== null && isOverPermissive(mode)) {
     throw new HubCredentialsError(
-      `${HUB_CREDENTIALS_PATH} is readable by others (mode ${mode.toString(8).padStart(4, "0")}); `
-      + `run: chmod 600 ${HUB_CREDENTIALS_PATH}`,
+      `${path} is readable by others (mode ${mode.toString(8).padStart(4, "0")}); `
+      + `run: chmod 600 ${path}`,
     );
   }
-  const fileText = readFile(HUB_CREDENTIALS_PATH);
+  const fileText = readFile(path);
   const fileValues = fileText === null ? {} : parseHubCredentialsFile(fileText);
 
-  const envToken = input.env.HUB_AGENT_KEY?.trim();
-  const fileToken = fileValues.HUB_AGENT_KEY?.trim();
+  const envToken = input.env[keyVar]?.trim();
+  const fileToken = fileValues[keyVar]?.trim();
   const token = envToken !== undefined && envToken !== "" ? envToken : fileToken;
 
   if (token === undefined || token === "") {
     throw new HubCredentialsError(
-      `no agent key: set HUB_AGENT_KEY or put HUB_AGENT_KEY=... in ${HUB_CREDENTIALS_PATH}`,
+      `no ${input.profile === "owner-desk" ? "owner-desk" : "agent"} key: set ${keyVar} or put ${keyVar}=... in ${path}`,
     );
   }
 
