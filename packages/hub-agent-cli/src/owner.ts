@@ -1,4 +1,10 @@
-import { OWNER_AGENT_OPERATION_NAMES, OWNER_AGENT_OPERATION_SCHEMAS, OWNER_AGENT_REASON_HEADER, OWNER_AGENT_REASON_MAX } from "@agency_hub_core/contracts";
+import {
+  OWNER_AGENT_CUSTOM_STEPS,
+  OWNER_AGENT_OPERATION_NAMES,
+  OWNER_AGENT_OPERATION_SCHEMAS,
+  OWNER_AGENT_REASON_HEADER,
+  OWNER_AGENT_REASON_MAX,
+} from "@agency_hub_core/contracts";
 import type { KernelClient } from "@kernel/sdk";
 
 import { HubUsageError, type HubCommand, type HubOption, type HubOptionValues } from "./commands.ts";
@@ -46,18 +52,21 @@ export function ownerReasonHeaders(values: HubOptionValues): Record<string, stri
   return { [OWNER_AGENT_REASON_HEADER]: encodeURIComponent(why) };
 }
 
-function jsonArgs(values: HubOptionValues): Record<string, unknown> {
-  const raw = text(values, "json");
+/** A flag's JSON object (`--json`: the operation's arguments; `--schedule`: a schedule); absent — {}. */
+function jsonValue(values: HubOptionValues, name: string): Record<string, unknown> {
+  const raw = text(values, name);
   if (raw === undefined) return {};
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new HubUsageError("--json is not JSON");
+    throw new HubUsageError(`--${name} is not JSON`);
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new HubUsageError("--json is an object: the operation's arguments");
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new HubUsageError(`--${name} is a JSON object`);
   return parsed as Record<string, unknown>;
 }
+
+const jsonArgs = (values: HubOptionValues) => jsonValue(values, "json");
 
 const defined = (fields: Record<string, unknown>) => Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 
@@ -213,5 +222,172 @@ export const HUB_OWNER_COMMANDS: readonly HubCommand[] = [
       if (Object.keys(fields).length === 0) throw new HubUsageError("nothing to change");
       return call(client, "people.edit", { ...fields, code: args[0]! });
     },
+  }),
+  command({
+    name: "owner people set",
+    summary: "Set a person's state, the day they left, working pages and schedule (people.edit with these alone)."
+      + " Never rights, logins, keys, role, Telegram or pay terms, never a proposal.",
+    example: "hub owner people set anna --state left --left-on 2026-11-30 --why \"ушла с 30.11\"",
+    arguments: { name: "<code>", describe: "The person's code", min: 1, max: 1 },
+    options: {
+      state: { kind: "string", describe: "The person's state: invited, set_up, working, left" },
+      "left-on": { kind: "string", describe: "The day they left, ГГГГ-ММ-ДД (state left); empty — none" },
+      "working-page": { kind: "list", describe: "The whole list of working pages, in order (comma-separated or repeated)" },
+      schedule: { kind: "string", describe: "A schedule line as JSON: {\"pageLabel\":null,\"from\":\"2026-12-01\",\"slot\":{\"start\":\"10:00\",\"end\":\"18:00\"}}" },
+    },
+    run: (client, values, _deps, args) => {
+      const leftOn = text(values, "left-on");
+      const fields = defined({
+        state: text(values, "state"),
+        leftOn: leftOn === undefined ? undefined : leftOn.trim() === "" ? null : leftOn,
+        workingPageLabels: values["working-page"] === undefined ? undefined : list(values, "working-page"),
+        schedule: text(values, "schedule") === undefined ? undefined : jsonValue(values, "schedule"),
+      });
+      if (Object.keys(fields).length === 0) throw new HubUsageError("nothing to set: --state, --left-on, --working-page or --schedule");
+      return call(client, "people.edit", { ...fields, code: args[0]! });
+    },
+  }),
+
+  // ── Кастомы ──
+  command({
+    name: "owner custom board",
+    summary: "«Кастомы» as the owner's board shows it: the live orders, findings, what changed by itself.",
+    options: { page: { kind: "string", describe: "One page's orders, by its label" } },
+    run: (client, values) => call(client, "custom.board", defined({ pageLabel: text(values, "page") })),
+  }),
+  command({
+    name: "owner custom show",
+    summary: "An order whole by its code: card, messages, payments, history, the steps the owner may take.",
+    arguments: { name: "<code>", describe: "The order's code, K-…", min: 1, max: 1 },
+    options: {},
+    run: (client, _values, _deps, args) => call(client, "custom.show", { code: args[0]! }),
+  }),
+  command({
+    name: "owner custom step",
+    summary: "One step of an order as the owner on the board, none of money (never payment, unpay, paid_word, cancel or a"
+      + " price). --step names it, --json its fields; an edit is {\"card\":{…the changed fields}} without «Оплата».",
+    example: "hub owner custom step K-12 --step hold --json '{\"reason\":\"ждём реквизит\"}' --why \"модель попросила подождать\"",
+    arguments: { name: "<code>", describe: "The order's code, K-…", min: 1, max: 1 },
+    options: {
+      step: { kind: "string", describe: `The step (required): ${OWNER_AGENT_CUSTOM_STEPS.join(", ")}` },
+      json: { kind: "string", describe: "The step's fields as JSON (reason, note, deadlineOn, card, …)" },
+    },
+    run: (client, values, _deps, args) => call(client, "custom.step", { code: args[0]!, step: { ...jsonArgs(values), action: required(values, "step") } }),
+  }),
+  command({
+    name: "owner custom-finding list",
+    summary: "«Найдено без заказа»: the open findings, and the ones an agent dismissed in two weeks.",
+    options: {},
+    run: (client) => call(client, "customFinding.list", {}),
+  }),
+  command({
+    name: "owner custom-finding answer",
+    summary: "Answer a finding: dismiss (--reason), reopen, link (--code K-…) or record (--json '{\"card\":…}') one of no sale."
+      + " A sale's finding recorded or linked pays the order: 409 finding_pays, the owner does it on the board.",
+    example: "hub owner custom-finding answer 42 --step dismiss --reason not_custom --why \"обычный тип\"",
+    arguments: { name: "<finding №>", describe: "The finding's number", min: 1, max: 1 },
+    options: {
+      step: { kind: "string", describe: "dismiss | reopen | link | record (required)" },
+      reason: { kind: "string", describe: "dismiss: not_custom, sexting, unused, duplicate, test, not_asked" },
+      code: { kind: "string", describe: "link: the order's code, K-…" },
+      json: { kind: "string", describe: "record: its fields as JSON ({\"card\":…, \"pageLabel\":…, \"fan\":…})" },
+    },
+    run: (client, values, _deps, args) => call(client, "customFinding.answer", {
+      findingId: id(args[0], "<finding №>"),
+      step: { ...jsonArgs(values), ...defined({ reason: text(values, "reason"), code: text(values, "code") }), action: required(values, "step") },
+    }),
+  }),
+
+  // ── Дела ──
+  command({
+    name: "owner matter list",
+    summary: "The owner's matters (every one), by state, kind or page, with whether each kind is known.",
+    options: {
+      state: { kind: "string", describe: "open (default) | closed" },
+      kind: { kind: "string", describe: "One kind" },
+      page: { kind: "string", describe: "One page's (a matter of no page is every page's)" },
+      limit: { kind: "number", describe: "At most this many (default 200, at most 500)" },
+    },
+    run: (client, values) => call(client, "matter.list", defined({
+      state: text(values, "state"), kind: text(values, "kind"), pageLabel: text(values, "page"),
+      limit: text(values, "limit") === undefined ? undefined : id(text(values, "limit"), "--limit"),
+    })),
+  }),
+  command({
+    name: "owner matter close",
+    summary: "Close a matter an agent opened, by its key. Any other closes through its kind's own step (409 matter_kind_service names it).",
+    example: "hub owner matter close agent.ask:17 --how resolved --note \"решили на созвоне\" --why \"закрываю вопрос\"",
+    arguments: { name: "<key>", describe: "The matter's key", min: 1, max: 1 },
+    options: {
+      how: { kind: "string", describe: "resolved | withdrawn | cause_gone (required)" },
+      note: { kind: "string", describe: "A line in its history" },
+    },
+    run: (client, values, _deps, args) => call(client, "matter.close", defined({ key: args[0]!, how: required(values, "how"), note: text(values, "note") })),
+  }),
+  command({
+    name: "owner matter comment",
+    summary: "Comment a matter by its key, in its history (any kind's).",
+    arguments: { name: "<key>", describe: "The matter's key", min: 1, max: 1 },
+    options: { text: { kind: "string", describe: "The comment (required)" } },
+    run: (client, values, _deps, args) => call(client, "matter.comment", { key: args[0]!, text: required(values, "text") }),
+  }),
+
+  // ── «Обучение» ──
+  command({
+    name: "owner learn list",
+    summary: "The pages of «Обучение», each with whether the team reads it.",
+    options: {},
+    run: (client) => call(client, "learn.list", {}),
+  }),
+  command({
+    name: "owner learn show",
+    summary: "A page of «Обучение» with its text.",
+    arguments: { name: "<slug>", describe: "The page's slug", min: 1, max: 1 },
+    options: {},
+    run: (client, _values, _deps, args) => call(client, "learn.show", { slug: args[0]! }),
+  }),
+  command({
+    name: "owner learn approve",
+    summary: "Approve a page of «Обучение» for the team; --take-back takes the approval back.",
+    arguments: { name: "<slug>", describe: "The page's slug", min: 1, max: 1 },
+    options: { "take-back": { kind: "boolean", describe: "Take the approval back: the team reads it no more" } },
+    run: (client, values, _deps, args) => call(client, "learn.approve", { slug: args[0]!, approved: values["take-back"] !== true }),
+  }),
+
+  // ── Подмены ──
+  command({
+    name: "owner swap list",
+    summary: "The approved swaps of the next 14 days (and today).",
+    options: {},
+    run: (client) => call(client, "swap.list", {}),
+  }),
+  command({
+    name: "owner swap approve",
+    summary: "«Можно» to a swap question, with a line: the day's lines of the schedule are written.",
+    arguments: { name: "<question №>", describe: "The swap question's number", min: 1, max: 1 },
+    options: { text: { kind: "string", describe: "A line to the asker" } },
+    run: (client, values, _deps, args) => call(client, "swap.approve", defined({ questionId: id(args[0], "<question №>"), text: text(values, "text") })),
+  }),
+  command({
+    name: "owner swap revoke",
+    summary: "Take an approved swap back before its day.",
+    arguments: { name: "<question №>", describe: "The swap question's number", min: 1, max: 1 },
+    options: {},
+    run: (client, _values, _deps, args) => call(client, "swap.revoke", { questionId: id(args[0], "<question №>") }),
+  }),
+
+  // ── Решения из ledger ──
+  command({
+    name: "owner decision unlinked",
+    summary: "Decisions carried over from the ledger that name no sale yet, each with the sales it may be.",
+    options: {},
+    run: (client) => call(client, "decision.unlinked", {}),
+  }),
+  command({
+    name: "owner decision link",
+    summary: "Tie a decision carried over from the ledger to its sale: it rules the sale from now, the reports follow.",
+    arguments: { name: "<decision №>", describe: "The decision's number", min: 1, max: 1 },
+    options: { sale: { kind: "number", describe: "The sale by Hub's id (required)" } },
+    run: (client, values, _deps, args) => call(client, "decision.link", { decisionId: id(args[0], "<decision №>"), transactionId: id(text(values, "sale"), "--sale") }),
   }),
 ];

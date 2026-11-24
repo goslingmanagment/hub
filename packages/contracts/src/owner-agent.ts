@@ -12,6 +12,30 @@
  */
 import { z } from "zod";
 
+import { agentReportSlugSchema } from "./agent-reports.ts";
+import {
+  customFindingActionBodySchema,
+  customFindingActionResponseSchema,
+  customFindingsListResponseSchema,
+  customOrderActionBodySchema,
+  customOrderCardSchema,
+  customOrderCodeSchema,
+  customOrderDetailResponseSchema,
+  customOrdersBoardQuerySchema,
+  customOrdersBoardResponseSchema,
+  type CustomFindingActionBody,
+  type CustomOrderAction,
+  type CustomOrderActionBody,
+  type CustomOrderCard,
+} from "./custom-orders.ts";
+import {
+  agentMatterCommentResponseSchema,
+  agentMatterStateSchema,
+  MATTER_CLOSED_HOWS,
+  matterKeySchema,
+  mattersListQuerySchema,
+  mattersListResponseSchema,
+} from "./matters.ts";
 import {
   personLoginSchema,
   personOnboardingStepSchema,
@@ -27,6 +51,8 @@ import {
 } from "./people.ts";
 import { personStartSchema } from "./person-start.ts";
 import { businessDate, errorResponseSchema, intId, isoDateTime, isoTimestamp, mills } from "./primitives.ts";
+import { learnPageApproveResponseSchema, learnPageResponseSchema, learnPagesResponseSchema } from "./routes-learn.ts";
+import { saleDecisionLinkResponseSchema, saleDecisionsUnlinkedResponseSchema } from "./routes-sale-claims.ts";
 import { agentSaleDecisionSchema, agentSaleQuestionSchema } from "./routes-sale-decisions.ts";
 import {
   shiftReportBodySchema,
@@ -34,6 +60,7 @@ import {
   shiftReportsListItemSchema,
   shiftReportVersionSummarySchema,
 } from "./routes-shift-handins.ts";
+import { teamQuestionWriteResponseSchema, teamSwapsResponseSchema } from "./routes-team-questions.ts";
 import { shiftReportPhaseEnum } from "./shift-report-board.ts";
 
 /** The header the owner's reason travels in. */
@@ -208,6 +235,103 @@ const peopleEditArgs = z.object({
   leftOn: businessDate.nullable().optional(),
 }).strict().refine((body) => Object.entries(body).some(([key, value]) => key !== "code" && value !== undefined), "nothing to change");
 
+// ── Кастомы: the board's own steps, none of money ───────────────────────────
+
+/**
+ * The board's steps the door takes, as the owner on the board takes them — and no other: never `payment` or `unpay` (a
+ * sale on or off an order), `paid_word` (the owner's word on the payment), `cancel` (a cancelled order gives its sales
+ * back), nor the agreed total (`priceMills`) or the card's «Оплата» (`price`) in an edit.
+ */
+export const OWNER_AGENT_CUSTOM_STEPS = [
+  "edit", "deadline", "fan", "card", "checked", "at_model", "partly", "shot", "revision", "refused", "given", "ungive", "retract", "close",
+  "hold", "unhold", "issue_clear", "fan_asked_clear", "accepted_by",
+] as const satisfies readonly CustomOrderAction[];
+type OwnerCustomStepAction = (typeof OWNER_AGENT_CUSTOM_STEPS)[number];
+
+/** The card without its «Оплата» line: the price as the team writes it is the owner's own, on the board. */
+type OwnerCustomCard = Omit<CustomOrderCard, "price">;
+/** Only the fields that change: a value sets it, `null` empties it, an absent key stays as it is (the price too). */
+export type OwnerCustomCardPatch = { [K in keyof OwnerCustomCard]?: Exclude<OwnerCustomCard[K], undefined> | null };
+const ownerCustomCardPatchSchema = z.object(Object.fromEntries(
+  Object.entries(customOrderCardSchema.omit({ price: true }).shape)
+    .map(([key, field]) => [key, (field as z.ZodOptional<z.ZodType>).unwrap().nullable().optional()]),
+)).strict().refine((patch) => Object.keys(patch).length > 0, "nothing to change") as unknown as z.ZodType<OwnerCustomCardPatch>;
+
+/** A step of the door: an edit is the card's changed fields (never its price); any other is the board's own body. */
+export type OwnerCustomStep =
+  | { action: "edit"; card: OwnerCustomCardPatch }
+  | Extract<CustomOrderActionBody, { action: Exclude<OwnerCustomStepAction, "edit"> }>;
+
+const CUSTOM_STEP_SET: ReadonlySet<string> = new Set(OWNER_AGENT_CUSTOM_STEPS.filter((step) => step !== "edit"));
+const ownerCustomStepSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("edit"), card: ownerCustomCardPatchSchema }).strict(),
+  ...customOrderActionBodySchema.options.filter((option) => CUSTOM_STEP_SET.has(option.shape.action.value)),
+] as unknown as [z.ZodObject, ...z.ZodObject[]]) as unknown as z.ZodType<OwnerCustomStep>;
+
+const customShowArgs = z.object({ code: customOrderCodeSchema }).strict();
+
+const customStepArgs = z.object({ code: customOrderCodeSchema, step: ownerCustomStepSchema }).strict();
+
+const customStepResult = z.object({
+  /** Whether the step changed the order (the same step again changes nothing). */
+  changed: z.boolean(),
+  /** The order after it, as the board shows it to the owner. */
+  detail: customOrderDetailResponseSchema,
+});
+
+/**
+ * A finding's answers the door gives: dismiss, reopen (one an agent dismissed), record or link — a finding of no sale.
+ * A sale's finding (a sale, a shift report's line) recorded or linked pays the order with its sale: 409
+ * `finding_pays`, nothing written — the owner does that in Workboard. Recording names no agreed total and no «Оплата».
+ */
+export type OwnerCustomFindingStep =
+  | (Omit<Extract<CustomFindingActionBody, { action: "record" }>, "priceMills" | "card"> & { card: OwnerCustomCard })
+  | Extract<CustomFindingActionBody, { action: "link" | "dismiss" | "reopen" }>;
+
+const ownerCustomFindingStepSchema = z.discriminatedUnion("action", customFindingActionBodySchema.options.map((option) => (
+  option.shape.action.value === "record"
+    ? (option as z.ZodObject).omit({ priceMills: true }).extend({ card: customOrderCardSchema.omit({ price: true }) }).strict()
+    : option
+)) as unknown as [z.ZodObject, ...z.ZodObject[]]) as unknown as z.ZodType<OwnerCustomFindingStep>;
+
+const customFindingArgs = z.object({ findingId: id, step: ownerCustomFindingStepSchema }).strict();
+
+// ── Дела: read, closed by their writer, commented ────────────────────────────
+
+const matterCloseArgs = z.object({
+  key: matterKeySchema,
+  how: z.enum(MATTER_CLOSED_HOWS),
+  note: z.string().trim().min(1).max(500).optional(),
+}).strict();
+
+const matterCloseResult = z.object({
+  matter: agentMatterStateSchema,
+  /** closed — now; unchanged — it was closed already. */
+  transition: z.enum(["closed", "unchanged"]),
+});
+
+const matterCommentArgs = z.object({ key: matterKeySchema, text: z.string().trim().min(1).max(2000) }).strict();
+
+// ── «Обучение» ───────────────────────────────────────────────────────────────
+
+const learnShowArgs = z.object({ slug: agentReportSlugSchema }).strict();
+
+/** `approved: true` — the team reads it; false — the approval taken back (the owner alone reads it again). */
+const learnApproveArgs = z.object({ slug: agentReportSlugSchema, approved: z.boolean() }).strict();
+
+// ── Подмены ──────────────────────────────────────────────────────────────────
+
+/** «Можно» to a swap question, with a line; a question of another kind is not this operation's (409). */
+const swapApproveArgs = z.object({ questionId: id, text: z.string().trim().max(500).optional() }).strict();
+
+const swapRevokeArgs = z.object({ questionId: id }).strict();
+
+// ── Решения из ledger, привязанные к продаже ─────────────────────────────────
+
+const decisionLinkArgs = z.object({ decisionId: id, transactionId: id }).strict();
+
+const none = z.object({}).strict();
+
 // ── The table ────────────────────────────────────────────────────────────────
 
 export const OWNER_AGENT_OPERATION_SCHEMAS = {
@@ -220,6 +344,23 @@ export const OWNER_AGENT_OPERATION_SCHEMAS = {
   "sale.close": { args: saleCloseArgs, result: saleCloseResult, writes: true },
   "people.show": { args: peopleShowArgs, result: peopleResult, writes: false },
   "people.edit": { args: peopleEditArgs, result: peopleResult, writes: true },
+  // Part 2 (H10).
+  "custom.board": { args: customOrdersBoardQuerySchema, result: customOrdersBoardResponseSchema, writes: false },
+  "custom.show": { args: customShowArgs, result: customOrderDetailResponseSchema, writes: false },
+  "custom.step": { args: customStepArgs, result: customStepResult, writes: true },
+  "customFinding.list": { args: none, result: customFindingsListResponseSchema, writes: false },
+  "customFinding.answer": { args: customFindingArgs, result: customFindingActionResponseSchema, writes: true },
+  "matter.list": { args: mattersListQuerySchema, result: mattersListResponseSchema, writes: false },
+  "matter.close": { args: matterCloseArgs, result: matterCloseResult, writes: true },
+  "matter.comment": { args: matterCommentArgs, result: agentMatterCommentResponseSchema, writes: true },
+  "learn.list": { args: none, result: learnPagesResponseSchema, writes: false },
+  "learn.show": { args: learnShowArgs, result: learnPageResponseSchema, writes: false },
+  "learn.approve": { args: learnApproveArgs, result: learnPageApproveResponseSchema, writes: true },
+  "swap.list": { args: none, result: teamSwapsResponseSchema, writes: false },
+  "swap.approve": { args: swapApproveArgs, result: teamQuestionWriteResponseSchema, writes: true },
+  "swap.revoke": { args: swapRevokeArgs, result: teamQuestionWriteResponseSchema, writes: true },
+  "decision.unlinked": { args: none, result: saleDecisionsUnlinkedResponseSchema, writes: false },
+  "decision.link": { args: decisionLinkArgs, result: saleDecisionLinkResponseSchema, writes: true },
 } as const satisfies Record<string, { args: z.ZodType; result: z.ZodType; writes: boolean }>;
 
 export type OwnerAgentOperation = keyof typeof OWNER_AGENT_OPERATION_SCHEMAS;

@@ -43,6 +43,7 @@ import {
   countVisibleOpenMatters,
   findMatterByKey,
   findMatterPerson,
+  isTestUser,
   listMatterChecks,
   listMatterPageLabels,
   listMatterUsernames,
@@ -579,6 +580,70 @@ export async function agentCommentMatter(app: MattersApp, scope: AgentMatterScop
     door: "api", agentKeyId: scope.principal.agentKeyId, onBehalfOfUserId: onBehalfOf,
   }, now);
   if (commented === null) throw notFound();
+  return { matter: stateOf(commented.matter), eventId: commented.eventId };
+}
+
+// ── The owner's agent door (services/owner-agent-door.ts) ──────────────────
+
+/**
+ * Where a matter closes when it is not an agent's: its kind's own service. A kind Hub's server keeps closes by its
+ * pass when its cause is gone, or by its object's own step; the ledger's, ContentOps' and a person's by theirs. Null —
+ * an agent's matter: its writer closes it by its key (the agent's door, the owner's agent door).
+ */
+export function matterClosedWhere(matter: Pick<MatterRow, "kind" | "source">): string | null {
+  const kind = matter.kind;
+  if (isSaleClaimMatterKind(kind)) return "the sale's own step: sale.decide, sale.close, decision.link, or Workboard";
+  if (isTeamQuestionMatterKind(kind)) return "the question's own step: swap.approve, swap.revoke, or Workboard";
+  if (isCustomOrderCheckKind(kind)) return "the order's or the finding's own step: custom.step, customFinding.answer";
+  if (matter.source === "agent" && !isMatterMirrorKind(kind) && !isMatterServerKind(kind) && !isMatterCheckKind(kind)
+    && !isShiftReportMatterKind(kind) && !isMatterPersonStartKind(kind) && !isReportPostMatterKind(kind)) return null;
+  if (matter.source === "ledger") return "the ledger: it closes when the ledger's cause is gone";
+  if (matter.source === "contentops") return "ContentOps: it closes when its cause there is gone";
+  if (matter.source === "person") return "the person's own step";
+  return "Hub's own pass: it closes when its cause is gone";
+}
+
+/** A matter the owner reads, of the live realm, by its key; one that waits for a test login is not found. */
+async function ownerMatterOf(app: MattersApp, key: string): Promise<MatterRow> {
+  const matter = await findMatterByKey(app.db, key);
+  if (matter === null || ("userId" in matter.owner && await isTestUser(app.db, matter.owner.userId))) throw new NotFoundError("No such matter");
+  return matter;
+}
+
+/**
+ * Closes a matter by its key for the owner, through its kind's own service: an agent's matter by its writer (as the
+ * agent's door closes it, `writer: agent`); any other is 409 `matter_kind_service`, naming where it closes. A closed one
+ * stays as it was.
+ */
+export async function closeMatterAsOwner(
+  app: MattersApp,
+  body: { key: string; how: AgentMatterCloseBody["how"]; note?: string | undefined },
+  actor: MatterActor,
+  now: Date = new Date(),
+): Promise<{ matter: AgentMatterResponse["matter"]; transition: "closed" | "unchanged" }> {
+  const matter = await ownerMatterOf(app, body.key);
+  const where = matterClosedWhere(matter);
+  if (where !== null) throw new ConflictError(`A «${matter.kind}» matter closes through ${where}`, { reason: "matter_kind_service" });
+  try {
+    const closed = await closeMatter(app.db, { key: body.key, how: body.how, note: body.note ?? null, writer: "agent" }, actor, now);
+    if (closed.matter === null) throw new NotFoundError("No such matter");
+    return { matter: stateOf(closed.matter), transition: closed.transition === "closed" ? "closed" : "unchanged" };
+  } catch (error) {
+    if (error instanceof MatterWriterConflictError) throw new ConflictError(`A «${matter.kind}» matter is not an agent's`, { reason: "matter_kind_service" });
+    throw error;
+  }
+}
+
+/** A comment on any matter the owner reads, by its key, in its history (the matters' one writer of comments, every kind's). */
+export async function commentMatterAsOwner(
+  app: MattersApp,
+  body: { key: string; text: string },
+  actor: MatterActor,
+  now: Date = new Date(),
+): Promise<AgentMatterCommentResponse> {
+  await ownerMatterOf(app, body.key);
+  const commented = await commentMatter(app.db, { key: body.key, text: body.text }, actor, now);
+  if (commented === null) throw new NotFoundError("No such matter");
   return { matter: stateOf(commented.matter), eventId: commented.eventId };
 }
 

@@ -173,6 +173,19 @@ export async function readCustomOrdersBoard(
   now: Date = new Date(),
 ): Promise<CustomOrdersBoardResponse> {
   requireBoardReader(principal);
+  return customOrdersBoardAs(app, principal, query, now);
+}
+
+/**
+ * The board as `principal` reads it, the door checked by the caller: the board's own reader above, and the owner's
+ * agent door AS the owner (services/owner-agent-door.ts, whose principal is no cookie session).
+ */
+export async function customOrdersBoardAs(
+  app: BoardApp,
+  principal: HumanAuthPrincipal,
+  query: { pageLabel?: string | undefined },
+  now: Date = new Date(),
+): Promise<CustomOrdersBoardResponse> {
   const viewer = await customViewerOf(app, principal);
   const scope = await boardScope(app, viewer, query.pageLabel);
   const factsOn = await customsFactsOn(app);
@@ -257,6 +270,11 @@ export async function readCustomOrdersDone(
 /** `customFindingsList`: the open findings the viewer resolves, the newest first, and the ones an agent dismissed. */
 export async function readCustomFindings(app: BoardApp, principal: AuthPrincipal, now: Date = new Date()): Promise<CustomFindingsListResponse> {
   requireBoardReader(principal);
+  return customFindingsAs(app, principal, now);
+}
+
+/** The findings as `principal` reads them, the door checked by the caller (the owner's agent door AS the owner). */
+export async function customFindingsAs(app: BoardApp, principal: HumanAuthPrincipal, now: Date = new Date()): Promise<CustomFindingsListResponse> {
   const viewer = await customViewerOf(app, principal);
   const [open, dismissed] = await Promise.all([findingsFor(app, viewer), agentDismissedFor(app, viewer, now)]);
   return { findings: open.map(findingWire), dismissedByAgent: dismissed.map(findingWire), serverNow: now.toISOString() };

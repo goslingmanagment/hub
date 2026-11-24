@@ -169,6 +169,11 @@ export function mayResolveFinding(viewer: CustomViewer, finding: { pageId: numbe
 const resolvedAlready = () => new ConflictError("The finding is resolved already", { reason: "resolved" });
 /** Only what an agent dismissed is brought back by a person; their own and another person's answers stand. */
 const notReopenable = () => new ConflictError("Only a finding an agent dismissed is brought back", { reason: "not_reopenable" });
+/** A door that pays no order (`noPayment`): a sale's finding recorded or linked would pay the order with its sale. */
+const paysOrder = () => new ConflictError(
+  "The finding is a sale: recording or linking it pays the order with that sale — the owner does it on the board",
+  { reason: "finding_pays" },
+);
 const byAgentDismissed = (finding: CustomFindingRow) => finding.status === "dismissed" && finding.resolvedByAgentKeyId !== null;
 
 /** The sale a finding names (Hub's id: a sale's, a shift report line's); null — none. */
@@ -222,12 +227,14 @@ export async function actOnCustomFinding(
  * One answer to a finding as `person`, by the board's own rules (`mayResolveFinding`): the board's door, and an agent on
  * the person's word (agent.ts: the request kept in the finding's history; `pageIds`/`noPage` — the key's pages, else the
  * finding reads as not found). Every answer leaves its line in the finding's history (`custom_finding.*`).
+ * `noPayment` — a door that pays no order (the owner's agent door): recording or linking a finding that names a sale
+ * (which pays the order with it) is 409 `finding_pays` before anything is written.
  */
 export async function actOnCustomFindingAs(
   app: FindingsApp,
   input: {
     person: HumanAuthPrincipal; findingId: string; body: CustomFindingActionBody; now: Date; actor: CustomActor;
-    requestRef?: string; pageIds?: readonly number[]; noPage?: boolean;
+    requestRef?: string; pageIds?: readonly number[]; noPage?: boolean; noPayment?: boolean;
   },
 ): Promise<{ finding: CustomFinding }> {
   const { now, actor } = input;
@@ -239,6 +246,8 @@ export async function actOnCustomFindingAs(
   if (seen === null || !ofKey(seen) || !mayResolveFinding(viewer, seen)) throw new NotFoundError("The finding was not found");
   const body = input.body;
   if (body.action === "reopen" ? !byAgentDismissed(seen) : seen.status !== "open") throw body.action === "reopen" ? notReopenable() : resolvedAlready();
+  // A finding's sale is its identity (source and ref never change): refused here, nothing of it written.
+  if (input.noPayment === true && (body.action === "record" || body.action === "link") && saleOf(seen) !== null) throw paysOrder();
   const userId = input.person.user.id;
   const requestRef = input.requestRef === undefined ? {} : { requestRef: input.requestRef };
   await app.db.transaction(async (tx) => {
@@ -262,6 +271,8 @@ export async function actOnCustomFindingAs(
     /** The finding's sale paid to the order, checked first; a person's own step (it takes a sale off no other order). */
     const pay = async (orderId: number) => {
       if (sale === null) return;
+      // Never reached past the check above; kept so a door that pays nothing can never pay, whatever comes before.
+      if (input.noPayment === true) throw paysOrder();
       const order = (await findCustomOrder(db, orderId))!;
       if ((await checkPersonSale(db, order, sale)).already) return;
       await applyCustomStep({ db }, { orderId, step: { action: "payment", transactionId: sale }, actor, viewer: null, now, ...stepWord });

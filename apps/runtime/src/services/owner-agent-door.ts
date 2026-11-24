@@ -9,6 +9,7 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   findPersonRowByCode,
+  findTeamQuestion,
   listActiveSaleDecisions,
   listHandinNames,
   listHandinPeopleOfUsers,
@@ -16,6 +17,7 @@ import {
   listLoginsByPersonCode,
   listPersonLoginRows,
   listSaleClaims,
+  listSaleDecisions,
   listTestPageIds,
   type Database,
   type SaleDecisionKind,
@@ -24,11 +26,17 @@ import type { z } from "zod";
 
 import type { AppContext } from "../bootstrap.ts";
 import { principalOfLogin, recordAudit, type AuditContext, type HumanAuthPrincipal, type OwnerAgentPrincipal } from "./auth.ts";
+import { customFindingsAs, customOrdersBoardAs } from "./custom-orders/board.ts";
+import { actOnCustomFindingAs } from "./custom-orders/findings.ts";
+import { actOnCustomOrderAs, customOrderAs, type CustomActor } from "./custom-orders/index.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from "./errors.ts";
+import { approveLearnPage, readLearnPage, readLearnPages } from "./learn-pages.ts";
+import { closeMatterAsOwner, commentMatterAsOwner, readMattersList } from "./matters.ts";
 import { readPersonForOwner, updatePerson } from "./people/index.ts";
-import { applySaleDecision, cancelSaleDecisionApplied, ownerAgentSettleBy } from "./sale-claims.ts";
+import { applySaleDecision, cancelSaleDecisionApplied, linkUnlinkedDecision, ownerAgentSettleBy, readUnlinkedDecisions } from "./sale-claims.ts";
 import { closeSaleQuestionAsOwner, saleDecisionWire, saleDecisionWires } from "./sale-decisions-door.ts";
 import { readStoredShiftReport, readStoredShiftReportVersions, readStoredShiftReports } from "./shift-handins.ts";
+import { answerQuestion, readTeamSwaps, revokeSwap } from "./team-questions.ts";
 
 /**
  * The owner's agent door (payouts plan 2026-11-24, §1.8, H9): the owner's own agent acting AS the owner, on the
@@ -46,11 +54,14 @@ import { readStoredShiftReport, readStoredShiftReportVersions, readStoredShiftRe
  * Every call, in this order (`callOwnerAgent`): (1) the key is an `act:owner` key of an active owner of the live realm
  * (auth.ts, the route's kind); (2) the reason (`x-hub-owner-reason`, 1 to 500 characters) — else 400 before anything;
  * (3) the operation is on the table — else 403; (4) the call is audited (`owner_agent.call`: op, key, reason) — a
- * failed audit fails the call before it runs; (5) the arguments by the operation's strict schema — else 400; (6) it runs.
+ * failed audit fails the call before it runs; (5) nothing of `OWNER_AGENT_NEVER` anywhere in the arguments — else 403;
+ * (6) the arguments by the operation's strict schema — else 400; (7) it runs.
  *
  * Adding a row: its arguments and answer in packages/contracts/src/owner-agent.ts (`OWNER_AGENT_OPERATION_SCHEMAS`), the
- * row here with the console operation it does the same as, its call in tests/owner-agent-door.integration.test.ts, and
- * its words in docs/agent-doors.md. Part 2 (H10) adds customs, matters, learn pages, swaps, decision links.
+ * row here with the console operation it does the same as, its call in tests/owner-agent-door*.integration.test.ts, and
+ * its words in docs/agent-doors.md. Part 2 (H10): customs (the board's steps of no money; a finding's answers that pay
+ * no order), matters (read; an agent's closed by its writer, any commented), «Обучение» (read, approve), swaps (read,
+ * approve, revoke), decisions carried over from the ledger tied to their sale.
  */
 
 /** Who acts and why: the key, its name, the owner it acts as, the owner's reason. Passed beside the owner's principal. */
@@ -76,7 +87,13 @@ interface OwnerAgentRow<K extends OwnerAgentOperation> {
  * What the door never has (§1.8 «Чего у двери нет», H9 «Никогда»): no console operation of these families and no field
  * of these in an operation's arguments. Keys, passwords, sessions, devices, invitations; erasure and deletion, the page
  * browser, sends and broadcasts; pay terms, where people are paid, transfers, prices, discounts; configs, prompts, the
- * pace, the master switches; signing for a chatter, the test wall; people's rights, logins, role, the owner's Telegram.
+ * pace, the master switches; signing for a chatter, the test wall; people's rights, logins, role, the owner's Telegram;
+ * a person's proposals (their stored change may carry any of it); a custom's payment, its undoing, the owner's word on
+ * it, its cancel (which gives its sales back) and its price.
+ *
+ * `fields` and `steps` are also read off every call's arguments, at any depth, before the operation's own schema
+ * (`ownerAgentNeverIn`, H10): a key named so — written in any case, with or without `_` — or a step (`action`) named so is
+ * 403 with nothing run but the call's audit row, whatever the operation.
  */
 export const OWNER_AGENT_NEVER = {
   operations: [
@@ -88,13 +105,45 @@ export const OWNER_AGENT_NEVER = {
   ],
   fields: [
     "rights", "logins", "agentKeys", "role", "telegram", "payTerms", "payoutDetails", "invite", "password",
-    "priceMills", "payment", "paidWord", "leadModelSlugs", "capabilities",
+    "priceMills", "price", "payment", "unpay", "paidWord", "paid_word", "leadModelSlugs", "capabilities", "proposal", "proposals",
   ],
+  /** The steps (`action`) of no operation of the door: a custom's payment, its undoing, the owner's word on it, its cancel. */
+  steps: ["payment", "unpay", "paid_word", "cancel"],
 } as const;
 
 /** Whether a name (an operation of the door, or the console operation it maps to) is of what the door never has. */
 export function ownerAgentNever(name: string): boolean {
   return OWNER_AGENT_NEVER.operations.some((pattern) => pattern.test(name));
+}
+
+/** A name as `OWNER_AGENT_NEVER` compares it: lower case, letters and digits alone (`paid_word` is `paidWord`). */
+const neverName = (name: string) => name.toLowerCase().replace(/[^a-z0-9]/g, "");
+const NEVER_FIELDS: ReadonlySet<string> = new Set(OWNER_AGENT_NEVER.fields.map(neverName));
+const NEVER_STEPS: ReadonlySet<string> = new Set(OWNER_AGENT_NEVER.steps.map(neverName));
+/** Deeper than any operation's arguments: what nests further is refused as it is. */
+const NEVER_DEPTH = 12;
+
+/**
+ * The first thing of `OWNER_AGENT_NEVER` in a call's arguments, at any depth: a key of its `fields`, or a step (`action`)
+ * of its `steps`; null — none. Arguments nested deeper than any operation's are named as such.
+ */
+export function ownerAgentNeverIn(args: unknown, depth = 0): string | null {
+  if (args === null || typeof args !== "object") return null;
+  if (depth > NEVER_DEPTH) return "(nested too deep)";
+  if (Array.isArray(args)) {
+    for (const item of args) {
+      const found = ownerAgentNeverIn(item, depth + 1);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  for (const [key, value] of Object.entries(args)) {
+    if (NEVER_FIELDS.has(neverName(key))) return key;
+    if (neverName(key) === "action" && typeof value === "string" && NEVER_STEPS.has(neverName(value))) return `action: ${value}`;
+    const found = ownerAgentNeverIn(value, depth + 1);
+    if (found !== null) return found;
+  }
+  return null;
 }
 
 const notFound = () => new NotFoundError("Not found");
@@ -165,6 +214,20 @@ function ownerAgentPersonOf(detail: AdminPersonResponse): OwnerAgentPerson {
 const auditOf = (operator: OwnerAgentOperator): AuditContext => ({
   source: "owner_agent", actorUserId: operator.ownerUserId, actorAgentKeyId: operator.agentKeyId,
 });
+
+/** How an object's history (`object_events`) names a write of the door: the key, the owner on whose behalf, door api. */
+const actorOf = (operator: OwnerAgentOperator): CustomActor & { door: "api" } => ({
+  door: "api", agentKeyId: operator.agentKeyId, onBehalfOfUserId: operator.ownerUserId,
+});
+
+/** A swap question of the live realm, or 404; a question of another kind is not a swap's operation (409). */
+async function swapQuestion(app: OwnerApp, questionId: number) {
+  const row = await findTeamQuestion(app.db, questionId);
+  const live = await livePageCheck(app.db);
+  if (row === null || !live(row.pageId)) throw new NotFoundError("No such question");
+  if (row.kind !== "swap" || row.swap === null) throw new ConflictError("The question is not a swap's", { reason: "not_swap" });
+  return row;
+}
 
 export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow<K> } = {
   // ── Отчёты смен: what is stored, read as it is ──
@@ -324,6 +387,117 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
       return { person: ownerAgentPersonOf(detail) };
     },
   },
+
+  // ── Кастомы: the board as the owner reads it; its steps of no money ──
+  "custom.board": {
+    console: "customOrdersBoard",
+    summary: "«Кастомы» as the owner's board shows it (one page's with pageLabel): the live orders, findings, what changed by itself.",
+    run: (app, owner, _operator, args, now) => customOrdersBoardAs(app, owner, args, now),
+  },
+  "custom.show": {
+    console: "customOrder",
+    summary: "An order whole by its code (K-…): its card, messages, payments, history, the steps the owner may take.",
+    run: (app, owner, _operator, args, now) => customOrderAs(app, owner, args.code, now),
+  },
+  "custom.step": {
+    console: "customOrderAct",
+    summary: "One step of an order as the owner on the board, none of money (no payment, unpay, paid_word, cancel or price):"
+      + " an edit is the card's changed fields without «Оплата».",
+    run: (app, owner, operator, args, now) => actOnCustomOrderAs(app, owner, {
+      code: args.code,
+      step: args.step.action === "edit" ? { action: "edit", patch: args.step.card } : args.step,
+      actor: actorOf(operator),
+    }, now),
+  },
+  "customFinding.list": {
+    console: "customFindingsList",
+    summary: "«Найдено без заказа»: the open findings, and the ones an agent dismissed in two weeks (a person may bring one back).",
+    run: (app, owner, _operator, _args, now) => customFindingsAs(app, owner, now),
+  },
+  "customFinding.answer": {
+    console: "customFindingAct",
+    summary: "Answer a finding: dismiss, reopen, record or link one of no sale. A sale's finding recorded or linked pays the"
+      + " order: 409 finding_pays, the owner does it on the board.",
+    run: (app, owner, operator, args, now) => actOnCustomFindingAs(app, {
+      person: owner, findingId: String(args.findingId), body: args.step, now, actor: actorOf(operator), noPayment: true,
+    }),
+  },
+
+  // ── Дела ──
+  "matter.list": {
+    console: "mattersList",
+    summary: "The owner's matters by state, kind or page (every one: his and the others'), with whether each kind is known.",
+    run: (app, owner, _operator, args, now) => readMattersList(app, owner, args, now),
+  },
+  "matter.close": {
+    console: "agentMatterClose",
+    summary: "Close a matter an agent opened, by its key (resolved, withdrawn, cause_gone). Any other closes through its"
+      + " kind's own step: 409 matter_kind_service, naming it.",
+    run: (app, _owner, operator, args, now) => closeMatterAsOwner(app, args, actorOf(operator), now),
+  },
+  "matter.comment": {
+    console: "agentMatterComment",
+    summary: "Comment a matter by its key, in its history (any kind's).",
+    run: (app, _owner, operator, args, now) => commentMatterAsOwner(app, args, actorOf(operator), now),
+  },
+
+  // ── «Обучение» ──
+  "learn.list": {
+    console: "learnPages",
+    summary: "The pages of «Обучение», each with whether the team reads it (approved).",
+    run: (app, owner, _operator, _args, now) => readLearnPages(app, owner, now),
+  },
+  "learn.show": {
+    console: "learnPage",
+    summary: "A page of «Обучение» with its text.",
+    run: (app, owner, _operator, args, now) => readLearnPage(app, owner, args.slug, now),
+  },
+  "learn.approve": {
+    console: "learnPageApprove",
+    summary: "Approve a page for the team (approved: true), or take the approval back (false).",
+    run: (app, owner, operator, args, now) => approveLearnPage(app, owner, args.slug, args.approved, now, auditOf(operator)),
+  },
+
+  // ── Подмены ──
+  "swap.list": {
+    console: "teamSwaps",
+    summary: "The approved swaps of the next 14 days (and today): who covers whom, when, on which pages.",
+    run: (app, owner, _operator, _args, now) => readTeamSwaps(app, owner, now),
+  },
+  "swap.approve": {
+    console: "teamQuestionAnswer",
+    summary: "«Можно» to a swap question, with a line: the day's lines of the schedule are written. Once its hours began: 409.",
+    run: async (app, owner, operator, args, now) => {
+      await swapQuestion(app, args.questionId);
+      return answerQuestion(app, owner, args.questionId, { answer: "yes", ...(args.text === undefined ? {} : { text: args.text }) }, now, { audit: auditOf(operator) });
+    },
+  },
+  "swap.revoke": {
+    console: "teamSwapRevoke",
+    summary: "Take an approved swap back before its day: its lines are marked taken back.",
+    run: async (app, owner, operator, args, now) => {
+      await swapQuestion(app, args.questionId);
+      return revokeSwap(app, owner, args.questionId, now, { audit: auditOf(operator) });
+    },
+  },
+
+  // ── Решения из ledger ──
+  "decision.unlinked": {
+    console: "saleDecisionsUnlinked",
+    summary: "Decisions carried over from the ledger that name no sale yet, each with the sales it may be.",
+    run: (app, owner, _operator, _args, now) => readUnlinkedDecisions(app, owner, now),
+  },
+  "decision.link": {
+    console: "saleDecisionLink",
+    summary: "Tie a decision carried over from the ledger to its sale: it rules the sale from now, the reports follow.",
+    run: async (app, owner, operator, args, now) => {
+      await liveSale(app, args.transactionId);
+      const decision = (await listSaleDecisions(app.db, { ids: [args.decisionId] }))[0];
+      const live = await livePageCheck(app.db);
+      if (decision === undefined || !live(decision.pageId)) throw new NotFoundError("No such decision waiting for a sale");
+      return linkUnlinkedDecision(app, owner, args, now, ownerAgentSettleBy(operator));
+    },
+  },
 };
 
 /** The reason as the header carries it: percent-encoded UTF-8, 1 to 500 characters after trimming; else 400. */
@@ -369,14 +543,17 @@ export async function callOwnerAgent(
     targetUserId: null,
     metadata: { op, keyName: operator.keyName, reason },
   });
-  // (5) The arguments, by the operation's own strict schema.
+  // (5) What the door never takes, at any depth of the arguments (a right, a price, a payment step): 403, nothing run.
+  const never = ownerAgentNeverIn(input.args);
+  if (never !== null) throw new ForbiddenError(`${op}: «${never}» is never the owner's agent door's`);
+  // (6) The arguments, by the operation's own strict schema.
   const schemas = OWNER_AGENT_OPERATION_SCHEMAS[op];
   const parsed = schemas.args.safeParse(input.args ?? {});
   if (!parsed.success) {
     const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.map(String).join(".") || "args"}: ${issue.message}`);
     throw new BadRequestError(`${op}: ${issues.join("; ")}`, { reason: "owner_agent_args" });
   }
-  // (6) As the owner: the same principal a session of his would be, re-read now.
+  // (7) As the owner: the same principal a session of his would be, re-read now.
   const owner = await principalOfLogin(app, principal.ownerUserId);
   if (owner === null || owner.user.role !== "owner" || owner.sandbox?.test === true) {
     throw new UnauthorizedError("The owner this key acts as is not an active owner", { reason: null });
