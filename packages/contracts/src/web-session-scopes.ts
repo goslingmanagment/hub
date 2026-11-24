@@ -44,6 +44,7 @@ export const NARROW_WEB_SESSION_OPERATIONS = [
   "shiftReportsList",
   "shiftReportClaimable",
   "shiftReportLineSet",
+  "shiftReportReportSale",
   "shiftReportCommentSet",
   "shiftReportOffPlatformAdd",
   "shiftReportOffPlatformWithdraw",

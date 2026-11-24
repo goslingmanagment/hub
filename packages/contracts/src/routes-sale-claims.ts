@@ -160,27 +160,80 @@ export const offPlatformPendingResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
-// ── The week's sales nobody claimed ─────────────────────────────────────────
+// ── Open sales nobody claimed (owner view, live solo-page suggestion) ───────
+
+export const saleNobodySuggestionSchema = z.object({
+  personId: intId,
+  userId: intId,
+  code: z.string(),
+  name: z.string(),
+});
+
+export const saleNobodyCandidateSchema = z.object({
+  userId: intId,
+  code: z.string(),
+  name: z.string(),
+  workingPageLabels: z.array(z.string()),
+});
+
+export const saleNobodyWaitingDecisionSchema = z.object({
+  decisionId: intId,
+  transactionId: intId,
+  pageLabel: z.string(),
+  platform: z.string(),
+  kind: z.string(),
+  occurredAt: isoTimestamp,
+  netMills: mills,
+  fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable() }),
+  recipients: z.array(z.object({
+    userId: intId,
+    name: z.string(),
+    code: z.string().nullable(),
+    isLeft: z.boolean(),
+    percent: z.number().int(),
+  })),
+  decidedAt: isoTimestamp,
+  note: z.string().nullable(),
+});
 
 export const saleNobodyQuerySchema = z.object({
-  /** The Monday of the week (Moscow). */
-  week: businessDate,
+  /** Legacy week filter; optional — the owner sees all open nobody sales regardless of week close. */
+  week: businessDate.optional(),
 });
 export const saleNobodyResponseSchema = z.object({
   from: businessDate,
   to: businessDate,
-  /** The days of the week all of whose shifts are handed in: only their sales are here. */
   days: z.array(businessDate),
-  sales: z.array(saleSchema.extend({ home: z.string(), words: z.string() })),
+  sales: z.array(saleSchema.extend({
+    home: z.string(),
+    words: z.string(),
+    /** Live single-chatter suggestion for open `no_holder` sales; null when 0 or >=2 candidates. */
+    suggestion: saleNobodySuggestionSchema.nullable().default(null),
+  })),
+  /** Active chatters/team leads of the owner's realm to give a nobody sale to. */
+  candidates: z.array(saleNobodyCandidateSchema).default([]),
+  /** Active split decisions waiting for a recipient's shift report («ждёт отчёта»). */
+  waitingDecisions: z.array(saleNobodyWaitingDecisionSchema).default([]),
   totalMills: mills,
   serverNow: isoTimestamp,
 });
 export const saleNobodyKeepBodySchema = z.object({
-  week: businessDate,
-  /** The sales the owner leaves nobody's; absent — every one of the week's list. */
+  week: businessDate.optional(),
+  /** The sales the owner leaves nobody's; absent — every open nobody sale. */
   transactionIds: z.array(intId).max(500).optional(),
 });
 export const saleNobodyKeepResponseSchema = z.object({ kept: z.number().int().nonnegative(), savedAt: isoTimestamp });
+export const saleNobodyGiveBodySchema = z.object({
+  transactionId: intId,
+  userId: intId,
+  note: z.string().trim().max(1000).nullable().optional(),
+});
+export const saleNobodyGiveResponseSchema = z.object({
+  decisionId: intId,
+  status: z.enum(["delivered", "draft", "waiting_report"]),
+  versions: z.array(z.object({ shiftId: intId, version: z.number().int().positive() })),
+  savedAt: isoTimestamp,
+});
 
 // ── Decisions carried over from the ledger and tied to no sale ──────────────
 
@@ -314,17 +367,24 @@ export const saleClaimRouteSchemas = {
   },
   saleNobody: {
     auth: { kind: "owner-session" }, tags: ["admin"],
-    summary: "The week's sales nobody claimed, of the days all of whose shifts are handed in",
-    description: "Owner only. Database only.",
+    summary: "All open sales nobody claimed, with live single-chatter suggestions and waiting deliveries",
+    description: "Owner only. Shows all open nobody/decide sales regardless of week close, with live suggestion for single-chatter pages and active decisions waiting for a next shift report. Database only.",
     querystring: saleNobodyQuerySchema,
     response: { 200: saleNobodyResponseSchema, ...personErrors },
   },
   saleNobodyKeep: {
     auth: { kind: "owner-session" }, tags: ["admin"],
-    summary: "The owner leaves the week's unclaimed sales nobody's («никому»)",
+    summary: "The owner leaves open unclaimed sales nobody's («никому»)",
     description: "Owner only. Each is the owner's decision «никому». Database only.",
     body: saleNobodyKeepBodySchema,
     response: { 200: saleNobodyKeepResponseSchema, ...personErrors },
+  },
+  saleNobodyGive: {
+    auth: { kind: "owner-session" }, tags: ["admin"],
+    summary: "The owner gives an open nobody sale to a person («Отдать <имя>»)",
+    description: "Owner only. Writes the decision under lockSaleSettlements (409 on stale/already decided) and delivers into the recipient's open draft, submitted report (system version), or next shift.",
+    body: saleNobodyGiveBodySchema,
+    response: { 200: saleNobodyGiveResponseSchema, ...personErrors },
   },
   saleDecisionsUnlinked: {
     auth: { kind: "owner-session" }, tags: ["admin"],

@@ -97,6 +97,14 @@ export const LEDGER_GO_RULE: SaleRuleConfig = {
 export const SALE_HOME_KINDS = ["shift", "visit", "pot", "waiting", "decide", "nobody", "before_rule", "unknown"] as const;
 export type SaleHomeKind = (typeof SALE_HOME_KINDS)[number];
 
+/**
+ * Canonical predicate for sales hidden from chatters and team leads: nobody's sales belong to the owner's view alone
+ * (H8). Applied on the server before LIMIT/OFFSET across team sales list, draft «Рядом», claimable list, and sale chain.
+ */
+export function isTeamHiddenSaleHome(home: string | null | undefined): boolean {
+  return home === "nobody";
+}
+
 /** The one pot of the rule: tips under wall posts and Campaign contributions. */
 export const POT_OBSHAK = "obshak";
 

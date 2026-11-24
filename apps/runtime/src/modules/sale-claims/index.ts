@@ -5,6 +5,7 @@ import {
   answerSaleClaim,
   decideOffPlatformLine,
   decideSaleDispute,
+  giveNobodySale,
   keepSalesNobody,
   linkUnlinkedDecision,
   readAgentSaleClaims,
@@ -116,6 +117,10 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
 
   server.post("/api/v1/sale-nobody/keep", { schema: routeSchemas.saleNobodyKeep }, async (request) => {
     return keepSalesNobody(appContext, await owner(request), request.body);
+  });
+
+  server.post("/api/v1/sale-nobody/give", { schema: routeSchemas.saleNobodyGive }, async (request) => {
+    return giveNobodySale(appContext, await owner(request), request.body);
   });
 
   server.get("/api/v1/sale-decisions/unlinked", { schema: routeSchemas.saleDecisionsUnlinked }, async (request) => {

@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { KernelClient } from "@kernel/sdk";
-import { shiftReportResponseSchema, type ShiftReportConfirmResponse, type ShiftReportLineBody, type ShiftReportOffPlatformBody, type ShiftReportResponse } from "@agency_hub_core/contracts";
+import { shiftReportResponseSchema, type ShiftReportConfirmResponse, type ShiftReportLineBody, type ShiftReportOffPlatformBody, type ShiftReportReportSaleBody, type ShiftReportResponse } from "@agency_hub_core/contracts";
 import { KernelApiError } from "@agency_hub_core/ui/hubClient";
 
 /**
@@ -80,6 +80,8 @@ export type Write =
   | { op: "claim"; claimId: number; answer: "agree" | "disagree" }
   | { op: "offPlatformAdd"; body: ShiftReportOffPlatformBody }
   | { op: "offPlatformWithdraw"; offPlatformId: number }
+  /** «Сообщить владельцу» (H8): exact match by transactionRef or fan + amount. */
+  | { op: "reportSale"; body: ShiftReportReportSaleBody }
   /** «Скопировать пост» of one model's post: Hub remembers the copy (a later version that changes its page sums says «Пост изменился»). */
   | { op: "postCopied"; model: string };
 
@@ -100,6 +102,7 @@ function send(kernel: KernelClient, shiftId: number, write: Write): Promise<unkn
     case "claim": return kernel.saleClaimAnswer({ params: { claimId: write.claimId }, body: { answer: write.answer, note: null } });
     case "offPlatformAdd": return kernel.shiftReportOffPlatformAdd({ params, body: write.body });
     case "offPlatformWithdraw": return kernel.shiftReportOffPlatformWithdraw({ params: { shiftId, offPlatformId: write.offPlatformId } });
+    case "reportSale": return kernel.shiftReportReportSale({ params, body: write.body });
     case "postCopied": return kernel.shiftReportPostCopied({ params, query: { model: write.model } });
   }
 }

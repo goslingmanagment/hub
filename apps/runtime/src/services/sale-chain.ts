@@ -33,7 +33,7 @@ import { hubModelNameOf, type HubModel } from "./ledger-month.ts";
 import { realmOf, requireSalesOfRealm } from "./sandbox/realm.ts";
 import { readTeamLedgerPayoutPerson } from "./ledger-person-pay.ts";
 import { readTeamLedgerReports } from "./ledger-team-reports.ts";
-import { SALE_HOME_REASON_TEXT, SALE_RULE, type SaleHomeReason } from "./sale-rule.ts";
+import { SALE_HOME_REASON_TEXT, SALE_RULE, isTeamHiddenSaleHome, type SaleHomeReason } from "./sale-rule.ts";
 import { dayWords, shiftWords } from "./shift-handin-rules.ts";
 
 /**
@@ -58,7 +58,7 @@ type ChainApp = Pick<AppContext, "db" | "config" | "logger">;
 
 export type ChainViewer =
   | { kind: "owner" }
-  | { kind: "team_lead"; pageIds: readonly number[] }
+  | { kind: "team_lead"; userId?: number; pageIds: readonly number[] }
   | { kind: "chatter"; userId: number; pageIds: readonly number[] }
   | { kind: "agent"; pageIds: readonly number[] };
 
@@ -482,15 +482,24 @@ export async function readSaleChain(
   const claims = (await listSaleClaims(db, { transactionIds: [sale.transactionId] })).filter((claim) => claim.state !== "withdrawn");
   let ownLogins: number[] = [];
   if (viewer.kind !== "owner" && !viewer.pageIds.includes(sale.pageId)) throw notFound();
-  if (viewer.kind === "chatter") {
-    const person = (await listHandinPeopleOfUsers(db, [viewer.userId])).get(viewer.userId);
-    ownLogins = [...new Set([viewer.userId, ...(person?.userIds ?? [])])];
+  if (viewer.kind === "chatter" || viewer.kind === "team_lead") {
+    if (viewer.userId !== undefined) {
+      const person = (await listHandinPeopleOfUsers(db, [viewer.userId])).get(viewer.userId);
+      ownLogins = [...new Set([viewer.userId, ...(person?.userIds ?? [])])];
+    }
     const mine = (id2: number | null) => id2 !== null && ownLogins.includes(id2);
-    const involved = people.some(mine)
-      || reports.some((report) => mine(report.userId))
-      || claims.some((claim) => mine(claim.claimantUserId) || mine(claim.sideUserId))
-      || await shiftOfUsersHoldsSale(db, { userIds: ownLogins, pageLabel: sale.pageLabel, at: sale.occurredAt });
-    if (!involved) throw notFound();
+    const hasOwnLineOrClaim = reports.some((report) => mine(report.userId))
+      || claims.some((claim) => mine(claim.claimantUserId) || mine(claim.sideUserId));
+    // Nobody's sales are hidden from chatters and team leads (H8), unless they already have their own handed-in line
+    // or non-withdrawn claim referencing this sale.
+    if (isTeamHiddenSaleHome(sale.home?.home)) {
+      if (!hasOwnLineOrClaim) throw notFound();
+    } else if (viewer.kind === "chatter") {
+      const involved = people.some(mine)
+        || hasOwnLineOrClaim
+        || await shiftOfUsersHoldsSale(db, { userIds: ownLogins, pageLabel: sale.pageLabel, at: sale.occurredAt });
+      if (!involved) throw notFound();
+    }
   }
 
   const decision = (await listActiveSaleDecisions(db, [sale.transactionId])).get(sale.transactionId) ?? null;

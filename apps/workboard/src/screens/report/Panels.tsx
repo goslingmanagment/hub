@@ -152,22 +152,42 @@ function OffPlatform({ api }: { api: BoardApi }) {
   );
 }
 
-/** «Найти продажу»: a sale of the last 7 days on the person's pages that no report of theirs holds, «Это моё» with a line of why. */
+/** «Найти продажу»: claimable sales of the last 7 days + «Сообщить владельцу» by exact transactionRef or fan + amount (H8). */
 function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
   const read = useClaimable(api.report.shift.id, true);
   const [query, setQuery] = useState("");
   const [claiming, setClaiming] = useState<{ id: number; text: string } | null>(null);
+  const [reportRef, setReportRef] = useState("");
+  const [reportFan, setReportFan] = useState("");
+  const [reportAmount, setReportAmount] = useState("");
+  const [reportNote, setReportNote] = useState("");
   const { once, sending } = useOnce();
   const onBoard = new Set(allRows(api.board).map((row) => row.transactionId));
   const sales = (read.data?.sales ?? []).filter((sale) => !onBoard.has(sale.transactionId));
   const words = query.trim().toLowerCase().replace(/^@/, "");
-  const nobody = sales.filter((sale) => sale.home === "nobody");
-  const found = words === "" ? [] : sales.filter((sale) => sale.home !== "nobody" && [sale.fan.name, sale.fan.username].some((name) => name !== null && name.toLowerCase().includes(words)));
+  const found = words === "" ? [] : sales.filter((sale) => [sale.fan.name, sale.fan.username].some((name) => name !== null && name.toLowerCase().includes(words)));
   const claim = (transactionId: number, note: string) => once(async () => {
     if (await api.run({ op: "line", transactionId, body: { statement: "mine", note } }, "Продажа добавлена в отчёт")) {
       setClaiming(null);
       close();
       api.show(keyOfTransaction(transactionId));
+    }
+  });
+  const dollars = Number(reportAmount.replace(",", "."));
+  const hasRef = reportRef.trim() !== "";
+  const hasFanAmount = reportFan.trim() !== "" && Number.isFinite(dollars) && dollars > 0;
+  const reportReady = (hasRef || hasFanAmount) && reportNote.trim() !== "";
+  const reportToOwner = () => once(async () => {
+    if (!reportReady) return;
+    const body = hasRef
+      ? { transactionRef: reportRef.trim(), note: reportNote.trim() }
+      : { fan: reportFan.trim(), amountMills: Number(millsFromDollars(dollars)), note: reportNote.trim() };
+    if (await api.run({ op: "reportSale", body }, "Заявка отправлена владельцу")) {
+      setReportRef("");
+      setReportFan("");
+      setReportAmount("");
+      setReportNote("");
+      close();
     }
   });
   const saleRow = (sale: (typeof sales)[number]) => {
@@ -205,13 +225,28 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
       {read.isError && <div className="dlg-e">Список не пришёл. <button type="button" className="lk" onClick={() => void read.refetch()}>Ещё раз</button></div>}
       {read.data && (
         <>
-          <div className="dlg-t">Ничьи{nobody.length === 0 ? ": нет" : ""}</div>
-          {nobody.map(saleRow)}
-          <div className="dlg-t">Другие</div>
-          <input className="fld" placeholder="Имя или логин фана" aria-label="Имя или логин фана" value={query} onChange={(event) => setQuery(event.target.value)} />
+          <div className="dlg-t">Найти среди продаж команды</div>
+          <input className="fld" placeholder="Имя или логин фана" aria-label="Имя или логин фана" value={query} onChange={(event) => setQuery(event.target.value)} data-autofocus />
           {words !== "" && (found.length === 0 ? <div className="dlg-e">Таких продаж нет.</div> : found.slice(0, 50).map(saleRow))}
         </>
       )}
+      <div className="dlg-t">Сообщить владельцу</div>
+      <p className="hint">Если продажи нет в списке, укажите номер транзакции или точные данные фана и сумму. Строка попадёт в отчёт как спорная ($0) и уйдёт владельцу.</p>
+      <div className="form-r">
+        <input className="fld" placeholder="Номер транзакции" aria-label="Номер транзакции" maxLength={120} value={reportRef} onChange={(event) => setReportRef(event.target.value)} />
+      </div>
+      <div className="form-r">
+        <input className="fld" placeholder="Или фан (логин / имя / id)" aria-label="Фан" maxLength={200} value={reportFan} onChange={(event) => setReportFan(event.target.value)} disabled={hasRef} />
+        <input className="fld is-sum" inputMode="decimal" placeholder="Сумма, $" aria-label="Сумма в долларах" value={reportAmount} onChange={(event) => setReportAmount(event.target.value)} disabled={hasRef} />
+      </div>
+      <div className="form-r">
+        <input className="fld" placeholder="Почему продажа ваша? Одной строкой" aria-label="Пояснение для владельца" maxLength={300} value={reportNote}
+          onChange={(event) => setReportNote(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && reportReady) void reportToOwner();
+          }} />
+        <button type="button" className="btn btn--main btn--sm" disabled={!reportReady || sending} onClick={() => void reportToOwner()}>Сообщить</button>
+      </div>
     </>
   );
 }

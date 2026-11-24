@@ -6,6 +6,7 @@ import {
   findHandinShift,
   findPersonRowByCode,
   listActiveSaleDecisions,
+  listCurrentReportsOfSales,
   listHandinLastWrites,
   listHandinMarks,
   listHandinNames,
@@ -18,8 +19,10 @@ import {
   listHandinsOfShifts,
   listMatterPageLabels,
   listPersonWorkingPageRows,
+  listRecipientOpenShifts,
   listReportedSales,
   listSaleClaims,
+  listSaleDecisions,
   listSaleFacts,
   listSaleHomes,
   listVisiblePages,
@@ -36,6 +39,7 @@ import {
   type HandinVersionRow,
   type OffPlatformRow,
 } from "@agency_hub_core/db";
+import { moscowDayOfMs } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "./auth.ts";
@@ -348,9 +352,33 @@ export async function draftFacts(
     };
   });
 
+  // Active unapplied owner decisions (`kind = 'split'`, `applied_at IS NULL`) for this person: pull into the one
+  // deterministic landing open shift when no submitted report of the person holds the sale yet (H8 «Отдать <имя>»
+  // without a shift on the sale's day). Also avoid duplicating `before` owner-decision rows across multiple open shifts.
+  const pendingDecisions = (await listSaleDecisions(db, { open: true, userIds: subject.userIds }))
+    .filter((one) => one.kind === "split" && one.transactionId !== null);
+  const openShifts = pendingDecisions.length === 0 ? [] : await listRecipientOpenShifts(db, { userIds: subject.userIds });
+  const landingShiftFor = (occurredAt: Date): number | null => {
+    if (openShifts.length === 0) return null;
+    const landingDay = moscowDayOfMs(occurredAt.getTime());
+    const picked = openShifts.find((one) => one.reportDate === landingDay)
+      ?? openShifts.find((one) => one.reportDate > landingDay)
+      ?? openShifts[0]!;
+    return picked.shiftId;
+  };
+  const pendingDecisionBySale = new Map(pendingDecisions.map((one) => [one.transactionId!, one]));
+
   // The days before the window: its next-shift PPVs and «долёт», as the hourly `sale_homes` keeps them.
   const before = (await listSaleHomes(db, { from: new Date(window.from - HANDIN_LOOKBACK_DAYS * DAY_MS), to: from }))
-    .filter((row) => row.shares.some((share) => subject.userIds.includes(share.userId)));
+    .filter((row) => row.shares.some((share) => subject.userIds.includes(share.userId)))
+    .filter((row) => {
+      // An active unapplied owner decision with no shift of its own lands only on its single deterministic open shift.
+      if ((row.reason === "owner_claim" || row.reason === "owner_split") && pendingDecisionBySale.has(row.transactionId)
+        && openShifts.length > 1 && landingShiftFor(row.occurredAt) !== shift.id) {
+        return false;
+      }
+      return true;
+    });
   const kinds = await listHandinSaleKinds(db, before.map((row) => row.transactionId));
   for (const row of before) {
     const label = catalog.labelOf.get(row.pageId) ?? String(row.pageId);
@@ -417,6 +445,56 @@ export async function draftFacts(
   for (const row of claimedRows) {
     classified.push(claimedSale(saleOfRow(row), context, others.has(row.transactionId)));
     seen.add(row.transactionId);
+  }
+
+  // Pull active unapplied owner decisions (`applied_at IS NULL`, `kind = 'split'`) that are not yet in `seen` and not
+  // yet held by any submitted report of the person: delivered once into the recipient's landing open shift draft.
+  const unshownPending = pendingDecisions.filter((one) => one.transactionId !== null && !seen.has(one.transactionId));
+  if (unshownPending.length > 0 && (handin === null || handin.state === "open")) {
+    const pendingIds = [...new Set(unshownPending.map((one) => one.transactionId!))];
+    const submittedForPending = await listCurrentReportsOfSales(db, pendingIds);
+    const alreadySubmittedByMe = new Set<number>();
+    for (const report of submittedForPending) {
+      if (!context.userIds.has(report.userId)) continue;
+      if (report.handinId === handin?.id) continue;
+      for (const line of report.lines) {
+        if (line.transactionId !== null && (line.amountMills > 0 || line.settled === "owner")) {
+          alreadySubmittedByMe.add(line.transactionId);
+        }
+      }
+    }
+    const pendingSales = new Map((await listHandinSalesByIds(db, pendingIds)).map((row) => [row.transactionId, row]));
+    for (const decision of unshownPending) {
+      const saleId = decision.transactionId!;
+      if (seen.has(saleId) || alreadySubmittedByMe.has(saleId)) continue;
+      const row = pendingSales.get(saleId);
+      if (row === undefined) continue;
+      const share = settledShareOf({ netMills: row.netMills, userIds: context.userIds, decision, agreed: [] });
+      if (share === null || share.amountMills <= 0) continue;
+      if (landingShiftFor(row.occurredAt) !== shift.id) continue;
+      const reason: SaleHomeReason = decision.ruleHome === "nobody" && decision.shares.filter((one) => one.percent > 0).length === 1
+        ? "owner_claim"
+        : "owner_split";
+      const base = saleOfRow(row);
+      const draftSale: DraftSale = {
+        ...base,
+        home: {
+          kind: "shift",
+          reason,
+          pot: null,
+          shares: [{ userId: subject.shift.userId, workRef: null, shiftId: null, mills: share.amountMills }],
+        },
+      };
+      classified.push({
+        sale: draftSale,
+        group: "mine",
+        added: true,
+        shareMills: share.amountMills,
+        toUserId: null,
+        alreadyIn: null,
+      });
+      seen.add(saleId);
+    }
   }
   classified.sort((a, b) => (a.group === b.group ? a.sale.occurredAt - b.sale.occurredAt : a.group === "mine" ? -1 : 1));
 

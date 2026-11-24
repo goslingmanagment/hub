@@ -126,13 +126,18 @@ function columns(): Column<TeamSalesListSale>[] {
 export function ListTab() {
   const { period } = usePeriod();
   const { page, setPage } = usePageFilter();
-  const [home, setHome] = useHomeFilter();
+  const [rawHome, setHome] = useHomeFilter();
   const { isOwner } = useMe();
+  // Nobody's sales are hidden from chatters and team leads (H8): never offer or query the «Ничьи» chip for them.
+  const home: TeamSaleHomeFilterWire = !isOwner && rawHome === "nobody" ? "all" : rawHome;
   const query = useSalesList({ from: period.from, to: period.to, page, home });
   const first = query.data?.pages[0] ?? null;
   const rows = query.data?.pages.flatMap((one) => one.sales) ?? [];
   const counts = first?.counts ?? null;
-  const shown = FILTERS.filter((one) => one.value === "all" || one.value === home || (counts !== null && counts[one.value] > 0 && !(one.value === "mine" && isOwner)));
+  const shown = FILTERS.filter((one) => {
+    if (one.value === "nobody" && !isOwner) return false;
+    return one.value === "all" || one.value === home || (counts !== null && counts[one.value] > 0 && !(one.value === "mine" && isOwner));
+  });
 
   let body;
   if (first === null) {

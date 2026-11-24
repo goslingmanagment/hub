@@ -1,6 +1,6 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
-import { livePageSql, liveUserSql, testUserSql } from "./realm.ts";
+import { livePageSql, liveUserSql, testPageSql, testUserSql } from "./realm.ts";
 import { enqueueSaleHomeRefreshForHandin } from "./sale-homes.ts";
 import type { Database } from "../client.ts";
 
@@ -1029,16 +1029,129 @@ export async function listHandinSalesByIds(db: Database, transactionIds: readonl
   return result.rows.map(saleOf);
 }
 
+/** SQL predicate matching `isTeamHiddenSaleHome` (`home === 'nobody'`): excludes nobody's sales before LIMIT/OFFSET. */
+export function teamVisibleSaleHomeSql(alias: SQL = sql`h`): SQL {
+  return sql`(${alias}.home is null or ${alias}.home <> 'nobody')`;
+}
+
 /** The sales of the pages in [from, to), the newest first, at most `limit`: what a person may add by hand. */
-export async function listHandinSalesOnPages(db: Database, input: { pageIds: readonly number[]; from: Date; to: Date; limit: number }): Promise<HandinSaleRow[]> {
+export async function listHandinSalesOnPages(
+  db: Database,
+  input: { pageIds: readonly number[]; from: Date; to: Date; limit: number; hideNobody?: boolean },
+): Promise<HandinSaleRow[]> {
   if (input.pageIds.length === 0) return [];
+  const visibleHome = input.hideNobody === true ? sql`and ${teamVisibleSaleHomeSql()}` : sql``;
   const result = await db.execute<Row>(sql`${SALE_SELECT}
     where t.platform_account_id = any(${ids(input.pageIds)}) and t.is_active and t.gross_amount_mills > 0
       and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
       and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz
+      ${visibleHome}
     order by t.occurred_at desc, t.id desc
     limit ${input.limit}`);
   return result.rows.map(saleOf);
+}
+
+/**
+ * Exact-match lookup for «Сообщить владельцу»: searches active sales strictly within the caller's granted pages and
+ * realm, by platform/Hub transaction reference OR by (fan + amountMills). Returns up to `limit` (default 2) rows so
+ * the caller distinguishes exact-1 from 0/>1 without ever exposing a candidate list.
+ */
+export async function findSalesForReportClaim(
+  db: Database,
+  input: {
+    pageIds: readonly number[];
+    realm: "live" | "test";
+    transactionRef?: string | undefined;
+    fan?: string | undefined;
+    amountMills?: number | undefined;
+    limit?: number;
+  },
+): Promise<HandinSaleRow[]> {
+  if (input.pageIds.length === 0) return [];
+  const realmSql = input.realm === "test" ? testPageSql(sql`t.platform_account_id`) : livePageSql(sql`t.platform_account_id`);
+  const ref = input.transactionRef?.trim() ?? "";
+  let matchSql: SQL;
+  if (ref !== "") {
+    matchSql = /^\d+$/u.test(ref) && Number.isSafeInteger(Number(ref))
+      ? sql`(t.transaction_id = ${ref} or t.id = ${Number(ref)})`
+      : sql`t.transaction_id = ${ref}`;
+  } else {
+    const fan = (input.fan ?? "").trim().replace(/^@+/u, "");
+    if (fan === "" || input.amountMills === undefined) return [];
+    matchSql = sql`(lower(coalesce(f.username, '')) = lower(${fan})
+      or lower(coalesce(f.display_name, '')) = lower(${fan})
+      or f.platform_user_id = ${fan}
+      or ('u' || f.platform_user_id) = ${fan})
+      and (t.creator_net_amount_mills = ${input.amountMills} or t.gross_amount_mills = ${input.amountMills})`;
+  }
+  const result = await db.execute<Row>(sql`${SALE_SELECT}
+    where t.platform_account_id = any(${ids(input.pageIds)}) and ${realmSql}
+      and t.is_active and t.gross_amount_mills > 0
+      and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
+      and ${matchSql}
+    order by t.occurred_at desc, t.id desc
+    limit ${input.limit ?? 2}`);
+  return result.rows.map(saleOf);
+}
+
+/** Living shifts of a person on a Moscow report day, joined with their handin row (if any), newest first. */
+export interface RecipientDayHandinRow {
+  shiftId: number;
+  userId: number;
+  shiftState: string;
+  reportDate: string;
+  pages: string[];
+  handinId: number | null;
+  handinState: "open" | "submitted" | null;
+  phase: string | null;
+}
+
+export async function listRecipientDayHandins(
+  db: Database,
+  input: { userIds: readonly number[]; reportDate: string },
+): Promise<RecipientDayHandinRow[]> {
+  if (input.userIds.length === 0) return [];
+  const result = await db.execute<Row>(sql`
+    select s.id as shift_id, s.user_id, s.state as shift_state,
+      to_char(coalesce(h.report_date, s.report_date), 'YYYY-MM-DD') as report_date,
+      s.pages,
+      h.id as handin_id, h.state as handin_state, h.phase
+    from shifts s
+    left join shift_handins h on h.shift_id = s.id
+    where s.user_id = any(${ids(input.userIds)}) and s.state in ('going', 'closed')
+      and coalesce(h.report_date, s.report_date) = ${input.reportDate}::date
+    order by s.started_at desc, s.id desc`);
+  return result.rows.map((row) => ({
+    shiftId: num(row.shift_id),
+    userId: num(row.user_id),
+    shiftState: String(row.shift_state),
+    reportDate: String(row.report_date),
+    pages: jsonArray<{ pageLabel?: string }>(row.pages).map((page) => String(page.pageLabel ?? "")).filter((label) => label !== ""),
+    handinId: nullableNum(row.handin_id),
+    handinState: row.handin_state === null || row.handin_state === undefined ? null : (String(row.handin_state) as "open" | "submitted"),
+    phase: text(row.phase),
+  }));
+}
+
+/** Living unsubmitted shifts of a person (no handin or open handin), oldest first, for deterministic decision landing. */
+export async function listRecipientOpenShifts(
+  db: Database,
+  input: { userIds: readonly number[] },
+): Promise<Array<{ shiftId: number; userId: number; reportDate: string; startedAt: Date }>> {
+  if (input.userIds.length === 0) return [];
+  const result = await db.execute<Row>(sql`
+    select s.id as shift_id, s.user_id, to_char(s.report_date, 'YYYY-MM-DD') as report_date, s.started_at
+    from shifts s
+    left join shift_handins h on h.shift_id = s.id
+    where s.user_id = any(${ids(input.userIds)}) and s.state in ('going', 'closed')
+      and (h.id is null or h.state = 'open')
+    order by s.started_at asc, s.id asc`);
+  return result.rows.map((row) => ({
+    shiftId: num(row.shift_id),
+    userId: num(row.user_id),
+    reportDate: String(row.report_date),
+    startedAt: date(row.started_at),
+  }));
 }
 
 /**
@@ -1071,14 +1184,16 @@ function teamSaleHomeSql(filter: Exclude<TeamSaleHomeFilter, "all">, userIds: re
  */
 export async function listTeamSalesWithHomes(
   db: Database,
-  input: { pageIds: "all" | readonly number[]; from: Date; to: Date; filter: TeamSaleHomeFilter; userIds: readonly number[]; limit: number; offset: number },
+  input: { pageIds: "all" | readonly number[]; from: Date; to: Date; filter: TeamSaleHomeFilter; userIds: readonly number[]; limit: number; offset: number; hideNobody?: boolean },
 ): Promise<{ sales: HandinSaleRow[]; counts: Record<TeamSaleHomeFilter, number> }> {
   const counts = Object.fromEntries(TEAM_SALE_HOME_FILTERS.map((filter) => [filter, 0])) as Record<TeamSaleHomeFilter, number>;
   if (input.pageIds !== "all" && input.pageIds.length === 0) return { sales: [], counts };
   const pages = input.pageIds === "all" ? livePageSql(sql`t.platform_account_id`) : sql`t.platform_account_id = any(${ids(input.pageIds)})`;
+  const visibleHome = input.hideNobody === true ? sql`and ${teamVisibleSaleHomeSql()}` : sql``;
   const where = sql`where ${pages} and t.is_active and t.gross_amount_mills > 0
       and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
-      and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz`;
+      and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz
+      ${visibleHome}`;
   const only = input.filter === "all" ? sql`` : sql`and ${teamSaleHomeSql(input.filter, input.userIds)}`;
   const result = await db.execute<Row>(sql`${SALE_SELECT}
     ${where} ${only}

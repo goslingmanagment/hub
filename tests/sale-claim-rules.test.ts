@@ -10,9 +10,11 @@ import {
   ruleMarksOf,
   settledVersion,
   shareAfter,
+  suggestSoloPagePerson,
   type ClaimView,
   type ReportLine,
   type ReportView,
+  type SoloPageCandidate,
 } from "../apps/runtime/src/services/sale-claim-rules.ts";
 import { SALE_RULE, homeOfSale, homesOfSales, type RuleMark, type RuleSale, type RuleWork } from "../apps/runtime/src/services/sale-rule.ts";
 
@@ -119,15 +121,15 @@ describe("which statements reach another person", () => {
     expect(claims[0]!.note).toBe("договорились вчера");
   });
 
-  it("takes a «моё» of a sale nobody held as plain, a junction's to the rule, a pot's to the owner", () => {
+  it("routes a disputed «моё» on a nobody's sale and a pot's sale to the owner (sideUserId: null), while a junction stays to the rule", () => {
     const claims = deriveClaims([
       report(101, 1, "2026-11-05 22:00", [
-        line(1, { statement: "mine", amountMills: 36_000, disputed: false, rule: { home: "nobody", reason: "no_holder", shareMills: 0, toUserId: null, senderUserId: null } }),
-        line(2, { statement: "mine", amountMills: 36_000, disputed: true, rule: { home: "decide", reason: "no_last_writer", shareMills: 0, toUserId: null, senderUserId: null } }),
-        line(3, { statement: "mine", amountMills: 36_000, disputed: true, rule: { home: "pot", reason: "post_tip", shareMills: 0, toUserId: null, senderUserId: null } }),
+        line(1, { statement: "mine", amountMills: 0, claimedMills: 36_000, disputed: true, rule: { home: "nobody", reason: "no_holder", shareMills: 0, toUserId: null, senderUserId: null } }),
+        line(2, { statement: "mine", amountMills: 0, claimedMills: 36_000, disputed: true, rule: { home: "decide", reason: "no_last_writer", shareMills: 0, toUserId: null, senderUserId: null } }),
+        line(3, { statement: "mine", amountMills: 0, claimedMills: 36_000, disputed: true, rule: { home: "pot", reason: "post_tip", shareMills: 0, toUserId: null, senderUserId: null } }),
       ]),
     ]);
-    expect(claims.map((claim) => [claim.transactionId, claim.sideUserId])).toEqual([[3, null]]);
+    expect(claims.map((claim) => [claim.transactionId, claim.sideUserId])).toEqual([[1, null], [3, null]]);
   });
 
   it("makes a sale counted for more than its net a dispute by itself, the later hand-in against the earlier", () => {
@@ -303,6 +305,90 @@ describe("a word on a sale «стык смен» (review round 2, N4)", () => {
     const junction = { home: "decide", reason: "no_last_writer", shareMills: 0, toUserId: null, senderUserId: null };
     const marks = ruleMarksOf({ reports: [report(101, 1, "2026-11-05 22:00", [line(7, { statement: "mine", disputed: true, rule: junction })])], claims: [] }).get(7);
     expect(marks).toEqual([{ ...said(101, "mine"), confirmed: false }]);
+  });
+});
+
+describe("live single-chatter suggestion for open nobody sales (H8)", () => {
+  const person = (personId: number, code: string, over: Partial<SoloPageCandidate> = {}): SoloPageCandidate => ({
+    personId,
+    code,
+    displayName: code[0]!.toUpperCase() + code.slice(1),
+    kind: "human",
+    role: "chatter",
+    state: "working",
+    leftOn: null,
+    ...over,
+  });
+  const login = (personId: number, userId: number, disabled = false) => ({
+    personId,
+    userId,
+    disabledAt: disabled ? new Date("2026-11-01T00:00:00Z") : null,
+    deletedAt: null,
+  });
+
+  it("suggests the sole active chatter linked via working pages, ignoring non-chatters and preferring a live login", () => {
+    const people = [
+      person(1, "anna"),
+      person(2, "cm", { role: "content_manager" }),
+      person(3, "boss", { role: "owner" }),
+      person(4, "bot", { kind: "agent", role: "agent" }),
+    ];
+    const got = suggestSoloPagePerson({
+      pageId: 10,
+      saleDay: "2026-11-12",
+      people,
+      workingPages: [{ personId: 1, pageId: 10 }, { personId: 2, pageId: 10 }, { personId: 3, pageId: 10 }],
+      logins: [login(1, 501, true), login(1, 502, false)],
+      slots: [],
+    });
+    expect(got).toEqual({ personId: 1, userId: 502, code: "anna", name: "Anna" });
+  });
+
+  it("returns null when 0 or >=2 active people cover the page", () => {
+    const people = [person(1, "anna"), person(2, "bella")];
+    const logins = [login(1, 501), login(2, 502)];
+    expect(suggestSoloPagePerson({ pageId: 10, saleDay: "2026-11-12", people, workingPages: [], logins, slots: [] })).toBeNull();
+    expect(suggestSoloPagePerson({
+      pageId: 10,
+      saleDay: "2026-11-12",
+      people,
+      workingPages: [{ personId: 1, pageId: 10 }, { personId: 2, pageId: 10 }],
+      logins,
+      slots: [],
+    })).toBeNull();
+  });
+
+  it("excludes people who left on or before saleDay, and keeps people who left strictly after saleDay", () => {
+    const people = [
+      person(1, "anna"),
+      person(2, "cora", { state: "left", leftOn: "2026-11-12" }),
+      person(3, "dora", { state: "left", leftOn: null }),
+    ];
+    const workingPages = [{ personId: 1, pageId: 10 }, { personId: 2, pageId: 10 }, { personId: 3, pageId: 10 }];
+    const logins = [login(1, 501), login(2, 502), login(3, 503)];
+    expect(suggestSoloPagePerson({ pageId: 10, saleDay: "2026-11-12", people, workingPages, logins, slots: [] })?.code).toBe("anna");
+    expect(suggestSoloPagePerson({ pageId: 10, saleDay: "2026-11-11", people, workingPages, logins, slots: [] })).toBeNull();
+  });
+
+  it("unions active schedule slots and cover swaps on saleDay (and respects off swaps on slot-only holders)", () => {
+    const people = [person(1, "anna"), person(2, "bella")];
+    const logins = [login(1, 501), login(2, 502)];
+    const coverSlot = {
+      personId: 2, pageId: 10, startMinute: 12 * 60, endMinute: 20 * 60, weekdays: null,
+      validFrom: "2026-11-12", validTo: "2026-11-12", day: "cover" as const,
+    };
+    expect(suggestSoloPagePerson({ pageId: 10, saleDay: "2026-11-12", people, workingPages: [], logins, slots: [coverSlot] })?.code).toBe("bella");
+    expect(suggestSoloPagePerson({ pageId: 10, saleDay: "2026-11-13", people, workingPages: [], logins, slots: [coverSlot] })).toBeNull();
+    expect(suggestSoloPagePerson({
+      pageId: 10, saleDay: "2026-11-12", people, workingPages: [{ personId: 1, pageId: 10 }], logins, slots: [coverSlot],
+    })).toBeNull();
+    expect(suggestSoloPagePerson({
+      pageId: 10, saleDay: "2026-11-13", people, workingPages: [{ personId: 1, pageId: 10 }], logins, slots: [coverSlot],
+    })?.code).toBe("anna");
+    const standing = { personId: 2, pageId: 10, startMinute: 12 * 60, endMinute: 20 * 60, weekdays: null, validFrom: null, validTo: null };
+    const off = { ...standing, validFrom: "2026-11-12", validTo: "2026-11-12", day: "off" as const };
+    expect(suggestSoloPagePerson({ pageId: 10, saleDay: "2026-11-12", people, workingPages: [], logins, slots: [standing, off] })).toBeNull();
+    expect(suggestSoloPagePerson({ pageId: 10, saleDay: "2026-11-13", people, workingPages: [], logins, slots: [standing, off] })?.code).toBe("bella");
   });
 });
 

@@ -109,6 +109,7 @@ export const CLIENT_TOKEN_PROFILES = {
       "shiftReportsList",
       "shiftReportClaimable",
       "shiftReportLineSet",
+      "shiftReportReportSale",
       "shiftReportCommentSet",
       "shiftReportOffPlatformAdd",
       "shiftReportOffPlatformWithdraw",
