@@ -477,7 +477,8 @@ function oneUser(works: readonly RuleWork[]): boolean {
  */
 function homeOfSender(rule: SaleRuleConfig, sale: RuleSale, sender: number, holders: readonly RuleWork[], ix: Index, now: number): SaleHome {
   const at = sale.occurredAt;
-  const theirs = (work: RuleWork) => work.userId === sender && !beforeRule(rule, work);
+  const senderPerson = ix.personOf(sender);
+  const theirs = (work: RuleWork) => ix.personOf(work.userId) === senderPerson && !beforeRule(rule, work);
   for (const work of holders) {
     if (theirs(work)) return whole(work, sale.netMills, "ppv_sender");
   }

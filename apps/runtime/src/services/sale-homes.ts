@@ -1,5 +1,6 @@
 import type { AgentTeamSale, AgentTeamSalesResponse, AgentTeamWork } from "@agency_hub_core/contracts";
 import {
+  acquireErasureFenceSharedLock,
   completeSaleHomeRefreshDue,
   deleteVanishedSaleHomesInWindow,
   listActiveSaleDecisions,
@@ -373,19 +374,29 @@ export function moscowDaysInRange(from: Date, to: Date): string[] {
 export async function refreshSaleHomesForDay(
   db: Database,
   day: string,
-  now: Date,
+  now?: Date,
   options?: { /** Test seam: runs after reading inputs & generation, before writing/completing. */ afterRead?: () => Promise<void> },
 ): Promise<{ sales: number; written: number; retracted: number }> {
   if (day < moscowDayOf(SALE_RULE.since)) return { sales: 0, written: 0, retracted: 0 };
   const dayStart = new Date(`${day}T00:00:00+03:00`);
-  const dayEnd = new Date(Math.min(now.getTime(), dayStart.getTime() + DAY_MS));
-  if (!(dayStart.getTime() < dayEnd.getTime())) return { sales: 0, written: 0, retracted: 0 };
 
   return db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await lockSaleHomeRefreshDay(tx, day);
+    // Read the effective clock AFTER acquiring the day lock so a slow sweep never overwrites a fresher pass across a
+    // PPV deadline or clears a current-day generation with a stale cutoff.
+    const effectiveNow = now ?? new Date();
+    const dayEnd = new Date(Math.min(effectiveNow.getTime(), dayStart.getTime() + DAY_MS));
+    if (!(dayStart.getTime() < dayEnd.getTime())) return { sales: 0, written: 0, retracted: 0 };
     const generation = await readSaleHomeRefreshGeneration(tx, day);
-    const { answer, homes, pageIds, logins } = await computeSaleHomes(tx, { from: dayStart, to: dayEnd, now, slots: registrySlots(tx) });
+    // Take the shared erasure fence in sorted page-id order BEFORE reading sales so an in-flight page erasure commits
+    // first (and any later erasure waits for this write before deleting), preventing resurrection of erased homes.
+    const activePages = [...await listVisiblePages(tx), ...await listVisiblePages(tx, await listTestPageIds(tx))];
+    const sortedPageIds = [...new Set(activePages.map((page) => page.id))].sort((a, b) => a - b);
+    for (const pageId of sortedPageIds) {
+      await acquireErasureFenceSharedLock(tx, pageId);
+    }
+    const { answer, homes, pageIds, logins } = await computeSaleHomes(tx, { from: dayStart, to: dayEnd, now: effectiveNow, slots: registrySlots(tx) });
     const pieces = workPiecesOf(answer.works);
     const shiftRows = await listShiftRows(tx, { from: new Date(Date.parse(answer.workFrom) - DAY_MS), to: new Date(Date.parse(answer.workTo) + DAY_MS) });
     const handedInDates = await readHandedInReportDates(tx, shiftRows);
@@ -394,7 +405,7 @@ export async function refreshSaleHomesForDay(
       const pageId = pageIds.get(sale.pageLabel);
       return pageId === undefined ? [] : [saleHomeRowOf({ sale, home: homes[at]!, pageId, pieces, logins, shiftRows, handedInDates, rule: SALE_RULE })];
     });
-    const written = await upsertSaleHomes(tx, rows, now);
+    const written = await upsertSaleHomes(tx, rows, effectiveNow);
     const retracted = await deleteVanishedSaleHomesInWindow(tx, {
       from: dayStart,
       to: dayEnd,
@@ -409,7 +420,7 @@ export async function refreshSaleHomesForDay(
 }
 
 /** Recomputes the homes of every Moscow day in [from, to) through the single per-day refresh handler. */
-export async function refreshSaleHomes(db: Database, input: { from: Date; to: Date; now: Date }): Promise<{ sales: number; written: number; retracted: number }> {
+export async function refreshSaleHomes(db: Database, input: { from: Date; to: Date; now?: Date }): Promise<{ sales: number; written: number; retracted: number }> {
   let sales = 0;
   let written = 0;
   let retracted = 0;
@@ -435,7 +446,7 @@ export const SALE_HOMES_DUE_QUEUE = "team.sale-homes.due";
 export const SALE_HOMES_SWEEP_QUEUE = "team.sale-homes.sweep";
 
 /** 5-minute due pass: drains `sale_home_refresh_due` through the single per-day refresh handler. */
-export async function runSaleHomesDueTick(app: Pick<AppContext, "db" | "logger">, now: Date = new Date()): Promise<{ days: number; sales: number; written: number; retracted: number }> {
+export async function runSaleHomesDueTick(app: Pick<AppContext, "db" | "logger">, now?: Date): Promise<{ days: number; sales: number; written: number; retracted: number }> {
   const due = await listSaleHomeRefreshDue(app.db);
   let sales = 0;
   let written = 0;
@@ -451,9 +462,10 @@ export async function runSaleHomesDueTick(app: Pick<AppContext, "db" | "logger">
 }
 
 /** Hourly job: this Moscow week and the previous week (a PPV waits up to 7 days), plus any queued due days. */
-export async function runSaleHomesTick(app: Pick<AppContext, "db" | "logger">, now: Date = new Date()): Promise<{ sales: number; written: number; retracted: number }> {
-  const from = new Date(Math.max(SALE_RULE.since, moscowWeekStart(now.getTime()) - 7 * DAY_MS));
-  const result = await refreshSaleHomes(app.db, { from, to: now, now });
+export async function runSaleHomesTick(app: Pick<AppContext, "db" | "logger">, now?: Date): Promise<{ sales: number; written: number; retracted: number }> {
+  const windowNow = now ?? new Date();
+  const from = new Date(Math.max(SALE_RULE.since, moscowWeekStart(windowNow.getTime()) - 7 * DAY_MS));
+  const result = await refreshSaleHomes(app.db, { from, to: windowNow, ...(now === undefined ? {} : { now }) });
   const due = await runSaleHomesDueTick(app, now);
   const total = { sales: result.sales + due.sales, written: result.written + due.written, retracted: result.retracted + due.retracted };
   if (total.written + total.retracted > 0) app.logger.info(total, "sale homes refreshed");
@@ -461,8 +473,9 @@ export async function runSaleHomesTick(app: Pick<AppContext, "db" | "logger">, n
 }
 
 /** Nightly sweep: recomputes every Moscow day from `SALE_RULE.since` through today and retracts vanished sales. */
-export async function runSaleHomesSweepTick(app: Pick<AppContext, "db" | "logger">, now: Date = new Date()): Promise<{ sales: number; written: number; retracted: number }> {
-  const result = await refreshSaleHomes(app.db, { from: new Date(SALE_RULE.since), to: now, now });
+export async function runSaleHomesSweepTick(app: Pick<AppContext, "db" | "logger">, now?: Date): Promise<{ sales: number; written: number; retracted: number }> {
+  const windowNow = now ?? new Date();
+  const result = await refreshSaleHomes(app.db, { from: new Date(SALE_RULE.since), to: windowNow, ...(now === undefined ? {} : { now }) });
   if (result.written + result.retracted > 0) app.logger.info(result, "sale homes nightly sweep complete");
   return result;
 }

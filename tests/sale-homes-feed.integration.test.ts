@@ -226,7 +226,7 @@ describe("the sale homes feed", () => {
     expect(idle.more).toBe(false);
 
     // Changing the home emits a new seq.
-    const movedToPot: SaleHomeRow = { ...nobodyRow, home: "pot", reason: "owner_pot", pot: "obshak" };
+    const movedToPot: SaleHomeRow = { ...nobodyRow, home: "pot", reason: "owner_pot", pot: "fixture-pot" };
     expect(await upsertSaleHomes(app.db, [movedToPot], msk("2026-11-11 14:00"))).toBe(1);
     const changed = await feedHttp(`?since=${initial.next}&limit=500`);
     expect(changed.homes).toHaveLength(1);
@@ -236,7 +236,7 @@ describe("the sale homes feed", () => {
       pageLabel: "mia-1",
       home: "pot",
       reason: "owner_pot",
-      pot: "obshak",
+      pot: "fixture-pot",
       shares: [],
     });
     expect(changed.homes[0]!.seq).toBeGreaterThan(Number(initial.next));
@@ -532,5 +532,47 @@ describe("the sale homes feed", () => {
       [[pausedTx, activeVanishedTx]],
     );
     expect(surviving.rows.map((r) => Number(r.transaction_id))).toEqual([pausedTx]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("never lets a released held retract erase a sale whose home has since been restored", async (context) => {
+    if (!testDb) return context.skip();
+    const start = (await readSaleHomesFeed(app, { pageIds: [pageOne, pageTwo], limit: 500, agentKeyId: keyId })).next;
+    const at = msk("2026-11-16 14:00");
+    const restoredTx = await insertSale({ pageId: pageTwo, occurredAt: at, netMills: 11_000, canonicalType: "tip" });
+    const row: SaleHomeRow = {
+      transactionId: restoredTx,
+      pageId: pageTwo,
+      occurredAt: at,
+      netMills: 11_000,
+      home: "shift",
+      reason: "owner_claim",
+      pot: null,
+      waitsUntil: null,
+      shares: [{
+        personCode: "anna",
+        userId: anna,
+        shiftId: null,
+        workRef: null,
+        reportDate: "2026-11-16",
+        daySource: "sale_day",
+        percent: 100,
+        mills: 11_000,
+      }],
+      ruleVersion: "2026-11-12.1",
+    };
+
+    // 1. Insert home, then delete it (retract). Key with only pageOne holds both changes.
+    await upsertSaleHomes(app.db, [row], at);
+    await testDb.pool.query("delete from sale_homes where transaction_id = $1", [restoredTx]);
+    const heldStep = await readSaleHomesFeed(app, { pageIds: [pageOne], since: start, limit: 500, agentKeyId: keyId });
+    expect(heldStep.held.some((h) => h.transactionId === restoredTx)).toBe(true);
+
+    // 2. Restore the home (newer upsert), then grant pageTwo so the older held retract is re-placed at the end.
+    await upsertSaleHomes(app.db, [row], msk("2026-11-16 15:00"));
+    const released = await readSaleHomesFeed(app, { pageIds: [pageOne, pageTwo], since: heldStep.next, limit: 500, agentKeyId: keyId });
+    const entries = released.homes.filter((h) => h.transactionId === restoredTx);
+    expect(entries.length).toBeGreaterThan(0);
+    // Every emitted entry for the restored sale reflects the current live home (`upsert`), NEVER `retract`.
+    expect(entries.every((e) => e.op === "upsert" && e.home === "shift")).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

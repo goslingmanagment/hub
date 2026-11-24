@@ -574,6 +574,8 @@ export async function insertHandinVersion(
     shiftId: input.handin.shiftId,
     reportDate: input.reportDate,
     transactionIds: input.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId])),
+    handinId: input.handin.id,
+    previousVersion: input.handin.currentVersion,
   });
   return versionOf(result.rows[0]!);
 }

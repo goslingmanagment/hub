@@ -245,10 +245,12 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
     }
   });
   // The ledger's feed of computed sale homes (0441, Contract K1): every upsert/retract after a cursor; read:money.
+  // Authorize against the key's granted `principal.pageIds` (already single-realm by 0414), not only active `scope.pages`,
+  // so retracts emitted when a previously deactivated page is erased are delivered instead of stuck in `held`.
   server.get("/api/v1/agent/sale-homes/feed", { schema: routeSchemas.agentSaleHomesFeed }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     const scope = await beginAgentRequest(appContext, principal, { operation: "agentSaleHomesFeed", requiredCapabilities: ["read:money"] });
-    const pageIds = scope.pages.map((page) => page.id);
+    const pageIds = principal.pageIds;
     let delivered = 0;
     try {
       const feed = await readSaleHomesFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId, realm: realmOf(principal) });

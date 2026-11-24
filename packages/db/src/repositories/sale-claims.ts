@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import { livePageSql, liveUserSql, testPageSql, testUserSql } from "./realm.ts";
-import { enqueueSaleHomeRefreshForSales } from "./sale-homes.ts";
+import { SALE_RULE_SINCE_DAY, enqueueSaleHomeRefreshForSales } from "./sale-homes.ts";
 import type { Database } from "../client.ts";
 import type { HandinVersionLine, HandinVersionOffPlatform, HandinVersionPage } from "./shift-handins.ts";
 
@@ -314,25 +314,39 @@ export interface SaleClaimInsert {
 /** A new claim; a claim of the same report, sale and side already there — null (nothing written). */
 export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: Date): Promise<SaleClaimRow | null> {
   const result = await db.execute<Row>(sql`
-    insert into sale_claims (transaction_id, page_id, kind, claimant_user_id, claimant_handin_id, claimant_version, statement,
-      share_with_user_id, claimant_note, claimed_at, side_user_id, side_shift_id, state, escalated_at, escalated_why, ledger_question_id,
-      question, who_text, ledger_ref, needs_link, decision_id, closed_at, answer, answer_note, answered_at, created_at, updated_at,
-      asked_of, source_link, asked_by_agent_key_id, origin)
-    values (${input.transactionId}, ${input.pageId}, ${input.kind}, ${input.claimantUserId}, ${input.claimantHandinId}, ${input.claimantVersion},
-      ${input.statement}, ${input.shareWithUserId}, ${input.claimantNote}, ${input.claimedAt.toISOString()}::timestamptz, ${input.sideUserId},
-      ${input.sideShiftId}, ${input.state}, ${input.escalatedAt?.toISOString() ?? null}::timestamptz, ${input.escalatedWhy ?? null},
-      ${input.ledgerQuestionId ?? null}, ${input.question ?? null}, ${input.whoText ?? null},
-      ${input.ledgerRef == null ? null : JSON.stringify(input.ledgerRef)}::jsonb, ${input.transactionId === null}, ${input.decisionId ?? null},
-      ${input.closedAt?.toISOString() ?? null}::timestamptz, ${input.answer ?? null}, ${input.answerNote ?? null},
-      ${input.answeredAt?.toISOString() ?? null}::timestamptz, ${at.toISOString()}::timestamptz, ${at.toISOString()}::timestamptz,
-      ${input.askedOf ?? null}, ${input.sourceLink ?? null}, ${input.askedByAgentKeyId ?? null}, ${input.origin ?? "version"})
-    on conflict do nothing
-    returning id`);
+    with inserted as (
+      insert into sale_claims (transaction_id, page_id, kind, claimant_user_id, claimant_handin_id, claimant_version, statement,
+        share_with_user_id, claimant_note, claimed_at, side_user_id, side_shift_id, state, escalated_at, escalated_why, ledger_question_id,
+        question, who_text, ledger_ref, needs_link, decision_id, closed_at, answer, answer_note, answered_at, created_at, updated_at,
+        asked_of, source_link, asked_by_agent_key_id, origin)
+      values (${input.transactionId}, ${input.pageId}, ${input.kind}, ${input.claimantUserId}, ${input.claimantHandinId}, ${input.claimantVersion},
+        ${input.statement}, ${input.shareWithUserId}, ${input.claimantNote}, ${input.claimedAt.toISOString()}::timestamptz, ${input.sideUserId},
+        ${input.sideShiftId}, ${input.state}, ${input.escalatedAt?.toISOString() ?? null}::timestamptz, ${input.escalatedWhy ?? null},
+        ${input.ledgerQuestionId ?? null}, ${input.question ?? null}, ${input.whoText ?? null},
+        ${input.ledgerRef == null ? null : JSON.stringify(input.ledgerRef)}::jsonb, ${input.transactionId === null}, ${input.decisionId ?? null},
+        ${input.closedAt?.toISOString() ?? null}::timestamptz, ${input.answer ?? null}, ${input.answerNote ?? null},
+        ${input.answeredAt?.toISOString() ?? null}::timestamptz, ${at.toISOString()}::timestamptz, ${at.toISOString()}::timestamptz,
+        ${input.askedOf ?? null}, ${input.sourceLink ?? null}, ${input.askedByAgentKeyId ?? null}, ${input.origin ?? "version"})
+      on conflict do nothing
+      returning id, transaction_id
+    ), queued as (
+      insert into sale_home_refresh_due (day, generation, queued_at)
+      select distinct d.day, 1, clock_timestamp()
+      from (
+        select (t.occurred_at at time zone 'Europe/Moscow')::date as day
+        from inserted i join transactions t on t.id = i.transaction_id
+        union
+        select (h.occurred_at at time zone 'Europe/Moscow')::date as day
+        from inserted i join sale_homes h on h.transaction_id = i.transaction_id
+      ) d
+      where d.day >= ${SALE_RULE_SINCE_DAY}::date
+      on conflict (day) do update set
+        generation = sale_home_refresh_due.generation + 1,
+        queued_at = clock_timestamp()
+    )
+    select id from inserted`);
   const id = result.rows[0]?.id;
   if (id === undefined) return null;
-  if (input.state === "agreed" && input.transactionId !== null) {
-    await enqueueSaleHomeRefreshForSales(db, [input.transactionId]);
-  }
   return findSaleClaim(db, num(id));
 }
 
@@ -385,13 +399,31 @@ export async function updateSaleClaim(
   const only = options.ifState === undefined ? sql``
     : typeof options.ifState === "string" ? sql` and state = ${options.ifState}`
       : sql` and state = any(${sql.param([...options.ifState])}::text[])`;
-  const result = await db.execute<Row>(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only} returning transaction_id`);
-  const updated = (result.rowCount ?? 0) > 0;
-  if (updated && (patch.state !== undefined || patch.statement !== undefined || patch.shareWithUserId !== undefined)) {
-    const txId = nullableNum(result.rows[0]?.transaction_id);
-    if (txId !== null) await enqueueSaleHomeRefreshForSales(db, [txId]);
+  const affectsRule = patch.state !== undefined || patch.statement !== undefined || patch.shareWithUserId !== undefined || patch.transactionId !== undefined;
+  if (!affectsRule) {
+    const result = await db.execute<Row>(sql`update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only}`);
+    return (result.rowCount ?? 0) > 0;
   }
-  return updated;
+  const result = await db.execute<Row>(sql`
+    with updated as (
+      update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only} returning id, transaction_id
+    ), queued as (
+      insert into sale_home_refresh_due (day, generation, queued_at)
+      select distinct d.day, 1, clock_timestamp()
+      from (
+        select (t.occurred_at at time zone 'Europe/Moscow')::date as day
+        from updated u join transactions t on t.id = u.transaction_id
+        union
+        select (h.occurred_at at time zone 'Europe/Moscow')::date as day
+        from updated u join sale_homes h on h.transaction_id = u.transaction_id
+      ) d
+      where d.day >= ${SALE_RULE_SINCE_DAY}::date
+      on conflict (day) do update set
+        generation = sale_home_refresh_due.generation + 1,
+        queued_at = clock_timestamp()
+    )
+    select id from updated`);
+  return result.rows.length > 0;
 }
 
 /**
@@ -412,21 +444,33 @@ export async function reopenSaleClaim(
   const answer = input.keepAnswer === true ? sql`` : sql`
       answer = null, answer_note = null, answered_at = null, answered_by_user_id = null, answered_by_agent_key_id = null,
       answer_door = null, answer_ref = null,`;
-  const result = await db.execute(sql`
-    update sale_claims set page_id = ${input.pageId}, kind = ${input.kind}, claimant_version = ${input.claimantVersion},
-      statement = ${input.statement}, share_with_user_id = ${input.shareWithUserId}, claimant_note = ${input.claimantNote},
-      claimed_at = ${input.claimedAt.toISOString()}::timestamptz, side_shift_id = ${input.sideShiftId}, state = ${input.state},
-      escalated_at = ${input.escalatedAt?.toISOString() ?? null}::timestamptz, escalated_why = ${input.escalatedWhy},${answer}
-      decision_id = null, closed_at = null, silence_at = null,
-      created_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
-    where id = ${id} and state = 'withdrawn' and kind in ('claim', 'double')
-    returning transaction_id`);
-  const reopened = (result.rowCount ?? 0) > 0;
-  if (reopened && input.state === "agreed") {
-    const txId = nullableNum(result.rows[0]?.transaction_id);
-    if (txId !== null) await enqueueSaleHomeRefreshForSales(db, [txId]);
-  }
-  return reopened;
+  const result = await db.execute<Row>(sql`
+    with reopened as (
+      update sale_claims set page_id = ${input.pageId}, kind = ${input.kind}, claimant_version = ${input.claimantVersion},
+        statement = ${input.statement}, share_with_user_id = ${input.shareWithUserId}, claimant_note = ${input.claimantNote},
+        claimed_at = ${input.claimedAt.toISOString()}::timestamptz, side_shift_id = ${input.sideShiftId}, state = ${input.state},
+        escalated_at = ${input.escalatedAt?.toISOString() ?? null}::timestamptz, escalated_why = ${input.escalatedWhy},${answer}
+        decision_id = null, closed_at = null, silence_at = null,
+        created_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
+      where id = ${id} and state = 'withdrawn' and kind in ('claim', 'double')
+      returning id, transaction_id
+    ), queued as (
+      insert into sale_home_refresh_due (day, generation, queued_at)
+      select distinct d.day, 1, clock_timestamp()
+      from (
+        select (t.occurred_at at time zone 'Europe/Moscow')::date as day
+        from reopened r join transactions t on t.id = r.transaction_id
+        union
+        select (h.occurred_at at time zone 'Europe/Moscow')::date as day
+        from reopened r join sale_homes h on h.transaction_id = r.transaction_id
+      ) d
+      where d.day >= ${SALE_RULE_SINCE_DAY}::date
+      on conflict (day) do update set
+        generation = sale_home_refresh_due.generation + 1,
+        queued_at = clock_timestamp()
+    )
+    select id from reopened`);
+  return result.rows.length > 0;
 }
 
 // ── The owner's decisions ────────────────────────────────────────────────────

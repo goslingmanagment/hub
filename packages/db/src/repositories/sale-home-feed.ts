@@ -173,26 +173,3 @@ export async function listSaleHomesByTransactionIds(
   }
   return out;
 }
-
-/** Looks up current report date (handed-in version's if submitted, else `shifts.report_date`) by shift id for legacy share fallback. */
-export async function listShiftReportDatesByIds(
-  db: Database,
-  shiftIds: readonly number[],
-): Promise<Map<number, { reportDate: string; handedIn: boolean }>> {
-  const unique = [...new Set(shiftIds.filter(Number.isSafeInteger))];
-  if (unique.length === 0) return new Map();
-  const result = await db.execute<Row>(sql`
-    select s.id,
-      to_char(coalesce(v.report_date, h.report_date, s.report_date), 'YYYY-MM-DD') as report_date,
-      (h.state = 'submitted') as handed_in
-    from shifts s
-    left join shift_handins h on h.shift_id = s.id and h.state = 'submitted'
-    left join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version
-    where s.id = any(${ids(unique)})`);
-  const out = new Map<number, { reportDate: string; handedIn: boolean }>();
-  for (const row of result.rows) {
-    if (row.report_date === null || row.report_date === undefined) continue;
-    out.set(num(row.id), { reportDate: String(row.report_date), handedIn: row.handed_in === true });
-  }
-  return out;
-}

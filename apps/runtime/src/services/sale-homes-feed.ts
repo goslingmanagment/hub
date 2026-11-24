@@ -6,7 +6,6 @@ import {
   listSaleHomeChangesAfter,
   listSaleHomeChangesHeld,
   listSaleHomesByTransactionIds,
-  listShiftReportDatesByIds,
   placeSaleHomeChanges,
   releaseSaleHomeChangesHeld,
   type SaleHomeChangeRow,
@@ -16,7 +15,6 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { saleKindOf } from "./sale-kinds.ts";
-import { reportDateOfSale } from "./shift-rows.ts";
 
 /**
  * The sale homes feed (0441, Contract K1): every computed home change (`upsert` or `retract`) in `sale_homes`, after a
@@ -58,18 +56,19 @@ export async function readSaleHomesFeed(
   }
   const served = placed.changes.filter(readable);
 
-  const upsertTxIds = served.filter((change) => change.op === "upsert").map((change) => change.transactionId);
-  const hydrated = await listSaleHomesByTransactionIds(db, upsertTxIds);
+  // Hydrate EVERY served position against current `sale_homes` (not just `change.op === 'upsert'`), so an older held
+  // retract re-placed after a sale returned emits the current live home (`upsert`) instead of erasing a valid sale.
+  const servedTxIds = served.map((change) => change.transactionId);
+  const hydrated = await listSaleHomesByTransactionIds(db, servedTxIds);
   const pages = await listMatterPageLabels(db);
 
-  // Legacy fallback: rows backfilled by 0441 before the first refresh may lack `personCode`/`reportDate`/`daySource`.
+  // Legacy fallback: rows backfilled by 0441 before the initial due pass finishes carry no `daySource`; never guess
+  // `sale_day` or trust an unverified `shiftId` — emit `unresolved` (`reportDate: null`) until refreshed via `landShare`.
   const legacyRows: SaleHomeHydratedRow[] = [...hydrated.values()].filter((row) => row.shares.some((share) => !isEnrichedShare(share)));
   const legacyUserIds = legacyRows.flatMap((row) => row.shares.filter((share) => !isEnrichedShare(share)).map((share) => share.userId));
-  const legacyShiftIds = legacyRows.flatMap((row) => row.shares.filter((share) => !isEnrichedShare(share) && share.shiftId !== null).map((share) => share.shiftId!));
   const legacyPeople = await listHandinPeopleOfUsers(db, legacyUserIds);
-  const legacyShifts = await listShiftReportDatesByIds(db, legacyShiftIds);
 
-  const wireShare = (home: SaleHomeHydratedRow, share: SaleHomeShareRow): AgentSaleHomeShare => {
+  const wireShare = (share: SaleHomeShareRow): AgentSaleHomeShare => {
     if (isEnrichedShare(share)) {
       return {
         personCode: share.personCode ?? null,
@@ -82,48 +81,23 @@ export async function readSaleHomesFeed(
         mills: share.mills,
       };
     }
-    const personCode = share.personCode ?? legacyPeople.get(share.userId)?.code ?? null;
-    if (share.shiftId !== null) {
-      const shiftInfo = legacyShifts.get(share.shiftId);
-      return {
-        personCode,
-        userId: share.userId,
-        shiftId: share.shiftId,
-        workRef: share.workRef,
-        reportDate: shiftInfo?.reportDate ?? null,
-        daySource: shiftInfo === undefined ? "unresolved" : shiftInfo.handedIn ? "report" : "shift",
-        percent: share.percent,
-        mills: share.mills,
-      };
-    }
-    if (share.workRef !== null) {
-      return {
-        personCode,
-        userId: share.userId,
-        shiftId: null,
-        workRef: share.workRef,
-        reportDate: null,
-        daySource: "unresolved",
-        percent: share.percent,
-        mills: share.mills,
-      };
-    }
     return {
-      personCode,
+      personCode: share.personCode ?? legacyPeople.get(share.userId)?.code ?? null,
       userId: share.userId,
-      shiftId: null,
-      workRef: null,
-      reportDate: reportDateOfSale(home.occurredAt.getTime()),
-      daySource: "sale_day",
+      shiftId: share.shiftId,
+      workRef: share.workRef,
+      reportDate: null,
+      daySource: "unresolved",
       percent: share.percent,
       mills: share.mills,
     };
   };
 
   const homes: AgentSaleHomeFeedItem[] = served.map((change) => {
-    const row = change.op === "upsert" ? hydrated.get(change.transactionId) : undefined;
+    const found = hydrated.get(change.transactionId);
+    const row = found !== undefined && found.pageId === change.pageId ? found : undefined;
     const pageLabel = row?.pageLabel ?? pages.labelOf.get(change.pageId) ?? null;
-    if (change.op === "retract" || row === undefined) {
+    if (row === undefined) {
       return {
         seq: change.seq,
         at: change.at.toISOString(),
@@ -155,7 +129,7 @@ export async function readSaleHomesFeed(
       pot: row.pot,
       waitsUntil: row.waitsUntil?.toISOString() ?? null,
       ruleVersion: row.ruleVersion,
-      shares: row.shares.map((share) => wireShare(row, share)),
+      shares: row.shares.map((share) => wireShare(share)),
     };
   });
 

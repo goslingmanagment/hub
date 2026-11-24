@@ -147,6 +147,32 @@ describe("multi-login workRefFor / workRefOf in sale-rule", () => {
     const home = homeOfSale(sale, [ruleWork(annaMainVisit), ...works], [], now, SALE_RULE, LOGINS);
     expect(home.shares[0]!.workRef).toBe(annaAltShift.ref);
   });
+
+  it("matches an automatic PPV sender's next shift across two logins of the same person (homeOfSender)", () => {
+    const annaNextAltShift = teamWork({ userId: 102, kind: "shift", from: "2026-11-11 15:00", to: "2026-11-11 23:00", pageLabel: "mia-1" });
+    const sale: RuleSale = {
+      ref: "5004",
+      pageId: 1,
+      kind: "ppv",
+      netMills: 18_000,
+      occurredAt: msk("2026-11-11 12:00"),
+      holders: [],
+      // PPV sent from Anna's main login (101), while Anna's qualifying shift 3h later runs under her alt login (102).
+      ppvSender: { userId: 101, role: "chatter", leftAt: null },
+      postTip: false,
+      campaign: false,
+      lastWriter: null,
+      marks: [],
+      resolution: null,
+      claimedBy: null,
+    };
+    const [home] = homesOfSales([sale], [ruleWork(annaNextAltShift)], [], msk("2026-11-20 12:00"), SALE_RULE, LOGINS);
+    expect(home).toMatchObject({
+      kind: "shift",
+      reason: "ppv_sender_next_shift",
+      shares: [{ userId: 102, workRef: annaNextAltShift.ref, percent: 100, mills: 18_000 }],
+    });
+  });
 });
 
 describe("unified share landing (landShare, homeCredit, saleHomeRowOf)", () => {

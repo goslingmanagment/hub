@@ -246,26 +246,30 @@ export async function listSalePlatformRefs(db: Database, transactionIds: readonl
 }
 
 /**
- * Removes `sale_homes` rows in [from, to) on `pageIds` whose sale is no longer active (not among `keepTransactionIds`),
- * so the `sale_homes` DELETE trigger emits `retract` on the feed. Strictly scoped to the pages actually read so
- * deactivating/pausing a page never falsely retracts its historical homes. Derived projection hygiene, never deletes
- * captured facts.
+ * Removes `sale_homes` rows in [from, to) whose sale is no longer active on the read pages OR whose source transaction
+ * no longer exists (including erased or vanished transactions on inactive pages), so the `sale_homes` DELETE trigger
+ * emits `retract` on the feed while historical homes of soft-deleted pages whose transactions still exist survive.
+ * Derived projection hygiene, never deletes captured facts.
  */
 export async function deleteVanishedSaleHomesInWindow(
   db: Database,
   input: { from: Date; to: Date; pageIds: readonly number[]; keepTransactionIds: readonly number[] },
 ): Promise<number> {
   const uniquePages = [...new Set(input.pageIds.filter(Number.isSafeInteger))];
-  if (uniquePages.length === 0) return 0;
   const keep = input.keepTransactionIds.length === 0
-    ? sql``
-    : sql`and not (transaction_id = any(${ids(input.keepTransactionIds)}))`;
+    ? sql`true`
+    : sql`not (sale_homes.transaction_id = any(${ids(input.keepTransactionIds)}))`;
+  const activeVanished = uniquePages.length === 0
+    ? sql`false`
+    : sql`(sale_homes.page_id = any(${ids(uniquePages)}) and ${keep})`;
   const result = await db.execute(sql`
     delete from sale_homes
-    where occurred_at >= ${input.from.toISOString()}::timestamptz
-      and occurred_at < ${input.to.toISOString()}::timestamptz
-      and page_id = any(${ids(uniquePages)})
-      ${keep}`);
+    where sale_homes.occurred_at >= ${input.from.toISOString()}::timestamptz
+      and sale_homes.occurred_at < ${input.to.toISOString()}::timestamptz
+      and (
+        ${activeVanished}
+        or not exists (select 1 from transactions t where t.id = sale_homes.transaction_id)
+      )`);
   return result.rowCount ?? 0;
 }
 
@@ -313,12 +317,13 @@ export async function enqueueSaleHomeRefreshForSales(db: Database, transactionId
 }
 
 /**
- * Enqueues the Moscow days affected by a new hand-in version: the days of every sale in its lines, any existing
- * `sale_homes` referencing the shift, and the report date itself. Run in the hand-in writer's transaction.
+ * Enqueues the Moscow days affected by a new hand-in version: the days of every sale in its new lines, any sale removed
+ * since the previous version, any existing `sale_homes` referencing the shift, and the report date itself. Run in the
+ * hand-in writer's transaction.
  */
 export async function enqueueSaleHomeRefreshForHandin(
   db: Database,
-  input: { shiftId: number; reportDate: string; transactionIds: readonly number[] },
+  input: { shiftId: number; reportDate: string; transactionIds: readonly number[]; handinId?: number; previousVersion?: number | null },
 ): Promise<void> {
   const unique = [...new Set(input.transactionIds.filter(Number.isSafeInteger))];
   const txPart = unique.length === 0
@@ -328,6 +333,14 @@ export async function enqueueSaleHomeRefreshForHandin(
       select (occurred_at at time zone 'Europe/Moscow')::date as day
       from transactions
       where id = any(${ids(unique)})`;
+  const prevPart = input.handinId !== undefined && input.previousVersion !== undefined && input.previousVersion !== null && input.previousVersion > 0
+    ? sql`
+      union
+      select (t.occurred_at at time zone 'Europe/Moscow')::date as day
+      from shift_handin_lines l
+      join transactions t on t.id = l.transaction_id
+      where l.handin_id = ${input.handinId} and l.version = ${input.previousVersion} and l.transaction_id is not null`
+    : sql``;
   await db.execute(sql`
     insert into sale_home_refresh_due (day, generation, queued_at)
     select distinct day, 1, clock_timestamp()
@@ -341,6 +354,7 @@ export async function enqueueSaleHomeRefreshForHandin(
         where (s ->> 'shiftId') ~ '^[0-9]{1,18}$' and (s ->> 'shiftId')::bigint = ${input.shiftId}
       )
       ${txPart}
+      ${prevPart}
     ) d
     where day >= ${SALE_RULE_SINCE_DAY}::date
     on conflict (day) do update set

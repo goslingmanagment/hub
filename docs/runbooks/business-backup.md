@@ -125,7 +125,7 @@ changes behind its cursor. Before the ledger reads Hub's feeds again, follow the
 2. In the restored Hub database, bump feed sequence counters (`sale_home_changes_id_seq`, `sale_home_changes.seq` max,
    and sibling feed sequences) above the maxima of both Hub and the ledger so newly emitted rows never collide with
    already-consumed cursors.
-3. Re-read the sale homes feed from `since=` (empty) into a separate mirror in the ledger.
+3. Re-read the sale homes feed from the start (`since` omitted or `since=0`) into a separate mirror in the ledger.
 4. Reconcile keys, shares, retracts, `held`, and any records present only in the ledger; surface discrepancies on
    already-paid days to the owner.
 5. Atomically switch the ledger's mirror and cursor, then resume the jobs.
