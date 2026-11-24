@@ -293,6 +293,7 @@ export const agentPotDistributionsFeedResponseSchema = z.object({
   held: z.array(z.object({
     seq: intId,
     distributionId: intId,
+    modelSlug: z.string(),
     pageLabels: z.array(z.string()),
     reason: z.enum(["page_outside_key"]),
   })),

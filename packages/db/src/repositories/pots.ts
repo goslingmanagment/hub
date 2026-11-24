@@ -106,7 +106,7 @@ export async function losesPostedPotCoverage(db: Database, pot: PotRow, next: {
       cross join lateral (select coalesce(pp.sale_day, (coalesce(t.occurred_at, h.occurred_at) at time zone 'Europe/Moscow')::date) as day,
         coalesce(pp.intake, case when h.home = 'pot' then
           case when coalesce(nullif(h.pot, ''), 'obshak') <> 'obshak' then 'explicit' else h.reason end end) as intake) sale
-      where d.pot_id = ${pot.id} and (
+      where d.pot_id = ${pot.id} and d.reversed_at is null and (
         pp.page_id = any(${ids(removedPages)})
         or (${next.opensOn}::date > ${pot.opensOn}::date and (sale.day is null or sale.day < ${next.opensOn}::date))
         or (${next.closesOn}::date is not null and (${pot.closesOn}::date is null or ${next.closesOn}::date < ${pot.closesOn}::date)
@@ -323,6 +323,7 @@ export interface PotDistributionLineRow {
 
 export interface PotDistributionPartRow {
   distributionId: number;
+  saleDay: string | null;
   transactionId: number;
   pageId: number;
   pageLabel: string | null;
@@ -418,9 +419,11 @@ export async function reversePotDistributionRow(
 async function listPartsByDistributionIds(db: Database, distributionIds: readonly number[]): Promise<Map<number, PotDistributionPartRow[]>> {
   if (distributionIds.length === 0) return new Map();
   const result = await db.execute<Row>(sql`
-    select pp.distribution_id, pp.transaction_id, pp.page_id, p.label as page_label, pp.base_mills
+    select pp.distribution_id, pp.transaction_id, pp.page_id, p.label as page_label, pp.base_mills,
+      to_char(coalesce((t.occurred_at at time zone 'Europe/Moscow')::date, pp.sale_day), 'YYYY-MM-DD') as sale_day
     from pot_distribution_parts pp
     left join pages p on p.id = pp.page_id
+    left join transactions t on t.id = pp.transaction_id
     where pp.distribution_id = any(${ids(distributionIds)})
     order by pp.distribution_id, pp.transaction_id`);
   const out = new Map<number, PotDistributionPartRow[]>();
@@ -429,6 +432,7 @@ async function listPartsByDistributionIds(db: Database, distributionIds: readonl
     const list = out.get(distributionId) ?? [];
     list.push({
       distributionId,
+      saleDay: text(row.sale_day),
       transactionId: num(row.transaction_id),
       pageId: num(row.page_id),
       pageLabel: text(row.page_label),

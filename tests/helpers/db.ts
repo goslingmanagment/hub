@@ -284,8 +284,9 @@ export async function resetIntegrationDatabase(
   await seedHealthyStorageSample(pool);
   // Every change log was cleared by this test reset, including its durable position.
   await pool.query(`do $$ begin if to_regclass('feed_positions') is not null then
-    insert into feed_positions(feed, last_seq) values
-      ('sale_decision_changes', 0), ('sale_home_changes', 0), ('pot_distribution_changes', 0);
+    insert into feed_positions(feed, last_seq)
+      select distinct c.relname, 0 from pg_trigger t join pg_class c on c.oid = t.tgrelid
+      where t.tgfoid = 'record_feed_position()'::regprocedure;
   end if; end $$`);
   // Explicit fixture reset of the migration-owned singleton. Runtime never
   // reconstructs a missing policy state from env or enables a lost policy.

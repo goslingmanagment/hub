@@ -358,7 +358,7 @@ export async function cancelSaleDecisionSaid(app: DoorApp, actor: DoorActor, inp
 
 /** `agentSaleDecisionApplied`: taken into a person's post of a date. */
 export async function markSaleDecisionTaken(
-  app: DoorApp, actor: DoorActor | { owner: true }, input: { decisionId: number; person: string; reportDate: string }, now: Date = new Date(),
+  app: DoorApp, actor: DoorActor | { owner: true; operator: OperatorContext }, input: { decisionId: number; person: string; reportDate: string }, now: Date = new Date(),
 ) {
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
@@ -378,6 +378,11 @@ export async function markSaleDecisionTaken(
     if (share === undefined) throw new BadRequestError("This person has no share of the decision", { reason: "not_recipient" });
     if (decision.state !== "active" || !(await applySaleDelivery(db, { id: decision.id, userId: share.userId, reportDate: input.reportDate, at: now }))) {
       throw new ConflictError("Only an active share not yet taken into a report can be applied", { reason: "not_open" });
+    }
+    if ("owner" in actor) {
+      await recordOwnerWrite(db, actor.operator.onBehalfOfUserId, actor.operator, "sale.decision_applied", {
+        decisionId: decision.id, recipientUserId: share.userId, person: input.person, reportDate: input.reportDate,
+      });
     }
   });
   const [wire] = await decisionWires(app, [input.decisionId]);

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { saleNobodyResponseSchema, shiftReportResponseSchema, type AdminPersonCreateBody } from "@agency_hub_core/contracts";
-import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
+import { assignUserToPage, createFanslyPage, createModel, insertAgentKey, syncShiftRows } from "@agency_hub_core/db";
 import { moscowDayOfMs, sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -467,6 +467,49 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     expect(await rows(landing)).toContain(fresh);
     expect(await rows(landing)).not.toContain(old);
   });
+
+  for (const retiredState of ["dropped", "merged"] as const) {
+    it(`settles pending deliveries after their pinned shift is ${retiredState}`, async (context) => {
+      if (!testDb) return context.skip();
+      const pool = testDb.pool;
+      const day = retiredState === "merged" ? "2026-11-15" : "2026-11-13";
+      const landingDay = retiredState === "merged" ? day : "2026-11-14";
+      const user = users.cora!;
+      const landing = await insertShift(user, "shared-1", `${landingDay}T06:00:00Z`, `${landingDay}T09:00:00Z`);
+      const pinned = await insertShift(user, "solo-1", `${day}T12:00:00Z`, `${day}T15:00:00Z`);
+      const sales: number[] = [];
+      const decisions: number[] = [];
+      for (const variant of ["current", "legacy"]) {
+        const sale = await insertSale({ pageId: soloPage, fanId: fanAlpha, ref: `fixture-${retiredState}-${variant}`,
+          occurredAt: `${day}T10:00:00Z`, netMills: 137, home: "nobody", reason: "no_holder" });
+        const give = await rawSession("boss", "POST", "/api/v1/sale-nobody/give", { transactionId: sale, userId: user });
+        expect(give.statusCode, give.body).toBe(200);
+        sales.push(sale);
+        decisions.push(give.json().decisionId as number);
+      }
+      const receipts = async () => (await pool.query(
+        "select state, shift_id::int as shift from sale_decision_deliveries where decision_id = any($1) order by decision_id", [decisions],
+      )).rows;
+      expect(await receipts()).toEqual(decisions.map(() => ({ state: "pending", shift: pinned })));
+      await syncShiftRows(app.db, {
+        now: new Date(), endedAfter: new Date(day),
+        plan: (rows) => {
+          const before = rows.find((row) => row.id === pinned)!;
+          return { open: [], update: [],
+            merge: retiredState === "merged" ? [{ id: pinned, into: landing, before }] : [],
+            drop: retiredState === "dropped" ? [{ id: pinned, before }] : [],
+          };
+        },
+      });
+      expect(await receipts()).toEqual(decisions.map(() => ({ state: "pending", shift: null })));
+      // Simulate one reservation left behind by a writer predating the sync cleanup.
+      await pool.query("update sale_decision_deliveries set shift_id = $1 where decision_id = $2", [pinned, decisions[1]]);
+      const draft = shiftReportResponseSchema.parse((await rawSession("cora", "GET", `/api/v1/shift-reports/${landing}`)).json());
+      for (const sale of sales) expect(draft.view?.lines.find((line) => line.transactionId === sale)?.amountMills).toBe(137);
+      await handInAndConfirm(asSession, "cora", landing);
+      expect(await receipts()).toEqual(decisions.map(() => ({ state: "applied", shift: landing })));
+    });
+  }
 
   it("filters stored and uncomputed nobody sales before both team shift responses and their sums", async (context) => {
     if (!testDb) return context.skip();

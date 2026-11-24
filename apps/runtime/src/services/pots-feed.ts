@@ -31,11 +31,10 @@ function isReadable(dist: PotDistributionHydratedRow | undefined, granted: Reado
 }
 
 function ungrantedPageLabels(
-  dist: PotDistributionHydratedRow | undefined,
+  dist: PotDistributionHydratedRow,
   granted: ReadonlySet<number>,
   labelOf: ReadonlyMap<number, string>,
 ): string[] {
-  if (dist === undefined) return ["unknown"];
   const missing = dist.allPageIds.filter((pageId) => !granted.has(pageId));
   const labels = [...new Set(missing.map((pageId) => labelOf.get(pageId) ?? `#${pageId}`))].sort();
   return labels.length > 0 ? labels : [...new Set(dist.allPageIds.map((pageId) => labelOf.get(pageId) ?? `#${pageId}`))].sort();
@@ -126,12 +125,17 @@ export async function readPotDistributionsFeed(
 
   return {
     changes,
-    held: heldRows.map((change) => ({
-      seq: change.seq,
-      distributionId: change.distributionId,
-      pageLabels: ungrantedPageLabels(hydrated(change.distributionId), granted, pages.labelOf),
-      reason: "page_outside_key" as const,
-    })),
+    held: heldRows.map((change) => {
+      const dist = hydrated(change.distributionId);
+      if (!dist) throw new Error("Held pot distribution is missing");
+      return {
+        seq: change.seq,
+        distributionId: dist.id,
+        modelSlug: dist.modelSlug,
+        pageLabels: ungrantedPageLabels(dist, granted, pages.labelOf),
+        reason: "page_outside_key",
+      };
+    }),
     next: String(placed.changes.at(-1)?.seq ?? afterSeq),
     more: placed.more,
     serverNow: now.toISOString(),

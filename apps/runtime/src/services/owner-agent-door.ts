@@ -367,8 +367,8 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
   "sale.applied": {
     console: "agentSaleDecisionApplied",
     summary: "Record the report date for one recipient of an active decision.",
-    run: async (app, _owner, _operator, args, now) => {
-      const { decision, versions } = await markSaleDecisionTaken(app, { owner: true }, args, now);
+    run: async (app, _owner, operator, args, now) => {
+      const { decision, versions } = await markSaleDecisionTaken(app, { owner: true, operator }, args, now);
       return { decision, versions };
     },
   },
@@ -602,7 +602,7 @@ export function ownerReasonOf(header: unknown): string {
   } catch {
     throw refuse("not percent-encoded UTF-8");
   }
-  if (/\p{Cc}/u.test(text)) throw refuse("control characters are not allowed");
+  if (/[\p{Cc}\p{Cf}]/u.test(text)) throw refuse("control and format characters are not allowed");
   const reason = text.trim();
   if (reason.length === 0) throw refuse("required: why the owner asks for this, in a line (no fan's name)");
   if ([...reason].length > OWNER_AGENT_REASON_MAX) throw refuse(`at most ${OWNER_AGENT_REASON_MAX} characters`);

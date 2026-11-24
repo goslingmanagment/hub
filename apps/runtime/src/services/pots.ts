@@ -954,10 +954,11 @@ async function prepareDistributionParts(
 
 async function unknownFormulaPeople(db: Database, realm: "live" | "test", formula: PotFormula, recipients: readonly string[]) {
   const people = await listPersonRows(db, realm);
-  const humans = new Set(people.filter((p) => p.kind === "human").map((p) => p.code));
+  const eligible = new Set(people.filter((p) => p.kind === "human"
+    && (formula.kind === "equal" || p.role === "chatter" || p.role === "team_lead")).map((p) => p.code));
   const entries = formula.kind === "manual" ? formula.params.shares : formula.params.weights;
   const named = entries && typeof entries === "object" ? Object.keys(entries).map((code) => code.trim()).filter(Boolean) : [];
-  return [...new Set([...recipients, ...named])].filter((code) => !humans.has(code));
+  return [...new Set([...recipients, ...named])].filter((code) => !eligible.has(code));
 }
 
 /** Pure preview («Распределить»): zero DB writes. */
@@ -1049,7 +1050,7 @@ export async function previewPotDistribution(
     };
   }
 
-  // For manual formula, also validate that all named people exist in the realm's people registry.
+  // Check named recipients even when a zero share or an unused weight produced no line.
   if (computed.normalizedFormula.kind !== "equal") {
     const unknown = await unknownFormulaPeople(app.db, realm, formula, computed.lines.map((line) => line.personCode));
     if (unknown.length > 0) {
@@ -1212,13 +1213,12 @@ export async function reversePotDistribution(
 
   const existing = await findPotDistributionById(app.db, distributionId);
   if (existing === null) throw new NotFoundError("Раздача не найдена");
-  const pot = await findPotById(app.db, existing.potId);
-  if (pot === null) throw new NotFoundError("Общак не найден");
-  requireSameRealm(principal, pot.isTest, () => new NotFoundError("Раздача не найдена"));
-
   const reversed = await app.db.transaction(async (raw) => {
     const tx = raw as unknown as Database;
     await lockWorkboardPots(tx);
+    const pot = await findPotById(tx, existing.potId);
+    if (pot === null) throw new NotFoundError("Общак не найден");
+    requireSameRealm(principal, pot.isTest, () => new NotFoundError("Раздача не найдена"));
     const ok = await reversePotDistributionRow(tx, {
       distributionId,
       reversedByUserId: principal.user.id,
@@ -1226,13 +1226,21 @@ export async function reversePotDistribution(
       at: now,
     });
     if (!ok) throw new ConflictError("Раздача уже сторнирована", { reason: "already_reversed" });
-    if (existing.postedByUserId === null && existing.parts.length === 1) {
-      const current = (await findPotById(tx, pot.id))!;
-      const ctx = await loadParticipantContext(tx, current.isTest ? "test" : "live", existing.day);
-      const participants = resolvePotParticipants({
-        ...ctx, day: existing.day, mode: current.participantsMode, pageIds: current.pageIds, listed: current.participants,
-      });
-      await holdPotAutoPost(tx, existing.parts[0]!.transactionId, pot.id, participants);
+    if (pot.autoPost) {
+      // Reconciliation uses the roster on each sale's day, even for a batch posted on a later day.
+      const participantsByDay = new Map<string, string[]>();
+      for (const part of existing.parts) {
+        const day = part.saleDay ?? existing.day;
+        let participants = participantsByDay.get(day);
+        if (!participants) {
+          const ctx = await loadParticipantContext(tx, realmOf(principal), day);
+          participants = resolvePotParticipants({
+            ...ctx, day, mode: pot.participantsMode, pageIds: pot.pageIds, listed: pot.participants,
+          });
+          participantsByDay.set(day, participants);
+        }
+        await holdPotAutoPost(tx, part.transactionId, pot.id, participants);
+      }
     }
     if (!pot.isTest) {
       const homes = await listSaleHomesForPotCheck(tx, existing.parts.map((part) => part.transactionId));
@@ -1245,7 +1253,7 @@ export async function reversePotDistribution(
     return (await findPotDistributionById(tx, distributionId))!;
   });
 
-  if (!pot.isTest) await syncUnroutedPotMatter(app.db, now).catch(() => undefined);
+  if (realmOf(principal) === "live") await syncUnroutedPotMatter(app.db, now).catch(() => undefined);
   const [wire] = await toDistributionWires(app.db, [reversed]);
   return { distribution: wire!, savedAt: now.toISOString() };
 }

@@ -606,12 +606,16 @@ export async function scheduleSaleDeliveries(db: Database, decision: SaleDecisio
   if (written.rowCount !== users.length) throw new Error("A decision recipient is outside the sale's realm");
 }
 
+// Older shift syncs could leave a pending delivery pinned to a retired shift.
+const activeDeliveryShift = sql`(select s.id from shifts s where s.id = x.shift_id and s.state in ('going', 'closed'))`;
+
 export async function listSaleDeliveries(db: Database, input: {
   userIds?: readonly number[]; realm?: "live" | "test"; pendingOnly?: boolean; decisionIds?: readonly number[]; linkedOnly?: boolean;
   draft?: { shiftId: number; transactionIds: readonly number[] };
 }) {
   const result = await db.execute<Row>(sql`
-    select ${DECISION_COLUMNS}, x.recipient_user_id, x.state as delivery_state, x.shift_id, to_char(x.report_date, 'YYYY-MM-DD') as delivery_date
+    select ${DECISION_COLUMNS}, x.recipient_user_id, x.state as delivery_state,
+      case when x.state = 'pending' then ${activeDeliveryShift} else x.shift_id end as shift_id, to_char(x.report_date, 'YYYY-MM-DD') as delivery_date
     from sale_decision_deliveries x join sale_owner_decisions d on d.id = x.decision_id
     where d.state = 'active'
       and ${testUserSql(sql`x.recipient_user_id`)} = ${testPageSql(sql`d.page_id`)}
@@ -634,7 +638,9 @@ export async function updateReportDeliveries(db: Database, input: {
   await db.execute(sql`
     update sale_decision_deliveries x set state = ${input.state}, shift_id = ${input.shiftId}, report_date = ${input.reportDate}::date
     from sale_owner_decisions d where d.id = x.decision_id and d.state = 'active' and x.state = 'pending'
-      and d.transaction_id = any(${ids(input.transactionIds)}) and (x.shift_id is null or x.shift_id = ${input.shiftId})
+      and d.transaction_id = any(${ids(input.transactionIds)})
+      and (x.shift_id = ${input.shiftId} or ${activeDeliveryShift} is null)
+      and exists (select 1 from shifts target where target.id = ${input.shiftId} and target.state in ('going', 'closed'))
       and (x.recipient_user_id = ${input.userId} or exists (
         select 1 from person_logins a join person_logins b using (person_id)
         where a.user_id = x.recipient_user_id and b.user_id = ${input.userId}))`);

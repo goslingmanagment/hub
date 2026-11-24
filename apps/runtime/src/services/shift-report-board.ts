@@ -8,6 +8,7 @@ import type {
   ShiftReportResponse,
 } from "@agency_hub_core/contracts";
 import {
+  areHandinSalesOnPages,
   clearCandidateSignature,
   closeMatter,
   findAgentKeyPerson,
@@ -1027,6 +1028,8 @@ export async function answerShiftReportCheck(
     }
     const colleagues = new Set((await listHandinColleagues(db, { pageIds, exceptUserIds: subject.userIds })).map((one) => one.userId));
     const lineOf = new Map(lockedCandidate.lines.flatMap((line) => (line.transactionId === null ? [] : [[line.transactionId, line] as const])));
+    const proposedIds = input.body.proposals.map((one) => one.transactionId).filter((id) => lineOf.has(id));
+    if (!(await areHandinSalesOnPages(db, proposedIds, input.pageIds))) throw new NotFoundError("Not found");
     // Validate every proposal before writing any.
     const planned = input.body.proposals.map((proposal) => {
       const line = lineOf.get(proposal.transactionId);

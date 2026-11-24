@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { lockSaleSettlements } from "./sale-claims.ts";
 
 // A chatter's shift as a row with a stable id (0379): what chatter-shifts.ts
 // computes, written by the shift-rows job (apps/runtime services/shift-rows.ts
@@ -160,6 +161,12 @@ export async function syncShiftRows(
         values (${shiftId}, ${now}::timestamptz, ${change}, ${before === null ? null : JSON.stringify(before)}::jsonb, ${JSON.stringify(after)}::jsonb)`);
       result.traced += 1;
     };
+    const retiredIds = [...plan.merge, ...plan.drop].map((shift) => shift.id);
+    if (retiredIds.length > 0) {
+      await lockSaleSettlements(tx);
+      await tx.execute(sql`update sale_decision_deliveries set shift_id = null, report_date = null
+        where state = 'pending' and shift_id = any(${sql.param(retiredIds)}::bigint[])`);
+    }
     for (const one of plan.merge) {
       await tx.execute(sql`update shifts set state = 'merged', merged_into = ${one.into}, updated_at = ${now}::timestamptz where id = ${one.id}`);
       await trace(one.id, "merged", traceOf(one.before), { ...traceOf(one.before), state: "merged", mergedInto: one.into });

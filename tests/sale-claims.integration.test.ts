@@ -52,6 +52,9 @@ const asSession = editingSession(rawSession);
 const asKey = (key: keyof typeof KEYS, method: "GET" | "POST", url: string, payload?: Record<string, unknown>) =>
   server!.inject({ method, url, headers: { authorization: `Bearer ${KEYS[key]}` }, ...(payload ? { payload } : {}) });
 
+const DAY_MS = 86_400_000;
+const recentDay = (daysAgo: number) => new Date(Date.now() - daysAgo * DAY_MS).toISOString().slice(0, 10);
+
 async function insertShift(userId: number, page: string, startedAt: string, endedAt: string): Promise<number> {
   const result = await testDb!.pool.query(
     `insert into shifts (user_id, state, started_at, ended_at, worked_minutes, messages, report_date, pages)
@@ -174,11 +177,12 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
     await person("bella", ["submits_shift"], SENDER_B);
     await person("cora", ["submits_shift"]);
     await person("dina", []);
-    await testDb.pool.query("update person_rights set granted_at = '2026-11-01T00:00:00Z'");
+    await testDb.pool.query("update person_rights set granted_at = now() - interval '30 days'");
     anna = await fixtureUserId(app, "anna");
     bella = await fixtureUserId(app, "bella");
-    shiftA = await insertShift(anna, "mia-1", "2026-11-10T15:00:00Z", "2026-11-10T23:00:00Z");
-    shiftB = await insertShift(bella, "mia-1", "2026-11-10T07:00:00Z", "2026-11-10T15:00:00Z");
+    const day = recentDay(5);
+    shiftA = await insertShift(anna, "mia-1", `${day}T15:00:00Z`, `${day}T23:00:00Z`);
+    shiftB = await insertShift(bella, "mia-1", `${day}T07:00:00Z`, `${day}T15:00:00Z`);
   }, 180_000);
 
   afterAll(async () => {
@@ -445,7 +449,8 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
 
   it("signs «мимо площадки» the owner confirmed while the report waits in «Подтвердите»: the board counts it, «Подтверждаю» goes through", async (context) => {
     if (!testDb) return context.skip();
-    const shift = await insertShift(anna, "mia-1", "2026-11-12T15:00:00Z", "2026-11-12T23:00:00Z");
+    const day = recentDay(4);
+    const shift = await insertShift(anna, "mia-1", `${day}T15:00:00Z`, `${day}T23:00:00Z`);
     const added = await rawSession("anna", "POST", `/api/v1/shift-reports/${shift}/off-platform`, { amountMills: 30_000, fromWhom: "фан", whatFor: "кастом" });
     expect(added.statusCode, added.body).toBe(200);
     // Counted once (the owner confirms on a page of the report), then «Исправить», «Сдать смену»: it waits in «Подтвердите».
@@ -462,7 +467,8 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
 
   it("signs a colleague's «Не согласен» given while the report waits in «Подтвердите»: «Было 10, стало 0», then «Подтверждаю» goes through", async (context) => {
     if (!testDb) return context.skip();
-    const shift = await insertShift(anna, "mia-1", "2026-11-13T15:00:00Z", "2026-11-13T23:00:00Z");
+    const day = recentDay(3);
+    const shift = await insertShift(anna, "mia-1", `${day}T15:00:00Z`, `${day}T23:00:00Z`);
     const sale = await bellasSale("tx-sign-agreed", 10_000);
     const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${sale}`, { statement: "mine", note: "мой постоянный" });
     expect(said.statusCode, said.body).toBe(200);
@@ -484,7 +490,8 @@ describe("claims of a sale: who answers, who decides, who sees", () => {
 
   it("signs a sale's comment written in «Подтвердите»: the board shows it and the counted version keeps it", async (context) => {
     if (!testDb) return context.skip();
-    const shift = await insertShift(anna, "mia-1", "2026-11-14T15:00:00Z", "2026-11-14T23:00:00Z");
+    const day = recentDay(2);
+    const shift = await insertShift(anna, "mia-1", `${day}T15:00:00Z`, `${day}T23:00:00Z`);
     const sale = await bellasSale("tx-sign-note", 12_000);
     const said = await rawSession("anna", "PUT", `/api/v1/shift-reports/${shift}/lines/${sale}`, { statement: "mine", note: "мой постоянный" });
     expect(said.statusCode, said.body).toBe(200);
