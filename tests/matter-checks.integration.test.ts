@@ -45,7 +45,7 @@ let aliceToken = "";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
-const START = new Date("2026-11-20T09:00:00.000Z");
+const START = new Date(Math.max(Date.now(), Date.parse("2026-11-20T09:00:00.000Z")));
 
 async function loginCookie(username: keyof typeof PASSWORDS): Promise<string> {
   const login = await server!.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username, password: PASSWORDS[username] } });
@@ -146,7 +146,7 @@ describe("matter checks (package K)", () => {
     }
     await insertAgentKey(app.db, {
       name: "checks-agent", keyPrefix: AGENT.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(AGENT),
-      capabilities: ["write:matters"] as never, pageIds: [pages["lora-1"]!], expiresAt: new Date(Math.max(Date.now(), START.getTime()) + 3 * DAY), createdBy: users.boss!,
+      capabilities: ["write:matters"] as never, pageIds: [pages["lora-1"]!], expiresAt: new Date(START.getTime() + 3 * DAY), createdBy: users.boss!,
     });
 
     server = await buildApiServer(app);
