@@ -23,10 +23,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-91 routes marked "yes", and every route marked "no" refuses it with 403.
+92 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (567)
+## Routes (570)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -300,6 +300,7 @@ A full device token is not affected.
 | GET | `/api/v1/agent/shift-reports/draft` | `agentShiftReport` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/shift-reports/line` | `agentShiftReportLineSet` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/shift-reports/off-platform` | `agentShiftReportOffPlatformAdd` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/shift-reports/report-sale` | `agentShiftReportReportSale` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/shift-reports/submit` | `agentShiftReportSubmit` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — | no |
 | PUT | `/api/v1/agent/system/copies` | `agentSystemCopies` | `agentKey` | — | — | no |
@@ -522,6 +523,7 @@ A full device token is not affected.
 | GET | `/api/v1/sale-disputes/claim/:claimId` | `saleDisputeOfClaim` | `any-session` | — | — | no |
 | POST | `/api/v1/sale-disputes/decide` | `saleDisputeDecide` | `any-session` | — | — | no |
 | GET | `/api/v1/sale-nobody` | `saleNobody` | `owner-session` | — | — | no |
+| POST | `/api/v1/sale-nobody/give` | `saleNobodyGive` | `owner-session` | — | — | no |
 | POST | `/api/v1/sale-nobody/keep` | `saleNobodyKeep` | `owner-session` | — | — | no |
 | GET | `/api/v1/sales/chain` | `saleChain` | `any` | — | — | no |
 | GET | `/api/v1/shift-report-notes` | `shiftReportNotes` | `any-session` | — | — | no |
@@ -539,6 +541,7 @@ A full device token is not affected.
 | POST | `/api/v1/shift-reports/:shiftId/proposals/:proposalId/answer` | `shiftReportProposalAnswer` | `any` | — | — | yes |
 | POST | `/api/v1/shift-reports/:shiftId/reopen` | `shiftReportReopen` | `any` | — | — | yes |
 | POST | `/api/v1/shift-reports/:shiftId/reopen/cancel` | `shiftReportReopenCancel` | `any` | — | — | yes |
+| POST | `/api/v1/shift-reports/:shiftId/report-sale` | `shiftReportReportSale` | `any` | — | — | yes |
 | POST | `/api/v1/shift-reports/:shiftId/resend` | `shiftReportResend` | `any` | — | — | yes |
 | POST | `/api/v1/shift-reports/:shiftId/sightings/:sightingId/add` | `shiftReportSightingAdd` | `any` | — | — | yes |
 | POST | `/api/v1/shift-reports/:shiftId/submit` | `shiftReportSubmit` | `any` | — | — | yes |
