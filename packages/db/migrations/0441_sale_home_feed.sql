@@ -89,10 +89,14 @@ create table if not exists sale_home_refresh_due (
 
 -- Queue every day already present in `sale_homes` so the due pass enriches pre-0441 shares with `personCode`,
 -- `reportDate`, and `daySource` through the shared landing logic.
+-- Deduplicate `day` BEFORE evaluating `clock_timestamp()` (which is volatile per row and breaks SELECT DISTINCT).
 insert into sale_home_refresh_due (day, generation, queued_at)
-select distinct (occurred_at at time zone 'Europe/Moscow')::date, 1, clock_timestamp()
-from sale_homes
-where occurred_at >= '2026-11-02T00:00:00+03:00'::timestamptz
+select d.day, 1, clock_timestamp()
+from (
+  select distinct (occurred_at at time zone 'Europe/Moscow')::date as day
+  from sale_homes
+  where occurred_at >= '2026-11-02T00:00:00+03:00'::timestamptz
+) d
 on conflict (day) do update set
   generation = sale_home_refresh_due.generation + 1,
   queued_at = clock_timestamp();

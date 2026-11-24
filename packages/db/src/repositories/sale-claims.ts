@@ -331,7 +331,7 @@ export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: 
       returning id, transaction_id
     ), queued as (
       insert into sale_home_refresh_due (day, generation, queued_at)
-      select distinct d.day, 1, clock_timestamp()
+      select d.day, 1, statement_timestamp()
       from (
         select (t.occurred_at at time zone 'Europe/Moscow')::date as day
         from inserted i join transactions t on t.id = i.transaction_id
@@ -409,7 +409,7 @@ export async function updateSaleClaim(
       update sale_claims set ${sql.join(sets, sql`, `)} where id = ${id}${only} returning id, transaction_id
     ), queued as (
       insert into sale_home_refresh_due (day, generation, queued_at)
-      select distinct d.day, 1, clock_timestamp()
+      select d.day, 1, statement_timestamp()
       from (
         select (t.occurred_at at time zone 'Europe/Moscow')::date as day
         from updated u join transactions t on t.id = u.transaction_id
@@ -456,7 +456,7 @@ export async function reopenSaleClaim(
       returning id, transaction_id
     ), queued as (
       insert into sale_home_refresh_due (day, generation, queued_at)
-      select distinct d.day, 1, clock_timestamp()
+      select d.day, 1, statement_timestamp()
       from (
         select (t.occurred_at at time zone 'Europe/Moscow')::date as day
         from reopened r join transactions t on t.id = r.transaction_id

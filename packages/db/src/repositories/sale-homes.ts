@@ -300,7 +300,7 @@ export async function enqueueSaleHomeRefreshForSales(db: Database, transactionId
   if (unique.length === 0) return;
   await db.execute(sql`
     insert into sale_home_refresh_due (day, generation, queued_at)
-    select distinct day, 1, clock_timestamp()
+    select day, 1, statement_timestamp()
     from (
       select (occurred_at at time zone 'Europe/Moscow')::date as day
       from transactions
@@ -344,7 +344,7 @@ export async function enqueueSaleHomeRefreshForHandin(
     : sql``;
   await db.execute(sql`
     insert into sale_home_refresh_due (day, generation, queued_at)
-    select distinct day, 1, clock_timestamp()
+    select day, 1, statement_timestamp()
     from (
       select ${input.reportDate}::date as day
       union
@@ -372,7 +372,7 @@ export async function enqueueSaleHomeRefreshForUsers(db: Database, userIds: read
   if (unique.length === 0) return;
   await db.execute(sql`
     insert into sale_home_refresh_due (day, generation, queued_at)
-    select distinct day, 1, clock_timestamp()
+    select day, 1, statement_timestamp()
     from (
       select (h.occurred_at at time zone 'Europe/Moscow')::date as day
       from sale_homes h
@@ -419,7 +419,7 @@ export async function enqueueSaleHomeRefreshForPages(
   const homePage = input.pageIds === null ? sql`` : sql`and page_id = any(${ids(input.pageIds)})`;
   await db.execute(sql`
     insert into sale_home_refresh_due (day, generation, queued_at)
-    select distinct day, 1, clock_timestamp()
+    select day, 1, statement_timestamp()
     from (
       select (occurred_at at time zone 'Europe/Moscow')::date as day
       from transactions
