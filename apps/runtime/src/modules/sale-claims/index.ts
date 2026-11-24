@@ -198,16 +198,17 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
   async function readSaid<T>(
     request: Parameters<typeof requireAgentKeyPrincipal>[0],
     operation: "agentSaleDecisions" | "agentSaleQuestions",
-    read: (pageIds: number[]) => Promise<T>,
+    read: (pageIds: number[], realm: "live" | "test") => Promise<T>,
     count: (answer: T) => number,
   ): Promise<T> {
     const principal = await requireAgentKeyPrincipal(request);
     const capability = principal.capabilities.includes("write:shift_reports") ? "write:shift_reports" as const : "read:team" as const;
     const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities: [capability] });
     const pageIds = scope.pages.map((page) => page.id);
+    const realm = realmOf(principal);
     let delivered = 0;
     try {
-      const answer = await read(pageIds);
+      const answer = await read(pageIds, realm);
       delivered = count(answer);
       await writeAgentAudit(db, { agentKeyId: principal.agentKeyId, operation, pageIds, verbatimText: false, requestSummary: { returned: delivered } });
       return answer;
@@ -252,5 +253,5 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
     said(request, "agentSaleQuestionClose", request.body, (actor) => closeSaleQuestion(appContext, actor, request.body),
       (answer) => ({ questionId: answer.question.id, outcome: "closed" })));
   server.get("/api/v1/agent/sale-questions", { schema: routeSchemas.agentSaleQuestions }, async (request) =>
-    readSaid(request, "agentSaleQuestions", (pageIds) => listSaleQuestionsSaid(appContext, { pageIds, ...request.query }), (answer) => answer.questions.length));
+    readSaid(request, "agentSaleQuestions", (pageIds, realm) => listSaleQuestionsSaid(appContext, { pageIds, realm, ...request.query }), (answer) => answer.questions.length));
 }

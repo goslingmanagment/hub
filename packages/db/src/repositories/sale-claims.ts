@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 
-import { livePageSql } from "./realm.ts";
+import { livePageSql, liveUserSql, testPageSql, testUserSql } from "./realm.ts";
 import type { Database } from "../client.ts";
 import type { HandinVersionLine, HandinVersionOffPlatform, HandinVersionPage } from "./shift-handins.ts";
 
@@ -212,7 +212,7 @@ function claimOf(row: Row): SaleClaimRow {
   };
 }
 
-/** Claims by any of: ids, sales, the side, states; the newest first. */
+/** Claims by any of: ids, sales, pages, realm, the side, states; the newest first. */
 export async function listSaleClaims(
   db: Database,
   input: {
@@ -220,15 +220,25 @@ export async function listSaleClaims(
     transactionIds?: readonly number[];
     sideUserIds?: readonly number[];
     involvingUserIds?: readonly number[];
+    /** Access scope: filter to these pages in SQL BEFORE applying `limit`. */
+    pageIds?: readonly number[];
+    /** With `pageIds`: also include rows with `page_id is null` (owner's unlinked review; never for agent keys). */
+    includeNullPage?: boolean;
+    /** Realm wall in SQL, applied BEFORE `limit`. */
+    realm?: "live" | "test";
     states?: readonly SaleClaimState[];
     kinds?: readonly SaleClaimKind[];
     /** Closed by one of these decisions. */
     decisionIds?: readonly number[];
     /** Settled without the side's answer at or after this moment (`silence_at`). */
     silenceSince?: Date;
-    limit?: number;
+    /** Maximum rows; pass `null` for no SQL cap when caller filters further before applying its own limit. */
+    limit?: number | null;
   },
 ): Promise<SaleClaimRow[]> {
+  if (input.pageIds !== undefined && input.pageIds.length === 0 && input.includeNullPage !== true) {
+    return [];
+  }
   const where = [sql`true`];
   if (input.ids !== undefined) where.push(sql`c.id = any(${ids(input.ids)})`);
   if (input.silenceSince !== undefined) where.push(sql`c.silence_at >= ${input.silenceSince.toISOString()}::timestamptz`);
@@ -236,13 +246,28 @@ export async function listSaleClaims(
   if (input.transactionIds !== undefined) where.push(sql`c.transaction_id = any(${ids(input.transactionIds)})`);
   if (input.sideUserIds !== undefined) where.push(sql`c.side_user_id = any(${ids(input.sideUserIds)})`);
   if (input.involvingUserIds !== undefined) {
-    where.push(sql`(c.side_user_id = any(${ids(input.involvingUserIds)}) or c.claimant_user_id = any(${ids(input.involvingUserIds)}))`);
+    where.push(sql`(c.side_user_id = any(${ids(input.involvingUserIds)}) or c.claimant_user_id = any(${ids(input.involvingUserIds)}) or c.share_with_user_id = any(${ids(input.involvingUserIds)}))`);
+  }
+  if (input.pageIds !== undefined) {
+    if (input.pageIds.length === 0) {
+      where.push(sql`c.page_id is null`);
+    } else if (input.includeNullPage === true) {
+      where.push(sql`(c.page_id = any(${ids(input.pageIds)}) or c.page_id is null)`);
+    } else {
+      where.push(sql`c.page_id = any(${ids(input.pageIds)})`);
+    }
+  }
+  if (input.realm === "live") {
+    where.push(sql`${livePageSql(sql`c.page_id`)} and ${liveUserSql(sql`c.claimant_user_id`)} and ${liveUserSql(sql`c.side_user_id`)} and ${liveUserSql(sql`c.share_with_user_id`)}`);
+  } else if (input.realm === "test") {
+    where.push(sql`(${testPageSql(sql`c.page_id`)} or ${testUserSql(sql`c.claimant_user_id`)} or ${testUserSql(sql`c.side_user_id`)} or ${testUserSql(sql`c.share_with_user_id`)})`);
   }
   if (input.states !== undefined) where.push(sql`c.state = any(${sql.param([...input.states])}::text[])`);
   if (input.kinds !== undefined) where.push(sql`c.kind = any(${sql.param([...input.kinds])}::text[])`);
+  const cap = input.limit === null ? sql`` : sql`limit ${input.limit ?? 5000}`;
   const result = await db.execute<Row>(sql`
     select ${CLAIM_COLUMNS} from sale_claims c where ${sql.join(where, sql` and `)}
-    order by c.id desc limit ${input.limit ?? 5000}`);
+    order by c.id desc ${cap}`);
   return result.rows.map(claimOf);
 }
 
@@ -776,4 +801,68 @@ export async function listLoginsByPersonCode(db: Database, codes: readonly strin
     where p.code = any(${sql.param([...new Set(codes)])}::text[])
     group by p.code`);
   return new Map(result.rows.map((row) => [String(row.code), jsonOf<unknown[]>(row.user_ids, []).map(Number)]));
+}
+
+/** One person of the realm with ALL of their logins (active and disabled/deleted) and ALL working pages, for `payoutSaleBlockers`. */
+export interface SaleBlockerPersonRow {
+  personId: number;
+  code: string;
+  displayName: string;
+  reportTag: string | null;
+  userIds: number[];
+  usernames: string[];
+  workingPageIds: number[];
+}
+
+/**
+ * Every person in `realm` with all of their Hub logins and working pages: one read for `payoutSaleBlockers` so a
+ * person is resolved across every login and working page while other known people in `who_text` stay distinguishable.
+ */
+export async function listSaleBlockerPeople(db: Database, realm: "live" | "test" = "live"): Promise<SaleBlockerPersonRow[]> {
+  const personRealm = realm === "test" ? sql`p.is_test` : sql`not p.is_test`;
+  const pageRealm = realm === "test" ? testPageSql(sql`w.page_id`) : livePageSql(sql`w.page_id`);
+  const result = await db.execute<Row>(sql`
+    select p.id as person_id, p.code, p.display_name, p.report_tag,
+      coalesce((select array_agg(l.user_id order by l.user_id) from person_logins l where l.person_id = p.id), '{}') as user_ids,
+      coalesce((select array_agg(u.username order by u.id) from person_logins l join users u on u.id = l.user_id where l.person_id = p.id), '{}') as usernames,
+      coalesce((select array_agg(w.page_id order by w.position, w.page_id) from person_working_pages w where w.person_id = p.id and ${pageRealm}), '{}') as working_page_ids
+    from people p
+    where ${personRealm}
+    order by p.id`);
+  return result.rows.map((row) => ({
+    personId: num(row.person_id),
+    code: String(row.code),
+    displayName: String(row.display_name),
+    reportTag: text(row.report_tag),
+    userIds: jsonOf<unknown[]>(row.user_ids, []).map(Number),
+    usernames: jsonOf<unknown[]>(row.usernames, []).map(String),
+    workingPageIds: jsonOf<unknown[]>(row.working_page_ids, []).map(Number),
+  }));
+}
+
+/** Fallback lookup for a Hub login not linked to any `people` row yet, strictly inside `realm`. */
+export async function findUnlinkedBlockerLogin(
+  db: Database,
+  input: { userId?: number; username?: string },
+  realm: "live" | "test" = "live",
+): Promise<{ userId: number; username: string; pageIds: number[] } | null> {
+  // Unlinked logins belong to the live realm alone.
+  if (realm === "test") return null;
+  const where = input.userId !== undefined
+    ? sql`u.id = ${input.userId}`
+    : sql`lower(u.username) = lower(${input.username ?? ""})`;
+  const result = await db.execute<Row>(sql`
+    select u.id as user_id, u.username,
+      coalesce((select array_agg(distinct a.platform_account_id order by a.platform_account_id)
+        from user_page_assignments a where a.user_id = u.id and ${livePageSql(sql`a.platform_account_id`)}), '{}') as page_ids
+    from users u
+    where ${where} and not exists (select 1 from person_logins l where l.user_id = u.id)
+    limit 1`);
+  const row = result.rows[0];
+  if (row === undefined) return null;
+  return {
+    userId: num(row.user_id),
+    username: String(row.username),
+    pageIds: jsonOf<unknown[]>(row.page_ids, []).map(Number),
+  };
 }

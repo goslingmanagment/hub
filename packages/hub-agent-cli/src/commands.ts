@@ -2784,11 +2784,29 @@ const SALE_SAID_COMMANDS: HubCommand[] = [
     operation: "agentSaleQuestions",
     summary:
       "The questions about sales on the key's pages (carried over from the ledger and asked here), the oldest first; --open"
-      + " — still open; --md — `data.markdown`, grouped by whom they wait for (replaces `ledger question list --md`). Needs"
-      + " write:shift_reports or read:team.",
-    example: "hub sale questions --open --md",
-    options: { open: { kind: "boolean", describe: "Only the open ones" }, md: { kind: "boolean", describe: "Also data.markdown" } },
-    run: (client, values) => client.agentSaleQuestions({ query: { open: values.open === true ? "true" : "false", format: values.md === true ? "md" : "json" } }),
+      + " — still open; --person <code|id> — filter to open questions and shift-report disputes relevant to one person (the"
+      + " same canonical selector Workboard's payout panel uses, across all logins and working pages, with `coverage` when"
+      + " the key's grant is partial); --from/--to — Moscow day window; --md — `data.markdown`, grouped by whom they wait"
+      + " for (replaces `ledger question list --md`). Needs write:shift_reports or read:team.",
+    example: "hub sale questions --open --person anna --md",
+    options: {
+      open: { kind: "boolean", describe: "Only the open ones" },
+      person: { kind: "string", describe: "Filter to one person (registry code, person id, login id, or username)" },
+      from: { kind: "string", describe: "Only on or after this Moscow day (ГГГГ-ММ-ДД)" },
+      to: { kind: "string", describe: "Only on or before this Moscow day (ГГГГ-ММ-ДД)" },
+      md: { kind: "boolean", describe: "Also data.markdown" },
+    },
+    run: (client, values) => client.agentSaleQuestions({
+      query: {
+        open: values.open === true ? "true" : "false",
+        format: values.md === true ? "md" : "json",
+        ...defined({
+          person: readString(values, "person"),
+          from: readString(values, "from"),
+          to: readString(values, "to"),
+        }),
+      },
+    }),
   },
 ];
 
