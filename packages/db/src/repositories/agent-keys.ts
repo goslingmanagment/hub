@@ -290,8 +290,8 @@ export interface AgentKeyUseResult {
 
 /**
  * Records a use: stamps `last_used_at` and slides `expires_at` to now + 90 days,
- * CLAMPED to created_at + 365 days. A replaced key (`replaced_at` set) keeps the
- * end it was given: it works out its grace day and no use extends it.
+ * CLAMPED to created_at + 365 days. An owner or replaced key keeps the
+ * expiry it was given.
  *
  * Order matters: `least(greatest(current, slid), cap)`. Putting `greatest` on the
  * outside — as the first revision did — preserves an expiry that already sits
@@ -313,7 +313,8 @@ export async function recordAgentKeyUse(
     .update(agentKeys)
     .set({
       lastUsedAt: now,
-      expiresAt: sql`case when ${agentKeys.replacedAt} is not null then ${agentKeys.expiresAt} else least(
+      expiresAt: sql`case when ${agentKeys.replacedAt} is not null or 'act:owner' = any(${agentKeys.capabilities})
+        then ${agentKeys.expiresAt} else least(
         greatest(${agentKeys.expiresAt}, ${slid}::timestamptz),
         ${agentKeys.createdAt} + ${`${AGENT_KEY_MAX_LIFETIME_DAYS} days`}::interval
       ) end`,

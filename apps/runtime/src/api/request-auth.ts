@@ -41,10 +41,10 @@ export function unauthorizedFor(request: Pick<PrincipalRequest, "authFailure">) 
   return new UnauthorizedError(undefined, { reason: request.authFailure?.reason ?? null });
 }
 
-function bearerToken(request: PrincipalRequest): string | null {
+export function bearerToken(request: Pick<PrincipalRequest, "headers">): string | null {
   const authorization = request.headers.authorization;
   const match = typeof authorization === "string"
-    ? /^bearer\s+(.+)$/i.exec(authorization)
+    ? /^bearer\s+(.+)$/i.exec(authorization.trim())
     : null;
   const token = match?.[1]?.trim() ?? "";
   return token.length > 0 ? token : null;

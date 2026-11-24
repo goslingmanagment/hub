@@ -84,6 +84,9 @@ describe("the wall by object classifies every field a test principal can send", 
   });
 
   it("names a claim by its id, a login by its id, every value of a list, and nothing it calls `none`", () => {
+    for (const [op, kind] of [["swap.approve", "question"], ["swap.revoke", "question"], ["sale.close", "claim"]]) {
+      expect(requestObjects("ownerAgentCall", [{ op, args: { questionId: 39 } }])).toEqual([{ kind, value: "39" }]);
+    }
     expect(requestObjects("saleDisputeOfClaim", [{ claimId: 39 }])).toEqual([{ kind: "claim", value: "39" }]);
     expect(requestObjects("saleDisputeDecide", [{}, {}, { claimId: 39, outcome: "x" }])).toEqual([{ kind: "claim", value: "39" }]);
     expect(requestObjects("shiftReportsList", [{}, { userId: 17, from: "2026-11-01" }])).toEqual([{ kind: "login", value: "17" }]);

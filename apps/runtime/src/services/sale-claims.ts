@@ -29,6 +29,7 @@ import {
   insertHandinVersion,
   insertSaleClaim,
   insertSaleDecision,
+  isTestPage,
   linkSaleDecision,
   listActiveSaleDecisions,
   listCurrentHandinVersions,
@@ -73,7 +74,7 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import type { HumanAuthPrincipal } from "./auth.ts";
+import type { HumanAuthPrincipal, OperatorContext } from "./auth.ts";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { validatePotDecisionTarget } from "./pots.ts";
 import { refreshSaleHomesForDay } from "./sale-homes.ts";
@@ -562,7 +563,7 @@ async function syncNobodyWeek(app: Pick<AppContext, "db">, now: Date): Promise<n
 async function syncUnlinkedDecisions(app: Pick<AppContext, "db">, now: Date): Promise<number> {
   const { db } = app;
   const key = `${SALE_DECISIONS_UNLINKED_KIND}:ledger`;
-  const unlinked = await listSaleDecisions(db, { needsLink: true, activeOnly: true });
+  const unlinked = await listSaleDecisions(db, { needsLink: true, activeOnly: true, realm: "live" });
   if (unlinked.length === 0) {
     const closed = await closeMatter(db, { key, how: "resolved", writer: "server" }, SYSTEM, now);
     return closed.transition === "closed" ? 1 : 0;
@@ -596,6 +597,7 @@ interface SettleBy {
    * `api`; the version it makes stays the owner's own Workboard one (`door: workboard`, `actorUserId` the owner, no key).
    */
   onBehalfOfUserId?: number;
+  reason?: string;
 }
 
 /**
@@ -690,12 +692,19 @@ async function settleReport(
     at: input.at,
   });
   const amountMills = made.lines.find((one) => one.transactionId === input.transactionId)?.amountMills ?? 0;
-  const onBehalf = input.by.onBehalfOfUserId ?? null;
-  await insertHandinEvent(db, {
-    handinId: handin.id, event: "shift_report.settled", door: onBehalf === null ? "system" : "api", actorUserId: input.by.actorUserId, agentKeyId: input.by.agentKeyId,
-    onBehalfOfUserId: onBehalf, changes: { version: version.version, transactionId: input.transactionId, amountMills, madeFor: input.madeFor }, at: input.at,
-  });
+  await recordSettledReport(db, handin.id, version.version, input.transactionId, amountMills, input);
   return { shiftId: input.shiftId, version: version.version, versionId: version.id, dayPaid };
+}
+
+async function recordSettledReport(
+  db: Database, handinId: number, version: number, transactionId: number, amountMills: number,
+  { by, madeFor, at }: { by: SettleBy; madeFor: HandinVersionMadeFor; at: Date },
+) {
+  await insertHandinEvent(db, {
+    handinId, event: "shift_report.settled", door: by.onBehalfOfUserId === undefined ? "system" : "api",
+    actorUserId: by.actorUserId, agentKeyId: by.agentKeyId, onBehalfOfUserId: by.onBehalfOfUserId ?? null,
+    changes: { version, transactionId, amountMills, madeFor, ...(by.reason === undefined ? {} : { reason: by.reason }) }, at,
+  });
 }
 
 /**
@@ -779,10 +788,7 @@ async function deliverSaleToReport(
     reportDate: handin.reportDate,
     at: input.at,
   });
-  await insertHandinEvent(db, {
-    handinId: handin.id, event: "shift_report.settled", door: "system", actorUserId: input.by.actorUserId, agentKeyId: input.by.agentKeyId,
-    onBehalfOfUserId: null, changes: { version: version.version, transactionId: input.sale.transactionId, amountMills: input.amountMills, madeFor: input.madeFor }, at: input.at,
-  });
+  await recordSettledReport(db, handin.id, version.version, input.sale.transactionId, input.amountMills, input);
   return { shiftId: input.shiftId, version: version.version, versionId: version.id, dayPaid };
 }
 
@@ -1009,8 +1015,11 @@ export const personSettleBy = (actor: { door: HandinDoor; userId: number }): Set
  * The owner's agent door's word (owner-agent-door.ts): the owner's own Workboard version (`door: workboard`, the owner,
  * no key — 0400's rule and the ledger's reading stay as they are), its history naming the key and the owner it acts for.
  */
-export const ownerAgentSettleBy = (operator: { agentKeyId: number; ownerUserId: number }): SettleBy =>
-  ({ door: "workboard", actorUserId: operator.ownerUserId, agentKeyId: operator.agentKeyId, telegramMessageRef: null, telegramSenderId: null, onBehalfOfUserId: operator.ownerUserId });
+export const ownerAgentSettleBy = (operator: OperatorContext): SettleBy =>
+  ({
+    door: "workboard", actorUserId: operator.onBehalfOfUserId, agentKeyId: operator.agentKeyId,
+    telegramMessageRef: null, telegramSenderId: null, onBehalfOfUserId: operator.onBehalfOfUserId, reason: operator.reason,
+  });
 
 export type { MadeVersion, SettleBy };
 
@@ -2086,12 +2095,16 @@ export async function keepSalesNobody(app: ClaimsApp, principal: HumanAuthPrinci
 
 export async function readUnlinkedDecisions(app: ClaimsApp, principal: HumanAuthPrincipal, now: Date = new Date()): Promise<SaleDecisionsUnlinkedResponse> {
   requireOwnerSession(principal);
-  const decisions = await listSaleDecisions(app.db, { needsLink: true, activeOnly: true });
-  const names = await listHandinNames(app.db, decisions.flatMap((one) => one.shares.map((share) => share.userId)));
+  const decisions = await listSaleDecisions(app.db, { needsLink: true, activeOnly: true, realm: realmOf(principal) });
+  const [{ labelOf }, names] = await Promise.all([
+    listMatterPageLabels(app.db),
+    listHandinNames(app.db, decisions.flatMap((one) => one.shares.map((share) => share.userId))),
+  ]);
   const out: SaleDecisionsUnlinkedResponse["decisions"] = [];
   for (const decision of decisions) {
     const ref = decision.ledgerRef ?? {};
-    const pageLabel = typeof ref.pageLabel === "string" ? ref.pageLabel : null;
+    const refLabel = typeof ref.pageLabel === "string" ? ref.pageLabel : null;
+    const pageLabel = decision.pageId === null ? refLabel : labelOf.get(decision.pageId) ?? null;
     const around = typeof ref.occurredAt === "string" ? new Date(ref.occurredAt) : typeof ref.saidAt === "string" ? new Date(ref.saidAt) : decision.decidedAt;
     const candidates = pageLabel === null ? [] : await listSaleCandidates(app.db, {
       pageLabel, fan: typeof ref.fanRef === "string" ? ref.fanRef : null,
@@ -2134,23 +2147,33 @@ export async function linkUnlinkedDecision(
   app: ClaimsApp, principal: HumanAuthPrincipal, input: { decisionId: number; transactionId: number }, now: Date = new Date(), by?: SettleBy,
 ) {
   requireOwnerSession(principal);
-  const sale = (await listHandinSalesByIds(app.db, [input.transactionId]))[0];
-  if (sale === undefined) throw new NotFoundError("No such sale");
-  const decision = (await listSaleDecisions(app.db, { ids: [input.decisionId] }))[0];
-  // One cancelled or replaced meanwhile waits for no sale: refused before anything is written.
-  if (decision === undefined || !decision.needsLink || decision.state !== "active") throw new NotFoundError("No such decision waiting for a sale");
-  const pageLabel = typeof decision.ledgerRef?.pageLabel === "string" ? decision.ledgerRef.pageLabel : null;
-  if (pageLabel !== null && pageLabel !== sale.pageLabel) throw new BadRequestError("The sale is of another page", { reason: "page_mismatch" });
-  // Tied to its sale, it rules the sale from now exactly as a decision made on it (and replaces the one that ruled it):
-  // the sale's open claims are decided with it and the reports that hold the sale get what it gives. The ledger is
-  // asked about paid days before any lock.
-  const existingReports = await listCurrentReportsOfSales(app.db, [sale.transactionId]);
-  const deliveryTargets = await deliveryPaidTargets(app.db, decision, sale);
-  const paid = await paidDaysOf(app, [...existingReports, ...deliveryTargets]);
+  const realm = realmOf(principal);
+  async function readPair(db: Database) {
+    const [sale] = await listHandinSalesByIds(db, [input.transactionId]);
+    if (!sale || (await isTestPage(db, sale.pageId)) !== (realm === "test")) throw new NotFoundError("No such sale");
+    const [decision] = await listSaleDecisions(db, { ids: [input.decisionId], needsLink: true, activeOnly: true, realm });
+    if (!decision) throw new NotFoundError("No such decision waiting for a sale");
+    const pageMismatch = decision.pageId !== null ? decision.pageId !== sale.pageId
+      : typeof decision.ledgerRef?.pageLabel === "string" && decision.ledgerRef.pageLabel !== sale.pageLabel;
+    if (pageMismatch) throw new BadRequestError("The sale is of another page", { reason: "page_mismatch" });
+    return { sale, decision };
+  }
+  const planned = await readPair(app.db);
+  // Paid-day reads may call the ledger and must finish before taking the settlement lock.
+  const existingReports = await listCurrentReportsOfSales(app.db, [planned.sale.transactionId]);
+  const deliveryTargets = await deliveryPaidTargets(app.db, planned.decision, planned.sale);
+  const paid = realm === "test" ? new Map<number, boolean | null>() : await paidDaysOf(app, [...existingReports, ...deliveryTargets]);
   const made: MadeVersion[] = [];
   const linked = await app.db.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     await lockSaleSettlements(txDb);
+    const { sale, decision } = await readPair(txDb);
+    if ((await listActiveSaleDecisions(txDb, [sale.transactionId])).size > 0) {
+      throw new ConflictError("The sale already has an active decision", { reason: "decision_exists" });
+    }
+    if ((await listSaleClaims(txDb, { transactionIds: [sale.transactionId], states: ["owner", "asked"], limit: 1 })).length > 0) {
+      throw new ConflictError("The sale already has a claim", { reason: "open_dispute" });
+    }
     if (!(await linkSaleDecision(txDb, { id: input.decisionId, transactionId: sale.transactionId, pageId: sale.pageId, at: now }))) return false;
     made.push(...await followDecision(txDb, {
       transactionId: sale.transactionId, decisionId: decision.id, decision,
@@ -2161,7 +2184,7 @@ export async function linkUnlinkedDecision(
     return true;
   });
   await afterPaid(app, made, now);
-  if (linked) await refreshHomeOf(app, sale.occurredAt, now);
+  if (linked) await refreshHomeOf(app, planned.sale.occurredAt, now);
   await runSaleClaims(app, now).catch((error: unknown) => {
     app.logger.warn({ decisionId: input.decisionId, err: error instanceof Error ? error.message : String(error) }, "sale claims: the pass after a decision was tied to its sale failed; the next one will");
   });

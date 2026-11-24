@@ -58,7 +58,7 @@ import {
 import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import type { HumanAuthPrincipal } from "./auth.ts";
+import { recordOwnerWrite, type HumanAuthPrincipal, type OperatorContext } from "./auth.ts";
 import { moscowDayOf } from "./chatter-shifts.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { ledgerChecked, ledgerGet, list, micros, millsOf, type LedgerReadApp } from "./ledger-payouts.ts";
@@ -597,6 +597,7 @@ export async function createPot(
   principal: HumanAuthPrincipal,
   body: PotCreateBody,
   now: Date = new Date(),
+  operator?: OperatorContext,
 ): Promise<{ pot: PotSummary; savedAt: string }> {
   const realm = realmOf(principal);
   const catalog = await listPotCatalogModelsAndPages(app.db, realm);
@@ -644,6 +645,10 @@ export async function createPot(
       const fromDay = body.opensOn > potsFrom ? body.opensOn : potsFrom;
       await enqueueSaleHomeRefreshForPages(tx, { pageIds, fromDay });
     }
+    await recordOwnerWrite(tx, principal.user.id, operator, "pot.created", {
+      potId: row.id, code: row.code, modelSlug: model.modelSlug,
+      pageLabels: model.pages.filter((page) => pageIds.includes(page.id)).map((page) => page.label),
+    });
     return row;
   });
 
@@ -658,6 +663,7 @@ export async function updatePotService(
   potId: number,
   body: PotUpdateBody,
   now: Date = new Date(),
+  operator?: OperatorContext,
 ): Promise<{ pot: PotSummary; savedAt: string }> {
   const existing = await findPotById(app.db, potId);
   if (existing === null) throw new NotFoundError("Общак не найден");
@@ -725,6 +731,7 @@ export async function updatePotService(
       const fromDay = earliestOpen > potsFrom ? earliestOpen : potsFrom;
       await enqueueSaleHomeRefreshForPages(tx, { pageIds: affectedPages, fromDay });
     }
+    await recordOwnerWrite(tx, principal.user.id, operator, "pot.updated", { potId: row.id, code: row.code });
     return row;
   });
 
@@ -738,6 +745,7 @@ export async function closePot(
   principal: HumanAuthPrincipal,
   potId: number,
   now: Date = new Date(),
+  operator?: OperatorContext,
 ): Promise<{ pot: PotSummary; savedAt: string }> {
   const existing = await findPotById(app.db, potId);
   if (existing === null) throw new NotFoundError("Общак не найден");
@@ -755,6 +763,7 @@ export async function closePot(
     if (potsFrom !== null) {
       await enqueueSaleHomeRefreshForPages(tx, { pageIds: row.pageIds, fromDay: potsFrom });
     }
+    await recordOwnerWrite(tx, principal.user.id, operator, "pot.closed", { potId: row.id, code: row.code });
     return row;
   });
 
@@ -768,6 +777,7 @@ export async function createPagePots(
   principal: HumanAuthPrincipal,
   body: { opensOn?: string | undefined },
   now: Date = new Date(),
+  operator?: OperatorContext,
 ): Promise<{ created: PotSummary[]; skippedPageLabels: string[]; savedAt: string }> {
   const realm = realmOf(principal);
   const catalog = await listPotCatalogModelsAndPages(app.db, realm);
@@ -831,6 +841,9 @@ export async function createPagePots(
       const fromDay = createdRows.map((pot) => pot.opensOn).sort()[0]!;
       await enqueueSaleHomeRefreshForPages(tx, { pageIds: affectedPageIds, fromDay });
     }
+    await recordOwnerWrite(tx, principal.user.id, operator, "pot.create_page_pots", {
+      potIds: createdRows.map((row) => row.id), skippedPageLabels,
+    });
   });
 
   if (realm === "live") await syncUnroutedPotMatter(app.db, now).catch(() => undefined);
@@ -1078,6 +1091,7 @@ export async function postPotDistribution(
   potId: number,
   body: { day?: string | undefined; formula?: PotFormula | undefined; parts?: ReadonlyArray<{ transactionId: number; baseMills: number }> | undefined },
   now: Date = new Date(),
+  operator?: OperatorContext,
 ): Promise<{ distribution: PotDistributionItem; savedAt: string }> {
   const preCheck = await findPotById(app.db, potId);
   if (preCheck === null) throw new NotFoundError("Общак не найден");
@@ -1137,7 +1151,7 @@ export async function postPotDistribution(
       throw new ConflictError("Инвариант суммы раздачи нарушен", { reason: "sum_invariant_failed" });
     }
 
-    return insertPotDistribution(tx, {
+    const distribution = await insertPotDistribution(tx, {
       potId: pot.id,
       day,
       formula: computed.normalizedFormula,
@@ -1145,8 +1159,13 @@ export async function postPotDistribution(
       lines: computed.lines,
       parts: prepared.parts.map((part) => ({ transactionId: part.transactionId, pageId: part.pageId, baseMills: part.baseMills })),
       postedByUserId: principal.user.id,
+      agentKeyId: operator?.agentKeyId ?? null,
       postedAt: now,
     });
+    await recordOwnerWrite(tx, principal.user.id, operator, "pot.distribution_posted", {
+      potId, code: pot.code, distributionId: distribution.id, day, baseMills: distribution.baseMills,
+    });
+    return distribution;
   });
 
   if (realm === "live") await syncUnroutedPotMatter(app.db, now).catch(() => undefined);
@@ -1186,6 +1205,7 @@ export async function reversePotDistribution(
   distributionId: number,
   body: { reason: string },
   now: Date = new Date(),
+  operator?: OperatorContext,
 ): Promise<{ distribution: PotDistributionItem; savedAt: string }> {
   const reason = body.reason.trim();
   if (reason === "") throw new BadRequestError("Укажите причину сторно", { reason: "reason_required" });
@@ -1219,6 +1239,9 @@ export async function reversePotDistribution(
       await syncExcessBaseMatters(tx, homes, now);
       await closeMatter(tx, { key: `${POT_SALE_LEFT_KIND}:${distributionId}`, how: "resolved", writer: "server" }, SYSTEM, now);
     }
+    await recordOwnerWrite(tx, principal.user.id, operator, "pot.distribution_reversed", {
+      distributionId, potId: pot.id, reversalReason: reason,
+    });
     return (await findPotDistributionById(tx, distributionId))!;
   });
 

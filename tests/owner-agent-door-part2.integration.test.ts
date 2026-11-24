@@ -7,8 +7,9 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { issueOwnerAgentKey } from "../apps/runtime/src/services/agent-keys.ts";
 import { publishAgentReport } from "../apps/runtime/src/services/agent-reports.ts";
-import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, principalOfLogin, setUserPassword } from "../apps/runtime/src/services/auth.ts";
 import { recordCustomOrder } from "../apps/runtime/src/services/custom-orders/index.ts";
+import { linkUnlinkedDecision, readUnlinkedDecisions } from "../apps/runtime/src/services/sale-claims.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { editingSession } from "./helpers/shift-report-hand-in.ts";
@@ -387,6 +388,15 @@ describe("the owner's agent door, part 2", () => {
       ledgerRef: { pageLabel: "mia-1", fanRef: "fan-one", netMills: 30_000, occurredAt: new Date(Date.now() - 3_600_000).toISOString() },
     }, new Date()))!;
     expect(decision).toMatchObject({ needsLink: true });
+    const imported = async (pageId: number | null, pageLabel: string) => (await insertSaleDecision(app.db, {
+      transactionId: null, pageId, kind: "nobody", shares: [], pot: null, outcome: "imported", ruleHome: null,
+      note: "fixture", decidedByUserId: null, decidedAt: new Date(), saidBy: null, source: "ledger", ledgerDecisionId: null, ledgerRef: { pageLabel },
+    }, new Date()))!;
+    const label = (await q("select label from pages where id = $1", [testPage])).rows[0].label as string;
+    const testByLabel = await imported(null, label);
+    const testById = await imported(testPage, "fixture-obsolete-label");
+    const testOwner = (await principalOfLogin(app, tboss))!;
+    expect((await readUnlinkedDecisions(app, testOwner)).decisions.map((row) => row.id).sort()).toEqual([testById.id, testByLabel.id].sort());
     const listed = await call("decision.unlinked", {});
     expect(listed.statusCode, listed.body).toBe(200);
     expect(listed.json().result.decisions.map((one: { id: number }) => one.id)).toEqual([decision.id]);
@@ -397,11 +407,24 @@ describe("the owner's agent door, part 2", () => {
     expect((await q("select transaction_id from sale_owner_decisions where id = $1", [decision.id])).rows[0].transaction_id).toBeNull();
 
     const liveSale = await sale("tx-owner-door-2-link", 30_000);
+    expect((await call("decision.link", { decisionId: testByLabel.id, transactionId: liveSale })).statusCode).toBe(404);
+    await expect(linkUnlinkedDecision(app, testOwner, { decisionId: testByLabel.id, transactionId: liveSale })).rejects.toMatchObject({ statusCode: 404 });
+    await expect(linkUnlinkedDecision(app, testOwner, { decisionId: decision.id, transactionId: testSale })).rejects.toMatchObject({ statusCode: 404 });
+    const disputed = await sale("fixture-open-claim", 200);
+    await q("insert into sale_claims (transaction_id, page_id, kind, state, claimed_at) values ($1, $2, 'imported', 'owner', now())", [disputed, pageOne]);
+    const blocked = await call("decision.link", { decisionId: decision.id, transactionId: disputed });
+    expect([blocked.statusCode, blocked.json().reason]).toEqual([409, "open_dispute"]);
+    expect((await q("select state, decision_id from sale_claims where transaction_id = $1", [disputed])).rows).toEqual([{ state: "owner", decision_id: null }]);
     const linked = await call("decision.link", { decisionId: decision.id, transactionId: liveSale });
     expect(linked.statusCode, linked.body).toBe(200);
     expect(linked.json().result.linked).toBe(true);
     const row = (await q("select transaction_id, needs_link from sale_owner_decisions where id = $1", [decision.id])).rows[0];
     expect([Number(row.transaction_id), row.needs_link]).toEqual([liveSale, false]);
+    const second = await imported(pageOne, "fixture-obsolete-label");
+    const occupied = await call("decision.link", { decisionId: second.id, transactionId: liveSale });
+    expect([occupied.statusCode, occupied.json().reason]).toEqual([409, "decision_exists"]);
+    expect((await q("select state, needs_link from sale_owner_decisions where id = $1", [second.id])).rows).toEqual([{ state: "active", needs_link: true }]);
+    expect((await q("select id::int from sale_owner_decisions where transaction_id = $1 and state = 'active'", [liveSale])).rows).toEqual([{ id: decision.id }]);
     expect((await call("decision.link", { decisionId: decision.id, transactionId: liveSale })).statusCode).toBe(404);
   });
 });

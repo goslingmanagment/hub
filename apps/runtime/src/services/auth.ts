@@ -439,6 +439,25 @@ export async function recordAudit(app: Pick<AppContext, "db">, input: AuditConte
   });
 }
 
+/** A delegated owner's authority and the reason supplied for this operation. */
+export interface OperatorContext {
+  agentKeyId: number;
+  onBehalfOfUserId: number;
+  reason: string;
+}
+
+export function recordOwnerWrite(
+  db: AppContext["db"], ownerId: number, operator: OperatorContext | undefined, eventType: string, metadata: Record<string, unknown>,
+) {
+  return recordAudit({ db }, {
+    source: operator ? "owner_agent" : "workboard",
+    actorUserId: ownerId,
+    actorAgentKeyId: operator?.agentKeyId ?? null,
+    eventType,
+    metadata: operator ? { ...metadata, agentKeyId: operator.agentKeyId, onBehalfOfUserId: operator.onBehalfOfUserId, reason: operator.reason } : metadata,
+  });
+}
+
 /** Mutation + audit dual-write commit together (review R1-7). Mirrors the
  * sync-context idiom: a handle without a transaction API (unit-test fakes)
  * runs directly — the real Database always has one.
@@ -1501,18 +1520,12 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
     return null;
   }
 
-  // Slides expires_at (+90 days, clamped to created_at + 365) and stamps
-  // last_used_at in ONE guarded statement; null means the key was revoked or
-  // already expired between the lookup and the write.
-  const used = await recordAgentKeyUse(app.db, { id: record.id });
-  if (!used) {
-    return null;
-  }
-
-  // The owner's agent door (0442): never an agent principal, whatever else the row says.
   if (record.capabilities.includes(OWNER_AGENT_CAPABILITY)) {
-    return ownerAgentPrincipalOf(app, record);
+    const owner = await ownerAgentPrincipalOf(app, record);
+    if (owner === null) return null;
+    return await recordAgentKeyUse(app.db, { id: record.id }) ? owner : null;
   }
+  if (!(await recordAgentKeyUse(app.db, { id: record.id }))) return null;
 
   const testPages = record.pageIds.length === 0 ? [] : await listTestPageIds(app.db);
   const test = testPages.length > 0 && record.pageIds.every((pageId) => testPages.includes(pageId));

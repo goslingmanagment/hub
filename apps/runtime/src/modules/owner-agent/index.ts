@@ -4,7 +4,7 @@ import { OWNER_AGENT_REASON_HEADER, routeSchemas } from "@agency_hub_core/contra
 
 import { requireOwnerAgentPrincipal } from "../../services/auth.ts";
 import { callOwnerAgent } from "../../services/owner-agent-door.ts";
-import { unauthorizedFor } from "../../api/request-auth.ts";
+import { bearerToken, unauthorizedFor } from "../../api/request-auth.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /** Calls of the owner's agent door per key per minute: a person's pace, not a crawler's. */
@@ -26,7 +26,7 @@ export function registerOwnerAgentRoutes(server: ApiServer, ctx: ApiModuleContex
         max: OWNER_AGENT_CALLS_PER_MINUTE,
         timeWindow: 60_000,
         // Per key: the bearer's digest, never the bearer.
-        keyGenerator: (request) => `owner-agent:${createHash("sha256").update(String(request.headers.authorization ?? request.ip)).digest("hex")}`,
+        keyGenerator: (request) => `owner-agent:${createHash("sha256").update(bearerToken(request) ?? request.ip).digest("hex")}`,
       },
     },
   }, async (request, reply) => {

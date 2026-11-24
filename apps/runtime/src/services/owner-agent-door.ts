@@ -16,10 +16,8 @@ import {
   listHandinPeopleOfUsers,
   listHandinSalesByIds,
   listLoginsByPersonCode,
-  listPersonLoginRows,
   listPotCatalogModelsAndPages,
   listSaleClaims,
-  listSaleDecisions,
   listTestPageIds,
   type Database,
   type SaleDecisionKind,
@@ -27,7 +25,7 @@ import {
 import type { z } from "zod";
 
 import type { AppContext } from "../bootstrap.ts";
-import { principalOfLogin, recordAudit, type AuditContext, type HumanAuthPrincipal, type OwnerAgentPrincipal } from "./auth.ts";
+import { principalOfLogin, recordAudit, type AuditContext, type HumanAuthPrincipal, type OwnerAgentPrincipal, type OperatorContext } from "./auth.ts";
 import { customFindingsAs, customOrdersBoardAs } from "./custom-orders/board.ts";
 import { actOnCustomFindingAs } from "./custom-orders/findings.ts";
 import { actOnCustomOrderAs, customOrderAs, type CustomActor } from "./custom-orders/index.ts";
@@ -77,11 +75,8 @@ import { answerQuestion, readTeamSwaps, revokeSwap } from "./team-questions.ts";
  */
 
 /** Who acts and why: the key, its name, the owner it acts as, the owner's reason. Passed beside the owner's principal. */
-export interface OwnerAgentOperator {
-  agentKeyId: number;
+export interface OwnerAgentOperator extends OperatorContext {
   keyName: string;
-  ownerUserId: number;
-  reason: string;
 }
 
 type Args<K extends OwnerAgentOperation> = z.output<(typeof OWNER_AGENT_OPERATION_SCHEMAS)[K]["args"]>;
@@ -224,12 +219,12 @@ function ownerAgentPersonOf(detail: AdminPersonResponse): OwnerAgentPerson {
 }
 
 const auditOf = (operator: OwnerAgentOperator): AuditContext => ({
-  source: "owner_agent", actorUserId: operator.ownerUserId, actorAgentKeyId: operator.agentKeyId,
+  source: "owner_agent", actorUserId: operator.onBehalfOfUserId, actorAgentKeyId: operator.agentKeyId,
 });
 
 /** How an object's history (`object_events`) names a write of the door: the key, the owner on whose behalf, door api. */
 const actorOf = (operator: OwnerAgentOperator): CustomActor & { door: "api" } => ({
-  door: "api", agentKeyId: operator.agentKeyId, onBehalfOfUserId: operator.ownerUserId,
+  door: "api", agentKeyId: operator.agentKeyId, onBehalfOfUserId: operator.onBehalfOfUserId,
 });
 
 /** A swap question of the live realm, or 404; a question of another kind is not a swap's operation (409). */
@@ -342,7 +337,7 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
       const applied = await applySaleDecision(app, {
         transactionId,
         insert: {
-          kind, shares, pot: null, outcome: "said", note: args.note, decidedByUserId: operator.ownerUserId, decidedAt: now,
+          kind, shares, pot: null, outcome: "said", note: args.note, decidedByUserId: operator.onBehalfOfUserId, decidedAt: now,
           saidBy: null, source: "agent", ledgerDecisionId: null, ledgerRef: null, agentKeyId: operator.agentKeyId,
         },
         // Read in the decision's own transaction, in the settlements' turn: what it may decide.
@@ -399,7 +394,7 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
   "sale.close": {
     console: "saleDisputeDecide",
     summary: "Close an open sale question without a decision, with why (once: a closed one is 409).",
-    run: (app, _owner, _operator, args, now) => closeSaleQuestionAsOwner(app, args, now),
+    run: (app, _owner, operator, args, now) => closeSaleQuestionAsOwner(app, args, operator, now),
   },
 
   // ── Человек ──
@@ -410,23 +405,9 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
   },
   "people.edit": {
     console: "adminPersonUpdate",
-    summary: "Change a person's name, note, onboarding, schedule, working pages, state or day left. People only; the working"
-      + " pages of a person with a content manager's login are the owner's own (409).",
+    summary: "Edit a person's profile. Only the owner can edit an owner or change a content manager's access.",
     run: async (app, owner, operator, args, now) => {
       const { code, ...fields } = args;
-      const row = await findPersonRowByCode(app.db, code);
-      if (row === null || row.isTest) throw new NotFoundError(`No person «${code}»`);
-      if (row.kind !== "human") throw new ConflictError(`«${code}» is not a person: the door changes people only`, { reason: "not_human" });
-      if (fields.workingPageLabels !== undefined) {
-        // A content manager's working pages open ContentOps' pages of their models (person-door.ts): the owner's own word.
-        const logins = await listPersonLoginRows(app.db, [row.id]);
-        if (logins.some((login) => login.role === "content_manager")) {
-          throw new ConflictError(
-            `«${code}» has a content manager's login: their working pages open ContentOps, the owner sets them himself`,
-            { reason: "content_manager_pages" },
-          );
-        }
-      }
       const detail = await updatePerson(app, code, fields, auditOf(operator), now, owner);
       return { person: ownerAgentPersonOf(detail) };
     },
@@ -534,13 +515,7 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
   "decision.link": {
     console: "saleDecisionLink",
     summary: "Tie a decision carried over from the ledger to its sale: it rules the sale from now, the reports follow.",
-    run: async (app, owner, operator, args, now) => {
-      await liveSale(app, args.transactionId);
-      const decision = (await listSaleDecisions(app.db, { ids: [args.decisionId] }))[0];
-      const live = await livePageCheck(app.db);
-      if (decision === undefined || !live(decision.pageId)) throw new NotFoundError("No such decision waiting for a sale");
-      return linkUnlinkedDecision(app, owner, args, now, ownerAgentSettleBy(operator));
-    },
+    run: (app, owner, operator, args, now) => linkUnlinkedDecision(app, owner, args, now, ownerAgentSettleBy(operator)),
   },
 
   // ── Общаки в Workboard (H11) ──
@@ -566,14 +541,7 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
     run: async (app, owner, operator, args, now) => {
       const { modelId, pageIds } = await resolveLiveModelPages(app.db, args.modelSlug, args.pageLabels);
       const { modelSlug: _modelSlug, pageLabels: _pageLabels, ...rest } = args;
-      const saved = await createPot(app, owner, { ...rest, modelId, pageIds }, now);
-      await recordAudit(app, {
-        ...auditOf(operator),
-        eventType: "pot.created",
-        targetUserId: null,
-        metadata: { potId: saved.pot.id, code: saved.pot.code, modelSlug: saved.pot.modelSlug, pageLabels: saved.pot.pageLabels },
-      });
-      return saved;
+      return createPot(app, owner, { ...rest, modelId, pageIds }, now, operator);
     },
   },
   "pot.update": {
@@ -585,14 +553,7 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
         ? undefined
         : (await resolveLiveModelPages(app.db, pot.modelSlug, args.pageLabels)).pageIds;
       const { code: _code, pageLabels: _pageLabels, ...rest } = args;
-      const saved = await updatePotService(app, owner, pot.id, { ...rest, ...(pageIds === undefined ? {} : { pageIds }) }, now);
-      await recordAudit(app, {
-        ...auditOf(operator),
-        eventType: "pot.updated",
-        targetUserId: null,
-        metadata: { potId: saved.pot.id, code: saved.pot.code },
-      });
-      return saved;
+      return updatePotService(app, owner, pot.id, { ...rest, ...(pageIds === undefined ? {} : { pageIds }) }, now, operator);
     },
   },
   "pot.preview": {
@@ -610,28 +571,14 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
     run: async (app, owner, operator, args, now) => {
       const pot = await livePotByCode(app.db, args.code);
       const { code: _code, ...rest } = args;
-      const posted = await postPotDistribution(app, owner, pot.id, rest, now);
-      await recordAudit(app, {
-        ...auditOf(operator),
-        eventType: "pot.distribution_posted",
-        targetUserId: null,
-        metadata: { potId: pot.id, code: pot.code, distributionId: posted.distribution.id, day: posted.distribution.day, baseMills: posted.distribution.baseMills },
-      });
-      return posted;
+      return postPotDistribution(app, owner, pot.id, rest, now, operator);
     },
   },
   "pot.reverse": {
     console: "potDistributionReverse",
     summary: "Reverse a posted Workboard pot distribution once with a reason (restores remaining base and emits K2 reversed).",
     run: async (app, owner, operator, args, now) => {
-      const reversed = await reversePotDistribution(app, owner, args.distributionId, { reason: args.reason }, now);
-      await recordAudit(app, {
-        ...auditOf(operator),
-        eventType: "pot.distribution_reversed",
-        targetUserId: null,
-        metadata: { distributionId: reversed.distribution.id, potId: reversed.distribution.potId, reason: args.reason },
-      });
-      return reversed;
+      return reversePotDistribution(app, owner, args.distributionId, { reason: args.reason }, now, operator);
     },
   },
   "pot.close": {
@@ -639,14 +586,7 @@ export const OWNER_AGENT_OPERATIONS: { [K in OwnerAgentOperation]: OwnerAgentRow
     summary: "Close an open Workboard pot (historical posted distributions stay intact).",
     run: async (app, owner, operator, args, now) => {
       const pot = await livePotByCode(app.db, args.code);
-      const closed = await closePot(app, owner, pot.id, now);
-      await recordAudit(app, {
-        ...auditOf(operator),
-        eventType: "pot.closed",
-        targetUserId: null,
-        metadata: { potId: closed.pot.id, code: closed.pot.code },
-      });
-      return closed;
+      return closePot(app, owner, pot.id, now, operator);
     },
   },
 };
@@ -662,6 +602,7 @@ export function ownerReasonOf(header: unknown): string {
   } catch {
     throw refuse("not percent-encoded UTF-8");
   }
+  if (/\p{Cc}/u.test(text)) throw refuse("control characters are not allowed");
   const reason = text.trim();
   if (reason.length === 0) throw refuse("required: why the owner asks for this, in a line (no fan's name)");
   if ([...reason].length > OWNER_AGENT_REASON_MAX) throw refuse(`at most ${OWNER_AGENT_REASON_MAX} characters`);
@@ -686,7 +627,7 @@ export async function callOwnerAgent(
   const row = rowOf(input.op);
   if (row === null) throw new ForbiddenError("Not an operation of the owner's agent door");
   const op = input.op as OwnerAgentOperation;
-  const operator: OwnerAgentOperator = { agentKeyId: principal.agentKeyId, keyName: principal.keyName, ownerUserId: principal.ownerUserId, reason };
+  const operator: OwnerAgentOperator = { agentKeyId: principal.agentKeyId, keyName: principal.keyName, onBehalfOfUserId: principal.ownerUserId, reason };
   // (4) The audit, before the operation runs: a call that cannot be recorded does not happen.
   await recordAudit(app, {
     ...auditOf(operator),

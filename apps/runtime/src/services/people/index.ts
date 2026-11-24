@@ -642,6 +642,18 @@ async function updatePersonTx(db: Db, code: string, fields: ChangeFields, audit:
   const fromDay = toBusinessDate(now);
   await setStaffingDay(db, fromDay);
   const person = await requirePerson(db, code, { lock: true });
+  if (audit.source === "owner_agent") {
+    if (person.isTest) throw new NotFoundError(`No person «${code}»`);
+    if (person.kind !== "human") throw new ConflictError(`«${code}» is not a person`, { reason: "not_human" });
+    const logins = await listPersonLoginRows(db, [person.id]);
+    if (person.role === "owner" || logins.some((login) => login.role === "owner")) {
+      throw new ConflictError("Only the owner can edit an owner record", { reason: "owner_record" });
+    }
+    const changesAccess = fields.workingPageLabels !== undefined || fields.state !== undefined || fields.leftOn !== undefined || fields.role !== undefined;
+    if (changesAccess && (person.role === "content_manager" || logins.some((login) => login.role === "content_manager"))) {
+      throw new ConflictError("Only the owner can set a content manager's access", { reason: "content_manager_pages" });
+    }
+  }
   const change = await resolveChange(db, subjectOf(person), fields);
   const updated = await applyChange(db, person, change, audit, fromDay);
   await recordAudit({ db }, { ...audit, eventType: "person.updated", metadata: changeMetadata(person.code, change) });
