@@ -1,7 +1,7 @@
 import { SALE_TAKE_NOTICE_DAYS, type KernelOperationResponse, type ShiftReportClaim, type ShiftReportLine } from "@agency_hub_core/contracts";
 import { millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 
-import { demoError, hashString, type DemoHandlers, type DemoReply, type DemoRequest } from "../core.ts";
+import { demoError, hashString, type DemoHandlers, DemoReply, type DemoRequest } from "../core.ts";
 import { DEMO_USERS, demoUserByRole, type DemoUser } from "../world.ts";
 import { DAY_MS, HOUR_MS, MINUTE_MS, chatterWorld, mskDay, type DemoSale, type DemoShift } from "./account-model.ts";
 import { demoBoardClaimAnswer } from "./shift-report-board.ts";
@@ -564,8 +564,10 @@ export const saleClaimHandlers: DemoHandlers = {
     if (denied) return denied;
     const body = (request.body ?? {}) as { transactionIds?: number[] };
     const week = nobodyWeek(request.now);
-    const wanted = body.transactionIds ? new Set(body.transactionIds) : null;
-    const target = week.sales.filter((sale) => wanted === null || wanted.has(sale.transactionId));
+    if (!body.transactionIds?.length) return demoError(400, "Bad Request", "Select at least one sale");
+    const wanted = new Set(body.transactionIds);
+    const target = week.sales.filter((sale) => wanted.has(sale.transactionId));
+    if (target.length !== wanted.size) return new DemoReply(409, { statusCode: 409, error: "Conflict", message: "Обновите список ничьих продаж", reason: "already_decided" });
     for (const sale of target) world(request.now).kept.add(sale.transactionId);
     return { kept: target.length, savedAt: request.now.toISOString() };
   },

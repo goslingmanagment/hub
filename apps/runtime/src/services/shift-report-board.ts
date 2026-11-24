@@ -47,6 +47,7 @@ import {
   listUserPageAssignments,
   listUserRoles,
   lockSaleSettlements,
+  updateReportDeliveries,
   openMatter,
   reopenSaleClaim,
   setCandidateConfirmed,
@@ -251,6 +252,10 @@ export async function handInShiftReport(app: BoardApp, actor: HandinActor, input
       telegramMessageRef: actor.kind === "agent" ? actor.sourceRef : null, telegramSenderId: actor.kind === "agent" ? actor.telegramUserId : null,
       cutoffAt: now, totalMills: sums.totalMills, pages: sums.pages, lines, offPlatform, comment: handin.comment, modelComments: handin.modelComments, ruleVersion: SALE_RULE.version,
       hubCheck, signed: signed ? { totalMills: sums.totalMills, count } : null, expectedReviewerPersonId, at: now,
+    });
+    await updateReportDeliveries(db, {
+      transactionIds: lines.flatMap((line) => line.transactionId !== null && line.amountMills > 0 && line.alreadyIn == null ? [line.transactionId] : []),
+      userId: handin.userId, shiftId: subject.shift.id, reportDate: handin.reportDate, state: "pending",
     });
     const next = checkLetsConfirm({ handedInAt: now, now, hubPending: hubWaits, gengarPending: made.expectedReviewerPersonId !== null }) ? "confirm" : "checking";
     if (!(await setHandinPhase(db, { handinId: handin.id, phase: next, at: now, from: [handin.phase] }))) throw new PhaseConflictError(subject.shift.id, was);
@@ -900,6 +905,7 @@ export async function readShiftReportChecks(
   // The key's realm (sandbox/realm.ts): a live key never sees a test candidate, the test team's checker only those.
   const testLogins = await testUserIds(app);
   const catalog = await pageCatalog(app.db);
+  const grantedLabels = new Set(input.pageIds.flatMap((id) => catalog.labelOf.get(id) ?? []));
   const waiting = await listCandidatesAwaitingCheck(app.db, {
     reviewerPersonId: reviewer.personId,
     pageIds: input.pageIds,
@@ -915,9 +921,10 @@ export async function readShiftReportChecks(
     if (testLogins.has(subject.shift.userId) !== (realm === "test")) continue;
     const labels = subject.shift.pages.map((page) => page.pageLabel);
     if (!labels.every((label) => granted.has(catalog.idOf.get(label) ?? -1))) continue;
-    const ids = one.lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId]));
+    const lines = one.lines.filter((line) => line.pageLabel !== null && grantedLabels.has(line.pageLabel));
+    const ids = lines.flatMap((line) => (line.transactionId === null ? [] : [line.transactionId]));
     const fans = await listHandinSaleFans(app.db, ids);
-    const nameIds = one.lines.flatMap((line) => [line.rule.toUserId, line.rule.senderUserId, line.shareWithUserId]).filter((id): id is number => id !== null);
+    const nameIds = lines.flatMap((line) => [line.rule.toUserId, line.rule.senderUserId, line.shareWithUserId]).filter((id): id is number => id !== null);
     const names = await listHandinNames(app.db, [subject.shift.userId, ...nameIds]);
     const pageIds = labels.map((label) => catalog.idOf.get(label)).filter((id): id is number => id !== undefined);
     checks.push({
@@ -931,7 +938,7 @@ export async function readShiftReportChecks(
       cutoffAt: one.cutoffAt.toISOString(),
       handedInAt: one.madeAt.toISOString(),
       pages: labels,
-      lines: one.lines.flatMap((line) => (line.transactionId === null || line.pageLabel === null ? [] : [{
+      lines: lines.flatMap((line) => (line.transactionId === null || line.pageLabel === null ? [] : [{
         transactionId: line.transactionId,
         pageLabel: line.pageLabel,
         kind: line.kind,
@@ -945,7 +952,7 @@ export async function readShiftReportChecks(
         ruleWords: ruleWordsOfLine(line, names),
       }])),
       comment: one.comment,
-      comments: commentsOf(one, subject, catalog, null),
+      comments: commentsOf(one, subject, catalog, grantedLabels),
       colleagues: await listHandinColleagues(app.db, { pageIds, exceptUserIds: subject.userIds }),
     });
   }

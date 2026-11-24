@@ -22,6 +22,7 @@ import { perHour, saleKindOf, settleSale } from "./chatter-stats.ts";
 import {
   LOGINS_ALONE,
   RULED_SALES_LEAD_MS,
+  hiddenTeamSales,
   homeCredit,
   openWindowFrom,
   ownMoneyShares,
@@ -38,6 +39,7 @@ import {
   type ScreenHome,
   type ScreensRule,
 } from "./sale-rule-screens.ts";
+import { isTeamHiddenSaleHome } from "./sale-rule.ts";
 import { reportDateOfShift } from "./shift-rows.ts";
 
 /**
@@ -548,7 +550,7 @@ export async function readTeamShiftSales(
   const now = new Date();
   const { days, until } = input.query;
   const pages = await teamReadPages(app, principal, { pageLabel: input.query.pageLabel, pageScope: input.pageScope });
-  return teamShiftSalesOf(app.db, { days, until, now, pages });
+  return (await teamShiftSalesRead(app.db, { days, until, now, pages, hideNobody: principal.user.role !== "owner" || principal.narrowDeviceTokenId !== undefined })).response;
 }
 
 /** `teamShiftSales` of the pages, read as the screen reads it, for whoever may (the route above, the comparison tool). */
@@ -576,7 +578,7 @@ export interface TeamShiftSalesRead {
  */
 export async function teamShiftSalesRead(
   db: Database,
-  input: { days: number; until?: string | undefined; now: Date; pages: "all" | readonly number[]; rule?: ScreensRule | null },
+  input: { days: number; until?: string | undefined; now: Date; pages: "all" | readonly number[]; rule?: ScreensRule | null; hideNobody?: boolean },
 ): Promise<TeamShiftSalesRead> {
   const { days, until, now, pages } = input;
   const rule = input.rule !== undefined ? input.rule : await readScreensRule(db);
@@ -595,7 +597,12 @@ export async function teamShiftSalesRead(
   const shifts = pieces("shift");
   const visits = pieces("visit");
   // Every page's sales, a page nobody had open in the window too: its money is outside the shifts, never out of sight.
-  const sales = await listShiftSales(db, { pageIds: pages, from: readFrom, to: readTo });
+  const rows = await listShiftSales(db, { pageIds: pages, from: readFrom, to: readTo });
+  const ruledFrom = rule === null ? readFrom.getTime() : Math.max(ruledSalesFrom(rule), readFrom.getTime() - RULED_SALES_LEAD_MS);
+  const earlier = ruledFrom < readFrom.getTime() ? await listShiftSales(db, { pageIds: pages, from: new Date(ruledFrom), to: readFrom }) : [];
+  const hidden = input.hideNobody ? await hiddenTeamSales(db, [...earlier, ...rows], now) : new Set<number>();
+  const visible = (sale: ShiftSale) => !hidden.has(sale.transactionId);
+  const sales = rows.filter(visible);
   const held = shifts.map((shift) => ({ ...shift, held: salesOfWork(shift.work, sales) }));
   // The window's sales no shift holds: a look-in's when its person last wrote to the fan, else nobody's.
   const outside = salesNoShiftHolds({ from: window.from, to: window.to, sales, shifts: held });
@@ -603,7 +610,8 @@ export async function teamShiftSalesRead(
     hours: SALE_LAST_WRITER_HOURS,
     sales: lastWriterQuery([...contestedSales(held), ...outside.filter((sale) => visitsAround(visits, sale).length > 0)]),
   });
-  const oldWay = settleOutsideShifts(outside, visits, lastWriters);
+  const settled = settleOutsideShifts(outside, visits, lastWriters);
+  const oldWay = input.hideNobody && rule === null ? settled.filter((one) => one.visit !== null) : settled;
   if (rule === null) {
     const { result, money } = teamShiftMoneyOf({ days, now, until, shifts: held, lastWriters, firstActivity });
     return {
@@ -617,9 +625,7 @@ export async function teamShiftSalesRead(
   }
 
   // By the rule: the homes of every sale that can land on a ruled shift of the read — back by the PPV's wait.
-  const ruledFrom = Math.max(ruledSalesFrom(rule), readFrom.getTime() - RULED_SALES_LEAD_MS);
-  const earlier = ruledFrom < readFrom.getTime() ? await listShiftSales(db, { pageIds: pages, from: new Date(ruledFrom), to: readFrom }) : [];
-  const allSales = [...earlier, ...sales];
+  const allSales = [...earlier.filter(visible), ...sales];
   const homes = await readScreenHomes(db, {
     sales: allSales.filter((sale) => sale.occurredAt.getTime() >= ruledFrom),
     openFrom: openWindowFrom(now, [...people.values()].flatMap((person) => person.work)),
@@ -638,7 +644,7 @@ export async function teamShiftSalesRead(
     oldWay,
     credits,
     heldByRuled: new Set(held.filter((shift) => ruledWork(rule, shift.work)).flatMap((shift) => shift.held.map((sale) => sale.transactionId))),
-  });
+  }).filter((one) => !input.hideNobody || !isTeamHiddenSaleHome(one.home));
   return {
     response: { ...result, outside: outsideMoneyByRule(outsideSales, window.dates), ruleFrom: rule.from, serverNow: now.toISOString() },
     money,

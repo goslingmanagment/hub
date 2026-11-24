@@ -398,6 +398,7 @@ export const OWNER_AGENT_OPERATION_SCHEMAS = {
   "shiftReport.versions": { args: shiftReportVersionsArgs, result: shiftReportVersionsResult, writes: false },
   "sale.show": { args: saleShowArgs, result: saleShowResult, writes: false },
   "sale.decide": { args: saleDecideArgs, result: saleWriteResult, writes: true },
+  "sale.applied": { args: z.object({ decisionId: id, person: personCodeSchema, reportDate: businessDate }).strict(), result: saleWriteResult, writes: true },
   "sale.cancel": { args: saleCancelArgs, result: saleWriteResult, writes: true },
   "sale.close": { args: saleCloseArgs, result: saleCloseResult, writes: true },
   "people.show": { args: peopleShowArgs, result: peopleResult, writes: false },

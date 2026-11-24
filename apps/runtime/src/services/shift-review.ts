@@ -51,9 +51,9 @@ import { oldShiftCounts, saleKindOf, saleOriginOf, settleSale } from "./chatter-
 import type { ChatterSaleKind } from "@agency_hub_core/contracts";
 import { NotFoundError } from "./errors.ts";
 import { isTestPrincipal, userIsTest } from "./sandbox/realm.ts";
-import { SALE_HOME_REASON_TEXT, type SaleHomeReason } from "./sale-rule.ts";
+import { SALE_HOME_REASON_TEXT, isTeamHiddenSaleHome, type SaleHomeReason } from "./sale-rule.ts";
 import {
-  RULED_SALES_LEAD_MS, homeCredit, openWindowFrom, ownMoneyShares, piecesByUser, readPeopleLogins, readScreenHomes, readScreensRule, ruledWork,
+  RULED_SALES_LEAD_MS, hiddenTeamSales, homeCredit, openWindowFrom, ownMoneyShares, piecesByUser, readPeopleLogins, readScreenHomes, readScreensRule, ruledWork,
   type HomeCredit, type ScreenHome, type ScreensRule,
 } from "./sale-rule-screens.ts";
 import { reportDateOfShift } from "./shift-rows.ts";
@@ -753,6 +753,7 @@ async function salesAfterShift(
 
 /** A ruled shift's sales by their homes (sale-rule-screens.ts). */
 export interface RuledReview {
+  hidden: ReadonlySet<number>;
   homes: ReadonlyMap<number, ScreenHome>;
   /** The sales credited to the shift that are not among the ones on its pages within it (a PPV bought before it). */
   extra: SettledSale[];
@@ -784,6 +785,7 @@ async function ruledReviewOf(app: AppContext, input: {
   bought: readonly ShiftSale[];
   /** An agent key's pages: credits on those alone (as the old count reads only them); absent — every page. */
   grantedPageIds?: readonly number[] | undefined;
+  hideNobody?: boolean | undefined;
 }): Promise<RuledReview> {
   const { rule, userId, shift, now } = input;
   const end = shift.ongoing ? now.getTime() : shift.endedAt;
@@ -795,10 +797,13 @@ async function ruledReviewOf(app: AppContext, input: {
   });
   const byId = new Map<number, ShiftSale>();
   for (const sale of [...around, ...input.listed.map((one) => one.sale), ...input.before, ...input.bought]) byId.set(sale.transactionId, sale);
+  const hidden = input.hideNobody ? await hiddenTeamSales(app.db, [...byId.values()], now) : new Set<number>();
+  for (const id of hidden) byId.delete(id);
   const [homes, logins] = await Promise.all([
     readScreenHomes(app.db, { sales: [...byId.values()], openFrom: openWindowFrom(now, input.person.work), now, live: rule.live }),
     readPeopleLogins(app.db),
   ]);
+  if (input.hideNobody) for (const [id, home] of homes) if (isTeamHiddenSaleHome(home.kind)) hidden.add(id);
   // A share lands on the person's work by any of their logins: their other logins' work around the shift too.
   const others = logins.loginsOf(userId).filter((other) => other !== userId);
   const othersWork = others.length === 0 ? null : await input.everyone();
@@ -850,7 +855,7 @@ async function ruledReviewOf(app: AppContext, input: {
     return { ...one, verdict: share.elsewhere ? "theirs" : "none", holder: share.elsewhere ? logins.usernameOf(share.userId) : logins.nameOf(share.userId) };
   };
   return {
-    homes,
+    hidden, homes,
     extra: kept.filter((sale) => !listedIds.has(sale.transactionId)).map((sale) => ({
       sale: byId.get(sale.transactionId)!, held: true, verdict: "mine", holder: null, lastWriter: lastWriters.get(sale.transactionId) ?? null,
     })),
@@ -875,7 +880,7 @@ export async function readTeamShiftReview(
   // Anyone else reads the review WHOLE (transcripts, «откуда текст») on the pages of their teams (answer 4):
   // `teamPagesFor`, services/teams.ts. A shift with none of them is not theirs to open.
   const granted = (await teamPagesFor(app, principal)) ?? [];
-  const { review, pagesRead } = await computeShiftReview(app, query, { grantedPageIds: granted });
+  const { review, pagesRead } = await computeShiftReview(app, query, { grantedPageIds: granted, hideNobody: true });
   if (pagesRead === 0) throw new NotFoundError("The person has no shift at that time");
   return review;
 }
@@ -910,7 +915,7 @@ export function pageSalesOf(settled: readonly SettledSale[], start: number, end:
 export async function computeShiftReview(
   app: AppContext,
   query: TeamShiftReviewQuery,
-  options: { grantedPageIds?: readonly number[] } = {},
+  options: { grantedPageIds?: readonly number[]; hideNobody?: boolean } = {},
 ): Promise<{ review: TeamShiftReviewResponse; pagesLeftOut: string[]; pagesRead: number }> {
   const now = new Date();
   const at = Date.parse(query.at);
@@ -1083,7 +1088,7 @@ export async function computeShiftReview(
   // Each sale in its fan's chat: the ones the shift holds, and the rest to the fans of the chats shown; with its facts. And
   // the person's money around the shift: before it, no shift's; after it, their PPVs of the shift bought later.
   const chatOfSale = (one: SettledSale) => (one.sale.fanId === null ? null : chatOfFan.get(`${one.sale.pageId}:${one.sale.fanId}`) ?? null);
-  const listed = sales.filter((one) => one.held || chatOfSale(one) !== null);
+  const listedRaw = sales.filter((one) => one.held || chatOfSale(one) !== null);
   const ppvFans = chats.flatMap((chat) => {
     const fanId = fanOf.get(`${chat.pageId}:${chat.conv}`)?.fanId ?? null;
     const sentPpv = chat.messages.some((message) => message.by === "me" && message.priceMills !== null
@@ -1091,19 +1096,25 @@ export async function computeShiftReview(
     return fanId === null || !sentPpv ? [] : [{ pageId: chat.pageId, fanId }];
   });
   // The facts of every sale the review weighs, in one read: the ones shown, the ones before it and the PPVs bought after it.
-  const bought = shift.kind === "shift" ? await purchasesAfterShift(app, { end, ppvFans, now }) : [];
-  // From the screens' switch on (sale-rule-screens.ts), a ruled shift's sales are where their homes put them.
+  const purchases = shift.kind === "shift" ? await purchasesAfterShift(app, { end, ppvFans, now }) : [];
   const rule = await readScreensRule(app.db);
   const byRule = ruledWork(rule, shift)
     ? await ruledReviewOf(app, {
-      rule: rule!, userId: query.userId, shift, person, everyone, now, listed: [...listed], before: before.sales, bought, grantedPageIds: options.grantedPageIds,
+      rule: rule!, userId: query.userId, shift, person, everyone, now, listed: listedRaw, before: before.sales,
+      bought: purchases, grantedPageIds: options.grantedPageIds, hideNobody: options.hideNobody,
     })
     : null;
-  if (byRule !== null) listed.push(...byRule.extra);
+  const hidden = byRule?.hidden ?? (options.hideNobody
+    ? await hiddenTeamSales(app.db, [...sales.map((one) => one.sale), ...before.sales, ...purchases], now) : new Set<number>());
+  const visible = (sale: ShiftSale) => !hidden.has(sale.transactionId);
+  const visibleSales = sales.filter((one) => visible(one.sale));
+  const listed = [...listedRaw.filter((one) => visible(one.sale)), ...(byRule?.extra ?? [])];
+  const bought = purchases.filter(visible);
+  const beforeVisible = { ...before, sales: before.sales.filter(visible) };
   const withoutShift = byRule?.withoutShift ?? [];
-  const factIds = [...new Set([...listed.map((one) => one.sale), ...before.sales, ...bought, ...withoutShift.map((one) => one.sale)].map((sale) => sale.transactionId))];
+  const factIds = [...new Set([...listed.map((one) => one.sale), ...beforeVisible.sales, ...bought, ...withoutShift.map((one) => one.sale)].map((sale) => sale.transactionId))];
   const facts = new Map((await listSaleFacts(app.db, { transactionIds: factIds })).map((fact) => [fact.transactionId, fact]));
-  const beforeSales = salesBeforeShiftOf(query.userId, before, facts);
+  const beforeSales = salesBeforeShiftOf(query.userId, beforeVisible, facts);
   const laterSales = await salesAfterShift(app, { userId: query.userId, start, end, bought, facts, now });
   const rowAsSettled = (one: SettledSale): TeamShiftReviewResponse["sales"][number] => {
     const fact = facts.get(one.sale.transactionId);
@@ -1144,7 +1155,20 @@ export async function computeShiftReview(
     activity.set(ms, (activity.get(ms) ?? false) || minute.input);
   }
 
-  const salesOfPage = pageSalesOf(sales, start, end);
+  const salesOfPage = pageSalesOf(visibleSales, start, end);
+  if (hidden.size > 0) {
+    const hiddenNet = new Map<string, number>();
+    for (const { sale } of sales) {
+      if (visible(sale) || sale.fanId === null || sale.occurredAt < from || sale.occurredAt >= to) continue;
+      const key = `${sale.pageId}:${sale.fanId}`;
+      hiddenNet.set(key, (hiddenNet.get(key) ?? 0) + sale.netMills);
+    }
+    for (const chat of out) {
+      const pageId = personPageIds.get(chat.pageLabel);
+      const fan = fanOf.get(`${pageId}:${chat.conversationRef}`);
+      if (fan?.fanId != null) chat.shiftNetMills -= hiddenNet.get(`${pageId}:${fan.fanId}`) ?? 0;
+    }
+  }
   const chatKeyOf = (pageId: number, conv: string | null, fanId: number) => {
     const byConv = conv === null ? undefined : out.find((chat) => chat.pageLabel === labelOf.get(pageId) && chat.conversationRef === conv);
     return byConv?.key ?? chatOfFan.get(`${pageId}:${fanId}`) ?? null;
@@ -1166,7 +1190,7 @@ export async function computeShiftReview(
         allFans: allFans.has(page.label),
         sales: salesOfPage.get(page.id) ?? { netMills: 0, byKind: [] },
       })),
-      salesNetMills: byRule === null ? heldNetMills(sales) : byRule.salesNetMills,
+      salesNetMills: byRule === null ? heldNetMills(visibleSales) : byRule.salesNetMills,
     },
     previousAt: previous === null ? null : new Date(previous.startedAt).toISOString(),
     nextAt: found.next === null ? null : new Date(found.next.startedAt).toISOString(),

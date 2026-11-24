@@ -8,6 +8,7 @@ import {
   payLinksOf,
   postReportLinkOf,
   reportPageMetaOf,
+  reportHoldingSale,
   type ChainSums,
 } from "../apps/runtime/src/services/sale-chain.ts";
 
@@ -361,6 +362,11 @@ describe("report date, page metadata and Hub report evidence", () => {
       disputed: patch.disputed ?? false,
       ...(patch.claimedMills !== undefined ? { claimedMills: patch.claimedMills } : {}),
     });
+    const counted = { handinId: 1, shiftId: 1, userId: 101, reportDate: "2026-11-11", versionId: 1, version: 1,
+      submittedAt: new Date("2026-11-11"), lines: [line({})], pages: [], offPlatform: [] };
+    const reference = { ...counted, userId: 102, lines: [{ ...line({ amountMills: 0 }), alreadyIn: { shiftId: 1, reportDate: counted.reportDate } }] };
+    expect(reportHoldingSale([counted, reference], [101, 102], 9)).toBe(counted);
+    expect(reportHoldingSale([reference], [102], 9)).toBe(reference);
     expect(hubReportEvidenceOf(null, 9)).toBeNull();
     expect(hubReportEvidenceOf({ version: 2, lines: [line({ amountMills: 20_000 })] }, 9)).toEqual({ version: 2, status: "counted" });
     expect(hubReportEvidenceOf({ version: 2, lines: [line({ amountMills: 0, disputed: true, claimedMills: 20_000 })] }, 9)).toEqual({ version: 2, status: "disputed" });

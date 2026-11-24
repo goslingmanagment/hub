@@ -293,8 +293,8 @@ export function NobodyModal({ week, onClose }: { week?: string | undefined; onCl
     },
   });
   const keep = useMutation({
-    mutationFn: (transactionIds?: number[]) =>
-      kernel.saleNobodyKeep({ body: { ...(week ? { week } : {}), ...(transactionIds ? { transactionIds } : {}) } }),
+    mutationFn: ({ transactionIds }: { transactionIds: number[]; all?: boolean }) =>
+      kernel.saleNobodyKeep({ body: { transactionIds } }),
     onError: (error) => {
       const reason = error instanceof KernelApiError ? (error.body as { reason?: unknown } | null)?.reason : undefined;
       if (reason === "already_decided") {
@@ -304,7 +304,7 @@ export function NobodyModal({ week, onClose }: { week?: string | undefined; onCl
     },
     onSuccess: (answer, vars) => {
       toast.success(`Оставлены ничьими: ${answer.kept}`);
-      if (vars === undefined) {
+      if (vars.all) {
         void queryClient.invalidateQueries({ queryKey: ["matters"] });
         void queryClient.invalidateQueries({ queryKey: ["sale-claims"] });
         onClose();
@@ -325,7 +325,7 @@ export function NobodyModal({ week, onClose }: { week?: string | undefined; onCl
       actions={data && data.sales.length > 0 ? (
         <>
           <Button variant="ghost" onClick={onClose}>Закрыть</Button>
-          <Button variant="primary" loading={keep.isPending && keep.variables === undefined} disabled={busy} onClick={() => keep.mutate(undefined)}>Оставить все ничьими</Button>
+          <Button variant="primary" loading={keep.isPending && keep.variables?.all === true} disabled={busy} onClick={() => keep.mutate({ transactionIds: data.sales.map((sale) => sale.transactionId), all: true })}>Оставить все ничьими</Button>
         </>
       ) : undefined}
     >
@@ -398,9 +398,9 @@ export function NobodyModal({ week, onClose }: { week?: string | undefined; onCl
                         <Button
                           size="sm"
                           variant="ghost"
-                          loading={keep.isPending && keep.variables?.includes(sale.transactionId)}
+                          loading={keep.isPending && !keep.variables?.all && keep.variables?.transactionIds.includes(sale.transactionId)}
                           disabled={busy}
-                          onClick={() => keep.mutate([sale.transactionId])}
+                          onClick={() => keep.mutate({ transactionIds: [sale.transactionId] })}
                         >
                           Никому
                         </Button>

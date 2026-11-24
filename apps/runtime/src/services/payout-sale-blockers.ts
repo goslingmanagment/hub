@@ -352,7 +352,10 @@ export function selectPayoutSaleBlockers(input: {
   const reasons: SaleBlockerCoverageReason[] = [];
   if (input.personInHub === false) reasons.push("person_not_in_hub");
   if (scopeSet !== "owner") {
-    if (input.person.workingPageIds.some((pageId) => !scopeSet.has(pageId))) {
+    const omitted = input.claims.some((claim) => claim.pageId !== null && !scopeSet.has(claim.pageId)
+      && classifySaleBlocker({ claim, sale: input.sales.get(claim.transactionId ?? -1), person: input.person,
+        otherPeople: input.otherPeople, pageScope: "owner", from, to }) !== null);
+    if (omitted || input.person.workingPageIds.some((pageId) => !scopeSet.has(pageId))) {
       reasons.push("pages_outside_key");
     }
     const nullRows = input.nullPageCandidates ?? input.claims.filter((claim) => claim.pageId === null);
@@ -538,36 +541,9 @@ export async function payoutSaleBlockers(
     workingPageIds: row.workingPageIds,
   }));
 
-  // Realm and page access are enforced in SQL with NO pre-filter row cap (`limit: null`); person relevance and `limit`
-  // are applied afterwards by `selectPayoutSaleBlockers`.
-  const claims = await listSaleClaims(db, {
-    kinds,
-    states,
-    realm,
-    ...(pageScope === "owner" ? {} : { pageIds: pageScope }),
-    limit: null,
-  });
-
-  // For agent keys, also check whether relevant `page_id IS NULL` rows exist in this realm (never returned to the key;
-  // only flips `coverage` to partial with `unlinked_questions_omitted`).
-  const nullPageKinds = kinds.filter((kind) => kind === "question" || kind === "imported");
-  const nullPageCandidates = pageScope === "owner"
-    ? undefined
-    : nullPageKinds.length === 0
-      ? []
-      : await listSaleClaims(db, {
-        kinds: nullPageKinds,
-        states,
-        realm,
-        pageIds: [],
-        includeNullPage: true,
-        limit: null,
-      });
-
-  const saleIds = [...new Set([
-    ...claims.flatMap((claim) => (claim.transactionId === null ? [] : [claim.transactionId])),
-    ...(nullPageCandidates ?? []).flatMap((claim) => (claim.transactionId === null ? [] : [claim.transactionId])),
-  ])];
+  // Include the realm's omitted rows in the coverage check. Only granted rows can become items.
+  const claims = await listSaleClaims(db, { kinds, states, realm, limit: null });
+  const saleIds = [...new Set(claims.flatMap((claim) => claim.transactionId === null ? [] : [claim.transactionId]))];
   const sales = new Map((await listHandinSalesByIds(db, saleIds)).map((sale) => [sale.transactionId, sale]));
 
   const { matched, coverage } = selectPayoutSaleBlockers({
@@ -580,7 +556,6 @@ export async function payoutSaleBlockers(
     to: input.to ?? null,
     limit: input.limit,
     personInHub,
-    nullPageCandidates,
   });
 
   const nameIds = matched.flatMap(({ claim }) => [claim.claimantUserId, claim.sideUserId, claim.shareWithUserId].filter((id): id is number => id !== null));

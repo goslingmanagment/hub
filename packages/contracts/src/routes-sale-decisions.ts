@@ -105,9 +105,9 @@ export const agentSaleDecisionSchema = z.object({
   source: z.enum(["dispute", "ledger", "agent"]),
   /**
    * open — still to be taken into a report; held — the reports handed in Hub hold the sale for everyone it gives a
-   * share to (their versions follow the decision); applied — taken into a post; cancelled; superseded.
+   * share to (their versions follow the decision); applied — taken into a post; declined — every recipient declined.
    */
-  status: z.enum(["open", "held", "applied", "cancelled", "superseded"]),
+  status: z.enum(["open", "held", "applied", "declined", "cancelled", "superseded"]),
   /** Where it went, in words: «учтено в отчёте anna за 2026-11-11». */
   statusWords: z.string(),
   supersededBy: intId.nullable(),

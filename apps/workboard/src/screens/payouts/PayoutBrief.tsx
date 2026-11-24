@@ -6,6 +6,7 @@ import type {
   TeamLedgerPayoutPrepareResponse,
   TeamLedgerPayoutSaleBlocker,
 } from "@agency_hub_core/contracts";
+import { moscowToday } from "@agency_hub_core/ui/moscow";
 import { Button, Money, Notice, Skeleton, Table, Tooltip, type Column } from "@agency_hub_core/ui";
 import { formatDay, formatDayRange } from "@agency_hub_core/ui/format";
 import { useOwnerCard } from "@/screens/team/registry";
@@ -73,7 +74,7 @@ function PayoutSaleQuestions({
         >
           <ul className="payouts-questions">
             {questions.map((item) => {
-              const day = item.occurredAt !== null ? formatDay(item.occurredAt.slice(0, 10)) : formatDay(item.askedAt.slice(0, 10));
+              const day = formatDay(moscowToday(new Date(item.occurredAt ?? item.askedAt)));
               const hint = saleQuestionMatchHint(item.match);
               return (
                 <li key={item.id} className="payouts-question">

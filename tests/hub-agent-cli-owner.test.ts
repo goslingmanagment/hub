@@ -74,6 +74,8 @@ describe("hub owner", () => {
       [["owner", "matter", "close", "agent.ask:17", "--how", "resolved"], "matter.close", { key: "agent.ask:17", how: "resolved" }],
       [["owner", "learn", "approve", "chatter-job", "--take-back"], "learn.approve", { slug: "chatter-job", approved: false }],
       [["owner", "swap", "approve", "7", "--text", "ок"], "swap.approve", { questionId: 7, text: "ок" }],
+      [["owner", "sale", "applied", "7", "--person", "fixture", "--date", "2026-11-20"], "sale.applied",
+        { decisionId: 7, person: "fixture", reportDate: "2026-11-20" }],
       [["owner", "decision", "link", "9", "--sale", "1234567"], "decision.link", { decisionId: 9, transactionId: 1234567 }],
     ];
     for (const [argv, op, args] of sent) {

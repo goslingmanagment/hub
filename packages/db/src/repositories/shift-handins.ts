@@ -1,6 +1,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import { livePageSql, liveUserSql, testPageSql, testUserSql } from "./realm.ts";
+import { updateReportDeliveries } from "./sale-claims.ts";
 import { enqueueSaleHomeRefreshForHandin } from "./sale-homes.ts";
 import type { Database } from "../client.ts";
 
@@ -570,6 +571,10 @@ export async function insertHandinVersion(
     update shift_handins set state = 'submitted', current_version = ${version}, submitted_at = ${at}::timestamptz,
       report_date = ${input.reportDate}::date, updated_at = clock_timestamp()
     where id = ${input.handin.id}`);
+  await updateReportDeliveries(db, {
+    transactionIds: input.lines.flatMap((line) => line.transactionId !== null && line.amountMills > 0 && line.alreadyIn == null ? [line.transactionId] : []),
+    userId: input.handin.userId, shiftId: input.handin.shiftId, state: "applied", reportDate: input.reportDate,
+  });
   await enqueueSaleHomeRefreshForHandin(db, {
     shiftId: input.handin.shiftId,
     reportDate: input.reportDate,
@@ -1088,6 +1093,9 @@ export async function findSalesForReportClaim(
     where t.platform_account_id = any(${ids(input.pageIds)}) and ${realmSql}
       and t.is_active and t.gross_amount_mills > 0
       and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
+      and h.home = 'nobody'
+      and not exists (select 1 from sale_owner_decisions d where d.transaction_id = t.id and d.state = 'active')
+      and not exists (select 1 from sale_claims c where c.transaction_id = t.id and c.state = 'agreed')
       and ${matchSql}
     order by t.occurred_at desc, t.id desc
     limit ${input.limit ?? 2}`);
@@ -1119,6 +1127,9 @@ export async function listRecipientDayHandins(
     from shifts s
     left join shift_handins h on h.shift_id = s.id
     where s.user_id = any(${ids(input.userIds)}) and s.state in ('going', 'closed')
+      and (h.state = 'submitted' or (exists (select 1 from person_logins l join person_rights r using (person_id)
+        where l.user_id = s.user_id and r."right" = 'submits_shift' and r.granted_at <= s.started_at)
+      and (h.id is null or (h.state = 'open' and h.phase in ('draft', 'fixing')))))
       and coalesce(h.report_date, s.report_date) = ${input.reportDate}::date
     order by s.started_at desc, s.id desc`);
   return result.rows.map((row) => ({
@@ -1144,7 +1155,9 @@ export async function listRecipientOpenShifts(
     from shifts s
     left join shift_handins h on h.shift_id = s.id
     where s.user_id = any(${ids(input.userIds)}) and s.state in ('going', 'closed')
-      and (h.id is null or h.state = 'open')
+      and exists (select 1 from person_logins l join person_rights r using (person_id)
+        where l.user_id = s.user_id and r."right" = 'submits_shift' and r.granted_at <= s.started_at)
+      and (h.id is null or (h.state = 'open' and h.phase in ('draft', 'fixing')))
     order by s.started_at asc, s.id asc`);
   return result.rows.map((row) => ({
     shiftId: num(row.shift_id),

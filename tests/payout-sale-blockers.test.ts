@@ -249,6 +249,13 @@ describe("selectPayoutSaleBlockers", () => {
     expect(result.matched.map((item) => item.claim.id)).toEqual([30]);
     expect(result.coverage).toEqual({ state: "partial", reasons: ["pages_outside_key"] });
 
+    const swapped = selectPayoutSaleBlockers({
+      person: { ...person, workingPageIds: [1] }, otherPeople: others, claims: [{ ...onUngranted, kind: "claim" }],
+      sales: new Map(), pageScope: [1],
+    });
+    expect(swapped.matched).toEqual([]);
+    expect(swapped.coverage.reasons).toEqual(["pages_outside_key"]);
+
     // Markdown output also carries the partial-coverage warning so empty/partial lists never look complete.
     const md = questionsMarkdown([], result.coverage);
     expect(md).toContain("Покрытие неполное");
@@ -390,7 +397,9 @@ describe("PayoutBrief zero-balance visibility", () => {
 });
 
 describe("hub sale questions --person CLI", () => {
-  it("forwards --person, --from, --to, --open and --md to agentSaleQuestions", async () => {
+  it.each([
+    { flags: [], open: "true" }, { flags: ["--open"], open: "true" }, { flags: ["--include-closed"], open: "false" },
+  ])("filters personal questions with $flags", async ({ flags, open }) => {
     const calls: Array<{ operation: string; input: unknown }> = [];
     const client = new Proxy({}, {
       get: (_target, operation) => async (input: unknown) => {
@@ -405,7 +414,7 @@ describe("hub sale questions --person CLI", () => {
     });
 
     const result = await runHubCli({
-      argv: ["sale", "questions", "--open", "--person", "anna", "--from", "2026-11-10", "--to", "2026-11-20", "--md"],
+      argv: ["sale", "questions", ...flags, "--person", "anna", "--from", "2026-11-10", "--to", "2026-11-20", "--md"],
       env: { HUB_AGENT_KEY: "test-key" },
       readFile: () => null,
       createHubClient: () => client as never,
@@ -414,7 +423,7 @@ describe("hub sale questions --person CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(calls).toEqual([{
       operation: "agentSaleQuestions",
-      input: { query: { open: "true", format: "md", person: "anna", from: "2026-11-10", to: "2026-11-20" } },
+      input: { query: { open, format: "md", person: "anna", from: "2026-11-10", to: "2026-11-20" } },
     }]);
   });
 });

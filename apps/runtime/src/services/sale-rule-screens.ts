@@ -1,8 +1,8 @@
-import { listLoginPeople, listOwnerLoginIds, listSaleHomes, readSaleRuleSwitch, type Database, type SaleHomeRow, type ShiftSale } from "@agency_hub_core/db";
+import { listHandinSalesByIds, listLoginPeople, listOwnerLoginIds, listSaleHomes, readSaleRuleSwitch, type Database, type SaleHomeRow, type ShiftSale } from "@agency_hub_core/db";
 
 import { dayOfWork, moscowDayOf, workHoldsSale, type ComputedWork } from "./chatter-shifts.ts";
 import { computeSaleHomes, registrySlots } from "./sale-homes.ts";
-import { SALE_HOME_KINDS, SALE_RULE, type SaleHomeKind } from "./sale-rule.ts";
+import { SALE_HOME_KINDS, SALE_RULE, isTeamHiddenSaleHome, type SaleHomeKind } from "./sale-rule.ts";
 import { reportDateOfSale, reportDateOfShift } from "./shift-rows.ts";
 
 /**
@@ -131,6 +131,29 @@ export async function readScreenHomes(
     });
   });
   return homes;
+}
+
+/** Team visibility follows stored homes even before the screens switch. Classify new sales with the same rule. */
+export async function hiddenTeamSales(db: Database, sales: readonly ShiftSale[], now: Date): Promise<Set<number>> {
+  const hidden = new Set<number>();
+  const ids = [...new Set(sales.map((sale) => sale.transactionId))];
+  const missing = new Map<number, number[]>();
+  for (const row of await listHandinSalesByIds(db, ids)) {
+    if (isTeamHiddenSaleHome(row.home?.home)) hidden.add(row.transactionId);
+    if (row.home === null && row.occurredAt.getTime() >= SALE_RULE.since) {
+      const day = Math.floor(row.occurredAt.getTime() / DAY_MS) * DAY_MS;
+      const group = missing.get(day) ?? [];
+      group.push(row.transactionId);
+      missing.set(day, group);
+    }
+  }
+  for (const [day, group] of missing) {
+    const live = await computeSaleHomes(db, { from: new Date(day), to: new Date(day + DAY_MS), now, slots: registrySlots(db) });
+    const visible = new Set(live.answer.sales.flatMap((sale, i) =>
+      live.homes[i] !== undefined && !isTeamHiddenSaleHome(live.homes[i].kind) ? [Number(sale.transactionRef)] : []));
+    for (const id of group) if (!visible.has(id)) hidden.add(id);
+  }
+  return hidden;
 }
 
 /** How far before the switch a sale can still land on a ruled shift: the PPV's wait for its sender, and a day. */

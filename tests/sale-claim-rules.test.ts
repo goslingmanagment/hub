@@ -123,7 +123,7 @@ describe("which statements reach another person", () => {
     expect(claims[0]!.note).toBe("договорились вчера");
   });
 
-  it("routes a disputed «моё» on a nobody's sale and a pot's sale to the owner (sideUserId: null), while a junction stays to the rule", () => {
+  it("routes a disputed «моё» without a respondent to the owner, including a junction", () => {
     const claims = deriveClaims([
       report(101, 1, "2026-11-05 22:00", [
         line(1, { statement: "mine", amountMills: 0, claimedMills: 36_000, disputed: true, rule: { home: "nobody", reason: "no_holder", shareMills: 0, toUserId: null, senderUserId: null } }),
@@ -131,7 +131,7 @@ describe("which statements reach another person", () => {
         line(3, { statement: "mine", amountMills: 0, claimedMills: 36_000, disputed: true, rule: { home: "pot", reason: "post_tip", shareMills: 0, toUserId: null, senderUserId: null } }),
       ]),
     ]);
-    expect(claims.map((claim) => [claim.transactionId, claim.sideUserId])).toEqual([[1, null], [3, null]]);
+    expect(claims.map((claim) => [claim.transactionId, claim.sideUserId])).toEqual([[1, null], [2, null], [3, null]]);
   });
 
   it("makes a sale counted for more than its net a dispute by itself, the later hand-in against the earlier", () => {

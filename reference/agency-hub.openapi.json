@@ -187358,6 +187358,7 @@
                             "open",
                             "held",
                             "applied",
+                            "declined",
                             "cancelled",
                             "superseded"
                           ]
@@ -187861,6 +187862,7 @@
                               "open",
                               "held",
                               "applied",
+                              "declined",
                               "cancelled",
                               "superseded"
                             ]
@@ -188342,6 +188344,7 @@
                             "open",
                             "held",
                             "applied",
+                            "declined",
                             "cancelled",
                             "superseded"
                           ]
@@ -188846,6 +188849,7 @@
                             "open",
                             "held",
                             "applied",
+                            "declined",
                             "cancelled",
                             "superseded"
                           ]
@@ -320046,7 +320050,7 @@
                     "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                   },
                   "transactionIds": {
-                    "maxItems": 500,
+                    "minItems": 1,
                     "type": "array",
                     "items": {
                       "type": "integer",
@@ -320054,7 +320058,10 @@
                       "maximum": 9007199254740991
                     }
                   }
-                }
+                },
+                "required": [
+                  "transactionIds"
+                ]
               }
             }
           }
