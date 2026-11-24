@@ -58,11 +58,11 @@ export const AGENT_CAPABILITIES = [
   /**
    * The team's work and the facts of every sale on the key's pages: who held
    * the page, the bought PPV's sender, post tips and Campaign, the last
-   * writer, the chatters' marks and the owner's split (`agentTeamSales`).
-   * The agency ledger's right (ledger release 2, owner 2026-11-09): whose a
-   * sale is and what anyone is paid is the ledger's. Needs read:money too.
+   * writer, and the owner's split (`agentTeamSales`). Needs read:money too.
    * Alone it reads the people registry's feed (`agentPeople`): who is who,
    * their logins, working pages, schedule and Telegram — no money.
+   * Whose a sale is is computed in Hub (`sale_homes`, `agentSaleHomesFeed`);
+   * what anyone is paid stays the ledger's.
    */
   "read:team",
   /**

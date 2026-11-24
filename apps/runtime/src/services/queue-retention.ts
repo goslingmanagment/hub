@@ -123,6 +123,8 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "team.shift-rows", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   // Hourly; each tick recomputes this week's and last week's sale homes anew (sale-homes.ts).
   { queue: "team.sale-homes", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
+  // Every 5 minutes; drains `sale_home_refresh_due` days enqueued by sale-rule input writers (sale-homes.ts).
+  { queue: "team.sale-homes.due", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   // Every 5 minutes; each tick reads Hub's schedules and the ledger anew and judges every routine and copy (system-state-tick.ts).
   { queue: "system.state", retentionClass: "heartbeat-cron", retentionSeconds: HEARTBEAT_RETENTION_SECONDS, deleteAfterSeconds: HEARTBEAT_RETENTION_SECONDS },
   // Every 10 minutes; each tick reads the newcomers' way anew and makes its matters what they are (people/start-tick.ts).
@@ -155,6 +157,8 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "ai.balance.watch", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "team.shift-numbers", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "team.shift-numbers.check", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
+  // Nightly full sweep of sale homes from SALE_RULE.since through today (sale-homes.ts).
+  { queue: "team.sale-homes.sweep", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   // Frequent business crons (every 1/5/15 min): the 14d retention floor stays for
   // a tick that has not run yet, but a finished tick is kept a day like the
   // heartbeats' — nothing reads their finished rows, the lanes keep their own run

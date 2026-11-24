@@ -116,10 +116,19 @@ shows what it would take first. If production's `erasure_log` is lost with produ
 the copy are known only to the owner: Hub keeps no other record of them.
 
 The ledger reads Hub by cursors, and a restored Hub's ids start again from the copy's: handed-in report
-versions (and their places in the shift reports' feed) and erasures get ids the ledger has already seen, so it
-would take new versions for ones it stored and step over new erasures behind its cursor. Before the ledger reads
-Hub's feeds again, follow the ledger's own note on a Hub restore (the ledger repository's `AGENTS.md`, «Опасно» → «После
-восстановления хаба из копии»).
+versions (and their places in the shift reports' feed), decisions, computed sale homes (`sale_home_changes`), and
+erasures get ids/places the ledger has already seen, so it would take new versions for ones it stored and step over new
+changes behind its cursor. Before the ledger reads Hub's feeds again, follow the ledger's own note on a Hub restore
+(the ledger repository's `AGENTS.md`, «Опасно» → «После восстановления хаба из копии»):
+
+1. Pause the ledger's feed jobs (`hub-homes`, and any other Hub-following feed jobs) before exposing the restored Hub.
+2. In the restored Hub database, bump feed sequence counters (`sale_home_changes_id_seq`, `sale_home_changes.seq` max,
+   and sibling feed sequences) above the maxima of both Hub and the ledger so newly emitted rows never collide with
+   already-consumed cursors.
+3. Re-read the sale homes feed from the start (`since` omitted or `since=0`) into a separate mirror in the ledger.
+4. Reconcile keys, shares, retracts, `held`, and any records present only in the ledger; surface discrepancies on
+   already-paid days to the owner.
+5. Atomically switch the ledger's mirror and cursor, then resume the jobs.
 
 ## ContentOps database
 

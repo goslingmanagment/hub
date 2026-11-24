@@ -8,8 +8,9 @@ import { weekdayOfDay, type RuleWeekday } from "./schedule-slots.ts";
  * (`now` is an argument). A port of the agency ledger's `internal/split`
  * (split.go and marks.go, ledger origin/main 52968b6) with the owner's newer
  * answers of Gengar's shift report skill (SKILL.md §4, 2026-11-12), each behind
- * its own line of SALE_RULE. In shadow: the homes it gives are written to
- * `sale_homes` (sale-homes.ts) and read by no screen yet.
+ * its own line of SALE_RULE. The homes it gives are written to `sale_homes`
+ * (sale-homes.ts), read by Hub's screens, and served to the ledger on
+ * `GET /api/v1/agent/sale-homes/feed`.
  *
  * From SALE_RULE.since (2026-11-02 00:00 MSK), in this order:
  *
@@ -261,26 +262,44 @@ export interface SaleHome {
   slotJunction: boolean;
 }
 
+/** Maps each login id to a stable person key so multi-login people match across any of their logins. */
+export interface SaleRuleLogins {
+  personOf(userId: number): string;
+}
+
+const SINGLE_LOGIN_PEOPLE: SaleRuleLogins = {
+  personOf: (userId) => `login:${userId}`,
+};
+
 interface Index {
   works: readonly RuleWork[];
   byRef: Map<string, number>;
   slots: readonly RuleSlot[];
+  personOf: (userId: number) => string;
 }
 
-function indexOf(works: readonly RuleWork[], slots: readonly RuleSlot[]): Index {
+function indexOf(works: readonly RuleWork[], slots: readonly RuleSlot[], logins: SaleRuleLogins = SINGLE_LOGIN_PEOPLE): Index {
   const byRef = new Map<string, number>();
   works.forEach((work, at) => {
     if (!byRef.has(work.ref)) byRef.set(work.ref, at);
   });
-  return { works, byRef, slots };
+  return { works, byRef, slots, personOf: logins.personOf };
 }
 
 /**
  * A sale's home. `works` — everyone's around it (the wait and a day more on each side), any order; `slots` — the
- * schedule slots of the people (none: a junction nobody wrote to waits for the owner, as ledger's Go). Pure.
+ * schedule slots of the people (none: a junction nobody wrote to waits for the owner, as ledger's Go); `logins` —
+ * optional person-login map so a share's holding work matches any login of the same person. Pure.
  */
-export function homeOfSale(sale: RuleSale, works: readonly RuleWork[], slots: readonly RuleSlot[], now: number, rule: SaleRuleConfig = SALE_RULE): SaleHome {
-  return home(rule, sale, indexOf(works, slots), now);
+export function homeOfSale(
+  sale: RuleSale,
+  works: readonly RuleWork[],
+  slots: readonly RuleSlot[],
+  now: number,
+  rule: SaleRuleConfig = SALE_RULE,
+  logins: SaleRuleLogins = SINGLE_LOGIN_PEOPLE,
+): SaleHome {
+  return home(rule, sale, indexOf(works, slots, logins), now);
 }
 
 /** Every sale's home, in the order given. Pure. */
@@ -290,8 +309,9 @@ export function homesOfSales(
   slots: readonly RuleSlot[],
   now: number,
   rule: SaleRuleConfig = SALE_RULE,
+  logins: SaleRuleLogins = SINGLE_LOGIN_PEOPLE,
 ): SaleHome[] {
-  const ix = indexOf(works, slots);
+  const ix = indexOf(works, slots, logins);
   return sales.map((sale) => home(rule, sale, ix, now));
 }
 
@@ -457,7 +477,8 @@ function oneUser(works: readonly RuleWork[]): boolean {
  */
 function homeOfSender(rule: SaleRuleConfig, sale: RuleSale, sender: number, holders: readonly RuleWork[], ix: Index, now: number): SaleHome {
   const at = sale.occurredAt;
-  const theirs = (work: RuleWork) => work.userId === sender && !beforeRule(rule, work);
+  const senderPerson = ix.personOf(sender);
+  const theirs = (work: RuleWork) => ix.personOf(work.userId) === senderPerson && !beforeRule(rule, work);
   for (const work of holders) {
     if (theirs(work)) return whole(work, sale.netMills, "ppv_sender");
   }
@@ -531,20 +552,21 @@ export function halvesOf(net: number, a: number, b: number): Array<{ userId: num
   return [{ userId: low, mills: first }, { userId: high, mills: net - first }];
 }
 
-/** A person's work for a share: the one the rule's home already names, else their work holding the sale (a shift first). */
+/**
+ * A person's work for a share: the one the rule's home already names (own login first, else another of the same
+ * person), else their work holding the sale across any of their logins (own login first, shift before look-in).
+ */
 function workRefFor(user: number, sale: RuleSale, found: SaleHome, ix: Index): string | null {
-  const share = found.shares.find((one) => one.userId === user && one.workRef !== null);
-  if (share) return share.workRef;
-  let visit: string | null = null;
-  for (const ref of sale.holders) {
+  const person = ix.personOf(user);
+  const ownShare = found.shares.find((one) => one.userId === user && one.workRef !== null);
+  if (ownShare) return ownShare.workRef;
+  const personShare = found.shares.find((one) => ix.personOf(one.userId) === person && one.workRef !== null);
+  if (personShare) return personShare.workRef;
+  const holders = sale.holders.flatMap((ref) => {
     const at = ix.byRef.get(ref);
-    if (at === undefined) continue;
-    const work = ix.works[at]!;
-    if (work.userId !== user) continue;
-    if (work.kind === "shift") return work.ref;
-    visit ??= work.ref;
-  }
-  return visit;
+    return at === undefined ? [] : [ix.works[at]!];
+  });
+  return workRefOf(user, holders, ix);
 }
 
 /**
@@ -592,19 +614,19 @@ function agreedHome(sale: RuleSale, found: SaleHome, ix: Index): SaleHome | null
 function decide(sale: RuleSale, holders: readonly RuleWork[], shifts: readonly RuleWork[], ix: Index): SaleHome {
   const net = sale.netMills;
   const resolution = sale.resolution ?? [];
-  if (resolution.length > 0) return sharesHome(splitShares(net, resolution, (user) => workRefOf(user, holders)), "owner_split", ix);
+  if (resolution.length > 0) return sharesHome(splitShares(net, resolution, (user) => workRefOf(user, holders, ix)), "owner_split", ix);
   const settled = judgeMarks(sale.marks);
   if (settled.kind === "mine") {
     const user = settled.users[0]!;
     const mark = markOf(sale.marks, user);
     if (mark.confirmed) {
       const mills = mineMills(mark, net);
-      return sharesHome([{ workRef: workRefOf(user, holders), userId: user, percent: percentOfNet(mills, net), mills }], "marks", ix);
+      return sharesHome([{ workRef: workRefOf(user, holders, ix), userId: user, percent: percentOfNet(mills, net), mills }], "marks", ix);
     }
   } else if (settled.kind === "share") {
     const [a, b] = settled.users as [number, number];
     if (markOf(sale.marks, a).confirmed || markOf(sale.marks, b).confirmed) {
-      return sharesHome(halvesOf(net, a, b).map((half) => ({ workRef: workRefOf(half.userId, holders), userId: half.userId, percent: 50, mills: half.mills })), "marks", ix);
+      return sharesHome(halvesOf(net, a, b).map((half) => ({ workRef: workRefOf(half.userId, holders, ix), userId: half.userId, percent: 50, mills: half.mills })), "marks", ix);
     }
   } else if (settled.kind === "not_mine") {
     if (sale.marks.length > 0 && everyoneSaysNotMine(sale.marks, shifts)) return homeOf("nobody", "marks");
@@ -645,9 +667,25 @@ function everyoneSaysNotMine(marks: readonly RuleMark[], shifts: readonly RuleWo
   });
 }
 
-/** The user's work holding the sale (a shift before a look-in), or null — none holds it. */
-function workRefOf(user: number, holders: readonly RuleWork[]): string | null {
-  return holders.find((work) => work.userId === user)?.ref ?? null;
+/** The person's work holding the sale across any of their logins (own login before another; shift before look-in), or null. */
+function workRefOf(user: number, holders: readonly RuleWork[], ix: Index): string | null {
+  const person = ix.personOf(user);
+  let personShift: string | null = null;
+  let ownVisit: string | null = null;
+  let personVisit: string | null = null;
+  for (const work of holders) {
+    const own = work.userId === user;
+    if (!own && ix.personOf(work.userId) !== person) continue;
+    if (work.kind === "shift") {
+      if (own) return work.ref;
+      personShift ??= work.ref;
+    } else if (own) {
+      ownVisit ??= work.ref;
+    } else {
+      personVisit ??= work.ref;
+    }
+  }
+  return personShift ?? ownVisit ?? personVisit;
 }
 
 /** A home of shares: a visit's when every share is a look-in's, else a shift's. */

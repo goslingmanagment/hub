@@ -26,6 +26,7 @@ import {
   type DoorActor,
 } from "../../services/sale-decisions-door.ts";
 import { readSaleDecisionsFeed } from "../../services/sale-decisions-feed.ts";
+import { readSaleHomesFeed } from "../../services/sale-homes-feed.ts";
 import { handinActorOf, handinAgentActorOf } from "../../services/shift-handins.ts";
 import { realmOf, requireDecidedOfRealm } from "../../services/sandbox/realm.ts";
 import { beginAgentRequest, writeAgentAudit } from "../agent-read/index.ts";
@@ -238,6 +239,23 @@ export function registerSaleClaimRoutes(server: ApiServer, ctx: ApiModuleContext
       const feed = await readSaleDecisionsFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId, realm: realmOf(principal) });
       delivered = feed.changes.length;
       await writeAgentAudit(db, { agentKeyId: principal.agentKeyId, operation: "agentSaleDecisionsFeed", pageIds, verbatimText: false, requestSummary: { returned: delivered } });
+      return feed;
+    } finally {
+      await scope.finish(delivered);
+    }
+  });
+  // The ledger's feed of computed sale homes (0441, Contract K1): every upsert/retract after a cursor; read:money.
+  // Authorize against the key's granted `principal.pageIds` (already single-realm by 0414), not only active `scope.pages`,
+  // so retracts emitted when a previously deactivated page is erased are delivered instead of stuck in `held`.
+  server.get("/api/v1/agent/sale-homes/feed", { schema: routeSchemas.agentSaleHomesFeed }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    const scope = await beginAgentRequest(appContext, principal, { operation: "agentSaleHomesFeed", requiredCapabilities: ["read:money"] });
+    const pageIds = principal.pageIds;
+    let delivered = 0;
+    try {
+      const feed = await readSaleHomesFeed(appContext, { pageIds, since: request.query.since, limit: request.query.limit, agentKeyId: principal.agentKeyId, realm: realmOf(principal) });
+      delivered = feed.homes.length;
+      await writeAgentAudit(db, { agentKeyId: principal.agentKeyId, operation: "agentSaleHomesFeed", pageIds, verbatimText: false, requestSummary: { returned: delivered } });
       return feed;
     } finally {
       await scope.finish(delivered);

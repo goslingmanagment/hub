@@ -2275,6 +2275,10 @@ export const PAGE_ERASURE_TABLE_EXCLUSIONS: readonly PageErasureTableExclusion[]
     table: "pages",
     reason: "A test page standing in for this live page (0435 stands_in_for_page_id): the test team's catalog configuration, not captured creator or fan data; the pages catalog row it names stays, and the stand-in holds nothing of the live page.",
   },
+  {
+    table: "sale_home_changes",
+    reason: "Feed change-log of computed sale homes (0441): stores only numeric transaction/page ids, realm flag, op and timestamps, never fan data; retract rows emitted when erasure deletes sale_homes must survive so downstream consumers learn to remove those sales.",
+  },
 ];
 
 async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget[]> {

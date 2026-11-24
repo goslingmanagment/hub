@@ -1,23 +1,43 @@
 import type { AgentTeamSale, AgentTeamSalesResponse, AgentTeamWork } from "@agency_hub_core/contracts";
 import {
+  acquireErasureFenceSharedLock,
+  completeSaleHomeRefreshDue,
+  deleteVanishedSaleHomesInWindow,
   listActiveSaleDecisions,
+  listCurrentHandinVersions,
   listCurrentReportsOfSales,
+  listHandinsOfShifts,
+  listLoginPeople,
   listSaleClaims,
+  listSaleHomeRefreshDue,
   listShiftRows,
-  listUserLeaveFacts,
   listTestPageIds,
+  listUserLeaveFacts,
   listVisiblePages,
+  lockSaleHomeRefreshDay,
+  readSaleHomeRefreshGeneration,
   upsertSaleHomes,
+  versionReportDate,
   type Database,
   type SaleHomeRow,
+  type SaleHomeShareDaySource,
+  type SaleHomeShareRow,
   type ShiftRowRecord,
   type UserLeaveFacts,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { readAgentTeamSales } from "./agent-team-sales.ts";
-import { moscowDayOf } from "./chatter-shifts.ts";
+import { dayOfWork, moscowDayOf } from "./chatter-shifts.ts";
 import { ruleDecisionOf, ruleMarksOf, type ClaimView, type ReportView } from "./sale-claim-rules.ts";
+import {
+  LOGINS_ALONE,
+  landShare,
+  peopleLoginsOf,
+  piecesByUser,
+  type CreditPiece,
+  type PeopleLogins,
+} from "./sale-rule-screens.ts";
 import {
   SALE_RULE,
   homesOfSales,
@@ -28,23 +48,19 @@ import {
   type SaleRuleConfig,
 } from "./sale-rule.ts";
 import { NO_SLOTS, registrySlots, type SaleSlotProvider } from "./schedule-slots.ts";
+import { reportDateOfSale, reportDateOfShift } from "./shift-rows.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 /**
- * Whose each sale is, kept current in `sale_homes` (0380). The facts are the
- * ones the agency ledger reads (`readAgentTeamSales`, the answer of
- * POST /api/v1/agent/team/sales), the rule is sale-rule.ts; so a home here and
- * the ledger's `fact_homes` differ only where the facts or the owner's newer
- * answers do (the comparison tool, sale-rule-compare.ts, says which).
+ * Whose each sale is, kept current in `sale_homes` (0380) and served to downstream consumers on
+ * `GET /api/v1/agent/sale-homes/feed` (0441). The facts are read by `readAgentTeamSales`, the rule is `sale-rule.ts`,
+ * and where each share lands is `landShare` (`sale-rule-screens.ts`) — the same pure landing function screens use.
  *
- * The job recomputes the sales of this Moscow week and the one before every
- * hour — a new sale, a new send attribution, a shift that closed, a PPV whose
- * sender's next shift came, a statement handed in, an answer, the owner's
- * decision (sale-claims.ts): whatever changed the facts changes the home — and
- * writes a row only when it changed. `sale-homes:refresh` recomputes any range.
- * The schedule slots of a junction and who has left the team come from the
- * people registry (0384) beside Hub's logins. In shadow: no screen reads the
- * table yet.
+ * One per-day advisory-locked refresh handler (`refreshSaleHomesForDay`) drives every refresh path:
+ *  - `SALE_HOMES_DUE_QUEUE` (every 5 minutes): drains `sale_home_refresh_due` populated in-transaction by input writers;
+ *  - `SALE_HOMES_QUEUE` (hourly): refreshes this Moscow week and the previous week plus any queued days;
+ *  - `SALE_HOMES_SWEEP_QUEUE` (nightly): refreshes every Moscow day from `SALE_RULE.since` through today;
+ *  - `sale-homes:refresh` CLI and immediate post-decision refreshes (`refreshSaleHomes`).
  */
 
 const DAY_MS = 86_400_000;
@@ -79,6 +95,21 @@ export async function usersLeftAt(db: Database, userIds: readonly number[]): Pro
 /** The works of an answer as the rule reads them. Pure. */
 export function ruleWorksOf(works: readonly AgentTeamWork[]): RuleWork[] {
   return works.map((work) => ({ ref: work.ref, userId: work.userId, kind: work.kind, startedAt: Date.parse(work.startedAt), endedAt: Date.parse(work.endedAt) }));
+}
+
+/** The works of an answer as `CreditPiece` grouped by login, for `landShare`. Pure. */
+export function workPiecesOf(works: readonly AgentTeamWork[]): Map<number, CreditPiece[]> {
+  return piecesByUser(works.map((work): CreditPiece => ({
+    userId: work.userId,
+    work: {
+      kind: work.kind,
+      startedAt: Date.parse(work.startedAt),
+      endedAt: Date.parse(work.endedAt),
+      salesSince: new Map(
+        work.pages.flatMap((page) => (page.salesFrom === null ? [] : [[page.pageLabel, Date.parse(page.salesFrom)] as const])),
+      ),
+    },
+  })));
 }
 
 /**
@@ -177,33 +208,99 @@ function ruleSaleOf(
 /** The moment the answer's works are known up to: a PPV whose wait runs past it still waits (as the ledger reads it). Pure. */
 export const ruleNowOf = (answer: Pick<AgentTeamSalesResponse, "workTo">) => Date.parse(answer.workTo);
 
-/** The row of a sale's home; `shiftRows` — the rows of the shifts around, to name a share's shift by its id. Pure. */
+function findShiftRowForPiece(shiftRows: readonly ShiftRowRecord[], piece: CreditPiece): ShiftRowRecord | undefined {
+  return shiftRows.find((one) => one.userId === piece.userId && (one.state === "going" || one.state === "closed")
+    && one.startedAt.getTime() <= piece.work.startedAt && piece.work.startedAt <= one.endedAt.getTime());
+}
+
+/**
+ * The row of a sale's home, enriching every share with `personCode`, `reportDate`, and `daySource` via the exact same
+ * `landShare` function screens use (`homeCredit`). Pure.
+ */
 export function saleHomeRowOf(input: {
-  sale: AgentTeamSale;
+  sale: Pick<AgentTeamSale, "transactionRef" | "pageLabel" | "occurredAt" | "netMills">;
   home: SaleHome;
   pageId: number;
-  works: ReadonlyMap<string, RuleWork>;
+  pieces: ReadonlyMap<number, readonly CreditPiece[]>;
+  logins?: PeopleLogins;
   shiftRows: readonly ShiftRowRecord[];
+  /** Submitted shift hand-ins' current `versionReportDate`, keyed by `shiftId`. */
+  handedInDates?: ReadonlyMap<number, string>;
   rule: SaleRuleConfig;
 }): SaleHomeRow {
   const { sale, home } = input;
-  const shiftIdOf = (ref: string | null): number | null => {
-    const work = ref === null ? undefined : input.works.get(ref);
-    if (work === undefined || work.kind !== "shift") return null;
-    const row = input.shiftRows.find((one) => one.userId === work.userId && (one.state === "going" || one.state === "closed")
-      && one.startedAt.getTime() <= work.startedAt && work.startedAt <= one.endedAt.getTime());
-    return row?.id ?? null;
-  };
+  const logins = input.logins ?? LOGINS_ALONE;
+  const occurredAt = new Date(sale.occurredAt);
+  const handedInDates = input.handedInDates ?? new Map<number, string>();
+
+  const shares: SaleHomeShareRow[] = home.shares.map((share) => {
+    const personCode = logins.codeOf(share.userId);
+    const landed = landShare(share, { pageLabel: sale.pageLabel, occurredAt }, input.pieces, logins);
+    let shiftId: number | null = null;
+    let reportDate: string | null = null;
+    let daySource: SaleHomeShareDaySource;
+
+    switch (landed.kind) {
+      case "shift": {
+        const row = findShiftRowForPiece(input.shiftRows, landed.piece);
+        shiftId = row?.id ?? null;
+        const handedIn = row === undefined ? undefined : handedInDates.get(row.id);
+        if (handedIn !== undefined) {
+          reportDate = handedIn;
+          daySource = "report";
+        } else {
+          reportDate = row?.reportDate ?? reportDateOfShift(landed.piece.work);
+          daySource = "shift";
+        }
+        break;
+      }
+      case "visit": {
+        reportDate = dayOfWork(landed.piece.work);
+        daySource = "visit";
+        break;
+      }
+      case "holding_shift": {
+        const row = findShiftRowForPiece(input.shiftRows, landed.piece);
+        shiftId = row?.id ?? null;
+        const handedIn = row === undefined ? undefined : handedInDates.get(row.id);
+        reportDate = handedIn ?? row?.reportDate ?? reportDateOfShift(landed.piece.work);
+        daySource = "holding_shift";
+        break;
+      }
+      case "sale_day": {
+        reportDate = reportDateOfSale(occurredAt.getTime());
+        daySource = "sale_day";
+        break;
+      }
+      case "unresolved": {
+        reportDate = null;
+        daySource = "unresolved";
+        break;
+      }
+    }
+
+    return {
+      personCode,
+      userId: share.userId,
+      shiftId,
+      workRef: share.workRef,
+      reportDate,
+      daySource,
+      percent: share.percent,
+      mills: share.mills,
+    };
+  });
+
   return {
     transactionId: Number(sale.transactionRef),
     pageId: input.pageId,
-    occurredAt: new Date(sale.occurredAt),
+    occurredAt,
     netMills: sale.netMills,
     home: home.kind,
     reason: home.reason,
     pot: home.pot,
     waitsUntil: home.waitsUntil === null ? null : new Date(home.waitsUntil),
-    shares: home.shares.map((share) => ({ userId: share.userId, workRef: share.workRef, shiftId: shiftIdOf(share.workRef), percent: share.percent, mills: share.mills })),
+    shares,
     ruleVersion: input.rule.version,
   };
 }
@@ -212,39 +309,128 @@ export function saleHomeRowOf(input: {
 export const sendersOf = (answer: Pick<AgentTeamSalesResponse, "sales">) =>
   [...new Set(answer.sales.flatMap((sale) => (sale.ppvSender === null ? [] : [sale.ppvSender.userId])))];
 
+/** Reads `versionReportDate` for every submitted hand-in of living shift rows, in turn (safe inside a tx). */
+export async function readHandedInReportDates(db: Database, shiftRows: readonly ShiftRowRecord[]): Promise<Map<number, string>> {
+  const shiftIds = shiftRows.filter((row) => row.state === "going" || row.state === "closed").map((row) => row.id);
+  if (shiftIds.length === 0) return new Map();
+  const handins = await listHandinsOfShifts(db, shiftIds);
+  const submitted = [...handins.values()].filter((handin) => handin.state === "submitted");
+  if (submitted.length === 0) return new Map();
+  const versions = await listCurrentHandinVersions(db, submitted.map((handin) => handin.id));
+  const out = new Map<number, string>();
+  for (const handin of submitted) {
+    const version = versions.get(handin.id);
+    out.set(handin.shiftId, version === undefined ? handin.reportDate : versionReportDate(version, handin));
+  }
+  return out;
+}
+
 /**
- * The homes of every sale on every page in [from, to): the ledger's facts for that window, the rule on them.
- * `db` — a transaction or the pool; read in turn.
+ * The homes of every sale on every page in [from, to): the facts for that window, the rule on them (with person-login
+ * mapping across both realms so multi-login shares resolve by person). `db` — a transaction or the pool; read in turn.
  */
 export async function computeSaleHomes(
   db: Database,
   input: { from: Date; to: Date; now: Date; rule?: SaleRuleConfig; slots?: SaleSlotProvider },
-): Promise<{ answer: AgentTeamSalesResponse; homes: SaleHome[]; pageIds: Map<string, number> }> {
+): Promise<{ answer: AgentTeamSalesResponse; homes: SaleHome[]; pageIds: Map<string, number>; logins: PeopleLogins }> {
   const rule = input.rule ?? SALE_RULE;
   // Every page of both realms (sandbox/realm.ts): a test sale has its home like any other; the realms never meet in
   // one sale (a person works pages of one realm).
   const pages = [...await listVisiblePages(db), ...await listVisiblePages(db, await listTestPageIds(db))];
   const pageIds = new Map(pages.map((page) => [page.label, page.id]));
+  const logins = peopleLoginsOf(await listLoginPeople(db, "both"));
   const answer = await readAgentTeamSales(db, { from: input.from, to: input.to, now: input.now, pages: pages.map((page) => ({ id: page.id, label: page.label })), realm: "both" });
   const leftAt = await usersLeftAt(db, sendersOf(answer));
   const slots = await (input.slots ?? NO_SLOTS).slotsFor({ from: new Date(answer.workFrom), to: new Date(answer.workTo) });
   // What people said in their handed-in reports and what the owner decided, instead of the old shift-report tables.
   const inputs = await saleRuleInputs(db, answer.sales.map((sale) => Number(sale.transactionRef)).filter(Number.isSafeInteger));
-  const homes = homesOfSales(ruleSalesOf(answer.sales, { pageIds, leftAt, inputs }), ruleWorksOf(answer.works), slots, ruleNowOf(answer), rule);
-  return { answer, homes, pageIds };
+  const homes = homesOfSales(ruleSalesOf(answer.sales, { pageIds, leftAt, inputs }), ruleWorksOf(answer.works), slots, ruleNowOf(answer), rule, logins);
+  return { answer, homes, pageIds, logins };
 }
 
-/** Recomputes the homes of the sales in [from, to) by the registry's slots and writes the ones that changed. */
-export async function refreshSaleHomes(db: Database, input: { from: Date; to: Date; now: Date }): Promise<{ sales: number; written: number }> {
-  const { answer, homes, pageIds } = await computeSaleHomes(db, { ...input, slots: registrySlots(db) });
-  const works = new Map(ruleWorksOf(answer.works).map((work) => [work.ref, work]));
-  const shiftRows = await listShiftRows(db, { from: new Date(Date.parse(answer.workFrom) - DAY_MS), to: new Date(Date.parse(answer.workTo) + DAY_MS) });
-  const rows = answer.sales.flatMap((sale, at) => {
-    const pageId = pageIds.get(sale.pageLabel);
-    return pageId === undefined ? [] : [saleHomeRowOf({ sale, home: homes[at]!, pageId, works, shiftRows, rule: SALE_RULE })];
+/** Every Moscow day (YYYY-MM-DD) overlapping [from, to) on or after `SALE_RULE.since`, oldest first. Pure. */
+export function moscowDaysInRange(from: Date, to: Date): string[] {
+  const startMs = Math.max(from.getTime(), SALE_RULE.since);
+  const endMs = to.getTime();
+  if (!(startMs < endMs)) return [];
+  const firstDay = moscowDayOf(startMs);
+  const lastDay = moscowDayOf(endMs - 1);
+  const days: string[] = [];
+  let cursor = Date.parse(`${firstDay}T00:00:00+03:00`);
+  const end = Date.parse(`${lastDay}T00:00:00+03:00`);
+  while (cursor <= end) {
+    days.push(moscowDayOf(cursor));
+    cursor += DAY_MS;
+  }
+  return days;
+}
+
+/**
+ * The ONE refresh handler for a single Moscow day: acquires the per-day advisory lock BEFORE reading any inputs, reads
+ * the day's queued `generation` (if any), recomputes all homes in the day's window, upserts changed rows, retracts
+ * vanished sales in that window, and deletes `sale_home_refresh_due` strictly `WHERE day = $1 AND generation = $2`.
+ * Used by the 5-min due pass, hourly job, nightly sweep, manual CLI refresh, and post-decision refreshes.
+ */
+export async function refreshSaleHomesForDay(
+  db: Database,
+  day: string,
+  now?: Date,
+  options?: { /** Test seam: runs after reading inputs & generation, before writing/completing. */ afterRead?: () => Promise<void> },
+): Promise<{ sales: number; written: number; retracted: number }> {
+  if (day < moscowDayOf(SALE_RULE.since)) return { sales: 0, written: 0, retracted: 0 };
+  const dayStart = new Date(`${day}T00:00:00+03:00`);
+
+  return db.transaction(async (raw) => {
+    const tx = raw as unknown as Database;
+    await lockSaleHomeRefreshDay(tx, day);
+    // Read the effective clock AFTER acquiring the day lock so a slow sweep never overwrites a fresher pass across a
+    // PPV deadline or clears a current-day generation with a stale cutoff.
+    const effectiveNow = now ?? new Date();
+    const dayEnd = new Date(Math.min(effectiveNow.getTime(), dayStart.getTime() + DAY_MS));
+    if (!(dayStart.getTime() < dayEnd.getTime())) return { sales: 0, written: 0, retracted: 0 };
+    const generation = await readSaleHomeRefreshGeneration(tx, day);
+    // Take the shared erasure fence in sorted page-id order BEFORE reading sales so an in-flight page erasure commits
+    // first (and any later erasure waits for this write before deleting), preventing resurrection of erased homes.
+    const activePages = [...await listVisiblePages(tx), ...await listVisiblePages(tx, await listTestPageIds(tx))];
+    const sortedPageIds = [...new Set(activePages.map((page) => page.id))].sort((a, b) => a - b);
+    for (const pageId of sortedPageIds) {
+      await acquireErasureFenceSharedLock(tx, pageId);
+    }
+    const { answer, homes, pageIds, logins } = await computeSaleHomes(tx, { from: dayStart, to: dayEnd, now: effectiveNow, slots: registrySlots(tx) });
+    const pieces = workPiecesOf(answer.works);
+    const shiftRows = await listShiftRows(tx, { from: new Date(Date.parse(answer.workFrom) - DAY_MS), to: new Date(Date.parse(answer.workTo) + DAY_MS) });
+    const handedInDates = await readHandedInReportDates(tx, shiftRows);
+    if (options?.afterRead) await options.afterRead();
+    const rows = answer.sales.flatMap((sale, at) => {
+      const pageId = pageIds.get(sale.pageLabel);
+      return pageId === undefined ? [] : [saleHomeRowOf({ sale, home: homes[at]!, pageId, pieces, logins, shiftRows, handedInDates, rule: SALE_RULE })];
+    });
+    const written = await upsertSaleHomes(tx, rows, effectiveNow);
+    const retracted = await deleteVanishedSaleHomesInWindow(tx, {
+      from: dayStart,
+      to: dayEnd,
+      pageIds: [...pageIds.values()],
+      keepTransactionIds: rows.map((row) => row.transactionId),
+    });
+    if (generation !== null) {
+      await completeSaleHomeRefreshDue(tx, { day, generation });
+    }
+    return { sales: rows.length, written, retracted };
   });
-  const written = await upsertSaleHomes(db, rows, input.now);
-  return { sales: rows.length, written };
+}
+
+/** Recomputes the homes of every Moscow day in [from, to) through the single per-day refresh handler. */
+export async function refreshSaleHomes(db: Database, input: { from: Date; to: Date; now?: Date }): Promise<{ sales: number; written: number; retracted: number }> {
+  let sales = 0;
+  let written = 0;
+  let retracted = 0;
+  for (const day of moscowDaysInRange(input.from, input.to)) {
+    const one = await refreshSaleHomesForDay(db, day, input.now);
+    sales += one.sales;
+    written += one.written;
+    retracted += one.retracted;
+  }
+  return { sales, written, retracted };
 }
 
 /** Monday 00:00 Moscow of the week holding `at`. Pure. */
@@ -256,22 +442,53 @@ export function moscowWeekStart(at: number): number {
 }
 
 export const SALE_HOMES_QUEUE = "team.sale-homes";
+export const SALE_HOMES_DUE_QUEUE = "team.sale-homes.due";
+export const SALE_HOMES_SWEEP_QUEUE = "team.sale-homes.sweep";
 
-/** One run of the job: this Moscow week's sales and the week before's (a PPV waits up to 7 days). */
-export async function runSaleHomesTick(app: Pick<AppContext, "db" | "logger">): Promise<{ sales: number; written: number }> {
-  const now = new Date();
-  const from = new Date(Math.max(SALE_RULE.since, moscowWeekStart(now.getTime()) - 7 * DAY_MS));
-  const result = await refreshSaleHomes(app.db, { from, to: now, now });
-  if (result.written > 0) app.logger.info(result, "sale homes refreshed");
+/** 5-minute due pass: drains `sale_home_refresh_due` through the single per-day refresh handler. */
+export async function runSaleHomesDueTick(app: Pick<AppContext, "db" | "logger">, now?: Date): Promise<{ days: number; sales: number; written: number; retracted: number }> {
+  const due = await listSaleHomeRefreshDue(app.db);
+  let sales = 0;
+  let written = 0;
+  let retracted = 0;
+  for (const entry of due) {
+    const one = await refreshSaleHomesForDay(app.db, entry.day, now);
+    sales += one.sales;
+    written += one.written;
+    retracted += one.retracted;
+  }
+  if (written + retracted > 0) app.logger.info({ days: due.length, sales, written, retracted }, "sale homes due pass refreshed");
+  return { days: due.length, sales, written, retracted };
+}
+
+/** Hourly job: this Moscow week and the previous week (a PPV waits up to 7 days), plus any queued due days. */
+export async function runSaleHomesTick(app: Pick<AppContext, "db" | "logger">, now?: Date): Promise<{ sales: number; written: number; retracted: number }> {
+  const windowNow = now ?? new Date();
+  const from = new Date(Math.max(SALE_RULE.since, moscowWeekStart(windowNow.getTime()) - 7 * DAY_MS));
+  const result = await refreshSaleHomes(app.db, { from, to: windowNow, ...(now === undefined ? {} : { now }) });
+  const due = await runSaleHomesDueTick(app, now);
+  const total = { sales: result.sales + due.sales, written: result.written + due.written, retracted: result.retracted + due.retracted };
+  if (total.written + total.retracted > 0) app.logger.info(total, "sale homes refreshed");
+  return total;
+}
+
+/** Nightly sweep: recomputes every Moscow day from `SALE_RULE.since` through today and retracts vanished sales. */
+export async function runSaleHomesSweepTick(app: Pick<AppContext, "db" | "logger">, now?: Date): Promise<{ sales: number; written: number; retracted: number }> {
+  const windowNow = now ?? new Date();
+  const result = await refreshSaleHomes(app.db, { from: new Date(SALE_RULE.since), to: windowNow, ...(now === undefined ? {} : { now }) });
+  if (result.written + result.retracted > 0) app.logger.info(result, "sale homes nightly sweep complete");
   return result;
 }
 
 export async function ensureSaleHomesQueue(boss: QueueCreationClient, createdQueues?: Set<string>) {
   await ensureQueueCreated(boss, SALE_HOMES_QUEUE, { policy: "exclusive" }, createdQueues);
+  await ensureQueueCreated(boss, SALE_HOMES_DUE_QUEUE, { policy: "exclusive" }, createdQueues);
+  await ensureQueueCreated(boss, SALE_HOMES_SWEEP_QUEUE, { policy: "exclusive" }, createdQueues);
 }
 
 export async function ensureSaleHomesSchedule(boss: QueueCreationClient) {
   if (!boss.schedule) return;
-  // Hourly, off the ledger's read of the same facts.
   await boss.schedule(SALE_HOMES_QUEUE, "25 * * * *", null, { tz: "UTC" });
+  await boss.schedule(SALE_HOMES_DUE_QUEUE, "*/5 * * * *", null, { tz: "UTC" });
+  await boss.schedule(SALE_HOMES_SWEEP_QUEUE, "15 1 * * *", null, { tz: "UTC" });
 }

@@ -24,7 +24,7 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | People | `GET /api/v1/agent/people` (`hub people`) | `read:team` | Who is who: code, kind, role, state, logins, working pages, schedule, Telegram, rights (`rightGrants`: each with when it was granted). Pay terms only with `read:pay_terms` (the ledger's key). `?since=` (`--since`) for changes |
 | People | `POST /api/v1/agent/people/proposals`, `GET …/proposals` (`hub people propose\|proposals`) | `propose:people` | A change about a person (their working pages, schedule slot, state, Telegram, any field of the owner's edit), or a new person; it waits for the owner in Hub «Люди», and nothing changes until the owner accepts it. The way to change who works what and when: the registry is the home, not the person's card in the knowledge base. Never pay terms, never an invitation. `proposals` lists the key's own and what became of them |
 | Shifts | `GET /api/v1/agent/team/shift-review` (`hub shift-review`) | `read:team` + `read:money` | «Разбор смены» of one shift on the key's pages and the shift audit's numbers from it. Texts with `read:messages`; the AI's own texts never |
-| Shifts and sales | `POST /api/v1/agent/team/sales` | `read:team` + `read:money` | The team's work and every sale on the key's pages in a window (≤ 31 days), with the facts whose a sale is: holders, the bought PPV's sender, post tip, Campaign, last writer, marks, the owner's split (`resolution`: Hub's active decision when it shares the sale out, a nobody's sale given to a person included) and `decision` (`{kind: split\|nobody\|pot, pot}`: Hub's active decision of any kind) |
+| Shifts and sales | `POST /api/v1/agent/team/sales` | `read:team` + `read:money` | The team's work (with optional `personCode` and `reportDate`) and every sale on the key's pages in a window (≤ 31 days), with the facts whose a sale is computed from: holders, the bought PPV's sender, post tip, Campaign, last writer, `marks: []` (kept for backwards compatibility), the owner's split (`resolution`) and `decision` (`{kind: split\|nobody\|pot, pot}`) |
 | Sales (report check) | `POST /api/v1/agent/team/sale-context` (`hub sale-context`) | `read:team` + `read:money` | Each sale's fan, the PPV it bought (its text with `read:messages`), who wrote to the fan in 48 h, 7 days, last in 60 days; `archive`: the fan's chat as the report check reads the archive (the priced message, the page's messages of 7 days by author, the last author of 60 days) |
 | Sales (chain of money) | `GET /api/v1/agent/team/sale-chain` (`hub sale-chain <id>`) | `read:team` + `read:money` | From one sale: whose it is (home, why, the owner's decision, an open claim), the shift, the report of that day (Hub's version or the ledger's post), accrual and payout as states. Never a pay sum |
 | Fans (watch) | `POST /api/v1/agent/team/fan-watch` (`hub fan-watch`) | `read:messages` | A watched fan's new messages on a page since a mark (the archive's time, to the microsecond), and when the page last wrote to them. Tips with `read:money` |
@@ -45,6 +45,7 @@ capture, delivery) is `agent-read-skill.md`; the CLI is `hub` (`hub <command> --
 | Erasures (the ledger's feed) | `GET /api/v1/agent/erasures` | `read:team` + `read:money` | Every fan erasure Hub completed, after a cursor: the platform and the fan's ref, for the ledger to blank its own copies: below |
 | «Чья продажа» «со слов» | `POST /api/v1/agent/sale-decisions`, `…/cancel`, `…/applied`, `GET …/sale-decisions`; `POST /api/v1/agent/sale-questions`, `…/answer`, `…/close`, `GET …/sale-questions` (`hub sale decide\|cancel\|applied\|decisions\|ask\|answer\|close\|questions`) | `write:shift_reports` (the lists: or `read:team`) | Decisions and questions about whose a sale is, in their one home: below |
 | «Чья продажа» (the ledger's feed) | `GET /api/v1/agent/sale-decisions/feed` | `read:money` | Every change of a decision after a cursor, in the order made: what the ledger follows instead of writing its own. Below |
+| Computed sale homes (the ledger's feed) | `GET /api/v1/agent/sale-homes/feed` | `read:money` | Every change (`upsert` or `retract`) of `sale_homes` after a cursor, with `personCode`, `reportDate`, and `daySource` on every share. Test realm filtered before `held`. Below |
 | Claims | `GET /api/v1/agent/sale-claims`, `POST …/sale-claims/answer` | `write:shift_reports` (the list: or `read:team`) | The claims and decisions of a person or a sale; the other side's answer «со слов» |
 | Keys (for services) | `POST /api/v1/agent/keys/introspect` | `introspect:agent_keys` | Another service asks who an agent's hub key is: below |
 
@@ -404,6 +405,56 @@ same decision, and a second time for a reader whose cursor had passed its old pl
 by `decision.state` (each change carries the decision as it is now), not by the order of the `change` words. What
 the ledger takes from it: a pot's sale (kind `pot`), a nobody's sale given to a person (`owner`, `split` on a sale
 whose `ruleHome` was `nobody`), a report line's agreement (kind, shares, state, `saidBy`, `note`).
+
+### The ledger's feed of computed sale homes
+
+`GET /api/v1/agent/sale-homes/feed?since=<next>&limit=<1..500, 200>` (`read:money`): every computed home change in
+`sale_homes` (`upsert` or `retract`), after a cursor, in the order the feed placed it. Same cursor and placement
+mechanism as the shift reports' and decisions' feeds (`release -> place -> list` under an advisory lock; late commits
+land after the cursor; `limit` counts placed positions including `held`; the end is `more: false`). Test-realm changes
+(including `retract`) are filtered before `held`, so they never enter a live key's feed, held list, or cursor.
+
+```json
+{
+  "homes": [{
+    "seq": 41,
+    "at": "2026-11-12T18:20:00.000Z",
+    "op": "upsert",
+    "transactionId": 1234567,
+    "pageLabel": "mia-1",
+    "occurredAt": "2026-11-12T17:10:00.000Z",
+    "netMills": 24000,
+    "saleKind": "ppv",
+    "home": "shift",
+    "reason": "holder",
+    "pot": null,
+    "waitsUntil": null,
+    "ruleVersion": "2026-11-12.1",
+    "shares": [{
+      "personCode": "anna",
+      "userId": 6,
+      "shiftId": 88,
+      "workRef": "6:2026-11-12T13:00:00.000Z",
+      "reportDate": "2026-11-12",
+      "daySource": "report",
+      "percent": 100,
+      "mills": 24000
+    }]
+  }],
+  "held": [{ "seq": 44, "transactionId": 1234568, "reason": "page_outside_key" }],
+  "next": "44",
+  "more": false,
+  "serverNow": "2026-11-12T18:21:00.000Z"
+}
+```
+
+- Every entry carries the sale's current state (apply whenever `seq` is greater; replay is safe). On `retract`,
+  upsert-only fields are `null` and `shares` is `[]`.
+- Every share carries `personCode` (from the people registry, or `null`), `reportDate` (Moscow `YYYY-MM-DD`, or `null`
+  when `daySource` is `unresolved`), and `daySource` (`report` | `shift` | `visit` | `holding_shift` | `sale_day` |
+  `unresolved`), computed by the same pure `landShare` rule screens use.
+- Changes on pages outside the key's grant appear in `held` until granted, then receive a new `seq` at the end of the
+  feed and come through `homes` via the cursor.
 
 ## «Кто этот ключ»: another service accepts a hub key
 

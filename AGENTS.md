@@ -85,10 +85,14 @@ the owner's machine (outside this repository); a change that moves a home or add
   the person on Workboard «Начало», `services/people/start.ts`) is the person's own session's and the owner's card's only;
   a narrow session (from the extension, no password) is told only whether it is written, never the text.
   A newcomer's way to the first shift is read live from the facts (`start.ts`), never ticked by hand.
-- **Whose a sale is**: only `apps/runtime/src/services/sale-rule.ts`, written to `sale_homes` (`sale-homes.ts`);
-  schedule slots and «left the team» come from the people registry. Never compute it anywhere else. Screens follow
-  it from the date in `sale_rule_switch` (null: the old computation); where a home's share lands (the person's work by
-  any of their logins, or their own money of the sale's day) is `homeCredit` (`sale-rule-screens.ts`) on every screen.
+- **Whose a sale is**: only `apps/runtime/src/services/sale-rule.ts`, written to `sale_homes` (`sale-homes.ts`) and
+  served to the ledger on `GET /api/v1/agent/sale-homes/feed` (`sale-homes-feed.ts`, 0441); schedule slots and
+  «left the team» come from the people registry. Never compute it anywhere else. Input writers enqueue affected Moscow
+  days into `sale_home_refresh_due` in their own transaction; one per-day advisory-locked refresh handler
+  (`refreshSaleHomesForDay`) drives the 5-min due pass, hourly job, nightly sweep from `SALE_RULE.since`, and CLI.
+  Screens follow `sale_homes` from the date in `sale_rule_switch` (null: the old computation); where a home's share
+  lands (the person's work by any of their logins, or their own money of the sale's day) is ONE pure function,
+  `landShare` (`sale-rule-screens.ts`), shared by `homeCredit` on every screen and `saleHomeRowOf` in `sale_homes`.
 - **Shifts**: rows with a stable id in `shifts` (`shift-rows.ts`); what a shift IS stays `chatter-shifts.ts`.
 - **What waits for a person**: a matter (`services/matters.ts`, table `matters`): opened and closed by its reason
   key, one writer per kind, closes itself when the cause is gone. No new list, counter or inbox beside it. An

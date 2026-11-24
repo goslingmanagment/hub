@@ -38,6 +38,8 @@ import {
   deletePersonAgentKey,
   deletePersonLogin,
   endPersonScheduleSlot,
+  enqueueSaleHomeRefreshForPages,
+  enqueueSaleHomeRefreshForUsers,
   findPersonIdOfAgentKey,
   findPersonIdOfLogin,
   findPersonProposal,
@@ -580,6 +582,13 @@ async function applySchedule(db: Db, personId: number, pageId: number | null, sc
 async function applyChange(db: Db, person: PersonRow, change: ResolvedChange, audit: AuditContext): Promise<PersonRow> {
   const byUserId = audit.actorUserId ?? null;
   try {
+    const prevWorkingPageIds = change.workingPageIds !== undefined
+      ? (await listPersonWorkingPageRows(db, [person.id])).map((row) => row.pageId)
+      : [];
+    const leaveChanged = change.patch.state !== undefined || change.patch.leftOn !== undefined;
+    const prevLoginIds = leaveChanged
+      ? (await listPersonLoginRows(db, [person.id])).map((row) => row.userId)
+      : [];
     for (const userId of change.loginsRemove) await deletePersonLogin(db, { personId: person.id, userId });
     for (const userId of change.loginsAdd) await insertPersonLogin(db, { personId: person.id, userId, linkedByUserId: byUserId });
     for (const agentKeyId of change.keysRemove) await deletePersonAgentKey(db, { personId: person.id, agentKeyId });
@@ -587,7 +596,19 @@ async function applyChange(db: Db, person: PersonRow, change: ResolvedChange, au
     if (change.workingPageIds) await replacePersonWorkingPages(db, person.id, change.workingPageIds);
     if (change.rights) await replacePersonRights(db, person.id, change.rights, byUserId);
     if (change.schedule) await applySchedule(db, person.id, change.schedulePageId ?? null, change.schedule, byUserId);
-    return await updatePersonRow(db, person.id, change.patch);
+    const updated = await updatePersonRow(db, person.id, change.patch);
+    const affectedUsers = [...new Set([...change.loginsAdd, ...change.loginsRemove, ...prevLoginIds])];
+    if (affectedUsers.length > 0) await enqueueSaleHomeRefreshForUsers(db, affectedUsers);
+    if (change.workingPageIds !== undefined) {
+      await enqueueSaleHomeRefreshForPages(db, { pageIds: [...new Set([...prevWorkingPageIds, ...change.workingPageIds])], fromDay: null });
+    }
+    if (change.schedule !== undefined) {
+      await enqueueSaleHomeRefreshForPages(db, {
+        pageIds: change.schedulePageId != null ? [change.schedulePageId] : null,
+        fromDay: change.schedule.from,
+      });
+    }
+    return updated;
   } catch (error) {
     return conflictOf(error);
   }
@@ -706,6 +727,7 @@ async function createPersonTx(
       expiresInHours: invite.expiresInHours,
     }, audit);
     await insertPersonLogin(db, { personId: row.id, userId: created.user.id, linkedByUserId: audit.actorUserId ?? null }).catch(conflictOf);
+    await enqueueSaleHomeRefreshForUsers(db, [created.user.id]);
     if (isTest) {
       for (const label of invite.pageLabels) {
         const page = await findPageSummaryByLabel(db, label);

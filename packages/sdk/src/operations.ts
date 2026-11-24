@@ -203,6 +203,7 @@ export const kernelOperations = {
   agentSaleDecisionCancel: { method: "POST", path: "/api/v1/agent/sale-decisions/cancel" },
   agentSaleDecisions: { method: "GET", path: "/api/v1/agent/sale-decisions" },
   agentSaleDecisionsFeed: { method: "GET", path: "/api/v1/agent/sale-decisions/feed" },
+  agentSaleHomesFeed: { method: "GET", path: "/api/v1/agent/sale-homes/feed" },
   agentSaleQuestionAnswer: { method: "POST", path: "/api/v1/agent/sale-questions/answer" },
   agentSaleQuestionAsk: { method: "POST", path: "/api/v1/agent/sale-questions" },
   agentSaleQuestionClose: { method: "POST", path: "/api/v1/agent/sale-questions/close" },

@@ -4,15 +4,29 @@ import type { Database } from "../client.ts";
 import { isOwnerLogin } from "./chatter-activity.ts";
 
 // Whose each sale is by the one rule (0380 `sale_homes`, apps/runtime
-// services/sale-rule.ts and sale-homes.ts) and the screens' switch to it
-// (0381 `sale_rule_switch`, off). In shadow: no screen reads either yet.
+// services/sale-rule.ts and sale-homes.ts), the screens' switch to it
+// (0381 `sale_rule_switch`) and the refresh-due queue (0441 `sale_home_refresh_due`).
+
+/** First Moscow day covered by the sale rule (matches SALE_RULE.since = 2026-11-02T00:00:00+03:00). */
+export const SALE_RULE_SINCE_DAY = "2026-11-02";
+const SALE_RULE_SINCE_ISO = "2026-11-02T00:00:00+03:00";
+
+const ids = (values: readonly number[]) => sql`${sql.param(values.map(String))}::bigint[]`;
+
+export type SaleHomeShareDaySource = "report" | "shift" | "visit" | "holding_shift" | "sale_day" | "unresolved";
 
 export interface SaleHomeShareRow {
+  /** The person's code in the people registry; null — unlinked login. Optional when reading rows written before 0441. */
+  personCode?: string | null;
   userId: number;
   /** The work credited (`<userId>:<startedAt>`); null — none held the sale (an owner's claim). */
   workRef: string | null;
-  /** That work's row in `shifts`; null — a look-in, or not written yet. */
+  /** That work's row in `shifts`; null — a look-in, unresolved, or not written yet. */
   shiftId: number | null;
+  /** The share's Moscow report date (YYYY-MM-DD); null when daySource is `unresolved`. Optional on legacy rows. */
+  reportDate?: string | null;
+  /** How `reportDate` was resolved. Optional on legacy rows written before 0441. */
+  daySource?: SaleHomeShareDaySource;
   percent: number;
   mills: number;
 }
@@ -227,6 +241,233 @@ export async function listSalesOwnerWroteTo(
 export async function listSalePlatformRefs(db: Database, transactionIds: readonly number[]): Promise<Map<number, string>> {
   if (transactionIds.length === 0) return new Map();
   const result = await db.execute<{ id: string | number; transaction_id: string }>(sql`
-    select id, transaction_id from transactions where id = any(${sql.param(transactionIds.map(String))}::bigint[])`);
+    select id, transaction_id from transactions where id = any(${ids(transactionIds)})`);
   return new Map(result.rows.map((row) => [Number(row.id), row.transaction_id]));
+}
+
+/**
+ * Removes `sale_homes` rows in [from, to) whose sale is no longer active on the read pages OR whose source transaction
+ * no longer exists (including erased or vanished transactions on inactive pages), so the `sale_homes` DELETE trigger
+ * emits `retract` on the feed while historical homes of soft-deleted pages whose transactions still exist survive.
+ * Derived projection hygiene, never deletes captured facts.
+ */
+export async function deleteVanishedSaleHomesInWindow(
+  db: Database,
+  input: { from: Date; to: Date; pageIds: readonly number[]; keepTransactionIds: readonly number[] },
+): Promise<number> {
+  const uniquePages = [...new Set(input.pageIds.filter(Number.isSafeInteger))];
+  const keep = input.keepTransactionIds.length === 0
+    ? sql`true`
+    : sql`not (sale_homes.transaction_id = any(${ids(input.keepTransactionIds)}))`;
+  const activeVanished = uniquePages.length === 0
+    ? sql`false`
+    : sql`(sale_homes.page_id = any(${ids(uniquePages)}) and ${keep})`;
+  const result = await db.execute(sql`
+    delete from sale_homes
+    where sale_homes.occurred_at >= ${input.from.toISOString()}::timestamptz
+      and sale_homes.occurred_at < ${input.to.toISOString()}::timestamptz
+      and (
+        ${activeVanished}
+        or not exists (select 1 from transactions t where t.id = sale_homes.transaction_id)
+      )`);
+  return result.rowCount ?? 0;
+}
+
+// ── Refresh-due queue (0441 `sale_home_refresh_due`) ─────────────────────────
+
+export interface SaleHomeRefreshDueRow {
+  day: string;
+  generation: number;
+  queuedAt: Date;
+}
+
+/** Enqueues Moscow days (YYYY-MM-DD) >= SALE_RULE_SINCE_DAY, bumping `generation` on conflict. Run in the writer's tx. */
+export async function enqueueSaleHomeRefreshDays(db: Database, days: readonly string[]): Promise<void> {
+  const unique = [...new Set(days.filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(day) && day >= SALE_RULE_SINCE_DAY))];
+  if (unique.length === 0) return;
+  await db.execute(sql`
+    insert into sale_home_refresh_due (day, generation, queued_at)
+    select d, 1, clock_timestamp()
+    from unnest(${sql.param(unique)}::date[]) as d
+    on conflict (day) do update set
+      generation = sale_home_refresh_due.generation + 1,
+      queued_at = clock_timestamp()`);
+}
+
+/** Enqueues the Moscow day(s) of the named sales (from `transactions` and `sale_homes`). Run in the writer's tx. */
+export async function enqueueSaleHomeRefreshForSales(db: Database, transactionIds: readonly number[]): Promise<void> {
+  const unique = [...new Set(transactionIds.filter(Number.isSafeInteger))];
+  if (unique.length === 0) return;
+  await db.execute(sql`
+    insert into sale_home_refresh_due (day, generation, queued_at)
+    select distinct day, 1, clock_timestamp()
+    from (
+      select (occurred_at at time zone 'Europe/Moscow')::date as day
+      from transactions
+      where id = any(${ids(unique)})
+      union
+      select (occurred_at at time zone 'Europe/Moscow')::date as day
+      from sale_homes
+      where transaction_id = any(${ids(unique)})
+    ) d
+    where day >= ${SALE_RULE_SINCE_DAY}::date
+    on conflict (day) do update set
+      generation = sale_home_refresh_due.generation + 1,
+      queued_at = clock_timestamp()`);
+}
+
+/**
+ * Enqueues the Moscow days affected by a new hand-in version: the days of every sale in its new lines, any sale removed
+ * since the previous version, any existing `sale_homes` referencing the shift, and the report date itself. Run in the
+ * hand-in writer's transaction.
+ */
+export async function enqueueSaleHomeRefreshForHandin(
+  db: Database,
+  input: { shiftId: number; reportDate: string; transactionIds: readonly number[]; handinId?: number; previousVersion?: number | null },
+): Promise<void> {
+  const unique = [...new Set(input.transactionIds.filter(Number.isSafeInteger))];
+  const txPart = unique.length === 0
+    ? sql``
+    : sql`
+      union
+      select (occurred_at at time zone 'Europe/Moscow')::date as day
+      from transactions
+      where id = any(${ids(unique)})`;
+  const prevPart = input.handinId !== undefined && input.previousVersion !== undefined && input.previousVersion !== null && input.previousVersion > 0
+    ? sql`
+      union
+      select (t.occurred_at at time zone 'Europe/Moscow')::date as day
+      from shift_handin_versions v
+      cross join lateral jsonb_array_elements(v.lines) as l(line)
+      join transactions t on (l.line ->> 'transactionId') ~ '^[0-9]{1,18}$' and t.id = (l.line ->> 'transactionId')::bigint
+      where v.handin_id = ${input.handinId} and v.version = ${input.previousVersion}`
+    : sql``;
+  await db.execute(sql`
+    insert into sale_home_refresh_due (day, generation, queued_at)
+    select distinct day, 1, clock_timestamp()
+    from (
+      select ${input.reportDate}::date as day
+      union
+      select (h.occurred_at at time zone 'Europe/Moscow')::date as day
+      from sale_homes h
+      where exists (
+        select 1 from jsonb_array_elements(h.shares) as s
+        where (s ->> 'shiftId') ~ '^[0-9]{1,18}$' and (s ->> 'shiftId')::bigint = ${input.shiftId}
+      )
+      ${txPart}
+      ${prevPart}
+    ) d
+    where day >= ${SALE_RULE_SINCE_DAY}::date
+    on conflict (day) do update set
+      generation = sale_home_refresh_due.generation + 1,
+      queued_at = clock_timestamp()`);
+}
+
+/**
+ * Enqueues Moscow days since SALE_RULE_SINCE_DAY where any of `userIds` has a share in `sale_homes`, a shift, activity
+ * or a send attribution (login link/unlink, leave-state edit). Run in the writer's transaction.
+ */
+export async function enqueueSaleHomeRefreshForUsers(db: Database, userIds: readonly number[]): Promise<void> {
+  const unique = [...new Set(userIds.filter(Number.isSafeInteger))];
+  if (unique.length === 0) return;
+  await db.execute(sql`
+    insert into sale_home_refresh_due (day, generation, queued_at)
+    select distinct day, 1, clock_timestamp()
+    from (
+      select (h.occurred_at at time zone 'Europe/Moscow')::date as day
+      from sale_homes h
+      where h.occurred_at >= ${SALE_RULE_SINCE_ISO}::timestamptz
+        and exists (
+          select 1 from jsonb_array_elements(h.shares) as s
+          where (s ->> 'userId') ~ '^[0-9]{1,18}$' and (s ->> 'userId')::bigint = any(${ids(unique)})
+        )
+      union
+      select (s.started_at at time zone 'Europe/Moscow')::date as day
+      from shifts s
+      where s.user_id = any(${ids(unique)}) and s.ended_at >= ${SALE_RULE_SINCE_ISO}::timestamptz
+      union
+      select (s.ended_at at time zone 'Europe/Moscow')::date as day
+      from shifts s
+      where s.user_id = any(${ids(unique)}) and s.ended_at >= ${SALE_RULE_SINCE_ISO}::timestamptz
+      union
+      select (a.minute at time zone 'Europe/Moscow')::date as day
+      from chatter_activity_minutes a
+      where a.user_id = any(${ids(unique)}) and a.minute >= ${SALE_RULE_SINCE_ISO}::timestamptz
+      union
+      select (c.observed_at at time zone 'Europe/Moscow')::date as day
+      from client_send_attributions c
+      where c.user_id = any(${ids(unique)}) and c.observed_at >= ${SALE_RULE_SINCE_ISO}::timestamptz
+    ) d
+    where day >= ${SALE_RULE_SINCE_DAY}::date and day <= (clock_timestamp() at time zone 'Europe/Moscow')::date
+    on conflict (day) do update set
+      generation = sale_home_refresh_due.generation + 1,
+      queued_at = clock_timestamp()`);
+}
+
+/**
+ * Enqueues Moscow days with sales on `pageIds` (null — all pages) on or after `fromDay` (null — SALE_RULE_SINCE_DAY),
+ * up to today Moscow (schedule slot or working-pages edit). Run in the writer's transaction.
+ */
+export async function enqueueSaleHomeRefreshForPages(
+  db: Database,
+  input: { pageIds: readonly number[] | null; fromDay: string | null },
+): Promise<void> {
+  if (input.pageIds !== null && input.pageIds.length === 0) return;
+  const fromDay = input.fromDay !== null && input.fromDay > SALE_RULE_SINCE_DAY ? input.fromDay : SALE_RULE_SINCE_DAY;
+  const fromIso = `${fromDay}T00:00:00+03:00`;
+  const txPage = input.pageIds === null ? sql`` : sql`and platform_account_id = any(${ids(input.pageIds)})`;
+  const homePage = input.pageIds === null ? sql`` : sql`and page_id = any(${ids(input.pageIds)})`;
+  await db.execute(sql`
+    insert into sale_home_refresh_due (day, generation, queued_at)
+    select distinct day, 1, clock_timestamp()
+    from (
+      select (occurred_at at time zone 'Europe/Moscow')::date as day
+      from transactions
+      where occurred_at >= ${fromIso}::timestamptz and occurred_at <= clock_timestamp() ${txPage}
+      union
+      select (occurred_at at time zone 'Europe/Moscow')::date as day
+      from sale_homes
+      where occurred_at >= ${fromIso}::timestamptz and occurred_at <= clock_timestamp() ${homePage}
+    ) d
+    where day >= ${fromDay}::date and day <= (clock_timestamp() at time zone 'Europe/Moscow')::date
+    on conflict (day) do update set
+      generation = sale_home_refresh_due.generation + 1,
+      queued_at = clock_timestamp()`);
+}
+
+/** All days currently queued for refresh, oldest first. */
+export async function listSaleHomeRefreshDue(db: Database): Promise<SaleHomeRefreshDueRow[]> {
+  const result = await db.execute<{ day: string; generation: string | number; queued_at: Date | string }>(sql`
+    select to_char(day, 'YYYY-MM-DD') as day, generation, queued_at
+    from sale_home_refresh_due
+    order by day`);
+  return result.rows.map((row) => ({ day: row.day, generation: Number(row.generation), queuedAt: new Date(row.queued_at) }));
+}
+
+/** Current queued generation for a Moscow day; null — not queued. */
+export async function readSaleHomeRefreshGeneration(db: Database, day: string): Promise<number | null> {
+  const result = await db.execute<{ generation: string | number }>(sql`
+    select generation from sale_home_refresh_due where day = ${day}::date`);
+  const row = result.rows[0];
+  return row === undefined ? null : Number(row.generation);
+}
+
+/** Acquires the per-day transaction advisory lock before reading inputs for a Moscow day's `sale_homes` refresh. */
+export async function lockSaleHomeRefreshDay(db: Database, day: string): Promise<void> {
+  await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`sale_home_refresh_day:${day}`}, 0))`);
+}
+
+/**
+ * Deletes a queued day ONLY if its `generation` still equals what this pass computed (and without blocking on another
+ * transaction currently bumping that day's row). Queue hygiene, never deletes captured facts.
+ */
+export async function completeSaleHomeRefreshDue(db: Database, input: { day: string; generation: number }): Promise<boolean> {
+  const result = await db.execute(sql`
+    delete from sale_home_refresh_due
+    where ctid in (
+      select ctid from sale_home_refresh_due
+      where day = ${input.day}::date and generation = ${input.generation}
+      for update skip locked
+    )`);
+  return (result.rowCount ?? 0) > 0;
 }

@@ -1,17 +1,17 @@
 import { z } from "zod";
 
 import { CHATTER_SALE_KINDS } from "./chatter-stats.ts";
-import { errorResponseSchema, intId, isoDateTime, isoTimestamp, mills } from "./primitives.ts";
+import { businessDate, errorResponseSchema, intId, isoDateTime, isoTimestamp, mills } from "./primitives.ts";
 
 /**
- * The team's sale facts for the agency ledger (ledger release 2,
- * docs/plans/2026-11-09-release-2.md in the ledger repo): every piece of the
- * team's work and every sale on the key's pages in a window, with the facts the
- * ledger's split rules read — who held the page, who sent the bought PPV, a tip
+ * The team's work and sale facts (`agentTeamSales`): every piece of the team's
+ * work and every sale on the key's pages in a window, with the facts whose a
+ * sale is computed from — who held the page, who sent the bought PPV, a tip
  * under a post or to a Campaign, who wrote to the fan last, and the owner's
- * decision of the sale (`marks`, the chatters' own of Hub's old shift report, is
- * always empty now). Facts only: whose a sale is, and what anyone is paid, is
- * the ledger's (owner, 2026-11-08). Needs `read:team` and `read:money`.
+ * decision of the sale (`marks`, the chatters' own of Hub's old shift report,
+ * is always empty now and kept for backwards compatibility). Hub computes whose
+ * a sale is in `sale_homes` and serves it on `GET /api/v1/agent/sale-homes/feed`;
+ * what anyone is paid stays the ledger's. Needs `read:team` and `read:money`.
  */
 
 /** The longest window of one read, days. */
@@ -42,6 +42,10 @@ const agentTeamWorkSchema = z.object({
   userId: intId,
   username: z.string(),
   role,
+  /** The person's code in the people registry; null — unlinked login. Optional for backwards compatibility. */
+  personCode: z.string().nullable().optional(),
+  /** The work's Moscow report date (YYYY-MM-DD): handed-in version's reportDate, else shift's report_date, else visit's dayOfWork. */
+  reportDate: businessDate.nullable().optional(),
   /** A shift, or a look-in shorter than a shift (it holds only the sales to fans its person wrote to last). */
   kind: z.enum(["shift", "visit"]),
   startedAt: isoTimestamp,

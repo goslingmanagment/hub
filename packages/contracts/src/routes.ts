@@ -60,6 +60,7 @@ import { saleChainRouteSchemas } from "./routes-sale-chain.ts";
 import { shiftReportNoteRouteSchemas } from "./routes-shift-report-notes.ts";
 import { erasureRouteSchemas } from "./routes-erasures.ts";
 import { saleDecisionRouteSchemas } from "./routes-sale-decisions.ts";
+import { saleHomesRouteSchemas } from "./routes-sale-homes.ts";
 // One sign-in across the names Hub serves: the one-time code between names (ecosystem plan §3.2).
 import { signinRouteSchemas } from "./routes-signin.ts";
 // Система → «Состояние»: every routine and copy, from the owner's place (ecosystem plan, package P).
@@ -8139,6 +8140,7 @@ export type RouteSchemas = typeof baseRouteSchemas
   & typeof shiftReportNoteRouteSchemas
   & typeof erasureRouteSchemas
   & typeof saleDecisionRouteSchemas
+  & typeof saleHomesRouteSchemas
   & typeof workboardTodayRouteSchemas
   & typeof personDoorRouteSchemas;
 export const routeSchemas: RouteSchemas = {
@@ -8169,6 +8171,7 @@ export const routeSchemas: RouteSchemas = {
   ...shiftReportNoteRouteSchemas,
   ...erasureRouteSchemas,
   ...saleDecisionRouteSchemas,
+  ...saleHomesRouteSchemas,
   ...workboardTodayRouteSchemas,
   ...personDoorRouteSchemas,
 };

@@ -15,6 +15,7 @@ import {
 import {
   answerTeamQuestion,
   closeMatter,
+  enqueueSaleHomeRefreshDays,
   findPersonRowByCode,
   insertPersonDayLine,
   listApprovedSwaps,
@@ -473,6 +474,13 @@ async function slotPagesOf(
   return found;
 }
 
+/** The Moscow day(s) a swap's hours touch (including the next day when it crosses midnight). Pure. */
+function swapAffectedDays(swap: Pick<TeamQuestionSwapRow, "date" | "startMinute" | "endMinute">): string[] {
+  if (swap.endMinute > swap.startMinute) return [swap.date];
+  const next = new Date(Date.parse(`${swap.date}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  return [swap.date, next];
+}
+
 /**
  * The swap's lines of its day, written by the registry's one writer of day lines (`insertPersonDayLine`): the covering
  * person's `cover` line and the absent person's `off` line on each page. In the caller's transaction.
@@ -483,6 +491,7 @@ async function writeSwapLines(db: Parameters<typeof insertPersonDayLine>[0], que
     await insertPersonDayLine(db, { ...line, personId: swap.coverPersonId, kind: "cover" });
     await insertPersonDayLine(db, { ...line, personId: swap.absentPersonId, kind: "off" });
   }
+  await enqueueSaleHomeRefreshDays(db, swapAffectedDays(swap));
 }
 
 /** The persons' history (the audit log, as every change of a person): who covers whom, when, by whose word. */
@@ -504,7 +513,11 @@ export async function revokeSwap(app: QuestionsApp, principal: AuthPrincipal, id
   await requireQuestionOfRealm(app, principal, row);
   if (!decidesIt(facts, principal, row)) throw new ForbiddenError("Only whoever decided it takes it back");
   if (row.swap.date <= moscowDayOf(now.getTime())) throw new ConflictError("The swap's day has come: it stays");
-  const taken = await revokePersonDayLines(app.db, { questionId: id, byUserId: principal.user.id, at: now });
+  const taken = await app.db.transaction(async (tx) => {
+    const count = await revokePersonDayLines(tx, { questionId: id, byUserId: principal.user.id, at: now });
+    if (count > 0) await enqueueSaleHomeRefreshDays(tx, swapAffectedDays(row.swap!));
+    return count;
+  });
   if (taken === 0) throw new ConflictError("Nothing to take back: the swap is not standing");
   await auditSwap(app, principal, id, row.swap, "person.schedule_swap_revoked");
   await tellCover(app, facts, row, row.swap, "revoked", now);
