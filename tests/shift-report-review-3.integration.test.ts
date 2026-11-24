@@ -801,6 +801,12 @@ describe("«чья продажа» and the shift report, the final review's sec
     });
     const shift = await shiftRow(anna, 60);
     const near = await sale(pageTwo, 4_000, 58 * 60);
+    // Give `near` a visible non-nobody home (pot) so H8 shows it in «Рядом» on mia-2 while nobody's sales stay hidden.
+    await q(
+      `insert into sale_owner_decisions (transaction_id, page_id, kind, shares, pot, outcome, source, state, decided_at)
+       values ($1, $2, 'pot', '[]'::jsonb, 'fixture-pot', 'first', 'dispute', 'active', now())`,
+      [near, pageTwo],
+    );
     await submit(shift);
     expect((await newest(shift, near)).line).toMatchObject({ group: "near", pageLabel: "mia-2", amountMills: 0 });
     // Every line's page is one of the version's pages, with nothing where nothing is counted: the ledger's own check.
