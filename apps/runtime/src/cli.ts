@@ -26,6 +26,7 @@ import {
   DomainEventTargetMonthsUnattachedError,
   findPageByLabel,
   findUserById,
+  findUserByUsername,
   insertDeliveryAttempt,
   insertErasureLog,
   listPendingFanslyWsLiveReceipts,
@@ -60,6 +61,7 @@ import { createAppContext } from "./bootstrap.ts";
 import {
   canonicalCapabilities,
   issueAgentKey,
+  issueOwnerAgentKey,
   listAgentKeysDetailed,
   replaceAgentKey,
   updateAgentKeyCapabilities,
@@ -3950,7 +3952,7 @@ export function buildProgram() {
         const key = (await listAgentKeys(app.db)).find((candidate) => candidate.name === keyName);
         if (!key) throw new Error(`No agent key named ${keyName}`);
         const before = canonicalCapabilities(key.capabilities);
-        const after = canonicalCapabilities([...before.filter((capability) => !remove.includes(capability)), ...add]);
+        const after = canonicalCapabilities([...before.filter((capability) => !(remove as readonly string[]).includes(capability)), ...add]);
         const updated = await updateAgentKeyCapabilities(
           app,
           { id: key.id, capabilities: after, note },
@@ -4098,6 +4100,41 @@ export function buildProgram() {
           pageLabels: issued.key.pageLabels,
           expiresAt: issued.key.expiresAt,
           replaced: { name: issued.replaced.name, worksUntil: issued.replaced.expiresAt },
+        }));
+      } finally {
+        await app.close();
+      }
+    });
+
+  // The owner's agent door's key (payouts plan 2026-11-24 §1.8, 0442): `act:owner`, acting as the live owner's login
+  // through `/api/v1/owner-agent/call` and nothing else; issued here alone (the dashboard lists and revokes it, never
+  // issues, changes or replaces one). To rotate: revoke it on the dashboard (Система → Ключи агентов), then issue another.
+  // Audited as agent_key.issued, source cli, under the owner. The token goes to stdout this once (the owner's machine
+  // keeps it in its owner-desk profile: `hub owner …`).
+  program
+    .command("owner-agent-keys:issue")
+    .description("Issue the owner's agent door key (act:owner) acting as a live owner's login; prints its token once; audited")
+    .argument("<keyName>", "the key's name, as the dashboard will list it")
+    .requiredOption("--owner <login>", "the live owner's login the key acts as")
+    .requiredOption("--days <days>", "days until it expires, at most 365", parsePositiveInt)
+    .action(async (keyName: string, options: { owner: string; days: number }) => {
+      const name = keyName.trim();
+      if (name === "") throw new Error("<keyName> must not be blank");
+      const app = await createAppContext();
+      try {
+        const login = await findUserByUsername(app.db, options.owner.trim().toLowerCase());
+        if (!login) throw new Error(`No login ${options.owner}`);
+        const issued = await issueOwnerAgentKey(
+          app,
+          { name, ownerLogin: options.owner, expiresInDays: options.days },
+          { source: "cli", actorUserId: login.id },
+        );
+        console.log(JSON.stringify({
+          token: issued.token,
+          name: issued.key.name,
+          capabilities: issued.key.capabilities,
+          actsAsUserId: issued.ownerUserId,
+          expiresAt: issued.key.expiresAt,
         }));
       } finally {
         await app.close();

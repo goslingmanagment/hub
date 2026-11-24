@@ -300,16 +300,19 @@ What a decision does:
   same page and fan. `--answers <№>` names an open question about the same sale (or, neither naming a sale, the same
   page and fan). Anything else of the key's pages is 409 `other_sale`; a number of another page answers exactly as
   one that does not exist (409 `not_active`, `question_closed`). All of it is checked in the transaction that writes.
-- **To change the owner's word, record the owner's own words with the owner's own message.** The owner's word is a
-  decision made in Workboard (a dispute's — the owner's or the deciding lead's — and «никому» of a week:
-  `decided_by_user_id`), or one a key recorded from the owner's own message (its sender, kept as
-  `said_by_telegram_id`, is the owner's Telegram id in the people registry). `--sender` is the owner's Telegram id (the one the people registry holds for the person whose
-  role is owner), `--message` his message. Then `hub sale cancel <№> …` and `hub sale decide … --supersedes <№>` go
-  the usual way, and the reports follow. With any other sender — a chatter's or a lead's message retelling him, an
-  owner whose Telegram id the registry does not hold — it is 409 `owner_decision` and nothing changes. What a key
-  recorded from anyone else's message and what was carried over from the ledger a key cancels and replaces on any
-  message. Whether a sender is the owner is read from the registry when the decision is changed; decisions recorded
-  before the sender was kept carry none.
+- **A decision a signed-in decider made is never changed through this door.** One made in Workboard (a dispute's —
+  the owner's or the deciding lead's — and «никому» of a week) or by the owner's agent door (below), all of them
+  `decided_by_user_id`, is changed only there: 409 `owner_decision` here, whatever the sender — the owner's own
+  Telegram id included (payouts plan §11, «Защита слова владельца»).
+- **To change the owner's word recorded from his message, record his own words with his own message.** A decision a
+  key recorded from the owner's own message (its sender, kept as `said_by_telegram_id`, is the owner's Telegram id in
+  the people registry) is his word: `--sender` is the owner's Telegram id (the one the people registry holds for the
+  person whose role is owner), `--message` his message. Then `hub sale cancel <№> …` and `hub sale decide …
+  --supersedes <№>` go the usual way, and the reports follow. With any other sender — a chatter's or a lead's message
+  retelling him, an owner whose Telegram id the registry does not hold — it is 409 `owner_decision` and nothing
+  changes. What a key recorded from anyone else's message and what was carried over from the ledger a key cancels and
+  replaces on any message. Whether a sender is the owner is read from the registry when the decision is changed;
+  decisions recorded before the sender was kept carry none.
 - `hub sale cancel`: the decision is cancelled and, in the same transaction, every report handed in Hub that it had
   settled gets a new version with what rules now — an agreement of the two sides, else the rule with the person's
   own word (a disputed «моё» counts nothing again) — exactly what handing in again would write. A decision it had
@@ -335,7 +338,8 @@ answered, it stays the owner's, titled «Вопрос чаттерам без о
 and, on its own line, its note (`--note`): free words of the team, shown in `--md` as written. Refusals: 400
 `bad_decision` (the kind's rules), 400 `person_unknown`, 404 a sale, a page, a decision or a question outside the
 key's grant (one that names no page included), 409 `decision_exists`, `not_active`, `question_closed`, `other_sale`,
-`owner_decision` (the owner's word — made in Workboard or recorded from his message — and the message is not his),
+`owner_decision` (a decision a signed-in decider made, on any message; the owner's word recorded from his message,
+and the message is not his),
 `claim_closed` (a claim of the sale closed while the decision was being written: read the sale again). A question is
 answered or closed once: a second `hub sale answer` or `hub sale close`, or one after a decision answered it, is 409
 `question_closed` and changes nothing.
@@ -455,6 +459,58 @@ land after the cursor; `limit` counts placed positions including `held`; the end
   `unresolved`), computed by the same pure `landShare` rule screens use.
 - Changes on pages outside the key's grant appear in `held` until granted, then receive a new `seq` at the end of the
   feed and come through `homes` via the cursor.
+
+## The owner's agent door (`act:owner`)
+
+The owner's own agent acting AS the owner, on the owner's word, with the owner's reason on every call (payouts plan
+2026-11-24, §1.8; `services/owner-agent-door.ts`). Not an agent key of the plane: an `act:owner` key holds that one
+capability, no page, names the live owner's login it acts as (`agent_keys.acts_as_user_id`, 0442), and reaches one
+route, `POST /api/v1/owner-agent/call` — every other route refuses it (403), and that route refuses every other key and
+session. Issued only on the server: `cli.js owner-agent-keys:issue <name> --owner <login> --days N` (the token is
+printed once). The dashboard lists it and may revoke it; it never issues, changes or replaces one (409
+`owner_agent_key`): to rotate, revoke it and issue another. It is no agent's key for another service
+(`agentKeyIntrospect` answers `active: false`). A key acting as a disabled or deleted owner, or as the test team's
+owner, is no principal (401).
+
+The CLI is `hub owner …` with the owner's desk's key: `HUB_OWNER_KEY`, or `HUB_OWNER_KEY=…` in
+`~/.config/hub/owner-desk` (mode 600) — never `HUB_AGENT_KEY` and never a cron's file. `--why` on every command.
+
+| Operation | `hub owner …` | What it does |
+|---|---|---|
+| `shiftReport.list` | `shift-report list --person C --from D --to D` | A person's shifts (≤ 62 Moscow days) with their stored reports: state, phase, version, total |
+| `shiftReport.show` | `shift-report show --shift N [--version V]` | A stored version whole (the newest by default); never a draft |
+| `shiftReport.versions` | `shift-report versions --shift N` | The stored versions, newest first |
+| `sale.show` | `sale show --sale N` | Whose a sale is by the rule, its decisions and claims, whether a dispute is open |
+| `sale.decide` | `sale decide --sale N --kind owner\|split\|exclude --share C[:P] --note W [--supersedes №]` | The owner's decision of a known sale: the reports follow, as a dispute's decision. An open dispute (a claim or a question waiting): 409 `open_dispute` — decide it in Workboard. An active decision: name it (409 `decision_exists`) |
+| `sale.cancel` | `sale cancel № --note W` | Cancels an active decision; the reports it settled get a new version |
+| `sale.close` | `sale close № --note W` | Closes an open sale question without a decision, once (409 `question_closed`) |
+| `people.show` | `people show C` | A person: who, logins, pages, schedule, rights, onboarding, the owner's note. Never pay terms, payout details, keys or proposals |
+| `people.edit` | `people edit C [--display-name] [--note] [--state] [--left-on] [--working-page …] [--json '{"onboarding":…,"schedule":…}']` | Those fields of a person (kind human) and nothing else (400). A person with a content manager's login: their working pages are the owner's own (409 `content_manager_pages`) |
+
+`hub owner call <op> --json '{…}' --why …` runs any operation of the table; `hub owner ops` lists them (no call).
+
+Every call, in this order: (1) the key — an `act:owner` key of an active owner of the live realm; (2) the reason,
+header `x-hub-owner-reason`, 1 to 500 characters after trimming, UTF-8 percent-encoded (`encodeURIComponent`), never a
+fan's name — else 400 `owner_reason` before anything; (3) the operation — on the table, else 403; (4) the audit row
+`owner_agent.call` (the owner as actor, the key, the operation, the reason), written before anything runs — a call
+that cannot be recorded does not run; (5) the arguments by the operation's strict schema — an unknown field is 400
+`owner_agent_args`; (6) the operation, as the owner's own principal. 60 calls a minute per key; answers are
+`Cache-Control: no-store`.
+
+What it writes and how it is named:
+- A decision: `sale_owner_decisions` `source 'agent'`, `decided_by_user_id` the owner, `agent_key_id` the key. The bot
+  door never changes it (above).
+- A report's new version made by it: the owner's own Workboard version (`door 'workboard'`, `actor_user_id` the owner,
+  no key: 0400's rule and the ledger's reading are as they were); its history row (`object_events`
+  `shift_report.settled`) names the key (`actor_agent_key_id`), the owner it acts for (`on_behalf_of_user_id`) and
+  the door `api`.
+- A person's change: the audit row `person.updated` under the owner, with the key in its metadata.
+- A read writes nothing but its own audit row (and its observation): no check runs, no phase moves, no take settles.
+
+Never on this door (a predicate and a test hold it, `OWNER_AGENT_NEVER`): keys, passwords, sessions, devices,
+invitations; erasure and deletion, the page browser, sends and broadcasts; pay terms, payout details, transfers,
+prices, discounts; configs, prompts, the pace, master switches; signing for a chatter, the test wall; people's rights,
+logins, role, Telegram.
 
 ## «Кто этот ключ»: another service accepts a hub key
 

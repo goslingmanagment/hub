@@ -28,13 +28,17 @@
 
 import { z } from "zod";
 
-import { AGENT_CAPABILITIES, type AgentCapability } from "./agent-read-capabilities.ts";
+import { AGENT_KEY_CAPABILITIES, type AgentCapability } from "./agent-read-capabilities.ts";
 import { personCodeSchema, personStateEnum } from "./people.ts";
 import { errorResponseSchema, intId } from "./primitives.ts";
 import { agentIsoTimestamp, agentSha256Hex } from "./routes-agent.ts";
 
-/** Derived, never hand-listed: the enum IS the closed matrix (spec §8). */
-export const agentKeyCapabilityEnum = z.enum(AGENT_CAPABILITIES);
+/**
+ * Derived, never hand-listed: the enum IS the closed matrix (spec §8) — the agent plane's and `act:owner`, the owner's
+ * agent door, so a listing names such a key as it is. Issuing, changing or replacing an `act:owner` key here is a 409
+ * from the service (services/agent-keys.ts): it is the server CLI's alone.
+ */
+export const agentKeyCapabilityEnum = z.enum(AGENT_KEY_CAPABILITIES);
 
 /** The sliding default; the hard ceiling lives with the repository. */
 export const AGENT_KEY_DEFAULT_LIFETIME_DAYS = 90;
@@ -111,7 +115,7 @@ export const agentKeyCreateBodySchema = z.object({
    * (`AGENT_KEY_SERVICE_CAPABILITIES` only), which may have none.
    */
   agentCode: personCodeSchema.optional(),
-  capabilities: z.array(agentKeyCapabilityEnum).min(1).max(AGENT_CAPABILITIES.length),
+  capabilities: z.array(agentKeyCapabilityEnum).min(1).max(AGENT_KEY_CAPABILITIES.length),
   /** At least one: a key granted no page can read nothing, and issuing one would
    *  only produce a credential that fails confusingly at every call. */
   pageLabels: z.array(z.string().min(1).max(200)).min(1).max(200),
@@ -169,7 +173,7 @@ export const agentKeyReplaceResponseSchema = z.object({
  * only to replace one (agentKeyReplace).
  */
 export const agentKeyUpdateBodySchema = z.object({
-  capabilities: z.array(agentKeyCapabilityEnum).max(AGENT_CAPABILITIES.length)
+  capabilities: z.array(agentKeyCapabilityEnum).max(AGENT_KEY_CAPABILITIES.length)
     .refine((values) => new Set(values).size === values.length, "capabilities must be unique"),
 }).strict();
 

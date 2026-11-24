@@ -19,6 +19,7 @@ body remain handler-checked and are noted per route in the service layer.
 | `apiKey` | device-token bearer (historical kind name: API keys are retired) |
 | `device-token` | device-token bearer only |
 | `agentKey` | Agent Read Plane key only; no human principal is admitted |
+| `ownerAgentKey` | the owner's agent door's act:owner key only; it is admitted by no other kind |
 | `any` | any authenticated principal except an agent key |
 
 The `chat-extension token` column is the narrow device token a client asks
@@ -26,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 92 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (570)
+## Routes (571)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -429,6 +430,7 @@ A full device token is not affected.
 | GET | `/api/v1/overview` | `overview` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue` | `overviewRevenue` | `session` | — | — | no |
 | GET | `/api/v1/overview/revenue/daily` | `overviewRevenueDaily` | `session` | — | — | no |
+| POST | `/api/v1/owner-agent/call` | `ownerAgentCall` | `ownerAgentKey` | — | — | no |
 | GET | `/api/v1/page-browser/drafts` | `pageBrowserDrafts` | `owner-session` | — | — | no |
 | DELETE | `/api/v1/page-browser/drafts/:name` | `pageBrowserDraftDelete` | `owner-session` | — | — | no |
 | PUT | `/api/v1/page-browser/drafts/:name` | `pageBrowserDraftSave` | `owner-session` | — | — | no |

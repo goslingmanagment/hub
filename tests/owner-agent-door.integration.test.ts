@@ -1,0 +1,453 @@
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { assignUserToPage, createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
+import { sha256Hex } from "@agency_hub_core/shared";
+
+import { buildApiServer } from "../apps/runtime/src/api/server.ts";
+import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { introspectAgentKey, issueOwnerAgentKey, replaceAgentKey, updateAgentKeyCapabilities } from "../apps/runtime/src/services/agent-keys.ts";
+import { AGENT_KEY_TOKEN_PREFIX, createUserAccount, setUserPassword } from "../apps/runtime/src/services/auth.ts";
+import { setPersonPayTerm } from "../apps/runtime/src/services/people/index.ts";
+import { runSaleClaims } from "../apps/runtime/src/services/sale-claims.ts";
+import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
+import { createTestAppContext } from "./helpers/runtime.ts";
+import { editingSession, handInAndConfirm, insertReviewerAgentKey } from "./helpers/shift-report-hand-in.ts";
+import { fixtureUserId } from "./helpers/user-identity.ts";
+
+// The owner's agent door (payouts plan 2026-11-24, §1.8, H9), on a real database and the real server: its key reaches
+// its own route and no other; a call is the owner's reason, then the table, then the audit, then the arguments; a read
+// writes nothing but its audit row; a decision is the owner's, names the key and the owner it acts for, and the bot
+// door cannot change it even with the owner's Telegram id; a person is read without money and changed by a narrow
+// list; the key is issued by the server alone and is nobody's for another service. Synthetic people, pages and sums.
+
+vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
+
+const AUDIT = { source: "cli" } as const;
+const OWNER_TG = 700_000_901;
+const SENDER_B = 700_000_902;
+const WRITER = `${AGENT_KEY_TOKEN_PREFIX}owner-door-writer`;
+const SERVICE = `${AGENT_KEY_TOKEN_PREFIX}owner-door-introspect`;
+const TEST_OWNER_KEY = `${AGENT_KEY_TOKEN_PREFIX}owner-door-test-owner`;
+const WHY = "сверяю спорную продажу";
+
+let testDb: StartedTestDatabase | null = null;
+let app: AppContext;
+let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
+const cookies: Record<string, string> = {};
+let ownerKey = "";
+let ownerKeyId = 0;
+let boss = 0;
+let anna = 0;
+let bella = 0;
+let pageOne = 0;
+let shiftA = 0;
+let shiftB = 0;
+let shiftR = 0;
+
+const call = (op: string, args: Record<string, unknown>, options: { why?: string | null; key?: string } = {}) => {
+  const why = options.why === undefined ? WHY : options.why;
+  return server!.inject({
+    method: "POST",
+    url: "/api/v1/owner-agent/call",
+    headers: { authorization: `Bearer ${options.key ?? ownerKey}`, ...(why === null ? {} : { "x-hub-owner-reason": encodeURIComponent(why) }) },
+    payload: { op, args },
+  });
+};
+const rawSession = (who: string, method: "GET" | "POST" | "PUT", url: string, payload?: Record<string, unknown>) =>
+  server!.inject({ method, url, headers: { cookie: cookies[who]! }, ...(payload ? { payload } : {}) });
+const asSession = editingSession(rawSession);
+const asWriter = (url: string, payload: Record<string, unknown>) =>
+  server!.inject({ method: "POST", url, headers: { authorization: `Bearer ${WRITER}` }, payload });
+
+const count = async (sql: string, params: unknown[] = []) => Number((await testDb!.pool.query<{ n: string }>(sql, params)).rows[0]!.n);
+const calls = () => count("select count(*) as n from audit_events where event_type = 'owner_agent.call'");
+
+async function insertShift(userId: number, startedAt: string, endedAt: string): Promise<number> {
+  const result = await testDb!.pool.query(
+    `insert into shifts (user_id, state, started_at, ended_at, worked_minutes, messages, report_date, pages)
+     values ($1, 'closed', $2::timestamptz, $3::timestamptz, 400, 300, $4::date, $5::jsonb) returning id`,
+    [userId, startedAt, endedAt, startedAt.slice(0, 10), JSON.stringify([{ pageLabel: "mia-1", activeMinutes: 400, messages: 300, salesFrom: startedAt }])],
+  );
+  return Number(result.rows[0].id);
+}
+
+/** A sale of mia-1 an hour ago whose home by the rule is bella's shift (written by hand, as sale-claims tests do). */
+async function bellasSale(ref: string, net: number): Promise<number> {
+  const inserted = await testDb!.pool.query(
+    `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+       gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
+     values ($1, $2, 'subscription', 'subscription', 'posted', 'ok', $3, $3, $4, $5, now() - interval '1 hour', 'fansly:rest', 'USD')
+     returning id`,
+    [pageOne, ref, net + 4_000, net, 4_000],
+  );
+  const id = Number(inserted.rows[0].id);
+  await testDb!.pool.query(
+    `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at)
+     select t.id, t.platform_account_id, t.occurred_at, t.creator_net_amount_mills, 'shift', 'holder',
+            jsonb_build_array(jsonb_build_object('userId', $2::bigint, 'workRef', null, 'shiftId', $3::bigint, 'percent', 100, 'mills', t.creator_net_amount_mills)),
+            'test', now()
+     from transactions t where t.id = $1`,
+    [id, bella, shiftB],
+  );
+  return id;
+}
+
+/** Everything a read must leave as it was: the reports, their versions, candidates, proposals, claims, history, matters. */
+async function snapshot() {
+  const rows = async (table: string) => (await testDb!.pool.query(`select to_jsonb(t) as row from ${table} t order by 1`)).rows.map((one) => JSON.stringify(one.row)).sort();
+  return {
+    handins: await rows("shift_handins"),
+    versions: await rows("shift_handin_versions"),
+    candidates: await rows("shift_handin_candidates"),
+    proposals: await rows("shift_handin_proposals"),
+    claims: await rows("sale_claims"),
+    decisions: await rows("sale_owner_decisions"),
+    events: await rows("object_events"),
+    matters: await rows("matters"),
+  };
+}
+
+describe("the owner's agent door", () => {
+  beforeAll(async () => {
+    testDb = await startIntegrationTestDatabase();
+    if (!testDb) return;
+    app = createTestAppContext(testDb);
+    await createUserAccount(app, { username: "boss", role: "owner", password: "boss-password-for-tests" }, AUDIT);
+    await createUserAccount(app, { username: "tboss", role: "owner", password: "tboss-password-for-tests" }, AUDIT);
+    for (const name of ["anna", "bella", "vera"]) {
+      await createUserAccount(app, { username: name, role: "chatter" }, AUDIT);
+      await setUserPassword(app, { userId: await fixtureUserId(app, name), password: `${name}-password-for-tests` }, AUDIT);
+    }
+    boss = await fixtureUserId(app, "boss");
+    anna = await fixtureUserId(app, "anna");
+    bella = await fixtureUserId(app, "bella");
+    // vera's login is a content manager's.
+    await testDb.pool.query("update users set role = 'content_manager' where id = $1", [await fixtureUserId(app, "vera")]);
+    const model = await createModel(app.db, { slug: "mia", name: "Mia" });
+    pageOne = (await createFanslyPage(app.db, { modelId: model!.id, label: "mia-1" }))!.id;
+    await createFanslyPage(app.db, { modelId: model!.id, label: "mia-2" });
+    for (const name of ["anna", "bella"]) await assignUserToPage(app.db, await fixtureUserId(app, name), pageOne);
+
+    server = await buildApiServer(app);
+    await server.ready();
+    for (const user of ["boss", "anna", "bella"]) {
+      const login = await server.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username: user, password: `${user}-password-for-tests` } });
+      expect(login.statusCode, login.body).toBe(200);
+      const header = login.headers["set-cookie"];
+      cookies[user] = String(Array.isArray(header) ? header[0] : header).split(";")[0]!;
+    }
+    const person = async (code: string, body: Record<string, unknown>) => {
+      const created = await asSession("boss", "POST", "/api/v1/admin/people", { code, displayName: code, state: "working", ...body });
+      expect(created.statusCode, created.body).toBe(200);
+    };
+    await person("boss", { role: "owner", telegram: { userId: OWNER_TG }, logins: { add: [boss] } });
+    await person("anna", { role: "chatter", rights: ["submits_shift"], logins: { add: [anna] } });
+    await person("bella", { role: "chatter", rights: ["submits_shift"], telegram: { userId: SENDER_B }, logins: { add: [bella] } });
+    await person("vera", { role: "content_manager", logins: { add: [await fixtureUserId(app, "vera")] } });
+    await testDb.pool.query("update person_rights set granted_at = '2026-11-01T00:00:00Z'");
+    // The test team's owner: a login of the test realm (0414).
+    const tPerson = (await testDb.pool.query<{ id: string }>(
+      "insert into people (code, display_name, role, state, is_test) values ('t-boss', 'Тест', 'owner', 'working', true) returning id",
+    )).rows[0]!.id;
+    await testDb.pool.query("insert into person_logins (user_id, person_id) values ($1, $2)", [await fixtureUserId(app, "tboss"), tPerson]);
+    await setPersonPayTerm(app, "anna", { modelSlug: "mia", validFrom: "2026-11-01", shareBasisPoints: 2_500, fixPerShiftMills: 7_000 }, AUDIT);
+
+    shiftA = await insertShift(anna, "2026-11-10T15:00:00Z", "2026-11-10T23:00:00Z");
+    shiftB = await insertShift(bella, "2026-11-10T07:00:00Z", "2026-11-10T15:00:00Z");
+    shiftR = await insertShift(anna, "2026-11-11T15:00:00Z", "2026-11-11T23:00:00Z");
+
+    const issued = await issueOwnerAgentKey(app, { name: "owner-desk-test", ownerLogin: "boss", expiresInDays: 30 }, { source: "cli", actorUserId: boss });
+    ownerKey = issued.token;
+    ownerKeyId = issued.key.id;
+    for (const [token, name, capabilities, pages] of [
+      [WRITER, "owner-door-writer", ["write:shift_reports"], [pageOne]],
+      [SERVICE, "owner-door-introspect", ["introspect:agent_keys"], [pageOne]],
+    ] as const) {
+      await insertAgentKey(testDb.db, {
+        name, keyPrefix: token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(token),
+        capabilities: [...capabilities], pageIds: [...pages], expiresAt: new Date(Date.now() + 30 * 86_400_000), createdBy: boss,
+      });
+    }
+    // A key acting as the test team's owner, written past the issuer (which refuses it): the door refuses it too.
+    await insertAgentKey(testDb.db, {
+      name: "owner-door-test-owner", keyPrefix: TEST_OWNER_KEY.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(TEST_OWNER_KEY),
+      capabilities: ["act:owner"], pageIds: [], expiresAt: new Date(Date.now() + 30 * 86_400_000), createdBy: boss,
+      actsAsUserId: await fixtureUserId(app, "tboss"),
+    });
+  }, 180_000);
+
+  afterAll(async () => {
+    await server?.close();
+    await testDb?.stop();
+  });
+
+  it("is issued by the server alone, for a live owner, holding act:owner and nothing else", async (context) => {
+    if (!testDb) return context.skip();
+    const row = await testDb.pool.query("select capabilities, page_ids, acts_as_user_id from agent_keys where id = $1", [ownerKeyId]);
+    expect(row.rows[0]).toMatchObject({ capabilities: ["act:owner"], page_ids: [] });
+    expect(Number(row.rows[0].acts_as_user_id)).toBe(boss);
+    await expect(issueOwnerAgentKey(app, { name: "t-desk", ownerLogin: "tboss", expiresInDays: 30 }, AUDIT)).rejects.toThrow(/test team/);
+    await expect(issueOwnerAgentKey(app, { name: "a-desk", ownerLogin: "anna", expiresInDays: 30 }, AUDIT)).rejects.toThrow(/not an active owner/);
+    // The table refuses an act:owner key with another capability, and any other key naming an owner.
+    const refused = (capabilities: string[], actsAsUserId?: number) => insertAgentKey(testDb!.db, {
+      name: `bad-${capabilities.join("-")}-${actsAsUserId ?? 0}`, keyPrefix: "agency_hub_agent_bad", keyDigest: sha256Hex(`bad-${capabilities.join()}-${actsAsUserId ?? 0}`),
+      capabilities, pageIds: [], expiresAt: new Date(Date.now() + 86_400_000), createdBy: boss, ...(actsAsUserId === undefined ? {} : { actsAsUserId }),
+    });
+    await expect(refused(["act:owner", "read:team"], boss)).rejects.toThrow(/no other capability/);
+    await expect(refused(["act:owner"])).rejects.toThrow(/names the owner/);
+    await expect(refused(["read:team"], boss)).rejects.toThrow(/names the owner/);
+
+    // The dashboard's paths refuse it: issued, granted, changed, replaced (409); another service never sees it active.
+    const issuedHere = await server!.inject({
+      method: "POST", url: "/api/v1/agent/keys", headers: { cookie: cookies.boss! },
+      payload: { name: "owner-desk-2", capabilities: ["act:owner"], pageLabels: ["mia-1"] },
+    });
+    expect(issuedHere.statusCode, issuedHere.body).toBe(409);
+    expect(issuedHere.json().reason).toBe("owner_agent_key");
+    await expect(updateAgentKeyCapabilities(app, { id: ownerKeyId, capabilities: ["read:team"] }, AUDIT)).rejects.toMatchObject({ statusCode: 409 });
+    await expect(replaceAgentKey(app, { id: ownerKeyId, name: "owner-desk-next", expiresInDays: 30 }, AUDIT)).rejects.toMatchObject({ statusCode: 409 });
+    const replacedHere = await server!.inject({
+      method: "POST", url: `/api/v1/agent/keys/${ownerKeyId}/replace`, headers: { cookie: cookies.boss! }, payload: { name: "owner-desk-next" },
+    });
+    expect(replacedHere.statusCode, replacedHere.body).toBe(409);
+    expect((await introspectAgentKey(app, sha256Hex(ownerKey))).active).toBe(false);
+    const introspected = await server!.inject({
+      method: "POST", url: "/api/v1/agent/keys/introspect", headers: { authorization: `Bearer ${SERVICE}` }, payload: { keyDigest: sha256Hex(ownerKey) },
+    });
+    expect(introspected.statusCode, introspected.body).toBe(200);
+    expect(introspected.json().active).toBe(false);
+    // The owner's listing names it as it is.
+    const listed = await server!.inject({ method: "GET", url: "/api/v1/agent/keys", headers: { cookie: cookies.boss! } });
+    expect(listed.statusCode, listed.body).toBe(200);
+    expect(listed.json().find((key: { id: number }) => key.id === ownerKeyId)).toMatchObject({ capabilities: ["act:owner"], agent: null });
+  });
+
+  it("reaches its own route alone: every other route of the server refuses it", async (context) => {
+    if (!testDb) return context.skip();
+    const admitted: string[] = [];
+    for (const row of server!.routePolicyTable) {
+      if (row.auth === null || row.auth.kind === "public" || row.auth.kind === "hmac" || row.routeKey === "ownerAgentCall") continue;
+      const url = row.url.replace(/:([A-Za-z]+)/g, (_, name: string) => (name === "pageLabel" ? "mia-1" : "1"));
+      const answer = await server!.inject({
+        method: row.method as "GET", url, headers: { authorization: `Bearer ${ownerKey}` },
+        ...(row.method === "GET" || row.method === "DELETE" ? {} : { payload: {} }),
+      });
+      if (answer.statusCode !== 403) admitted.push(`${row.method} ${row.url} ${answer.statusCode}`);
+    }
+    expect(admitted).toEqual([]);
+    // …and its own route refuses a person, an agent key, nobody, and a key acting as the test team's owner.
+    const own = { method: "POST" as const, url: "/api/v1/owner-agent/call", payload: { op: "people.show", args: { code: "anna" } } };
+    const reason = { "x-hub-owner-reason": "x" };
+    expect((await server!.inject({ ...own, headers: { cookie: cookies.boss!, ...reason } })).statusCode).toBe(403);
+    expect((await server!.inject({ ...own, headers: { authorization: `Bearer ${WRITER}`, ...reason } })).statusCode).toBe(403);
+    expect((await server!.inject({ ...own, headers: reason })).statusCode).toBe(401);
+    expect((await call("people.show", { code: "anna" }, { key: TEST_OWNER_KEY })).statusCode).toBe(401);
+    // Swagger is the owner's session's, never this key's.
+    expect((await server!.inject({ method: "GET", url: "/documentation/json", headers: { authorization: `Bearer ${ownerKey}` } })).statusCode).toBe(403);
+  });
+
+  it("takes the reason first, then the table, then writes the audit, then reads the arguments", async (context) => {
+    if (!testDb) return context.skip();
+    const before = await calls();
+    for (const why of [null, "", "   ", "я".repeat(501)]) {
+      const refused = await call("people.show", { code: "anna" }, { why });
+      expect(refused.statusCode, `${String(why).slice(0, 10)}: ${refused.body}`).toBe(400);
+      expect(refused.json().reason).toBe("owner_reason");
+    }
+    for (const op of ["people.delete", "agentKeyCreate", "adminPersonPayTermSet", "__proto__", "toString"]) {
+      expect((await call(op, {})).statusCode, op).toBe(403);
+    }
+    expect(await calls()).toBe(before);
+
+    // Arguments the operation does not name: the audit row is written (the call happened), nothing else runs.
+    const extra = await call("people.edit", { code: "anna", displayName: "Анна", rights: ["submits_shift"] });
+    expect(extra.statusCode, extra.body).toBe(400);
+    expect(await calls()).toBe(before + 1);
+    const person = await testDb.pool.query("select display_name from people where code = 'anna'");
+    expect(person.rows[0].display_name).toBe("anna");
+
+    const shown = await call("people.show", { code: "anna" });
+    expect(shown.statusCode, shown.body).toBe(200);
+    expect(shown.headers["cache-control"]).toBe("no-store");
+    const audit = await testDb.pool.query(
+      "select actor_user_id, source, metadata from audit_events where event_type = 'owner_agent.call' order by id desc limit 1",
+    );
+    expect(Number(audit.rows[0].actor_user_id)).toBe(boss);
+    expect(audit.rows[0]).toMatchObject({ source: "owner_agent", metadata: { op: "people.show", keyName: "owner-desk-test", reason: WHY, actorAgentKeyId: ownerKeyId } });
+  });
+
+  it("reads a person without money, and changes only the fields of its list", async (context) => {
+    if (!testDb) return context.skip();
+    const shown = await call("people.show", { code: "anna" });
+    expect(shown.statusCode, shown.body).toBe(200);
+    const person = shown.json().result.person as Record<string, unknown>;
+    expect(person).toMatchObject({ code: "anna", role: "chatter" });
+    for (const field of ["payTerms", "payoutDetails", "agentKeys", "proposals"]) expect(person, field).not.toHaveProperty(field);
+    expect(shown.body).not.toMatch(/shareBasisPoints|fixPerShiftMills|payoutDetails|payTerms/);
+    expect((await call("people.show", { code: "t-boss" })).statusCode).toBe(404);
+
+    const edited = await call("people.edit", { code: "anna", displayName: "Анна К.", note: "ведёт mia-1" });
+    expect(edited.statusCode, edited.body).toBe(200);
+    expect(edited.json().result.person).toMatchObject({ displayName: "Анна К.", note: "ведёт mia-1" });
+    const audit = await testDb.pool.query("select actor_user_id, metadata from audit_events where event_type = 'person.updated' order by id desc limit 1");
+    expect(Number(audit.rows[0].actor_user_id)).toBe(boss);
+    expect(audit.rows[0].metadata).toMatchObject({ code: "anna", actorAgentKeyId: ownerKeyId });
+
+    for (const args of [{ rights: ["submits_shift"] }, { payTerms: [] }, { role: "team_lead" }, { logins: { add: [boss] } }, { telegram: { userId: 5 } }]) {
+      expect((await call("people.edit", { code: "anna", ...args })).statusCode, JSON.stringify(args)).toBe(400);
+    }
+    // A content manager's working pages open ContentOps: the owner's own word, never the door's.
+    const pages = await call("people.edit", { code: "vera", workingPageLabels: ["mia-1"] });
+    expect(pages.statusCode, pages.body).toBe(409);
+    expect(pages.json().reason).toBe("content_manager_pages");
+    expect((await testDb.pool.query("select count(*)::int as n from person_working_pages w join people p on p.id = w.person_id where p.code = 'vera'")).rows[0].n).toBe(0);
+    expect((await call("people.edit", { code: "vera", displayName: "Вера" })).statusCode).toBe(200);
+    const pagesOfAnna = await call("people.edit", { code: "anna", workingPageLabels: ["mia-1"] });
+    expect(pagesOfAnna.statusCode, pagesOfAnna.body).toBe(200);
+  });
+
+  it("reads stored shift reports and writes nothing but its audit rows", async (context) => {
+    if (!testDb) return context.skip();
+    // anna's report counted once, then handed in again with Gengar expected: it waits in «Проверка» — what a board
+    // read checks and moves on.
+    await handInAndConfirm(asSession, "anna", shiftR);
+    const reviewer = await insertReviewerAgentKey(testDb.db, { name: "owner-door-reviewer", token: `${AGENT_KEY_TOKEN_PREFIX}owner-door-reviewer`, pageIds: [pageOne], createdBy: boss });
+    expect((await asSession("anna", "POST", `/api/v1/shift-reports/${shiftR}/reopen`)).statusCode).toBe(200);
+    const handed = await asSession("anna", "POST", `/api/v1/shift-reports/${shiftR}/submit`);
+    expect(handed.statusCode, handed.body).toBe(200);
+    // Gengar's ten minutes are up: a board read now moves the report to «Подтвердите». The door's reads must not.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(Date.now() + 11 * 60_000));
+
+    const before = await snapshot();
+    const audits = await calls();
+    const observations = await count("select count(*) as n from observations");
+
+    const listed = await call("shiftReport.list", { person: "anna", from: "2026-11-11", to: "2026-11-11" });
+    expect(listed.statusCode, listed.body).toBe(200);
+    expect(listed.json().result).toMatchObject({ person: { code: "anna" }, shifts: [{ shiftId: shiftR, state: "submitted", version: 1, phase: "checking" }] });
+    const shown = await call("shiftReport.show", { shiftId: shiftR });
+    expect(shown.statusCode, shown.body).toBe(200);
+    expect(shown.json().result).toMatchObject({ state: "submitted", phase: "checking", view: { source: "version", version: 1 }, latest: { version: 1 } });
+    expect((await call("shiftReport.show", { shiftId: shiftR, version: 1 })).statusCode).toBe(200);
+    expect((await call("shiftReport.show", { shiftId: shiftR, version: 9 })).statusCode).toBe(404);
+    const versions = await call("shiftReport.versions", { shiftId: shiftR });
+    expect(versions.statusCode, versions.body).toBe(200);
+    expect(versions.json().result.versions).toHaveLength(1);
+
+    expect(await snapshot()).toEqual(before);
+    expect(await calls()).toBe(audits + 5);
+    expect(await count("select count(*) as n from observations")).toBe(observations + 5);
+    // The same report read on the board does what is due: the phase moves.
+    await asSession("anna", "GET", `/api/v1/shift-reports/${shiftR}`);
+    expect((await testDb.pool.query("select phase from shift_handins where shift_id = $1", [shiftR])).rows[0].phase).toBe("confirm");
+    vi.useRealTimers();
+    // Gengar goes: the hand-ins below do not wait for a check.
+    await testDb.pool.query("update agent_keys set revoked_at = now() where id = $1", [reviewer.agentKeyId]);
+  });
+
+  it("decides a sale as the owner, naming the key; the bot door cannot change that word, even with the owner's Telegram id", async (context) => {
+    if (!testDb) return context.skip();
+    // anna takes bella's sale in her handed-in report: her report holds it.
+    const sale = await bellasSale("tx-owner-door-1", 12_000);
+    const said = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${sale}`, { statement: "mine", note: "чат вела я" });
+    expect(said.statusCode, said.body).toBe(200);
+    await handInAndConfirm(asSession, "anna", shiftA);
+    await runSaleClaims(app);
+    const held = await testDb.pool.query(
+      `select line from shift_handins h join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version
+         cross join lateral jsonb_array_elements(v.lines) line where h.shift_id = $1 and (line ->> 'transactionId')::bigint = $2`,
+      [shiftA, sale],
+    );
+    expect(held.rows[0].line).toMatchObject({ amountMills: 12_000 });
+
+    const shown = await call("sale.show", { transactionId: sale });
+    expect(shown.statusCode, shown.body).toBe(200);
+    // (The take moved the sale's home by the rule, which this file's world cannot compute: no shares to show.)
+    expect(shown.json().result).toMatchObject({ sale: { transactionId: sale, netMills: 12_000 }, decisions: [], openDispute: false });
+    expect(shown.json().result.claims).toEqual([expect.objectContaining({ kind: "claim", state: "agreed", claimant: "anna", side: "bella", statement: "mine" })]);
+
+    const decided = await call("sale.decide", { transactionId: sale, kind: "owner", shares: [{ person: "bella", percent: 100 }], note: "чат вела bella" });
+    expect(decided.statusCode, decided.body).toBe(200);
+    const decision = decided.json().result.decision as { id: number; source: string };
+    expect(decision.source).toBe("agent");
+    expect(decided.json().result.versions).toEqual([expect.objectContaining({ shiftId: shiftA })]);
+
+    const row = await testDb.pool.query("select source, decided_by_user_id, agent_key_id, said_by_telegram_id from sale_owner_decisions where id = $1", [decision.id]);
+    expect(row.rows[0]).toMatchObject({ source: "agent", said_by_telegram_id: null });
+    expect([Number(row.rows[0].decided_by_user_id), Number(row.rows[0].agent_key_id)]).toEqual([boss, ownerKeyId]);
+    // The report's new version is the owner's own Workboard one; its history names the key and the owner it acts for.
+    const version = await testDb.pool.query(
+      `select v.door, v.actor_user_id, v.agent_key_id from shift_handins h join shift_handin_versions v on v.handin_id = h.id and v.version = h.current_version
+        where h.shift_id = $1`, [shiftA],
+    );
+    expect(version.rows[0]).toMatchObject({ door: "workboard", agent_key_id: null });
+    expect(Number(version.rows[0].actor_user_id)).toBe(boss);
+    const event = await testDb.pool.query(
+      "select actor_user_id, actor_agent_key_id, on_behalf_of_user_id, door from object_events where event = 'shift_report.settled' order by id desc limit 1",
+    );
+    expect(event.rows[0]).toMatchObject({ actor_user_id: null, door: "api" });
+    expect([Number(event.rows[0].actor_agent_key_id), Number(event.rows[0].on_behalf_of_user_id)]).toEqual([ownerKeyId, boss]);
+
+    // The bot door: neither a stranger's message nor the owner's own Telegram id changes a decision the owner made.
+    for (const sender of [SENDER_B, OWNER_TG]) {
+      const cancel = await asWriter("/api/v1/agent/sale-decisions/cancel", { decisionId: decision.id, note: "передумали", telegramUserId: sender, sourceRef: "https://t.me/c/1/90" });
+      expect(cancel.statusCode, cancel.body).toBe(409);
+      expect(cancel.json().reason).toBe("owner_decision");
+      const replace = await asWriter("/api/v1/agent/sale-decisions", {
+        transactionId: sale, kind: "owner", shares: [{ person: "anna", percent: 100 }], saidBy: "владелец", saidAt: "2026-11-24",
+        supersedes: decision.id, telegramUserId: sender, sourceRef: "https://t.me/c/1/91",
+      });
+      expect(replace.statusCode, replace.body).toBe(409);
+      expect(replace.json().reason).toBe("owner_decision");
+    }
+
+    // The door: a sale with an active decision names it; then it replaces it.
+    const again = await call("sale.decide", { transactionId: sale, kind: "exclude", note: "никому" });
+    expect(again.statusCode, again.body).toBe(409);
+    expect(again.json().reason).toBe("decision_exists");
+    const replaced = await call("sale.decide", { transactionId: sale, kind: "exclude", note: "никому", supersedes: decision.id });
+    expect(replaced.statusCode, replaced.body).toBe(200);
+    const cancelled = await call("sale.cancel", { decisionId: replaced.json().result.decision.id, note: "по правилу" });
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect(cancelled.json().result.decision.status).toBe("cancelled");
+  });
+
+  it("keeps the owner's word said in Telegram to the bot door's rule, and leaves an open dispute to Workboard", async (context) => {
+    if (!testDb) return context.skip();
+    // A decision recorded from the owner's own message (no signed-in decider): his message through the bot door changes it.
+    const said = await bellasSale("tx-owner-door-2", 8_000);
+    const recorded = await asWriter("/api/v1/agent/sale-decisions", {
+      transactionId: said, kind: "owner", shares: [{ person: "bella", percent: 100 }], saidBy: "владелец", saidAt: "2026-11-24",
+      telegramUserId: OWNER_TG, sourceRef: "https://t.me/c/1/92",
+    });
+    expect(recorded.statusCode, recorded.body).toBe(200);
+    const byStranger = await asWriter("/api/v1/agent/sale-decisions/cancel", { decisionId: recorded.json().decision.id, note: "x", telegramUserId: SENDER_B, sourceRef: "https://t.me/c/1/93" });
+    expect(byStranger.statusCode).toBe(409);
+    const byOwner = await asWriter("/api/v1/agent/sale-decisions/cancel", { decisionId: recorded.json().decision.id, note: "передумал", telegramUserId: OWNER_TG, sourceRef: "https://t.me/c/1/94" });
+    expect(byOwner.statusCode, byOwner.body).toBe(200);
+
+    // An open question of the sale: the door does not decide over it; it closes it once.
+    const disputed = await bellasSale("tx-owner-door-3", 5_000);
+    const asked = await asWriter("/api/v1/agent/sale-questions", {
+      transactionId: disputed, askedOf: "owner", people: ["anna", "bella"], question: "Чья продажа?", askedAt: "2026-11-24",
+      telegramUserId: SENDER_B, sourceRef: "https://t.me/c/1/95",
+    });
+    expect(asked.statusCode, asked.body).toBe(200);
+    const questionId = asked.json().question.id as number;
+    const refused = await call("sale.decide", { transactionId: disputed, kind: "owner", shares: [{ person: "anna", percent: 100 }], note: "моё слово" });
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json().reason).toBe("open_dispute");
+    expect(await count("select count(*) as n from sale_owner_decisions where transaction_id = $1", [disputed])).toBe(0);
+    expect((await call("sale.show", { transactionId: disputed })).json().result.openDispute).toBe(true);
+    const closed = await call("sale.close", { questionId, note: "разобрались сами" });
+    expect(closed.statusCode, closed.body).toBe(200);
+    expect(closed.json().result.question.status).toBe("closed");
+    const twice = await call("sale.close", { questionId, note: "ещё раз" });
+    expect(twice.statusCode).toBe(409);
+    expect(twice.json().reason).toBe("question_closed");
+    // A person the shares name must be a live person of the registry.
+    const stranger = await call("sale.decide", { transactionId: disputed, kind: "owner", shares: [{ person: "t-boss", percent: 100 }], note: "x" });
+    expect(stranger.statusCode, stranger.body).toBe(400);
+  });
+});

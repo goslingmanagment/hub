@@ -154,6 +154,16 @@ the owner's machine (outside this repository); a change that moves a home or add
   services redeem a code with their own key (`signin:<service>`), they never get the session.
   ContentOps acts AS the signed-in person (its key + the person's grant) only through `services/person-door.ts`: one
   table of operations, each running the console's own service with that person as the principal.
+- **The owner's agent door**: `services/owner-agent-door.ts` (one table, `OWNER_AGENT_OPERATIONS`, and what it never has,
+  `OWNER_AGENT_NEVER`; arguments and answers in `packages/contracts/src/owner-agent.ts`). An `act:owner` key (0442: that
+  capability alone, no page, `acts_as_user_id` a live owner; issued only by `cli.js owner-agent-keys:issue`, never on
+  the dashboard; nobody's for another service) reaches `POST /api/v1/owner-agent/call` and nothing else, and is its own
+  principal (`OwnerAgentPrincipal`: neither a person nor an agent). Every call: the reason (`x-hub-owner-reason`), the
+  table, the audit row (`owner_agent.call`) before it runs, the strict arguments, then the owner's own service as
+  `principalOfLogin(owner)`. Its reads are projections of what is stored (`readStored*` in `shift-handins.ts`: never
+  `dueNow`); its writes name the key and the owner (`ownerAgentSettleBy`). The CLI is `hub owner …` with the owner's
+  desk key (`~/.config/hub/owner-desk`, `HUB_OWNER_KEY`), never an agent's. A decision with `decided_by_user_id`
+  (Workboard or this door) is never changed through the bot door, the owner's Telegram id included.
 - **Whose an agent key is**: the agent person it is linked to (`person_agent_keys`, one writer: `insertPersonAgentKey`
   in `packages/db/src/repositories/people.ts`). An agent holds ONE live key at a time: the services (ledger, TaskIndex,
   ContentOps) learn only the agent from Hub (`agentKeyIntrospect`) and give a key that agent's rights, so a second

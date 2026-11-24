@@ -174,6 +174,20 @@ export const AGENT_CAPABILITIES = [
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
 
+/**
+ * The owner's agent door (payouts plan 2026-11-24, §1.8; 0442): a key that acts AS the owner, on the owner's word with
+ * a reason on every call, through its own routes (`/api/v1/owner-agent/*`) alone. NOT a capability of the agent plane:
+ * a key holding it is no agent principal (every `agentKey` route refuses it), holds nothing else, names the owner's
+ * login it acts as (`agent_keys.acts_as_user_id`), and is issued and rotated only by the server's CLI
+ * (`owner-agent-keys:issue`). The dashboard lists it and may revoke it; it never issues, changes or replaces one.
+ */
+export const OWNER_AGENT_CAPABILITY = "act:owner";
+
+/** Every value `agent_keys.capabilities` may hold: the agent plane's matrix and the owner's agent door. */
+export const AGENT_KEY_CAPABILITIES = [...AGENT_CAPABILITIES, OWNER_AGENT_CAPABILITY] as const;
+
+export type AgentKeyCapability = (typeof AGENT_KEY_CAPABILITIES)[number];
+
 const AGENT_CAPABILITY_SET: ReadonlySet<string> = new Set(AGENT_CAPABILITIES);
 
 /**

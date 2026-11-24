@@ -4,7 +4,7 @@ import {
   type ClientTokenProfile,
 } from "@agency_hub_core/contracts";
 
-import { isAgentPrincipal, type AuthPrincipal } from "./auth.ts";
+import type { AuthPrincipal } from "./auth.ts";
 import { ForbiddenError } from "./errors.ts";
 
 /**
@@ -28,7 +28,7 @@ export function clientTokenRouteRefusal(
   routeKey: string,
   principal: AuthPrincipal | null,
 ): ForbiddenError | null {
-  if (principal === null || isAgentPrincipal(principal) || principal.clientProfile === undefined) {
+  if (principal === null || principal.kind !== undefined || principal.clientProfile === undefined) {
     return null;
   }
   return clientTokenProfileAllows(principal.clientProfile, routeKey)

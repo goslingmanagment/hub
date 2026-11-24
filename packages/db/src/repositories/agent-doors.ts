@@ -83,6 +83,8 @@ export interface AgentKeyIntrospectionRow {
   agentKeyId: number;
   expiresAt: Date;
   revokedAt: Date | null;
+  /** An `act:owner` key (0442, the owner's agent door): never an agent's key for another service. */
+  actsAsOwner: boolean;
   /** Null — no agent holds the key. */
   person: { code: string; displayName: string; kind: string; state: string } | null;
 }
@@ -90,7 +92,7 @@ export interface AgentKeyIntrospectionRow {
 /** A key by its digest with its agent person, for `agentKeyIntrospect`. Never returns the digest or the prefix. */
 export async function findAgentKeyIntrospection(db: Database, keyDigest: string): Promise<AgentKeyIntrospectionRow | null> {
   const result = await db.execute<Row>(sql`
-    select a.id, a.expires_at, a.revoked_at, p.code, p.display_name, p.kind, p.state
+    select a.id, a.expires_at, a.revoked_at, ('act:owner' = any(a.capabilities)) as acts_owner, p.code, p.display_name, p.kind, p.state
       from agent_keys a
       left join person_agent_keys k on k.agent_key_id = a.id
       left join people p on p.id = k.person_id
@@ -102,6 +104,7 @@ export async function findAgentKeyIntrospection(db: Database, keyDigest: string)
     agentKeyId: Number(row.id),
     expiresAt: new Date(row.expires_at as string | Date),
     revokedAt: nullableDate(row.revoked_at),
+    actsAsOwner: row.acts_owner === true,
     person: row.code === null || row.code === undefined ? null : {
       code: String(row.code), displayName: String(row.display_name), kind: String(row.kind), state: String(row.state),
     },

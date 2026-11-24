@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import argon2 from "argon2";
 
-import { isClientTokenProfile, type ClientTokenProfile } from "@agency_hub_core/contracts";
+import { isClientTokenProfile, OWNER_AGENT_CAPABILITY, type ClientTokenProfile } from "@agency_hub_core/contracts";
 
 import {
   assignUserToPage,
@@ -61,7 +61,7 @@ import {
   UnauthorizedError,
   type AuthFailureReason,
 } from "./errors.ts";
-import { findPageSummaryByLabel, listTestPageIds } from "@agency_hub_core/db";
+import { findPageSummaryByLabel, isTestUser, listTestPageIds } from "@agency_hub_core/db";
 import { ownerCanAccessPage, principalSandboxOf, type PrincipalSandbox } from "./sandbox/realm.ts";
 
 export const SESSION_COOKIE_NAME = "agency_hub_core_session";
@@ -185,15 +185,39 @@ export interface AgentAuthPrincipal {
   sandbox?: { test: true };
 }
 
-export type AuthPrincipal = HumanAuthPrincipal | AgentAuthPrincipal;
+/**
+ * The owner's agent door (payouts plan 2026-11-24, §1.8; 0442): an `act:owner` key, acting AS the live owner it names
+ * (`agent_keys.acts_as_user_id`), on the owner's word with a reason on every call. Its own variant, neither a person
+ * nor an agent: it is in no `HUMAN_AUTH_METHODS` and `isAgentPrincipal` refuses it, so every route but its own
+ * (`ownerAgentKey`) refuses it by kind, and it holds no page (`pageScopeFor` and `canAccessPage` give it nothing). Its
+ * route runs the owner's own services with `principalOfLogin(owner)` and names the key beside it
+ * (services/owner-agent-door.ts).
+ */
+export interface OwnerAgentPrincipal {
+  kind: "owner_agent";
+  authMethod: "owner_agent_key";
+  agentKeyId: number;
+  /** Operator-facing key name; safe for logs and audit rows, never secret. */
+  keyName: string;
+  /** The live owner the key acts as: `actsAsUserId`, checked on every request (an active owner of the live realm). */
+  ownerUserId: number;
+  actsAsUserId: number;
+}
 
-/** The authentication methods that existed before the agent plane. */
+export type AuthPrincipal = HumanAuthPrincipal | AgentAuthPrincipal | OwnerAgentPrincipal;
+
+/** The authentication methods that existed before the agent plane. Never the owner's agent door's key. */
 const HUMAN_AUTH_METHODS: ReadonlySet<AuthPrincipal["authMethod"]> = new Set<
   AuthPrincipal["authMethod"]
 >(["session", "device_token"]);
 
 export function isAgentPrincipal(principal: AuthPrincipal): principal is AgentAuthPrincipal {
   return principal.kind === "agent";
+}
+
+/** The owner's agent door's principal (an `act:owner` key). Never an agent's, never a person's. */
+export function isOwnerAgentPrincipal(principal: AuthPrincipal): principal is OwnerAgentPrincipal {
+  return principal.kind === "owner_agent";
 }
 
 /**
@@ -204,7 +228,7 @@ export function isAgentPrincipal(principal: AuthPrincipal): principal is AgentAu
  * its grant decides.
  */
 export function isNarrowPrincipal(principal: AuthPrincipal): boolean {
-  return principal.kind !== "agent" && (principal.narrowDeviceTokenId !== undefined || principal.clientProfile !== undefined);
+  return principal.kind === undefined && (principal.narrowDeviceTokenId !== undefined || principal.clientProfile !== undefined);
 }
 
 /**
@@ -226,6 +250,15 @@ export function requireAgentPrincipal(
 ): asserts principal is AgentAuthPrincipal {
   if (!isAgentPrincipal(principal)) {
     throw new ForbiddenError("This route requires an agent key");
+  }
+}
+
+/** The owner's agent door admits its `act:owner` key and nothing else. */
+export function requireOwnerAgentPrincipal(
+  principal: AuthPrincipal,
+): asserts principal is OwnerAgentPrincipal {
+  if (!isOwnerAgentPrincipal(principal)) {
+    throw new ForbiddenError("This route requires the owner's agent key");
   }
 }
 
@@ -1270,6 +1303,10 @@ export function canAccessPage(principal: AuthPrincipal, pageId: number) {
   if (isAgentPrincipal(principal)) {
     return principal.pageIds.includes(pageId);
   }
+  // The owner's agent door reads no page itself: its operations run as the owner's principal (owner-agent-door.ts).
+  if (isOwnerAgentPrincipal(principal)) {
+    return false;
+  }
 
   if (principal.user.role === "owner") {
     // The wall of the test realm (sandbox/realm.ts): a live owner never opens a test page, a test owner only those.
@@ -1458,7 +1495,7 @@ export const AGENT_KEY_TOKEN_PREFIX = "agency_hub_agent_";
  * digest and a dead key are the same non-answer; nothing about the row is
  * revealed either way.
  */
-export async function authenticateAgentKey(app: AppContext, agentKeyToken: string) {
+export async function authenticateAgentKey(app: AppContext, agentKeyToken: string): Promise<AgentAuthPrincipal | OwnerAgentPrincipal | null> {
   const record = await findAgentKeyByDigest(app.db, sha256Hex(agentKeyToken));
   if (!record) {
     return null;
@@ -1472,6 +1509,11 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
     return null;
   }
 
+  // The owner's agent door (0442): never an agent principal, whatever else the row says.
+  if (record.capabilities.includes(OWNER_AGENT_CAPABILITY)) {
+    return ownerAgentPrincipalOf(app, record);
+  }
+
   const testPages = record.pageIds.length === 0 ? [] : await listTestPageIds(app.db);
   const test = testPages.length > 0 && record.pageIds.every((pageId) => testPages.includes(pageId));
   return {
@@ -1483,6 +1525,35 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
     pageIds: record.pageIds,
     ...(test ? { sandbox: { test: true as const } } : {}),
   } satisfies AgentAuthPrincipal;
+}
+
+/**
+ * An `act:owner` key as its principal: only while the login it acts as is an active owner of the LIVE realm — not
+ * disabled, not deleted, not the test team's owner (0414). Anything else is no principal at all (401): the key is dead
+ * while its owner is. Read on every request, nothing cached.
+ */
+async function ownerAgentPrincipalOf(
+  app: AppContext,
+  record: { id: number; name: string; capabilities: readonly string[]; pageIds: readonly number[]; actsAsUserId: number | null },
+): Promise<OwnerAgentPrincipal | null> {
+  if (record.actsAsUserId === null || record.capabilities.length !== 1 || record.pageIds.length !== 0) {
+    return null;
+  }
+  const owner = await findUserById(app.db, record.actsAsUserId);
+  if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+    return null;
+  }
+  if (await isTestUser(app.db, owner.id)) {
+    return null;
+  }
+  return {
+    kind: "owner_agent",
+    authMethod: "owner_agent_key",
+    agentKeyId: record.id,
+    keyName: record.name,
+    ownerUserId: owner.id,
+    actsAsUserId: owner.id,
+  };
 }
 
 export interface BearerAuthResult {

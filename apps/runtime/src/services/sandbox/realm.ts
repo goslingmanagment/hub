@@ -74,7 +74,7 @@ export async function principalSandboxOf(
 
 /** Whether a principal is a test person's login. */
 export function isTestPrincipal(principal: AuthPrincipal): principal is HumanAuthPrincipal & { sandbox: PrincipalSandbox } {
-  return principal.kind !== "agent" && principal.sandbox?.test === true;
+  return principal.kind === undefined && principal.sandbox?.test === true;
 }
 
 /** Whether an agent key is the test realm's (granted test pages only: the test team's checker). */

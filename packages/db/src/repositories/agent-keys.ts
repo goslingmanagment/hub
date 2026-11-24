@@ -62,6 +62,8 @@ const CONSTRAINT_MESSAGES: Readonly<Record<string, string>> = {
   agent_keys_capabilities_check:
     "capability outside the closed matrix (see AGENT_CAPABILITIES in packages/contracts)",
   agent_keys_max_lifetime_check: "expires_at is beyond the 365-day ceiling from created_at",
+  agent_keys_acts_as_check: "an act:owner key names the owner it acts as, and no other key names one",
+  agent_keys_act_owner_alone_check: "an act:owner key holds no other capability and no page",
   agent_keys_expires_at_check: "expires_at must be after created_at",
 };
 
@@ -133,6 +135,8 @@ export interface InsertAgentKeyInput {
   createdBy: number | null;
   /** Issuance instant; defaults to the database `now()`. Tests pin it. */
   createdAt?: Date;
+  /** The owner's login an `act:owner` key acts as (0442); absent for every other key. */
+  actsAsUserId?: number;
 }
 
 /**
@@ -170,6 +174,7 @@ export async function insertAgentKey(
         expiresAt: input.expiresAt,
         createdBy: input.createdBy,
         ...(input.createdAt ? { createdAt: input.createdAt } : {}),
+        ...(input.actsAsUserId === undefined ? {} : { actsAsUserId: input.actsAsUserId }),
       })
       .returning();
 

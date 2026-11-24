@@ -90,6 +90,7 @@ import { registerShiftHandinRoutes } from "../modules/shift-handins/index.ts";
 import { registerSaleClaimRoutes } from "../modules/sale-claims/index.ts";
 import { registerTeamRoutes } from "../modules/teams/index.ts";
 import { registerSaleChainRoutes } from "../modules/sale-chain/index.ts";
+import { registerOwnerAgentRoutes } from "../modules/owner-agent/index.ts";
 import { registerTeamQuestionRoutes } from "../modules/team-questions/index.ts";
 import { registerLearnRoutes } from "../modules/learn/index.ts";
 import { registerErasureRoutes } from "../modules/erasures/index.ts";
@@ -337,6 +338,13 @@ export async function buildApiServer(appContext: AppContext) {
             type: "http",
             scheme: "bearer",
             description: "Agent Read Plane key (prefix agency_hub_agent_)",
+          },
+          // The owner's agent door's act:owner key: the same prefix and header, its own scheme — it reaches its own
+          // route and nothing else, and no other key reaches that route.
+          ownerAgentKeyAuth: {
+            type: "http",
+            scheme: "bearer",
+            description: "The owner's agent door key (act:owner, prefix agency_hub_agent_); x-hub-owner-reason on every call",
           },
         },
       },
@@ -823,6 +831,8 @@ export async function buildApiServer(appContext: AppContext) {
   registerSaleClaimRoutes(server, moduleContext);
   registerTeamRoutes(server, moduleContext);
   registerSaleChainRoutes(server, moduleContext);
+  // --- The owner's agent door (act:owner keys only) --- (module: apps/runtime/src/modules/owner-agent)
+  registerOwnerAgentRoutes(server, moduleContext);
   registerTeamQuestionRoutes(server, moduleContext);
   registerLearnRoutes(server, moduleContext);
   registerErasureRoutes(server, moduleContext);

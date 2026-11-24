@@ -134,6 +134,10 @@ export const ROUTE_OBJECTS: Readonly<Record<string, Readonly<Record<string, Fiel
   adminConfigUpdate: { key: "none", patches: "none" },
   // A batch of fans by their platform ids, read through the batch's own page or model (the route's pageLabel/modelSlug).
   spenderBatch: { fans: "none" },
+  // The owner's agent door (owner-agent-door.ts): its operation's arguments name a sale question (a row of sale_claims)
+  // and the rest by their own names; the key is live, so an object of the test realm is missing. A person's `code` is
+  // the services' own to answer (a test person is their 404): a hidden code would fail the code's own pattern (a 400).
+  ownerAgentCall: { args: "nested", questionId: "claim" },
 };
 
 /** Which object a route's field names; undefined — the field is not classified. */

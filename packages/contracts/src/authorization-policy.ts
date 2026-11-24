@@ -23,6 +23,7 @@ const KIND_DESCRIPTIONS: Record<RouteAuthPolicy["kind"], string> = {
   "apiKey": "device-token bearer (historical kind name: API keys are retired)",
   "device-token": "device-token bearer only",
   "agentKey": "Agent Read Plane key only; no human principal is admitted",
+  "ownerAgentKey": "the owner's agent door's act:owner key only; it is admitted by no other kind",
   "any": "any authenticated principal except an agent key",
 };
 
