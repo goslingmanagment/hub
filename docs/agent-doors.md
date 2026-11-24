@@ -285,7 +285,7 @@ What the agent ran in the ledger, and what it runs now:
 | `ledger question add --page P … --asked-of owner\|chatters --who W --question Q --note N` | `hub sale ask --sale <id> (or --page P --fan R …) --of owner\|chatters --who W [--person A --person B] --question Q --note N --asked-at D --sender S --message M` |
 | `ledger question answer Q --answer …` | `hub sale answer Q --answer … --sender S --message M` |
 | `ledger question drop Q --note …` | `hub sale close Q --note … --sender S --message M` |
-| `ledger question list --open --md` | `hub sale questions --open --md \| jq -r .data.markdown` |
+| `ledger question list --open --md` | `hub sale questions --open [--person <code\|id>] [--from YYYY-MM-DD --to YYYY-MM-DD] --md \| jq -r .data.markdown` |
 
 What a decision does:
 
@@ -338,6 +338,21 @@ key's grant (one that names no page included), 409 `decision_exists`, `not_activ
 `claim_closed` (a claim of the sale closed while the decision was being written: read the sale again). A question is
 answered or closed once: a second `hub sale answer` or `hub sale close`, or one after a decision answered it, is 409
 `question_closed` and changes nothing.
+
+`hub sale questions --open --person <code|id> [--from YYYY-MM-DD --to YYYY-MM-DD] [--md]` (`GET /api/v1/agent/sale-questions?open=true&person=…`)
+delegates to Hub's one canonical selector (`services/payout-sale-blockers.ts`, `payoutSaleBlockers`) — the exact same
+selector Workboard's payout panel (`PayoutBrief`, «Открытые вопросы по его продажам») reads:
+- Resolves `<code|id>` (registry code, person id, login id or username) in the key's realm across ALL of the person's
+  logins (active and disabled/deleted) and ALL of their working pages; a person outside the key's realm is 404.
+- Returns both open sale questions (`question`, `imported`) and open shift-report disputes (`claim`, `double`) where the
+  person is a party (`claimant`, `side`, `share_with`, or sale home holder), is named in `who` or the question text, or
+  where an unattributed open question sits on one of their working pages; another person's question is excluded.
+- Realm, page-grant and person-relevance filtering run BEFORE any row limit, so unrelated rows never crowd out a
+  person's open blockers.
+- Unlinked open questions without a page (`page_id IS NULL`) are surfaced to the owner in Workboard's payout panel
+  (`match: "unlinked"`), never to an agent key; when the key's grant misses any working page of the person, or relevant
+  null-page questions exist, or the row cap triggers, the answer carries `coverage: { state: "partial", reasons: […] }`
+  (and `--md` appends a partial-coverage warning line) so a partial read never reads as "no blockers".
 
 Carried over from the ledger (`sale-claims:import`, on the server): run again with fresh files it writes nothing
 twice and completes what an earlier run left out — a decision the ledger marked taken into a post (`applied`: the

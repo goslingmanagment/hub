@@ -10,7 +10,7 @@
  */
 import { z } from "zod";
 
-import { errorResponseSchema, intId, isoTimestamp, mills } from "./primitives.ts";
+import { businessDate, errorResponseSchema, intId, isoTimestamp, mills } from "./primitives.ts";
 
 /** The ledger's words of a decision's kind: whole to one, shares, a pot, money outside the platform, nobody's. */
 export const SALE_DECISION_KINDS = ["owner", "split", "pot", "off_platform", "exclude"] as const;
@@ -147,6 +147,16 @@ export const agentSaleQuestionCloseBodySchema = z.object({ questionId: intId, no
 export const agentSaleQuestionsQuerySchema = z.object({
   open: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   format: z.enum(["json", "md"]).default("json"),
+  /**
+   * Filter to questions and shift-report disputes relevant to one person (by registry code, person id, login id, or
+   * username), via the same canonical selector (`payoutSaleBlockers`) Workboard's payout panel reads: all logins and
+   * working pages of the person, filtered by key grant and relevance before any row limit.
+   */
+  person: z.string().trim().min(1).max(63).optional(),
+  /** Optional Moscow day lower bound (YYYY-MM-DD), inclusive. */
+  from: businessDate.optional(),
+  /** Optional Moscow day upper bound (YYYY-MM-DD), inclusive. */
+  to: businessDate.optional(),
 });
 
 export const agentSaleQuestionSchema = z.object({
@@ -166,11 +176,23 @@ export const agentSaleQuestionSchema = z.object({
   answer: z.string().nullable(),
   /** carried over from the ledger (its question number) or asked here. */
   ledgerQuestionId: intId.nullable(),
+  /** Source row kind in `sale_claims`: `question`/`imported` (sale question) or `claim`/`double` (shift-report dispute). */
+  kind: z.enum(["claim", "double", "imported", "question"]).optional(),
+  /** How this row matched `person` when filtered (`party` | `named` | `page` | `unlinked`); absent when unfiltered. */
+  match: z.enum(["party", "named", "page", "unlinked"]).optional(),
 });
 
 export const agentSaleQuestionsResponseSchema = z.object({
   questions: z.array(agentSaleQuestionSchema),
   markdown: z.string().nullable(),
+  /**
+   * Present when filtered by `person`: `complete` when every working page of the person is in the key's grant and no
+   * unlinked or truncated rows were omitted; `partial` with `reasons` otherwise.
+   */
+  coverage: z.object({
+    state: z.enum(["complete", "partial"]),
+    reasons: z.array(z.enum(["pages_outside_key", "unlinked_questions_omitted", "truncated"])),
+  }).optional(),
   serverNow: isoTimestamp,
 });
 
@@ -322,8 +344,12 @@ export const saleDecisionRouteSchemas = {
   },
   agentSaleQuestions: {
     auth: { kind: "agentKey" }, tags: ["agent"],
-    summary: "The questions about sales on the key's pages, as a list or as the memory file has them (needs write:shift_reports or read:team)",
-    description: "Database only. The ones carried over from the ledger and the ones asked here.",
+    summary: "The questions (and, with `person`, shift-report disputes) about sales on the key's pages, as JSON or markdown (needs write:shift_reports or read:team)",
+    description: "Database only. Without `person`: the sale questions carried over from the ledger and asked here on the key's pages. "
+      + "With `person` (registry code, person id, login id, or username): delegates to Hub's canonical selector `payoutSaleBlockers` "
+      + "(the same selector Workboard's payout panel uses) across all logins and working pages, with access and person filtering "
+      + "applied before any row limit, and returns `coverage` when the key's grant does not cover every working page or unlinked "
+      + "null-page questions were omitted.",
     querystring: agentSaleQuestionsQuerySchema,
     response: { 200: agentSaleQuestionsResponseSchema, ...agentErrors },
   },

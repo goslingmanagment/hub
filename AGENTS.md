@@ -113,6 +113,10 @@ the owner's machine (outside this repository); a change that moves a home or add
   Whoever writes whose a sale is (a decision made, replaced, cancelled or tied; an agreement) or a report's version
   from its draft takes `lockSaleSettlements` first in the transaction — then decisions and claims, then reports —
   reads there what it writes from, and never holds it across a call to the ledger.
+  Open sale questions and disputes relevant to one person are selected by ONE selector, `services/payout-sale-blockers.ts`
+  (`payoutSaleBlockers`), across all of their logins and working pages (access and relevance checked before any limit;
+  unlinked questions surfaced to the owner): read by both Workboard's payout panel (`PayoutBrief`, visible even at zero
+  balance alongside ledger's flags) and `hub sale questions --person`.
 - **A sale's chain of money** (whose, shift, report, accrual, payout): one read, `services/sale-chain.ts`
   (`saleChain`, agents `agentSaleChain` / `hub sale-chain`), it computes nothing anew and says «неизвестно» when a
   source does not answer. Shown only by `SaleChainTrigger` (`packages/ui/src/components/SaleChain.tsx`): the sale's amount.

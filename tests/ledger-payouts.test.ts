@@ -170,7 +170,14 @@ describe("readLedgerPayouts", () => {
 });
 
 describe("readLedgerPayoutPrepare", () => {
-  it("passes one person's brief on in mills, the message untouched", async () => {
+  const emptyBlockers = async () => ({
+    person: null,
+    items: [],
+    coverage: { state: "complete" as const, reasons: [] },
+    serverNow: "2026-11-09T10:00:01.000Z",
+  });
+
+  it("passes one person's brief on in mills, the message untouched, with Hub's open sale questions", async () => {
     const seen: { url?: string; auth?: string | undefined } = {};
     const brief = {
       ok: true, slug: "alex", name: "Алекс", status: "active", generatedAt: "2026-11-09T10:00:00+03:00", accrualFrom: "2026-09-01",
@@ -181,16 +188,56 @@ describe("readLedgerPayoutPrepare", () => {
       message: "закинул зп, {перевод} usdt\nитого 45.67 → {перевод}", placeholder: "{перевод}",
       checks: { stale: false, lastSheetsCollectAt: null, lastRebuildAt: null },
     };
-    const result = await readLedgerPayoutPrepare(app(), { person: "alex" }, { fetchImpl: fetchReturning(200, brief, seen) });
+    const result = await readLedgerPayoutPrepare(app(), { person: "alex" }, { fetchImpl: fetchReturning(200, brief, seen), readSaleBlockers: emptyBlockers });
     expect(seen.url).toBe("https://ledger.test/v1/payouts/prepare?person=alex");
     expect(result).toMatchObject({
       amountMills: 45_670, nothing: null, lines: [{ kind: "week", model: "Mia", shownMills: 45_670 }], blockers: 1,
+      saleQuestions: [], saleQuestionsCoverage: { state: "complete", reasons: [] },
       suggestion: { transferMills: 46_000, aboveTableMills: 330 }, message: brief.message, placeholder: "{перевод}",
     });
   });
 
+  it("keeps ledger flags and Hub open sale questions even when balance is zero (nothing)", async () => {
+    const brief = {
+      ok: true, slug: "alex", name: "Алекс", status: "active", generatedAt: "2026-11-09T10:00:00+03:00", accrualFrom: "2026-09-01",
+      amountMicros: 0, nothing: "долга нет: платить нечего", toPayMicros: 0, period: null,
+      lines: [], blocks: [],
+      flags: [{ kind: "hub_decision", blocker: true, text: "решение Hub №7: ожидаемая доля не попала в отчёт" }],
+      blockers: 1, suggestion: null, message: undefined, placeholder: undefined,
+    };
+    const result = await readLedgerPayoutPrepare(app(), { person: "alex" }, {
+      fetchImpl: fetchReturning(200, brief),
+      readSaleBlockers: async () => ({
+        person: null,
+        items: [{
+          claim: {} as never,
+          sale: null,
+          id: 91,
+          kind: "question" as const,
+          transactionId: 77_001,
+          pageLabel: "mia-1",
+          netMills: 32_000,
+          occurredAt: "2026-11-08T14:00:00.000Z",
+          askedAt: "2026-11-09T08:00:00.000Z",
+          askedOf: "owner" as const,
+          who: "Алекс и Боря",
+          text: "Чья продажа?",
+          match: "party" as const,
+          link: "/workboard/waiting?dispute=77001#questions",
+          sourceLink: "https://t.me/c/1/91",
+        }],
+        coverage: { state: "complete", reasons: [] },
+        serverNow: "2026-11-09T10:00:01.000Z",
+      }),
+    });
+    expect(result.amountMills).toBe(0);
+    expect(result.nothing).toBe("долга нет: платить нечего");
+    expect(result.flags).toHaveLength(1);
+    expect(result.saleQuestions).toEqual([expect.objectContaining({ id: 91, pageLabel: "mia-1", netMills: 32_000, match: "party" })]);
+  });
+
   it("is a 404 for a person without a tab and a 503 on a changed answer", async () => {
-    await expect(readLedgerPayoutPrepare(app(), { person: "nobody" }, { fetchImpl: fetchReturning(404, { error: "no" }) })).rejects.toMatchObject({ statusCode: 404 });
-    await expect(readLedgerPayoutPrepare(app(), { person: "alex" }, { fetchImpl: fetchReturning(200, { slug: "alex" }) })).rejects.toMatchObject({ statusCode: 503 });
+    await expect(readLedgerPayoutPrepare(app(), { person: "nobody" }, { fetchImpl: fetchReturning(404, { error: "no" }), readSaleBlockers: emptyBlockers })).rejects.toMatchObject({ statusCode: 404 });
+    await expect(readLedgerPayoutPrepare(app(), { person: "alex" }, { fetchImpl: fetchReturning(200, { slug: "alex" }), readSaleBlockers: emptyBlockers })).rejects.toMatchObject({ statusCode: 503 });
   });
 });

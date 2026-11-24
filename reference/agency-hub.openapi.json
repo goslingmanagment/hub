@@ -189457,6 +189457,24 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "claim",
+                            "double",
+                            "imported",
+                            "question"
+                          ]
+                        },
+                        "match": {
+                          "type": "string",
+                          "enum": [
+                            "party",
+                            "named",
+                            "page",
+                            "unlinked"
+                          ]
                         }
                       },
                       "required": [
@@ -189703,11 +189721,11 @@
         }
       },
       "get": {
-        "summary": "The questions about sales on the key's pages, as a list or as the memory file has them (needs write:shift_reports or read:team)",
+        "summary": "The questions (and, with `person`, shift-report disputes) about sales on the key's pages, as JSON or markdown (needs write:shift_reports or read:team)",
         "tags": [
           "agent"
         ],
-        "description": "Database only. The ones carried over from the ledger and the ones asked here.",
+        "description": "Database only. Without `person`: the sale questions carried over from the ledger and asked here on the key's pages. With `person` (registry code, person id, login id, or username): delegates to Hub's canonical selector `payoutSaleBlockers` (the same selector Workboard's payout panel uses) across all logins and working pages, with access and person filtering applied before any row limit, and returns `coverage` when the key's grant does not cover every working page or unlinked null-page questions were omitted.",
         "parameters": [
           {
             "schema": {
@@ -189733,6 +189751,34 @@
             },
             "in": "query",
             "name": "format",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 63
+            },
+            "in": "query",
+            "name": "person",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "to",
             "required": false
           }
         ],
@@ -189881,6 +189927,24 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "claim",
+                              "double",
+                              "imported",
+                              "question"
+                            ]
+                          },
+                          "match": {
+                            "type": "string",
+                            "enum": [
+                              "party",
+                              "named",
+                              "page",
+                              "unlinked"
+                            ]
                           }
                         },
                         "required": [
@@ -189907,6 +189971,34 @@
                         "string",
                         "null"
                       ]
+                    },
+                    "coverage": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "complete",
+                            "partial"
+                          ]
+                        },
+                        "reasons": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "pages_outside_key",
+                              "unlinked_questions_omitted",
+                              "truncated"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "reasons"
+                      ],
+                      "additionalProperties": false
                     },
                     "serverNow": {
                       "type": "string"
@@ -190322,6 +190414,24 @@
                             {
                               "type": "null"
                             }
+                          ]
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "claim",
+                            "double",
+                            "imported",
+                            "question"
+                          ]
+                        },
+                        "match": {
+                          "type": "string",
+                          "enum": [
+                            "party",
+                            "named",
+                            "page",
+                            "unlinked"
                           ]
                         }
                       },
@@ -190756,6 +190866,24 @@
                             {
                               "type": "null"
                             }
+                          ]
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "claim",
+                            "double",
+                            "imported",
+                            "question"
+                          ]
+                        },
+                        "match": {
+                          "type": "string",
+                          "enum": [
+                            "party",
+                            "named",
+                            "page",
+                            "unlinked"
                           ]
                         }
                       },
@@ -402814,11 +402942,11 @@
     },
     "/api/v1/team/ledger-payouts/prepare": {
       "get": {
-        "summary": "One person's payout brief from the agency ledger: the transfer, the lines, the blockers, the message",
+        "summary": "One person's payout brief from the agency ledger plus Hub's open sale questions/disputes for them",
         "tags": [
           "admin"
         ],
-        "description": "Read from the ledger's GET /v1/payouts/prepare with Hub's payouts key. Read-only: nothing is recorded or sent. 404 — the ledger has no payout tab of the person; 503 — the ledger is not connected or did not answer.",
+        "description": "Read from the ledger's GET /v1/payouts/prepare with Hub's payouts key, joined with Hub's canonical selector `payoutSaleBlockers` (open sale questions and shift-report disputes across all logins and working pages, plus unlinked open questions for the owner — returned even when the person's debt is zero). Read-only: nothing is recorded or sent. 404 — the ledger has no payout tab of the person; 503 — the ledger is not connected or did not answer.",
         "parameters": [
           {
             "schema": {
@@ -402984,6 +403112,151 @@
                       "minimum": 0,
                       "maximum": 9007199254740991
                     },
+                    "saleQuestions": {
+                      "default": [],
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "claim",
+                              "double",
+                              "imported",
+                              "question"
+                            ]
+                          },
+                          "transactionId": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "pageLabel": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "netMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "occurredAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "askedAt": {
+                            "type": "string"
+                          },
+                          "askedOf": {
+                            "type": "string",
+                            "enum": [
+                              "owner",
+                              "chatters"
+                            ]
+                          },
+                          "who": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "match": {
+                            "type": "string",
+                            "enum": [
+                              "party",
+                              "named",
+                              "page",
+                              "unlinked"
+                            ]
+                          },
+                          "link": {
+                            "type": "string"
+                          },
+                          "sourceLink": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "kind",
+                          "transactionId",
+                          "pageLabel",
+                          "netMills",
+                          "occurredAt",
+                          "askedAt",
+                          "askedOf",
+                          "who",
+                          "text",
+                          "match",
+                          "link",
+                          "sourceLink"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "saleQuestionsCoverage": {
+                      "default": {
+                        "state": "complete",
+                        "reasons": []
+                      },
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "complete",
+                            "partial"
+                          ]
+                        },
+                        "reasons": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "person_not_in_hub",
+                              "pages_outside_key",
+                              "unlinked_questions_omitted",
+                              "truncated"
+                            ]
+                          }
+                        }
+                      },
+                      "required": [
+                        "state",
+                        "reasons"
+                      ],
+                      "additionalProperties": false
+                    },
                     "suggestion": {
                       "anyOf": [
                         {
@@ -403039,6 +403312,8 @@
                     "lines",
                     "flags",
                     "blockers",
+                    "saleQuestions",
+                    "saleQuestionsCoverage",
                     "suggestion",
                     "message",
                     "placeholder"

@@ -245,6 +245,53 @@
     line-height: var(--ui-lh-14);
   }
 
+  .payouts-questions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .payouts-question {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .payouts-question__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 4px 12px;
+  }
+
+  .payouts-question__meta {
+    color: var(--ui-text-2);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .payouts-question__text {
+    color: var(--ui-text);
+    font-size: var(--ui-fs-14);
+    line-height: var(--ui-lh-14);
+    overflow-wrap: anywhere;
+  }
+
+  .payouts-question__link {
+    color: var(--ui-text);
+    font-size: var(--ui-fs-13);
+    line-height: var(--ui-lh-13);
+    font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    white-space: nowrap;
+  }
+
   /* The chatter's message as it will be sent: their lower case, their line breaks. */
   .payouts-message {
     margin: 0;

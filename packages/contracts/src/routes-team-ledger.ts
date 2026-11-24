@@ -171,6 +171,49 @@ export const teamLedgerPayoutPrepareQuerySchema = z.object({
   person: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
 });
 
+/**
+ * One open sale question or dispute relevant to a person, from Hub's canonical selector (`payoutSaleBlockers`): shown
+ * in Workboard's payout panel («Открытые вопросы по его продажам») even when the person's balance is zero.
+ */
+export const teamLedgerPayoutSaleBlockerSchema = z.object({
+  /** `sale_claims.id`. */
+  id: intId,
+  /** claim | double — shift report dispute; question | imported — «чья продажа» question. */
+  kind: z.enum(["claim", "double", "imported", "question"]),
+  /** Hub's sale id; null — not tied to a sale yet. */
+  transactionId: intId.nullable(),
+  pageLabel: z.string().nullable(),
+  /** Sale net in mills; null — not known. */
+  netMills: mills.nullable(),
+  /** Sale moment; null — not known. */
+  occurredAt: isoTimestamp.nullable(),
+  /** When the claim or question was opened. */
+  askedAt: isoTimestamp,
+  /** Who decides: owner (waiting for owner/lead) or chatters (waiting for chatter answer). */
+  askedOf: z.enum(["owner", "chatters"]),
+  /** Parties or `who_text` in words; null — unattributed. */
+  who: z.string().nullable(),
+  /** One-line Russian text of the question or dispute. */
+  text: z.string(),
+  /**
+   * Why this row is shown for the person:
+   * - `party`: claimant, side, share target or sale home holder under any of the person's logins;
+   * - `named`: named in `who` or the question text;
+   * - `page`: unattributed open question on one of the person's working pages;
+   * - `unlinked`: unattributed open question with no page, surfaced to the owner for review.
+   */
+  match: z.enum(["party", "named", "page", "unlinked"]),
+  /** Workboard link to open and decide the dispute/question (`/workboard/waiting?dispute=…` or `?claim=…`). */
+  link: z.string(),
+  /** Telegram message link where the question was asked, if any. */
+  sourceLink: z.string().nullable(),
+});
+
+export const teamLedgerPayoutSaleBlockersCoverageSchema = z.object({
+  state: z.enum(["complete", "partial"]),
+  reasons: z.array(z.enum(["person_not_in_hub", "pages_outside_key", "unlinked_questions_omitted", "truncated"])),
+});
+
 /** One person's payout brief (ledger L5 `payout prepare`): read-only, nothing is recorded or sent. */
 export const teamLedgerPayoutPrepareResponseSchema = z.object({
   slug: z.string(),
@@ -196,6 +239,10 @@ export const teamLedgerPayoutPrepareResponseSchema = z.object({
   /** What the owner should know before paying; a blocker stops the payout until it is understood. */
   flags: z.array(z.object({ kind: z.string(), blocker: z.boolean(), text: z.string() })),
   blockers: z.number().int().nonnegative(),
+  /** Open sale questions and disputes relevant to the person from Hub (`payoutSaleBlockers`), shown even at zero balance. */
+  saleQuestions: z.array(teamLedgerPayoutSaleBlockerSchema).default([]),
+  /** Whether Hub had full coverage of the person when selecting `saleQuestions`. */
+  saleQuestionsCoverage: teamLedgerPayoutSaleBlockersCoverageSchema.default({ state: "complete", reasons: [] }),
   /** The transfer the owner usually makes (rounded to a dollar), what goes above the table, and a note. */
   suggestion: z.object({ transferMills: mills, aboveTableMills: mills, note: z.string() }).nullable(),
   /** The chatter's message; `placeholder` stands where the transferred amount goes after the transfer. */
@@ -411,6 +458,8 @@ export const teamLedgerMonthResponseSchema = z.object({
 
 export type TeamLedgerPayoutsResponse = z.infer<typeof teamLedgerPayoutsResponseSchema>;
 export type TeamLedgerPayoutPrepareResponse = z.infer<typeof teamLedgerPayoutPrepareResponseSchema>;
+export type TeamLedgerPayoutSaleBlocker = z.infer<typeof teamLedgerPayoutSaleBlockerSchema>;
+export type TeamLedgerPayoutSaleBlockersCoverage = z.infer<typeof teamLedgerPayoutSaleBlockersCoverageSchema>;
 export type TeamLedgerPayoutPerson = z.infer<typeof teamLedgerPayoutPersonSchema>;
 export type TeamLedgerPayoutPersonResponse = z.infer<typeof teamLedgerPayoutPersonResponseSchema>;
 export type LedgerDayState = z.infer<typeof ledgerDayStateEnum>;
@@ -460,9 +509,11 @@ export const teamLedgerRouteSchemas = {
   teamLedgerPayoutPrepare: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
-    summary: "One person's payout brief from the agency ledger: the transfer, the lines, the blockers, the message",
-    description: "Read from the ledger's GET /v1/payouts/prepare with Hub's payouts key. Read-only: nothing is recorded "
-      + "or sent. 404 — the ledger has no payout tab of the person; 503 — the ledger is not connected or did not answer.",
+    summary: "One person's payout brief from the agency ledger plus Hub's open sale questions/disputes for them",
+    description: "Read from the ledger's GET /v1/payouts/prepare with Hub's payouts key, joined with Hub's canonical selector "
+      + "`payoutSaleBlockers` (open sale questions and shift-report disputes across all logins and working pages, plus "
+      + "unlinked open questions for the owner — returned even when the person's debt is zero). Read-only: nothing is "
+      + "recorded or sent. 404 — the ledger has no payout tab of the person; 503 — the ledger is not connected or did not answer.",
     querystring: teamLedgerPayoutPrepareQuerySchema,
     response: {
       200: teamLedgerPayoutPrepareResponseSchema,

@@ -262,24 +262,101 @@ function teamLedgerPayoutPrepare(request: DemoRequest): KernelOperationResponse<
   const today = mskDay(now);
   const person = personOf(card, addDays(today, -6), today, today, addDays(today, -HISTORY_DAYS), request.now);
   const generatedAt = new Date(now - 4_000).toISOString();
+  const twoDaysAgoIso = new Date(now - 2 * DAY).toISOString();
+  const demoSaleQuestions: KernelOperationResponse<"teamLedgerPayoutPrepare">["saleQuestions"] = slug === "kate.v"
+    ? [{
+      id: 501,
+      kind: "claim",
+      transactionId: 410_201,
+      pageLabel: "mia-1",
+      netMills: 52_000,
+      occurredAt: twoDaysAgoIso,
+      askedAt: twoDaysAgoIso,
+      askedOf: "owner",
+      who: "Катя и Алекс",
+      text: "Катя заявляет «моё»: договорилась о кастоме накануне — «Не согласен»: писал этому фану на своей смене",
+      match: "party",
+      link: "/workboard/waiting?dispute=410201#questions",
+      sourceLink: null,
+    }]
+    : slug === "lena.r"
+      ? [{
+        id: 512,
+        kind: "question",
+        transactionId: null,
+        pageLabel: "mia-2",
+        netMills: 40_000,
+        occurredAt: twoDaysAgoIso,
+        askedAt: twoDaysAgoIso,
+        askedOf: "owner",
+        who: "Лена и Алекс",
+        text: "Чья продажа после закрытия смены?",
+        match: "party",
+        link: "/workboard/waiting?claim=512#questions",
+        sourceLink: null,
+      }]
+      : slug === "vika"
+        ? [{
+          id: 520,
+          kind: "imported",
+          transactionId: null,
+          pageLabel: null,
+          netMills: 24_000,
+          occurredAt: null,
+          askedAt: twoDaysAgoIso,
+          askedOf: "owner",
+          who: null,
+          text: "Спорная чаевая без привязанной страницы — проверить владельцу",
+          match: "unlinked",
+          link: "/workboard/waiting?claim=520#questions",
+          sourceLink: null,
+        }]
+        : [];
+  const saleQuestionsCoverage: KernelOperationResponse<"teamLedgerPayoutPrepare">["saleQuestionsCoverage"] = slug === "vika"
+    ? { state: "partial", reasons: ["person_not_in_hub"] }
+    : { state: "complete", reasons: [] };
   if (person.balanceMills <= 0) {
-    return { slug, name: card.name, generatedAt, amountMills: person.balanceMills, nothing: person.balanceMills < 0 ? "выплачено вперёд: платить нечего" : "долга нет: платить нечего", toPayMills: person.toPayMills, period: null, lines: [], flags: [], blockers: 0, suggestion: null, message: null, placeholder: null };
+    // Even at zero balance, ledger flags and Hub's open sale questions are kept and shown on the panel.
+    const zeroFlags = slug === "lena.r"
+      ? [{ kind: "hub_decision", blocker: true, text: "решение Hub №14: ожидаемая доля не попала в отчёт" }]
+      : [];
+    return {
+      slug,
+      name: card.name,
+      generatedAt,
+      amountMills: person.balanceMills,
+      nothing: person.balanceMills < 0 ? "выплачено вперёд: платить нечего" : "долга нет: платить нечего",
+      toPayMills: person.toPayMills,
+      period: null,
+      lines: [],
+      flags: zeroFlags,
+      blockers: zeroFlags.filter((flag) => flag.blocker).length,
+      saleQuestions: demoSaleQuestions,
+      saleQuestionsCoverage,
+      suggestion: null,
+      message: null,
+      placeholder: null,
+    };
   }
   const dollars = (mills: number) => (mills / 1000).toFixed(2).replace(/\.00$/, "");
   const days = person.unpaidDays.filter((day) => day.kind === "day");
   const opening = person.unpaidDays.find((day) => day.kind === "opening");
   const bonus = person.unpaidDays.find((day) => day.kind === "other");
   const ddmm = (date: string) => `${date.slice(8)}.${date.slice(5, 7)}`;
+  const daysTotal = days.reduce((sum, day) => sum + day.unpaidMills, 0);
+  // Sample explicit rounding delta line (H3/L4) on a multi-week chatter while keeping lines equal to amountMills.
+  const roundingMills = slug === "den.s" && daysTotal > 10 ? 10 : 0;
   const lines = [
     ...(opening ? [{ kind: "opening", model: null, text: `старый долг: +${dollars(opening.unpaidMills)} — дни до ${ddmm(opening.date)}`, shownMills: opening.unpaidMills, from: opening.date, to: opening.date }] : []),
     ...(days.length > 0 ? [{
       kind: "week",
       model: card.model,
-      text: `${days[0]!.date.slice(8)}–${days[days.length - 1]!.date.slice(8)}.${days[days.length - 1]!.date.slice(5, 7)}: ${days.map((day) => dollars(day.unpaidMills * 4)).join("+")} = ${dollars(days.reduce((sum, day) => sum + day.unpaidMills * 4, 0))} × 25% = ${dollars(days.reduce((sum, day) => sum + day.unpaidMills, 0))}`,
-      shownMills: days.reduce((sum, day) => sum + day.unpaidMills, 0),
+      text: `${days[0]!.date.slice(8)}–${days[days.length - 1]!.date.slice(8)}.${days[days.length - 1]!.date.slice(5, 7)}: ${days.map((day) => dollars(day.unpaidMills * 4)).join("+")} = ${dollars(days.reduce((sum, day) => sum + day.unpaidMills * 4, 0))} × 25% = ${dollars(daysTotal - roundingMills)}`,
+      shownMills: daysTotal - roundingMills,
       from: days[0]!.date,
       to: days[days.length - 1]!.date,
     }] : []),
+    ...(roundingMills !== 0 ? [{ kind: "rounding", model: null, text: "округление недель", shownMills: roundingMills, from: null, to: null }] : []),
     ...(bonus ? [{ kind: "other", model: null, text: `поправка ${ddmm(bonus.date)}: +${dollars(bonus.unpaidMills)} — {за что}`, shownMills: bonus.unpaidMills, from: bonus.date, to: bonus.date }] : []),
   ];
   const flags = [
@@ -303,6 +380,8 @@ function teamLedgerPayoutPrepare(request: DemoRequest): KernelOperationResponse<
     lines,
     flags,
     blockers: flags.filter((flag) => flag.blocker).length,
+    saleQuestions: demoSaleQuestions,
+    saleQuestionsCoverage,
     suggestion: { transferMills: transfer, aboveTableMills: transfer - person.balanceMills, note: transfer === person.balanceMills ? "сумма ровная" : `до доллара вверх на ${dollars(transfer - person.balanceMills)}: в журнал отдельной строкой {сверх таблицы}` },
     message,
     placeholder: "{перевод}",

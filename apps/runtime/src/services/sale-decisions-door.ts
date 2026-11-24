@@ -29,6 +29,7 @@ import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
+import { blockerMoscowDay, payoutSaleBlockers, type PayoutSaleBlockerItem, type SaleBlockerCoverage } from "./payout-sale-blockers.ts";
 import { applySaleDecision, cancelSaleDecisionApplied, runSaleClaims } from "./sale-claims.ts";
 
 /**
@@ -582,13 +583,20 @@ async function questionWiresOf(app: DoorApp, questions: readonly SaleClaimRow[])
   });
 }
 
+const COVERAGE_REASON_WORDS: Record<SaleBlockerCoverage["reasons"][number], string> = {
+  person_not_in_hub: "человека нет в реестре Hub",
+  pages_outside_key: "у ключа нет доступа ко всем рабочим страницам человека",
+  unlinked_questions_omitted: "есть несвязанные открытые вопросы без страницы — их видит владелец в Workboard",
+  truncated: "список обрезан лимитом",
+};
+
 /**
  * The open questions as the agent's memory file has them, by whom they wait for — what `ledger question list --md` gave:
  *   ## Ждёт владельца / ## Решают сами чаттеры
  *   - **<fan>** (<page>). Нетто <net>. <question> Договориться: <who>. Спросили: <when>, <link>. (№<id>)
- * Pure.
+ * When `coverage` is partial, appends an explicit warning so a partial read never masquerades as "no blockers". Pure.
  */
-export function questionsMarkdown(questions: readonly AgentSaleQuestion[]): string {
+export function questionsMarkdown(questions: readonly AgentSaleQuestion[], coverage?: SaleBlockerCoverage): string {
   const sentence = (text: string) => {
     const one = text.split(/\s+/u).join(" ").trim();
     return one === "" || /[.?!…]$/u.test(one) ? one : `${one}.`;
@@ -607,14 +615,104 @@ export function questionsMarkdown(questions: readonly AgentSaleQuestion[]): stri
     });
     if (lines.length > 0) groups.push(`## ${title}\n\n${lines.join("\n")}\n`);
   }
+  if (coverage?.state === "partial" && coverage.reasons.length > 0) {
+    const words = coverage.reasons.map((reason) => COVERAGE_REASON_WORDS[reason]).join("; ");
+    groups.push(`> Покрытие неполное: ${words}.\n`);
+  }
   return groups.join("\n");
 }
 
-/** `agentSaleQuestions`: the questions on the key's pages (carried over and asked here), the oldest first. */
-export async function listSaleQuestionsSaid(app: DoorApp, input: { pageIds: readonly number[]; open: boolean; format: "json" | "md" }, now: Date = new Date()) {
-  const rows = (await listSaleClaims(app.db, { kinds: ["question", "imported"], ...(input.open ? { states: ["owner", "asked"] as const } : {}), limit: 2000 }))
-    .filter((one) => one.pageId !== null && input.pageIds.includes(one.pageId))
-    .reverse();
-  const questions = await questionWiresOf(app, rows);
+function blockerToAgentQuestion(item: PayoutSaleBlockerItem, fans: ReadonlyMap<number, { fanRef: string | null; name: string | null; username: string | null }>): AgentSaleQuestion {
+  const { claim } = item;
+  const ref = claim.ledgerRef ?? {};
+  const fan = claim.transactionId === null ? undefined : fans.get(claim.transactionId) ?? item.sale?.fan;
+  const open = claim.state === "owner" || claim.state === "asked";
+  return {
+    id: item.id,
+    transactionId: item.transactionId,
+    pageLabel: item.pageLabel,
+    fan: fan === undefined
+      ? { fanRef: typeof ref.fanRef === "string" ? ref.fanRef : null, name: null, username: null }
+      : { fanRef: fan.fanRef, name: fan.name, username: fan.username },
+    netMills: item.netMills,
+    askedOf: item.askedOf,
+    who: item.who,
+    question: item.text,
+    askedAt: item.askedAt,
+    sourceLink: item.sourceLink,
+    status: open ? "open" : claim.decisionId !== null ? "decided" : claim.answerText !== null || typeof ref.answer === "string" ? "answered" : "closed",
+    decisionId: claim.decisionId,
+    answer: claim.answerText ?? (typeof ref.answer === "string" ? ref.answer : null),
+    ledgerQuestionId: claim.ledgerQuestionId,
+    kind: item.kind,
+    match: item.match,
+  };
+}
+
+/**
+ * `agentSaleQuestions`: the questions on the key's pages (carried over and asked here), the oldest first.
+ * When `person` is named, delegates to Hub's one canonical selector (`payoutSaleBlockers`), the same selector
+ * Workboard's payout panel uses: all logins and working pages of the person, access and relevance checked before limit.
+ */
+export async function listSaleQuestionsSaid(
+  app: DoorApp,
+  input: {
+    pageIds: readonly number[];
+    realm?: "live" | "test";
+    open: boolean;
+    format: "json" | "md";
+    person?: string | undefined;
+    from?: string | undefined;
+    to?: string | undefined;
+    limit?: number | undefined;
+  },
+  now: Date = new Date(),
+) {
+  const realm = input.realm ?? "live";
+  const limit = input.limit ?? 2000;
+  if (input.person !== undefined) {
+    const selected = await payoutSaleBlockers(app, {
+      person: input.person,
+      from: input.from ?? null,
+      to: input.to ?? null,
+      pageScope: input.pageIds,
+      realm,
+      openOnly: input.open,
+      requirePerson: true,
+      limit,
+    }, now);
+    const saleIds = selected.items.flatMap((item) => (item.transactionId === null ? [] : [item.transactionId]));
+    const fans = await listHandinSaleFans(app.db, saleIds);
+    const questions = selected.items.map((item) => blockerToAgentQuestion(item, fans));
+    const coverage = {
+      state: selected.coverage.state,
+      reasons: selected.coverage.reasons.filter((reason): reason is "pages_outside_key" | "unlinked_questions_omitted" | "truncated" => reason !== "person_not_in_hub"),
+    };
+    return {
+      questions,
+      markdown: input.format === "md" ? questionsMarkdown(questions, coverage) : null,
+      coverage,
+      serverNow: now.toISOString(),
+    };
+  }
+  const hasWindow = input.from !== undefined || input.to !== undefined;
+  // Access (`pageIds`) and realm are enforced in SQL BEFORE any row limit.
+  const rows = (await listSaleClaims(app.db, {
+    kinds: ["question", "imported"],
+    ...(input.open ? { states: ["owner", "asked"] as const } : {}),
+    pageIds: input.pageIds,
+    realm,
+    limit: hasWindow ? null : limit,
+  })).reverse();
+  let filtered = rows;
+  if (hasWindow) {
+    const saleIds = rows.flatMap((one) => (one.transactionId === null ? [] : [one.transactionId]));
+    const sales = new Map((await listHandinSalesByIds(app.db, saleIds)).map((sale) => [sale.transactionId, sale]));
+    filtered = rows.filter((one) => {
+      const day = blockerMoscowDay(one, one.transactionId === null ? undefined : sales.get(one.transactionId));
+      return (input.from === undefined || day >= input.from) && (input.to === undefined || day <= input.to);
+    }).slice(0, limit);
+  }
+  const questions = await questionWiresOf(app, filtered);
   return { questions, markdown: input.format === "md" ? questionsMarkdown(questions) : null, serverNow: now.toISOString() };
 }

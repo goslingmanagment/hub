@@ -6,6 +6,7 @@ import { microUsdFromDbInt, microUsdToMills, millsToNumber } from "@agency_hub_c
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
+import { payoutSaleBlockers } from "./payout-sale-blockers.ts";
 
 /**
  * Workboard «Выплаты» from the agency ledger (ledger release 2, H2): Hub's
@@ -303,16 +304,31 @@ const ledgerPrepareSchema = z.object({
 });
 
 /**
- * One person's payout brief from the ledger (L5 `payout prepare`): what to transfer, the lines, what blocks it, and
- * the chatter's message with the transfer left as a placeholder. Read-only: nothing is recorded or sent.
+ * One person's payout brief from the ledger (L5 `payout prepare`), joined with Hub's canonical selector of open sale
+ * questions and disputes (`payoutSaleBlockers`): what to transfer, the lines, what blocks it (even at zero balance),
+ * and the chatter's message with the transfer left as a placeholder. Read-only: nothing is recorded or sent.
  */
 export async function readLedgerPayoutPrepare(
   app: LedgerApp,
   query: { person: string },
-  options: { fetchImpl?: typeof fetch } = {},
+  options: {
+    fetchImpl?: typeof fetch;
+    now?: Date;
+    readSaleBlockers?: typeof payoutSaleBlockers;
+  } = {},
 ): Promise<TeamLedgerPayoutPrepareResponse> {
   const body = await ledgerGet(app, "/v1/payouts/prepare", { person: query.person }, { ...options, notFound: NO_PAYOUT_TAB });
   const brief = ledgerChecked(app.logger, ledgerPrepareSchema, body, "/v1/payouts/prepare", "ledger payout prepare: unexpected answer");
+  const now = options.now ?? new Date();
+  const readSaleBlockers = options.readSaleBlockers ?? payoutSaleBlockers;
+  const saleBlockers = await readSaleBlockers(app, {
+    person: query.person,
+    fallbackName: brief.name,
+    from: null,
+    to: null,
+    pageScope: "owner",
+    realm: "live",
+  }, now);
   return {
     slug: brief.slug,
     name: brief.name,
@@ -331,6 +347,22 @@ export async function readLedgerPayoutPrepare(
     })),
     flags: brief.flags,
     blockers: brief.blockers,
+    saleQuestions: saleBlockers.items.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      transactionId: item.transactionId,
+      pageLabel: item.pageLabel,
+      netMills: item.netMills,
+      occurredAt: item.occurredAt,
+      askedAt: item.askedAt,
+      askedOf: item.askedOf,
+      who: item.who,
+      text: item.text,
+      match: item.match,
+      link: item.link,
+      sourceLink: item.sourceLink,
+    })),
+    saleQuestionsCoverage: saleBlockers.coverage,
     suggestion: brief.suggestion === null ? null : {
       transferMills: payMillsOf(brief.suggestion.transferMicros),
       aboveTableMills: payMillsOf(brief.suggestion.aboveTableMicros),
