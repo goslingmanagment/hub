@@ -189,9 +189,10 @@ function tilesOf(index: ReviewIndex, when: ShiftWhen): Tile[] {
       value: when.worked ?? "—",
       hint: [
         when.withPauses ? `${when.withPauses}.` : "",
+        shift.pauseMinutes > 0 ? "Паузы на пульсе: серые полосы." : "",
         shift.pausePolicy !== null
-          ? `Перерывы без отправок ≥ ${SHIFT_PAUSE_POLICY.minAwayMinutes} мин (норма: 1 отдых до ${SHIFT_PAUSE_POLICY.restMaxMinutes} мин и до ${SHIFT_PAUSE_POLICY.maxAwayCount} отходов): ${pausePolicySummary(shift.pausePolicy)}.`
-          : shift.pauseMinutes > 0 ? "Паузы на пульсе: серые полосы." : "",
+          ? `Перерывы без кликов и отправок ≥ ${SHIFT_PAUSE_POLICY.minAwayMinutes} мин (норма: 1 отдых до ${SHIFT_PAUSE_POLICY.restMaxMinutes} мин и до ${SHIFT_PAUSE_POLICY.maxAwayCount} отходов): ${pausePolicySummary(shift.pausePolicy)}.`
+          : "",
       ].filter(Boolean).join(" ") || "Время работы без пауз.",
     },
   ];

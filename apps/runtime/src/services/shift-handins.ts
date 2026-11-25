@@ -803,6 +803,9 @@ export async function setShiftReportLine(
       if (matched.home?.home === "nobody") claimableNobody = { pageId: matched.pageId };
     } else if (line.claimed === true ? statement !== "mine" : !statementAllowed(line.group, statement)) {
       throw new BadRequestError("This line does not take that word", { reason: "statement_not_allowed" });
+    } else if (statement === "share" && line.group !== "mine" && line.sale.home.kind === "nobody") {
+      // «Пополам с» a near sale is a question to its holder; a nobody sale has none, so only «моё» (the owner decides).
+      throw new BadRequestError("A sale of nobody takes only «моё»", { reason: "statement_not_allowed" });
     }
     if (statement === "mine" && note === null) throw new BadRequestError("«Это моё» needs one line of why", { reason: "note_required" });
     // Given to the pot by its holder: the owner decides it; nobody takes it meanwhile.

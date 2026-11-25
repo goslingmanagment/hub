@@ -13,7 +13,7 @@ describe("shiftSendBreaksOf", () => {
   it("counts >= 10 full empty minutes without sends as a break, and ignores 9 full empty minutes", () => {
     // 0..10 send, 11..19 empty (9m), 20..30 send, 31..40 empty (10m), 41..60 send.
     const sends = [...range(0, 11), ...range(20, 31), ...range(41, 60)];
-    expect(shiftSendBreaksOf({ sendMinutes: sends, shiftStart: m(0), shiftEnd: m(60) })).toEqual([
+    expect(shiftSendBreaksOf({ activeMinutes: sends, shiftStart: m(0), shiftEnd: m(60) })).toEqual([
       { from: m(31), to: m(41), minutes: 10 },
     ]);
   });
@@ -21,19 +21,37 @@ describe("shiftSendBreaksOf", () => {
   it("does not flag a normal closed shift's 10-minute end-of-shift idle tail (9 full empty minutes after last send)", () => {
     // Last send in minute 49 (49:00..49:59), closed shift ends at 59:00 (lastInput + 10 min) -> 50..58 = 9 empty minutes.
     const sends = range(0, 50);
-    expect(shiftSendBreaksOf({ sendMinutes: sends, shiftStart: m(0), shiftEnd: m(59) })).toEqual([]);
+    expect(shiftSendBreaksOf({ activeMinutes: sends, shiftStart: m(0), shiftEnd: m(59) })).toEqual([]);
     // 10 full empty minutes after last send (50..59, shiftEnd = 60) -> flagged.
-    expect(shiftSendBreaksOf({ sendMinutes: sends, shiftStart: m(0), shiftEnd: m(60) })).toEqual([
+    expect(shiftSendBreaksOf({ activeMinutes: sends, shiftStart: m(0), shiftEnd: m(60) })).toEqual([
       { from: m(50), to: m(60), minutes: 10 },
     ]);
+  });
+
+  it("counts a minute with a click and no send as active (reading the queue is not being away)", () => {
+    // Sends 0..59 and 76..120; minutes 60..75 only clicks.
+    const active = [...range(0, 60), ...range(60, 76), ...range(76, 120)];
+    expect(shiftSendBreaksOf({ activeMinutes: active, shiftStart: m(0), shiftEnd: m(120) })).toEqual([]);
+  });
+
+  it("does not flag a closed shift's tail when the last click came after the last send", () => {
+    // Last send 180, last click 183, the shift ends at lastInput + 10 = 193: tail 184..192 = 9 empty minutes.
+    const active = [...range(0, 181), ...range(181, 184)];
+    expect(shiftSendBreaksOf({ activeMinutes: active, shiftStart: m(0), shiftEnd: m(193) })).toEqual([]);
+  });
+
+  it("does not count lateness (slot start to the first active minute) as a break", () => {
+    // Look-in -60..-50 joined to the shift, slot at 0, work begins at 40.
+    const active = [...range(-60, -50), ...range(40, 120)];
+    expect(shiftSendBreaksOf({ activeMinutes: active, shiftStart: m(-60), shiftEnd: m(120), slotStart: m(0) })).toEqual([]);
   });
 
   it("excludes pre-slot look-in gaps when slotStart is after shiftStart", () => {
     // Look-in at -45..-40, gap -39..-1 (39m before slotStart = 0), then continuous sends 0..120.
     const sends = [...range(-45, -40), ...range(0, 120)];
-    expect(shiftSendBreaksOf({ sendMinutes: sends, shiftStart: m(-45), shiftEnd: m(120), slotStart: m(0) })).toEqual([]);
+    expect(shiftSendBreaksOf({ activeMinutes: sends, shiftStart: m(-45), shiftEnd: m(120), slotStart: m(0) })).toEqual([]);
     // Without slotStart, that 39m gap is seen.
-    expect(shiftSendBreaksOf({ sendMinutes: sends, shiftStart: m(-45), shiftEnd: m(120) })).toEqual([
+    expect(shiftSendBreaksOf({ activeMinutes: sends, shiftStart: m(-45), shiftEnd: m(120) })).toEqual([
       { from: m(-40), to: m(0), minutes: 40 },
     ]);
   });

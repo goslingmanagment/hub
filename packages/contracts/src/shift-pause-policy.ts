@@ -1,9 +1,10 @@
 /**
  * Shift break policy (10 / 60 / 3, owner, 2026-11-25):
  *
- * - A break is at least `minAwayMinutes` (10) consecutive full empty minutes with zero authored sends inside the shift's
- *   working window (`[max(shiftStart, slotStart), shiftEnd)`, so pre-slot look-in gaps joined to the shift do not
- *   masquerade as a break).
+ * - A break is at least `minAwayMinutes` (10) consecutive full empty minutes with neither a click nor an authored send
+ *   (the person physically away) inside the shift's working window (`[max(shiftStart, slotStart), shiftEnd)`, so
+ *   pre-slot look-in gaps joined to the shift do not masquerade as a break). The stretch from the window's start to the
+ *   first active minute is lateness, not a break.
  * - The single longest break >= 10 min is classified as `rest` (norm <= 60 min; minutes past 60 are flagged in
  *   `overrunMinutes` and do NOT count as an extra `away`).
  * - All remaining breaks >= 10 min are classified chronologically: #1..#3 are `away`, #4+ are `away_excess`.
@@ -13,7 +14,7 @@
  */
 
 export const SHIFT_PAUSE_POLICY = {
-  /** Minimum full empty minutes with zero sent messages to count as a break. */
+  /** Minimum full empty minutes with neither a click nor a send to count as a break. */
   minAwayMinutes: 10,
   /** Maximum normal duration of the single main rest break, minutes. */
   restMaxMinutes: 60,
@@ -24,11 +25,11 @@ export const SHIFT_PAUSE_POLICY = {
 export type ShiftBreakKind = "rest" | "away" | "away_excess";
 
 export interface ShiftSendBreak {
-  /** Start of the first full empty minute without sends, ms. */
+  /** Start of the first full empty minute (no click, no send), ms. */
   from: number;
-  /** End of the last full empty minute without sends (start of the next send minute or shift window end), ms. */
+  /** End of the last full empty minute (start of the next active minute or shift window end), ms. */
   to: number;
-  /** Full empty minutes without sends (`(to - from) / 60_000`). */
+  /** Full empty minutes (`(to - from) / 60_000`). */
   minutes: number;
 }
 
@@ -59,16 +60,17 @@ export interface ShiftPauseSummary {
 const MINUTE_MS = 60_000;
 
 /**
- * Finds all breaks of at least `minAwayMinutes` consecutive full empty minutes with zero authored sends inside
- * `[max(shiftStart, slotStart), shiftEnd)`.
+ * Finds all breaks of at least `minAwayMinutes` consecutive full empty minutes with neither a click nor an authored send
+ * inside `[max(shiftStart, slotStart), shiftEnd)`.
  *
  * Pre-slot look-in gaps (when a look-in before `slotStart` was joined to the shift) are excluded by starting the window
- * at `max(shiftStart, slotStart)`. Normal closed-shift idle tails (<= 9 full empty minutes after the final send minute)
- * stay strictly below `minAwayMinutes` and are never flagged. Pure.
+ * at `max(shiftStart, slotStart)`; the stretch before the first active minute of the window is lateness and is not a
+ * break. A closed shift ends at most `CHATTER_SHIFT_IDLE_PAUSE_MINUTES` (10) after its last click, so its idle tail is
+ * at most 9 full empty minutes and is never flagged. Pure.
  */
 export function shiftSendBreaksOf(input: {
-  /** Timestamps (ms) of the person's authored sends across all their pages. */
-  sendMinutes: readonly number[];
+  /** Timestamps (ms) of the person's active minutes across all their pages: a click (input) or an authored send. */
+  activeMinutes: readonly number[];
   shiftStart: number;
   shiftEnd: number;
   /** Earliest start (ms) of the person's schedule slot(s) overlapping this shift, when known. */
@@ -84,37 +86,28 @@ export function shiftSendBreaksOf(input: {
   if (windowTo - windowFrom < minAway * MINUTE_MS) return [];
 
   const unique = new Set<number>();
-  for (const at of input.sendMinutes) {
+  for (const at of input.activeMinutes) {
     const minute = Math.floor(at / MINUTE_MS) * MINUTE_MS;
     if (minute >= windowFrom && minute < windowTo) unique.add(minute);
   }
-  const sends = [...unique].sort((a, b) => a - b);
+  const active = [...unique].sort((a, b) => a - b);
   const out: ShiftSendBreak[] = [];
 
-  if (sends.length === 0) {
-    const minutes = Math.floor((windowTo - windowFrom) / MINUTE_MS);
-    if (minutes >= minAway) out.push({ from: windowFrom, to: windowTo, minutes });
-    return out;
-  }
+  // Nothing done in the window, or the stretch before the first active minute: lateness, not a break.
+  if (active.length === 0) return out;
 
-  // Leading empty stretch [windowFrom, sends[0]).
-  const leadMinutes = Math.floor((sends[0]! - windowFrom) / MINUTE_MS);
-  if (leadMinutes >= minAway) {
-    out.push({ from: windowFrom, to: sends[0]!, minutes: leadMinutes });
-  }
-
-  // Interior gaps: full empty minutes strictly between consecutive send minutes [prev + 1m, next).
-  for (let index = 1; index < sends.length; index += 1) {
-    const prev = sends[index - 1]!;
-    const next = sends[index]!;
+  // Interior gaps: full empty minutes strictly between consecutive active minutes [prev + 1m, next).
+  for (let index = 1; index < active.length; index += 1) {
+    const prev = active[index - 1]!;
+    const next = active[index]!;
     const gapMinutes = Math.floor((next - prev) / MINUTE_MS) - 1;
     if (gapMinutes >= minAway) {
       out.push({ from: prev + MINUTE_MS, to: next, minutes: gapMinutes });
     }
   }
 
-  // Trailing empty stretch [lastSend + 1m, windowTo).
-  const trailFrom = sends.at(-1)! + MINUTE_MS;
+  // Trailing empty stretch [lastActive + 1m, windowTo).
+  const trailFrom = active.at(-1)! + MINUTE_MS;
   const trailMinutes = Math.floor((windowTo - trailFrom) / MINUTE_MS);
   if (trailMinutes >= minAway) {
     out.push({ from: trailFrom, to: windowTo, minutes: trailMinutes });
@@ -124,7 +117,7 @@ export function shiftSendBreaksOf(input: {
 }
 
 /**
- * Classifies no-send breaks under the 10 / 60 / 3 policy:
+ * Classifies breaks (no click, no send) under the 10 / 60 / 3 policy:
  * - The single longest break (tie broken by earliest) is `rest` (norm <= 60 min; overrun flagged without counting as an away).
  * - Remaining breaks chronologically: #1..#3 `away`, #4+ `away_excess`.
  * Pure.

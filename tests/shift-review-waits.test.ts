@@ -139,6 +139,17 @@ describe("pageWatchesOf and colleagueSpansOf", () => {
       pageLabel: "ari-1", to: slotEndAri + 15 * MIN, handedOver: true,
     });
 
+    // A colleague who held ari-1 before slotEnd and left well before this shift's end handed nothing over.
+    const leftEarly: PersonPiece[] = [{ userId: 9, username: "miron", work: work(shiftStart - 6 * HOUR, slotEndAri + 5 * MIN, { "ari-1": shiftStart - 6 * HOUR }) }];
+    expect(pageWatchesOf({ shift, pages, slots, colleagues: leftEarly, start: shiftStart, end: shiftEnd })[0]).toMatchObject({
+      pageLabel: "ari-1", to: shiftEnd, handedOver: false,
+    });
+    // A successor who came for half an hour and left: the page was the chatter's again.
+    const brief: PersonPiece[] = [{ userId: 9, username: "miron", work: work(slotEndAri + 5 * MIN, slotEndAri + 35 * MIN, { "ari-1": slotEndAri + 5 * MIN }) }];
+    expect(pageWatchesOf({ shift, pages, slots, colleagues: brief, start: shiftStart, end: shiftEnd })[0]).toMatchObject({
+      pageLabel: "ari-1", to: shiftEnd, handedOver: false,
+    });
+
     // No successor arrives on ari-1 -> watchTo stays shiftEnd.
     expect(pageWatchesOf({ shift, pages, slots, colleagues: [], start: shiftStart, end: shiftEnd })[0]).toMatchObject({
       pageLabel: "ari-1", to: shiftEnd, handedOver: false,
