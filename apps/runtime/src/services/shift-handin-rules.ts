@@ -95,6 +95,8 @@ export interface DraftContext {
   notMine?: ReadonlySet<number>;
   /** Pages where this person is the sole active worker on the report day: unclaimed nobody sales show in «Рядом» ($0 until claimed). */
   soloPages?: ReadonlySet<string>;
+  /** Unclaimed `nobody` sales whose fan this person has personally messaged on that page in history: shown in «Рядом» ($0 until claimed). */
+  messagedNobodyIds?: ReadonlySet<number>;
 }
 
 export type DraftGroup = "mine" | "near";
@@ -150,8 +152,12 @@ export function classifySale(sale: DraftSale, context: DraftContext): Classified
   // chatter can claim their own sales from the 24h day, staying `nobody` if left unticked.
   const heldByThisReport = reported !== undefined && reported.handinId === context.handinId;
   const onSoloPage = context.soloPages?.has(sale.pageLabel) === true && sale.home.reason !== "owner_nobody";
-  if (isTeamHiddenSaleHome(sale.home.kind) && !heldByThisReport && !onSoloPage) return null;
-  if (sale.source === "window" && (sale.heldByShift || sale.inReportWindow)) {
+  const messagedNobody = sale.home.kind === "nobody"
+    && sale.home.reason !== "owner_nobody"
+    && alreadyIn === null
+    && context.messagedNobodyIds?.has(sale.transactionId) === true;
+  if (isTeamHiddenSaleHome(sale.home.kind) && !heldByThisReport && !onSoloPage && !messagedNobody) return null;
+  if ((sale.source === "window" && (sale.heldByShift || sale.inReportWindow)) || (messagedNobody && sale.inReportWindow)) {
     return { sale, group: "near", added: false, shareMills: 0, toUserId: other?.userId ?? null, alreadyIn };
   }
   return null;
@@ -278,6 +284,10 @@ export function reasonWords(input: {
   homeKind: SaleHomeKind;
   toName: string | null;
   senderName: string | null;
+  /** True when a `waiting` PPV was sent by the reader themself. */
+  isOwnWaiting?: boolean;
+  /** Deadline for a `waiting` PPV's sender to have their next shift; shown when provided. */
+  waitsUntil?: Date | null;
   alreadyIn: { reportDate: string } | null;
 }): string {
   if (input.alreadyIn !== null) return `уже в отчёте смены ${dayWords(input.alreadyIn.reportDate)}`;
@@ -310,9 +320,11 @@ export function reasonWords(input: {
     case "pot":
       return input.reason === "campaign" ? "общак: Campaign OnlyFans" : "общак: чаевые под постом";
     case "waiting": {
+      const until = input.waitsUntil != null ? ` (до ${DAY_MONTH.format(input.waitsUntil)}, ${CLOCK.format(input.waitsUntil)})` : "";
+      if (input.isOwnWaiting === true) return `ваш PPV, уйдёт в вашу следующую смену${until}`;
       // Names carry no gender: «PPV от Олега, уйдёт в следующую смену Олега».
       const sender = input.senderName === null ? null : personNameForms(input.senderName).gen;
-      return sender === null ? "PPV коллеги, уйдёт в следующую смену отправителя" : `PPV от ${sender}, уйдёт в следующую смену ${sender}`;
+      return `${sender === null ? "PPV коллеги, уйдёт в следующую смену отправителя" : `PPV от ${sender}, уйдёт в следующую смену ${sender}`}${until}`;
     }
     case "decide":
       return input.reason === "marks_disagree" ? "метки чаттеров не сходятся: решит владелец" : "стык смен, фану никто из них не писал: решит владелец";

@@ -290,7 +290,7 @@ export const shiftReportRowSchema = z.object({
   kind: z.string(),
   /** The site's own words before the fan: «Media Sale to», «Tip from», «Payment for message from», «Subscription from». */
   siteWords: z.string(),
-  fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable() }),
+  fan: z.object({ fanRef: z.string().nullable(), name: z.string().nullable(), username: z.string().nullable(), alias: z.string().nullable().optional() }),
   occurredAt: isoTimestamp,
   netMills: mills,
   /** What the fan paid (OnlyFans shows both); null — the site shows only the net (Fansly). */

@@ -945,7 +945,7 @@ export async function readShiftReportChecks(
         kind: line.kind,
         occurredAt: line.occurredAt ?? new Date(0).toISOString(),
         netMills: line.netMills,
-        fan: fans.get(line.transactionId) ?? { fanRef: null, name: null, username: null },
+        fan: fans.get(line.transactionId) ?? { fanRef: null, name: null, username: null, alias: null },
         statement: line.statement,
         withUserId: line.statement === "share" ? line.shareWithUserId : line.statement === "give" ? line.toUserId ?? null : null,
         note: line.note,

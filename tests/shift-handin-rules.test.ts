@@ -14,6 +14,7 @@ import {
 } from "../apps/runtime/src/services/shift-handin-rules.ts";
 import { versionCountsMoney } from "@agency_hub_core/db";
 import { draftLines } from "../apps/runtime/src/services/shift-handins.ts";
+import { fanOf, meaningfulAlias } from "../apps/workboard/src/screens/report/model.ts";
 
 // The shift report's money (ecosystem package F): which sales a draft holds,
 // what each line counts, the page sums and the post. Pure.
@@ -159,15 +160,39 @@ describe("the report's window and sales added by hand", () => {
       .toEqual({ from: Date.parse("2026-11-09T12:00:00+03:00"), to: Date.parse("2026-11-09T20:00:00+03:00"), pageIds: [11, 12] });
   });
 
-  it("hides a sale nobody held from «Рядом», and «моё» on a nobody's sale counts 0 (disputed, routed to the owner)", () => {
+  it("hides a sale nobody held from «Рядом», exposes it at $0 when chatter messaged that fan, and keeps «моё» disputed", () => {
     const nobody = sale({
       transactionId: 21, heldByShift: false, inReportWindow: true, netMills: 4_000,
       home: { kind: "nobody", reason: "no_holder", pot: null, shares: [] },
     });
     expect(classifySale(nobody, context())).toBeNull();
     expect(classifySale({ ...nobody, inReportWindow: false }, context())).toBeNull();
+    // Chatter personally messaged this fan on this page -> surfaces in «Рядом» at $0 (both window and same-day before).
+    expect(classifySale(nobody, context({ messagedNobodyIds: new Set([21]) })))
+      .toMatchObject({ group: "near", shareMills: 0, added: false });
+    expect(classifySale({ ...nobody, source: "before", inReportWindow: true }, context({ messagedNobodyIds: new Set([21]) })))
+      .toMatchObject({ group: "near", shareMills: 0, added: false });
+    // Explicitly closed as owner_nobody or already in another report stays hidden even if messaged.
+    expect(classifySale({ ...nobody, home: { kind: "nobody", reason: "owner_nobody", pot: null, shares: [] } }, context({ messagedNobodyIds: new Set([21]) }))).toBeNull();
+    expect(classifySale(nobody, context({ messagedNobodyIds: new Set([21]), reported: new Map([[21, { handinId: 99, shiftId: 88, reportDate: "2026-11-10" }]]) }))).toBeNull();
     expect(lineAmount({ group: "near", netMills: 4_000, shareMills: 0, homeKind: "nobody", statement: "mine", alreadyIn: false }))
       .toEqual({ amountMills: 0, disputed: true, claimedMills: 4_000 });
+  });
+
+  it("formats waiting PPV reason words for the sender, a named colleague, and with a deadline", () => {
+    const deadline = new Date("2026-11-30T11:20:00Z"); // 14:20 MSK
+    expect(reasonWords({
+      group: "near", added: false, reason: "ppv_sender_no_shift", homeKind: "waiting",
+      toName: null, senderName: "Никита", isOwnWaiting: true, waitsUntil: deadline, alreadyIn: null,
+    })).toContain("ваш PPV, уйдёт в вашу следующую смену (до 30 нояб., 14:20)");
+    expect(reasonWords({
+      group: "near", added: false, reason: "ppv_sender_no_shift", homeKind: "waiting",
+      toName: null, senderName: "Олег", isOwnWaiting: false, waitsUntil: deadline, alreadyIn: null,
+    })).toContain("PPV от Олега, уйдёт в следующую смену Олега (до 30 нояб., 14:20)");
+    expect(reasonWords({
+      group: "near", added: false, reason: "ppv_sender_no_shift", homeKind: "waiting",
+      toName: null, senderName: null, alreadyIn: null,
+    })).toBe("PPV коллеги, уйдёт в следующую смену отправителя");
   });
 
   it("counts a sale added by hand with «моё» as disputed (0 until settled), including nobody's sales", () => {
@@ -333,6 +358,17 @@ describe("a version that counts money (round 2, N1)", () => {
     expect(versionCountsMoney({ lines: [{}], offPlatform: [], totalMills: 0 })).toBe(true);
     expect(versionCountsMoney({ lines: [], offPlatform: [{}], totalMills: 5_000 })).toBe(true);
     expect(versionCountsMoney({ lines: [], offPlatform: [], totalMills: 5_000 })).toBe(true);
+  });
+});
+
+describe("fan label with page_alias", () => {
+  it("prefers a meaningful page_alias and ignores noisy non-alphanumeric markers like +", () => {
+    expect(meaningfulAlias("Theo/UK/")).toBe("Theo/UK/");
+    expect(meaningfulAlias("+")).toBeNull();
+    expect(meaningfulAlias("   ")).toBeNull();
+    expect(fanOf({ fan: { alias: "Theo/UK/", name: "Lincoln92_", username: "Lincoln92_" } })).toBe("Theo/UK/");
+    expect(fanOf({ fan: { alias: "+", name: "Lincoln92_", username: "Lincoln92_" } })).toBe("Lincoln92_");
+    expect(fanOf({ fan: { alias: null, name: null, username: "Lincoln92_" } })).toBe("Lincoln92_");
   });
 });
 

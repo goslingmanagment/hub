@@ -332,7 +332,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   const deciderOfPage = (label: string | null) => disputeDecider({ modelSlug: catalog.info.get(label ?? "")?.modelSlug ?? null, testOwner, facts: teamFacts, sidePersonIds });
   const ownerDecider = disputeDecider({ modelSlug: null, testOwner });
   const deciderOfLine = (line: Pick<HandinVersionLine, "pageLabel" | "rule">) =>
-    (line.rule.home === "pot" || line.rule.home === "decide" ? ownerDecider : deciderOfPage(line.pageLabel));
+    (line.rule.home === "pot" || line.rule.home === "decide" || line.rule.home === "nobody" ? ownerDecider : deciderOfPage(line.pageLabel));
   // The board's own (the first page's), for a text that names no sale.
   const decider = deciderOfPage(labels[0] ?? null);
   // «решил …»: the decision's own author — the owner («владелец», the test team's owner by name), else the lead by name.
@@ -495,7 +495,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       refLabel: fansly && ref !== null ? `#…${ref.ref.slice(-4)}` : null,
       kind: line.kind,
       siteWords: siteWordsOf(platform, line.kind),
-      fan: fans.get(id) ?? { fanRef: null, name: null, username: null },
+      fan: fans.get(id) ?? { fanRef: null, name: null, username: null, alias: null },
       occurredAt: line.occurredAt ?? new Date(0).toISOString(),
       netMills: line.netMills,
       grossMills: fansly || ref === null ? null : ref.grossMills,
@@ -602,7 +602,7 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
       refLabel: platform === "fansly" ? `#…${one.platformRef.slice(-4)}` : null,
       kind: one.kind,
       siteWords: siteWordsOf(platform, one.kind),
-      fan: { fanRef: one.fanRef, name: one.fanName, username: one.fanRef },
+      fan: { fanRef: one.fanRef, name: one.fanName, username: one.fanRef, alias: null },
       occurredAt: one.occurredAt.toISOString(),
       netMills: one.netMills,
       grossMills: platform === "fansly" ? null : one.grossMills,
@@ -736,7 +736,9 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
   const waiting = flat.filter((row) => (row.ask !== null && (row.ask.state === "asked" || row.ask.state === "disputed"))
     || (row.incoming !== null && row.incoming.state !== "settled") || (row.sighting !== null && !row.sighting.added) || row.late)
     .map((row) => ({
-      key: row.key, transactionId: row.transactionId, pageLabel: row.pageLabel, fanName: row.fan.name ?? row.fan.username, netMills: row.netMills,
+      key: row.key, transactionId: row.transactionId, pageLabel: row.pageLabel,
+      fanName: (row.fan.alias && /[\p{L}\p{N}]/u.test(row.fan.alias) ? row.fan.alias : null) ?? row.fan.name ?? row.fan.username,
+      netMills: row.netMills,
       why: row.late ? "late" as const : row.ask !== null ? "ask" as const : row.incoming !== null ? "incoming" as const : "sighting" as const,
     }));
   const nowMills = sums.totalMills;
