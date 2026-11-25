@@ -3280,6 +3280,73 @@ export async function listLinkStatSnapshots(db: Database, input: { runId: number
     .orderBy(pageLinkStatSnapshots.platformLinkId);
 }
 
+export interface FreshCompleteLinkStatCatalog {
+  runId: number;
+  pulledAt: Date;
+  links: Array<{
+    platformLinkId: string;
+    isFinished: boolean;
+  }>;
+}
+
+/**
+ * Latest complete link-stats inventory for one (page, linkKind) under the
+ * page's CURRENT OFAPI account binding within `maxAgeMs`. Used by
+ * `syncOfapiFanIdentities` (LINK-001) to reuse the link catalog already
+ * persisted by `ofapi-link-stats-sync` instead of re-buying the same link-list
+ * walk. Returns null when no complete, binding-matching run sits inside the
+ * freshness bound so the caller falls back to live discovery.
+ */
+export async function listLatestFreshCompleteLinkStatCatalog(
+  db: Database,
+  input: {
+    pageId: number;
+    linkKind: LinkStatKind;
+    ofapiAccountId: string;
+    maxAgeMs: number;
+    now?: Date;
+  },
+): Promise<FreshCompleteLinkStatCatalog | null> {
+  const now = input.now ?? new Date();
+  const minPulledAt = new Date(now.getTime() - input.maxAgeMs);
+  const [run] = await db
+    .select({
+      id: pageLinkStatRuns.id,
+      pulledAt: pageLinkStatRuns.pulledAt,
+    })
+    .from(pageLinkStatRuns)
+    .where(and(
+      eq(pageLinkStatRuns.platformAccountId, input.pageId),
+      eq(pageLinkStatRuns.linkKind, input.linkKind),
+      eq(pageLinkStatRuns.status, "complete"),
+      eq(pageLinkStatRuns.ofapiAccountId, input.ofapiAccountId),
+      gte(pageLinkStatRuns.pulledAt, minPulledAt),
+    ))
+    .orderBy(desc(pageLinkStatRuns.pulledAt), desc(pageLinkStatRuns.id))
+    .limit(1);
+  if (!run) {
+    return null;
+  }
+
+  const snapshots = await db
+    .select({
+      platformLinkId: pageLinkStatSnapshots.platformLinkId,
+      isFinished: pageLinkStatSnapshots.isFinished,
+    })
+    .from(pageLinkStatSnapshots)
+    .where(eq(pageLinkStatSnapshots.runId, run.id))
+    .orderBy(pageLinkStatSnapshots.platformLinkId);
+
+  return {
+    runId: run.id,
+    pulledAt: run.pulledAt,
+    links: snapshots.map((row) => ({
+      platformLinkId: row.platformLinkId,
+      isFinished: row.isFinished === true,
+    })),
+  };
+}
+
 /** One (active OnlyFans page, link kind) as the series monitor sees it. */
 export interface LinkStatSeriesHealthRow {
   platformAccountId: number;

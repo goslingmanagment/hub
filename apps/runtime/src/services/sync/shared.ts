@@ -15,6 +15,7 @@ import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { noteCaptureCasRefVanished, putCaptureCasPayloads } from "../capture-cas-dual-write.ts";
+import { stampOnlyParseVersion } from "../canonicalize/index.ts";
 import type { NormalizedSyncError } from "./errors.ts";
 import { SyncPayloadPersistenceError } from "./errors.ts";
 import {
@@ -192,6 +193,7 @@ export async function persistRawPayload(
       platform,
       accountId: input.platformAccountId,
       kind: input.endpoint,
+      parseVersion: stampOnlyParseVersion("pull", input.endpoint),
       payload: observedPayload,
       payloadHash: createHash("sha256").update(JSON.stringify(observedPayload)).digest(),
       idempotencyKey: [

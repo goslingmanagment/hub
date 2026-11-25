@@ -2186,11 +2186,13 @@ export async function pausePageSyncForAuth(
             updated_at = ${now}
         where page_id = ${input.pageId}
           and stream = ${stream}
-          -- An already-paused stream is owned by a feature gate or an
-          -- operator. It is already safely parked; auth must not replace the
-          -- marker that tells the matching resume path who may release it.
+          -- An already-paused or non-auth-blocked stream is owned by a feature
+          -- gate, operator, or another blocker (e.g. provider_bad_data,
+          -- manual_action_required, dependency, legacy retirement). It is
+          -- already safely parked; auth must not replace the marker that tells
+          -- the matching resume/recovery path who may release it.
           -- Auth-owned rows may refresh their own diagnostic timestamp.
-          and (status <> 'paused' or blocker_kind = 'auth')
+          and (status not in ('paused', 'blocked') or blocker_kind = 'auth')
       `);
     }
   });

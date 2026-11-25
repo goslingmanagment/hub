@@ -72,8 +72,21 @@ describe("stamp-only observations (stamped at insert, never swept)", () => {
         }
       }
     }
-    // fansly.ws.frame.v1 + every client-capture desktop kind but harvest.messages.
-    expect(stampOnlyKinds).toBe(1 + [...CANONICALIZER_FAMILIES.find((family) => family.lane === "desktop")!.kinds!].length - 1);
+    // fansly.ws.frame.v1 + link_stats_{tracking,trial} + every client-capture desktop kind but harvest.messages.
+    expect(stampOnlyKinds).toBe(1 + 2 + [...CANONICALIZER_FAMILIES.find((family) => family.lane === "desktop")!.kinds!].length - 1);
+  });
+
+  it("the link-stats envelope its writer builds passes the link_stats family's shape gate", () => {
+    const linkStats = CANONICALIZER_FAMILIES.find((family) => family.source === "pull" && family.lane === "link_stats")!;
+    for (const kind of ["link_stats_tracking", "link_stats_trial"]) {
+      const written = {
+        id: 1, source: "pull", producer: `sync:onlyfans:${kind}`, platform: "onlyfans", accountId: 11,
+        nativeAccountRef: null, kind, observedAt: null, receivedAt: RECEIVED_AT,
+        payload: { items: [], hasNextPage: false },
+      } as CanonicalizableObservation;
+      expect(linkStats.canParse?.(written), kind).toBe(true);
+      expect(stampOnlyParseVersion("pull", kind), kind).toBe(linkStats.version);
+    }
   });
 
   it("the captured frame its writer builds passes the signals family's shape gate", () => {
