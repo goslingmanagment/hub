@@ -29,7 +29,7 @@ export async function readAccountShiftNumbers(
   const { from, to } = numbersWindowOf(input, now);
   const me = await loginsOfPersonOf(app.db, principal.user.id);
 
-  const own = await teamShiftJobs(app, { from, to, now, scope: "all", userIds: me.userIds });
+  const own = await teamShiftJobs(app, { from, to, now, scope: "all", userIds: me.userIds, realm: principal.sandbox?.test === true ? "test" : "live" });
   const rows = (await shiftRowsOf(app, own, { fromTable: await numbersFromTable(app) })).map((row) => row!);
   const shifts = own.jobs.map((job, index) => ({ job, row: rows[index]!, workedMinutes: job.shift.workedMinutes }));
   const perShift = shifts.map((one) => ({ ...one, numbers: numbersOf([one]) }));
@@ -81,7 +81,7 @@ export async function teamAverage(
   const logins = await loginsOfPeople(app.db, people);
   if (logins.length === 0) return null;
   // Their shifts on the team's pages only: a shift on another model's page is not this team's norm.
-  const found = await teamShiftJobs(app, { from: input.from, to: input.to, now: input.now, scope: [...pages], userIds: logins });
+  const found = await teamShiftJobs(app, { from: input.from, to: input.to, now: input.now, scope: [...pages], userIds: logins, realm: input.test ? "test" : "live" });
   const closed = { jobs: found.jobs.filter((job) => !job.shift.ongoing), openings: found.openings };
   const rows = await shiftRowsOf(app, closed, { fromTable: true, liveFallback: false });
   const counted = closed.jobs.flatMap((job, index) => {

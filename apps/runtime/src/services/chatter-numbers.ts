@@ -20,6 +20,7 @@ import {
   listShiftReviewGenerations,
   listShiftReviewMessages,
   listShiftReviewSends,
+  listTestUserIds,
   readShiftFans,
   type ShiftFansRow,
   type ShiftReviewGenerationRow,
@@ -33,6 +34,8 @@ import { requireTeamReader } from "./teams.ts";
 import { middleOfWork, readPeopleWork, type ComputedWork, type PersonWork } from "./chatter-shifts.ts";
 import { loadEffectiveConfigField } from "./effective-config.ts";
 import { groupLoginsByPerson, loginsOfPersonOf } from "./person-logins.ts";
+import { isTestPrincipal } from "./sandbox/realm.ts";
+import { registrySlotOccurrences } from "./schedule-slots.ts";
 import { storedRowsFor, type ShiftNumbersStore } from "./shift-numbers.ts";
 import { BadRequestError } from "./errors.ts";
 import {
@@ -40,12 +43,16 @@ import {
   autoOpenings,
   chatGenerationsOf,
   chatOriginsOf,
+  colleagueSpansOf,
+  pageWatchesOf,
   pagesWithAllFans,
   piecesOf,
   shiftChatsOf,
-  shiftNeedsColleagues,
   shiftPageLabels,
   shiftRuleDataOf,
+  workedWindowsOf,
+  type ClampedColleagueSpan,
+  type PageWatch,
 } from "./shift-review.ts";
 
 /**
@@ -116,13 +123,18 @@ export function shiftNumbersOf(input: {
   openings: readonly string[];
   start: number;
   end: number;
+  pageWatches?: readonly PageWatch[];
+  colleagueSpans?: readonly ClampedColleagueSpan[];
   /** The shift's AI texts and the extension's links of sent messages to them, as the review reads them. */
   generations?: readonly ShiftReviewGenerationRow[];
   links?: ReadonlyMap<string, string>;
 }): ShiftNumbersRow {
   const { start, end } = input;
   const chats = shiftChatsOf({ rows: input.rows, sends: input.sends, userId: input.userId, username: input.username, openings: input.openings, start, end });
-  const data = shiftRuleDataOf(chats, input.labelOf, start, end);
+  const data = shiftRuleDataOf(chats, input.labelOf, start, end, {
+    ...(input.pageWatches === undefined ? {} : { pageWatches: input.pageWatches }),
+    ...(input.colleagueSpans === undefined ? {} : { colleagueSpans: input.colleagueSpans }),
+  });
   const counts = shiftReviewCounts(data, shiftReviewWaits(data));
   const composedWith = new Map(input.sends.map((send) => [`${send.pageId}:${send.ref}`, send.composedWith]));
   const composed = { hand: 0, reply: 0, fix: 0, other: 0 };
@@ -172,6 +184,7 @@ export async function readShiftNumbers(
   app: Pick<AppContext, "db">,
   input: {
     userId: number; username: string; pages: ReadonlyArray<{ id: number; label: string }>; allFansPageIds: readonly number[];
+    pageWatches?: readonly PageWatch[]; colleagueSpans?: readonly ClampedColleagueSpan[];
     start: number; end: number; openings: readonly string[];
   },
 ): Promise<ShiftNumbersRow> {
@@ -179,9 +192,11 @@ export async function readShiftNumbers(
   const pageIds = input.pages.map((page) => page.id);
   const from = new Date(start);
   const to = new Date(end + 1);
+  const workedWindows = input.pageWatches === undefined ? undefined : workedWindowsOf(input.pageWatches, input.allFansPageIds, end);
   // One query after another: the shifts are read side by side instead.
   const rows = await listShiftReviewMessages(app.db, {
-    userId, pageIds, workedPageIds: input.allFansPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
+    userId, pageIds, workedPageIds: input.allFansPageIds, ...(workedWindows === undefined ? {} : { workedWindows }), from, to,
+    horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
     deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, broadcastOwnWords: SHIFT_REVIEW_BROADCAST_OWN_WORDS, texts: "mine",
   });
   const sends = await listShiftReviewSends(app.db, { userId, pageIds, from, to });
@@ -194,7 +209,12 @@ export async function readShiftNumbers(
     refs: sends.map((send) => send.ref), from: new Date(start - 5 * 60_000), to: new Date(end + 60 * 60_000),
   });
   const labelOf = new Map(input.pages.map((page) => [page.id, page.label]));
-  return shiftNumbersOf({ rows, sends, fans, userId, username: input.username, labelOf, openings: input.openings, start, end, generations, links });
+  return shiftNumbersOf({
+    rows, sends, fans, userId, username: input.username, labelOf, openings: input.openings, start, end,
+    ...(input.pageWatches === undefined ? {} : { pageWatches: input.pageWatches }),
+    ...(input.colleagueSpans === undefined ? {} : { colleagueSpans: input.colleagueSpans }),
+    generations, links,
+  });
 }
 
 function averagePrice(prices: readonly number[]): number | null {
@@ -266,6 +286,10 @@ export interface ShiftJob {
   pages: Array<{ id: number; label: string }>;
   /** The pages whose every fan the shift answers for (`pagesWithAllFans`). */
   allFansPageIds: number[];
+  /** Per-page watch windows `[watchFrom, watchTo]` (cut on scheduled handover to a colleague). */
+  pageWatches: PageWatch[];
+  /** Colleagues' shift holding spans on this shift's pages, clamped to `[start - norm, end]`. */
+  colleagueSpans: ClampedColleagueSpan[];
 }
 
 export interface TeamShiftJobs {
@@ -281,36 +305,48 @@ export interface TeamShiftJobs {
  */
 export async function teamShiftJobs(
   app: Pick<AppContext, "db">,
-  input: { from: Date; to: Date; now: Date; scope: "all" | readonly number[]; userIds?: readonly number[] | undefined },
+  input: { from: Date; to: Date; now: Date; scope: "all" | readonly number[]; userIds?: readonly number[] | undefined; realm?: "live" | "test" | undefined },
 ): Promise<TeamShiftJobs> {
   const { from, to, now, scope } = input;
   // A day more on each side, so the shifts of the window are whole.
   const around = { from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), now };
-  // Whether a page with fewer of the person's messages shows all its fans is a question of the colleagues' shifts on every
-  // page (`pagesWithAllFans`), so everyone's work, read beside the people asked when it is not theirs already.
   const whole = scope === "all" && input.userIds === undefined;
   const readPeople = async (): Promise<Map<number, PersonWork>> => {
-    if (input.userIds === undefined) return readPeopleWork(app.db, { ...around, pages: scope });
+    if (input.userIds === undefined) return readPeopleWork(app.db, { ...around, pages: scope, ...(input.realm === undefined ? {} : { realm: input.realm }) });
     const each = await Promise.all(input.userIds.map((userId) => readPeopleWork(app.db, { ...around, pages: scope, userId })));
     return new Map(each.flatMap((one) => [...one]));
   };
-  const [people, others] = await Promise.all([readPeople(), whole ? null : readPeopleWork(app.db, { ...around, pages: "all" })]);
+  const people = await readPeople();
   const found = [...people].flatMap(([userId, person]) => person.work
     .filter((shift) => shift.kind === "shift" && middleOfWork(shift) >= from.getTime() && middleOfWork(shift) < to.getTime())
     .map((shift) => ({ userId, username: person.username, shift })));
   if (found.length === 0) return { jobs: [], openings: [] };
 
-  // As the review reads a shift: its pages, the automated texts, the colleagues' shifts.
-  const [known, autoTexts] = await Promise.all([
+  // Colleagues stay strictly within the shifts' own realm (0414 sandbox wall): never mix live and test people.
+  const effectiveRealm: "live" | "test" = input.realm
+    ?? (whole ? "live" : ((await listTestUserIds(app.db)).some((id) => people.has(id)) ? "test" : "live"));
+
+  // As the review reads a shift: colleagues' shifts (all pages in realm), schedule slots, pages, automated texts.
+  const [others, slotMap, known, autoTexts] = await Promise.all([
+    whole ? Promise.resolve(null) : readPeopleWork(app.db, { ...around, pages: "all", realm: effectiveRealm }),
+    registrySlotOccurrences(app.db, { from: around.from, to: around.to }),
     listPagesByLabels(app.db, [...new Set(found.flatMap(({ shift }) => shiftPageLabels(shift)))]),
     listAllAutomatedTexts(app.db),
   ]);
-  const shiftsOfAll = found.some(({ shift }) => shiftNeedsColleagues(shift)) ? piecesOf(others ?? people, "shift") : [];
+  const shiftsOfAll = piecesOf(others ?? people, "shift");
   const jobs = found.map(({ userId, username, shift }): ShiftJob => {
     const end = shift.ongoing ? now.getTime() : shift.endedAt;
     const pages = shiftPageLabels(shift).flatMap((label) => known.filter((page) => page.label === label));
-    const allFans = pagesWithAllFans(shift, shiftsOfAll.filter((one) => one.userId !== userId), shift.startedAt, end);
-    return { userId, username, shift, end, pages, allFansPageIds: pages.filter((page) => allFans.has(page.label)).map((page) => page.id) };
+    const colleagues = shiftsOfAll.filter((one) => one.userId !== userId);
+    const allFans = pagesWithAllFans(shift, colleagues, shift.startedAt, end);
+    const pageWatches = pageWatchesOf({ shift, pages, slots: slotMap.get(userId) ?? [], colleagues, start: shift.startedAt, end });
+    const colleagueSpans = colleagueSpansOf({ pages, colleagues, start: shift.startedAt, end });
+    return {
+      userId, username, shift, end, pages,
+      allFansPageIds: pages.filter((page) => allFans.has(page.label)).map((page) => page.id),
+      pageWatches,
+      colleagueSpans,
+    };
   });
   return { jobs, openings: autoOpenings(autoTexts) };
 }
@@ -318,7 +354,9 @@ export async function teamShiftJobs(
 /** A shift's numbers counted now, from the database. */
 export function readJobNumbers(app: Pick<AppContext, "db">, job: ShiftJob, openings: readonly string[]): Promise<ShiftNumbersRow> {
   return readShiftNumbers(app, {
-    userId: job.userId, username: job.username, pages: job.pages, allFansPageIds: job.allFansPageIds, start: job.shift.startedAt, end: job.end, openings,
+    userId: job.userId, username: job.username, pages: job.pages, allFansPageIds: job.allFansPageIds,
+    pageWatches: job.pageWatches, colleagueSpans: job.colleagueSpans,
+    start: job.shift.startedAt, end: job.end, openings,
   });
 }
 
@@ -407,7 +445,7 @@ export async function readTeamChatterNumbers(
   const { from, to } = numbersWindowOf(input, now);
   // One person: every login of theirs (person-logins.ts), on the viewer's pages.
   const userIds = input.userId === undefined ? undefined : (await loginsOfPersonOf(app.db, input.userId)).userIds;
-  const found = await teamShiftJobs(app, { from, to, now, scope: input.pageScope ?? "all", userIds });
+  const found = await teamShiftJobs(app, { from, to, now, scope: input.pageScope ?? "all", userIds, realm: isTestPrincipal(principal) ? "test" : "live" });
   if (found.jobs.length === 0) return { from: from.toISOString(), to: to.toISOString(), chatters: [], serverNow: now.toISOString() };
   const rows = await shiftRowsOf(app, found, { fromTable: await numbersFromTable(app) });
   const chatters = await chattersByPerson(app, found.jobs, rows.map((row) => row!));

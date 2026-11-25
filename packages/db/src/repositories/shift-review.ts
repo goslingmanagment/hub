@@ -65,6 +65,11 @@ export async function listShiftReviewMessages(
   db: Database,
   input: {
     userId: number; pageIds: readonly number[]; workedPageIds: readonly number[]; from: Date; to: Date; horizonHours: number; burstMinChats: number;
+    /**
+     * Per-page watch windows `[from, to)` for the `worked` pages (incoming fan messages and inherited waits before
+     * `from` are filtered per page). When omitted, every page in `workedPageIds` uses `[input.from, input.to)`.
+     */
+    workedWindows?: ReadonlyArray<{ pageId: number; from: Date; to: Date }>;
     /** A message deleted sooner than this after it was sent is not seen. */
     deletedUnseenSeconds: number;
     /** A broadcast's message with this many words of its own or more is personal. */
@@ -81,7 +86,10 @@ export async function listShiftReviewMessages(
   const allTexts = input.texts === undefined || input.texts === "all";
   const mineTexts = input.texts === "mine";
   const pages = sql`${sql.param(input.pageIds.map(String))}::bigint[]`;
-  const worked = sql`${sql.param(input.workedPageIds.map(String))}::bigint[]`;
+  const windows = input.workedWindows ?? input.workedPageIds.map((pageId) => ({ pageId, from: input.from, to: input.to }));
+  const windowPageIds = sql`${sql.param(windows.map((window) => String(window.pageId)))}::bigint[]`;
+  const windowFroms = sql`${sql.param(windows.map((window) => window.from.toISOString()))}::timestamptz[]`;
+  const windowTos = sql`${sql.param(windows.map((window) => window.to.toISOString()))}::timestamptz[]`;
   const from = sql`${input.from.toISOString()}::timestamptz`;
   const to = sql`${input.to.toISOString()}::timestamptz`;
   const horizon = sql`${from} - make_interval(hours => ${input.horizonHours})`;
@@ -137,17 +145,25 @@ export async function listShiftReviewMessages(
       where a.user_id = ${input.userId} and a.page_id = any(${pages})
         and a.observed_at >= ${from} and a.observed_at < ${to}
     ),
+    worked_windows as (
+      select * from unnest(${windowPageIds}, ${windowFroms}, ${windowTos}) as w(page_id, w_from, w_to)
+    ),
     chats as materialized (
-      select page_id, conv from page_msgs where at >= ${from} and not sent and seen and page_id = any(${worked})
+      select pm.page_id, pm.conv
+      from page_msgs pm
+      join worked_windows w on w.page_id = pm.page_id
+      where pm.at >= w.w_from and pm.at < w.w_to and not pm.sent and pm.seen
       union
       select pm.page_id, pm.conv from page_msgs pm
       join mine x on x.page_id = pm.page_id and x.platform = pm.platform and x.ref = pm.ref
       union
       select page_id, conv from (
-        select distinct on (page_id, conv) page_id, conv, sent
-        from page_msgs where at < ${from} and seen
-        order by page_id, conv, at desc, ref desc
-      ) last where not last.sent and last.page_id = any(${worked})
+        select distinct on (pm.page_id, pm.conv) pm.page_id, pm.conv, pm.sent
+        from page_msgs pm
+        join worked_windows w on w.page_id = pm.page_id
+        where pm.at < w.w_from and pm.seen
+        order by pm.page_id, pm.conv, pm.at desc, pm.ref desc
+      ) last where not last.sent
     ),
     shaped as materialized (
       select pm.*, md5(coalesce(pm.text_plain, '') || '|' || coalesce(pm.price_mills, 0)::text || '|' || pm.media::text) as shape

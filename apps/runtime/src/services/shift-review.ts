@@ -7,6 +7,7 @@ import {
   SHIFT_REVIEW_DELETED_UNSEEN_SECONDS,
   SHIFT_REVIEW_LATER_SALES_DAYS,
   SHIFT_REVIEW_NEIGHBOUR_DAYS,
+  SHIFT_REVIEW_REPLY_NORM_SECONDS,
   SHIFT_REVIEW_SEAM_MINUTES,
   SHIFT_REVIEW_WAIT_HORIZON_HOURS,
   shiftReviewHi,
@@ -57,6 +58,7 @@ import {
   type HomeCredit, type ScreenHome, type ScreensRule,
 } from "./sale-rule-screens.ts";
 import { reportDateOfShift } from "./shift-rows.ts";
+import { registrySlotOccurrences, type SlotOccurrence } from "./schedule-slots.ts";
 import { salesNoShiftHolds, salesOfWork, settleOutsideShifts } from "./team-shift-sales.ts";
 
 /**
@@ -440,8 +442,8 @@ export interface ShiftChat {
   /** The messages shown: the last SHIFT_REVIEW_CONTEXT_MESSAGES before the shift, then all of it. */
   shown: ChatMessage[];
   earlierHidden: number;
-  /** The chatter's messages that answered a waiting fan, by ref: how long the fan had waited (from the shift's start at most), seconds. */
-  replyByRef: Map<string, number>;
+  /** The chatter's messages that answered a waiting fan, by ref: seconds waited (from shift start at most) and whether it answered a silent past-shift tail. */
+  replyByRef: Map<string, { seconds: number; tail: boolean }>;
 }
 
 /**
@@ -488,9 +490,19 @@ export function shiftChatsOf(input: {
     const waits = waitsOf(answers, userId, start, end).filter((wait) => wait.to > start && wait.since < end);
     if (waits.length === 0 && !chat.messages.some((message) => (message.at.getTime() >= start && message.at.getTime() <= end)
       || (message.by === "me" && sendRefs.has(`${message.pageId}:${message.ref}`)))) continue;
-    const replyByRef = new Map<string, number>();
+    const replyByRef = new Map<string, { seconds: number; tail: boolean }>();
     for (const wait of waits) {
-      if (wait.answerRef !== null) replyByRef.set(wait.answerRef, Math.round((wait.to - Math.max(wait.since, start)) / 1000));
+      if (wait.answerRef !== null) {
+        const inherited = wait.since < start;
+        const fanWrote = inherited && chat.messages.some((message) => {
+          const at = message.at.getTime();
+          return !message.sent && seenMessage(message) && at >= start && at <= wait.to;
+        });
+        replyByRef.set(wait.answerRef, {
+          seconds: Math.round((wait.to - Math.max(wait.since, start)) / 1000),
+          tail: inherited && !fanWrote,
+        });
+      }
     }
     const before = chat.messages.filter((message) => message.at.getTime() < start);
     const shown = [...before.slice(-SHIFT_REVIEW_CONTEXT_MESSAGES), ...chat.messages.filter((message) => message.at.getTime() >= start)];
@@ -515,6 +527,7 @@ export function waitRowsOf(chat: ShiftChat, pageLabel: string, start: number, en
 export function ruleMessageOf(message: ChatMessage, chat: Pick<ShiftChat, "replyByRef">, start: number, end: number): ShiftReviewRuleMessage {
   const at = message.at.getTime();
   const inShift = at >= start && at <= end;
+  const reply = chat.replyByRef.get(message.ref);
   return {
     at: message.at.toISOString(),
     side: message.sent ? "page" : "fan",
@@ -525,21 +538,47 @@ export function ruleMessageOf(message: ChatMessage, chat: Pick<ShiftChat, "reply
     priceMills: message.priceMills,
     bought: message.bought,
     ...(message.deletedAt === null ? {} : { deletedAt: message.deletedAt.toISOString() }),
-    mine: message.by === "me" && inShift ? { replySeconds: chat.replyByRef.get(message.ref) ?? null } : null,
+    mine: message.by === "me" && inShift
+      ? { replySeconds: reply?.seconds ?? null, ...(reply === undefined ? {} : { replyTail: reply.tail }) }
+      : null,
   };
 }
 
 /** The shift's chats as its rules read them: what «Смены» counts by `shiftReviewWaits` and `shiftReviewCounts`, as the review's screen does. Pure. */
-export function shiftRuleDataOf(chats: readonly ShiftChat[], labelOf: ReadonlyMap<number, string>, start: number, end: number): ShiftReviewRuleData {
+export function shiftRuleDataOf(
+  chats: readonly ShiftChat[],
+  labelOf: ReadonlyMap<number, string>,
+  start: number,
+  end: number,
+  extra?: { pageWatches?: readonly PageWatch[]; colleagueSpans?: readonly ClampedColleagueSpan[] },
+): ShiftReviewRuleData {
   const pageLabel = (chat: ShiftChat) => labelOf.get(chat.pageId) ?? String(chat.pageId);
   return {
-    shift: { startedAt: new Date(start).toISOString(), endedAt: new Date(end).toISOString() },
+    shift: {
+      startedAt: new Date(start).toISOString(),
+      endedAt: new Date(end).toISOString(),
+      ...(extra?.pageWatches === undefined ? {} : {
+        pages: extra.pageWatches.map((watch) => ({
+          pageLabel: watch.pageLabel,
+          watchFrom: new Date(watch.from).toISOString(),
+          watchTo: new Date(watch.to).toISOString(),
+        })),
+      }),
+    },
     chats: chats.map((chat) => ({
       key: chatKey(pageLabel(chat), chat.conv),
       pageLabel: pageLabel(chat),
       messages: chat.shown.map((message) => ruleMessageOf(message, chat, start, end)),
     })),
     waits: chats.flatMap((chat) => waitRowsOf(chat, pageLabel(chat), start, end)).sort((a, b) => Date.parse(a.from) - Date.parse(b.from)),
+    ...(extra?.colleagueSpans === undefined ? {} : {
+      colleagueSpans: extra.colleagueSpans.map((span) => ({
+        pageLabel: span.pageLabel,
+        name: span.name,
+        from: new Date(span.from).toISOString(),
+        to: new Date(span.to).toISOString(),
+      })),
+    }),
   };
 }
 
@@ -549,9 +588,112 @@ export function shiftPageLabels(shift: Pick<ComputedWork, "pages" | "messages">)
     .sort((a, b) => (shift.messages.get(b) ?? 0) - (shift.messages.get(a) ?? 0) || (shift.pages.get(b) ?? 0) - (shift.pages.get(a) ?? 0) || a.localeCompare(b));
 }
 
-/** The shift wrote on a page it does not work (hold the sales of): whether that page shows all its fans takes the colleagues' shifts (`pagesWithAllFans`). Pure. */
-export function shiftNeedsColleagues(shift: ComputedWork): boolean {
-  return shift.kind === "shift" && [...shift.messages].some(([label, messages]) => messages > 0 && !shift.salesSince.has(label));
+/** Maximum grace past the chatter's scheduled slot end when an incoming colleague arrives late, minutes. */
+export const SHIFT_REVIEW_HANDOVER_SOFT_JOIN_MINUTES = 15;
+/** Maximum window after the chatter's scheduled slot end to recognize a colleague as that slot's incoming successor, minutes. */
+const HANDOVER_SUCCESSOR_WINDOW_MINUTES = 90;
+
+export interface PageWatch {
+  pageId: number;
+  pageLabel: string;
+  from: number;
+  to: number;
+  handedOver: boolean;
+}
+
+export interface ClampedColleagueSpan {
+  pageLabel: string;
+  userId: number;
+  name: string;
+  from: number;
+  to: number;
+}
+
+/**
+ * Per-page watch windows `[shift.startedAt, watchTo]` for one shift. A page's `watchTo` is cut before `end` ONLY when:
+ * 1) the work is a shift and the chatter has scheduled slot occurrence(s) on that page overlapping `[start, end)` whose
+ *    latest end `slotEnd` is strictly before `end`, AND
+ * 2) an incoming colleague's shift holds that page after `slotEnd` (`endedAt > slotEnd` and `salesSince <= slotEnd + 90 min`).
+ * Handover time is clamped to at most 15 min past `slotEnd` so a colleague's long lateness is not dumped on the
+ * outgoing chatter; when no successor shows up on that page, `watchTo` stays `end`. Pure.
+ */
+export function pageWatchesOf(input: {
+  shift: ComputedWork;
+  pages: ReadonlyArray<{ id: number; label: string }>;
+  slots: readonly SlotOccurrence[];
+  colleagues: readonly PersonPiece[];
+  start: number;
+  end: number;
+}): PageWatch[] {
+  const { shift, pages, slots, colleagues, start, end } = input;
+  const softJoin = SHIFT_REVIEW_HANDOVER_SOFT_JOIN_MINUTES * MINUTE_MS;
+  const successorWindow = HANDOVER_SUCCESSOR_WINDOW_MINUTES * MINUTE_MS;
+  return pages.map((page) => {
+    if (shift.kind !== "shift") {
+      return { pageId: page.id, pageLabel: page.label, from: start, to: end, handedOver: false };
+    }
+    const pageSlots = slots.filter((occ) => (occ.pageId === page.id || occ.pageId === null) && occ.start < end && occ.end > start);
+    if (pageSlots.length === 0) {
+      return { pageId: page.id, pageLabel: page.label, from: start, to: end, handedOver: false };
+    }
+    const slotEnd = Math.max(...pageSlots.map((occ) => occ.end));
+    if (slotEnd >= end) {
+      return { pageId: page.id, pageLabel: page.label, from: start, to: end, handedOver: false };
+    }
+    let earliestSince = Number.POSITIVE_INFINITY;
+    for (const colleague of colleagues) {
+      if (colleague.work.kind !== "shift") continue;
+      const since = colleague.work.salesSince.get(page.label);
+      if (since === undefined) continue;
+      if (colleague.work.endedAt <= slotEnd || since > slotEnd + successorWindow || since >= end) continue;
+      if (since < earliestSince) earliestSince = since;
+    }
+    if (!Number.isFinite(earliestSince)) {
+      return { pageId: page.id, pageLabel: page.label, from: start, to: end, handedOver: false };
+    }
+    const watchTo = Math.min(end, Math.max(slotEnd, Math.min(earliestSince, slotEnd + softJoin)));
+    return { pageId: page.id, pageLabel: page.label, from: start, to: watchTo, handedOver: watchTo < end };
+  });
+}
+
+/**
+ * Colleagues' shift holding spans on this shift's pages, clamped to `[start - norm, end]`. Clamping to `end` guarantees
+ * that an ongoing successor shift never changes a closed shift's cache key (`shiftKeyOf`) or wait attribution. Pure.
+ */
+export function colleagueSpansOf(input: {
+  pages: ReadonlyArray<{ label: string }>;
+  colleagues: readonly PersonPiece[];
+  start: number;
+  end: number;
+}): ClampedColleagueSpan[] {
+  const { pages, colleagues, start, end } = input;
+  const norm = SHIFT_REVIEW_REPLY_NORM_SECONDS * 1000;
+  const minFrom = start - norm;
+  const pageSet = new Set(pages.map((page) => page.label));
+  const out: ClampedColleagueSpan[] = [];
+  for (const colleague of colleagues) {
+    if (colleague.work.kind !== "shift") continue;
+    for (const [pageLabel, since] of colleague.work.salesSince) {
+      if (!pageSet.has(pageLabel)) continue;
+      const from = Math.max(since, minFrom);
+      const to = Math.min(colleague.work.endedAt, end);
+      if (to > from) out.push({ pageLabel, userId: colleague.userId, name: colleague.username, from, to });
+    }
+  }
+  out.sort((a, b) => a.pageLabel.localeCompare(b.pageLabel) || a.from - b.from || a.to - b.to || a.userId - b.userId);
+  return out;
+}
+
+/** Per-page `workedWindows` argument for `listShiftReviewMessages` from `pageWatches` and `allFansPageIds`. Pure. */
+export function workedWindowsOf(
+  pageWatches: readonly PageWatch[],
+  allFansPageIds: readonly number[],
+  end: number,
+): Array<{ pageId: number; from: Date; to: Date }> {
+  const allFans = new Set(allFansPageIds);
+  return pageWatches
+    .filter((watch) => allFans.has(watch.pageId))
+    .map((watch) => ({ pageId: watch.pageId, from: new Date(watch.from), to: new Date(watch.to === end ? end + 1 : watch.to) }));
 }
 
 /** The shift that holds `at` among one person's work, and the shifts around it. Pure. */
@@ -960,14 +1102,22 @@ export async function computeShiftReview(
   const everyone = () => (everyoneRead ??= readPeopleWork(app.db, {
     from: new Date(start - 2 * DAY_MS), to: new Date(Math.min(end + DAY_MS, now.getTime())), now, pages: "all", realm,
   }));
-  const colleagues = !shiftNeedsColleagues(shift) ? [] : piecesOf(await everyone(), "shift").filter((one) => one.userId !== query.userId);
+  const [everyoneMap, slotMap] = await Promise.all([
+    everyone(),
+    registrySlotOccurrences(app.db, { from: new Date(start - DAY_MS), to: new Date(end + DAY_MS) }),
+  ]);
+  const colleagues = piecesOf(everyoneMap, "shift").filter((one) => one.userId !== query.userId);
   const allFans = pagesWithAllFans(shift, colleagues, start, end);
   const workedPageIds = pages.filter((page) => allFans.has(page.label)).map((page) => page.id);
+  const pageWatches = pageWatchesOf({ shift, pages, slots: slotMap.get(query.userId) ?? [], colleagues, start, end });
+  const watchByPageId = new Map(pageWatches.map((watch) => [watch.pageId, watch]));
+  const colleagueSpans = colleagueSpansOf({ pages, colleagues, start, end });
+  const workedWindows = workedWindowsOf(pageWatches, workedPageIds, end);
   const labelOf = new Map(pages.map((page) => [page.id, page.label]));
 
   const [rows, sends, generations, autoTexts, minutes, sales, before, follows, aiUse] = await Promise.all([
     listShiftReviewMessages(app.db, {
-      userId: query.userId, pageIds, workedPageIds, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
+      userId: query.userId, pageIds, workedPageIds, workedWindows, from, to, horizonHours: SHIFT_REVIEW_WAIT_HORIZON_HOURS, burstMinChats: MASS_SEND_MIN_CHATS,
       deletedUnseenSeconds: SHIFT_REVIEW_DELETED_UNSEEN_SECONDS, broadcastOwnWords: SHIFT_REVIEW_BROADCAST_OWN_WORDS,
     }),
     listShiftReviewSends(app.db, { userId: query.userId, pageIds, from, to }),
@@ -1073,6 +1223,7 @@ export async function computeShiftReview(
           mine = {
             ...origin,
             replySeconds: fact.mine.replySeconds,
+            ...(fact.mine.replyTail === undefined ? {} : { replyTail: fact.mine.replyTail }),
             repeats: hi ? 0 : Math.max(0, (mineText.get(normalized(message.text))?.size ?? 1) - 1),
             marks: marksOf(message.text, fanWritesRussian),
           };
@@ -1185,11 +1336,15 @@ export async function computeShiftReview(
       pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
       lastInputAt: new Date(shift.lastInputAt).toISOString(),
       lastBeatAt: new Date(shift.lastBeatAt).toISOString(),
-      pages: pages.map((page) => ({
-        pageLabel: page.label, platform: page.platform, messages: shift.messages.get(page.label) ?? 0, worked: worked(page.label),
-        allFans: allFans.has(page.label),
-        sales: salesOfPage.get(page.id) ?? { netMills: 0, byKind: [] },
-      })),
+      pages: pages.map((page) => {
+        const watch = watchByPageId.get(page.id);
+        return {
+          pageLabel: page.label, platform: page.platform, messages: shift.messages.get(page.label) ?? 0, worked: worked(page.label),
+          allFans: allFans.has(page.label),
+          ...(watch === undefined ? {} : { watchFrom: new Date(watch.from).toISOString(), watchTo: new Date(watch.to).toISOString() }),
+          sales: salesOfPage.get(page.id) ?? { netMills: 0, byKind: [] },
+        };
+      }),
       salesNetMills: byRule === null ? heldNetMills(visibleSales) : byRule.salesNetMills,
     },
     previousAt: previous === null ? null : new Date(previous.startedAt).toISOString(),
@@ -1200,6 +1355,12 @@ export async function computeShiftReview(
     beforeSales: (byRule === null ? beforeSales : beforeSales.filter((one) => !byRule.creditedToPerson(one.sale.transactionId))).map(rowOf),
     laterSales: laterSales.map(rowOf),
     waits,
+    colleagueSpans: colleagueSpans.map((span) => ({
+      pageLabel: span.pageLabel,
+      name: span.name,
+      from: new Date(span.from).toISOString(),
+      to: new Date(span.to).toISOString(),
+    })),
     follows: follows.filter((follow) => follow.at.getTime() >= start && follow.at.getTime() <= end).map((follow) => ({
       pageLabel: labelOf.get(follow.pageId) ?? String(follow.pageId),
       fanRef: follow.fanRef,

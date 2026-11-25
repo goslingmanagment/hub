@@ -4,8 +4,10 @@ import {
   shiftReviewFansMessage,
   shiftReviewMedian,
   shiftReviewMine,
+  shiftReviewReplyTail,
   shiftReviewSeen,
   shiftReviewWaits,
+  silentTailAnswerKeys,
 } from "./shift-review-rules.ts";
 
 /**
@@ -86,7 +88,7 @@ export interface ShiftAuditReport {
   total: ShiftAuditNumbers;
 }
 
-type Review = Pick<TeamShiftReviewResponse, "shift" | "chats" | "waits" | "follows" | "aiUse">;
+type Review = Pick<TeamShiftReviewResponse, "shift" | "chats" | "waits" | "colleagueSpans" | "follows" | "aiUse">;
 type Message = TeamShiftReviewResponse["chats"][number]["messages"][number];
 
 function empty(): ShiftAuditNumbers {
@@ -132,6 +134,8 @@ export function shiftAuditNumbers(review: Review): ShiftAuditReport {
   const delays = new Map<string, number[]>();
   const chatPage = new Map(review.chats.map((chat) => [chat.key, chat.pageLabel]));
   const minesOf = new Map<string, number[]>();
+  const waits = shiftReviewWaits({ shift: review.shift, chats: review.chats, waits: review.waits, colleagueSpans: review.colleagueSpans });
+  const silentTailAnswers = silentTailAnswerKeys(waits);
 
   for (const chat of review.chats) {
     const page = of(chat.pageLabel);
@@ -155,7 +159,7 @@ export function shiftAuditNumbers(review: Review): ShiftAuditReport {
     }
     for (const message of mine) {
       const seconds = message.mine?.replySeconds ?? null;
-      if (seconds === null) continue;
+      if (seconds === null || shiftReviewReplyTail(message, chat.key, silentTailAnswers)) continue;
       delays.set(chat.pageLabel, [...(delays.get(chat.pageLabel) ?? []), seconds]);
       if (seconds > SHIFT_AUDIT_SLOW_REPLY_SECONDS) page.repliesOver15 += 1;
       if (page.longestReplySeconds === null || seconds > page.longestReplySeconds) {
@@ -177,7 +181,6 @@ export function shiftAuditNumbers(review: Review): ShiftAuditReport {
     }
   }
 
-  const waits = shiftReviewWaits({ shift: review.shift, chats: review.chats, waits: review.waits });
   const atStart = new Set<string>();
   const atEnd = new Set<string>();
   for (const wait of waits) {

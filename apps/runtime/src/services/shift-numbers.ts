@@ -40,9 +40,9 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
  */
 
 /** Raise when what a shift's numbers are changes: every row of another revision is counted again. */
-export const SHIFT_NUMBERS_REVISION = 1;
-/** How far back each pass looks for closed shifts to write or rewrite (the team reads ask up to 31 days). */
-export const SHIFT_NUMBERS_REFRESH_DAYS = 16;
+export const SHIFT_NUMBERS_REVISION = 2;
+/** How far back each pass looks for closed shifts to write or rewrite (covers the full 31-day team read window). */
+export const SHIFT_NUMBERS_REFRESH_DAYS = 32;
 /** The shadow check's window. */
 export const SHIFT_NUMBERS_CHECK_DAYS = 14;
 
@@ -50,13 +50,19 @@ const DAY_MS = 86_400_000;
 /** Shifts the pass reads at once: it runs beside the API on the same database. */
 const PASS_READS_AT_ONCE = 3;
 
-/** What a shift's numbers are read from, besides the facts: its end, pages, all-fans pages and the openings. Pure. */
+/** What a shift's numbers are read from, besides the facts: its end, pages, all-fans pages, page watch windows, clamped colleague spans and openings. Pure. */
 export function shiftKeyOf(job: ShiftJob, openings: readonly string[]): string {
   const openingsHash = createHash("sha1").update(openings.join("\u0000")).digest("hex").slice(0, 12);
   return JSON.stringify({
     end: job.end,
     pages: job.pages.map((page) => page.id).sort((a, b) => a - b),
     allFans: [...job.allFansPageIds].sort((a, b) => a - b),
+    watches: job.pageWatches
+      .map((watch) => [watch.pageId, watch.from, watch.to] as const)
+      .sort((a, b) => a[0] - b[0]),
+    colleagues: job.colleagueSpans
+      .map((span) => [span.pageLabel, span.userId, span.from, span.to] as const)
+      .sort((a, b) => a[0].localeCompare(b[0]) || a[1] - b[1] || a[2] - b[2] || a[3] - b[3]),
     openings: openingsHash,
   });
 }
@@ -110,10 +116,10 @@ export async function storedRowsFor(
  * The cuts the shifts are found in, as each realm's reader finds them: the live agency's ("all", the owner's), and
  * the test team's pages when there are any (the test owner's cut).
  */
-async function realmScopes(app: Pick<AppContext, "db">): Promise<Array<"all" | number[]>> {
+async function realmScopes(app: Pick<AppContext, "db">): Promise<Array<{ scope: "all" | number[]; realm: "live" | "test" }>> {
   const facts = await loadTeamFacts(app.db);
   const test = facts.pages.filter((page) => page.test).map((page) => page.pageId);
-  return test.length === 0 ? ["all"] : ["all", test];
+  return test.length === 0 ? [{ scope: "all", realm: "live" }] : [{ scope: "all", realm: "live" }, { scope: test, realm: "test" }];
 }
 
 function markOf(app: Pick<AppContext, "db">, job: ShiftJob): Promise<string> {
@@ -147,8 +153,8 @@ export async function refreshShiftNumbers(
 ): Promise<ShiftNumbersRefresh> {
   const store = input.store ?? tableStore(app.db);
   const tally: ShiftNumbersRefresh = { closed: 0, written: 0, kept: 0 };
-  for (const scope of await realmScopes(app)) {
-    const found = await teamShiftJobs(app, { from: input.from, to: input.now, now: input.now, scope });
+  for (const { scope, realm } of await realmScopes(app)) {
+    const found = await teamShiftJobs(app, { from: input.from, to: input.now, now: input.now, scope, realm });
     const closed = found.jobs.filter((job) => !job.shift.ongoing);
     tally.closed += closed.length;
     if (closed.length === 0) continue;
@@ -210,8 +216,8 @@ export async function compareShiftNumbers(
   app: Pick<AppContext, "db">, input: { from: Date; now: Date; store?: ShiftNumbersStore },
 ): Promise<ShiftNumbersCheck> {
   const check: ShiftNumbersCheck = { compared: 0, differ: 0, missing: 0, first: [], liveMs: 0, storedMs: 0 };
-  for (const scope of await realmScopes(app)) {
-    const found = await teamShiftJobs(app, { from: input.from, to: input.now, now: input.now, scope });
+  for (const { scope, realm } of await realmScopes(app)) {
+    const found = await teamShiftJobs(app, { from: input.from, to: input.now, now: input.now, scope, realm });
     const closed: TeamShiftJobs = { jobs: found.jobs.filter((job) => !job.shift.ongoing), openings: found.openings };
     const storedStart = Date.now();
     const stored = await storedRowsFor(app, closed, input.store);

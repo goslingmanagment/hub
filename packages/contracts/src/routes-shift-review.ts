@@ -103,6 +103,8 @@ const shiftReviewMineSchema = z.object({
   fixExpanded: z.boolean().optional(),
   /** Seconds the fan had waited (from the shift's start at most) when this message answered them; null — no one waited. */
   replySeconds: count.nullable(),
+  /** True when this reply answered a silent tail from a past shift (fan began waiting before the shift and did not write in it): excluded from the shift's reply median. */
+  replyTail: z.boolean().optional(),
   /** Other chats the chatter sent the same text to in this shift; a Hi greeting (the page's A/B set) repeats nothing. */
   repeats: count,
   /** `dash` — a long dash (an AI tell), `cyrillic` — Russian letters to a fan who writes none, `leak` — the AI's service text. */
@@ -254,6 +256,9 @@ export const teamShiftReviewResponseSchema = z.object({
      */
     pages: z.array(z.object({
       pageLabel: z.string(), platform: z.string(), messages: count, worked: z.boolean(), allFans: z.boolean().optional(),
+      /** When the chatter's watch on this page began and ended (cut earlier than `endedAt` on scheduled handover to a colleague). Absent — the whole shift. */
+      watchFrom: isoTimestamp.optional(),
+      watchTo: isoTimestamp.optional(),
       /**
        * Every sale on the page within the shift, whoever's (the page's money, as the shift audit counts it), net, and by
        * kind. Whose each is — `sales`; the shift's — `salesNetMills`. Absent — not read.
@@ -312,6 +317,16 @@ export const teamShiftReviewResponseSchema = z.object({
     by: z.enum(["me", "other", "none"]).nullable(),
     pending: z.boolean().optional(),
   })),
+  /**
+   * Colleagues' shift holding spans on this shift's pages, clamped to `[startedAt - 10 min, endedAt]`. Used by
+   * `shiftReviewWaits` to tell co-working and page handover apart from unanswered waits. Absent — not read.
+   */
+  colleagueSpans: z.array(z.object({
+    pageLabel: z.string(),
+    name: z.string(),
+    from: isoTimestamp,
+    to: isoTimestamp,
+  })).optional(),
   /** The new followers of the shift's pages within it, oldest first. Absent — not read. */
   follows: z.array(shiftReviewFollowSchema).optional(),
   /** The chatter's AI events on the shift's pages within it, by page and feature (`ai_usage_events`). Absent — not read. */
