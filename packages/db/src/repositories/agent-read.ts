@@ -480,7 +480,7 @@ export async function resolveAgentFanCandidates(
              r.platform_account_id, r.rank
       from ranked r
       where r.rn <= ${perValueLimit}
-      order by r.id, r.match_kind, r.matched_value, r.platform_account_id nulls first, r.rank
+      order by r.rank, r.id, r.match_kind, r.matched_value, r.platform_account_id nulls first
       limit ${input.limit}
     `
     : sql`

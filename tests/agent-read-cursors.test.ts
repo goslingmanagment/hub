@@ -166,4 +166,21 @@ describe("agent read plane: cursors", () => {
     expect((thrown as AppError).statusCode).toBe(400);
     expect((thrown as AppError).code).toBe("agent_cursor_too_large");
   });
+
+  it("refuses compressible cursor payloads exceeding the 16 KiB decode ceiling at mint time", () => {
+    // Highly compressible (>16 KiB uncompressed) payload would fit in 2048 chars compressed,
+    // but decode rejects >16 KiB uncompressed — encode must reject upfront instead of minting a dead cursor.
+    let thrown: unknown = null;
+    try {
+      encodeAgentCursor({
+        ...payload,
+        params: { ...params, q: "a".repeat(20_000) },
+      }, signing);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).statusCode).toBe(400);
+    expect((thrown as AppError).code).toBe("agent_cursor_too_large");
+  });
 });

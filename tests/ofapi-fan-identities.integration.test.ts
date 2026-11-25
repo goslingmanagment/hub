@@ -18,10 +18,7 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import { SyncPayloadPersistenceError } from "../apps/runtime/src/services/sync/errors.ts";
-import {
-  OFAPI_LINK_CATALOG_MAX_AGE_MS,
-  syncOfapiFanIdentities,
-} from "../apps/runtime/src/services/sync/ofapi-fan-identities.ts";
+import { syncOfapiFanIdentities } from "../apps/runtime/src/services/sync/ofapi-fan-identities.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -774,9 +771,10 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     tags: null,
   });
 
-  it("LINK-001: reuses fresh complete page_link_stat_runs with zero link-list API calls", async () => {
-    const page = await seedMappedPage("links-reuse-fresh-of");
+  it("does not reuse /stored page_link_stat_runs in Phase 1 so removed links never burn live Phase 2 calls", async () => {
+    const page = await seedMappedPage("links-no-stored-reuse-of");
     const pulledAt = new Date(Date.now() - 60 * 60_000);
+    // Stored link-stats include removed/deleted links (id 42, 7) that live lists hide.
     await insertLinkStatRunWithSnapshots(
       appContext.db,
       {
@@ -785,11 +783,14 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
         status: "complete",
         pulledAt,
         apiPages: 1,
-        rawItems: 1,
-        writtenRows: 1,
+        rawItems: 2,
+        writtenRows: 2,
         ofapiAccountId: OFAPI_ACCOUNT,
       },
-      [linkSnapshot(page.id, "tracking", "42", { name: "promo-a", clicksCount: 10, subscribersCount: 2 })],
+      [
+        linkSnapshot(page.id, "tracking", "42", { name: "removed-track" }),
+        linkSnapshot(page.id, "tracking", "101", { name: "live-track" }),
+      ],
     );
     await insertLinkStatRunWithSnapshots(
       appContext.db,
@@ -799,90 +800,26 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
         status: "complete",
         pulledAt,
         apiPages: 1,
-        rawItems: 1,
-        writtenRows: 1,
+        rawItems: 2,
+        writtenRows: 2,
         ofapiAccountId: OFAPI_ACCOUNT,
       },
-      [linkSnapshot(page.id, "trial", "7", { name: "trial-finished", isFinished: true, clicksCount: 5, subscribersCount: 1 })],
-    );
-
-    const { client, calls } = fakeLinksClient({
-      trackingLinks: [{ id: 999 }],
-      trialLinks: [{ id: 888 }],
-      trackingUsers: new Map([
-        ["42:subscribers", [linkUser(700001, "from_cached_track", "Cached Track")]],
-        ["42:spenders", []],
-      ]),
-      trialSubscribers: new Map([
-        ["7", [linkUser(700002, "from_cached_trial", "Cached Trial")]],
-      ]),
-    });
-    appContext = { ...appContext, ofapi: client };
-
-    const result = await syncOfapiFanIdentities(appContext, await buildInput(page));
-    expect(result.satisfied).toBe(true);
-    // Zero link-list calls: both tracking & trial came from fresh complete link-stats runs.
-    expect(calls).toEqual(["tracking:42:subscribers", "tracking:42:spenders", "trial:7"]);
-    expect(client.listTrackingLinks).not.toHaveBeenCalled();
-    expect(client.listTrialLinks).not.toHaveBeenCalled();
-    expect(result.stats).toMatchObject({ trackingLinks: 1, trialLinks: 1, requestsUsed: 3 });
-
-    const saved = (await getCheckpoint(appContext.db, page.id, "fan_identities"))?.state as Record<string, unknown>;
-    expect(saved.finishedTrialLinkIds).toEqual(["7"]);
-  });
-
-  it("LINK-001: falls back to live link-list discovery when link-stats runs are stale, partial, or from another binding", async () => {
-    const page = await seedMappedPage("links-reuse-fallback-of");
-    const staleAt = new Date(Date.now() - OFAPI_LINK_CATALOG_MAX_AGE_MS - 60_000);
-    // Tracking has only a stale complete run; trial has a fresh partial run + a fresh run under a different binding.
-    await insertLinkStatRunWithSnapshots(
-      appContext.db,
-      {
-        platformAccountId: page.id,
-        linkKind: "tracking",
-        status: "complete",
-        pulledAt: staleAt,
-        apiPages: 1,
-        rawItems: 1,
-        writtenRows: 1,
-        ofapiAccountId: OFAPI_ACCOUNT,
-      },
-      [linkSnapshot(page.id, "tracking", "11")],
-    );
-    await insertLinkStatRunWithSnapshots(
-      appContext.db,
-      {
-        platformAccountId: page.id,
-        linkKind: "trial",
-        status: "partial",
-        pulledAt: new Date(Date.now() - 10 * 60_000),
-        apiPages: 1,
-        rawItems: 1,
-        writtenRows: 1,
-        ofapiAccountId: OFAPI_ACCOUNT,
-      },
-      [linkSnapshot(page.id, "trial", "22")],
-    );
-    await insertLinkStatRunWithSnapshots(
-      appContext.db,
-      {
-        platformAccountId: page.id,
-        linkKind: "trial",
-        status: "complete",
-        pulledAt: new Date(Date.now() - 5 * 60_000),
-        apiPages: 1,
-        rawItems: 1,
-        writtenRows: 1,
-        ofapiAccountId: "acct_other_binding",
-      },
-      [linkSnapshot(page.id, "trial", "33")],
+      [
+        linkSnapshot(page.id, "trial", "7", { name: "removed-trial", isFinished: true }),
+        linkSnapshot(page.id, "trial", "202", { name: "live-trial", isFinished: false }),
+      ],
     );
 
     const { client, calls } = fakeLinksClient({
       trackingLinks: [{ id: 101 }],
       trialLinks: [{ id: 202 }],
-      trackingUsers: new Map([["101:subscribers", []], ["101:spenders", []]]),
-      trialSubscribers: new Map([["202", []]]),
+      trackingUsers: new Map([
+        ["101:subscribers", [linkUser(700001, "live_track_fan", "Live Track Fan")]],
+        ["101:spenders", []],
+      ]),
+      trialSubscribers: new Map([
+        ["202", [linkUser(700002, "live_trial_fan", "Live Trial Fan")]],
+      ]),
     });
     appContext = { ...appContext, ofapi: client };
 
@@ -895,5 +832,6 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
       "tracking:101:spenders",
       "trial:202",
     ]);
+    expect(result.stats).toMatchObject({ trackingLinks: 1, trialLinks: 1, requestsUsed: 5 });
   });
 });

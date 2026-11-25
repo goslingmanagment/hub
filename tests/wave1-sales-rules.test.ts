@@ -100,7 +100,7 @@ describe("Wave 1 unit regressions (OA-004, OP-H5, solo-page draft)", () => {
     expect(chainReportDateOf({ handedIn: null, decision, deliveries: partialDeliveries, logins: [101], shift: null, occurredAt })).toBe("2026-11-10");
   });
 
-  it("shows unclaimed nobody sales in near on solo pages while hiding shared-page and owner_nobody sales", () => {
+  it("shows unclaimed nobody sales in near on solo pages only within the shift report day while hiding shared, owner_nobody, out-of-day, and pre-shift pot sales", () => {
     const context: DraftContext = {
       shiftId: 10,
       workRef: "101:2026-11-10T09:00:00.000Z",
@@ -109,24 +109,43 @@ describe("Wave 1 unit regressions (OA-004, OP-H5, solo-page draft)", () => {
       submittedShiftIds: new Set(),
       reported: new Map(),
       handinId: null,
-      soloPages: new Set(["solo-1"]),
+      soloDayWindow: {
+        pages: new Set(["solo-1"]),
+        from: msk("2026-11-10 00:00"),
+        to: msk("2026-11-11 00:00"),
+      },
     };
-    const makeSale = (pageLabel: string, reason: "no_holder" | "owner_nobody"): DraftSale => ({
+    const makeSale = (
+      pageLabel: string,
+      opts: {
+        kind?: "nobody" | "pot";
+        reason?: "no_holder" | "owner_nobody" | "post_tip";
+        occurredAt?: number;
+        inReportWindow?: boolean;
+      } = {},
+    ): DraftSale => ({
       transactionId: 1,
       pageLabel,
       platform: "fansly",
       kind: "subscription",
-      occurredAt: msk("2026-11-10 04:00"),
+      occurredAt: opts.occurredAt ?? msk("2026-11-10 04:00"),
       netMills: 9_000,
-      home: { kind: "nobody", reason, pot: null, shares: [] },
+      home: { kind: opts.kind ?? "nobody", reason: opts.reason ?? "no_holder", pot: opts.kind === "pot" ? "models" : null, shares: [] },
       ppvSenderUserId: null,
       source: "window",
       heldByShift: false,
-      inReportWindow: true,
+      inReportWindow: opts.inReportWindow ?? false,
     });
 
-    expect(classifySale(makeSale("solo-1", "no_holder"), context)).toMatchObject({ group: "near", shareMills: 0 });
-    expect(classifySale(makeSale("solo-1", "owner_nobody"), context)).toBeNull();
-    expect(classifySale(makeSale("shared-1", "no_holder"), context)).toBeNull();
+    // Unclaimed nobody sale on solo page inside the shift's Moscow day (even outside shift hours) -> shown in near.
+    expect(classifySale(makeSale("solo-1"), context)).toMatchObject({ group: "near", shareMills: 0 });
+    // Explicitly decided nobody by owner -> hidden.
+    expect(classifySale(makeSale("solo-1", { reason: "owner_nobody" }), context)).toBeNull();
+    // Shared page -> hidden.
+    expect(classifySale(makeSale("shared-1"), context)).toBeNull();
+    // Previous Moscow day (e.g. night shift crossing midnight) -> hidden.
+    expect(classifySale(makeSale("solo-1", { occurredAt: msk("2026-11-09 23:30") }), context)).toBeNull();
+    // Pre-shift pot sale outside report window on solo page -> hidden (solo day widening is nobody-only).
+    expect(classifySale(makeSale("solo-1", { kind: "pot", reason: "post_tip", inReportWindow: false }), context)).toBeNull();
   });
 });

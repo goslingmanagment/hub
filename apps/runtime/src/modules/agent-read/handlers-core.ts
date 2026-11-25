@@ -399,10 +399,9 @@ export async function handleAgentCapabilities(
 /**
  * Normalizes ONE input into every form worth trying.
  *
- * The `user` prefix is NEVER stripped. `fansly.com/user438765948262952961` is a
+ * The `user` prefix is NEVER stripped. `fansly.com/user100000000000000001` is a
  * USERNAME whose owner's `platform_user_id` is a different number entirely, and
- * the first pass of the production gate answered "no such fan" about a fan who
- * had paid $100 precisely because it treated the slug as an id.
+ * treating the slug as an id would miss an existing paying fan.
  */
 export function normalizeResolveInput(raw: string, hint: string): string[] {
   const forms: string[] = [];
@@ -452,11 +451,11 @@ export async function handleAgentResolve(
     const allValues = [...new Set(perInput.flatMap((entry) => entry.normalized))];
 
     // BL-A-7: apply the 20-candidate cap per input value in SQL (fetching 21
-    // per value so `candidatesCapped` is exact) rather than a single global
-    // limit that lets one noisy input starve the rest of the batch.
+    // per value so `candidatesCapped` is exact) without a smaller global cap
+    // that could truncate across inputs while reporting `candidatesCapped: false`.
     const perInputCap = 20;
     const perValueLimit = perInputCap + 1;
-    const candidateLimit = Math.min(perValueLimit * Math.max(allValues.length, body.inputs.length), 2500);
+    const candidateLimit = perValueLimit * Math.max(allValues.length, body.inputs.length);
     const resolved = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       resolveAgentFanCandidates(tx, {
         pageIds: scope.pageIds,

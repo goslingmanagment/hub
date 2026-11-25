@@ -302,29 +302,39 @@ export async function draftFacts(
   now: Date,
   marks: readonly HandinMarkRow[] = [],
   candidate: readonly HandinVersionLine[] = [],
+  options?: { allowedPageIds?: ReadonlySet<number> },
 ): Promise<DraftFacts> {
   const { shift } = subject;
+  const allowedPageIds = options?.allowedPageIds;
+  const allowedLabels = allowedPageIds === undefined
+    ? null
+    : new Set([...allowedPageIds].map((id) => catalog.labelOf.get(id)).filter((label): label is string => label !== undefined));
   const shiftEnd = shift.state === "going" ? Math.max(now.getTime(), shift.endedAt.getTime()) : shift.endedAt.getTime() + 1;
   // The same slots the hourly `sale_homes` job reads: the draft's homes are the rule's homes.
   const slotProvider = registrySlots(db);
   const slots = await slotProvider.slotsFor({ from: new Date(shift.startedAt.getTime() - 2 * DAY_MS), to: new Date(shiftEnd + DAY_MS) });
-  const window = await reportWindowOf(db, subject, slots, catalog, shiftEnd);
-  // On a solo page (exact 1 active worker on the report day), expose all sales of that 24h Moscow day in «Рядом»
-  // (default $0 -> stays nobody unless the chatter marks «моё»).
+  const rawWindow = await reportWindowOf(db, subject, slots, catalog, shiftEnd);
+  const window: ReportWindow = allowedLabels === null
+    ? rawWindow
+    : { ...rawWindow, pages: new Set([...rawWindow.pages].filter((label) => allowedLabels.has(label))) };
+  // On a solo page (exact 1 active worker on the report day), expose unclaimed `nobody` sales of that exact 24h Moscow
+  // day in «Рядом» (default $0 -> stays nobody unless the chatter marks «моё»). Never widen outside an agent's grant.
   const soloPageLabels = new Set<string>();
   const reportDayStart = Date.parse(`${shift.reportDate}T00:00:00+03:00`);
   const reportDayEnd = reportDayStart + DAY_MS;
-  const candidatePageLabels = new Set([...window.pages, ...shiftPageLabels(shift)]);
+  const candidatePageLabels = new Set(
+    [...window.pages, ...shiftPageLabels(shift)].filter((label) => allowedLabels === null || allowedLabels.has(label)),
+  );
   if (subject.person !== null && !Number.isNaN(reportDayStart)) {
     const candidatePageIds = [...candidatePageLabels]
       .map((label) => catalog.idOf.get(label))
-      .filter((id): id is number => id !== undefined);
+      .filter((id): id is number => id !== undefined && (allowedPageIds === undefined || allowedPageIds.has(id)));
     if (candidatePageIds.length > 0) {
       const realm = (await isTestUser(db, shift.userId)) ? "test" : "live";
       const soloIds = await soloPagesForPerson(db, realm, subject.person.personId, shift.reportDate, candidatePageIds);
       for (const pageId of soloIds) {
         const label = catalog.labelOf.get(pageId);
-        if (label !== undefined) soloPageLabels.add(label);
+        if (label !== undefined && (allowedLabels === null || allowedLabels.has(label))) soloPageLabels.add(label);
       }
     }
   }
@@ -347,12 +357,13 @@ export async function draftFacts(
     return row?.id ?? -1;
   };
 
-  const sales: DraftSale[] = live.answer.sales.map((sale, index) => {
+  const sales: DraftSale[] = live.answer.sales.flatMap((sale, index) => {
+    if (allowedLabels !== null && !allowedLabels.has(sale.pageLabel)) return [];
     const home = live.homes[index]!;
     const at = Date.parse(sale.occurredAt);
     const isDayNobody = home.kind === "nobody" && home.reason !== "owner_nobody"
       && candidatePageLabels.has(sale.pageLabel) && !Number.isNaN(reportDayStart) && at >= reportDayStart && at < reportDayEnd;
-    return {
+    return [{
       transactionId: Number(sale.transactionRef),
       pageLabel: sale.pageLabel,
       platform: sale.platform,
@@ -374,16 +385,17 @@ export async function draftFacts(
       ppvSenderUserId: sale.ppvSender?.userId ?? null,
       source: "window",
       heldByShift: workRef !== null && sale.holders.includes(workRef),
-      inReportWindow: (window.pages.has(sale.pageLabel) && at >= window.from && at < window.to)
-        || (hasSoloPages && soloPageLabels.has(sale.pageLabel) && at >= reportDayStart && at < reportDayEnd)
-        || isDayNobody,
-    };
+      // Strict report window only (plus same-day unclaimed nobody for messaged-fan lookup); solo-page 24h visibility
+      // is enforced separately in `classifySale` strictly for unclaimed `nobody` sales inside `[reportDayStart, reportDayEnd)`.
+      inReportWindow: (window.pages.has(sale.pageLabel) && at >= window.from && at < window.to) || isDayNobody,
+    }];
   });
 
   const beforeToMs = Number.isNaN(reportDayEnd) ? from.getTime() : Math.max(from.getTime(), Math.min(reportDayEnd, now.getTime()));
   const liveIds = new Set(sales.map((sale) => sale.transactionId));
   const beforeAll = await listSaleHomes(db, { from: new Date(window.from - HANDIN_LOOKBACK_DAYS * DAY_MS), to: new Date(beforeToMs) });
   const beforeCandidates = beforeAll.filter((row) => {
+    if (allowedPageIds !== undefined && !allowedPageIds.has(row.pageId)) return false;
     if (liveIds.has(row.transactionId)) return false;
     const at = row.occurredAt.getTime();
     if (at < from.getTime() && row.shares.some((share) => subject.userIds.includes(share.userId))) return true;
@@ -481,7 +493,7 @@ export async function draftFacts(
     reported,
     handinId: handin?.id ?? null,
     notMine,
-    soloPages: soloPageLabels,
+    ...(hasSoloPages ? { soloDayWindow: { pages: soloPageLabels, from: reportDayStart, to: reportDayEnd } } : {}),
     messagedNobodyIds,
   };
 
@@ -502,6 +514,7 @@ export async function draftFacts(
   // One of them the draft no longer reads — of the days before the shift, its home naming the person no more — is
   // read by its id: the word keeps it a line of the report it was said in.
   for (const row of await listHandinSalesByIds(db, [...notMine].filter((id) => !seen.has(id)))) {
+    if (allowedPageIds !== undefined && !allowedPageIds.has(row.pageId)) continue;
     const one = classifySale(saleOfRow(row), context);
     if (one === null) continue;
     seen.add(row.transactionId);
@@ -510,7 +523,8 @@ export async function draftFacts(
 
   // The sales the person added by hand: a «моё» on a sale no group of the draft holds.
   const claimedIds = marks.filter((mark) => mark.statement === "mine" && !seen.has(mark.transactionId)).map((mark) => mark.transactionId);
-  const claimedRows = await listHandinSalesByIds(db, claimedIds);
+  const claimedRows = (await listHandinSalesByIds(db, claimedIds))
+    .filter((row) => allowedPageIds === undefined || allowedPageIds.has(row.pageId));
   const others = await listHandinOtherReports(db, {
     transactionIds: [...claimedRows.map((row) => row.transactionId), ...classified.filter((one) => one.group === "near").map((one) => one.sale.transactionId)],
     exceptUserIds: subject.userIds,
@@ -526,7 +540,8 @@ export async function draftFacts(
   const unshown = deliveries.filter((one) => one.state !== "declined" && !seen.has(one.decision.transactionId!)
     && (one.shiftId === shift.id || (one.state === "pending" && one.shiftId === null)));
   if (unshown.length > 0) {
-    const rows = await listHandinSalesByIds(db, unshown.map((one) => one.decision.transactionId!));
+    const rows = (await listHandinSalesByIds(db, unshown.map((one) => one.decision.transactionId!)))
+      .filter((row) => allowedPageIds === undefined || allowedPageIds.has(row.pageId));
     const byId = new Map(rows.map((row) => [row.transactionId, row]));
     for (const delivery of unshown) {
       const decision = delivery.decision;

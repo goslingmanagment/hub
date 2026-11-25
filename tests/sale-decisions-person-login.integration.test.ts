@@ -1,6 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createFanslyPage, createModel, insertAgentKey, listLoginsByPersonCode } from "@agency_hub_core/db";
+import {
+  applySaleDelivery,
+  createFanslyPage,
+  createModel,
+  insertAgentKey,
+  listLoginsByPersonCode,
+  listSaleDecisions,
+  scheduleSaleDeliveries,
+} from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -234,5 +242,39 @@ describe("a person code names the person's live login", () => {
       { person: "vera", userId: users["vera-new"], reportDate: "2026-11-20" },
       { person: "gleb", userId: users["gleb-one"], reportDate: "2026-11-21" },
     ]));
+
+    // Linking a pre-applied imported decision preserves 'applied' state instead of re-scheduling 'pending'.
+    const txPreApplied = await insertTx("tx-pre-applied-link");
+    const preAppliedId = Number((await testDb.pool.query<{ id: string }>(
+      `insert into sale_owner_decisions
+         (transaction_id, page_id, kind, shares, outcome, decided_at, source, applied_user_id, applied_report_date, applied_at)
+       values ($1, $2, 'split', $3::jsonb, 'first', $4::timestamptz, 'ledger', $5, '2026-11-20', now()) returning id`,
+      [txPreApplied, pageId, JSON.stringify([{ userId: users["vera-new"], percent: 100 }]), occurredAt, users["vera-old"]],
+    )).rows[0]!.id);
+    const [preAppliedRow] = await listSaleDecisions(app.db, { ids: [preAppliedId] });
+    await scheduleSaleDeliveries(app.db, preAppliedRow!);
+    const preAppliedDeliveries = await testDb.pool.query<{ state: string; report_date: string | null }>(
+      "select state, to_char(report_date, 'YYYY-MM-DD') as report_date from sale_decision_deliveries where decision_id = $1",
+      [preAppliedId],
+    );
+    expect(preAppliedDeliveries.rows).toEqual([{ state: "applied", report_date: "2026-11-20" }]);
+
+    // Partial per-recipient apply on a 2-way split publishes a 'changed' feed event with the new appliedDeliveries.
+    const txPartial = await insertTx("tx-partial-apply-feed");
+    const partialId = Number((await testDb.pool.query<{ id: string }>(
+      `insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, decided_at, source)
+       values ($1, $2, 'split', $3::jsonb, 'half', $4::timestamptz, 'dispute') returning id`,
+      [txPartial, pageId, JSON.stringify([{ userId: users["vera-new"], percent: 50 }, { userId: users["gleb-one"], percent: 50 }]), occurredAt],
+    )).rows[0]!.id);
+    const [partialRow] = await listSaleDecisions(app.db, { ids: [partialId] });
+    await scheduleSaleDeliveries(app.db, partialRow!);
+    const beforeFeed = await readSaleDecisionsFeed(app, { pageIds: [pageId], limit: 200 });
+    expect(await applySaleDelivery(app.db, { id: partialId, userId: users["vera-new"]!, reportDate: "2026-11-22", at: new Date() })).toBe(true);
+    const deltaFeed = await readSaleDecisionsFeed(app, { pageIds: [pageId], since: beforeFeed.next, limit: 50 });
+    const partialChange = deltaFeed.changes.find((c) => c.decision.id === partialId);
+    expect(partialChange?.change).toBe("changed");
+    expect(partialChange?.decision.appliedDeliveries).toEqual([
+      { person: "vera", userId: users["vera-new"], reportDate: "2026-11-22" },
+    ]);
   });
 });

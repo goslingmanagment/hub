@@ -432,6 +432,8 @@ interface LaneInFlight {
 /** Capture-job states that mean the OFAPI executor still owns this work. */
 const OFAPI_LIVE_STATES = new Set(["ready", "leased", "awaiting_parse", "retry_wait"]);
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * The lane table for work in flight — one reader per executor lane, looked
  * up, never compared.
@@ -439,6 +441,9 @@ const OFAPI_LIVE_STATES = new Set(["ready", "leased", "awaiting_parse", "retry_w
 const LANE_IN_FLIGHT: Readonly<Partial<Record<Platform, LaneInFlight>>> = {
   onlyfans: {
     read: async ({ app, row }): Promise<InFlightVerdict> => {
+      if (!UUID_RE.test(row.executionRef)) {
+        return { kind: "gone" };
+      }
       const job = await getOfapiCaptureJob(app.db, row.executionRef);
       if (!job) {
         return { kind: "gone" };

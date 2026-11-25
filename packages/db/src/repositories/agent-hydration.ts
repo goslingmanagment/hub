@@ -1021,8 +1021,10 @@ export async function listDispatchingAgentHydrationRequests(
     select ${REQUEST_COLUMNS} ${REQUEST_FROM}
     left join ofapi_capture_jobs j
       on p.platform = 'onlyfans'
-     and r.execution_ref ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-     and j.id = r.execution_ref::uuid
+     and j.id = case
+       when r.execution_ref ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+       then r.execution_ref::uuid
+     end
     where r.state = 'dispatching'
       and ${LEGACY_SWEEPABLE}
       ${excluded}

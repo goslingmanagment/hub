@@ -42,8 +42,8 @@ Read this plan end-to-end before Task 1. If any referenced symbol/file diverges 
 {
   "id": 2117449,
   "campaignCode": 7,
-  "campaignName": "waptap",
-  "campaignUrl": "https://onlyfans.com/loravie/c7",
+  "campaignName": "promo-a",
+  "campaignUrl": "https://onlyfans.com/example-creator/c7",
   "subscribersCount": 19,
   "clicksCount": 82,
   "createdAt": "2025-09-15T10:17:11+00:00",

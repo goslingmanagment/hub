@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 
 import { z } from "zod";
@@ -7,6 +8,7 @@ import {
   openCursorEnvelope,
   sealCursorEnvelope,
   SIGNED_CURSOR_MAX_LENGTH,
+  SIGNED_CURSOR_MAX_UNCOMPRESSED_BYTES,
   type SignedCursorKeyRing,
 } from "../../services/signed-cursor.ts";
 import { AppError } from "../../services/errors.ts";
@@ -99,6 +101,16 @@ export function encodeAgentCursor(
     paramsHash: agentParamsHash(payload.params),
     issuedAt: payload.issuedAt ?? new Date().toISOString(),
   } satisfies AgentCursorPayload);
+  const canonicalBytes = Buffer.byteLength(canonicalJson(canonical), "utf8");
+  if (canonicalBytes > SIGNED_CURSOR_MAX_UNCOMPRESSED_BYTES) {
+    // BL-A9: enforce the decoder's uncompressed cap at mint time so a highly
+    // compressible >16 KiB payload is never minted into an un-decodable cursor.
+    throw new AppError(
+      "Query parameters are too large to paginate within cursor size limits",
+      400,
+      "agent_cursor_too_large",
+    );
+  }
   const token = sealCursorEnvelope(CURSOR_HMAC_DOMAIN, canonical, signing, undefined, {
     compressIfOversized: true,
   });
