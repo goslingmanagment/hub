@@ -10,6 +10,7 @@ import {
   CHATTER_SHIFT_MIN_WORKED_MINUTES,
   CHATTER_SHIFT_PAGE_MIN_MESSAGES,
   CHATTER_SHIFT_PIECE_MIN_MESSAGES,
+  CHATTER_SHIFT_SEND_ACTIVE_SINCE,
   CHATTER_SHIFT_SLOT_PAUSE_SINCE,
   CHATTER_SHIFTS_MAX_WINDOW_DAYS,
   type ClientActivityBody,
@@ -199,6 +200,8 @@ function addTo(map: Map<string, number>, key: string, by: number) {
 
 /** From when a break inside the person's own slot is a pause (CHATTER_SHIFT_SLOT_PAUSE_SINCE), ms. */
 const SLOT_PAUSE_SINCE = Date.parse(CHATTER_SHIFT_SLOT_PAUSE_SINCE);
+/** From when a send minute inside an already-started stretch counts as active work (CHATTER_SHIFT_SEND_ACTIVE_SINCE), ms. */
+const SEND_ACTIVE_SINCE = Date.parse(CHATTER_SHIFT_SEND_ACTIVE_SINCE);
 
 /**
  * The work of one person from their minutes (any order, any pages; one row per
@@ -220,11 +223,33 @@ export function workOfMinutes(
     if (!minute.input) continue;
     const pages = activeAt.get(minute.at);
     if (pages === undefined) activeAt.set(minute.at, [minute.pageLabel]);
-    else pages.push(minute.pageLabel);
+    else if (!pages.includes(minute.pageLabel)) pages.push(minute.pageLabel);
   }
-  const inputs = [...activeAt.keys()].sort((a, b) => a - b);
-  if (inputs.length === 0) return [];
+  const baseInputs = [...activeAt.keys()].sort((a, b) => a - b);
+  if (baseInputs.length === 0) return [];
 
+  const pauseAfter = CHATTER_SHIFT_IDLE_PAUSE_MINUTES * MINUTE_MS;
+  const endAfter = CHATTER_SHIFT_END_IDLE_MINUTES * MINUTE_MS;
+  /**
+   * A break from the action at `from` to `until` (the next action, or now) lies in the person's own slot: one occurrence
+   * of their schedule holds both, and it began on or after SLOT_PAUSE_SINCE (owner, 2026-11-19).
+   */
+  const inOwnSlot = (from: number, until: number) => from >= SLOT_PAUSE_SINCE && schedule.some((span) => span.start <= from && until < span.end);
+
+  // From SEND_ACTIVE_SINCE onward, authored sends inside an already-started stretch fill missed/return-minute beats in
+  // BOTH `activeAt` and `openAt`, never expanding `[firstInput, lastInput]` of any stretch or shifting historical work.
+  const baseStretches = splitWhere(baseInputs, (gap, before, after) => gap >= endAfter && !inOwnSlot(before, after));
+  const baseBounds = baseStretches.map((stretch) => ({ first: stretch[0]!, last: stretch.at(-1)! }));
+  for (const one of sent) {
+    if (one.messages <= 0 || one.at < SEND_ACTIVE_SINCE) continue;
+    if (!baseBounds.some((bound) => one.at >= bound.first && one.at <= bound.last)) continue;
+    openAt.add(one.at);
+    const pages = activeAt.get(one.at);
+    if (pages === undefined) activeAt.set(one.at, [one.pageLabel]);
+    else if (!pages.includes(one.pageLabel)) pages.push(one.pageLabel);
+  }
+
+  const inputs = [...activeAt.keys()].sort((a, b) => a - b);
   const open = [...openAt].sort((a, b) => a - b);
   const messages = [...sent].sort((a, b) => a.at - b.at);
   const messageAts = messages.map((one) => one.at);
@@ -232,9 +257,6 @@ export function workOfMinutes(
   const messagesBefore = [0];
   for (const one of messages) messagesBefore.push(messagesBefore.at(-1)! + one.messages);
   const messagesIn = (from: number, to: number) => messagesBefore[countBelow(messageAts, to)]! - messagesBefore[countBelow(messageAts, from)]!;
-
-  const pauseAfter = CHATTER_SHIFT_IDLE_PAUSE_MINUTES * MINUTE_MS;
-  const endAfter = CHATTER_SHIFT_END_IDLE_MINUTES * MINUTE_MS;
 
   /** The end of work that stopped: its last open minute, or its last activity plus the idle that still counts. */
   const endOf = (lastInput: number) => {
@@ -319,12 +341,6 @@ export function workOfMinutes(
     }
     return kept;
   };
-
-  /**
-   * A break from the action at `from` to `until` (the next action, or now) lies in the person's own slot: one occurrence
-   * of their schedule holds both, and it began on or after SLOT_PAUSE_SINCE (owner, 2026-11-19).
-   */
-  const inOwnSlot = (from: number, until: number) => from >= SLOT_PAUSE_SINCE && schedule.some((span) => span.start <= from && until < span.end);
 
   /** A piece of work before it is computed: its active minutes and its end. */
   type Segment = { kind: ComputedWork["kind"]; part: number[]; end: number; ongoing: boolean };
@@ -467,6 +483,8 @@ export interface PersonWork {
   pageIds: Map<string, number>;
   /** Oldest first, on the pages in scope only. */
   work: ComputedWork[];
+  /** Authored send minutes across all of the person's pages (reused by shift pause policy with zero extra SQL). */
+  sent?: readonly SentMinute[];
 }
 
 /**
@@ -531,7 +549,7 @@ export async function readPeopleWork(
     const cut = scope === null ? all : all.flatMap((one) => workOnPages(one, labels) ?? []);
     // The owner is not a chatter: their work stays work, but holds no sale (owner, 2026-11-12).
     const work = owners.has(userId) ? cut.map((one) => ({ ...one, salesSince: new Map<string, number>() })) : cut;
-    if (work.length > 0) out.set(userId, { username: known.username, pageIds: known.pageIds, work });
+    if (work.length > 0) out.set(userId, { username: known.username, pageIds: known.pageIds, work, sent: known.sent });
   }
   return out;
 }

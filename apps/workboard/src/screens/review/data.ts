@@ -103,6 +103,25 @@ export interface ReviewChatRow {
   paidMills: number;
 }
 
+export interface ReviewShiftBreak {
+  from: number;
+  to: number;
+  minutes: number;
+  kind: "rest" | "away" | "away_excess";
+  overrunMinutes: number;
+  awayIndex: number | null;
+}
+
+export interface ReviewPausePolicy {
+  breaks: ReviewShiftBreak[];
+  restMinutes: number;
+  restOverrunMinutes: number;
+  awayCount: number;
+  awayExcessCount: number;
+  awayMinutes: number;
+  preliminary: boolean;
+}
+
 export interface ReviewShift {
   userId: number;
   username: string;
@@ -118,6 +137,8 @@ export interface ReviewShift {
   lastBeatAt: string;
   pauses: Array<{ from: number; to: number }>;
   pauseMinutes: number;
+  /** Classified no-send breaks under the 10 / 60 / 3 policy; null on visits or absent from older payloads. */
+  pausePolicy: ReviewPausePolicy | null;
   pages: TeamShiftReviewResponse["shift"]["pages"];
   salesNetMills: number;
   previousAt: string | null;
@@ -216,6 +237,17 @@ export function indexOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
     lastBeatAt: data.shift.lastBeatAt,
     pauses,
     pauseMinutes: pauses.reduce((sum, pause) => sum + Math.round((pause.to - pause.from) / MINUTE_MS), 0),
+    pausePolicy: data.shift.pausePolicy === undefined ? null : {
+      ...data.shift.pausePolicy,
+      breaks: data.shift.pausePolicy.breaks.map((one) => ({
+        from: Date.parse(one.from),
+        to: Date.parse(one.to),
+        minutes: one.minutes,
+        kind: one.kind,
+        overrunMinutes: one.overrunMinutes,
+        awayIndex: one.awayIndex,
+      })),
+    },
     pages: data.shift.pages,
     salesNetMills: Number(data.shift.salesNetMills),
     previousAt: data.previousAt,

@@ -1,4 +1,4 @@
-import { shiftReviewCounts, type KernelOperationResponse, type ShiftReviewChat, type ShiftReviewMessage } from "@agency_hub_core/contracts";
+import { classifyShiftBreaks, shiftReviewCounts, shiftSendBreaksOf, type KernelOperationResponse, type ShiftReviewChat, type ShiftReviewMessage } from "@agency_hub_core/contracts";
 import { millsFromDollars, millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 import { myMessages, reviewWaits, shiftQuality, summariesOf, totalsOf, type ShiftQuality } from "@agency_hub_core/ui/shiftReview";
 
@@ -493,6 +493,11 @@ function inventedReviewOf(shift: DemoShift, now: number): Response {
 
   const others = teamWorld(new Date(now)).shifts.filter((one) => one.user.id === shift.user.id).sort((a, b) => a.startedAt - b.startedAt);
   const position = others.findIndex((one) => one.startedAt === shift.startedAt);
+  const sendMinutes = chats.flatMap((chat) => chat.messages.flatMap((message) => (message.inShift && message.by === "me" ? [Date.parse(message.at)] : [])));
+  const pausePolicy = classifyShiftBreaks(
+    shiftSendBreaksOf({ sendMinutes, shiftStart: start, shiftEnd: end }),
+    { ongoing: shift.ongoing },
+  );
   return {
     shift: {
       userId: shift.user.id,
@@ -503,6 +508,17 @@ function inventedReviewOf(shift: DemoShift, now: number): Response {
       ongoing: shift.ongoing,
       workedMinutes: shift.workedMinutes,
       pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
+      pausePolicy: {
+        ...pausePolicy,
+        breaks: pausePolicy.breaks.map((one) => ({
+          from: new Date(one.from).toISOString(),
+          to: new Date(one.to).toISOString(),
+          minutes: one.minutes,
+          kind: one.kind,
+          overrunMinutes: one.overrunMinutes,
+          awayIndex: one.awayIndex,
+        })),
+      },
       lastInputAt: iso(shift.lastInputAt),
       lastBeatAt: iso(shift.lastBeatAt),
       pages: [...pages].sort((a, b) => b.messages - a.messages).map((page) => ({

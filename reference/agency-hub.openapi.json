@@ -212763,6 +212763,102 @@
                                 "additionalProperties": false
                               }
                             },
+                            "pausePolicy": {
+                              "type": "object",
+                              "properties": {
+                                "breaks": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "from": {
+                                        "type": "string"
+                                      },
+                                      "to": {
+                                        "type": "string"
+                                      },
+                                      "minutes": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "rest",
+                                          "away",
+                                          "away_excess"
+                                        ]
+                                      },
+                                      "overrunMinutes": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "awayIndex": {
+                                        "anyOf": [
+                                          {
+                                            "type": "integer",
+                                            "exclusiveMinimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "from",
+                                      "to",
+                                      "minutes",
+                                      "kind",
+                                      "overrunMinutes",
+                                      "awayIndex"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "restMinutes": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "restOverrunMinutes": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "awayCount": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "awayExcessCount": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "awayMinutes": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "preliminary": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "breaks",
+                                "restMinutes",
+                                "restOverrunMinutes",
+                                "awayCount",
+                                "awayExcessCount",
+                                "awayMinutes",
+                                "preliminary"
+                              ],
+                              "additionalProperties": false
+                            },
                             "lastInputAt": {
                               "type": "string"
                             },
@@ -422960,6 +423056,102 @@
                             ],
                             "additionalProperties": false
                           }
+                        },
+                        "pausePolicy": {
+                          "type": "object",
+                          "properties": {
+                            "breaks": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "from": {
+                                    "type": "string"
+                                  },
+                                  "to": {
+                                    "type": "string"
+                                  },
+                                  "minutes": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "rest",
+                                      "away",
+                                      "away_excess"
+                                    ]
+                                  },
+                                  "overrunMinutes": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "awayIndex": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "exclusiveMinimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "from",
+                                  "to",
+                                  "minutes",
+                                  "kind",
+                                  "overrunMinutes",
+                                  "awayIndex"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "restMinutes": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "restOverrunMinutes": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "awayCount": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "awayExcessCount": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "awayMinutes": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "preliminary": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "breaks",
+                            "restMinutes",
+                            "restOverrunMinutes",
+                            "awayCount",
+                            "awayExcessCount",
+                            "awayMinutes",
+                            "preliminary"
+                          ],
+                          "additionalProperties": false
                         },
                         "lastInputAt": {
                           "type": "string"

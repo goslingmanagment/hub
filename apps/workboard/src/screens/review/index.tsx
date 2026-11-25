@@ -7,7 +7,7 @@ import { formatAgo, formatCount, formatDay, formatMills, formatPercent, formatTi
 import { mondayOf } from "@agency_hub_core/ui/moscow";
 import { withPeriod } from "@agency_hub_core/ui/period";
 import { ruPlural } from "@agency_hub_core/ui/plural";
-import { CHATTER_SHIFT_END_IDLE_MINUTES, CHATTER_SHIFT_PAGE_MIN_MESSAGES } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_END_IDLE_MINUTES, CHATTER_SHIFT_PAGE_MIN_MESSAGES, SHIFT_PAUSE_POLICY } from "@agency_hub_core/contracts";
 import { REPLY_FAST_SECONDS, REPLY_NORM_SECONDS, shiftQuality } from "@agency_hub_core/ui/shiftReview";
 import { shiftIdleText, shiftIdleTitle, shiftSettling } from "@agency_hub_core/ui/shiftLive";
 import { shiftWhen, type ShiftWhen } from "@agency_hub_core/ui/shiftWhen";
@@ -19,7 +19,7 @@ import { Tiles, TilesSkeleton, type Tile } from "@/shared/Tiles";
 import { usePeriod } from "@/shared/usePeriod";
 import { useMe } from "@/shared/useMe";
 import { ChatList } from "./ChatList.js";
-import { useShiftReview, useShiftsAround, type ReviewFilter, type ReviewIndex, type ReviewModel, type ReviewShift } from "./data.js";
+import { useShiftReview, useShiftsAround, type ReviewFilter, type ReviewIndex, type ReviewModel, type ReviewPausePolicy, type ReviewShift } from "./data.js";
 import { Evidence } from "./Evidence.js";
 import { LOOK, focusOf, ordered } from "./look.js";
 import { Pulse } from "./Pulse.js";
@@ -125,6 +125,13 @@ function salesHint(index: ReviewIndex): { hint: ReactNode; bar: NonNullable<Tile
   return { hint, bar: rows.length > 1 ? rows.map((row) => ({ key: row.key, size: row.mills, className: `review-money__key--${row.key}` })) : [] };
 }
 
+function pausePolicySummary(policy: ReviewPausePolicy): string {
+  if (policy.breaks.length === 0) return `без перерывов ≥ ${SHIFT_PAUSE_POLICY.minAwayMinutes} мин`;
+  const rest = `отдых ${formatCount(policy.restMinutes)} мин${policy.restOverrunMinutes > 0 ? ` (+${formatCount(policy.restOverrunMinutes)} мин сверх ${SHIFT_PAUSE_POLICY.restMaxMinutes})` : ""}`;
+  const aways = `${formatCount(policy.awayCount)} ${ruPlural(policy.awayCount, "отход", "отхода", "отходов")}${policy.awayExcessCount > 0 ? ` (норма ${SHIFT_PAUSE_POLICY.maxAwayCount})` : ""}`;
+  return `${rest} · ${aways}${policy.preliminary ? " · предварительно" : ""}`;
+}
+
 /**
  * The shift's numbers (D1): the same three quality numbers as the journal and the card, the sales, the messages and
  * the time worked. A number and its label; its definition only on hover.
@@ -180,7 +187,12 @@ function tilesOf(index: ReviewIndex, when: ShiftWhen): Tile[] {
     {
       label: "Отработано",
       value: when.worked ?? "—",
-      hint: [when.withPauses ? `${when.withPauses}.` : "", shift.pauseMinutes > 0 ? "Паузы на пульсе: серые полосы." : ""].join(" ").trim() || "Время работы без пауз.",
+      hint: [
+        when.withPauses ? `${when.withPauses}.` : "",
+        shift.pausePolicy !== null
+          ? `Перерывы без отправок ≥ ${SHIFT_PAUSE_POLICY.minAwayMinutes} мин (норма: 1 отдых до ${SHIFT_PAUSE_POLICY.restMaxMinutes} мин и до ${SHIFT_PAUSE_POLICY.maxAwayCount} отходов): ${pausePolicySummary(shift.pausePolicy)}.`
+          : shift.pauseMinutes > 0 ? "Паузы на пульсе: серые полосы." : "",
+      ].filter(Boolean).join(" ") || "Время работы без пауз.",
     },
   ];
 }
@@ -553,6 +565,7 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
   // Rare honest notes: the numbers may still move, the archive does not hold every message yet, a visit, not a shift.
   const notes: string[] = [];
   if (shift.kind === "visit") notes.push("это заход, а не смена");
+  if (shift.pausePolicy !== null && shift.pausePolicy.breaks.length > 0) notes.push(pausePolicySummary(shift.pausePolicy));
   if (!shift.ongoing && shiftSettling(shift, shift.serverNow)) notes.push(`числа предварительные до ${formatTimeOfDay(shift.end + CHATTER_SHIFT_END_IDLE_MINUTES * MINUTE_MS)}`);
   if (shift.unarchived > 0) notes.push(`${formatCount(shift.unarchived)} сообщ. ещё нет в архиве`);
   if (shift.deleted > 0) notes.push(deletedNote(model, shift.deleted));
@@ -581,6 +594,8 @@ function Loaded({ model, params, update, back, updatedAt, refreshing, onRefresh 
             minutes={index.minutes}
             sales={index.sales}
             pauses={shift.pauses}
+            breaks={shift.pausePolicy?.breaks ?? []}
+            breaksPreliminary={shift.pausePolicy?.preliminary ?? false}
             start={shift.start}
             end={shift.end}
             ongoing={shift.ongoing}

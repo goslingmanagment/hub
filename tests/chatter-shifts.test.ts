@@ -449,3 +449,53 @@ describe("dayOfWork", () => {
     expect(day(moscow("2026-10-27", "20:00"), moscow("2026-10-28", "04:00"))).toBe("2026-10-27");
   });
 });
+
+describe("return-minute send activity (CHATTER_SHIFT_SEND_ACTIVE_SINCE)", () => {
+  const from = (day: string) => Date.parse(`${day}T18:00:00+03:00`) - T0;
+  const on = (day: string) => ({
+    at: (minute: number) => at(minute) + from(day),
+    minutes: (...args: Parameters<typeof minutes>) => minutes(...args).map((one) => ({ ...one, at: one.at + from(day) })),
+    sends: (...args: Parameters<typeof sends>) => sends(...args).map((one) => ({ ...one, at: one.at + from(day) })),
+  });
+
+  it("fills missed/return-minute beats with authored sends after cutoff without shifting stretch bounds or historical shifts", () => {
+    const after = on("2026-11-27");
+    const later = after.at(10 * 24 * 60);
+    // Input beats at 0..100 and 125..300, with extension open; chatter actually sent in minute 110 and 120 (missed beats).
+    const active = [...range(0, 100), ...range(125, 300)];
+    const sentWithReturn = [
+      ...after.sends(0, 100, 50),
+      { at: after.at(110), pageLabel: "ari-1", messages: 1 },
+      { at: after.at(120), pageLabel: "ari-1", messages: 1 },
+      ...after.sends(125, 300, 60),
+    ];
+    const [shift] = workOfMinutes(after.minutes(0, 300, active), sentWithReturn, later);
+    // Sends at 110 and 120 bridge the 99->125 gap so there is a 1-min pause 109..110 instead of a 16-min pause 109..125.
+    expect(shift).toMatchObject({ kind: "shift", startedAt: after.at(0), endedAt: after.at(300), pauses: [{ from: after.at(109), to: after.at(110) }] });
+
+    // Sends strictly outside [firstInput, lastInput] never move startedAt/endedAt or bridge separate closed shifts.
+    const outsideSends = [
+      { at: after.at(-20), pageLabel: "ari-1", messages: 3 },
+      ...after.sends(0, 200, 60),
+      { at: after.at(230), pageLabel: "ari-1", messages: 2 },
+      ...after.sends(260, 460, 60),
+      { at: after.at(490), pageLabel: "ari-1", messages: 3 },
+    ];
+    const split = workOfMinutes(after.minutes(0, 460, [...range(0, 200), ...range(260, 460)]), outsideSends, later);
+    expect(bounds(split)).toEqual([
+      ["shift", after.at(0), after.at(209)],
+      ["shift", after.at(260), after.at(460)],
+    ]);
+
+    // Before cutoff (2026-11-25): historical shifts are untouched.
+    const before = on("2026-11-25");
+    const histSent = [
+      ...before.sends(0, 100, 50),
+      { at: before.at(110), pageLabel: "ari-1", messages: 1 },
+      { at: before.at(120), pageLabel: "ari-1", messages: 1 },
+      ...before.sends(125, 300, 60),
+    ];
+    const [histShift] = workOfMinutes(before.minutes(0, 300, active), histSent, before.at(10 * 24 * 60));
+    expect(histShift!.pauses).toEqual([{ from: before.at(109), to: before.at(125) }]);
+  });
+});
