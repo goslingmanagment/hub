@@ -71,6 +71,34 @@ describe("the numbers of a shift, by the review's rules", () => {
       messages: 1, replyDelays: [0], waitingAtEnd: 0, composed: { hand: 0, reply: 1, fix: 0, other: 0 },
     });
   });
+
+  it("excludes silent past-shift tails from replyDelays while keeping live inherited waits, and respects pageWatches handover", () => {
+    const rows = [
+      // Silent tail from before the shift: excluded from replyDelays.
+      row("tail-silent", "t1", START - 60 * MIN, "fan"),
+      row("tail-silent", "t2", START + 10 * MIN, "page", USER),
+      // Live tail: fan waited before shift AND wrote in shift -> included in replyDelays (counted from shift start).
+      row("tail-live", "l1", START - 30 * MIN, "fan"),
+      row("tail-live", "l2", START + 4 * MIN, "fan"),
+      row("tail-live", "l3", START + 8 * MIN, "page", USER),
+      // Fan wrote after scheduled page handover (START + 2h): excluded from waitingAtEnd.
+      row("after-handover", "h1", START + 150 * MIN, "fan"),
+    ];
+    const result = shiftNumbersOf({
+      rows,
+      sends: [send("t2", START + 10 * MIN), send("l3", START + 8 * MIN)],
+      fans: { writtenFans: [], paidFans: [] },
+      userId: USER,
+      username: "Мирон",
+      labelOf: new Map([[2, "lora-2"]]),
+      openings: [],
+      start: START,
+      end: END,
+      pageWatches: [{ pageId: 2, pageLabel: "lora-2", from: START, to: START + 120 * MIN, handedOver: true }],
+      colleagueSpans: [{ pageLabel: "lora-2", userId: COLLEAGUE, name: "Коля", from: START + 120 * MIN, to: END }],
+    });
+    expect(result).toMatchObject({ messages: 2, replyDelays: [8 * 60], waitingAtEnd: 0 });
+  });
 });
 
 describe("«ИИ без правки» of a shift, by the review's rule", () => {

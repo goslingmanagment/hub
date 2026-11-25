@@ -41,17 +41,31 @@ describe("slotOccurrencesOf", () => {
       .toEqual([[msk("2026-11-16", "18:00"), msk("2026-11-17", "00:00"), null]]);
   });
 
-  it("counts a page's line and a line of every page both; given the working pages, the latter runs on each", () => {
+  it("lets a page-specific standing line override an every-page line on that page, matching standingLinesOn", () => {
     const slots = [line(), line({ pageId: 12, startMinute: 16 * 60, endMinute: 20 * 60 })];
     const day = [msk("2026-11-16", "00:00"), msk("2026-11-16", "23:00")] as const;
     expect(runs(slots, ...day)).toEqual([
       [msk("2026-11-16", "08:00"), msk("2026-11-16", "16:00"), null],
       [msk("2026-11-16", "16:00"), msk("2026-11-16", "20:00"), 12],
     ]);
+    // With working pages [11, 12]: page 11 uses the every-page line (08-16), while page 12 uses ONLY its own line (16-20).
     expect(runs(slots, ...day, [11, 12])).toEqual([
       [msk("2026-11-16", "08:00"), msk("2026-11-16", "16:00"), 11],
-      [msk("2026-11-16", "08:00"), msk("2026-11-16", "16:00"), 12],
       [msk("2026-11-16", "16:00"), msk("2026-11-16", "20:00"), 12],
+    ]);
+    // Overnight split (e.g. every-page 18:00-02:00 + page 12 override 18:00-00:00): page 12 ends at 00:00, page 11 at 02:00.
+    const overnight = [
+      line({ startMinute: 18 * 60, endMinute: 2 * 60 }),
+      line({ pageId: 12, startMinute: 18 * 60, endMinute: 24 * 60 }),
+    ];
+    expect(runs(overnight, msk("2026-11-16", "18:00"), msk("2026-11-17", "03:00"), [11, 12])).toEqual([
+      [msk("2026-11-16", "18:00"), msk("2026-11-17", "02:00"), 11],
+      [msk("2026-11-16", "18:00"), msk("2026-11-17", "00:00"), 12],
+    ]);
+    // Page-specific weekday override: chosen by date alone before weekdays, so Tuesday does not fall back to the every-page line.
+    const mondayOnly = [line(), line({ pageId: 12, weekdays: ["mon"], startMinute: 16 * 60, endMinute: 20 * 60 })];
+    expect(runs(mondayOnly, msk("2026-11-17", "00:00"), msk("2026-11-17", "23:00"), [11, 12])).toEqual([
+      [msk("2026-11-17", "08:00"), msk("2026-11-17", "16:00"), 11],
     ]);
   });
 

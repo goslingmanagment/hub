@@ -76,7 +76,7 @@ export async function readTeamNewcomers(app: AppContext, principal: HumanAuthPri
     if (first !== null && userIds.length > 0) {
       const from = first;
       const to = new Date(Math.min(now.getTime(), first.getTime() + FIRST_WEEK_MS + DAY_MS));
-      const found = await teamShiftJobs(app, { from, to, now, scope: pageScope ?? "all", userIds });
+      const found = await teamShiftJobs(app, { from, to, now, scope: pageScope ?? "all", userIds, realm: test ? "test" : "live" });
       const jobs = [...found.jobs].sort((a, b) => a.shift.startedAt - b.shift.startedAt).slice(0, FIRST_SHIFTS);
       const rows = await shiftRowsOf(app, { jobs, openings: found.openings }, { fromTable: true, liveFallback: false });
       const noted = new Set((await listNotedShiftStarts(app.db, userIds)).map((one) => `${one.userId}:${one.startedAt.getTime()}`));

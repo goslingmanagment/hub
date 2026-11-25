@@ -36,7 +36,7 @@ export const SHIFT_REVIEW_FAN_QUIET_SECONDS = 15 * 60;
 
 /** What the rules read of a message: `teamShiftReview`'s, or the same facts the server builds for «Смены». */
 export type ShiftReviewRuleMessage = Pick<ShiftReviewMessage, "at" | "side" | "by" | "byName" | "mass" | "inShift" | "deletedAt" | "priceMills" | "bought"> & {
-  mine: Pick<ShiftReviewMine, "replySeconds"> | null;
+  mine: Pick<ShiftReviewMine, "replySeconds" | "replyTail"> | null;
 };
 
 export interface ShiftReviewRuleChat {
@@ -46,9 +46,12 @@ export interface ShiftReviewRuleChat {
 }
 
 export interface ShiftReviewRuleData {
-  shift: Pick<TeamShiftReviewResponse["shift"], "startedAt" | "endedAt">;
+  shift: Pick<TeamShiftReviewResponse["shift"], "startedAt" | "endedAt"> & {
+    pages?: ReadonlyArray<Pick<TeamShiftReviewResponse["shift"]["pages"][number], "pageLabel" | "watchFrom" | "watchTo">>;
+  };
   chats: readonly ShiftReviewRuleChat[];
   waits: TeamShiftReviewResponse["waits"];
+  colleagueSpans?: TeamShiftReviewResponse["colleagueSpans"];
 }
 
 /** An AI text whose words match the sent text at least this much went out as it was («ИИ без правки»). */
@@ -146,8 +149,23 @@ export interface ShiftReviewWait {
 /** The shift's waits, each with whose it is (see the file's head). */
 export function shiftReviewWaits(data: ShiftReviewRuleData): ShiftReviewWait[] {
   const start = Date.parse(data.shift.startedAt);
+  const end = Date.parse(data.shift.endedAt);
   const norm = SHIFT_REVIEW_REPLY_NORM_SECONDS * 1000;
   const chats = new Map(data.chats.map((chat) => [chat.key, chat]));
+  const watchByPage = new Map<string, { from: number; to: number }>();
+  for (const page of data.shift.pages ?? []) {
+    watchByPage.set(page.pageLabel, {
+      from: page.watchFrom === undefined ? start : Date.parse(page.watchFrom),
+      to: page.watchTo === undefined ? end : Date.parse(page.watchTo),
+    });
+  }
+  const spansByPage = new Map<string, Array<{ name: string; from: number; to: number }>>();
+  for (const span of data.colleagueSpans ?? []) {
+    spansByPage.set(span.pageLabel, [
+      ...(spansByPage.get(span.pageLabel) ?? []),
+      { name: span.name, from: Date.parse(span.from), to: Date.parse(span.to) },
+    ]);
+  }
   // When each colleague wrote on each page: within the shift, and in the messages shown before it.
   const colleagueAt = new Map<string, number[]>();
   for (const chat of data.chats) {
@@ -159,33 +177,55 @@ export function shiftReviewWaits(data: ShiftReviewRuleData): ShiftReviewWait[] {
   }
   const writingOn = (page: string, name: string | null, at: number) => (colleagueAt.get(`${page}|${name ?? ""}`) ?? [])
     .some((one) => one <= at && one >= at - norm);
+  const onSpan = (page: string, name: string | null, at: number) => (spansByPage.get(page) ?? [])
+    .some((span) => (name === null || span.name === name) && span.from <= at && at <= span.to);
+  const activeOn = (page: string, name: string | null, at: number) => writingOn(page, name, at) || onSpan(page, name, at);
+  const spanHolderAt = (page: string, at: number) => (spansByPage.get(page) ?? [])
+    .find((span) => span.from <= at && at <= span.to)?.name ?? null;
+
   return data.waits.map((wait) => {
     const since = Date.parse(wait.since);
-    const from = Date.parse(wait.from);
-    const to = Date.parse(wait.to);
+    const rawFrom = Date.parse(wait.from);
+    const rawTo = Date.parse(wait.to);
     const chat = chats.get(wait.chat);
     const page = chat?.pageLabel ?? "";
+    const watch = watchByPage.get(page);
+    const watchFrom = watch?.from ?? start;
+    const watchTo = watch?.to ?? end;
+    const countedFrom = Math.max(since, watchFrom);
+    const afterWatch = wait.by !== "me" && rawFrom >= watchTo;
+    const crossesWatchTo = wait.by !== "me" && rawFrom < watchTo && rawTo > watchTo;
+    const shortBeforeHandover = crossesWatchTo && watchTo - countedFrom <= norm;
+    const effectiveTo = crossesWatchTo && !shortBeforeHandover ? watchTo : rawTo;
+
     const timed = (chat?.messages ?? []).map((message) => ({ message, at: Date.parse(message.at) }));
     const before = timed.filter((one) => answersFan(one.message) && one.at < since).at(-1);
-    const heldByMe = before?.message.by === "me";
     const holder = before && before.at >= start - norm && before.message.by === "other" ? before.message.byName : undefined;
-    const heldBy = holder !== undefined && (wait.by === "other" || writingOn(page, holder, to)) ? holder ?? "коллега" : null;
-    const answer = wait.by === "other" ? timed.find((one) => one.at === to && one.message.by === "other") : undefined;
-    const answeredOnTheirWatch = answer !== undefined && writingOn(page, answer.message.byName, from);
-    const fanAts = timed.filter((one) => shiftReviewFansMessage(one.message) && one.at >= since && one.at <= to).map((one) => one.at);
+    const heldByColleague = holder !== undefined && (wait.by === "other" || activeOn(page, holder, effectiveTo)) ? holder ?? "коллега" : null;
+    const answer = wait.by === "other" ? timed.find((one) => one.at === rawTo && one.message.by === "other") : undefined;
+    const answeredOnTheirWatch = answer !== undefined && activeOn(page, answer.message.byName, rawFrom);
+    const his = wait.by === "me"
+      ? true
+      : afterWatch || shortBeforeHandover
+        ? false
+        : answeredOnTheirWatch
+          ? false
+          : heldByColleague === null;
+    const heldBy = heldByColleague ?? (afterWatch || shortBeforeHandover ? spanHolderAt(page, Math.max(rawFrom, watchTo)) ?? spanHolderAt(page, rawTo) : null);
+    const fanAts = timed.filter((one) => shiftReviewFansMessage(one.message) && one.at >= since && one.at <= effectiveTo).map((one) => one.at);
     return {
       chat: wait.chat,
       since,
-      from,
-      to,
+      from: rawFrom,
+      to: effectiveTo,
       by: wait.by,
       byName: answer?.message.byName ?? null,
       heldBy,
-      inherited: since < start,
-      fanWrote: timed.some((one) => shiftReviewFansMessage(one.message) && one.message.inShift && one.at >= since && one.at <= to),
-      fanBack: fanBackOf(fanAts, Math.max(since, start)),
-      seconds: (to - Math.max(since, start)) / 1000,
-      his: wait.by === "me" || heldByMe || (heldBy === null && !answeredOnTheirWatch),
+      inherited: since < watchFrom,
+      fanWrote: timed.some((one) => shiftReviewFansMessage(one.message) && one.message.inShift && one.at >= watchFrom && one.at <= effectiveTo),
+      fanBack: fanBackOf(fanAts, countedFrom),
+      seconds: Math.max(0, (effectiveTo - countedFrom) / 1000),
+      his,
     };
   });
 }
@@ -211,13 +251,34 @@ export function shiftReviewWaitingSilently(wait: ShiftReviewWait): boolean {
   return wait.his && wait.by === null && wait.inherited && !wait.fanWrote;
 }
 
+/** Keys `<chat>|<to ms>` of waits that are silent tails from past shifts answered by the chatter (`inherited && !fanWrote && by === "me"`). */
+export function silentTailAnswerKeys(waits: readonly ShiftReviewWait[]): Set<string> {
+  return new Set(waits.filter((wait) => wait.inherited && !wait.fanWrote && wait.by === "me").map((wait) => `${wait.chat}|${wait.to}`));
+}
+
+/**
+ * True when the chatter's reply answered a silent tail from a past shift (fan began waiting before the shift and did
+ * not write in it): excluded from the shift's reply median and counted separately in `tailReplies`. Live tails (fan
+ * wrote again in the shift) stay in the median, counted from the shift's start.
+ */
+export function shiftReviewReplyTail(
+  message: Pick<ShiftReviewRuleMessage, "at" | "mine">,
+  chatKey: string,
+  silentTailAnswers: ReadonlySet<string>,
+): boolean {
+  if (message.mine?.replyTail !== undefined) return message.mine.replyTail;
+  return silentTailAnswers.has(`${chatKey}|${Date.parse(message.at)}`);
+}
+
 export interface ShiftReviewCounts {
   /** The chatter's personal messages of the shift the fans could see: «Сообщения». */
   messages: number;
   /** The chatter's mass messages of the shift. */
   massMessages: number;
-  /** How long the fan had waited for each personal message that answered one, seconds: the replies. */
+  /** How long the fan had waited for each personal message that answered a live wait (silent past-shift tails excluded), seconds. */
   replyDelays: number[];
+  /** Personal replies that answered a silent tail from a past shift (`inherited && !fanWrote`): excluded from `replyDelays`. */
+  tailReplies: number;
   /** The chatter's fans who wrote in the shift (or began waiting in it) and got no answer before its end: «Без ответа к концу смены». */
   unanswered: number;
   /** Fans waiting since before the shift who did not write in it and got no answer in it. */
@@ -230,18 +291,42 @@ export interface ShiftReviewCounts {
 
 /** The shift's numbers, as «Разбор смены» shows them and «Смены» counts them. */
 export function shiftReviewCounts(data: Pick<ShiftReviewRuleData, "chats">, waits: readonly ShiftReviewWait[]): ShiftReviewCounts {
-  const mine = data.chats.flatMap((chat) => chat.messages.filter(shiftReviewMine));
-  const personal = mine.filter((message) => !message.mass);
-  const bought = mine.filter((message) => message.bought === true);
+  const silentTailAnswers = silentTailAnswerKeys(waits);
+  const replyDelays: number[] = [];
+  let tailReplies = 0;
+  let messages = 0;
+  let massMessages = 0;
+  let ppvSent = 0;
+  let ppvBought = 0;
+  const boughtPrices: number[] = [];
+  for (const chat of data.chats) {
+    for (const message of chat.messages) {
+      if (!shiftReviewMine(message)) continue;
+      if (message.priceMills !== null) ppvSent += 1;
+      if (message.bought === true) {
+        ppvBought += 1;
+        if (message.priceMills !== null) boughtPrices.push(message.priceMills);
+      }
+      if (message.mass) {
+        massMessages += 1;
+        continue;
+      }
+      messages += 1;
+      if (message.mine!.replySeconds === null) continue;
+      if (shiftReviewReplyTail(message, chat.key, silentTailAnswers)) tailReplies += 1;
+      else replyDelays.push(message.mine!.replySeconds);
+    }
+  }
   return {
-    messages: personal.length,
-    massMessages: mine.length - personal.length,
-    replyDelays: personal.flatMap((message) => (message.mine!.replySeconds === null ? [] : [message.mine!.replySeconds])),
+    messages,
+    massMessages,
+    replyDelays,
+    tailReplies,
     unanswered: waits.filter(shiftReviewUnanswered).length,
     waitingSilently: waits.filter(shiftReviewWaitingSilently).length,
-    ppvSent: mine.filter((message) => message.priceMills !== null).length,
-    ppvBought: bought.length,
-    boughtPrices: bought.flatMap((message) => (message.priceMills === null ? [] : [message.priceMills])),
+    ppvSent,
+    ppvBought,
+    boughtPrices,
   };
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ShiftReviewChat, ShiftReviewMessage, TeamShiftReviewResponse } from "@agency_hub_core/contracts";
+import { shiftAuditNumbers, shiftReviewCounts, type ShiftReviewChat, type ShiftReviewMessage, type TeamShiftReviewResponse } from "@agency_hub_core/contracts";
 import { chatBusyIn, fanReturnOf, myMessages, pulseOf, reviewWaits, salesByOrigin, salesSplit, summariesOf, totalsOf } from "@agency_hub_core/ui/shiftReview";
 
 // «Разбор смены»: whose a fan's wait is when a page is shared or handed over (2026-11-07). The first version counted
@@ -165,8 +165,65 @@ describe("shift review: the pulse keeps the tail of past shifts apart", () => {
     expect(pulse[4]).toMatchObject({ waiting: 1, waitingTail: 1 });
   });
 
-  it("keeps the replies to fans from past shifts off the median", () => {
-    expect(pulse[7]).toMatchObject({ replies: 1, replyMedianSeconds: 120, tailReplies: 2 });
+  it("keeps silent past-shift tails off the median while keeping live inherited waits in it across pulse, header, counts, and audit", () => {
+    const waits = reviewWaits(tail);
+    const counts = shiftReviewCounts(tail, waits);
+    const totals = totalsOf(tail, myMessages(tail), summariesOf(tail, waits), waits);
+    const audit = shiftAuditNumbers(tail);
+    // Chat "t" is silent from before the shift (tailReplies: 1); chat "u" wrote again in-shift (360s) and chat "v" began in-shift (120s).
+    expect(pulse[7]).toMatchObject({ replies: 2, replyMedianSeconds: 240, tailReplies: 1 });
+    expect(counts).toMatchObject({ replyDelays: [360, 120], tailReplies: 1 });
+    expect(totals).toMatchObject({ replies: 2, replyMedianSeconds: 240, tailReplies: 1 });
+    expect(audit.total).toMatchObject({ replies: 2, replyMedianSeconds: 240 });
+  });
+});
+
+describe("shift review: page handover watchTo and co-working colleagueSpans", () => {
+  const handoverShift: TeamShiftReviewResponse = {
+    ...data,
+    shift: {
+      ...data.shift,
+      startedAt: at("09:00"),
+      endedAt: at("12:00"),
+      workedMinutes: 180,
+      pages: [
+        { pageLabel: "ari-1", platform: "fansly", messages: 10, worked: true, watchFrom: at("09:00"), watchTo: at("10:08") },
+        { pageLabel: "lora-1", platform: "fansly", messages: 20, worked: true, watchFrom: at("09:00"), watchTo: at("12:00") },
+      ],
+    },
+    colleagueSpans: [
+      { pageLabel: "ari-1", name: "Miron", from: at("10:08"), to: at("12:00") },
+      { pageLabel: "lora-1", name: "Oleg", from: at("09:00"), to: at("12:00") },
+    ],
+    chats: [
+      // 1. After watchTo on ari-1 (10:20): even though chatter wrote earlier, not his.
+      { ...chat("after", [mine("09:30", null), message("10:20", "fan", null)]), pageLabel: "ari-1" },
+      // 2. Crossing watchTo within 10-min norm (10:04 -> 10:08 = 4 min): not his.
+      { ...chat("short-cross", [mine("09:30", null), message("10:04", "fan", null), message("10:15", "page", "other", { byName: "Miron" })]), pageLabel: "ari-1" },
+      // 3. Crossing watchTo past 10-min norm (09:30 -> 10:08 = 38 min): stays his, capped at watchTo (10:08).
+      { ...chat("long-cross", [message("09:30", "fan", null), message("10:25", "page", "other", { byName: "Miron" })]), pageLabel: "ari-1" },
+      // 4. Chatter answered himself after watchTo: Rule 1 keeps it his.
+      { ...chat("self-after", [message("10:30", "fan", null), mine("10:35", 300)]), pageLabel: "ari-1" },
+      // 5. Co-working on lora-1: chatter wrote earlier (heldByMe), fan wrote 10:00, Oleg answered 10:04 on Oleg's span -> not his.
+      { ...chat("cowork", [mine("09:10", null), message("10:00", "fan", null), message("10:04", "page", "other", { byName: "Oleg" })]), pageLabel: "lora-1" },
+    ],
+    waits: [
+      { chat: "after", since: at("10:20"), from: at("10:20"), to: at("12:00"), by: null },
+      { chat: "short-cross", since: at("10:04"), from: at("10:04"), to: at("10:15"), by: "other" },
+      { chat: "long-cross", since: at("09:30"), from: at("09:30"), to: at("10:25"), by: "other" },
+      { chat: "self-after", since: at("10:30"), from: at("10:30"), to: at("10:35"), by: "me" },
+      { chat: "cowork", since: at("10:00"), from: at("10:00"), to: at("10:04"), by: "other" },
+    ],
+  };
+
+  it("excludes post-handover and short-crossing waits, caps long crossing waits at watchTo, and lets colleagueSpans override stale heldByMe", () => {
+    const waits = reviewWaits(handoverShift);
+    const byChat = new Map(waits.map((one) => [one.chat, one]));
+    expect(byChat.get("after")).toMatchObject({ his: false, heldBy: "Miron" });
+    expect(byChat.get("short-cross")).toMatchObject({ his: false, heldBy: "Miron" });
+    expect(byChat.get("long-cross")).toMatchObject({ his: true, to: Date.parse(at("10:08")), seconds: 38 * 60 });
+    expect(byChat.get("self-after")).toMatchObject({ his: true, seconds: 300 });
+    expect(byChat.get("cowork")).toMatchObject({ his: false });
   });
 });
 

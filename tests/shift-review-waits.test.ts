@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { ShiftReviewSendRow } from "@agency_hub_core/db";
-import { pendingSendsByChat, waitsOf, type ChatMessage } from "../apps/runtime/src/services/shift-review.ts";
+import type { ShiftReviewMessageRow, ShiftReviewSendRow } from "@agency_hub_core/db";
+import type { ComputedWork, PersonPiece } from "../apps/runtime/src/services/chatter-shifts.ts";
+import { colleagueSpansOf, pageWatchesOf, pendingSendsByChat, shiftChatsOf, waitsOf, type ChatMessage } from "../apps/runtime/src/services/shift-review.ts";
 
 // The waits of «Разбор смены» (services/shift-review.ts). The cases are the audit's of 2026-11-07: a fan's old unanswered
 // message took their fresh ones out of «Без ответа» with it; a send Fansly never gave the archive left its fan waiting; a fan
@@ -95,5 +96,86 @@ describe("pendingSendsByChat", () => {
     ], USER, "chatter");
     expect([...byChat.keys()]).toEqual(["1:100", "1:777"]);
     expect(byChat.get("1:100")!.map((one) => [one.ref, one.pending, one.by])).toEqual([["901", true, "me"]]);
+  });
+});
+
+describe("pageWatchesOf and colleagueSpansOf", () => {
+  const MIN = 60_000;
+  const work = (startedAt: number, endedAt: number, salesSince: Record<string, number>): ComputedWork => ({
+    kind: "shift",
+    startedAt,
+    endedAt,
+    ongoing: false,
+    workedMinutes: Math.round((endedAt - startedAt) / MIN),
+    pauses: [],
+    lastInputAt: endedAt,
+    lastBeatAt: endedAt,
+    pages: new Map(Object.keys(salesSince).map((label) => [label, 60])),
+    messages: new Map(Object.keys(salesSince).map((label) => [label, 30])),
+    salesSince: new Map(Object.entries(salesSince)),
+  });
+
+  it("cuts watchTo on scheduled handover with 15-min soft join clamp, and keeps full shift when no successor arrives", () => {
+    const shiftStart = START;
+    const shiftEnd = START + 9 * HOUR;
+    const slotEndAri = START + 6 * HOUR;
+    const pages = [{ id: 1, label: "ari-1" }, { id: 2, label: "lora-1" }];
+    const slots = [
+      { start: shiftStart, end: slotEndAri, pageId: 1 },
+      { start: shiftStart, end: shiftEnd, pageId: 2 },
+    ];
+    const shift = work(shiftStart, shiftEnd, { "ari-1": shiftStart, "lora-1": shiftStart });
+
+    // Successor arrives 8 min after slotEnd -> watchTo = slotEnd + 8 min.
+    const onTime: PersonPiece[] = [{ userId: 9, username: "miron", work: work(slotEndAri + 8 * MIN, shiftEnd + 4 * HOUR, { "ari-1": slotEndAri + 8 * MIN }) }];
+    expect(pageWatchesOf({ shift, pages, slots, colleagues: onTime, start: shiftStart, end: shiftEnd })).toEqual([
+      { pageId: 1, pageLabel: "ari-1", from: shiftStart, to: slotEndAri + 8 * MIN, handedOver: true },
+      { pageId: 2, pageLabel: "lora-1", from: shiftStart, to: shiftEnd, handedOver: false },
+    ]);
+
+    // Successor arrives 45 min late -> watchTo clamped to slotEnd + 15 min.
+    const late: PersonPiece[] = [{ userId: 9, username: "miron", work: work(slotEndAri + 45 * MIN, shiftEnd + 4 * HOUR, { "ari-1": slotEndAri + 45 * MIN }) }];
+    expect(pageWatchesOf({ shift, pages, slots, colleagues: late, start: shiftStart, end: shiftEnd })[0]).toMatchObject({
+      pageLabel: "ari-1", to: slotEndAri + 15 * MIN, handedOver: true,
+    });
+
+    // No successor arrives on ari-1 -> watchTo stays shiftEnd.
+    expect(pageWatchesOf({ shift, pages, slots, colleagues: [], start: shiftStart, end: shiftEnd })[0]).toMatchObject({
+      pageLabel: "ari-1", to: shiftEnd, handedOver: false,
+    });
+
+    // colleagueSpansOf clamps ongoing successor endedAt to the reviewed shift's end (stable cache key).
+    expect(colleagueSpansOf({ pages, colleagues: onTime, start: shiftStart, end: shiftEnd })).toEqual([
+      { pageLabel: "ari-1", userId: 9, name: "miron", from: slotEndAri + 8 * MIN, to: shiftEnd },
+    ]);
+  });
+});
+
+describe("shiftChatsOf replyTail", () => {
+  const row = (conv: string, ref: string, at: number, sent: boolean): ShiftReviewMessageRow => ({
+    pageId: 1, platform: "fansly", conv, ref, at: new Date(at), sent, text: "hi", priceMills: null, tipMills: null, media: 0,
+    fanNativeId: sent ? null : "fan-1", mass: false, authorId: sent ? USER : null, authorName: sent ? "me" : null,
+    bought: null, unarchived: false, deletedAt: null,
+  });
+
+  it("marks silent past-shift replies as replyTail=true and live inherited replies as replyTail=false", () => {
+    const chats = shiftChatsOf({
+      rows: [
+        row("silent", "1", START - HOUR, false),
+        row("silent", "2", START + 5 * 60_000, true),
+        row("live", "3", START - HOUR, false),
+        row("live", "4", START + 2 * 60_000, false),
+        row("live", "5", START + 6 * 60_000, true),
+      ],
+      sends: [],
+      userId: USER,
+      username: "me",
+      openings: [],
+      start: START,
+      end: END,
+    });
+    const byConv = new Map(chats.map((one) => [one.conv, one]));
+    expect(byConv.get("silent")!.replyByRef.get("2")).toEqual({ seconds: 300, tail: true });
+    expect(byConv.get("live")!.replyByRef.get("5")).toEqual({ seconds: 360, tail: false });
   });
 });

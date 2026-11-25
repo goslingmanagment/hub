@@ -6,10 +6,12 @@ import {
   shiftReviewHi,
   shiftReviewMedian,
   shiftReviewMine,
+  shiftReviewReplyTail,
   shiftReviewSeen,
   shiftReviewUnanswered,
   shiftReviewWaitingSilently,
   shiftReviewWaits,
+  silentTailAnswerKeys,
   type ShiftReviewChat,
   type ShiftReviewMessage,
   type ShiftReviewWait,
@@ -258,7 +260,7 @@ export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
   const count = Math.max(1, Math.ceil((end - start) / MINUTE_MS));
   const index = (at: number) => Math.min(count - 1, Math.max(0, Math.floor((at - start) / MINUTE_MS)));
 
-  const tailAnswers = new Set(waits.filter((wait) => wait.inherited && wait.by === "me").map((wait) => `${wait.chat}|${wait.to}`));
+  const silentTailAnswers = silentTailAnswerKeys(waits);
   const sent = new Array<number>(count).fill(0);
   const sentHi = new Array<number>(count).fill(0);
   const fans = new Array<number>(count).fill(0);
@@ -273,7 +275,7 @@ export function pulseOf(data: TeamShiftReviewResponse, waits: readonly ReviewWai
       sent[index(at)]! += 1;
       if (isHi(message.mine)) sentHi[index(at)]! += 1;
       if (message.mine.replySeconds === null) continue;
-      if (tailAnswers.has(`${chat.key}|${at}`)) tailAt[index(at)]! += 1;
+      if (shiftReviewReplyTail(message, chat.key, silentTailAnswers)) tailAt[index(at)]! += 1;
       else replyAt[index(at)]!.push(message.mine.replySeconds);
     }
   }
@@ -472,6 +474,8 @@ export interface ShiftTotals {
   replyMedianSeconds: number | null;
   repliesWithinFast: number;
   repliesWithinNorm: number;
+  /** Replies to silent tails from past shifts (`inherited && !fanWrote`): excluded from the reply median. */
+  tailReplies: number;
   /** Replies to fans who had been waiting since before the shift; their wait counts from its start. */
   repliesToInherited: number;
   /** The chatter's fans who wrote in the shift (or began waiting in it) and got no answer before its end. */
@@ -533,6 +537,7 @@ export function totalsOf(data: TeamShiftReviewResponse, mine: readonly MyMessage
     replyMedianSeconds: median(delays),
     repliesWithinFast: delays.filter((delay) => delay <= REPLY_FAST_SECONDS).length,
     repliesWithinNorm: delays.filter((delay) => delay <= REPLY_NORM_SECONDS).length,
+    tailReplies: counts.tailReplies,
     repliesToInherited: personal.filter((one) => one.message.mine.replySeconds !== null && inheritedAnswers.has(`${one.chat.key}|${one.at}`)).length,
     unanswered: counts.unanswered,
     unansweredInherited: unanswered.filter((wait) => wait.inherited).length,

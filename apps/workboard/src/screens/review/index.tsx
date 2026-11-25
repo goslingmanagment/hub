@@ -153,9 +153,14 @@ function tilesOf(index: ReviewIndex, when: ShiftWhen): Tile[] {
     {
       label: METRICS.reply.label,
       value: formatReplyMedian(quality.replyMedianSeconds),
-      hint: totals.replies > 0
-        ? `Половина ответов быстрее, половина медленнее. До ${REPLY_FAST_SECONDS / 60} мин: ${percent(totals.repliesWithinFast)}, до ${REPLY_NORM_SECONDS / 60} мин: ${percent(totals.repliesWithinNorm)}.`
-        : "Половина ответов быстрее, половина медленнее. Ответов в смену не было.",
+      hint: [
+        totals.replies > 0
+          ? `Половина ответов быстрее, половина медленнее. До ${REPLY_FAST_SECONDS / 60} мин: ${percent(totals.repliesWithinFast)}, до ${REPLY_NORM_SECONDS / 60} мин: ${percent(totals.repliesWithinNorm)}.`
+          : "Половина ответов быстрее, половина медленнее. Ответов в смену не было.",
+        totals.tailReplies > 0
+          ? `Ещё ${formatCount(totals.tailReplies)} ${ruPlural(totals.tailReplies, "ответ", "ответа", "ответов")} на тихие хвосты прошлых смен (не в медиане).`
+          : "",
+      ].join(" ").trim(),
     },
     {
       label: shift.ongoing ? UNANSWERED_NOW_LABEL : METRICS.unanswered.label,
@@ -209,19 +214,25 @@ function PageMenu({ shift, page, onPage }: { shift: ReviewShift; page: string | 
   const items: MenuEntry[] = [
     { label: "Все страницы", checked: page === null, onSelect: () => onPage(null) },
     { separator: true },
-    ...shift.pages.map((one): MenuEntry => ({
-      label: one.pageLabel,
-      hint: !one.worked && shift.kind === "shift"
+    ...shift.pages.map((one): MenuEntry => {
+      const handedOver = one.watchTo !== undefined && Date.parse(one.watchTo) < shift.end;
+      const handedSuffix = handedOver ? ` · до ${formatTimeOfDay(one.watchTo!)}` : "";
+      const baseHint = !one.worked && shift.kind === "shift"
         ? one.allFans ? "мало сообщений, фаны все" : "мало сообщений"
-        : `${formatCount(one.messages)} ${ruPlural(one.messages, "сообщение", "сообщения", "сообщений")}`,
-      title: !one.worked && shift.kind === "shift"
+        : `${formatCount(one.messages)} ${ruPlural(one.messages, "сообщение", "сообщения", "сообщений")}`;
+      const baseTitle = !one.worked && shift.kind === "shift"
         ? one.allFans
           ? `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи страницы не в этой смене. Но страницу в смену больше никто не вёл: здесь все её фаны`
           : `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений, и страницу вёл коллега: продажи не в этой смене, здесь только чаты, где писал чаттер`
-        : "Сообщений чаттера на странице за смену, рассылки тоже",
-      checked: page === one.pageLabel,
-      onSelect: () => onPage(one.pageLabel),
-    })),
+        : "Сообщений чаттера на странице за смену, рассылки тоже";
+      return {
+        label: one.pageLabel,
+        hint: `${baseHint}${handedSuffix}`,
+        title: handedOver ? `${baseTitle}. По графику передана коллеге в ${formatTimeOfDay(one.watchTo!)}` : baseTitle,
+        checked: page === one.pageLabel,
+        onSelect: () => onPage(one.pageLabel),
+      };
+    }),
   ];
   return (
     <Menu

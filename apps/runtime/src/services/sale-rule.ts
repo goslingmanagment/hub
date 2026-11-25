@@ -1,7 +1,7 @@
 import { millsFromInteger, millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 
 import { SALE_LAST_WRITER_HOURS, dayOfWork, moscowDayOf } from "./chatter-shifts.ts";
-import { weekdayOfDay, type RuleWeekday } from "./schedule-slots.ts";
+import { standingLinesOn, weekdayOfDay, type DatedLine, type RuleWeekday } from "./schedule-slots.ts";
 
 /**
  * Whose a sale is: one rule for the whole of Hub, a pure function of the facts
@@ -148,7 +148,7 @@ export const SALE_HOME_REASON_TEXT: Readonly<Record<SaleHomeReason, string>> = {
 };
 
 /** The days of the week a slot runs on, and a Moscow day's: the registry's schedule (schedule-slots.ts, a leaf). */
-export { RULE_WEEKDAYS, weekdayOfDay, type RuleWeekday } from "./schedule-slots.ts";
+export { RULE_WEEKDAYS, standingLinesOn, weekdayOfDay, type DatedLine, type RuleWeekday } from "./schedule-slots.ts";
 
 /**
  * A person's schedule slot: from `startMinute` to `endMinute` of the Moscow day (minutes from 00:00; a slot whose end
@@ -330,21 +330,7 @@ export function slotRuns(slots: readonly RuleSlot[], input: { personId: number; 
   return anyRuns((on) => linesOn(own, input.pageId, on)) && !anyRuns((on) => swapLinesOn(own, input.pageId, on, "off"));
 }
 
-/** A schedule line as the choice of a day's lines reads it: its page (null — every page) and its validity. */
-type DatedLine = { pageId: number | null; validFrom: string | null; validTo: string | null };
-
 const validOn = (slot: DatedLine, on: string) => (slot.validFrom === null || slot.validFrom <= on) && (slot.validTo === null || on <= slot.validTo);
-
-/**
- * Which of a person's STANDING lines stand for them on a page on a Moscow day: the page's own valid that day, else the
- * every-page ones valid that day — chosen by the dates alone, the weekday is read after. The one home of the choice: the
- * rule (`slotRuns`) and a swap's pages (team-questions.ts). Pure.
- */
-export function standingLinesOn<L extends DatedLine>(standing: readonly L[], pageId: number | null, on: string): L[] {
-  const valid = standing.filter((slot) => validOn(slot, on));
-  const ofPage = pageId === null ? [] : valid.filter((slot) => slot.pageId === pageId);
-  return ofPage.length > 0 ? ofPage : valid.filter((slot) => slot.pageId === null);
-}
 
 /** A person's STANDING lines on a page for a Moscow day (`standingLinesOn` of their lines that are not a swap's). */
 function linesOn(own: readonly RuleSlot[], pageId: number | null, on: string): RuleSlot[] {

@@ -35,6 +35,22 @@ export function weekdayOfDay(day: string): RuleWeekday {
   return RULE_WEEKDAYS[(new Date(`${day}T00:00:00Z`).getUTCDay() + 6) % 7]!;
 }
 
+/** A schedule line as the choice of a day's lines reads it: its page (null — every page) and its validity. */
+export type DatedLine = { pageId: number | null; validFrom: string | null; validTo: string | null };
+
+const validOn = (slot: DatedLine, on: string) => (slot.validFrom === null || slot.validFrom <= on) && (slot.validTo === null || on <= slot.validTo);
+
+/**
+ * Which of a person's STANDING lines stand for them on a page on a Moscow day: the page's own valid that day, else the
+ * every-page ones valid that day — chosen by the dates alone, the weekday is read after. The one home of the choice:
+ * `slotOccurrencesOf`, the sale rule (`sale-rule.ts`), and a swap's pages (`team-questions.ts`). Pure.
+ */
+export function standingLinesOn<L extends DatedLine>(standing: readonly L[], pageId: number | null, on: string): L[] {
+  const valid = standing.filter((slot) => validOn(slot, on));
+  const ofPage = pageId === null ? [] : valid.filter((slot) => slot.pageId === pageId);
+  return ofPage.length > 0 ? ofPage : valid.filter((slot) => slot.pageId === null);
+}
+
 /**
  * Where the people's schedule slots come from (sale-rule.ts `RuleSlot`): the people registry (`registrySlots`), or
  * none — then a junction nobody wrote to waits for the owner, as ledger's Go. A registry with no slot gives none.
@@ -104,16 +120,25 @@ export interface SlotOccurrence {
   pageId: number | null;
 }
 
+function slotRunOf(slot: RuleSlot, midnight: number, weekday: RuleWeekday): { start: number; end: number } | null {
+  if (slot.weekdays !== null && !slot.weekdays.includes(weekday)) return null;
+  const minutes = (slot.endMinute - slot.startMinute + MINUTES_OF_DAY) % MINUTES_OF_DAY || (slot.endMinute === MINUTES_OF_DAY ? MINUTES_OF_DAY - slot.startMinute : 0);
+  if (minutes <= 0) return null;
+  const start = midnight + slot.startMinute * MINUTE_MS;
+  return { start, end: start + minutes * MINUTE_MS };
+}
+
 /**
  * The runs of a person's lines that overlap [from, to): each line on the Moscow days of its start from the day before
  * `from` (a slot begun then runs past midnight) to the day of `to`, on its weekdays and within its validity, for as
  * long as it is (a slot whose end is not after its start crosses midnight; one ending 24:00 runs to midnight; one of no
- * length runs never). A swap's `off` line runs nowhere: it takes its own hours out of the person's lines of its page
- * (as the rule's `slotRuns`); a `cover` line runs as a line of its own, whatever is off. `slots` name the person by
- * login (`personId`), as the rule reads them. `pagesOfAll` — the person's working pages, which a line of every page
- * stands for: given, such a line runs page by page, each cut by that page's `off` (a page's swap does not take the
- * person off the other pages); not given, it stays a line of every page. In the order of the days, then of the lines.
- * Pure.
+ * length runs never). On each page and day, standing lines follow `standingLinesOn` (page-specific lines override
+ * every-page lines by date before weekdays are checked, matching `sale-rule.ts`). A swap's `off` line runs nowhere: it
+ * takes its own hours out of the person's standing lines of its page; a `cover` line runs as a line of its own,
+ * whatever is off. `slots` name the person by login (`personId`), as the rule reads them. `pagesOfAll` — the person's
+ * working pages, which a line of every page stands for: given, standing lines expand page by page with per-page
+ * precedence and each page's `off`; not given, every-page lines stay `pageId: null`. In the order of the days, then of
+ * the lines. Pure.
  */
 export function slotOccurrencesOf(
   slots: readonly RuleSlot[],
@@ -121,33 +146,74 @@ export function slotOccurrencesOf(
 ): SlotOccurrence[] {
   const own = slots.filter((slot) => input.userIds.has(slot.personId));
   if (own.length === 0) return [];
-  const runs: Array<{ slot: RuleSlot; start: number; end: number }> = [];
+  const standing = own.filter((slot) => slot.day === undefined);
+  const swapOffs = own.filter((slot) => slot.day === "off");
+  const swapCovers = own.filter((slot) => slot.day === "cover");
+
+  const days: Array<{ day: string; midnight: number; weekday: RuleWeekday }> = [];
   const first = moscowDayOf(input.from - DAY_MS);
   for (let day = first; Date.parse(`${day}T00:00:00+03:00`) <= input.to; day = moscowDayOf(Date.parse(`${day}T12:00:00+03:00`) + DAY_MS)) {
-    const midnight = Date.parse(`${day}T00:00:00+03:00`);
-    const weekday = weekdayOfDay(day);
-    for (const slot of own) {
-      if ((slot.validFrom !== null && day < slot.validFrom) || (slot.validTo !== null && day > slot.validTo)) continue;
-      if (slot.weekdays !== null && !slot.weekdays.includes(weekday)) continue;
-      const minutes = (slot.endMinute - slot.startMinute + MINUTES_OF_DAY) % MINUTES_OF_DAY || (slot.endMinute === MINUTES_OF_DAY ? MINUTES_OF_DAY - slot.startMinute : 0);
-      if (minutes <= 0) continue;
-      const start = midnight + slot.startMinute * MINUTE_MS;
-      runs.push({ slot, start, end: start + minutes * MINUTE_MS });
+    days.push({ day, midnight: Date.parse(`${day}T00:00:00+03:00`), weekday: weekdayOfDay(day) });
+  }
+
+  // Every `off` run across the window first, so a swap begun the previous evening cuts past midnight too.
+  const offs: Array<{ pageId: number | null; start: number; end: number }> = [];
+  for (const { day, midnight, weekday } of days) {
+    for (const slot of swapOffs) {
+      if (!validOn(slot, day)) continue;
+      const run = slotRunOf(slot, midnight, weekday);
+      if (run !== null) offs.push({ pageId: slot.pageId, ...run });
     }
   }
-  const offs = runs.filter((run) => run.slot.day === "off");
+
   const pagesOfAll = input.pagesOfAll !== undefined && input.pagesOfAll.length > 0 ? input.pagesOfAll : null;
+  const standingPages = pagesOfAll !== null
+    ? [...new Set([...pagesOfAll, ...standing.flatMap((slot) => (slot.pageId === null ? [] : [slot.pageId]))])]
+    : null;
+  const specificPages = [...new Set(standing.flatMap((slot) => (slot.pageId === null ? [] : [slot.pageId])))];
   const out: SlotOccurrence[] = [];
-  for (const run of runs) {
-    if (run.slot.day === "off") continue;
-    const onPages: Array<number | null> = run.slot.pageId === null && run.slot.day === undefined && pagesOfAll !== null ? [...pagesOfAll] : [run.slot.pageId];
-    for (const pageId of onPages) {
-      const pieces = run.slot.day === "cover" ? [{ start: run.start, end: run.end }]
-        : withoutHours({ start: run.start, end: run.end }, offs.filter((off) => off.slot.pageId === pageId));
-      for (const piece of pieces) {
-        if (piece.end <= input.from || piece.start >= input.to) continue;
-        out.push({ start: piece.start, end: piece.end, pageId });
+
+  for (const { day, midnight, weekday } of days) {
+    if (standingPages !== null) {
+      for (const pageId of standingPages) {
+        for (const slot of standingLinesOn(standing, pageId, day)) {
+          const run = slotRunOf(slot, midnight, weekday);
+          if (run === null) continue;
+          const pieces = withoutHours(run, offs.filter((off) => off.pageId === pageId));
+          for (const piece of pieces) {
+            if (piece.end <= input.from || piece.start >= input.to) continue;
+            out.push({ start: piece.start, end: piece.end, pageId });
+          }
+        }
       }
+    } else {
+      for (const slot of standingLinesOn(standing, null, day)) {
+        const run = slotRunOf(slot, midnight, weekday);
+        if (run === null) continue;
+        const pieces = withoutHours(run, offs.filter((off) => off.pageId === null));
+        for (const piece of pieces) {
+          if (piece.end <= input.from || piece.start >= input.to) continue;
+          out.push({ start: piece.start, end: piece.end, pageId: null });
+        }
+      }
+      for (const pageId of specificPages) {
+        for (const slot of standingLinesOn(standing, pageId, day)) {
+          if (slot.pageId !== pageId) continue;
+          const run = slotRunOf(slot, midnight, weekday);
+          if (run === null) continue;
+          const pieces = withoutHours(run, offs.filter((off) => off.pageId === pageId));
+          for (const piece of pieces) {
+            if (piece.end <= input.from || piece.start >= input.to) continue;
+            out.push({ start: piece.start, end: piece.end, pageId });
+          }
+        }
+      }
+    }
+    for (const slot of swapCovers) {
+      if (!validOn(slot, day)) continue;
+      const run = slotRunOf(slot, midnight, weekday);
+      if (run === null || run.end <= input.from || run.start >= input.to) continue;
+      out.push({ start: run.start, end: run.end, pageId: slot.pageId });
     }
   }
   return out;
@@ -186,12 +252,11 @@ export function scheduleSpansOf(runs: ReadonlyArray<{ start: number; end: number
 }
 
 /**
- * Each login's schedule over [from, to), as the cut of a shift reads it (chatter-shifts.ts `workOfMinutes`): the runs of
- * the person's lines on any page of theirs (`slotOccurrencesOf` over their working pages: a page's line and a line of
- * every page both count, a swap's `off` takes its hours off its page, a `cover` adds its own), joined into one
- * (`scheduleSpansOf`). A login with no line has none. Read through `db` in turn.
+ * Each login's per-page schedule occurrences over [from, to) (`slotOccurrencesOf` over their working pages: page-specific
+ * standing lines override every-page ones, a swap's `off` takes its hours off its page, a `cover` adds its own).
+ * A login with no line has none. Read through `db` in turn.
  */
-export async function registryScheduleSpans(db: Database, input: { from: Date; to: Date }): Promise<Map<number, ScheduleSpan[]>> {
+export async function registrySlotOccurrences(db: Database, input: { from: Date; to: Date }): Promise<Map<number, SlotOccurrence[]>> {
   const lines = await registryLines(db, input);
   if (lines.length === 0) return new Map();
   const logins = await listPersonLoginRows(db);
@@ -199,10 +264,22 @@ export async function registryScheduleSpans(db: Database, input: { from: Date; t
   const slots = ruleSlotsOf({ slots: lines, logins, from: input.from, to: input.to });
   const pagesOf = new Map<number, number[]>();
   for (const row of working) pagesOf.set(row.personId, [...(pagesOf.get(row.personId) ?? []), row.pageId]);
-  const out = new Map<number, ScheduleSpan[]>();
+  const out = new Map<number, SlotOccurrence[]>();
   for (const login of logins) {
     const runs = slotOccurrencesOf(slots, { userIds: new Set([login.userId]), from: input.from.getTime(), to: input.to.getTime(), pagesOfAll: pagesOf.get(login.personId) });
-    if (runs.length > 0) out.set(login.userId, scheduleSpansOf(runs));
+    if (runs.length > 0) out.set(login.userId, runs);
   }
+  return out;
+}
+
+/**
+ * Each login's schedule over [from, to), as the cut of a shift reads it (chatter-shifts.ts `workOfMinutes`): the runs of
+ * the person's lines on any page of theirs (`registrySlotOccurrences`), joined into one (`scheduleSpansOf`).
+ * A login with no line has none. Read through `db` in turn.
+ */
+export async function registryScheduleSpans(db: Database, input: { from: Date; to: Date }): Promise<Map<number, ScheduleSpan[]>> {
+  const runsByLogin = await registrySlotOccurrences(db, input);
+  const out = new Map<number, ScheduleSpan[]>();
+  for (const [userId, runs] of runsByLogin) out.set(userId, scheduleSpansOf(runs));
   return out;
 }

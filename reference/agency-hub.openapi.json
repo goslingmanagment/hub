@@ -212791,6 +212791,12 @@
                                   "allFans": {
                                     "type": "boolean"
                                   },
+                                  "watchFrom": {
+                                    "type": "string"
+                                  },
+                                  "watchTo": {
+                                    "type": "string"
+                                  },
                                   "sales": {
                                     "type": "object",
                                     "properties": {
@@ -213157,6 +213163,9 @@
                                                   "type": "null"
                                                 }
                                               ]
+                                            },
+                                            "replyTail": {
+                                              "type": "boolean"
                                             },
                                             "repeats": {
                                               "type": "integer",
@@ -213908,6 +213917,33 @@
                               "from",
                               "to",
                               "by"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "colleagueSpans": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "from": {
+                                "type": "string"
+                              },
+                              "to": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "name",
+                              "from",
+                              "to"
                             ],
                             "additionalProperties": false
                           }
@@ -422953,6 +422989,12 @@
                               "allFans": {
                                 "type": "boolean"
                               },
+                              "watchFrom": {
+                                "type": "string"
+                              },
+                              "watchTo": {
+                                "type": "string"
+                              },
                               "sales": {
                                 "type": "object",
                                 "properties": {
@@ -423319,6 +423361,9 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "replyTail": {
+                                          "type": "boolean"
                                         },
                                         "repeats": {
                                           "type": "integer",
@@ -424070,6 +424115,33 @@
                           "from",
                           "to",
                           "by"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "colleagueSpans": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "pageLabel",
+                          "name",
+                          "from",
+                          "to"
                         ],
                         "additionalProperties": false
                       }

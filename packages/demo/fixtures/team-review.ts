@@ -1,4 +1,4 @@
-import type { KernelOperationResponse, ShiftReviewChat, ShiftReviewMessage } from "@agency_hub_core/contracts";
+import { shiftReviewCounts, type KernelOperationResponse, type ShiftReviewChat, type ShiftReviewMessage } from "@agency_hub_core/contracts";
 import { millsFromDollars, millsPercentOf, millsToNumber } from "@agency_hub_core/shared";
 import { myMessages, reviewWaits, shiftQuality, summariesOf, totalsOf, type ShiftQuality } from "@agency_hub_core/ui/shiftReview";
 
@@ -686,7 +686,7 @@ export function shiftReviewNumbers(shift: DemoShift, now: number): ReviewNumbers
   const mine = myMessages(review);
   const waits = reviewWaits(review);
   const totals = totalsOf(review, mine, summariesOf(review, waits), waits);
-  const delays = mine.flatMap((one) => (one.message.mass || one.message.mine.replySeconds === null ? [] : [one.message.mine.replySeconds]));
+  const delays = shiftReviewCounts(review, waits).replyDelays;
   const numbers: ReviewNumbers = {
     quality: shiftQuality(totals),
     messages: totals.messages,
