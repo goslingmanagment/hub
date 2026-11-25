@@ -230,6 +230,8 @@ export const agentSaleDecisionFeedDecisionSchema = z.object({
   note: z.string().nullable(),
   /** Taken into a person's post of a date; null — not. */
   applied: z.object({ person: z.string().nullable(), reportDate: z.string() }).nullable(),
+  /** Per-recipient applied deliveries for split decisions (`sale_decision_deliveries` rows in state `applied`). */
+  appliedDeliveries: z.array(z.object({ person: z.string().nullable(), userId: intId, reportDate: z.string() })).default([]),
   /** The ledger's own number of a decision carried over from it; null — made in Hub. */
   ledgerDecisionId: intId.nullable(),
 });

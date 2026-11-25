@@ -30,6 +30,7 @@ import {
   listHandinNames,
   listHandinPeopleOfUsers,
   listHandinSaleFans,
+  listHandinSalesByIds,
   listHandinSalesOnPages,
   listHandinAccessiblePageIds,
   listHandinShifts,
@@ -45,6 +46,7 @@ import {
   listReportedSales,
   listSaleClaims,
   lockSaleSettlements,
+  reopenReportDeliveries,
   updateReportDeliveries,
   updateSaleClaim,
   reopenSaleClaim,
@@ -61,7 +63,9 @@ import {
   type HandinVersionMadeFor,
   type HandinVersionOffPlatform,
   type HandinVersionRow,
+  type UpdatedDeliveryRow,
 } from "@agency_hub_core/db";
+import { formatUsdFromMills, moscowDayOfMs } from "@agency_hub_core/shared";
 import { userIsTest } from "./sandbox/realm.ts";
 
 import type { AgentAuthPrincipal } from "./auth.ts";
@@ -69,13 +73,14 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { ledgerGet } from "./ledger-payouts.ts";
 import { parseLedgerReportDays } from "./ledger-reports.ts";
 import { pagesWithLines, reportSums } from "./sale-claim-rules.ts";
-import { claimsOfReport, runSaleClaims, settleAskedTakes } from "./sale-claims.ts";
+import { claimsOfReport, runSaleClaims, SALE_DELIVERY_DECLINED_KIND, saleDeliveryDeclinedKey, settleAskedTakes } from "./sale-claims.ts";
 import { checkReportNow, moveWhenDue, syncCheckMatters } from "./shift-handin-check.ts";
 import { boardOn, phaseOf, readBoard } from "./shift-report-board-view.ts";
 import { holdsSale, PhaseConflictError } from "./shift-report-phases.ts";
 import type { SaleHomeKind, SaleHomeReason } from "./sale-rule.ts";
 import {
   commentText,
+  dayWords,
   postTexts,
   reasonWords,
   statementAllowed,
@@ -807,6 +812,8 @@ export async function setShiftReportLine(
   }
 
   const who = writer(actor);
+  let declinedDeliveries: UpdatedDeliveryRow[] = [];
+  let reopenedDeliveries: UpdatedDeliveryRow[] = [];
   await app.db.transaction(async (tx) => {
     const db = tx as unknown as Database;
     await lockSaleSettlements(db);
@@ -819,8 +826,14 @@ export async function setShiftReportLine(
       byUserId: who.byUserId, byAgentKeyId: who.byAgentKeyId, at: now,
     });
     if (wordChanged && written === "not_mine") {
-      await updateReportDeliveries(db, { transactionIds: [input.transactionId], userId: subject.shift.userId,
-        shiftId: subject.shift.id, state: "declined", reportDate: handin.reportDate });
+      declinedDeliveries = await updateReportDeliveries(db, {
+        transactionIds: [input.transactionId], userId: subject.shift.userId,
+        shiftId: subject.shift.id, state: "declined", reportDate: handin.reportDate,
+      });
+    } else if (wordChanged && before?.statement === "not_mine" && written !== "not_mine") {
+      reopenedDeliveries = await reopenReportDeliveries(db, {
+        transactionIds: [input.transactionId], userId: subject.shift.userId, shiftId: subject.shift.id,
+      });
     }
     if (wordChanged) {
       // A new word takes back a question asked from the draft about this sale.
@@ -846,6 +859,46 @@ export async function setShiftReportLine(
       }
     }
   });
+  if (declinedDeliveries.length > 0 && !(await userIsTest(app, subject.shift.userId))) {
+    const [sale] = await listHandinSalesByIds(app.db, [input.transactionId]);
+    const names = await listHandinNames(app.db, [subject.shift.userId]);
+    const personName = names.get(subject.shift.userId) ?? `#${subject.shift.userId}`;
+    const details = sale
+      ? `${sale.pageLabel}, ${formatUsdFromMills(sale.netMills)}, ${dayWords(moscowDayOfMs(sale.occurredAt.getTime()))}`
+      : `#${input.transactionId}`;
+    for (const delivery of declinedDeliveries) {
+      await openMatter(app.db, {
+        key: saleDeliveryDeclinedKey(delivery.decisionId, delivery.recipientUserId),
+        kind: SALE_DELIVERY_DECLINED_KIND,
+        source: "server",
+        title: `${personName} отклонил(а) отданную продажу («не моё»): ${details}`,
+        object: { type: "transaction", id: String(delivery.transactionId) },
+        pageIds: sale ? [sale.pageId] : [],
+        owner: { role: "owner" },
+        money: true,
+        evidence: {
+          decisionId: delivery.decisionId,
+          recipientUserId: delivery.recipientUserId,
+          transactionId: delivery.transactionId,
+          shiftId: subject.shift.id,
+        },
+        link: "/workboard/waiting",
+      }, { door: "system" }, now).catch((error: unknown) => {
+        app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: failed to open declined-delivery owner matter");
+      });
+    }
+  }
+  if (reopenedDeliveries.length > 0) {
+    for (const delivery of reopenedDeliveries) {
+      await closeMatter(app.db, {
+        key: saleDeliveryDeclinedKey(delivery.decisionId, delivery.recipientUserId),
+        how: "resolved",
+        writer: "server",
+      }, { door: "system" }, now).catch((error: unknown) => {
+        app.logger.warn({ shiftId: subject.shift.id, err: error instanceof Error ? error.message : String(error) }, "shift report: failed to close declined-delivery owner matter");
+      });
+    }
+  }
   if (oldWayTo !== null) await runSaleClaims(app, now).catch(() => undefined);
   // «Общак» said or taken back: the owner's matter opens or closes now, not at the next pass.
   if (statement === "pot" || before?.statement === "pot") {

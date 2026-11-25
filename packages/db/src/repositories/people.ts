@@ -287,11 +287,12 @@ export async function listUnlinkedLoginRows(db: Database, realm: PeopleRealm = "
   return result.rows.map(loginOf);
 }
 
-/** Every Hub login with its person (null — no person holds it), person code and display name: whose a share of a sale is. */
-export async function listLoginPeople(db: Database, realm: PeopleRealm | "both" = "live"): Promise<Array<{ userId: number; username: string; personId: number | null; personCode: string | null; displayName: string | null }>> {
+/** Every Hub login with its person (null — no person holds it), person code, display name, and live flag: whose a share of a sale is. */
+export async function listLoginPeople(db: Database, realm: PeopleRealm | "both" = "live"): Promise<Array<{ userId: number; username: string; personId: number | null; personCode: string | null; displayName: string | null; live: boolean }>> {
   const filter = realm === "both" ? sql`true` : loginRealmSql(realm, sql`u.id`);
   const result = await db.execute<Row>(sql`
-    select u.id as user_id, u.username, l.person_id, p.code as person_code, p.display_name
+    select u.id as user_id, u.username, l.person_id, p.code as person_code, p.display_name,
+           (u.deleted_at is null and u.disabled_at is null) as live
       from users u
       left join person_logins l on l.user_id = u.id
       left join people p on p.id = l.person_id
@@ -303,6 +304,7 @@ export async function listLoginPeople(db: Database, realm: PeopleRealm | "both" 
     personId: nullableNumber(row.person_id),
     personCode: row.person_code === null || row.person_code === undefined ? null : String(row.person_code),
     displayName: row.display_name === null || row.display_name === undefined ? null : String(row.display_name),
+    live: Boolean(row.live),
   }));
 }
 
@@ -700,7 +702,7 @@ export async function rewritePersonScheduleSlot(db: Database, slotId: number, in
 
 export interface PersonRightRow {
   personId: number;
-  right: "customs_lead" | "records_customs" | "submits_shift" | "sees_own_pay";
+  right: "customs_lead" | "records_customs" | "submits_shift" | "sees_own_pay" | "reviews_shift_reports";
   grantedAt: Date;
 }
 

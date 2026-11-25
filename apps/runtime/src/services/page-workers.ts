@@ -87,3 +87,26 @@ export async function soloPageSuggestions(
   }
   return suggestions;
 }
+
+/**
+ * Which of `pageIds` have `personId` as their sole active chat-team worker on Moscow `day`
+ * (same registry + schedule snapshot as `soloPageSuggestions`).
+ */
+export async function soloPagesForPerson(
+  db: Database,
+  realm: PeopleRealm,
+  personId: number,
+  day: string,
+  pageIds: readonly number[],
+): Promise<Set<number>> {
+  const unique = [...new Set(pageIds)];
+  if (unique.length === 0) return new Set();
+  const ctx = await loadParticipantContext(db, realm, day);
+  const logins = await listPersonLoginRows(db, ctx.people.map((p) => p.personId));
+  const solo = new Set<number>();
+  for (const pageId of unique) {
+    const suggestion = suggestSoloPagePerson({ ...ctx, logins, pageId, saleDay: day });
+    if (suggestion?.personId === personId) solo.add(pageId);
+  }
+  return solo;
+}

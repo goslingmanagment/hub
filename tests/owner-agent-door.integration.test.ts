@@ -326,7 +326,7 @@ describe("the owner's agent door", () => {
   it("takes the reason first, then the table, then writes the audit, then reads the arguments", async (context) => {
     if (!testDb) return context.skip();
     const before = await calls();
-    for (const why of [null, "", "   ", "я".repeat(501), "fixture\u0000reason", "fixture\nreason"]) {
+    for (const why of [null, "", "   ", "я".repeat(501), "fixture\u0000reason", "fixture\u200breason"]) {
       const refused = await call("people.show", { code: "anna" }, { why });
       expect(refused.statusCode, `${String(why).slice(0, 10)}: ${refused.body}`).toBe(400);
       expect(refused.json().reason).toBe("owner_reason");

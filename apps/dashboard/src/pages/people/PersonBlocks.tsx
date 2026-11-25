@@ -139,7 +139,13 @@ export function proposalLines(proposal: Pick<Proposal, "change">): string[] {
   }
   if (Array.isArray(fields.rights)) {
     const rights = fields.rights as string[];
-    const words = [rights.includes("customs_lead") ? "ведёт кастомы" : null, rights.includes("records_customs") ? "записывает кастомы в системе" : null, rights.includes("submits_shift") ? "сдаёт смену доской" : null, rights.includes("sees_own_pay") ? "видит свои деньги" : null].filter(Boolean);
+    const words = [
+      rights.includes("customs_lead") ? "ведёт кастомы" : null,
+      rights.includes("records_customs") ? "записывает кастомы в системе" : null,
+      rights.includes("submits_shift") ? "сдаёт смену доской" : null,
+      rights.includes("sees_own_pay") ? "видит свои деньги" : null,
+      rights.includes("reviews_shift_reports") ? "проверяет отчёты смен" : null,
+    ].filter(Boolean);
     lines.push(words.length > 0 ? words.join(", ") : "без узких прав");
   }
   if (typeof fields.note === "string") lines.push(`заметка: ${fields.note}`);
@@ -176,28 +182,33 @@ export function PersonBlock({ person, onEdit }: { person: RegistryPerson; onEdit
 }
 
 /** The narrow rights, each a switch of its own; a change keeps the other rights as they are. */
-const RIGHT_SWITCHES: ReadonlyArray<{ right: RegistryPerson["rights"][number]["right"]; label: string; hint: string; on: string; off: string; held: string }> = [
+const RIGHT_SWITCHES: ReadonlyArray<{ right: RegistryPerson["rights"][number]["right"]; kind: "human" | "agent"; label: string; hint: string; on: string; off: string; held: string }> = [
   // The person right: still read for an order whose page is not known (custom-orders leaders `fallback`); the team's
   // own customs lead is the team record «Ведёт кастомы команды» (TeamRoles.tsx).
-  { right: "customs_lead", label: "Кастомы без страницы", hint: "Ведёт заказы кастомов, у которых не известна страница: проверка и отдача в съёмку.", on: "ведёт кастомы без страницы", off: "больше не ведёт кастомы без страницы", held: "Ведёт кастомы без страницы." },
+  { right: "customs_lead", kind: "human", label: "Кастомы без страницы", hint: "Ведёт заказы кастомов, у которых не известна страница: проверка и отдача в съёмку.", on: "ведёт кастомы без страницы", off: "больше не ведёт кастомы без страницы", held: "Ведёт кастомы без страницы." },
   {
-    right: "records_customs", label: "Записывает кастомы в системе", hint: "Получает дела по кастомам: «отдайте фану», продажа похожа на кастом без заказа.",
+    right: "records_customs", kind: "human", label: "Записывает кастомы в системе", hint: "Получает дела по кастомам: «отдайте фану», продажа похожа на кастом без заказа.",
     on: "записывает кастомы в системе", off: "больше не получает дела по кастомам", held: "Записывает кастомы в системе.",
   },
   {
     // The «Отчёт» board (package R): the person hands their shift in on the board (shifts begun after the switch).
-    right: "submits_shift", label: "Сдаёт смену доской", hint: "Кнопка «Отчёт» в ChatGoose: смена сдаётся доской и подтверждается после проверки. Для смен, начатых после включения.",
+    right: "submits_shift", kind: "human", label: "Сдаёт смену доской", hint: "Кнопка «Отчёт» в ChatGoose: смена сдаётся доской и подтверждается после проверки. Для смен, начатых после включения.",
     on: "сдаёт смену доской", off: "больше не сдаёт смену доской", held: "Сдаёт смену доской.",
   },
   {
-    right: "sees_own_pay", label: "Видит свои деньги", hint: "В «Деньги → Мои деньги»: начислено за период, к выплате, выплачено и начисление каждой смены. Только суммы, без ставок.",
+    right: "sees_own_pay", kind: "human", label: "Видит свои деньги", hint: "В «Деньги → Мои деньги»: начислено за период, к выплате, выплачено и начисление каждой смены. Только суммы, без ставок.",
     on: "видит свои деньги", off: "больше не видит свои деньги", held: "Видит свои деньги.",
+  },
+  {
+    right: "reviews_shift_reports", kind: "agent", label: "Проверяет отчёты смен", hint: "Назначает агента проверяющим сданных отчётов смен на страницах его ключа с правом review:shift_reports.",
+    on: "проверяет отчёты смен", off: "больше не проверяет отчёты смен", held: "Проверяет отчёты смен.",
   },
 ];
 
 export function RightsBlock({ person, canEdit }: { person: RegistryPerson; canEdit: boolean }) {
   const update = useUpdatePerson(person.code);
   const held = new Set(person.rights.map((right) => right.right));
+  const applicable = RIGHT_SWITCHES.filter((right) => right.kind === person.kind);
   const toggle = (right: (typeof RIGHT_SWITCHES)[number], on: boolean) => {
     const rights = [...held].filter((one) => one !== right.right);
     update.mutate({ rights: on ? [...rights, right.right] : rights }, {
@@ -207,7 +218,7 @@ export function RightsBlock({ person, canEdit }: { person: RegistryPerson; canEd
   };
   return (
     <Card title="Права" description="Узкие права рядом с ролью.">
-      {canEdit && person.kind === "human" ? <div className="registry-rights">{RIGHT_SWITCHES.map((right) => (
+      {canEdit && applicable.length > 0 ? <div className="registry-rights">{applicable.map((right) => (
         <Switch
           key={right.right}
           label={right.label}

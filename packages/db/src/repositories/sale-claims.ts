@@ -340,6 +340,7 @@ export async function insertSaleClaim(db: Database, input: SaleClaimInsert, at: 
         from inserted i join sale_homes h on h.transaction_id = i.transaction_id
       ) d
       where d.day >= ${SALE_RULE_SINCE_DAY}::date
+      order by d.day
       on conflict (day) do update set
         generation = sale_home_refresh_due.generation + 1,
         queued_at = clock_timestamp()
@@ -418,6 +419,7 @@ export async function updateSaleClaim(
         from updated u join sale_homes h on h.transaction_id = u.transaction_id
       ) d
       where d.day >= ${SALE_RULE_SINCE_DAY}::date
+      order by d.day
       on conflict (day) do update set
         generation = sale_home_refresh_due.generation + 1,
         queued_at = clock_timestamp()
@@ -465,6 +467,7 @@ export async function reopenSaleClaim(
         from reopened r join sale_homes h on h.transaction_id = r.transaction_id
       ) d
       where d.day >= ${SALE_RULE_SINCE_DAY}::date
+      order by d.day
       on conflict (day) do update set
         generation = sale_home_refresh_due.generation + 1,
         queued_at = clock_timestamp()
@@ -595,15 +598,19 @@ export async function listSaleDecisions(
   return result.rows.map(decisionOf);
 }
 
-/** Only decisions created through the settlement path schedule new deliveries. */
+/** Only decisions created or linked through the settlement path schedule new deliveries (idempotent). */
 export async function scheduleSaleDeliveries(db: Database, decision: SaleDecisionRow): Promise<void> {
   if (decision.kind !== "split" || decision.pageId === null) return;
-  const users = decision.shares.filter((share) => share.percent > 0).map((share) => share.userId);
-  const written = await db.execute(sql`
+  const users = [...new Set(decision.shares.filter((share) => share.percent > 0).map((share) => share.userId))];
+  if (users.length === 0) return;
+  const valid = await db.execute<{ n: string | number }>(sql`
+    select count(*)::int as n from users u where u.id = any(${ids(users)})
+      and ${testUserSql(sql`u.id`)} = ${testPageSql(sql`${decision.pageId}::bigint`)}`);
+  if (num(valid.rows[0]?.n ?? 0) !== users.length) throw new Error("A decision recipient is outside the sale's realm");
+  await db.execute(sql`
     insert into sale_decision_deliveries (decision_id, recipient_user_id)
     select ${decision.id}, u.id from users u where u.id = any(${ids(users)})
-      and ${testUserSql(sql`u.id`)} = ${testPageSql(sql`${decision.pageId}::bigint`)}`);
-  if (written.rowCount !== users.length) throw new Error("A decision recipient is outside the sale's realm");
+    on conflict (decision_id, recipient_user_id) do nothing`);
 }
 
 // Older shift syncs could leave a pending delivery pinned to a retired shift.
@@ -630,12 +637,18 @@ export async function listSaleDeliveries(db: Database, input: {
     state: row.delivery_state as "pending" | "applied" | "declined", shiftId: nullableNum(row.shift_id), reportDate: text(row.delivery_date) }));
 }
 
+export interface UpdatedDeliveryRow {
+  decisionId: number;
+  recipientUserId: number;
+  transactionId: number;
+}
+
 /** Settle or reserve just this person's deliveries in the same transaction as their report or draft word. */
 export async function updateReportDeliveries(db: Database, input: {
   transactionIds: readonly number[]; userId: number; shiftId: number; state: "pending" | "applied" | "declined"; reportDate: string;
-}): Promise<void> {
-  if (!input.transactionIds.length) return;
-  await db.execute(sql`
+}): Promise<UpdatedDeliveryRow[]> {
+  if (!input.transactionIds.length) return [];
+  const result = await db.execute<Row>(sql`
     update sale_decision_deliveries x set state = ${input.state}, shift_id = ${input.shiftId}, report_date = ${input.reportDate}::date
     from sale_owner_decisions d where d.id = x.decision_id and d.state = 'active' and x.state = 'pending'
       and d.transaction_id = any(${ids(input.transactionIds)})
@@ -643,7 +656,35 @@ export async function updateReportDeliveries(db: Database, input: {
       and exists (select 1 from shifts target where target.id = ${input.shiftId} and target.state in ('going', 'closed'))
       and (x.recipient_user_id = ${input.userId} or exists (
         select 1 from person_logins a join person_logins b using (person_id)
-        where a.user_id = x.recipient_user_id and b.user_id = ${input.userId}))`);
+        where a.user_id = x.recipient_user_id and b.user_id = ${input.userId}))
+    returning x.decision_id, x.recipient_user_id, d.transaction_id`);
+  return result.rows.map((row) => ({
+    decisionId: num(row.decision_id),
+    recipientUserId: num(row.recipient_user_id),
+    transactionId: num(row.transaction_id),
+  }));
+}
+
+/** Reverts a recipient's declined delivery on this open shift back to pending when they clear «не моё» in draft. */
+export async function reopenReportDeliveries(db: Database, input: {
+  transactionIds: readonly number[]; userId: number; shiftId: number;
+}): Promise<UpdatedDeliveryRow[]> {
+  if (!input.transactionIds.length) return [];
+  const result = await db.execute<Row>(sql`
+    update sale_decision_deliveries x set state = 'pending', report_date = null
+    from sale_owner_decisions d where d.id = x.decision_id and d.state = 'active' and x.state = 'declined'
+      and x.shift_id = ${input.shiftId}
+      and d.transaction_id = any(${ids(input.transactionIds)})
+      and exists (select 1 from shifts target where target.id = ${input.shiftId} and target.state in ('going', 'closed'))
+      and (x.recipient_user_id = ${input.userId} or exists (
+        select 1 from person_logins a join person_logins b using (person_id)
+        where a.user_id = x.recipient_user_id and b.user_id = ${input.userId}))
+    returning x.decision_id, x.recipient_user_id, d.transaction_id`);
+  return result.rows.map((row) => ({
+    decisionId: num(row.decision_id),
+    recipientUserId: num(row.recipient_user_id),
+    transactionId: num(row.transaction_id),
+  }));
 }
 
 export interface SaleDecisionInsert {

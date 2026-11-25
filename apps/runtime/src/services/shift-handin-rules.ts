@@ -93,6 +93,8 @@ export interface DraftContext {
   handinId: number | null;
   /** The sales the person's words in this report say «не моё» of: each stays their own line. */
   notMine?: ReadonlySet<number>;
+  /** Pages where this person is the sole active worker on the report day: unclaimed nobody sales show in «Рядом» ($0 until claimed). */
+  soloPages?: ReadonlySet<string>;
 }
 
 export type DraftGroup = "mine" | "near";
@@ -142,10 +144,13 @@ export function classifySale(sale: DraftSale, context: DraftContext): Classified
     return { sale, group: "mine", added: sale.source !== "window", shareMills: 0, toUserId: other?.userId ?? null, alreadyIn };
   }
   // Nobody's sales are hidden from chatters and team leads (H8): never shown in «Рядом» (own «не моё» lines stay above),
-  // except when this report's own current version already holds the sale (e.g. the person said «не моё» making it
-  // `nobody` and just cleared the word back to null before re-submitting).
+  // except (1) when this report's own current version already holds the sale (e.g. the person said «не моё» making it
+  // `nobody` and just cleared the word back to null before re-submitting), or (2) on a solo page where this person is
+  // the sole active worker on the report day (unless the owner already closed it as `owner_nobody`): shown at $0 so the
+  // chatter can claim their own sales from the 24h day, staying `nobody` if left unticked.
   const heldByThisReport = reported !== undefined && reported.handinId === context.handinId;
-  if (isTeamHiddenSaleHome(sale.home.kind) && !heldByThisReport) return null;
+  const onSoloPage = context.soloPages?.has(sale.pageLabel) === true && sale.home.reason !== "owner_nobody";
+  if (isTeamHiddenSaleHome(sale.home.kind) && !heldByThisReport && !onSoloPage) return null;
   if (sale.source === "window" && (sale.heldByShift || sale.inReportWindow)) {
     return { sale, group: "near", added: false, shareMills: 0, toUserId: other?.userId ?? null, alreadyIn };
   }

@@ -77,7 +77,15 @@ export async function upsertSaleHomes(db: Database, rows: readonly SaleHomeRow[]
       on conflict (transaction_id) do update set
         page_id = excluded.page_id, occurred_at = excluded.occurred_at, net_mills = excluded.net_mills, home = excluded.home,
         reason = excluded.reason, pot = excluded.pot, waits_until = excluded.waits_until, shares = excluded.shares,
-        suggested_person_id = excluded.suggested_person_id, rule_version = excluded.rule_version, computed_at = excluded.computed_at
+        suggested_person_id = excluded.suggested_person_id, rule_version = excluded.rule_version,
+        computed_at = case
+          when (sale_homes.page_id, sale_homes.occurred_at, sale_homes.net_mills, sale_homes.home, sale_homes.reason, sale_homes.pot,
+                sale_homes.waits_until, sale_homes.shares, sale_homes.rule_version)
+            is distinct from (excluded.page_id, excluded.occurred_at, excluded.net_mills, excluded.home, excluded.reason, excluded.pot,
+                excluded.waits_until, excluded.shares, excluded.rule_version)
+          then excluded.computed_at
+          else sale_homes.computed_at
+        end
       where (sale_homes.page_id, sale_homes.occurred_at, sale_homes.net_mills, sale_homes.home, sale_homes.reason, sale_homes.pot,
              sale_homes.waits_until, sale_homes.shares, sale_homes.rule_version, sale_homes.suggested_person_id)
         is distinct from (excluded.page_id, excluded.occurred_at, excluded.net_mills, excluded.home, excluded.reason, excluded.pot,
@@ -438,6 +446,69 @@ export async function enqueueSaleHomeRefreshForPages(
       where occurred_at >= ${fromIso}::timestamptz and occurred_at <= clock_timestamp() ${homePage}
     ) d
     where day >= ${fromDay}::date and day <= (clock_timestamp() at time zone 'Europe/Moscow')::date
+    order by day
+    on conflict (day) do update set
+      generation = sale_home_refresh_due.generation + 1,
+      queued_at = clock_timestamp()`);
+}
+
+/**
+ * Enqueues all Moscow days affected by a compound person edit (login links/leave state + working pages + schedule)
+ * in ONE sorted statement so concurrent edits always acquire `sale_home_refresh_due` row locks in ascending day order.
+ */
+export async function enqueueSaleHomeRefreshForPersonChange(
+  db: Database,
+  input: {
+    userIds: readonly number[];
+    pageScopes: ReadonlyArray<{ pageIds: readonly number[] | null; fromDay: string | null }>;
+  },
+): Promise<void> {
+  const uniqueUsers = [...new Set(input.userIds.filter(Number.isSafeInteger))];
+  const branches: ReturnType<typeof sql>[] = [];
+  if (uniqueUsers.length > 0) {
+    branches.push(
+      sql`select (h.occurred_at at time zone 'Europe/Moscow')::date as day
+        from sale_homes h
+        where h.occurred_at >= ${SALE_RULE_SINCE_ISO}::timestamptz
+          and exists (
+            select 1 from jsonb_array_elements(h.shares) as s
+            where (s ->> 'userId') ~ '^[0-9]{1,18}$' and (s ->> 'userId')::bigint = any(${ids(uniqueUsers)})
+          )`,
+      sql`select (s.started_at at time zone 'Europe/Moscow')::date as day
+        from shifts s
+        where s.user_id = any(${ids(uniqueUsers)}) and s.ended_at >= ${SALE_RULE_SINCE_ISO}::timestamptz`,
+      sql`select (s.ended_at at time zone 'Europe/Moscow')::date as day
+        from shifts s
+        where s.user_id = any(${ids(uniqueUsers)}) and s.ended_at >= ${SALE_RULE_SINCE_ISO}::timestamptz`,
+      sql`select (a.minute at time zone 'Europe/Moscow')::date as day
+        from chatter_activity_minutes a
+        where a.user_id = any(${ids(uniqueUsers)}) and a.minute >= ${SALE_RULE_SINCE_ISO}::timestamptz`,
+      sql`select (c.observed_at at time zone 'Europe/Moscow')::date as day
+        from client_send_attributions c
+        where c.user_id = any(${ids(uniqueUsers)}) and c.observed_at >= ${SALE_RULE_SINCE_ISO}::timestamptz`,
+    );
+  }
+  for (const scope of input.pageScopes) {
+    if (scope.pageIds !== null && scope.pageIds.length === 0) continue;
+    const fromDay = scope.fromDay !== null && scope.fromDay > SALE_RULE_SINCE_DAY ? scope.fromDay : SALE_RULE_SINCE_DAY;
+    const fromIso = `${fromDay}T00:00:00+03:00`;
+    const txPage = scope.pageIds === null ? sql`` : sql`and platform_account_id = any(${ids(scope.pageIds)})`;
+    const homePage = scope.pageIds === null ? sql`` : sql`and page_id = any(${ids(scope.pageIds)})`;
+    branches.push(
+      sql`select (occurred_at at time zone 'Europe/Moscow')::date as day
+        from transactions
+        where occurred_at >= ${fromIso}::timestamptz and occurred_at <= clock_timestamp() ${txPage}`,
+      sql`select (occurred_at at time zone 'Europe/Moscow')::date as day
+        from sale_homes
+        where occurred_at >= ${fromIso}::timestamptz and occurred_at <= clock_timestamp() ${homePage}`,
+    );
+  }
+  if (branches.length === 0) return;
+  await db.execute(sql`
+    insert into sale_home_refresh_due (day, generation, queued_at)
+    select day, 1, statement_timestamp()
+    from (${sql.join(branches, sql` union `)}) d
+    where day >= ${SALE_RULE_SINCE_DAY}::date and day <= (clock_timestamp() at time zone 'Europe/Moscow')::date
     order by day
     on conflict (day) do update set
       generation = sale_home_refresh_due.generation + 1,

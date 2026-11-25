@@ -38,7 +38,7 @@ import {
   deletePersonAgentKey,
   deletePersonLogin,
   endPersonScheduleSlot,
-  enqueueSaleHomeRefreshForPages,
+  enqueueSaleHomeRefreshForPersonChange,
   enqueueSaleHomeRefreshForUsers,
   findPersonIdOfAgentKey,
   findPersonIdOfLogin,
@@ -469,7 +469,11 @@ async function resolveChange(db: Db, subject: Subject, fields: ChangeFields): Pr
   }
 
   if (fields.rights !== undefined) {
-    resolved.rights = [...new Set(fields.rights)];
+    const uniqueRights = [...new Set(fields.rights)];
+    if (uniqueRights.includes("reviews_shift_reports") && subject.kind !== "agent") {
+      throw new BadRequestError("reviews_shift_reports is only for an agent person");
+    }
+    resolved.rights = uniqueRights;
     changed.push("rights");
   }
 
@@ -599,15 +603,15 @@ async function applyChange(db: Db, person: PersonRow, change: ResolvedChange, au
     if (change.schedule) await applySchedule(db, person.id, change.schedulePageId ?? null, change.schedule, byUserId);
     const updated = await updatePersonRow(db, person.id, change.patch);
     const affectedUsers = [...new Set([...change.loginsAdd, ...change.loginsRemove, ...prevLoginIds])];
-    if (affectedUsers.length > 0) await enqueueSaleHomeRefreshForUsers(db, affectedUsers);
+    const pageScopes: Array<{ pageIds: readonly number[] | null; fromDay: string | null }> = [];
     if (change.workingPageIds !== undefined) {
-      await enqueueSaleHomeRefreshForPages(db, { pageIds: [...new Set([...prevWorkingPageIds, ...change.workingPageIds])], fromDay });
+      pageScopes.push({ pageIds: [...new Set([...prevWorkingPageIds, ...change.workingPageIds])], fromDay });
     }
     if (change.schedule !== undefined) {
-      await enqueueSaleHomeRefreshForPages(db, {
-        pageIds: change.schedulePageId != null ? [change.schedulePageId] : null,
-        fromDay: change.schedule.from,
-      });
+      pageScopes.push({ pageIds: change.schedulePageId != null ? [change.schedulePageId] : null, fromDay: change.schedule.from });
+    }
+    if (affectedUsers.length > 0 || pageScopes.length > 0) {
+      await enqueueSaleHomeRefreshForPersonChange(db, { userIds: affectedUsers, pageScopes });
     }
     return updated;
   } catch (error) {

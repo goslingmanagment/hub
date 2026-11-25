@@ -602,8 +602,9 @@ export function ownerReasonOf(header: unknown): string {
   } catch {
     throw refuse("not percent-encoded UTF-8");
   }
-  if (/[\p{Cc}\p{Cf}]/u.test(text)) throw refuse("control and format characters are not allowed");
-  const reason = text.trim();
+  const normalized = text.replace(/[\r\n\t]+/gu, " ");
+  if (/[\p{Cc}\p{Cf}]/u.test(normalized)) throw refuse("control and format characters are not allowed");
+  const reason = normalized.trim();
   if (reason.length === 0) throw refuse("required: why the owner asks for this, in a line (no fan's name)");
   if ([...reason].length > OWNER_AGENT_REASON_MAX) throw refuse(`at most ${OWNER_AGENT_REASON_MAX} characters`);
   return reason;

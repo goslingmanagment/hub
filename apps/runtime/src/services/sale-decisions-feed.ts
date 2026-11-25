@@ -6,6 +6,7 @@ import {
   listSaleDecisionChangesAfter,
   listSaleDecisionChangesHeld,
   listSaleDecisions,
+  listSaleDeliveries,
   placeSaleDecisionChanges,
   releaseSaleDecisionChangesHeld,
   type SaleDecisionChangeRow,
@@ -61,7 +62,18 @@ export async function readSaleDecisionsFeed(
   }
   const served = fresh.changes.filter(readable);
   const decisions = new Map((await listSaleDecisions(db, { ids: [...new Set([...served, ...held].map((change) => change.decisionId))] })).map((one) => [one.id, one]));
-  const userIds = [...decisions.values()].flatMap((one) => [...one.shares.map((share) => share.userId), ...(one.appliedUserId === null ? [] : [one.appliedUserId])]);
+  const deliveries = await listSaleDeliveries(db, { decisionIds: [...new Set(served.map((change) => change.decisionId))] });
+  const appliedDeliveriesByDecision = new Map<number, Array<{ recipient: number; reportDate: string }>>();
+  for (const row of deliveries) {
+    if (row.state !== "applied" || row.reportDate === null) continue;
+    const list = appliedDeliveriesByDecision.get(row.decision.id) ?? [];
+    list.push({ recipient: row.recipient, reportDate: row.reportDate });
+    appliedDeliveriesByDecision.set(row.decision.id, list);
+  }
+  const userIds = [
+    ...[...decisions.values()].flatMap((one) => [...one.shares.map((share) => share.userId), ...(one.appliedUserId === null ? [] : [one.appliedUserId])]),
+    ...deliveries.map((row) => row.recipient),
+  ];
   const codes = await listHandinPeopleOfUsers(db, userIds);
   const pages = await listMatterPageLabels(db);
   const labelOf = (decision: SaleDecisionRow) => (decision.pageId === null
@@ -91,6 +103,11 @@ export async function readSaleDecisionsFeed(
           note: decision.note,
           applied: decision.appliedAt === null || decision.appliedReportDate === null ? null
             : { person: decision.appliedUserId === null ? null : codes.get(decision.appliedUserId)?.code ?? null, reportDate: decision.appliedReportDate },
+          appliedDeliveries: (appliedDeliveriesByDecision.get(decision.id) ?? []).map((row) => ({
+            person: codes.get(row.recipient)?.code ?? null,
+            userId: row.recipient,
+            reportDate: row.reportDate,
+          })),
           ledgerDecisionId: decision.ledgerDecisionId,
         },
       };

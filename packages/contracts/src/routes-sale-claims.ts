@@ -219,10 +219,13 @@ export const saleNobodyResponseSchema = z.object({
   totalMills: mills,
   serverNow: isoTimestamp,
 });
+/** Maximum number of nobody sales accepted in a single `saleNobodyKeep` batch. */
+export const SALE_NOBODY_KEEP_MAX = 500;
+
 export const saleNobodyKeepBodySchema = z.object({
   week: businessDate.optional(),
   /** The exact sales shown to the owner. */
-  transactionIds: z.array(intId).min(1),
+  transactionIds: z.array(intId).min(1).max(SALE_NOBODY_KEEP_MAX),
 });
 export const saleNobodyKeepResponseSchema = z.object({ kept: z.number().int().nonnegative(), savedAt: isoTimestamp });
 export const saleNobodyGiveBodySchema = z.object({

@@ -6,7 +6,9 @@ import { sha256Hex } from "@agency_hub_core/shared";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { AGENT_KEY_TOKEN_PREFIX, createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { readAgentTeamSales } from "../apps/runtime/src/services/agent-team-sales.ts";
 import { planImport } from "../apps/runtime/src/services/sale-claims-import.ts";
+import { readSaleDecisionsFeed } from "../apps/runtime/src/services/sale-decisions-feed.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
@@ -141,5 +143,96 @@ describe("a person code names the person's live login", () => {
     expect(plan.decisions[0]!.shares).toEqual([{ userId: users["vera-new"], percent: 100, person: "vera" }]);
     expect(plan.decisions[0]!.applied).toMatchObject({ person: "vera", userId: users["vera-new"], reportDate: "2026-11-20" });
     expect(plan.questions[0]!.people).toEqual([{ userId: users["vera-new"], name: "Вера" }, { userId: users["gleb-one"], name: "Глеб" }]);
+  });
+
+  it("normalizes deactivated logins and exports confirmed agreed marks in agentTeamSales + appliedDeliveries in decisions feed (OA-004, OA-005, OP-H5)", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = Number((await testDb.pool.query<{ id: string }>("select id from pages where label = 'mia-1'")).rows[0]!.id);
+    const fanId = Number((await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username, display_name) values ('fansly', '7700000799', 'fan_oa', 'Fan OA') returning id",
+    )).rows[0]!.id);
+    const occurredAt = "2026-11-20T14:00:00.000Z";
+    const insertTx = async (ref: string) => Number((await testDb!.pool.query<{ id: string }>(
+      `insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
+         gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
+       values ($1, $2, $3, 'tip', 'tip', 'posted', 'ok', 10000, 10000, 10000, 0, $4::timestamptz, 'fansly:rest', 'USD') returning id`,
+      [pageId, fanId, ref, occurredAt],
+    )).rows[0]!.id);
+    const txDecision = await insertTx("tx-oa-004-old-login");
+    const txTransfer = await insertTx("tx-oa-005-transfer");
+
+    // Stored decision pointing to vera's deactivated login (`vera-old`) + split delivery rows for both recipients.
+    const decId = Number((await testDb.pool.query<{ id: string }>(
+      `insert into sale_owner_decisions (transaction_id, page_id, kind, shares, outcome, decided_at, source)
+       values ($1, $2, 'split', $3::jsonb, 'half', $4::timestamptz, 'dispute') returning id`,
+      [txDecision, pageId, JSON.stringify([{ userId: users["vera-old"], percent: 50 }, { userId: users["gleb-one"], percent: 50 }]), occurredAt],
+    )).rows[0]!.id);
+    await testDb.pool.query(
+      `insert into sale_decision_deliveries (decision_id, recipient_user_id, state, report_date)
+       values ($1, $2, 'applied', '2026-11-20'), ($1, $3, 'applied', '2026-11-21')`,
+      [decId, users["vera-new"], users["gleb-one"]],
+    );
+
+    // Submitted Hub shift report with confirmed `not_mine` from vera-old + agreed claim by gleb-one.
+    const shiftId = Number((await testDb.pool.query<{ id: string }>(
+      `insert into shifts (user_id, state, started_at, ended_at, worked_minutes, messages, report_date, pages)
+       values ($1, 'closed', '2026-11-20T12:00:00Z', '2026-11-20T18:00:00Z', 300, 50, '2026-11-20', '[{"pageLabel":"mia-1","activeMinutes":300,"messages":50,"salesFrom":"2026-11-20T12:00:00Z"}]'::jsonb) returning id`,
+      [users["vera-old"]],
+    )).rows[0]!.id);
+    const handinId = Number((await testDb.pool.query<{ id: string }>(
+      `insert into shift_handins (shift_id, user_id, report_date, state, phase, current_version, submitted_at)
+       values ($1, $2, '2026-11-20', 'submitted', 'counted', 1, now()) returning id`,
+      [shiftId, users["vera-old"]],
+    )).rows[0]!.id);
+    const lines = [{
+      transactionId: txTransfer, pageLabel: "mia-1", occurredAt, netMills: 10_000, group: "mine",
+      statement: "not_mine", shareWithUserId: null, amountMills: 0, added: false, disputed: false, alreadyIn: null,
+      rule: { home: "shift", reason: "holder", shareMills: 10_000, toUserId: null, senderUserId: null },
+    }];
+    await testDb.pool.query(
+      `insert into shift_handin_versions (handin_id, version, door, actor_user_id, total_mills, pages, lines, off_platform, comment, rule_version, report_date, submitted_at)
+       values ($1, 1, 'workboard', $2, 0, '[{"pageLabel":"mia-1","amountMills":0}]'::jsonb, $3::jsonb, '[]'::jsonb, '', '2026-11-12.1', '2026-11-20', now())`,
+      [handinId, users["vera-old"], JSON.stringify(lines)],
+    );
+    const glebShiftId = Number((await testDb.pool.query<{ id: string }>(
+      `insert into shifts (user_id, state, started_at, ended_at, worked_minutes, messages, report_date, pages)
+       values ($1, 'closed', '2026-11-20T12:00:00Z', '2026-11-20T18:00:00Z', 300, 50, '2026-11-20', '[{"pageLabel":"mia-1","activeMinutes":300,"messages":50,"salesFrom":"2026-11-20T12:00:00Z"}]'::jsonb) returning id`,
+      [users["gleb-one"]],
+    )).rows[0]!.id);
+    const glebHandinId = Number((await testDb.pool.query<{ id: string }>(
+      `insert into shift_handins (shift_id, user_id, report_date, state, phase, current_version, submitted_at)
+       values ($1, $2, '2026-11-20', 'submitted', 'counted', 1, now()) returning id`,
+      [glebShiftId, users["gleb-one"]],
+    )).rows[0]!.id);
+    await testDb.pool.query(
+      `insert into sale_claims (transaction_id, page_id, kind, claimant_user_id, claimant_handin_id, claimant_version, side_user_id, statement, state, answer, claimed_at, answered_at, closed_at)
+       values ($1, $2, 'claim', $3, $4, 1, $5, 'mine', 'agreed', 'agree', now(), now(), now())`,
+      [txTransfer, pageId, users["gleb-one"], glebHandinId, users["vera-old"]],
+    );
+
+    const sales = await readAgentTeamSales(app.db, {
+      from: new Date("2026-11-20T00:00:00Z"),
+      to: new Date("2026-11-21T00:00:00Z"),
+      now: new Date("2026-11-21T00:00:00Z"),
+      pages: [{ id: pageId, label: "mia-1" }],
+    });
+    const saleDec = sales.sales.find((s) => s.transactionRef === String(txDecision));
+    expect(saleDec?.resolution).toEqual([
+      { userId: users["vera-new"], percent: 50 },
+      { userId: users["gleb-one"], percent: 50 },
+    ]);
+    const saleTr = sales.sales.find((s) => s.transactionRef === String(txTransfer));
+    expect(saleTr?.marks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: users["vera-new"], mark: "not_mine", confirmed: true }),
+      expect.objectContaining({ userId: users["gleb-one"], mark: "mine", confirmed: true }),
+    ]));
+
+    // OP-H5: decisions feed exposes per-recipient appliedDeliveries for split decisions.
+    const feed = await readSaleDecisionsFeed(app, { pageIds: [pageId], limit: 200 });
+    const entry = feed.changes.find((c) => c.decision.id === decId);
+    expect(entry?.decision.appliedDeliveries).toEqual(expect.arrayContaining([
+      { person: "vera", userId: users["vera-new"], reportDate: "2026-11-20" },
+      { person: "gleb", userId: users["gleb-one"], reportDate: "2026-11-21" },
+    ]));
   });
 });

@@ -518,9 +518,10 @@ export async function listTransactionPlatformRefs(db: Database, transactionIds: 
 }
 
 /**
- * Active reviewer agents of one realm in the people registry (`people.kind = 'agent'`, `state <> 'left'`) holding a
- * live key (`review:shift_reports`, not revoked, not expired) whose page grant covers ALL of `pageIds`, ordered
- * alphabetically by `people.code`. An agent with two live keys during replacement grace appears once.
+ * Active assigned reviewer agents of one realm in the people registry (`people.kind = 'agent'`, `state <> 'left'`,
+ * holding explicit `person_rights.right = 'reviews_shift_reports'`) with a live key (`review:shift_reports`, not
+ * revoked, not expired) whose page grant covers ALL of `pageIds`, ordered alphabetically by `people.code`. An agent
+ * with two live keys during replacement grace appears once.
  */
 export async function listShiftReportReviewers(
   db: Database,
@@ -536,6 +537,12 @@ export async function listShiftReportReviewers(
     where p.kind = 'agent'
       and p.state <> 'left'
       and ${realm}
+      and exists (
+        select 1
+        from person_rights r
+        where r.person_id = p.id
+          and r."right" = 'reviews_shift_reports'
+      )
       and exists (
         select 1
         from person_agent_keys pak

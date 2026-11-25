@@ -236,23 +236,34 @@ describe("the shift report: who reads, who writes", () => {
 
   it("offers and takes a sale by hand only on a page the person may open", async (context) => {
     if (!testDb) return context.skip();
-    const sale = async (page: string, ref: string) => {
+    const bellaId = await fixtureUserId(app, "bella");
+    const sale = async (page: string, ref: string, withHome = true) => {
       const pageId = (await testDb!.pool.query("select id from pages where label = $1", [page])).rows[0].id;
       const inserted = await testDb!.pool.query(
         `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
            gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
          values ($1, $2, 'subscription', 'subscription', 'posted', 'ok', 20000, 20000, 16000, 4000, now() - interval '1 hour', 'fansly:rest', 'USD')
-         returning id`,
+         returning id, occurred_at`,
         [pageId, ref],
       );
-      return Number(inserted.rows[0].id);
+      const txId = Number(inserted.rows[0].id);
+      if (withHome) {
+        await testDb!.pool.query(
+          `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at)
+           values ($1, $2, $3, 16000, 'shift', 'one_shift', $4::jsonb, '2026-11-12.1', now())`,
+          [txId, pageId, inserted.rows[0].occurred_at, JSON.stringify([{ userId: bellaId, workRef: "shift:bella", shiftId: null, mills: 16_000 }])],
+        );
+      }
+      return txId;
     };
     const open = await sale("mia-1", "tx-claim-open");
+    const uncomputed = await sale("mia-1", "tx-claim-uncomputed", false);
     const closed = await sale("mia-2", "tx-claim-closed");
     const offered = await asSession("anna", "GET", `/api/v1/shift-reports/${shiftA}/claimable`);
     expect(offered.statusCode, offered.body).toBe(200);
     const ids = offered.json().sales.map((one: { transactionId: number }) => one.transactionId);
     expect(ids).toContain(open);
+    expect(ids).not.toContain(uncomputed);
     expect(ids).not.toContain(closed);
     // A page the person may not open: never taken, by the session or «со слов».
     const refused = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${closed}`, { statement: "mine", note: "моя договорённость" });
@@ -430,12 +441,18 @@ describe("the shift report: who reads, who writes", () => {
 
     // «Отдать» dina, who hands shifts in the old way: the person's «не моё» and a question to the decider, never a gift settled.
     const pageId = (await testDb.pool.query("select id from pages where label = 'mia-1'")).rows[0].id;
-    const gift = Number((await testDb.pool.query(
+    const giftRow = (await testDb.pool.query(
       `insert into transactions (platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
          gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, platform_fee_mills, occurred_at, source, currency)
-       values ($1, 'tx-claim-give', 'tip', 'tip', 'posted', 'ok', 10000, 10000, 8000, 2000, now() - interval '2 hours', 'fansly:rest', 'USD') returning id`,
+       values ($1, 'tx-claim-give', 'tip', 'tip', 'posted', 'ok', 10000, 10000, 8000, 2000, now() - interval '2 hours', 'fansly:rest', 'USD') returning id, occurred_at`,
       [pageId],
-    )).rows[0].id);
+    )).rows[0];
+    const gift = Number(giftRow.id);
+    await testDb.pool.query(
+      `insert into sale_homes (transaction_id, page_id, occurred_at, net_mills, home, reason, shares, rule_version, computed_at)
+       values ($1, $2, $3, 8000, 'shift', 'one_shift', $4::jsonb, '2026-11-12.1', now())`,
+      [gift, pageId, giftRow.occurred_at, JSON.stringify([{ userId: await fixtureUserId(app, "bella"), workRef: "shift:bella", shiftId: null, mills: 8_000 }])],
+    );
     expect((await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftA}/lines/${gift}`, { statement: "mine", note: "мой фан" })).statusCode).toBe(200);
     const dina = await fixtureUserId(app, "dina");
     const give = await keepCard(gift, { word: "give", userId: dina });

@@ -1044,9 +1044,15 @@ export async function listHandinSalesByIds(db: Database, transactionIds: readonl
   return result.rows.map(saleOf);
 }
 
-/** SQL predicate matching `isTeamHiddenSaleHome` (`home === 'nobody'`): excludes nobody's sales before LIMIT/OFFSET. */
-export function teamVisibleSaleHomeSql(alias: SQL = sql`h`): SQL {
-  return sql`(${alias}.home is null or ${alias}.home <> 'nobody')`;
+const SALE_RULE_SINCE_ISO = "2026-11-02T00:00:00+03:00";
+
+/**
+ * SQL predicate matching `isTeamHiddenSaleHome` (`home === 'nobody'`) and failing closed on fresh post-rule sales
+ * whose `sale_homes` row has not been computed yet (`home IS NULL`): excludes both before LIMIT/OFFSET so uncomputed
+ * nobody sales never leak to chatters or team leads.
+ */
+export function teamVisibleSaleHomeSql(alias: SQL = sql`h`, txAlias: SQL = sql`t`): SQL {
+  return sql`((${alias}.home is not null and ${alias}.home <> 'nobody') or ${txAlias}.occurred_at < ${SALE_RULE_SINCE_ISO}::timestamptz)`;
 }
 
 /** The sales of the pages in [from, to), the newest first, at most `limit`: what a person may add by hand. */
@@ -1158,10 +1164,10 @@ export async function listRecipientDayHandins(
 export async function listRecipientOpenShifts(
   db: Database,
   input: { userIds: readonly number[] },
-): Promise<Array<{ shiftId: number; userId: number; reportDate: string; startedAt: Date }>> {
+): Promise<Array<{ shiftId: number; userId: number; reportDate: string; startedAt: Date; endedAt: Date }>> {
   if (input.userIds.length === 0) return [];
   const result = await db.execute<Row>(sql`
-    select s.id as shift_id, s.user_id, to_char(s.report_date, 'YYYY-MM-DD') as report_date, s.started_at
+    select s.id as shift_id, s.user_id, to_char(s.report_date, 'YYYY-MM-DD') as report_date, s.started_at, s.ended_at
     from shifts s
     left join shift_handins h on h.shift_id = s.id
     where s.user_id = any(${ids(input.userIds)}) and s.state in ('going', 'closed')
@@ -1174,6 +1180,7 @@ export async function listRecipientOpenShifts(
     userId: num(row.user_id),
     reportDate: String(row.report_date),
     startedAt: date(row.started_at),
+    endedAt: date(row.ended_at),
   }));
 }
 

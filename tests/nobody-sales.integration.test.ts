@@ -189,65 +189,107 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     await testDb?.stop();
   });
 
-  it("hides nobody sales from chatters and team leads across all 4 reads (team list, draft, claimable, saleChain) while owner sees all", async (context) => {
+  it("hides shared-page nobody and fresh uncomputed post-rule sales from chatters and team leads across all 4 reads while owner sees all", async (context) => {
     if (!testDb) return context.skip();
     const now = Date.now();
     const shiftStart = new Date(now - 3 * 3_600_000).toISOString();
     const shiftEnd = new Date(now - 30 * 60_000).toISOString();
-    const shiftAnna = await insertShift(users.anna!, "solo-1", shiftStart, shiftEnd);
+    const shiftAnna = await insertShift(users.anna!, "shared-1", shiftStart, shiftEnd);
 
     const visibleSale = await insertSale({
-      pageId: soloPage, fanId: fanAlpha, ref: "h8-vis-1", netMills: 20_000,
+      pageId: sharedPage, fanId: fanBeta, ref: "h8-vis-1", netMills: 20_000,
       occurredAt: new Date(now - 2 * 3_600_000).toISOString(),
       home: "shift", reason: "holder",
       shares: [{ userId: users.anna!, workRef: null, shiftId: shiftAnna, percent: 100, mills: 20_000 }],
     });
     const hiddenNobody = await insertSale({
-      pageId: soloPage, fanId: fanAlpha, ref: "h8-hid-1", netMills: 35_000,
+      pageId: sharedPage, fanId: fanBeta, ref: "h8-hid-1", netMills: 35_000,
       occurredAt: new Date(now - 90 * 60_000).toISOString(),
       home: "nobody", reason: "no_holder",
+    });
+    const freshUncomputed = await insertSale({
+      pageId: sharedPage, fanId: fanBeta, ref: "h8-fresh-null", netMills: 18_000,
+      occurredAt: new Date(now - 20 * 60_000).toISOString(),
+      home: null, reason: "no_holder",
     });
 
     const today = moscowDayOfMs(now);
     const yesterday = moscowDayOfMs(now - 86_400_000);
 
-    // 1. Team sales list & counts: hidden for chatter & team lead, visible for owner.
+    // 1. Team sales list & counts: hidden nobody AND fresh uncomputed post-rule sales hidden for chatter & team lead, visible for owner.
     for (const viewer of ["anna", "lena"] as const) {
       const listAll = await rawSession(viewer, "GET", `/api/v1/team/sales/list?from=${yesterday}&to=${today}&home=all`);
       expect(listAll.statusCode, listAll.body).toBe(200);
       const bodyAll = listAll.json() as { sales: Array<{ transactionId: number }>; counts: Record<string, number> };
       expect(bodyAll.sales.map((one) => one.transactionId)).toContain(visibleSale);
       expect(bodyAll.sales.map((one) => one.transactionId)).not.toContain(hiddenNobody);
+      expect(bodyAll.sales.map((one) => one.transactionId)).not.toContain(freshUncomputed);
       expect(bodyAll.counts.nobody).toBe(0);
 
       const listNobody = await rawSession(viewer, "GET", `/api/v1/team/sales/list?from=${yesterday}&to=${today}&home=nobody`);
       expect(listNobody.statusCode).toBe(200);
       expect((listNobody.json() as { sales: unknown[] }).sales).toEqual([]);
     }
-    const bossList = await rawSession("boss", "GET", `/api/v1/team/sales/list?from=${yesterday}&to=${today}&home=nobody`);
+    const bossList = await rawSession("boss", "GET", `/api/v1/team/sales/list?from=${yesterday}&to=${today}&home=all`);
     expect(bossList.statusCode, bossList.body).toBe(200);
     const bossBody = bossList.json() as { sales: Array<{ transactionId: number }>; counts: Record<string, number> };
     expect(bossBody.sales.map((one) => one.transactionId)).toContain(hiddenNobody);
+    expect(bossBody.sales.map((one) => one.transactionId)).toContain(freshUncomputed);
     expect(bossBody.counts.nobody).toBeGreaterThanOrEqual(1);
 
-    // 2. Shift report draft: nobody sale hidden from «Рядом» (near).
+    // 2. Shift report draft on shared-1: nobody sale hidden from «Рядом» (near).
     const draft = await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftAnna}`);
     expect(draft.statusCode, draft.body).toBe(200);
     const draftBody = shiftReportResponseSchema.parse(draft.json());
     expect(draftBody.view?.lines.map((line) => line.transactionId)).not.toContain(hiddenNobody);
 
-    // 3. Add-sale claimable list: hidden for human & agent doors, and direct lineSet on hidden nobody returns 404.
+    // 3. Add-sale claimable list: hidden nobody AND fresh uncomputed post-rule sales excluded; direct lineSet returns 404.
     const claimable = await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftAnna}/claimable`);
     expect(claimable.statusCode, claimable.body).toBe(200);
-    expect((claimable.json() as { sales: Array<{ transactionId: number }> }).sales.map((s) => s.transactionId)).not.toContain(hiddenNobody);
+    const claimableIds = (claimable.json() as { sales: Array<{ transactionId: number }> }).sales.map((s) => s.transactionId);
+    expect(claimableIds).not.toContain(hiddenNobody);
+    expect(claimableIds).not.toContain(freshUncomputed);
 
     const directClaim = await asSession("anna", "PUT", `/api/v1/shift-reports/${shiftAnna}/lines/${hiddenNobody}`, { statement: "mine", note: "пытаюсь добавить" });
     expect(directClaim.statusCode).toBe(404);
 
-    // 4. Direct saleChain: 404 for chatter and team lead, 200 for owner.
+    // 4. Direct saleChain: 404 for chatter and team lead on both nobody and fresh uncomputed post-rule sales; 200 for owner.
     expect((await rawSession("anna", "GET", `/api/v1/sales/chain?saleId=${hiddenNobody}`)).statusCode).toBe(404);
     expect((await rawSession("lena", "GET", `/api/v1/sales/chain?saleId=${hiddenNobody}`)).statusCode).toBe(404);
+    expect((await rawSession("anna", "GET", `/api/v1/sales/chain?saleId=${freshUncomputed}`)).statusCode).toBe(404);
+    expect((await rawSession("lena", "GET", `/api/v1/sales/chain?saleId=${freshUncomputed}`)).statusCode).toBe(404);
     expect((await rawSession("boss", "GET", `/api/v1/sales/chain?saleId=${hiddenNobody}`)).statusCode).toBe(200);
+    expect((await rawSession("boss", "GET", `/api/v1/sales/chain?saleId=${freshUncomputed}`)).statusCode).toBe(200);
+  });
+
+  it("shows all 24h sales of a solo page in the sole worker's shift report draft ($0 until claimed; owner_nobody stays hidden)", async (context) => {
+    if (!testDb) return context.skip();
+    const day = "2026-11-12";
+    const shiftAnnaSolo = await insertShift(users.anna!, "solo-1", `${day}T12:00:00+03:00`, `${day}T18:00:00+03:00`, "closed");
+    // Outside shift hours on the same Moscow day (passive sub / ppvWithoutAuthor -> nobody / no_holder).
+    const outsideNobody = await insertSale({
+      pageId: soloPage, fanId: fanAlpha, ref: "h8-solo-24h-outside", netMills: 25_000,
+      occurredAt: `${day}T03:30:00+03:00`,
+      home: "nobody", reason: "no_holder",
+    });
+    // Explicitly kept nobody by the owner -> must stay hidden.
+    const ownerClosedNobody = await insertSale({
+      pageId: soloPage, fanId: fanAlpha, ref: "h8-solo-24h-closed", netMills: 14_000,
+      occurredAt: `${day}T04:00:00+03:00`,
+      home: "nobody", reason: "no_holder",
+    });
+    expect((await rawSession("boss", "POST", "/api/v1/sale-nobody/keep", { transactionIds: [ownerClosedNobody] })).statusCode).toBe(200);
+
+    // Sole worker (anna) sees outsideNobody in «Рядом» at $0 (stays nobody if untouched) and does NOT see ownerClosedNobody.
+    const draft = shiftReportResponseSchema.parse((await rawSession("anna", "GET", `/api/v1/shift-reports/${shiftAnnaSolo}`)).json());
+    const shownLine = draft.view?.lines.find((line) => line.transactionId === outsideNobody);
+    expect(shownLine).toMatchObject({ group: "near", amountMills: 0, disputed: false });
+    expect(draft.view?.lines.find((line) => line.transactionId === ownerClosedNobody)).toBeUndefined();
+
+    // Non-solo chatter (cora) on the same page does NOT see outsideNobody in her draft.
+    const shiftCoraSolo = await insertShift(users.cora!, "solo-1", `${day}T12:00:00+03:00`, `${day}T18:00:00+03:00`, "closed");
+    const coraDraft = shiftReportResponseSchema.parse((await rawSession("cora", "GET", `/api/v1/shift-reports/${shiftCoraSolo}`)).json());
+    expect(coraDraft.view?.lines.find((line) => line.transactionId === outsideNobody)).toBeUndefined();
   });
 
   it("supports «Сообщить владельцу» (human + agent doors) with identical 0/>1/cross-realm refusal and opens disputed $0 line + owner claim", async (context) => {
@@ -261,7 +303,7 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     // Two identical fan+amount sales (ambiguous >1), one unique sale for human door, one for agent door, one out-of-grant, one test-realm.
     await insertSale({ pageId: soloPage, fanId: fanAlpha, ref: "h8-dup-1", netMills: 15_000, occurredAt: new Date(now - 2 * 3_600_000).toISOString(), home: "nobody", reason: "no_holder" });
     await insertSale({ pageId: soloPage, fanId: fanAlpha, ref: "h8-dup-2", netMills: 15_000, occurredAt: new Date(now - 90 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
-    const uniqueHuman = await insertSale({ pageId: soloPage, fanId: fanAlpha, ref: "h8-rep-human", netMills: 42_000, occurredAt: new Date(now - 70 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
+    const uniqueHuman = await insertSale({ pageId: sharedPage, fanId: fanAlpha, ref: "h8-rep-human", netMills: 42_000, occurredAt: new Date(now - 70 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
     const uniqueAgent = await insertSale({ pageId: sharedPage, fanId: fanBeta, ref: "h8-rep-agent", netMills: 53_000, occurredAt: new Date(now - 60 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
     await insertSale({ pageId: otherPage, fanId: fanOther, ref: "h8-other-grant", netMills: 61_000, occurredAt: new Date(now - 50 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
     await insertSale({ pageId: testPage, fanId: fanTest, ref: "h8-test-realm", netMills: 71_000, occurredAt: new Date(now - 40 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
@@ -367,9 +409,22 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     expect(decline.statusCode, decline.body).toBe(200);
     const declined = shiftReportResponseSchema.parse((await rawSession("bella", "GET", `/api/v1/shift-reports/${shiftBellaOpen}`)).json());
     expect(declined.view?.lines.find((one) => one.transactionId === saleA)?.amountMills).toBe(0);
+    // Declining an «Отдать» delivery opens an owner matter (`sale.delivery_declined`) and does NOT leak to later shifts.
+    const decA = (giveA.json() as { decisionId: number }).decisionId;
+    const declinedMatterKey = `sale.delivery_declined:${decA}:${users.bella!}`;
+    expect((await testDb.pool.query("select state from matters where reason_key = $1", [declinedMatterKey])).rows).toEqual([{ state: "open" }]);
     const later = await insertShift(users.bella!, "shared-1", "2026-11-19T08:00:00Z", "2026-11-19T12:00:00Z");
     const next = shiftReportResponseSchema.parse((await rawSession("bella", "GET", `/api/v1/shift-reports/${later}`)).json());
     expect(next.view?.lines.some((one) => one.transactionId === saleA)).toBe(false);
+    // Clearing `not_mine` in draft reverts the delivery back to `pending` and closes the owner matter.
+    const undoDecline = await asSession("bella", "PUT", `/api/v1/shift-reports/${shiftBellaOpen}/lines/${saleA}`, { statement: null });
+    expect(undoDecline.statusCode, undoDecline.body).toBe(200);
+    expect((await testDb.pool.query("select state from sale_decision_deliveries where decision_id = $1 and recipient_user_id = $2", [decA, users.bella!])).rows).toEqual([{ state: "pending" }]);
+    expect((await testDb.pool.query("select state from matters where reason_key = $1", [declinedMatterKey])).rows).toEqual([{ state: "closed" }]);
+    const restored = shiftReportResponseSchema.parse((await rawSession("bella", "GET", `/api/v1/shift-reports/${shiftBellaOpen}`)).json());
+    expect(restored.view?.lines.find((one) => one.transactionId === saleA)?.amountMills).toBe(19_000);
+    // Re-decline so subsequent assertions match the original flow.
+    expect((await asSession("bella", "PUT", `/api/v1/shift-reports/${shiftBellaOpen}/lines/${saleA}`, { statement: "not_mine" })).statusCode).toBe(200);
 
     // (b) Already handed-in report on dayB for anna (report does NOT initially hold saleB).
     const shiftAnnaSub = await insertShift(users.anna!, "solo-1", `${dayB}T10:00:00+03:00`, `${dayB}T18:00:00+03:00`, "closed");
@@ -563,6 +618,7 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     const unseen = await make("fixture-unseen");
     const keep = (body: Record<string, unknown>) => rawSession("boss", "POST", "/api/v1/sale-nobody/keep", body);
     expect((await keep({})).statusCode).toBe(400);
+    expect((await keep({ transactionIds: Array.from({ length: 501 }, (_, i) => i + 1) })).statusCode).toBe(400);
     expect((await keep({ transactionIds: [shown] })).json().kept).toBe(1);
     expect((await keep({ transactionIds: [unseen, shown] })).statusCode).toBe(409);
     const contested = await make("fixture-challenged");
