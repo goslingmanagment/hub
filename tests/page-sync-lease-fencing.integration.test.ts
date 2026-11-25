@@ -11,6 +11,7 @@ import {
   heartbeatPageSyncLease,
   PageSyncLeaseLostError,
   pausePageSync,
+  pausePageSyncForAuth,
   reclaimExpiredPageSync,
   requestPageSync,
   retryPageSync,
@@ -823,6 +824,133 @@ describe("page sync lease fencing", () => {
         pageId: page.id,
         stream: "subscribers",
         leaseToken: "lease-2",
+      });
+    } finally {
+      await testDb.stop();
+    }
+  }, 30_000);
+
+  it("pausePageSyncForAuth parks active/idle streams without overwriting operator pauses or non-auth blockers", async () => {
+    const testDb = await startIntegrationTestDatabase();
+    if (!testDb) {
+      return;
+    }
+
+    const now = new Date();
+    const later = new Date(now.getTime() + 60_000);
+
+    try {
+      const model = await createModel(testDb.db, {
+        slug: "auth-pause-preservation-model",
+        name: "Auth Pause Preservation Model",
+      });
+      const page = await createOnlyFansPage(testDb.db, {
+        modelId: model.id,
+        label: "auth-pause-preservation-page",
+      });
+      await ensurePageSyncStates(testDb.db, { pageId: page.id, now });
+
+      // 1. `subscribers`: blocked by an unrelated non-auth blocker (`provider_bad_data`) -> must keep its blocker.
+      await requestPageSync(testDb.db, { pageId: page.id, streams: ["subscribers"], source: "manual", now });
+      const subLease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
+        pageId: page.id,
+        workerId: "worker-1",
+        leaseToken: "lease-subscribers",
+        leaseTtlMs: 60_000,
+        now,
+      });
+      if (!subLease || subLease.stream !== "subscribers") {
+        throw new Error(`Expected subscribers lease, got ${subLease?.stream ?? "null"}`);
+      }
+      await blockPageSync(testDb.db, {
+        pageId: page.id,
+        stream: "subscribers",
+        requestSeq: subLease.leasedSeq ?? subLease.requestSeq,
+        leaseToken: "lease-subscribers",
+        blockerKind: "provider_bad_data",
+        blockerCode: "bad_payload",
+        blockerMessage: "unexpected schema",
+        errorCode: "bad_payload",
+        errorSummary: "unexpected schema",
+        now,
+      });
+      // 2. `light`: pending/runnable -> should be paused with blocker_kind = 'auth'.
+      await requestPageSync(testDb.db, { pageId: page.id, streams: ["light"], source: "manual", now });
+      // 3. `fan_identities`: operator-paused -> must stay operator-paused.
+      await pausePageSync(testDb.db, { pageId: page.id, streams: ["fan_identities"], now });
+      // 4. `dm_conversations`: blocked only with transient `blocker_kind = 'dependency'` -> parks under auth.
+      await requestPageSync(testDb.db, { pageId: page.id, streams: ["dm_conversations"], source: "manual", now });
+
+      // Second page with an already-auth-blocked stream to confirm auth blockers still refresh cleanly.
+      const page2 = await createOnlyFansPage(testDb.db, {
+        modelId: model.id,
+        label: "auth-pause-refresh-page",
+      });
+      await ensurePageSyncStates(testDb.db, { pageId: page2.id, now });
+      await requestPageSync(testDb.db, { pageId: page2.id, streams: ["light"], source: "manual", now });
+      const authLease = await acquirePageSyncLease(testDb.db, {
+        platforms: EVERY_PLATFORM,
+        pageId: page2.id,
+        workerId: "worker-1",
+        leaseToken: "lease-auth",
+        leaseTtlMs: 60_000,
+        now,
+      });
+      if (!authLease) {
+        throw new Error("Expected auth lease");
+      }
+      await blockPageSync(testDb.db, {
+        pageId: page2.id,
+        stream: "light",
+        requestSeq: authLease.leasedSeq ?? authLease.requestSeq,
+        leaseToken: "lease-auth",
+        blockerKind: "auth",
+        blockerCode: "old_auth",
+        blockerMessage: "older auth failure",
+        errorCode: "old_auth",
+        errorSummary: "older auth failure",
+        now,
+      });
+
+      await pausePageSyncForAuth(testDb.db, {
+        pageId: page.id,
+        streams: ["light", "fan_identities", "subscribers", "dm_conversations"],
+        blockerCode: "session_expired",
+        blockerMessage: "account needs reauth",
+        now: later,
+      });
+      await pausePageSyncForAuth(testDb.db, {
+        pageId: page2.id,
+        streams: ["light"],
+        blockerCode: "session_expired",
+        blockerMessage: "account needs reauth",
+        now: later,
+      });
+
+      expect(await getPageSyncState(testDb.db, page.id, "light")).toMatchObject({
+        status: "paused",
+        blockerKind: "auth",
+        blockerCode: "session_expired",
+      });
+      expect(await getPageSyncState(testDb.db, page.id, "fan_identities")).toMatchObject({
+        status: "paused",
+        blockerKind: null,
+      });
+      expect(await getPageSyncState(testDb.db, page.id, "subscribers")).toMatchObject({
+        status: "blocked",
+        blockerKind: "provider_bad_data",
+        blockerCode: "bad_payload",
+      });
+      expect(await getPageSyncState(testDb.db, page.id, "dm_conversations")).toMatchObject({
+        status: "paused",
+        blockerKind: "auth",
+        blockerCode: "session_expired",
+      });
+      expect(await getPageSyncState(testDb.db, page2.id, "light")).toMatchObject({
+        status: "paused",
+        blockerKind: "auth",
+        blockerCode: "session_expired",
       });
     } finally {
       await testDb.stop();

@@ -85,6 +85,12 @@ import {
   FANSLY_COMMENTS_CANONICALIZER_VERSION,
 } from "./fansly-comments.ts";
 import {
+  canonicalizeOfapiLinkStatsObservation,
+  canParseOfapiLinkStatsObservation,
+  OFAPI_LINK_STATS_CANONICALIZED_KINDS,
+  OFAPI_LINK_STATS_CANONICALIZER_VERSION,
+} from "./ofapi-link-stats.ts";
+import {
   canonicalizeFanslyPayoutsObservation,
   canParseFanslyPayoutsObservation,
   FANSLY_PAYOUTS_CANONICALIZED_KINDS,
@@ -324,6 +330,21 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     projectionOnly: true,
   },
   {
+    // BL-C3: OFAPI link-stats pages (`ofapi-link-stats-sync.ts`) project
+    // directly into `page_link_stat_runs` / `page_link_stat_snapshots` while
+    // journaling `{ items, hasNextPage }` first. Registered as stamp-only so
+    // `HEALTH_FLOOR_REGISTRY` tracks `obs_backlog_pull_link_stats_v1` and a
+    // future version bump replays every captured page.
+    source: "pull",
+    lane: "link_stats",
+    kinds: [...OFAPI_LINK_STATS_CANONICALIZED_KINDS],
+    version: OFAPI_LINK_STATS_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeOfapiLinkStatsObservation,
+    canParse: canParseOfapiLinkStatsObservation,
+    projectionOnly: true,
+    stampOnly: { exceptKinds: [] },
+  },
+  {
     source: "command_result",
     lane: "result",
     kinds: null,
@@ -381,3 +402,35 @@ export function stampOnlyParseVersion(source: string, kind: string): number | un
   if (family?.stampOnly === undefined || family.stampOnly.exceptKinds.includes(kind)) return undefined;
   return family.version;
 }
+
+/**
+ * Explicit allowlist of written `(source, kind)` observations intentionally NOT
+ * claimed by `CANONICALIZER_FAMILIES` (keyed by `${source}:${kind}`), each with
+ * its rationale. Pinned by `tests/observation-kinds-ratchet.test.ts` so a new
+ * observation writer can never silently land uncanonicalized without either a
+ * registered family or an explicit documented raw-only decision (BL-C3).
+ */
+export const RAW_ONLY_OBSERVATION_KINDS: Readonly<Record<string, string>> = {
+  // Direct OFAPI REST projections (written to dedicated tables; replay uses sync_raw_payloads / direct projectors):
+  "pull:ofapi_chargebacks": "Direct OFAPI chargebacks projection (ofapi-chargebacks-sync.ts -> ofapi_chargebacks); raw pages preserved for future replay.",
+  "pull:ofapi_users_list": "Direct OFAPI fan account-check projection (ofapi-fan-account-check.ts -> page_fans probe fields).",
+  "pull:fans_active": "Direct OFAPI active-audience projection (ofapi-audience-sync.ts -> fans / page_fans).",
+  "pull:dm_conversations": "Direct OFAPI DM conversation-list projection (ofapi-dm-sync.ts -> page_dm_threads).",
+  "pull:link_lists_tracking_live": "Direct OFAPI link-discovery inventory journal (ofapi-fan-identities.ts).",
+  "pull:link_lists_trial_live": "Direct OFAPI trial-link discovery inventory journal (ofapi-fan-identities.ts).",
+  "pull:link_fans_tracking_subscribers": "Consumed by dedicated link-fans journal projector (ofapi-link-fans-projection.ts).",
+  "pull:link_fans_tracking_spenders": "Consumed by dedicated link-fans journal projector (ofapi-link-fans-projection.ts).",
+  "pull:link_fans_trial_subscribers": "Consumed by dedicated link-fans journal projector (ofapi-link-fans-projection.ts).",
+  // Diagnostic / error / completion markers and dedicated-projector artifacts:
+  "pull:ofapi.account.response": "OFAPI account error diagnostic journal (ofapi-credential-policy.ts).",
+  "pull:account_lookup_public": "Direct public Fansly account lookup projection (sync/fansly/public-lookup.ts).",
+  "pull:account_lookup_public:failed": "Failed public Fansly account lookup diagnostic envelope.",
+  "client_capture:client.sale_sightings.v1": "Direct shift-handin sale sightings journal (shift-handin-check.ts); no domain events.",
+  "webhook:ofapi.webhook.invalid_identity": "Quarantined OFAPI webhook envelope with invalid identity header.",
+  "webhook:ofapi.webhook.malformed": "Quarantined malformed OFAPI webhook envelope.",
+  "webhook:ofapi.webhook.fact_conflict": "Quarantined OFAPI webhook payload hash conflict record.",
+  "webhook:ofapi_webhook_lineage_backfill": "Lineage backfill reconstruction audit journal (dm-corrections-lineage-intake.ts).",
+  "fansly_ws:fansly.ws.frame.v1:refused": "Refused Fansly WS frame kept unstamped for inspection.",
+  "ofapi_capture:ofapi.export_artifact_pointer.v1": "OFAPI export artifact pointer (consumed by export materializer, not domain-event sweep).",
+  "ofapi_capture:ofapi.typed_export_artifact.v1": "OFAPI typed export artifact blob (consumed synchronously by ofapi-typed-exports.ts).",
+};

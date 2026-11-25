@@ -18,6 +18,7 @@
 
 import {
   getCheckpoint,
+  listLatestFreshCompleteLinkStatCatalog,
   readLinkFanLastFinishedWalks,
   upsertCheckpointProgress,
   upsertFanPages,
@@ -47,6 +48,12 @@ import { persistRawPayload, retentionDate } from "./shared.ts";
 const LINKS_PAGE_LIMIT = 100;
 const USERS_PAGE_LIMIT = 100;
 const OFAPI_LINK_FANS_MAPPER_VERSION = "ofapi-link-fans-v1";
+/**
+ * Freshness bound for reusing `page_link_stat_runs` in Phase 1 (LINK-001).
+ * `ofapi-link-stats-sync` runs 4x/day (every 6h); 12h covers one missed window
+ * while ensuring stale or incomplete catalogs fall back to live discovery.
+ */
+export const OFAPI_LINK_CATALOG_MAX_AGE_MS = 12 * 3_600_000;
 // Journal pages the link ↔ fan projection applies per page the walk buys:
 // normally just that page; after a deploy, a rollback or a failed projection
 // the backlog drains this many at a time, oldest first.
@@ -405,13 +412,38 @@ export async function syncOfapiFanIdentities(
   // cannot silently drift if tracking/trial limits change later.
   const walkLinkPages = async (): Promise<OfapiBudgetBlock | null> => {
     while (cursor.phase === "links") {
+      const linkType = cursor.linkType!;
+      if (cursor.linkOffset === 0) {
+        const cached = await listLatestFreshCompleteLinkStatCatalog(app.db, {
+          pageId: input.pageContext.page.id,
+          linkKind: linkType,
+          ofapiAccountId,
+          maxAgeMs: OFAPI_LINK_CATALOG_MAX_AGE_MS,
+        });
+        if (cached !== null) {
+          const ids = linkType === "tracking" ? trackingLinkIds : trialLinkIds;
+          for (const link of cached.links) {
+            ids.add(link.platformLinkId);
+            if (linkType === "trial" && link.isFinished) {
+              finishedTrialLinkIds.add(link.platformLinkId);
+            }
+          }
+          cursor = linkType === "tracking"
+            ? { ...cursor, linkType: "trial", linkOffset: 0 }
+            : { ...cursor, phase: "users", linkType: null, linkOffset: 0 };
+          stats.trackingLinks = trackingLinkIds.size;
+          stats.trialLinks = trialLinkIds.size;
+          await persistCursor();
+          continue;
+        }
+      }
+
       const block = await guard.resolveBlock();
       if (block !== null) {
         await persistCursor();
         return block;
       }
 
-      const linkType = cursor.linkType!;
       const pageLimit = LINKS_PAGE_LIMIT;
       const page = linkType === "tracking"
         ? await client.listTrackingLinks!(requestContext, ofapiAccountId, {

@@ -8,6 +8,7 @@ import {
   createOnlyFansPage,
   findPageById,
   getCheckpoint,
+  insertLinkStatRunWithSnapshots,
   setPageOfapiAccountId,
   startSyncRun,
   upsertCheckpointProgress,
@@ -17,7 +18,10 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import { SyncPayloadPersistenceError } from "../apps/runtime/src/services/sync/errors.ts";
-import { syncOfapiFanIdentities } from "../apps/runtime/src/services/sync/ofapi-fan-identities.ts";
+import {
+  OFAPI_LINK_CATALOG_MAX_AGE_MS,
+  syncOfapiFanIdentities,
+} from "../apps/runtime/src/services/sync/ofapi-fan-identities.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -742,5 +746,154 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     expect(calls).toEqual([phase === "links" ? "tracking-links" : "tracking:42:subscribers"]);
     expect((await testDb!.pool.query("select count(*)::int as n from fans")).rows).toEqual([{ n: 0 }]);
     expect((await getCheckpoint(appContext.db, page.id, "fan_identities"))?.state).toEqual(cursor);
+  });
+
+  const linkSnapshot = (
+    pageId: number,
+    linkKind: "tracking" | "trial",
+    platformLinkId: string,
+    overrides?: Partial<{ name: string | null; isFinished: boolean | null; clicksCount: number; subscribersCount: number }>,
+  ) => ({
+    platformAccountId: pageId,
+    linkKind,
+    platformLinkId,
+    name: overrides?.name ?? null,
+    url: null,
+    linkCreatedAt: null,
+    linkEndsAt: null,
+    isFinished: overrides?.isFinished ?? null,
+    clicksCount: overrides?.clicksCount ?? 1,
+    claimsCount: null,
+    subscribersCount: overrides?.subscribersCount ?? 1,
+    spendersCount: null,
+    revenueNetMills: null,
+    revenueChargebacksMills: null,
+    revenueIsLoading: null,
+    revenueCalculatedAt: null,
+    trialDays: null,
+    tags: null,
+  });
+
+  it("LINK-001: reuses fresh complete page_link_stat_runs with zero link-list API calls", async () => {
+    const page = await seedMappedPage("links-reuse-fresh-of");
+    const pulledAt = new Date(Date.now() - 60 * 60_000);
+    await insertLinkStatRunWithSnapshots(
+      appContext.db,
+      {
+        platformAccountId: page.id,
+        linkKind: "tracking",
+        status: "complete",
+        pulledAt,
+        apiPages: 1,
+        rawItems: 1,
+        writtenRows: 1,
+        ofapiAccountId: OFAPI_ACCOUNT,
+      },
+      [linkSnapshot(page.id, "tracking", "42", { name: "promo-a", clicksCount: 10, subscribersCount: 2 })],
+    );
+    await insertLinkStatRunWithSnapshots(
+      appContext.db,
+      {
+        platformAccountId: page.id,
+        linkKind: "trial",
+        status: "complete",
+        pulledAt,
+        apiPages: 1,
+        rawItems: 1,
+        writtenRows: 1,
+        ofapiAccountId: OFAPI_ACCOUNT,
+      },
+      [linkSnapshot(page.id, "trial", "7", { name: "trial-finished", isFinished: true, clicksCount: 5, subscribersCount: 1 })],
+    );
+
+    const { client, calls } = fakeLinksClient({
+      trackingLinks: [{ id: 999 }],
+      trialLinks: [{ id: 888 }],
+      trackingUsers: new Map([
+        ["42:subscribers", [linkUser(700001, "from_cached_track", "Cached Track")]],
+        ["42:spenders", []],
+      ]),
+      trialSubscribers: new Map([
+        ["7", [linkUser(700002, "from_cached_trial", "Cached Trial")]],
+      ]),
+    });
+    appContext = { ...appContext, ofapi: client };
+
+    const result = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(result.satisfied).toBe(true);
+    // Zero link-list calls: both tracking & trial came from fresh complete link-stats runs.
+    expect(calls).toEqual(["tracking:42:subscribers", "tracking:42:spenders", "trial:7"]);
+    expect(client.listTrackingLinks).not.toHaveBeenCalled();
+    expect(client.listTrialLinks).not.toHaveBeenCalled();
+    expect(result.stats).toMatchObject({ trackingLinks: 1, trialLinks: 1, requestsUsed: 3 });
+
+    const saved = (await getCheckpoint(appContext.db, page.id, "fan_identities"))?.state as Record<string, unknown>;
+    expect(saved.finishedTrialLinkIds).toEqual(["7"]);
+  });
+
+  it("LINK-001: falls back to live link-list discovery when link-stats runs are stale, partial, or from another binding", async () => {
+    const page = await seedMappedPage("links-reuse-fallback-of");
+    const staleAt = new Date(Date.now() - OFAPI_LINK_CATALOG_MAX_AGE_MS - 60_000);
+    // Tracking has only a stale complete run; trial has a fresh partial run + a fresh run under a different binding.
+    await insertLinkStatRunWithSnapshots(
+      appContext.db,
+      {
+        platformAccountId: page.id,
+        linkKind: "tracking",
+        status: "complete",
+        pulledAt: staleAt,
+        apiPages: 1,
+        rawItems: 1,
+        writtenRows: 1,
+        ofapiAccountId: OFAPI_ACCOUNT,
+      },
+      [linkSnapshot(page.id, "tracking", "11")],
+    );
+    await insertLinkStatRunWithSnapshots(
+      appContext.db,
+      {
+        platformAccountId: page.id,
+        linkKind: "trial",
+        status: "partial",
+        pulledAt: new Date(Date.now() - 10 * 60_000),
+        apiPages: 1,
+        rawItems: 1,
+        writtenRows: 1,
+        ofapiAccountId: OFAPI_ACCOUNT,
+      },
+      [linkSnapshot(page.id, "trial", "22")],
+    );
+    await insertLinkStatRunWithSnapshots(
+      appContext.db,
+      {
+        platformAccountId: page.id,
+        linkKind: "trial",
+        status: "complete",
+        pulledAt: new Date(Date.now() - 5 * 60_000),
+        apiPages: 1,
+        rawItems: 1,
+        writtenRows: 1,
+        ofapiAccountId: "acct_other_binding",
+      },
+      [linkSnapshot(page.id, "trial", "33")],
+    );
+
+    const { client, calls } = fakeLinksClient({
+      trackingLinks: [{ id: 101 }],
+      trialLinks: [{ id: 202 }],
+      trackingUsers: new Map([["101:subscribers", []], ["101:spenders", []]]),
+      trialSubscribers: new Map([["202", []]]),
+    });
+    appContext = { ...appContext, ofapi: client };
+
+    const result = await syncOfapiFanIdentities(appContext, await buildInput(page));
+    expect(result.satisfied).toBe(true);
+    expect(calls).toEqual([
+      "tracking-links",
+      "trial-links",
+      "tracking:101:subscribers",
+      "tracking:101:spenders",
+      "trial:202",
+    ]);
   });
 });
