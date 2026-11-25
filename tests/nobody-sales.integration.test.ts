@@ -699,9 +699,10 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     );
     const waitingTxId = Number(waitingTx.rows[0]!.id);
     await testDb.pool.query(
-      `insert into message_media_offers (page_id, platform, message_ref, media_offer_ref, fan_platform_user_id, message_created_at)
-       values ($1, 'fansly', '777099', 'offer-wait-1', '901055', $2::timestamptz)`,
-      [sharedPage, new Date(waitAt.getTime() - 10 * 60_000).toISOString()],
+      `insert into message_media_offers (page_id, platform, message_ref, offer_ordinal, media_offer_ref, fan_platform_user_id, message_created_at,
+         first_observed_at, last_observed_at, content_hash, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', '777099', 0, 'offer-wait-1', '901055', $2::timestamptz, now(), now(), $3, 1, 1, 1)`,
+      [sharedPage, new Date(waitAt.getTime() - 10 * 60_000).toISOString(), "a".repeat(64)],
     );
     await testDb.pool.query(
       `insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at)
