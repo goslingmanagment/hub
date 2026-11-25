@@ -210,11 +210,13 @@ export async function handleAgentPersonTimeline(
       messages: mayReadMessages,
     }) as Array<(typeof ALL_LANES)[number]>;
 
-    const narrowed = pageLabel === undefined
+    const narrowed = (pageLabel === undefined
       ? scope.pages
-      : scope.pages.filter((page) => page.pageLabel === pageLabel);
+      : scope.pages.filter((page) => page.pageLabel === pageLabel))
+      .filter((page) => page.platform === params.platform);
     const pageIds = narrowed.map((page) => page.id);
-    const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
+    // BL-A-6: narrow scopeFieldStates platforms by the requested person's platform.
+    const platforms: Platform[] = [params.platform];
 
     const identity = pageIds.length === 0
       ? { row: null, witnesses: [] }
@@ -481,11 +483,15 @@ export async function handleAgentThreads(
     // the schema default silently changed the page size mid-walk.
     const requestedLimit = (stored?.limit as number | undefined) ?? query.limit;
 
-    const narrowed = effective.pageLabel === undefined
+    const narrowed = (effective.pageLabel === undefined
       ? scope.pages
-      : scope.pages.filter((page) => page.pageLabel === effective.pageLabel);
+      : scope.pages.filter((page) => page.pageLabel === effective.pageLabel))
+      .filter((page) => effective.platform === undefined || page.platform === effective.platform);
     const pageIds = narrowed.map((page) => page.id);
-    const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
+    // BL-A-6: narrow scopeFieldStates platforms by the effective platform filter.
+    const platforms = effective.platform !== undefined
+      ? [effective.platform as Platform]
+      : ([...new Set(narrowed.map((page) => page.platform))] as Platform[]);
 
     // The person filter is RESOLVED and APPLIED. It used to reach this function
     // and stop here: the response reported the predicate as applied and returned
@@ -957,7 +963,9 @@ export async function handleAgentThreadMessages(
         senderRole: row.senderRole as "fan",
         direction: (row.isSentByMe
           ? "outbound"
-          : row.senderRole === "unknown" ? "unknown" : "inbound") as "inbound",
+          : (row.senderRole === "unknown" || row.senderRole === "system")
+            ? "unknown"
+            : "inbound") as "inbound",
         isSentByMe: row.isSentByMe,
         occurredAt: isoOrNull(row.occurredAt),
         state: (row.deletedAt !== null
@@ -988,7 +996,7 @@ export async function handleAgentThreadMessages(
           mimeType: typeof media.mimetype === "string" ? media.mimetype : null,
           width: positiveIntegerOrNull(media.width),
           height: positiveIntegerOrNull(media.height),
-          durationSeconds: nonNegativeNumberOrNull(media.duration),
+          durationSeconds: nonNegativeNumberOrNull(media.durationSeconds ?? media.duration),
           sizeBytes: nonNegativeIntegerOrNull(media.size),
           isLocked: typeof media.locked === "boolean" ? media.locked : null,
         })),
@@ -1089,11 +1097,15 @@ export async function handleAgentSearchMessages(
       throw new AgentPlaneDisabledError("agent message search is disabled");
     }
 
-    const narrowed = body.pageLabels === undefined
+    const narrowed = (body.pageLabels === undefined
       ? scope.pages
-      : scope.pages.filter((page) => body.pageLabels?.includes(page.pageLabel));
+      : scope.pages.filter((page) => body.pageLabels?.includes(page.pageLabel)))
+      .filter((page) => body.platform === undefined || page.platform === body.platform);
     const pageIds = narrowed.map((page) => page.id);
-    const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
+    // BL-A-6: narrow scopeFieldStates platforms by the effective platform filter.
+    const platforms = body.platform !== undefined
+      ? [body.platform as Platform]
+      : ([...new Set(narrowed.map((page) => page.platform))] as Platform[]);
 
     const { detectPgTrgmExtension } = await import("@agency_hub_core/db");
     const trgmPresent = configured === "fts_trgm"
@@ -1213,7 +1225,11 @@ export async function handleAgentSearchMessages(
         messageRef: row.messageRef,
         occurredAt: isoOrNull(row.occurredAt),
         senderRole: row.senderRole as "fan",
-        direction: (row.isSentByMe ? "outbound" : "inbound") as "inbound",
+        direction: (row.isSentByMe
+          ? "outbound"
+          : (row.senderRole === "unknown" || row.senderRole === "system")
+            ? "unknown"
+            : "inbound") as "inbound",
         isSentByMe: row.isSentByMe,
         rank: row.rank,
         snippet: body.includeSnippet ? row.snippet : null,
@@ -1329,11 +1345,15 @@ export async function handleAgentCoverage(
     const claimFields = (stored?.claimFields as string[] | undefined) ?? query.claimFields ?? null;
     const requestedLimit = (stored?.limit as number | undefined) ?? query.limit;
 
-    const narrowed = pageLabel === undefined
+    const narrowed = (pageLabel === undefined
       ? scope.pages
-      : scope.pages.filter((page) => page.pageLabel === pageLabel);
+      : scope.pages.filter((page) => page.pageLabel === pageLabel))
+      .filter((page) => platform === undefined || page.platform === platform);
     const pageIds = narrowed.map((page) => page.id);
-    const platforms = [...new Set(narrowed.map((page) => page.platform))] as Platform[];
+    // BL-A-6: narrow scopeFieldStates platforms by the effective platform filter.
+    const platforms = platform !== undefined
+      ? [platform]
+      : ([...new Set(narrowed.map((page) => page.platform))] as Platform[]);
 
     // Accepted AND applied — this pair used to be dropped between the schema and
     // the query while the response reported the predicate as applied.

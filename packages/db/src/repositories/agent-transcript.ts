@@ -130,13 +130,15 @@ function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
   // a correct traversal is worth more than numeric-looking ref order.
   const direction = descending ? "desc" as const : "asc" as const;
 
+  // Strictly disjoint & exhaustive partition over (is_sent_by_me, sender_role)
+  // so outbound + inbound + unknown === unfiltered total (BL-A-3).
   const directionPredicate = filters.direction === undefined
     ? sql`true`
     : filters.direction === "outbound"
       ? sql`u.is_sent_by_me`
       : filters.direction === "inbound"
-        ? sql`not u.is_sent_by_me and u.sender_role <> 'system'`
-        : sql`u.sender_role = 'unknown'`;
+        ? sql`not u.is_sent_by_me and u.sender_role not in ('system', 'unknown')`
+        : sql`not u.is_sent_by_me and u.sender_role in ('system', 'unknown')`;
   const inWindow = (eventTime: SQL) => sql`(
     ${eventTime} is null or (${eventTime} >= ${input.from} and ${eventTime} < ${input.to})
   )`;
@@ -179,7 +181,8 @@ function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
              ma.text_plain,
              ma.text_html,
              ma.sender_role::text as sender_role,
-             ma.fan_native_id as sender_hint,
+             -- Outbound rows must not label the fan as the sender (BL-A1).
+             case when ma.is_sent_by_me then null::text else ma.fan_native_id end as sender_hint,
              ma.is_sent_by_me,
              ma.price_mills,
              ma.is_opened,
@@ -292,18 +295,25 @@ function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
     -- Resolve the binding once and supply the full index key. A join to pages
     -- can check the binding only AFTER scanning another platform's tombstones.
     cross_tombstones as (
-      select r.message_ref
+      select r.message_ref, max(d.deleted_at) as deleted_at
       from candidate_refs r
       join dm_message_archive d
         on d.platform = ${input.platform}
        and d.ofapi_account_id = (select p.ofapi_account_id from page p)
        and d.platform_message_id = r.message_ref
       where d.deleted_at is not null
+      group by r.message_ref
     ),
+    -- Carry the dominating store's real deleted_at across stores (BL-A2) so
+    -- cross-store tombstones do not fall back to the 1970 epoch.
     tombstoned as (
-      select c.message_ref from candidates c where c.deleted_at is not null
-      union
-      select ct.message_ref from cross_tombstones ct
+      select message_ref, max(deleted_at) as tombstone_at
+      from (
+        select c.message_ref, c.deleted_at from candidates c where c.deleted_at is not null
+        union all
+        select ct.message_ref, ct.deleted_at from cross_tombstones ct
+      ) ts
+      group by message_ref
     ),
     hot_upgrade as (
       select m.platform_message_id as message_ref, m.purchased_at
@@ -324,9 +334,11 @@ function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
     ),
     unioned as (
       select b.*,
-             (b.message_ref in (select t.message_ref from tombstoned t)) as is_tombstoned,
+             (t.message_ref is not null) as is_tombstoned,
+             coalesce(b.deleted_at, t.tombstone_at) as effective_deleted_at,
              case when h.purchased_at is not null then true else b.is_opened end as is_opened_upgraded
       from best b
+      left join tombstoned t on t.message_ref = b.message_ref
       left join hot_upgrade h on h.message_ref = b.message_ref
     ),
     u as (
@@ -359,7 +371,7 @@ function buildUnionQuery(input: AgentTranscriptInput, limit: number): SQL {
            u.serving_contract_version,
            u.backfill_source,
            u.content_pending,
-           u.deleted_at,
+           u.effective_deleted_at as deleted_at,
            u.fan_platform_user_id,
            u.source_plane,
            u.is_tombstoned,
@@ -451,19 +463,20 @@ export async function listAgentTranscript(
 }
 
 /**
- * Count the same filtered, deduplicated population up to `probeMax + 1`.
- * The extra row distinguishes an exact count from a lower bound. Delivery's
- * smaller row ceiling and cursor must not truncate this independent probe.
+ * Count the same filtered, deduplicated population up to `probeMax`
+ * (`AGENT_COUNT_PROBE_MAX = 5001`). Hitting `probeMax` establishes the lower
+ * bound `{ value: probeMax, exact: false }` ("at least 5001") while any smaller
+ * count is exact (`0..5000`, BL-A8).
  */
 export async function countAgentTranscript(
   db: Database,
   input: AgentTranscriptInput,
   probeMax: number,
 ): Promise<{ value: number; exact: boolean }> {
-  const probe = buildUnionQuery({ ...input, after: undefined }, probeMax + 1);
+  const probe = buildUnionQuery({ ...input, after: undefined }, probeMax);
   const result = await db.execute<{ count: string }>(
     sql`select count(*)::text as count from (${probe}) probe`,
   );
   const value = Number(result.rows[0]?.count ?? 0);
-  return value > probeMax ? { value: probeMax + 1, exact: false } : { value, exact: true };
+  return value >= probeMax ? { value: probeMax, exact: false } : { value, exact: true };
 }

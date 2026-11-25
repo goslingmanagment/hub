@@ -402,6 +402,8 @@ export interface AgentResolveMatch {
   displayName: string | null;
   matchKind: "platformUserId" | "username" | "alias" | "displayName";
   matchedValue: string;
+  /** Non-null for page-scoped `page_fan_aliases` matches (BL-A6). */
+  pageId: number | null;
   createdAtExternal: Date | null;
   deletedDetectedAt: Date | null;
 }
@@ -427,6 +429,8 @@ export async function resolveAgentFanCandidates(
     values: readonly string[];
     includeAliases: boolean;
     limit: number;
+    /** Per-matched-value candidate cap so one noisy input cannot starve others (BL-A-7). */
+    perValueLimit?: number | undefined;
   },
 ): Promise<{ matches: AgentResolveMatch[]; witnesses: PlaneReadWitness[] }> {
   if (input.pageIds.length === 0 || input.values.length === 0) {
@@ -443,14 +447,14 @@ export async function resolveAgentFanCandidates(
       union all
       select f.id, f.platform::text, f.platform_user_id, f.username, f.display_name,
              f.created_at_external, f.deleted_detected_at,
-             'alias'::text, u.username, 2
+             'alias'::text, u.username, null::bigint, 2
       from fan_username_aliases u
       join fans f on f.id = u.fan_id
       where lower(u.username) in ${lowered} and ${platformFilter}
       union all
       select f.id, f.platform::text, f.platform_user_id, f.username, f.display_name,
              f.created_at_external, f.deleted_detected_at,
-             'alias'::text, a.alias, 3
+             'alias'::text, a.alias, a.platform_account_id::bigint, 3
       from page_fan_aliases a
       join fans f on f.id = a.fan_id
       where lower(a.alias) in ${lowered}
@@ -458,6 +462,34 @@ export async function resolveAgentFanCandidates(
         and ${platformFilter}
     `
     : sql``;
+
+  const perValueLimit = input.perValueLimit;
+  const finalQuery = perValueLimit !== undefined && perValueLimit > 0
+    ? sql`,
+      ranked as (
+        select d.*,
+               row_number() over (
+                 partition by lower(d.matched_value)
+                 order by d.rank, d.id, d.match_kind, d.matched_value, d.platform_account_id nulls first
+               ) as rn
+        from deduped d
+      )
+      select r.id, r.platform, r.platform_user_id, r.username, r.display_name,
+             r.created_at_external, r.deleted_detected_at, r.match_kind, r.matched_value,
+             r.platform_account_id, r.rank
+      from ranked r
+      where r.rn <= ${perValueLimit}
+      order by r.id, r.match_kind, r.matched_value, r.platform_account_id nulls first, r.rank
+      limit ${input.limit}
+    `
+    : sql`
+      select d.id, d.platform, d.platform_user_id, d.username, d.display_name,
+             d.created_at_external, d.deleted_detected_at, d.match_kind, d.matched_value,
+             d.platform_account_id, d.rank
+      from deduped d
+      order by d.id, d.match_kind, d.matched_value, d.platform_account_id nulls first, d.rank
+      limit ${input.limit}
+    `;
 
   const result = await db.execute<Record<string, unknown>>(sql`
     with visible_fans as (
@@ -479,32 +511,36 @@ export async function resolveAgentFanCandidates(
     matched as (
       select f.id, f.platform::text as platform, f.platform_user_id, f.username, f.display_name,
              f.created_at_external, f.deleted_detected_at,
-             'platformUserId'::text as match_kind, f.platform_user_id as matched_value, 0 as rank
+             'platformUserId'::text as match_kind, f.platform_user_id as matched_value,
+             null::bigint as platform_account_id, 0 as rank
       from fans f
       where f.platform_user_id in ${values} and ${platformFilter}
       union all
       select f.id, f.platform::text, f.platform_user_id, f.username, f.display_name,
              f.created_at_external, f.deleted_detected_at,
-             'username'::text, f.username, 1
+             'username'::text, f.username, null::bigint, 1
       from fans f
       where lower(f.username) in ${lowered} and ${platformFilter}
       ${aliasArms}
       union all
       select f.id, f.platform::text, f.platform_user_id, f.username, f.display_name,
              f.created_at_external, f.deleted_detected_at,
-             'displayName'::text, f.display_name, 4
+             'displayName'::text, f.display_name, null::bigint, 4
       from fans f
       where lower(f.display_name) in ${lowered} and ${platformFilter}
+    ),
+    -- Distinct on the MATCHED VALUE and PAGE SCOPE too (BL-A6): collapsing by
+    -- (fan, kind, value) alone hid identical page-scoped aliases across pages.
+    deduped as (
+      select distinct on (m.id, m.match_kind, m.matched_value, m.platform_account_id)
+             m.id, m.platform, m.platform_user_id, m.username, m.display_name,
+             m.created_at_external, m.deleted_detected_at, m.match_kind, m.matched_value,
+             m.platform_account_id, m.rank
+      from matched m
+      join visible_fans v on v.fan_id = m.id
+      order by m.id, m.match_kind, m.matched_value, m.platform_account_id nulls first, m.rank
     )
-    -- Distinct on the MATCHED VALUE too: collapsing by (fan, kind) alone hid all
-    -- but one alias when several of them matched.
-    select distinct on (m.id, m.match_kind, m.matched_value)
-           m.id, m.platform, m.platform_user_id, m.username, m.display_name,
-           m.created_at_external, m.deleted_detected_at, m.match_kind, m.matched_value, m.rank
-    from matched m
-    join visible_fans v on v.fan_id = m.id
-    order by m.id, m.match_kind, m.matched_value, m.rank
-    limit ${input.limit}
+    ${finalQuery}
   `);
 
   return {
@@ -516,6 +552,7 @@ export async function resolveAgentFanCandidates(
       displayName: row.display_name == null ? null : String(row.display_name),
       matchKind: String(row.match_kind) as AgentResolveMatch["matchKind"],
       matchedValue: String(row.matched_value ?? ""),
+      pageId: row.platform_account_id == null ? null : Number(row.platform_account_id),
       createdAtExternal: date(row.created_at_external),
       deletedDetectedAt: date(row.deleted_detected_at),
     })),
@@ -533,26 +570,50 @@ export interface AgentFanThreadRow {
   pageLabel: string;
   platform: string;
   conversationRef: string;
+  isVisible: boolean;
+  unreadCount: number | null;
+  lastMessageAt: Date | null;
+  lastFanMessageAt: Date | null;
+  lastModelMessageAt: Date | null;
   storedMessageCount: number;
+  oldestStoredMessageRef: string | null;
+  newestStoredMessageRef: string | null;
   coverageStatusRaw: string;
+  lastMessageSyncAt: Date | null;
+  quarantineUntil: Date | null;
+  lifetimeSpendMills: bigint | null;
   coverage: AgentThreadCoverageRow;
 }
 
 export async function listAgentFanThreads(
   db: Database,
-  input: { pageIds: readonly number[]; fanIds: readonly number[] },
+  input: {
+    pageIds: readonly number[];
+    fanIds: readonly number[];
+    includeLifetimeSpend?: boolean | undefined;
+  },
 ): Promise<{ rows: AgentFanThreadRow[]; witnesses: PlaneReadWitness[] }> {
   if (input.pageIds.length === 0 || input.fanIds.length === 0) {
     return { rows: [], witnesses: [] };
   }
+  const includeSpend = input.includeLifetimeSpend === true;
   const fanIds = sql`(${sql.join(input.fanIds.map((id) => sql`${id}`), sql`, `)})`;
   const result = await db.execute<Record<string, unknown>>(sql`
     select t.fan_id, t.platform_account_id, p.label, p.platform::text as platform,
-           t.platform_conversation_id, t.stored_message_count,
-           t.message_coverage_status::text as coverage_status,
+           t.platform_conversation_id, t.is_visible, t.unread_count,
+           t.last_message_at, t.last_fan_message_at, t.last_model_message_at,
+           t.stored_message_count, t.oldest_stored_message_id, t.newest_stored_message_id,
+           t.message_coverage_status::text as coverage_status, t.last_message_sync_at,
+           h.quarantine_until,
+           ${includeSpend ? sql`fsl.creator_net_amount_mills::text` : sql`null::text`} as lifetime_spend_mills,
            ${THREAD_COVERAGE_COLUMNS}
     from page_dm_threads t
     join pages p on p.id = t.platform_account_id
+    left join page_dm_message_sync_health h on h.conversation_id = t.id
+    ${includeSpend
+      ? sql`left join fan_spend_lifetime fsl
+        on fsl.fan_id = t.fan_id and fsl.platform_account_id = t.platform_account_id`
+      : sql``}
     where t.platform_account_id in ${pageIdList(input.pageIds)}
       and t.fan_id in ${fanIds}
     order by t.last_message_at desc nulls last, t.id desc
@@ -565,11 +626,31 @@ export async function listAgentFanThreads(
       pageLabel: String(row.label),
       platform: String(row.platform),
       conversationRef: String(row.platform_conversation_id),
+      isVisible: row.is_visible === true,
+      unreadCount: row.unread_count == null ? null : Number(row.unread_count),
+      lastMessageAt: date(row.last_message_at),
+      lastFanMessageAt: date(row.last_fan_message_at),
+      lastModelMessageAt: date(row.last_model_message_at),
       storedMessageCount: Number(row.stored_message_count ?? 0),
+      oldestStoredMessageRef: row.oldest_stored_message_id == null
+        ? null
+        : String(row.oldest_stored_message_id),
+      newestStoredMessageRef: row.newest_stored_message_id == null
+        ? null
+        : String(row.newest_stored_message_id),
       coverageStatusRaw: String(row.coverage_status),
+      lastMessageSyncAt: date(row.last_message_sync_at),
+      quarantineUntil: date(row.quarantine_until),
+      lifetimeSpendMills: row.lifetime_spend_mills == null
+        ? null
+        : BigInt(String(row.lifetime_spend_mills)),
       coverage: threadCoverageOf(row),
     })),
-    witnesses: witnessesFor(["page_dm_threads"]),
+    witnesses: witnessesFor(
+      includeSpend
+        ? ["page_dm_threads", "fan_spend_lifetime"]
+        : ["page_dm_threads"],
+    ),
   };
 }
 
@@ -1219,12 +1300,17 @@ export async function listAgentTimeline(
     `);
   }
   if (wants("subscriptions")) {
+    // BL-A7: `subscription.ended` dates at `ends_at`, not creation time, so an
+    // ended subscription lands on the day it actually ended and filters cleanly.
+    const subOccurredAt = sql`case when s.ends_at is not null and s.ends_at < now()
+      then s.ends_at
+      else coalesce(s.source_created_at, s.last_seen_at) end`;
     arms.push(sql`
       select 'subscriptions'::text as lane,
              case when s.ends_at is not null and s.ends_at < now() then 'subscription.ended'
                   when s.is_current then 'subscription.renewed'
                   else 'subscription.started' end as kind,
-             coalesce(s.source_created_at, s.last_seen_at) as occurred_at,
+             ${subOccurredAt} as occurred_at,
              'subscription:' || s.id::text as stable_ref,
              p.label as page_label, p.platform::text as platform,
              null::text as conversation_ref, null::text as message_ref,
@@ -1242,15 +1328,20 @@ export async function listAgentTimeline(
       from page_subscriptions s
       join pages p on p.id = s.platform_account_id
       where s.platform_account_id in ${pages} and s.fan_id = ${input.fanId}
-        and coalesce(s.source_created_at, s.last_seen_at) >= ${input.from}
-        and coalesce(s.source_created_at, s.last_seen_at) < ${input.to}
+        and ${subOccurredAt} >= ${input.from}
+        and ${subOccurredAt} < ${input.to}
     `);
   }
   if (wants("follows")) {
+    // BL-A-2: `follow.ended` dates at the last observation before deactivation
+    // (`coalesce(fl.last_seen_at, fl.followed_at)`), not the original `followed_at`.
+    const followOccurredAt = sql`case when fl.is_active
+      then fl.followed_at
+      else coalesce(fl.last_seen_at, fl.followed_at) end`;
     arms.push(sql`
       select 'follows'::text as lane,
              case when fl.is_active then 'follow.started' else 'follow.ended' end as kind,
-             fl.followed_at as occurred_at,
+             ${followOccurredAt} as occurred_at,
              'follow:' || fl.id::text as stable_ref,
              p.label as page_label, p.platform::text as platform,
              null::text as conversation_ref, null::text as message_ref,
@@ -1267,7 +1358,7 @@ export async function listAgentTimeline(
       from page_follows fl
       join pages p on p.id = fl.platform_account_id
       where fl.platform_account_id in ${pages} and fl.fan_id = ${input.fanId}
-        and fl.followed_at >= ${input.from} and fl.followed_at < ${input.to}
+        and ${followOccurredAt} >= ${input.from} and ${followOccurredAt} < ${input.to}
     `);
   }
   if (wants("presence")) {
@@ -1572,11 +1663,11 @@ export async function countAgentThreads(
       join pages p on p.id = t.platform_account_id
       left join page_dm_message_sync_health h on h.conversation_id = t.id
       where ${threadsWhere(query)}
-      limit ${probeMax + 1}
+      limit ${probeMax}
     ) probe
   `);
   const value = Number(result.rows[0]?.count ?? 0);
-  return value > probeMax ? { value: probeMax + 1, exact: false } : { value, exact: true };
+  return value >= probeMax ? { value: probeMax, exact: false } : { value, exact: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1591,6 +1682,35 @@ export async function countAgentThreads(
  * whole answer into a 500 over that single row.
  */
 export const AGENT_SEARCH_SNIPPET_MAX_LENGTH = 300;
+
+/**
+ * Extracts lowercased search terms from a websearch query for snippet centering
+ * (BL-A-8). Skips negated `-term` tokens and `or` operators so multi-word
+ * queries center on the first positive matching lexeme in `text_plain`.
+ */
+export function extractSearchSnippetTerms(query: string): string[] {
+  const lowered = query.trim().toLowerCase();
+  if (lowered.length === 0) return [];
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  const add = (term: string) => {
+    if (term.length > 0 && !seen.has(term)) {
+      seen.add(term);
+      terms.push(term);
+    }
+  };
+  // Strip negated tokens (`-word` or `-"phrase"`) before extracting positive terms.
+  const withoutNegated = lowered.replace(/(^|\s)-(?:"[^"]*"|\S+)/g, " ");
+  for (const match of withoutNegated.matchAll(/[\p{L}\p{N}_]+/gu)) {
+    const token = match[0]!;
+    if (token === "or") continue;
+    add(token);
+  }
+  if (terms.length === 0) {
+    add(lowered);
+  }
+  return terms.slice(0, 16);
+}
 
 export interface AgentSearchRow {
   pageLabel: string;
@@ -1666,13 +1786,22 @@ export async function searchAgentArchive(
   if (input.direction === "outbound") {
     clauses.push(sql`ma.is_sent_by_me`);
   } else if (input.direction === "inbound") {
-    clauses.push(sql`not ma.is_sent_by_me and ma.sender_role <> 'system'`);
+    clauses.push(sql`not ma.is_sent_by_me and ma.sender_role not in ('system', 'unknown')`);
   } else if (input.direction === "unknown") {
-    clauses.push(sql`ma.sender_role = 'unknown'`);
+    clauses.push(sql`not ma.is_sent_by_me and ma.sender_role in ('system', 'unknown')`);
   }
 
+  // BL-A-8: center the snippet on the earliest matched lexeme across the full
+  // query and its individual search tokens rather than only the raw query string.
+  const searchTerms = extractSearchSnippetTerms(input.query);
+  const matchPosExpr = searchTerms.length === 0
+    ? sql`1`
+    : sql`coalesce(least(${sql.join(
+      searchTerms.map((term) => sql`nullif(position(${term} in lower(ma.text_plain)), 0)`),
+      sql`, `,
+    )}), 1)`;
   const snippet = input.includeSnippet
-    ? sql`substring(ma.text_plain from greatest(1, coalesce(nullif(position(lower(${input.query}) in lower(ma.text_plain)), 0), 1) - 120) for ${sql.raw(String(AGENT_SEARCH_SNIPPET_MAX_LENGTH))})`
+    ? sql`substring(ma.text_plain from greatest(1, ${matchPosExpr} - 120) for ${sql.raw(String(AGENT_SEARCH_SNIPPET_MAX_LENGTH))})`
     : sql`null::text`;
 
   const result = await db.execute<Record<string, unknown>>(sql`

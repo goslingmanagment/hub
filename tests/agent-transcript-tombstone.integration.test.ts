@@ -101,7 +101,10 @@ it("uses the current platform and account binding for chatless tombstones", asyn
   await tombstone(page!.id, "owner-binding", "fansly", "other-platform");
   const request = input(page!.id, "onlyfans");
   const all = await listAgentTranscript(testDb.db, request);
-  expect(all.rows.filter(row => row.deletedAt !== null).map(row => row.messageRef)).toEqual(["deleted"]);
+  const deletedRows = all.rows.filter(row => row.deletedAt !== null);
+  expect(deletedRows.map(row => row.messageRef)).toEqual(["deleted"]);
+  // BL-A2: cross-store tombstone carries the dominating store's real deleted_at, not 1970 epoch.
+  expect(deletedRows[0]?.deletedAt?.toISOString()).toBe("2026-09-08T00:00:00.000Z");
   const visible = { ...request, filters: { includeDeleted: false } };
   expect((await listAgentTranscript(testDb.db, visible)).rows.map(row => row.messageRef))
     .toEqual(["other-account", "other-platform"]);
