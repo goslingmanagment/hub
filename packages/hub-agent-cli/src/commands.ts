@@ -2860,8 +2860,9 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
     operation: "agentShiftReportClaimable",
     summary:
       "«Добавить → продажу»: the sales of the last 7 days the person may add to this report by hand, on the pages they may"
-      + " open and this key's grant, held by no report of theirs: nobody's first («ничья», home nobody: it counts plainly"
-      + " when added), then the newest; `words` says whose each is by the rule (one of someone else counts, marked disputed)."
+      + " open and this key's grant, held by no report of theirs, the newest first; of nobody's only those whose fan they"
+      + " wrote to («ничья», home nobody: added, it counts plainly, the person's word, unless another person's report holds"
+      + " it); `words` says whose each is by the rule (one of someone else is disputed, counting 0 until settled)."
       + " Add one with hub shift-report line --sale <transactionId> --statement mine --note \"<why, in their words>\"."
       + " Exit 0 — answered; 4 — refused (403: their switch is off; 409 sender_not_person) or no answer. Needs"
       + " write:shift_reports.",
@@ -2882,9 +2883,10 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
       "Set the person's word on one sale of the draft, from their message: --statement not_mine («не моё», counts 0) or"
       + " share («делим с…», half the net, --share-with the colleague) on a line of «Ваши продажи»; mine («это моё», --note"
       + " with one line of why) on a line of «Рядом» or on a sale of hub shift-report claimable, which adds it to the report"
-      + " (counted 0, disputed until settled); rule takes the word back. Or with --report-sale: report an unlisted/hidden sale"
-      + " directly to the owner by --ref <transactionRef> OR (--fan <fan> --amount <dollars>) plus --note — matches strictly 1"
-      + " sale on the person's granted pages and opens a disputed line (0) + owner claim without leaking hidden sales. Saved at"
+      + " (a nobody's sale counts plainly, the person's word, unless another person's report holds it; anyone else's is"
+      + " disputed, counting 0 until settled); rule takes the word back. Or with --report-sale: add an unlisted nobody's sale"
+      + " by --ref <transactionRef> OR (--fan <fan> --amount <dollars>) plus --note — matches strictly 1 sale on the"
+      + " person's granted pages and writes their «моё» on it (counted like any other line) without leaking hidden sales. Saved at"
       + " once. Only the person's own words in their own message, never the agent's inference. Exit 0 — saved; 4 — refused"
       + " (403: switch off; 409 sender_not_person, already_decided; 400 statement_not_allowed, note_required, share_with_unknown;"
       + " 404 not_claimable, sale_not_matched) or no answer. Needs write:shift_reports.",
@@ -2894,7 +2896,7 @@ const SHIFT_REPORT_COMMANDS: HubCommand[] = [
       sale: { kind: "number", describe: "The sale: transactionId of a line in show, or of a sale in claimable (required unless --report-sale)" },
       statement: { kind: "string", describe: `The person's word (required unless --report-sale): ${SHIFT_REPORT_LINE_WORDS.join(" | ")}` },
       "share-with": { kind: "string", describe: "With share: the colleague, by user id or by name as show's `colleagues` print it" },
-      "report-sale": { kind: "boolean", describe: "Report an exact sale to the owner («Сообщить владельцу») by --ref or (--fan + --amount) and --note" },
+      "report-sale": { kind: "boolean", describe: "Add an exact unlisted nobody's sale («Добавить продажу») by --ref or (--fan + --amount) and --note" },
       ref: { kind: "string", describe: "With --report-sale: exact platform transaction reference or Hub transaction id" },
       fan: { kind: "string", describe: "With --report-sale (paired with --amount): fan username, display name, or platform id" },
       amount: { kind: "string", describe: "With --report-sale (paired with --fan): sale amount in dollars, e.g. 25 or 19.99" },

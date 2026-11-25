@@ -10,7 +10,8 @@ import { intId, isoTimestamp, mills } from "./primitives.ts";
 
 /**
  * The kinds of package G's own matters, the server their one writer: the other side's notice «X записывает себе …» (`sale.claim`),
- * the owner's dispute of a sale (`sale.dispute`), the owner's weekly line of sales nobody claimed (`sale.nobody_week`),
+ * the owner's dispute of a sale (`sale.dispute`), the owner's old weekly line of sales nobody claimed (`sale.nobody_week`:
+ * opened no more since 2026-11-26, a chatter's «моё» on such a sale counts at once; the pass only closes it),
  * a report's «мимо площадки» waiting for the owner (`off_platform.pending`), the decisions carried over from the ledger
  * that wait to be tied to a sale (`sale.decisions.unlinked`). Kept apart from MATTER_SERVER_KINDS (as the shift report's):
  * «Состояние» closes every open matter of those that its own pass did not find. An agent key may open none of them.

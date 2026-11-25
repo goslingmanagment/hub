@@ -3,7 +3,7 @@ import type { HandinStatement, HandinVersionLine, ProposalRow } from "@agency_hu
 
 import { ConflictError } from "./errors.ts";
 import { lineAmount, type Statement } from "./shift-handin-rules.ts";
-import type { SaleHomeKind } from "./sale-rule.ts";
+import type { SaleHomeKind, SaleHomeReason } from "./sale-rule.ts";
 
 /**
  * The «Отчёт» board's rules (products plan 2026-11-13, package R), pure: the phases and who may do what in each, when
@@ -132,6 +132,7 @@ export function lineWithWord(
     netMills: line.netMills,
     shareMills: line.rule.shareMills,
     homeKind: line.rule.home as SaleHomeKind,
+    homeReason: line.rule.reason as SaleHomeReason,
     statement: arithmeticStatement(word.statement),
     alreadyIn: line.alreadyIn !== null,
     claimed: line.added && line.group === "mine" && line.statement === "mine",

@@ -546,10 +546,10 @@ export async function readBoard(input: BoardRead): Promise<ShiftReportBoard | nu
     };
     if (line.group !== "mine") {
       // Someone else's sale: the rule's own word (back to it), «Моя» and «Пополам с <держатель>», each of the two a
-      // question (a nobody's sale is mine at once, with the one line of why the server asks for). A sale that waits for
-      // its PPV's sender is that colleague's.
+      // question (a nobody's sale is mine at once, with the one line of why the server asks for: owner, 2026-11-26). A
+      // sale that waits for its PPV's sender is that colleague's.
       const holder = line.rule.toUserId ?? (line.rule.home === "waiting" ? line.rule.senderUserId : null);
-      const pot = line.rule.home === "pot" || line.rule.home === "decide" || line.rule.home === "nobody";
+      const pot = line.rule.home === "pot" || line.rule.home === "decide";
       const mine = owner("me", null, people, me);
       const mineAsks = askOf(holder, pot && holder === null);
       // «Моя» asks whoever holds the sale; a nobody's sale is the person's at once, by the word with its line of why.

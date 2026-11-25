@@ -1152,7 +1152,7 @@ export async function listHandinSalesOnPages(
 }
 
 /**
- * Exact-match lookup for «Сообщить владельцу»: searches active sales strictly within the caller's granted pages and
+ * Exact-match lookup for «Добавить продажу»: searches active sales strictly within the caller's granted pages and
  * realm, by platform/Hub transaction reference OR by (fan + amountMills). Returns up to `limit` (default 2) rows so
  * the caller distinguishes exact-1 from 0/>1 without ever exposing a candidate list.
  */

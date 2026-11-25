@@ -152,7 +152,7 @@ function OffPlatform({ api }: { api: BoardApi }) {
   );
 }
 
-/** «Найти продажу»: claimable sales of the last 7 days + «Сообщить владельцу» by exact transactionRef or fan + amount (H8). */
+/** «Найти продажу»: claimable sales of the last 7 days + «Добавить продажу» by exact transactionRef or fan + amount (H8). */
 function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
   const read = useClaimable(api.report.shift.id, true);
   const [query, setQuery] = useState("");
@@ -179,12 +179,12 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
   const hasRef = reportRef.trim() !== "";
   const hasFanAmount = reportFan.trim() !== "" && Number.isFinite(dollars) && dollars > 0;
   const reportReady = (hasRef || hasFanAmount) && reportNote.trim() !== "";
-  const reportToOwner = () => once(async () => {
+  const addReported = () => once(async () => {
     if (!reportReady) return;
     const body = hasRef
       ? { transactionRef: reportRef.trim(), note: reportNote.trim() }
       : { fan: reportFan.trim(), amountMills: Number(millsFromDollars(dollars)), note: reportNote.trim() };
-    if (await api.run({ op: "reportSale", body }, "Заявка отправлена владельцу")) {
+    if (await api.run({ op: "reportSale", body }, "Продажа добавлена в отчёт")) {
       setReportRef("");
       setReportFan("");
       setReportAmount("");
@@ -234,8 +234,8 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
           {words !== "" && (found.length === 0 ? <div className="dlg-e">Таких продаж нет.</div> : found.slice(0, 50).map(saleRow))}
         </>
       )}
-      <div className="dlg-t">Сообщить владельцу</div>
-      <p className="hint">Если продажи нет в списке, укажите номер транзакции или точные данные фана и сумму. Строка попадёт в отчёт как спорная ($0) и уйдёт владельцу.</p>
+      <div className="dlg-t">Добавить продажу</div>
+      <p className="hint">Если продажи нет в списке, укажите номер транзакции или точные данные фана и сумму. Продажа попадёт в отчёт и посчитается, как любая другая.</p>
       <div className="form-r">
         <input className="fld" placeholder="Номер транзакции" aria-label="Номер транзакции" maxLength={120} value={reportRef} onChange={(event) => setReportRef(event.target.value)} />
       </div>
@@ -244,12 +244,12 @@ function FindSale({ api, close }: { api: BoardApi; close: () => void }) {
         <input className="fld is-sum" inputMode="decimal" placeholder="Сумма, $" aria-label="Сумма в долларах" value={reportAmount} onChange={(event) => setReportAmount(event.target.value)} disabled={hasRef} />
       </div>
       <div className="form-r">
-        <input className="fld" placeholder="Почему продажа ваша? Одной строкой" aria-label="Пояснение для владельца" maxLength={300} value={reportNote}
+        <input className="fld" placeholder="Почему продажа ваша? Одной строкой" aria-label="Почему продажа ваша" maxLength={300} value={reportNote}
           onChange={(event) => setReportNote(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && reportReady) void reportToOwner();
+            if (event.key === "Enter" && reportReady) void addReported();
           }} />
-        <button type="button" className="btn btn--main btn--sm" disabled={!reportReady || sending} onClick={() => void reportToOwner()}>Сообщить</button>
+        <button type="button" className="btn btn--main btn--sm" disabled={!reportReady || sending} onClick={() => void addReported()}>Добавить</button>
       </div>
     </>
   );

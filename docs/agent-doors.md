@@ -169,12 +169,19 @@ itself. A question about whose a sale is goes to the person in words, and only t
   newest version as the post for «Отчётность», one per model) and `colleagues` (whom «делим с…» may name).
   Reading needs no message.
 - `hub shift-report claimable --shift <id> --sender <id>`: the sales of the last 7 days the person may add by hand,
-  nobody's first.
+  the newest first. Nobody's sales are hidden from chatters and team leads, except those whose fan the person wrote to.
 - `hub shift-report line --shift <id> --sale <transactionId> --statement not_mine|share|mine|rule`: the person's word
   on a sale. «не моё» and «делим с…» (`--share-with` a colleague, by user id or name) go on «Ваши продажи»; «моё»
   (with `--note`, one line of why) goes on «Рядом» or adds a sale from `claimable`; `rule` takes the word back.
+  «моё» on a nobody's sale is the person's word and counts the whole net at once (owner, 2026-11-26): no question to
+  the owner. When another person's handed-in report holds that sale, the line counts 0 and the hand-in makes it a
+  claim with that colleague, as any take of a colleague's sale. A sale the owner left «никому» takes no word.
   A «не моё» stays on its line, among «Ваши продажи» and counting nothing, in every later version until `rule`
   takes it back — also when the word itself made the sale nobody's (everyone of its home said it).
+- `hub shift-report line --shift <id> --report-sale --ref <transactionRef> | --fan <fan> --amount <dollars> --note …`:
+  «Не вижу свою продажу» — a nobody's sale the person does not see, found by its exact reference or by the fan and
+  the amount on the person's pages within the key's grant. Exactly one match writes the person's «моё» on it, counted
+  as above; none or several are the same 404 `sale_not_matched`, so nothing tells whether a hidden sale exists.
 - `hub shift-report comment --shift <id> --text "…" [--model <slug>]`: the comment, the person's text word for word.
   A shift on two models' pages is two posts, each with its model's comment: `--model` (a slug of the report's
   `view.comments`) sets that model's alone; without it the one text goes into every post.

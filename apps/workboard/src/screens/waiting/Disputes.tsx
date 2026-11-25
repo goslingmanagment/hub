@@ -11,10 +11,11 @@ import { ChainMoney } from "@/shared/saleChain";
 /**
  * «Ждут вас» of the owner, package G: the dispute of a sale (both statements,
  * the facts the rule read, the four answers and what each gives), a report's
- * «мимо площадки» (confirm on a page, or reject), the week's sales nobody
- * claimed (leave them nobody's), and the decisions carried over from the ledger
- * that wait to be tied to their sale. Each opens from its line; each answer is
- * one press, with an optional line of why kept beside the decision.
+ * «мимо площадки» (confirm on a page, or reject), and the decisions carried
+ * over from the ledger that wait to be tied to their sale. Each opens from its
+ * line; each answer is one press, with an optional line of why kept beside the
+ * decision. The sales nobody claimed wait for no one (owner, 2026-11-26: a
+ * chatter's «моё» counts at once): their list opens from «Продажи → Ничьи».
  */
 
 const KIND_WORDS: Readonly<Record<string, string>> = {
@@ -334,8 +335,9 @@ export function NobodyModal({ week, onClose }: { week?: string | undefined; onCl
       {data && (
         <div className="wt-modal">
           <p className="wt-modal__hint">
-            Все открытые ничьи продажи независимо от закрытия недели. Чаттеры и тимлиды их не видят.
-            Если на странице один активный чаттер, показана подсказка — решение всё равно за вами.
+            Ничьи продажи, которые никто не записал себе. Ваше решение они не ждут: чаттер, который писал этому фану,
+            сам записывает продажу в свой отчёт. Здесь можно отдать продажу человеку или оставить ничьей.
+            Если на странице один активный чаттер, показана подсказка.
           </p>
           {data.sales.length === 0 ? <p className="wt-modal__hint">Открытых ничьих продаж нет.</p> : (
             <>

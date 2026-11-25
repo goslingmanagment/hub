@@ -469,7 +469,7 @@ export async function draftFacts(
   const reported = await listReportedSales(db, { userIds: subject.userIds, since });
   const switchOnAt = subject.person?.submitsShiftSince?.getTime() ?? null;
   // Surface unclaimed `nobody` sales on the board for chatters who have personally messaged that fan on that page in
-  // history (at $0 until the owner/Gengar decides).
+  // history (at $0 until they say «моё»: then the whole net is theirs, unless another person's report holds it).
   const nobodyCandidates = sales.filter((sale) =>
     sale.home.kind === "nobody" && sale.home.reason !== "owner_nobody" && (sale.heldByShift || sale.inReportWindow));
   let messagedNobodyIds = new Set<number>();
@@ -722,8 +722,8 @@ export function draftLines(facts: Pick<DraftFacts, "classified" | "senders"> & P
     const takes = (word: Statement) => (one.claimed === true ? word === "mine" : statementAllowed(one.group, word));
     const statement = mark?.statement != null && takes(mark.statement) ? mark.statement : null;
     const plain = lineAmount({
-      group: one.group, netMills: one.sale.netMills, shareMills: one.shareMills, homeKind: one.sale.home.kind, statement, alreadyIn: one.alreadyIn !== null,
-      claimed: one.claimed === true, otherReport: one.otherReport === true,
+      group: one.group, netMills: one.sale.netMills, shareMills: one.shareMills, homeKind: one.sale.home.kind, homeReason: one.sale.home.reason,
+      statement, alreadyIn: one.alreadyIn !== null, claimed: one.claimed === true, otherReport: one.otherReport === true,
     });
     // Settled: what it gives, for a line the person said something of or that counts either way. Another report of the
     // person holding it still counts it there, not here.

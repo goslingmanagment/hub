@@ -254,7 +254,7 @@ export const shiftReportCommentBodySchema = z.object({
   modelSlug: z.string().trim().min(1).max(100).optional(),
 });
 
-/** «Сообщить владельцу» (H8): exact match by transactionRef OR (fan + amountMills), within caller's granted pages and realm. */
+/** «Добавить продажу» (H8): exact match by transactionRef OR (fan + amountMills), within caller's granted pages and realm. */
 const shiftReportReportSaleFields = {
   /** Platform transaction reference or Hub transaction id. */
   transactionRef: z.string().trim().min(1).max(120).optional(),
@@ -262,7 +262,7 @@ const shiftReportReportSaleFields = {
   fan: z.string().trim().min(1).max(200).optional(),
   /** Sale amount in mills (paired with `fan`). */
   amountMills: mills.min(1).max(100_000_000).optional(),
-  /** Required one-line explanation for the owner. */
+  /** Required one line of why the sale is the person's (the line's note). */
   note: z.string().trim().min(1).max(SHIFT_REPORT_NOTE_MAX),
 };
 
@@ -929,8 +929,8 @@ export const shiftHandinRouteSchemas = {
   },
   shiftReportReportSale: {
     auth: { kind: "any" }, tags: ["client"],
-    summary: "«Сообщить владельцу»: report an exact sale by transactionRef or fan + amount without revealing hidden sales",
-    description: `${ANY} Own shift, switched on. Matches strictly 1 sale within caller's granted pages and realm; 0 or >1 matches return the identical 404 refusal with no candidate list. On exact match, adds a disputed «моё» line (counts 0) and opens an owner claim without a respondent.`,
+    summary: "«Добавить продажу»: add an exact nobody's sale by transactionRef or fan + amount without revealing hidden sales",
+    description: `${ANY} Own shift, switched on. Matches strictly 1 nobody's sale within caller's granted pages and realm; 0 or >1 matches return the identical 404 refusal with no candidate list. On exact match, writes the person's «моё» on it: the line counts the whole net like any other (another person's report holding it makes the hand-in's claim one with that colleague). No owner claim.`,
     params: shiftReportParamsSchema,
     body: shiftReportReportSaleBodySchema,
     response: { 200: shiftReportReportSaleResponseSchema, ...personErrors, 409: shiftReportPhaseConflictSchema },
@@ -994,8 +994,8 @@ export const shiftHandinRouteSchemas = {
   },
   agentShiftReportReportSale: {
     auth: { kind: "agentKey" }, tags: ["agent"],
-    summary: "Report an exact sale to the owner «со слов» (needs write:shift_reports)",
-    description: "Exact match by transactionRef or fan + amount within the person's pages, key's grant, and realm; 0 or >1 matches return the identical 404 refusal. Adds a disputed «моё» line (counts 0) and opens an owner claim without a respondent.",
+    summary: "Add an exact nobody's sale to the person's report «со слов» (needs write:shift_reports)",
+    description: "Exact match by transactionRef or fan + amount within the person's pages, key's grant, and realm; 0 or >1 matches return the identical 404 refusal. Writes the person's «моё» on it: the line counts the whole net like any other (another person's report holding it makes the hand-in's claim one with that colleague). No owner claim.",
     body: agentShiftReportReportSaleBodySchema,
     response: { 200: shiftReportReportSaleResponseSchema, ...agentErrors },
   },
