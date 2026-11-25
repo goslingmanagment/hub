@@ -303,7 +303,7 @@ describe("H8: nobody sales are owner-only, solo page suggests its chatter, repor
     // Two identical fan+amount sales (ambiguous >1), one unique sale for human door, one for agent door, one out-of-grant, one test-realm.
     await insertSale({ pageId: soloPage, fanId: fanAlpha, ref: "h8-dup-1", netMills: 15_000, occurredAt: new Date(now - 2 * 3_600_000).toISOString(), home: "nobody", reason: "no_holder" });
     await insertSale({ pageId: soloPage, fanId: fanAlpha, ref: "h8-dup-2", netMills: 15_000, occurredAt: new Date(now - 90 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
-    const uniqueHuman = await insertSale({ pageId: soloPage, fanId: fanAlpha, ref: "h8-rep-human", netMills: 42_000, occurredAt: new Date(now - 70 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
+    const uniqueHuman = await insertSale({ pageId: sharedPage, fanId: fanAlpha, ref: "h8-rep-human", netMills: 42_000, occurredAt: new Date(now - 70 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
     const uniqueAgent = await insertSale({ pageId: sharedPage, fanId: fanBeta, ref: "h8-rep-agent", netMills: 53_000, occurredAt: new Date(now - 60 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
     await insertSale({ pageId: otherPage, fanId: fanOther, ref: "h8-other-grant", netMills: 61_000, occurredAt: new Date(now - 50 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
     await insertSale({ pageId: testPage, fanId: fanTest, ref: "h8-test-realm", netMills: 71_000, occurredAt: new Date(now - 40 * 60_000).toISOString(), home: "nobody", reason: "no_holder" });
